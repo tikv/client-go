@@ -76,26 +76,27 @@ func expo(base, cap, n int) int {
 	return int(math.Min(float64(cap), float64(base)*math.Pow(2.0, float64(n))))
 }
 
-type backoffType int
+// BackoffType is the retryable error type.
+type BackoffType int
 
 // Back off types.
 const (
-	boTiKVRPC backoffType = iota
+	BoTiKVRPC BackoffType = iota
 	BoTxnLock
-	boTxnLockFast
+	BoTxnLockFast
 	BoPDRPC
 	BoRegionMiss
 	BoUpdateLeader
-	boServerBusy
+	BoServerBusy
 )
 
-func (t backoffType) createFn() func(context.Context) int {
+func (t BackoffType) createFn() func(context.Context) int {
 	switch t {
-	case boTiKVRPC:
+	case BoTiKVRPC:
 		return NewBackoffFn(100, 2000, EqualJitter)
 	case BoTxnLock:
 		return NewBackoffFn(200, 3000, EqualJitter)
-	case boTxnLockFast:
+	case BoTxnLockFast:
 		return NewBackoffFn(50, 3000, EqualJitter)
 	case BoPDRPC:
 		return NewBackoffFn(500, 3000, EqualJitter)
@@ -104,19 +105,19 @@ func (t backoffType) createFn() func(context.Context) int {
 		return NewBackoffFn(2, 500, NoJitter)
 	case BoUpdateLeader:
 		return NewBackoffFn(1, 10, NoJitter)
-	case boServerBusy:
+	case BoServerBusy:
 		return NewBackoffFn(2000, 10000, EqualJitter)
 	}
 	return nil
 }
 
-func (t backoffType) String() string {
+func (t BackoffType) String() string {
 	switch t {
-	case boTiKVRPC:
+	case BoTiKVRPC:
 		return "tikvRPC"
 	case BoTxnLock:
 		return "txnLock"
-	case boTxnLockFast:
+	case BoTxnLockFast:
 		return "txnLockFast"
 	case BoPDRPC:
 		return "pdRPC"
@@ -124,7 +125,7 @@ func (t backoffType) String() string {
 		return "regionMiss"
 	case BoUpdateLeader:
 		return "updateLeader"
-	case boServerBusy:
+	case BoServerBusy:
 		return "serverBusy"
 	}
 	return ""
@@ -154,11 +155,11 @@ var CommitMaxBackoff = 41000
 type Backoffer struct {
 	ctx context.Context
 
-	fn         map[backoffType]func(context.Context) int
+	fn         map[BackoffType]func(context.Context) int
 	maxSleep   int
 	totalSleep int
 	errors     []error
-	types      []backoffType
+	types      []BackoffType
 }
 
 // txnStartKey is a key for transaction start_ts info in context.Context.
@@ -172,9 +173,9 @@ func NewBackoffer(ctx context.Context, maxSleep int) *Backoffer {
 	}
 }
 
-// Backoff sleeps a while base on the backoffType and records the error message.
+// Backoff sleeps a while base on the BackoffType and records the error message.
 // It returns a retryable error if total sleep time exceeds maxSleep.
-func (b *Backoffer) Backoff(typ backoffType, err error) error {
+func (b *Backoffer) Backoff(typ BackoffType, err error) error {
 	select {
 	case <-b.ctx.Done():
 		return errors.Trace(err)
@@ -184,7 +185,7 @@ func (b *Backoffer) Backoff(typ backoffType, err error) error {
 	metrics.TiKVBackoffCounter.WithLabelValues(typ.String()).Inc()
 	// Lazy initialize.
 	if b.fn == nil {
-		b.fn = make(map[backoffType]func(context.Context) int)
+		b.fn = make(map[BackoffType]func(context.Context) int)
 	}
 	f, ok := b.fn[typ]
 	if !ok {
