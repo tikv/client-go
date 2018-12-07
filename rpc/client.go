@@ -59,7 +59,7 @@ var MaxCallMsgSize = 1<<31 - 1
 // Timeout durations.
 const (
 	dialTimeout               = 5 * time.Second
-	readTimeoutShort          = 20 * time.Second  // For requests that read/write several key-values.
+	ReadTimeoutShort          = 20 * time.Second  // For requests that read/write several key-values.
 	ReadTimeoutMedium         = 60 * time.Second  // For requests that may need scan region.
 	ReadTimeoutLong           = 150 * time.Second // For requests that may need scan region multiple times.
 	GCTimeout                 = 5 * time.Minute
@@ -180,7 +180,8 @@ type rpcClient struct {
 	security config.Security
 }
 
-func newRPCClient(security config.Security) *rpcClient {
+// NewRPCClient manages connections and rpc calls with tikv-servers.
+func NewRPCClient(security config.Security) Client {
 	return &rpcClient{
 		conns:    make(map[string]*connArray),
 		security: security,
