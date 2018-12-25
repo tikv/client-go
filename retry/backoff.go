@@ -182,7 +182,7 @@ func (b *Backoffer) Backoff(typ BackoffType, err error) error {
 	default:
 	}
 
-	metrics.TiKVBackoffCounter.WithLabelValues(typ.String()).Inc()
+	metrics.BackoffCounter.WithLabelValues(typ.String()).Inc()
 	// Lazy initialize.
 	if b.fn == nil {
 		b.fn = make(map[BackoffType]func(context.Context) int)

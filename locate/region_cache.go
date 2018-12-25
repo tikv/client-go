@@ -322,7 +322,7 @@ func (c *RegionCache) dropRegionFromCache(verID RegionVerID) {
 	if !ok {
 		return
 	}
-	metrics.TiKVRegionCacheCounter.WithLabelValues("drop_region_from_cache", "ok").Inc()
+	metrics.RegionCacheCounter.WithLabelValues("drop_region_from_cache", "ok").Inc()
 	c.mu.sorted.Delete(newBtreeItem(r.region))
 	delete(c.mu.regions, verID)
 }
@@ -338,7 +338,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte) (*Region, erro
 			}
 		}
 		meta, leader, err := c.pdClient.GetRegion(bo.GetContext(), key)
-		metrics.TiKVRegionCacheCounter.WithLabelValues("get_region", metrics.RetLabel(err)).Inc()
+		metrics.RegionCacheCounter.WithLabelValues("get_region", metrics.RetLabel(err)).Inc()
 		if err != nil {
 			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", key, err)
 			continue
@@ -372,7 +372,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			}
 		}
 		meta, leader, err := c.pdClient.GetRegionByID(bo.GetContext(), regionID)
-		metrics.TiKVRegionCacheCounter.WithLabelValues("get_region_by_id", metrics.RetLabel(err)).Inc()
+		metrics.RegionCacheCounter.WithLabelValues("get_region_by_id", metrics.RetLabel(err)).Inc()
 		if err != nil {
 			backoffErr = errors.Errorf("loadRegion from PD failed, regionID: %v, err: %v", regionID, err)
 			continue
@@ -433,7 +433,7 @@ func (c *RegionCache) ClearStoreByID(id uint64) {
 func (c *RegionCache) loadStoreAddr(bo *retry.Backoffer, id uint64) (string, error) {
 	for {
 		store, err := c.pdClient.GetStore(bo.GetContext(), id)
-		metrics.TiKVRegionCacheCounter.WithLabelValues("get_store", metrics.RetLabel(err)).Inc()
+		metrics.RegionCacheCounter.WithLabelValues("get_store", metrics.RetLabel(err)).Inc()
 		if err != nil {
 			if errors.Cause(err) == context.Canceled {
 				return "", errors.Trace(err)

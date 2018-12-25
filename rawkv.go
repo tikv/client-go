@@ -84,7 +84,7 @@ func (c *RawKVClient) ClusterID() uint64 {
 // Get queries value with the key. When the key does not exist, it returns `nil, nil`.
 func (c *RawKVClient) Get(key []byte) ([]byte, error) {
 	start := time.Now()
-	defer func() { metrics.TiKVRawkvCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
 
 	req := &rpc.Request{
 		Type: rpc.CmdRawGet,
@@ -113,7 +113,7 @@ func (c *RawKVClient) Get(key []byte) ([]byte, error) {
 func (c *RawKVClient) BatchGet(keys [][]byte) ([][]byte, error) {
 	start := time.Now()
 	defer func() {
-		metrics.TiKVRawkvCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds())
+		metrics.RawkvCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds())
 	}()
 
 	bo := retry.NewBackoffer(context.Background(), rawkvMaxBackoff)
@@ -142,9 +142,9 @@ func (c *RawKVClient) BatchGet(keys [][]byte) ([][]byte, error) {
 // Put stores a key-value pair to TiKV.
 func (c *RawKVClient) Put(key, value []byte) error {
 	start := time.Now()
-	defer func() { metrics.TiKVRawkvCmdHistogram.WithLabelValues("put").Observe(time.Since(start).Seconds()) }()
-	metrics.TiKVRawkvSizeHistogram.WithLabelValues("key").Observe(float64(len(key)))
-	metrics.TiKVRawkvSizeHistogram.WithLabelValues("value").Observe(float64(len(value)))
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("put").Observe(time.Since(start).Seconds()) }()
+	metrics.RawkvSizeHistogram.WithLabelValues("key").Observe(float64(len(key)))
+	metrics.RawkvSizeHistogram.WithLabelValues("value").Observe(float64(len(value)))
 
 	if len(value) == 0 {
 		return errors.New("empty value is not supported")
@@ -175,7 +175,7 @@ func (c *RawKVClient) Put(key, value []byte) error {
 func (c *RawKVClient) BatchPut(keys, values [][]byte) error {
 	start := time.Now()
 	defer func() {
-		metrics.TiKVRawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds())
+		metrics.RawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds())
 	}()
 
 	if len(keys) != len(values) {
@@ -194,7 +194,7 @@ func (c *RawKVClient) BatchPut(keys, values [][]byte) error {
 // Delete deletes a key-value pair from TiKV.
 func (c *RawKVClient) Delete(key []byte) error {
 	start := time.Now()
-	defer func() { metrics.TiKVRawkvCmdHistogram.WithLabelValues("delete").Observe(time.Since(start).Seconds()) }()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("delete").Observe(time.Since(start).Seconds()) }()
 
 	req := &rpc.Request{
 		Type: rpc.CmdRawDelete,
@@ -220,7 +220,7 @@ func (c *RawKVClient) Delete(key []byte) error {
 func (c *RawKVClient) BatchDelete(keys [][]byte) error {
 	start := time.Now()
 	defer func() {
-		metrics.TiKVRawkvCmdHistogram.WithLabelValues("batch_delete").Observe(time.Since(start).Seconds())
+		metrics.RawkvCmdHistogram.WithLabelValues("batch_delete").Observe(time.Since(start).Seconds())
 	}()
 
 	bo := retry.NewBackoffer(context.Background(), rawkvMaxBackoff)
@@ -247,7 +247,7 @@ func (c *RawKVClient) DeleteRange(startKey []byte, endKey []byte) error {
 		if err != nil {
 			label += "_error"
 		}
-		metrics.TiKVRawkvCmdHistogram.WithLabelValues(label).Observe(time.Since(start).Seconds())
+		metrics.RawkvCmdHistogram.WithLabelValues(label).Observe(time.Since(start).Seconds())
 	}()
 
 	// Process each affected region respectively
@@ -275,7 +275,7 @@ func (c *RawKVClient) DeleteRange(startKey []byte, endKey []byte) error {
 // If you want to exclude the startKey, append a '\0' to the key: `Scan(append(startKey, '\0'), limit)`.
 func (c *RawKVClient) Scan(startKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
-	defer func() { metrics.TiKVRawkvCmdHistogram.WithLabelValues("raw_scan").Observe(time.Since(start).Seconds()) }()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("raw_scan").Observe(time.Since(start).Seconds()) }()
 
 	if limit > MaxRawKVScanLimit {
 		return nil, nil, errors.Trace(ErrMaxScanLimitExceeded)
