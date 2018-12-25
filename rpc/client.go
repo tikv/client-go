@@ -239,7 +239,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 	reqType := req.Type.String()
 	storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
 	defer func() {
-		metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID).Observe(time.Since(start).Seconds())
+		metrics.SendReqHistogram.WithLabelValues(reqType, storeID).Observe(time.Since(start).Seconds())
 	}()
 
 	connArray, err := c.getConnArray(addr)

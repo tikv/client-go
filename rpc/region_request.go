@@ -183,7 +183,7 @@ func regionErrorToLabel(e *errorpb.Error) string {
 }
 
 func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *locate.RPCContext, regionErr *errorpb.Error) (retryable bool, err error) {
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr)).Inc()
+	metrics.RegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr)).Inc()
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
 		// Retry if error is `NotLeader`.
 		log.Debugf("tikv reports `NotLeader`: %s, ctx: %v, retry later", notLeader, ctx)
