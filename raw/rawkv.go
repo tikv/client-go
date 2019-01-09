@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package raw
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/pd/client"
+	pd "github.com/pingcap/pd/client"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/locate"
 	"github.com/tikv/client-go/metrics"
@@ -40,7 +40,6 @@ const (
 	rawBatchPutSize = 16 * 1024
 	// rawBatchPairCount is the maximum limit for rawkv each batch get/delete request.
 	rawBatchPairCount = 512
-	rawkvMaxBackoff   = 20000
 )
 
 // RawKVClient is a client of TiKV server which is used as a key-value storage,
@@ -116,7 +115,7 @@ func (c *RawKVClient) BatchGet(keys [][]byte) ([][]byte, error) {
 		metrics.RawkvCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds())
 	}()
 
-	bo := retry.NewBackoffer(context.Background(), rawkvMaxBackoff)
+	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
 	resp, err := c.sendBatchReq(bo, keys, rpc.CmdRawBatchGet)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -186,7 +185,7 @@ func (c *RawKVClient) BatchPut(keys, values [][]byte) error {
 			return errors.New("empty value is not supported")
 		}
 	}
-	bo := retry.NewBackoffer(context.Background(), rawkvMaxBackoff)
+	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
 	err := c.sendBatchPut(bo, keys, values)
 	return errors.Trace(err)
 }
@@ -223,7 +222,7 @@ func (c *RawKVClient) BatchDelete(keys [][]byte) error {
 		metrics.RawkvCmdHistogram.WithLabelValues("batch_delete").Observe(time.Since(start).Seconds())
 	}()
 
-	bo := retry.NewBackoffer(context.Background(), rawkvMaxBackoff)
+	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
 	resp, err := c.sendBatchReq(bo, keys, rpc.CmdRawBatchDelete)
 	if err != nil {
 		return errors.Trace(err)
@@ -310,7 +309,7 @@ func (c *RawKVClient) Scan(startKey []byte, limit int) (keys [][]byte, values []
 }
 
 func (c *RawKVClient) sendReq(key []byte, req *rpc.Request) (*rpc.Response, *locate.KeyLocation, error) {
-	bo := retry.NewBackoffer(context.Background(), rawkvMaxBackoff)
+	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	for {
 		loc, err := c.regionCache.LocateKey(bo, key)
@@ -450,7 +449,7 @@ func (c *RawKVClient) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.C
 // We can't use sendReq directly, because we need to know the end of the region before we send the request
 // TODO: Is there any better way to avoid duplicating code with func `sendReq` ?
 func (c *RawKVClient) sendDeleteRangeReq(startKey []byte, endKey []byte) (*rpc.Response, []byte, error) {
-	bo := retry.NewBackoffer(context.Background(), rawkvMaxBackoff)
+	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	for {
 		loc, err := c.regionCache.LocateKey(bo, startKey)
