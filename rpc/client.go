@@ -257,6 +257,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 	// Coprocessor streaming request.
 	// Use context to support timeout for grpc streaming client.
 	ctx1, cancel := context.WithCancel(ctx)
+	defer cancel()
 	resp, err := CallRPC(ctx1, client, req)
 	if err != nil {
 		return nil, errors.Trace(err)
