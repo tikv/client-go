@@ -28,11 +28,11 @@ const (
 var pads = make([]byte, encGroupSize)
 
 // DecodeBytes decodes a TiDB encoded byte slice.
-func DecodeBytes(b []byte) ([]byte, error) {
+func DecodeBytes(b []byte) ([]byte, []byte, error) {
 	buf := make([]byte, 0, len(b)/(encGroupSize+1)*encGroupSize)
 	for {
 		if len(b) < encGroupSize+1 {
-			return nil, errors.New("insufficient bytes to decode value")
+			return nil, nil, errors.New("insufficient bytes to decode value")
 		}
 
 		groupBytes := b[:encGroupSize+1]
@@ -42,7 +42,7 @@ func DecodeBytes(b []byte) ([]byte, error) {
 
 		padCount := encMarker - marker
 		if padCount > encGroupSize {
-			return nil, errors.Errorf("invalid marker byte, group bytes %q", groupBytes)
+			return nil, nil, errors.Errorf("invalid marker byte, group bytes %q", groupBytes)
 		}
 
 		realGroupSize := encGroupSize - padCount
@@ -52,12 +52,12 @@ func DecodeBytes(b []byte) ([]byte, error) {
 		if padCount != 0 {
 			// Check validity of padding bytes.
 			if !bytes.Equal(group[realGroupSize:], pads[:padCount]) {
-				return nil, errors.Errorf("invalid padding byte, group bytes %q", groupBytes)
+				return nil, nil, errors.Errorf("invalid padding byte, group bytes %q", groupBytes)
 			}
 			break
 		}
 	}
-	return buf, nil
+	return b, buf, nil
 }
 
 // EncodeBytes encodes a byte slice into TiDB's encoded form.
