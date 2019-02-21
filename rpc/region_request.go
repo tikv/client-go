@@ -92,7 +92,7 @@ func (s *RegionRequestSender) SendReq(bo *retry.Backoffer, req *Request, regionI
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like StaleEpoch, which means to re-split the request and retry.
-			return GenRegionErrorResp(req, &errorpb.Error{StaleEpoch: &errorpb.StaleEpoch{}})
+			return GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 		}
 
 		s.storeAddr = ctx.Addr
@@ -174,7 +174,7 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "region_not_found"
 	} else if e.GetKeyNotInRegion() != nil {
 		return "key_not_in_region"
-	} else if e.GetStaleEpoch() != nil {
+	} else if e.GetEpochNotMatch() != nil {
 		return "stale_epoch"
 	} else if e.GetServerIsBusy() != nil {
 		return "server_is_busy"
@@ -214,9 +214,9 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *locate.RPC
 		return true, nil
 	}
 
-	if staleEpoch := regionErr.GetStaleEpoch(); staleEpoch != nil {
+	if epochNotMatch := regionErr.GetEpochNotMatch(); epochNotMatch != nil {
 		log.Debugf("tikv reports `StaleEpoch`, ctx: %v, retry later", ctx)
-		err = s.regionCache.OnRegionStale(ctx, staleEpoch.NewRegions)
+		err = s.regionCache.OnRegionStale(ctx, epochNotMatch.CurrentRegions)
 		return false, errors.Trace(err)
 	}
 	if regionErr.GetServerIsBusy() != nil {

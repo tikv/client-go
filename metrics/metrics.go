@@ -211,6 +211,15 @@ var (
 			Buckets: prometheus.ExponentialBuckets(1, 2, 30),
 			Help:    "batch wait duration",
 		})
+
+	TSFutureWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tikv",
+			Subsystem: "pdclient",
+			Name:      "ts_future_wait_seconds",
+			Help:      "Bucketed histogram of seconds cost for waiting timestamp future.",
+			Buckets:   prometheus.ExponentialBuckets(0.000005, 2, 18), // 5us ~ 128 ms
+		})
 )
 
 // RetLabel returns "ok" when err == nil and "err" when err != nil.
@@ -244,4 +253,5 @@ func init() {
 	prometheus.MustRegister(RegionCacheCounter)
 	prometheus.MustRegister(PendingBatchRequests)
 	prometheus.MustRegister(BatchWaitDuration)
+	prometheus.MustRegister(TSFutureWaitDuration)
 }

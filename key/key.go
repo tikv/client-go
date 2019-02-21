@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package codec
+package key
+
+import "bytes"
 
 // Key represents high-level Key type.
 type Key []byte
@@ -50,4 +52,20 @@ func (k Key) PrefixNext() Key {
 		buf = append(buf, 0)
 	}
 	return buf
+}
+
+// Cmp returns the comparison result of two key.
+// The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
+func (k Key) Cmp(another Key) int {
+	return bytes.Compare(k, another)
+}
+
+// Clone returns a copy of the Key.
+func (k Key) Clone() Key {
+	return append([]byte(nil), k...)
+}
+
+// HasPrefix tests whether the Key begins with prefix.
+func (k Key) HasPrefix(prefix Key) bool {
+	return bytes.HasPrefix(k, prefix)
 }
