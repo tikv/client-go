@@ -79,6 +79,9 @@ func (c *Cluster) allocID() uint64 {
 
 // GetAllRegions gets all the regions in the cluster.
 func (c *Cluster) GetAllRegions() []*Region {
+	c.Lock()
+	defer c.Unlock()
+
 	regions := make([]*Region, 0, len(c.regions))
 	for _, region := range c.regions {
 		regions = append(regions, region)
@@ -195,8 +198,8 @@ func (c *Cluster) GetRegion(regionID uint64) (*metapb.Region, uint64) {
 	c.RLock()
 	defer c.RUnlock()
 
-	r := c.regions[regionID]
-	if r == nil {
+	r, ok := c.regions[regionID]
+	if !ok {
 		return nil, 0
 	}
 	return proto.Clone(r.Meta).(*metapb.Region), r.leader
@@ -252,7 +255,7 @@ func (c *Cluster) Bootstrap(regionID uint64, storeIDs, peerIDs []uint64, leaderP
 	defer c.Unlock()
 
 	if len(storeIDs) != len(peerIDs) {
-		panic("len(storeIDs) != len(peerIDs)")
+		panic("length of storeIDs and peerIDs mismatch")
 	}
 	c.regions[regionID] = newRegion(regionID, storeIDs, peerIDs, leaderPeerID)
 }
@@ -447,7 +450,7 @@ func newPeerMeta(peerID, storeID uint64) *metapb.Peer {
 
 func newRegion(regionID uint64, storeIDs, peerIDs []uint64, leaderPeerID uint64) *Region {
 	if len(storeIDs) != len(peerIDs) {
-		panic("len(storeIDs) != len(peerIds)")
+		panic("length of storeIDs and peerIDs mismatch")
 	}
 	peers := make([]*metapb.Peer, 0, len(storeIDs))
 	for i := range storeIDs {
@@ -496,7 +499,7 @@ func (r *Region) leaderPeer() *metapb.Peer {
 
 func (r *Region) split(newRegionID uint64, key MvccKey, peerIDs []uint64, leaderPeerID uint64) *Region {
 	if len(r.Meta.Peers) != len(peerIDs) {
-		panic("len(r.meta.Peers) != len(peerIDs)")
+		panic("length of storeIDs and peerIDs mismatch")
 	}
 	storeIDs := make([]uint64, 0, len(r.Meta.Peers))
 	for _, peer := range r.Meta.Peers {
