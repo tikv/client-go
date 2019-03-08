@@ -11,28 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package codec
+package mocktikv
 
 import (
 	"github.com/pingcap/errors"
-	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/pd/client"
 )
 
-// DecodeRegionMetaKey translates a region meta from encoded form to unencoded form.
-func DecodeRegionMetaKey(r *metapb.Region) error {
-	if len(r.StartKey) != 0 {
-		_, decoded, err := DecodeBytes(r.StartKey)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		r.StartKey = decoded
+// NewTiKVAndPDClient creates a TiKV client and PD client from options.
+func NewTiKVAndPDClient(cluster *Cluster, mvccStore MVCCStore, path string) (*RPCClient, pd.Client, error) {
+	if cluster == nil {
+		cluster = NewCluster()
+		BootstrapWithSingleStore(cluster)
 	}
-	if len(r.EndKey) != 0 {
-		_, decoded, err := DecodeBytes(r.EndKey)
+
+	if mvccStore == nil {
+		var err error
+		mvccStore, err = NewMVCCLevelDB(path)
 		if err != nil {
-			return errors.Trace(err)
+			return nil, nil, errors.Trace(err)
 		}
-		r.EndKey = decoded
 	}
-	return nil
+
+	return NewRPCClient(cluster, mvccStore), NewPDClient(cluster), nil
 }

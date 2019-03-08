@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package raw
+package rawkv
 
 import (
 	"bytes"
@@ -270,9 +270,12 @@ func (c *RawKVClient) DeleteRange(startKey []byte, endKey []byte) error {
 	return nil
 }
 
-// Scan queries continuous kv pairs, starts from startKey, up to limit pairs.
-// If you want to exclude the startKey, append a '\0' to the key: `Scan(append(startKey, '\0'), limit)`.
-func (c *RawKVClient) Scan(startKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+// Scan queries continuous kv pairs in range [startKey, endKey), up to limit pairs.
+// If endKey is empty, it means unbounded.
+// If you want to exclude the startKey or include the endKey, append a '\0' to the key. For example, to scan
+// (startKey, endKey], you can write:
+// `Scan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
+func (c *RawKVClient) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("raw_scan").Observe(time.Since(start).Seconds()) }()
 
@@ -285,6 +288,7 @@ func (c *RawKVClient) Scan(startKey []byte, limit int) (keys [][]byte, values []
 			Type: rpc.CmdRawScan,
 			RawScan: &kvrpcpb.RawScanRequest{
 				StartKey: startKey,
+				EndKey:   endKey,
 				Limit:    uint32(limit - len(keys)),
 			},
 		}
