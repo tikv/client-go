@@ -254,9 +254,6 @@ func (c *Cluster) Bootstrap(regionID uint64, storeIDs, peerIDs []uint64, leaderP
 	c.Lock()
 	defer c.Unlock()
 
-	if len(storeIDs) != len(peerIDs) {
-		panic("length of storeIDs and peerIDs mismatch")
-	}
 	c.regions[regionID] = newRegion(regionID, storeIDs, peerIDs, leaderPeerID)
 }
 
