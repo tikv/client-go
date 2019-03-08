@@ -17,6 +17,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io/ioutil"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -65,3 +66,15 @@ func (s *Security) ToTLSConfig() (*tls.Config, error) {
 
 // EnableOpenTracing is the flag to enable open tracing.
 var EnableOpenTracing = false
+
+var (
+	// OverloadThreshold is a threshold of TiKV load.
+	// If TiKV load is greater than this, TiDB will wait for a while to avoid little batch.
+	OverloadThreshold uint = 200
+	// BatchWaitSize is the max wait size for batch.
+	BatchWaitSize uint = 8
+	// MaxBatchSize is the max batch size when calling batch commands API.
+	MaxBatchSize uint = 128
+	// MaxBatchWaitTime in nanosecond is the max wait time for batch.
+	MaxBatchWaitTime time.Duration
+)

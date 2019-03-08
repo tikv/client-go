@@ -9,8 +9,9 @@ require (
 	github.com/opentracing/opentracing-go v1.0.2 // indirect
 	github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8
 	github.com/pingcap/errors v0.11.0
+	github.com/pingcap/gofail v0.0.0-20181115114620-e47081505b9c // indirect
 	github.com/pingcap/goleveldb v0.0.0-20171020122428-b9ff6c35079e
-	github.com/pingcap/kvproto v0.0.0-20190110035000-d4fe6b336379
+	github.com/pingcap/kvproto v0.0.0-20190121084144-be0b43ee9241
 	github.com/pingcap/parser v0.0.0-20190118050330-3c9ff121c591
 	github.com/pingcap/pd v2.1.2+incompatible
 	github.com/pkg/errors v0.8.1
