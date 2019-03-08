@@ -28,7 +28,7 @@ require (
 	github.com/pingcap/check v0.0.0-20181222140913-41d022e836db // indirect
 	github.com/pingcap/errors v0.11.0
 	github.com/pingcap/gofail v0.0.0-20181115114620-e47081505b9c // indirect
-	github.com/pingcap/kvproto v0.0.0-20181224100128-c884c24ef88d
+	github.com/pingcap/kvproto v0.0.0-20190121084144-be0b43ee9241
 	github.com/pingcap/pd v2.1.2+incompatible
 	github.com/pkg/errors v0.8.0
 	github.com/prometheus/client_golang v0.9.1

@@ -15,6 +15,11 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
+const (
+	LabelBatchRecvLoop = "batch-recv-loop"
+	LabelBatchSendLoop = "batch-send-loop"
+)
+
 // Client metrics.
 // TODO: Create new grafana page for the metrics.
 var (
@@ -187,6 +192,25 @@ var (
 			Name:      "region_cache_operations_total",
 			Help:      "Counter of region cache.",
 		}, []string{"type", "result"})
+
+	// PendingBatchRequests indicates the number of requests pending in the batch channel.
+	PendingBatchRequests = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "tikv",
+			Subsystem: "client_go",
+			Name:      "pending_batch_requests",
+			Help:      "Pending batch requests",
+		})
+
+	BatchWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tikv",
+			Subsystem: "client_go",
+			Name:      "batch_wait_duration",
+			// Min bucket is [0, 1ns).
+			Buckets: prometheus.ExponentialBuckets(1, 2, 30),
+			Help:    "batch wait duration",
+		})
 )
 
 // RetLabel returns "ok" when err == nil and "err" when err != nil.
@@ -218,4 +242,6 @@ func init() {
 	prometheus.MustRegister(LoadSafepointCounter)
 	prometheus.MustRegister(SecondaryLockCleanupFailureCounter)
 	prometheus.MustRegister(RegionCacheCounter)
+	prometheus.MustRegister(PendingBatchRequests)
+	prometheus.MustRegister(BatchWaitDuration)
 }
