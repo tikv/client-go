@@ -49,7 +49,7 @@ type Lock struct {
 	// The slot IDs of the latches(keys) that a startTS must acquire before being able to processed.
 	requiredSlots []int
 	// acquiredCount represents the number of latches that the transaction has acquired.
-	// For status is stale, it include the latch whose front is current lock already.
+	// For status is stale, it includes the latch whose front is current lock already.
 	acquiredCount int
 	// startTS represents current transaction's.
 	startTS uint64

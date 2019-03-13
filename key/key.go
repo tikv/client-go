@@ -54,7 +54,7 @@ func (k Key) PrefixNext() Key {
 	return buf
 }
 
-// Cmp returns the comparison result of two key.
+// Cmp returns the comparison result of two keys.
 // The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
 func (k Key) Cmp(another Key) int {
 	return bytes.Compare(k, another)
