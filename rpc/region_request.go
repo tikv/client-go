@@ -175,7 +175,7 @@ func regionErrorToLabel(e *errorpb.Error) string {
 	} else if e.GetKeyNotInRegion() != nil {
 		return "key_not_in_region"
 	} else if e.GetEpochNotMatch() != nil {
-		return "stale_epoch"
+		return "epoch_not_match"
 	} else if e.GetServerIsBusy() != nil {
 		return "server_is_busy"
 	} else if e.GetStaleCommand() != nil {

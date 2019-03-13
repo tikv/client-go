@@ -19,7 +19,7 @@ import (
 
 var (
 	// ErrNotExist is used when try to get an entry with an unexist key from KV store.
-	ErrNotExist = errors.New("Error: key not exist")
+	ErrNotExist = errors.New("key not exist")
 	// ErrCannotSetNilValue is the error when sets an empty value.
 	ErrCannotSetNilValue = errors.New("can not set nil value")
 	// ErrTxnTooLarge is the error when transaction is too large, lock time reached the maximum value.
