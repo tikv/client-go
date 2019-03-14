@@ -108,7 +108,6 @@ func (iter *UnionIter) updateCur() error {
 					}
 					continue
 				}
-				// both go next
 				if err := iter.snapshotNext(); err != nil {
 					return errors.Trace(err)
 				}
