@@ -13,6 +13,8 @@
 
 package codec
 
+import "github.com/tikv/client-go/key"
+
 var (
 	tablePrefix     = []byte{'t'}
 	recordPrefixSep = []byte("_r")
@@ -36,7 +38,7 @@ func appendTableRecordPrefix(buf []byte, tableID int64) []byte {
 }
 
 // GenTableRecordPrefix composes record prefix with tableID: "t[tableID]_r".
-func GenTableRecordPrefix(tableID int64) Key {
+func GenTableRecordPrefix(tableID int64) key.Key {
 	buf := make([]byte, 0, len(tablePrefix)+8+len(recordPrefixSep))
 	return appendTableRecordPrefix(buf, tableID)
 }
@@ -50,13 +52,13 @@ func appendTableIndexPrefix(buf []byte, tableID int64) []byte {
 }
 
 // GenTableIndexPrefix composes index prefix with tableID: "t[tableID]_i".
-func GenTableIndexPrefix(tableID int64) Key {
+func GenTableIndexPrefix(tableID int64) key.Key {
 	buf := make([]byte, 0, len(tablePrefix)+8+len(indexPrefixSep))
 	return appendTableIndexPrefix(buf, tableID)
 }
 
 // EncodeTableIndexPrefix encodes index prefix with tableID and idxID.
-func EncodeTableIndexPrefix(tableID, idxID int64) Key {
+func EncodeTableIndexPrefix(tableID, idxID int64) key.Key {
 	key := make([]byte, 0, prefixLen)
 	key = appendTableIndexPrefix(key, tableID)
 	key = EncodeInt(key, idxID)

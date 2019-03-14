@@ -24,12 +24,11 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/parser/terror"
 	"github.com/tikv/client-go/rpc"
 )
 
 // For gofail injection.
-var undeterminedErr = terror.ErrResultUndetermined
+var errUndeterminedErr = errors.New("undetermined")
 
 const requestMaxSize = 8 * 1024 * 1024
 
@@ -168,14 +167,14 @@ func (h *rpcHandler) checkRequestContext(ctx *kvrpcpb.Context) *errorpb.Error {
 	// Region epoch does not match.
 	if !proto.Equal(region.GetRegionEpoch(), ctx.GetRegionEpoch()) {
 		nextRegion, _ := h.cluster.GetRegionByKey(region.GetEndKey())
-		newRegions := []*metapb.Region{region}
+		currentRegions := []*metapb.Region{region}
 		if nextRegion != nil {
-			newRegions = append(newRegions, nextRegion)
+			currentRegions = append(currentRegions, nextRegion)
 		}
 		return &errorpb.Error{
 			Message: *proto.String("stale epoch"),
-			StaleEpoch: &errorpb.StaleEpoch{
-				NewRegions: newRegions,
+			EpochNotMatch: &errorpb.EpochNotMatch{
+				CurrentRegions: currentRegions,
 			},
 		}
 	}
@@ -606,7 +605,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *rpc.Reque
 		resp.Commit = handler.handleKvCommit(r)
 		// gofail: var rpcCommitTimeout bool
 		// if rpcCommitTimeout {
-		//	return nil, undeterminedErr
+		//	return nil, errUndeterminedErr
 		// }
 	case rpc.CmdCleanup:
 		r := req.Cleanup
