@@ -28,6 +28,8 @@ var (
 	ErrEntryTooLarge = errors.New("entry is too large")
 	// ErrKeyExists returns when key is already exist.
 	ErrKeyExists = errors.New("key already exist")
+	// ErrInvalidTxn is the error that using a transaction after calling Commit or Rollback.
+	ErrInvalidTxn = errors.New("invalid transaction")
 )
 
 // IsErrNotFound checks if err is a kind of NotFound error.
