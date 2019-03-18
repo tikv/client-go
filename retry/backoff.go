@@ -133,19 +133,19 @@ func (t BackoffType) String() string {
 
 // Maximum total sleep time(in ms) for kv/cop commands.
 const (
-	copBuildTaskMaxBackoff         = 5000
-	tsoMaxBackoff                  = 15000
-	scannerNextMaxBackoff          = 20000
-	batchGetMaxBackoff             = 20000
-	copNextMaxBackoff              = 20000
-	getMaxBackoff                  = 20000
-	prewriteMaxBackoff             = 20000
-	cleanupMaxBackoff              = 20000
+	CopBuildTaskMaxBackoff         = 5000
+	TsoMaxBackoff                  = 15000
+	ScannerNextMaxBackoff          = 20000
+	BatchGetMaxBackoff             = 20000
+	CopNextMaxBackoff              = 20000
+	GetMaxBackoff                  = 20000
+	PrewriteMaxBackoff             = 20000
+	CleanupMaxBackoff              = 20000
 	GcOneRegionMaxBackoff          = 20000
 	GcResolveLockMaxBackoff        = 100000
-	deleteRangeOneRegionMaxBackoff = 100000
+	DeleteRangeOneRegionMaxBackoff = 100000
 	RawkvMaxBackoff                = 20000
-	splitRegionBackoff             = 20000
+	SplitRegionBackoff             = 20000
 )
 
 // CommitMaxBackoff is max sleep time of the 'commit' command
@@ -251,4 +251,9 @@ func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 // GetContext returns the associated context.
 func (b *Backoffer) GetContext() context.Context {
 	return b.ctx
+}
+
+// TotalSleep returns the total sleep time of the backoffer.
+func (b *Backoffer) TotalSleep() time.Duration {
+	return time.Duration(b.totalSleep) * time.Millisecond
 }

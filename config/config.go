@@ -87,4 +87,13 @@ var (
 	TxnEntryCountLimit uint64 = 300 * 1000
 	// TxnTotalSizeLimit is limit of the sum of all entry size.
 	TxnTotalSizeLimit = 100 * 1024 * 1024
+	// MaxTxnTimeUse is the max time a transaction can run.
+	MaxTxnTimeUse = 590
+)
+
+// Local latches for transactions. Enable it when
+// there are lots of conflicts between transactions.
+var (
+	EnableTxnLocalLatch        = false
+	TxnLocalLatchCapacity uint = 2048000
 )
