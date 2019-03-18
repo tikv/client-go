@@ -27,6 +27,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// ErrBodyMissing response body is missing error
+var ErrBodyMissing = errors.New("response body is missing")
+
 // RegionRequestSender sends KV/Cop requests to tikv server. It handles network
 // errors and some region errors internally.
 //
@@ -55,6 +58,11 @@ func NewRegionRequestSender(regionCache *locate.RegionCache, client Client) *Reg
 		regionCache: regionCache,
 		client:      client,
 	}
+}
+
+// RPCError returns an error if an RPC error is encountered during request.
+func (s *RegionRequestSender) RPCError() error {
+	return s.rpcError
 }
 
 // SendReq sends a request to tikv server.

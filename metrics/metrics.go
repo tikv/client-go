@@ -220,6 +220,15 @@ var (
 			Help:      "Bucketed histogram of seconds cost for waiting timestamp future.",
 			Buckets:   prometheus.ExponentialBuckets(0.000005, 2, 18), // 5us ~ 128 ms
 		})
+
+	LocalLatchWaitTimeHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tidb",
+			Subsystem: "tikvclient",
+			Name:      "local_latch_wait_seconds",
+			Help:      "Wait time of a get local latch.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 20),
+		})
 )
 
 // RetLabel returns "ok" when err == nil and "err" when err != nil.
@@ -254,4 +263,5 @@ func init() {
 	prometheus.MustRegister(PendingBatchRequests)
 	prometheus.MustRegister(BatchWaitDuration)
 	prometheus.MustRegister(TSFutureWaitDuration)
+	prometheus.MustRegister(LocalLatchWaitTimeHistogram)
 }
