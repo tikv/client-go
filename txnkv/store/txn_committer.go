@@ -250,14 +250,13 @@ func (c *TxnCommitter) doActionOnBatches(bo *retry.Backoffer, action commitActio
 	// Concurrently do the work for each batch.
 	ch := make(chan error, len(batches))
 	for _, batch1 := range batches {
-
 		batch := batch1
 		go func() {
 			if action == actionCommit {
 				// Because the secondary batches of the commit actions are implemented to be
 				// committed asynchronously in background goroutines, we should not
 				// fork a child context and call cancel() while the foreground goroutine exits.
-				// Otherwise the background goroutines will be canceled execeptionally.
+				// Otherwise the background goroutines will be canceled exceptionally.
 				// Here we makes a new clone of the original backoffer for this goroutine
 				// exclusively to avoid the data race when using the same backoffer
 				// in concurrent goroutines.
