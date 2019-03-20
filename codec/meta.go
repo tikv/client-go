@@ -23,14 +23,14 @@ func DecodeRegionMetaKey(r *metapb.Region) error {
 	if len(r.StartKey) != 0 {
 		_, decoded, err := DecodeBytes(r.StartKey)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		r.StartKey = decoded
 	}
 	if len(r.EndKey) != 0 {
 		_, decoded, err := DecodeBytes(r.EndKey)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		r.EndKey = decoded
 	}

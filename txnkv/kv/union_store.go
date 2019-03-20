@@ -187,7 +187,7 @@ func (us *unionStore) Get(k key.Key) ([]byte, error) {
 		v, err = us.BufferStore.r.Get(k)
 	}
 	if err != nil {
-		return v, errors.Trace(err)
+		return v, errors.WithStack(err)
 	}
 	if len(v) == 0 {
 		return nil, ErrNotExist

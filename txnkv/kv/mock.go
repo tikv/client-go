@@ -38,7 +38,7 @@ func (s *mockSnapshot) BatchGet(keys []key.Key) (map[string][]byte, error) {
 			continue
 		}
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		m[string(k)] = v
 	}

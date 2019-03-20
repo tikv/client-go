@@ -64,22 +64,22 @@ func NewStore(pdAddrs []string, security config.Security) (*TiKVStore, error) {
 		KeyPath:  security.SSLKey,
 	})
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	oracle, err := oracles.NewPdOracle(pdCli, time.Duration(oracleUpdateInterval)*time.Millisecond)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	tlsConfig, err := security.ToTLSConfig()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	spkv, err := NewEtcdSafePointKV(pdAddrs, tlsConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	clusterID := pdCli.GetClusterID(context.TODO())
@@ -156,7 +156,7 @@ func (s *TiKVStore) Close() error {
 
 	close(s.closed)
 	if err := s.client.Close(); err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 
 	if s.txnLatches != nil {
@@ -174,7 +174,7 @@ func (s *TiKVStore) GetTimestampWithRetry(bo *retry.Backoffer) (uint64, error) {
 		}
 		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get timestamp failed: %v", err))
 		if err != nil {
-			return 0, errors.Trace(err)
+			return 0, errors.WithStack(err)
 		}
 	}
 }
@@ -212,11 +212,11 @@ func (s *TiKVStore) CheckVisibility(startTS uint64) error {
 	diff := time.Since(cachedTime)
 
 	if diff > (GcSafePointCacheInterval - gcCPUTimeInaccuracyBound) {
-		return errors.Trace(ErrPDServerTimeout)
+		return errors.WithStack(ErrPDServerTimeout)
 	}
 
 	if startTS < cachedSafePoint {
-		return errors.Trace(ErrStartTSFallBehind)
+		return errors.WithStack(ErrStartTSFallBehind)
 	}
 
 	return nil

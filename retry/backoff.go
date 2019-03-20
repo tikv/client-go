@@ -178,7 +178,7 @@ func NewBackoffer(ctx context.Context, maxSleep int) *Backoffer {
 func (b *Backoffer) Backoff(typ BackoffType, err error) error {
 	select {
 	case <-b.ctx.Done():
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	default:
 	}
 

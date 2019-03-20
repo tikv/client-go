@@ -29,7 +29,7 @@ type TxnClient struct {
 func NewTxnClient(pdAddrs []string, security config.Security) (*TxnClient, error) {
 	tikvStore, err := store.NewStore(pdAddrs, security)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return &TxnClient{
 		tikvStore: tikvStore,
@@ -38,13 +38,13 @@ func NewTxnClient(pdAddrs []string, security config.Security) (*TxnClient, error
 
 func (c *TxnClient) Close() error {
 	err := c.tikvStore.Close()
-	return errors.Trace(err)
+	return errors.WithStack(err)
 }
 
 func (c *TxnClient) Begin() (*Transaction, error) {
 	ts, err := c.GetTS()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return c.BeginWithTS(ts), nil
 }

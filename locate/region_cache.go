@@ -108,7 +108,7 @@ func (c *RegionCache) GetRPCContext(bo *retry.Backoffer, id RegionVerID) (*RPCCo
 
 	addr, err := c.GetStoreAddr(bo, peer.GetStoreId())
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	if addr == "" {
 		// Store not found, region must be out of date.
@@ -153,7 +153,7 @@ func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, 
 
 	r, err := c.loadRegion(bo, key)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	c.mu.Lock()
@@ -184,7 +184,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 
 	r, err := c.loadRegionByID(bo, regionID)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	c.mu.Lock()
@@ -209,7 +209,7 @@ func (c *RegionCache) GroupKeysByRegion(bo *retry.Backoffer, keys [][]byte) (map
 			var err error
 			lastLoc, err = c.LocateKey(bo, k)
 			if err != nil {
-				return nil, first, errors.Trace(err)
+				return nil, first, errors.WithStack(err)
 			}
 		}
 		id := lastLoc.Region
@@ -226,7 +226,7 @@ func (c *RegionCache) ListRegionIDsInKeyRange(bo *retry.Backoffer, startKey, end
 	for {
 		curRegion, err := c.LocateKey(bo, startKey)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		regionIDs = append(regionIDs, curRegion.Region.id)
 		if curRegion.Contains(endKey) {
@@ -334,7 +334,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte) (*Region, erro
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WithStack(err)
 			}
 		}
 		meta, leader, err := c.pdClient.GetRegion(bo.GetContext(), key)
@@ -368,7 +368,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WithStack(err)
 			}
 		}
 		meta, leader, err := c.pdClient.GetRegionByID(bo.GetContext(), regionID)
@@ -411,7 +411,7 @@ func (c *RegionCache) GetStoreAddr(bo *retry.Backoffer, id uint64) (string, erro
 func (c *RegionCache) ReloadStoreAddr(bo *retry.Backoffer, id uint64) (string, error) {
 	addr, err := c.loadStoreAddr(bo, id)
 	if err != nil || addr == "" {
-		return "", errors.Trace(err)
+		return "", errors.WithStack(err)
 	}
 
 	c.storeMu.Lock()
@@ -436,11 +436,11 @@ func (c *RegionCache) loadStoreAddr(bo *retry.Backoffer, id uint64) (string, err
 		metrics.RegionCacheCounter.WithLabelValues("get_store", metrics.RetLabel(err)).Inc()
 		if err != nil {
 			if errors.Cause(err) == context.Canceled {
-				return "", errors.Trace(err)
+				return "", errors.WithStack(err)
 			}
 			err = errors.Errorf("loadStore from PD failed, id: %d, err: %v", id, err)
 			if err = bo.Backoff(retry.BoPDRPC, err); err != nil {
-				return "", errors.Trace(err)
+				return "", errors.WithStack(err)
 			}
 			continue
 		}

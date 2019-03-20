@@ -203,7 +203,7 @@ func (a *connArray) Init(addr string, security config.Security) error {
 	if len(security.SSLCA) != 0 {
 		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
@@ -245,7 +245,7 @@ func (a *connArray) Init(addr string, security config.Security) error {
 		if err != nil {
 			// Cleanup if the initialization fails.
 			a.Close()
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		a.v[i] = conn
 
@@ -255,7 +255,7 @@ func (a *connArray) Init(addr string, security config.Security) error {
 			streamClient, err := tikvClient.BatchCommands(context.TODO())
 			if err != nil {
 				a.Close()
-				return errors.Trace(err)
+				return errors.WithStack(err)
 			}
 			batchClient := &batchCommandsClient{
 				conn:               conn,
@@ -530,19 +530,19 @@ func sendBatchRequest(
 	case connArray.batchCommandsCh <- entry:
 	case <-ctx1.Done():
 		log.Warnf("SendRequest to %s is timeout", addr)
-		return nil, errors.Trace(gstatus.Error(gcodes.DeadlineExceeded, "Canceled or timeout"))
+		return nil, errors.WithStack(gstatus.Error(gcodes.DeadlineExceeded, "Canceled or timeout"))
 	}
 
 	select {
 	case res, ok := <-entry.res:
 		if !ok {
-			return nil, errors.Trace(entry.err)
+			return nil, errors.WithStack(entry.err)
 		}
 		return FromBatchCommandsResponse(res), nil
 	case <-ctx1.Done():
 		atomic.StoreInt32(&entry.canceled, 1)
 		log.Warnf("SendRequest to %s is canceled", addr)
-		return nil, errors.Trace(gstatus.Error(gcodes.DeadlineExceeded, "Canceled or timeout"))
+		return nil, errors.WithStack(gstatus.Error(gcodes.DeadlineExceeded, "Canceled or timeout"))
 	}
 }
 
@@ -557,7 +557,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 
 	connArray, err := c.getConnArray(addr)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	if config.MaxBatchSize > 0 {
@@ -580,7 +580,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 	defer cancel()
 	resp, err := CallRPC(ctx1, client, req)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -596,7 +596,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		log.Debug("copstream returns nothing for the request.")
 	}

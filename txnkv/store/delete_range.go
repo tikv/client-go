@@ -61,7 +61,7 @@ func (t *DeleteRangeTask) Execute() error {
 		bo := retry.NewBackoffer(t.ctx, retry.DeleteRangeOneRegionMaxBackoff)
 		loc, err := t.store.GetRegionCache().LocateKey(bo, startKey)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 
 		// Delete to the end of the region, except if it's the last region overlapping the range
@@ -81,22 +81,22 @@ func (t *DeleteRangeTask) Execute() error {
 
 		resp, err := t.store.SendReq(bo, req, loc.Region, rpc.ReadTimeoutMedium)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		if regionErr != nil {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return errors.Trace(err)
+				return errors.WithStack(err)
 			}
 			continue
 		}
 		deleteRangeResp := resp.DeleteRange
 		if deleteRangeResp == nil {
-			return errors.Trace(rpc.ErrBodyMissing)
+			return errors.WithStack(rpc.ErrBodyMissing)
 		}
 		if err := deleteRangeResp.GetError(); err != "" {
 			return errors.Errorf("unexpected delete range err: %v", err)

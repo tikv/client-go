@@ -754,7 +754,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *rpc.Reque
 		// copStream, err := handler.handleCopStream(ctx1, r)
 		// if err != nil {
 		// 	cancel()
-		// 	return nil, errors.Trace(err)
+		// 	return nil, errors.WithStack(err)
 		// }
 
 		// streamResp := &rpc.CopStreamResponse{
@@ -766,7 +766,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *rpc.Reque
 
 		// first, err := streamResp.Recv()
 		// if err != nil {
-		// 	return nil, errors.Trace(err)
+		// 	return nil, errors.WithStack(err)
 		// }
 		// streamResp.Response = first
 		// resp.CopStream = streamResp

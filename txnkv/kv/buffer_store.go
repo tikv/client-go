@@ -67,7 +67,7 @@ func (s *BufferStore) Get(k key.Key) ([]byte, error) {
 		val, err = s.r.Get(k)
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	if len(val) == 0 {
 		return nil, ErrNotExist
@@ -79,11 +79,11 @@ func (s *BufferStore) Get(k key.Key) ([]byte, error) {
 func (s *BufferStore) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
 	bufferIt, err := s.MemBuffer.Iter(k, upperBound)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	retrieverIt, err := s.r.Iter(k, upperBound)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return NewUnionIter(bufferIt, retrieverIt, false)
 }
@@ -92,27 +92,27 @@ func (s *BufferStore) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
 func (s *BufferStore) IterReverse(k key.Key) (Iterator, error) {
 	bufferIt, err := s.MemBuffer.IterReverse(k)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	retrieverIt, err := s.r.IterReverse(k)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return NewUnionIter(bufferIt, retrieverIt, true)
 }
 
 // WalkBuffer iterates all buffered kv pairs.
 func (s *BufferStore) WalkBuffer(f func(k key.Key, v []byte) error) error {
-	return errors.Trace(WalkMemBuffer(s.MemBuffer, f))
+	return errors.WithStack(WalkMemBuffer(s.MemBuffer, f))
 }
 
 // SaveTo saves all buffered kv pairs into a Mutator.
 func (s *BufferStore) SaveTo(m Mutator) error {
 	err := s.WalkBuffer(func(k key.Key, v []byte) error {
 		if len(v) == 0 {
-			return errors.Trace(m.Delete(k))
+			return errors.WithStack(m.Delete(k))
 		}
-		return errors.Trace(m.Set(k, v))
+		return errors.WithStack(m.Set(k, v))
 	})
-	return errors.Trace(err)
+	return errors.WithStack(err)
 }

@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/prometheus/common/log"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/metrics"
@@ -66,12 +66,12 @@ func (txn *Transaction) Get(k key.Key) ([]byte, error) {
 		return nil, err
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	err = txn.tikvStore.CheckVisibility(txn.startTS)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	return ret, nil
@@ -90,7 +90,7 @@ func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
 			continue
 		}
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		if len(val) != 0 {
 			bufferValues[i] = val
@@ -98,7 +98,7 @@ func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
 	}
 	storageValues, err := txn.snapshot.BatchGet(shrinkKeys)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	for i, key := range keys {
 		if bufferValues[i] == nil {
@@ -199,7 +199,7 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 	for _, lockKey := range txn.lockKeys {
 		if _, ok := mutations[string(lockKey)]; !ok {
@@ -215,14 +215,14 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 
 	committer, err := store.NewTxnCommitter(txn.tikvStore, txn.startTS, txn.startTime, mutations)
 	if err != nil || committer == nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 
 	// latches disabled
 	if txn.tikvStore.GetTxnLatches() == nil {
 		err = committer.Execute(ctx)
 		log.Debug("[kv]", txn.startTS, " txnLatches disabled, 2pc directly:", err)
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 
 	// latches enabled
@@ -236,14 +236,14 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 	defer txn.tikvStore.GetTxnLatches().UnLock(lock)
 	if lock.IsStale() {
 		err = errors.Errorf("startTS %d is stale", txn.startTS)
-		return errors.Annotate(err, store.TxnRetryableMark)
+		return errors.WithMessage(err, store.TxnRetryableMark)
 	}
 	err = committer.Execute(ctx)
 	if err == nil {
 		lock.SetCommitTS(committer.GetCommitTS())
 	}
 	log.Debug("[kv]", txn.startTS, " txnLatches enabled while txn retryable:", err)
-	return errors.Trace(err)
+	return errors.WithStack(err)
 }
 
 func (txn *Transaction) Rollback() error {

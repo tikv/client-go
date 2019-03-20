@@ -43,14 +43,14 @@ func (c *codecPDClient) GetRegionByID(ctx context.Context, regionID uint64) (*me
 
 func processRegionResult(region *metapb.Region, peer *metapb.Peer, err error) (*metapb.Region, *metapb.Peer, error) {
 	if err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	if region == nil {
 		return nil, nil, nil
 	}
 	err = codec.DecodeRegionMetaKey(region)
 	if err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	return region, peer, nil
 }

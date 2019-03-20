@@ -51,19 +51,19 @@ func initStore() {
 func puts(args ...[]byte) error {
 	tx, err := client.Begin()
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 
 	for i := 0; i < len(args); i += 2 {
 		key, val := args[i], args[i+1]
 		err := tx.Set(key, val)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 	}
 	err = tx.Commit(context.Background())
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 
 	return nil
@@ -72,11 +72,11 @@ func puts(args ...[]byte) error {
 func get(k []byte) (KV, error) {
 	tx, err := client.Begin()
 	if err != nil {
-		return KV{}, errors.Trace(err)
+		return KV{}, errors.WithStack(err)
 	}
 	v, err := tx.Get(k)
 	if err != nil {
-		return KV{}, errors.Trace(err)
+		return KV{}, errors.WithStack(err)
 	}
 	return KV{K: k, V: v}, nil
 }
@@ -84,17 +84,17 @@ func get(k []byte) (KV, error) {
 func dels(keys ...[]byte) error {
 	tx, err := client.Begin()
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 	for _, key := range keys {
 		err := tx.Delete(key)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 	}
 	err = tx.Commit(context.Background())
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 	return nil
 }
@@ -102,11 +102,11 @@ func dels(keys ...[]byte) error {
 func scan(keyPrefix []byte, limit int) ([]KV, error) {
 	tx, err := client.Begin()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	it, err := tx.Iter(key.Key(keyPrefix), nil)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	defer it.Close()
 	var ret []KV
