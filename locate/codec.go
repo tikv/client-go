@@ -35,8 +35,15 @@ func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte) (*metapb.Regi
 	return processRegionResult(region, peer, err)
 }
 
-// GetRegionByID encodes the key before send requests to pd-server and decodes the
+// GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
+func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte) (*metapb.Region, *metapb.Peer, error) {
+	encodedKey := codec.EncodeBytes(key)
+	region, peer, err := c.Client.GetPrevRegion(ctx, encodedKey)
+	return processRegionResult(region, peer, err)
+}
+
+// GetRegionByID decodes the returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64) (*metapb.Region, *metapb.Peer, error) {
 	region, peer, err := c.Client.GetRegionByID(ctx, regionID)
 	return processRegionResult(region, peer, err)
