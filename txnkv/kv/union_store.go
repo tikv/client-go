@@ -14,7 +14,6 @@
 package kv
 
 import (
-	"github.com/pkg/errors"
 	"github.com/tikv/client-go/key"
 )
 
@@ -187,7 +186,7 @@ func (us *unionStore) Get(k key.Key) ([]byte, error) {
 		v, err = us.BufferStore.r.Get(k)
 	}
 	if err != nil {
-		return v, errors.WithStack(err)
+		return v, err
 	}
 	if len(v) == 0 {
 		return nil, ErrNotExist

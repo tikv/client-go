@@ -14,7 +14,6 @@
 package kv
 
 import (
-	"github.com/pkg/errors"
 	"github.com/tikv/client-go/key"
 )
 
@@ -38,7 +37,7 @@ func (s *mockSnapshot) BatchGet(keys []key.Key) (map[string][]byte, error) {
 			continue
 		}
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, err
 		}
 		m[string(k)] = v
 	}

@@ -14,7 +14,6 @@
 package kv
 
 import (
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/key"
 )
@@ -43,7 +42,7 @@ func NewUnionIter(dirtyIt Iterator, snapshotIt Iterator, reverse bool) (*UnionIt
 	}
 	err := it.updateCur()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 	return it, nil
 }
@@ -52,14 +51,14 @@ func NewUnionIter(dirtyIt Iterator, snapshotIt Iterator, reverse bool) (*UnionIt
 func (iter *UnionIter) dirtyNext() error {
 	err := iter.dirtyIt.Next()
 	iter.dirtyValid = iter.dirtyIt.Valid()
-	return errors.WithStack(err)
+	return err
 }
 
 // snapshotNext makes iter.snapshotIt go and update valid status.
 func (iter *UnionIter) snapshotNext() error {
 	err := iter.snapshotIt.Next()
 	iter.snapshotValid = iter.snapshotIt.Valid()
-	return errors.WithStack(err)
+	return err
 }
 
 func (iter *UnionIter) updateCur() error {
@@ -80,7 +79,7 @@ func (iter *UnionIter) updateCur() error {
 			// if delete it
 			if len(iter.dirtyIt.Value()) == 0 {
 				if err := iter.dirtyNext(); err != nil {
-					return errors.WithStack(err)
+					return err
 				}
 				continue
 			}
@@ -101,15 +100,15 @@ func (iter *UnionIter) updateCur() error {
 					// snapshot has a record, but txn says we have deleted it
 					// just go next
 					if err := iter.dirtyNext(); err != nil {
-						return errors.WithStack(err)
+						return err
 					}
 					if err := iter.snapshotNext(); err != nil {
-						return errors.WithStack(err)
+						return err
 					}
 					continue
 				}
 				if err := iter.snapshotNext(); err != nil {
-					return errors.WithStack(err)
+					return err
 				}
 				iter.curIsDirty = true
 				break
@@ -123,7 +122,7 @@ func (iter *UnionIter) updateCur() error {
 					log.Warnf("[kv] delete a record not exists? k = %q", iter.dirtyIt.Key())
 					// jump over this deletion
 					if err := iter.dirtyNext(); err != nil {
-						return errors.WithStack(err)
+						return err
 					}
 					continue
 				}
@@ -144,10 +143,9 @@ func (iter *UnionIter) Next() error {
 		err = iter.dirtyNext()
 	}
 	if err != nil {
-		return errors.WithStack(err)
+		return err
 	}
-	err = iter.updateCur()
-	return errors.WithStack(err)
+	return iter.updateCur()
 }
 
 // Value implements the Iterator Value interface.
