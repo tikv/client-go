@@ -84,7 +84,7 @@ type EtcdSafePointKV struct {
 func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config) (*EtcdSafePointKV, error) {
 	etcdCli, err := createEtcdKV(addrs, tlsConfig)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 	return &EtcdSafePointKV{cli: etcdCli}, nil
 }
@@ -135,7 +135,7 @@ func saveSafePoint(kv SafePointKV, key string, t uint64) error {
 	err := kv.Put(GcSavedSafePoint, s)
 	if err != nil {
 		log.Error("save safepoint failed:", err)
-		return errors.WithStack(err)
+		return err
 	}
 	return nil
 }
@@ -144,7 +144,7 @@ func loadSafePoint(kv SafePointKV, key string) (uint64, error) {
 	str, err := kv.Get(GcSavedSafePoint)
 
 	if err != nil {
-		return 0, errors.WithStack(err)
+		return 0, err
 	}
 
 	if str == "" {

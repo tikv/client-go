@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	pd "github.com/pingcap/pd/client"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/locate"
@@ -64,22 +64,22 @@ func NewStore(pdAddrs []string, security config.Security) (*TiKVStore, error) {
 		KeyPath:  security.SSLKey,
 	})
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	oracle, err := oracles.NewPdOracle(pdCli, time.Duration(oracleUpdateInterval)*time.Millisecond)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	tlsConfig, err := security.ToTLSConfig()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	spkv, err := NewEtcdSafePointKV(pdAddrs, tlsConfig)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	clusterID := pdCli.GetClusterID(context.TODO())
@@ -156,7 +156,7 @@ func (s *TiKVStore) Close() error {
 
 	close(s.closed)
 	if err := s.client.Close(); err != nil {
-		return errors.WithStack(err)
+		return err
 	}
 
 	if s.txnLatches != nil {
@@ -174,7 +174,7 @@ func (s *TiKVStore) GetTimestampWithRetry(bo *retry.Backoffer) (uint64, error) {
 		}
 		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get timestamp failed: %v", err))
 		if err != nil {
-			return 0, errors.WithStack(err)
+			return 0, err
 		}
 	}
 }
