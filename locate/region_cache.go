@@ -493,7 +493,7 @@ func (c *RegionCache) OnRegionStale(ctx *RPCContext, newRegions []*metapb.Region
 	c.dropRegionFromCache(ctx.Region)
 
 	for _, meta := range newRegions {
-		if _, ok := c.pdClient.(*codecPDClient); ok {
+		if _, ok := c.pdClient.(*CodecPDClient); ok {
 			if err := codec.DecodeRegionMetaKey(meta); err != nil {
 				return errors.Errorf("newRegion's range key is not encoded: %v, %v", meta, err)
 			}

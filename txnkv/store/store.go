@@ -89,7 +89,7 @@ func NewStore(pdAddrs []string, security config.Security) (*TiKVStore, error) {
 		uuid:        fmt.Sprintf("tikv-%d", clusterID),
 		oracle:      oracle,
 		client:      rpc.NewRPCClient(security),
-		pdClient:    &codecPDClient{pdCli},
+		pdClient:    &locate.CodecPDClient{Client: pdCli},
 		regionCache: locate.NewRegionCache(pdCli),
 		etcdAddrs:   pdAddrs,
 		tlsConfig:   tlsConfig,
