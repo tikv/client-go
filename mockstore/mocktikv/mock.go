@@ -14,7 +14,7 @@
 package mocktikv
 
 import (
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/pingcap/pd/client"
 )
 

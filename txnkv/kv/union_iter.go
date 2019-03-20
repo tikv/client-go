@@ -14,7 +14,7 @@
 package kv
 
 import (
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/key"
 )

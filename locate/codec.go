@@ -16,7 +16,7 @@ package locate
 import (
 	"context"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	pd "github.com/pingcap/pd/client"
 	"github.com/tikv/client-go/codec"

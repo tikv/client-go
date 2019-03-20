@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/config"

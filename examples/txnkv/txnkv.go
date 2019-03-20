@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/txnkv"

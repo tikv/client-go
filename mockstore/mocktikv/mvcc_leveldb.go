@@ -18,7 +18,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/pingcap/goleveldb/leveldb"
 	"github.com/pingcap/goleveldb/leveldb/iterator"
 	"github.com/pingcap/goleveldb/leveldb/opt"

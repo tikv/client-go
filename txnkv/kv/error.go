@@ -14,7 +14,7 @@
 package kv
 
 import (
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 )
 
 var (

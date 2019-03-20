@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/pingcap/pd/client"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/metrics"

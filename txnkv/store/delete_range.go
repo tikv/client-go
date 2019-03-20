@@ -17,8 +17,8 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/rpc"
 )

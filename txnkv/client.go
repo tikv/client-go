@@ -16,7 +16,7 @@ package txnkv
 import (
 	"context"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/txnkv/store"

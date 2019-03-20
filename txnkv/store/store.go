@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	pd "github.com/pingcap/pd/client"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/config"

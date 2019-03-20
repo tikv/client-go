@@ -14,7 +14,7 @@
 package codec
 
 import (
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 )
 
