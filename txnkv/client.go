@@ -16,7 +16,6 @@ package txnkv
 import (
 	"context"
 
-	"github.com/pkg/errors"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/txnkv/store"
@@ -29,7 +28,7 @@ type TxnClient struct {
 func NewTxnClient(pdAddrs []string, security config.Security) (*TxnClient, error) {
 	tikvStore, err := store.NewStore(pdAddrs, security)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 	return &TxnClient{
 		tikvStore: tikvStore,
@@ -37,14 +36,13 @@ func NewTxnClient(pdAddrs []string, security config.Security) (*TxnClient, error
 }
 
 func (c *TxnClient) Close() error {
-	err := c.tikvStore.Close()
-	return errors.WithStack(err)
+	return c.tikvStore.Close()
 }
 
 func (c *TxnClient) Begin() (*Transaction, error) {
 	ts, err := c.GetTS()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 	return c.BeginWithTS(ts), nil
 }

@@ -24,9 +24,9 @@ import (
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/metrics"
@@ -203,7 +203,7 @@ func (a *connArray) Init(addr string, security config.Security) error {
 	if len(security.SSLCA) != 0 {
 		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
-			return errors.WithStack(err)
+			return err
 		}
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
@@ -557,7 +557,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 
 	connArray, err := c.getConnArray(addr)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	if config.MaxBatchSize > 0 {
@@ -580,7 +580,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 	defer cancel()
 	resp, err := CallRPC(ctx1, client, req)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -596,7 +596,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.WithStack(err)
+			return nil, err
 		}
 		log.Debug("copstream returns nothing for the request.")
 	}

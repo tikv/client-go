@@ -66,7 +66,7 @@ func (l *mvccLock) MarshalBinary() ([]byte, error) {
 	mh.WriteSlice(&buf, l.value)
 	mh.WriteNumber(&buf, l.op)
 	mh.WriteNumber(&buf, l.ttl)
-	return buf.Bytes(), err
+	return buf.Bytes(), mh.err
 }
 
 // UnmarshalBinary implements encoding.BinaryUnmarshaler interface.
@@ -78,7 +78,7 @@ func (l *mvccLock) UnmarshalBinary(data []byte) error {
 	mh.ReadSlice(buf, &l.value)
 	mh.ReadNumber(buf, &l.op)
 	mh.ReadNumber(buf, &l.ttl)
-	return err
+	return mh.err
 }
 
 // MarshalBinary implements encoding.BinaryMarshaler interface.
@@ -91,7 +91,7 @@ func (v mvccValue) MarshalBinary() ([]byte, error) {
 	mh.WriteNumber(&buf, v.startTS)
 	mh.WriteNumber(&buf, v.commitTS)
 	mh.WriteSlice(&buf, v.value)
-	return buf.Bytes(), err
+	return buf.Bytes(), mh.err
 }
 
 // UnmarshalBinary implements encoding.BinaryUnmarshaler interface.
@@ -104,7 +104,7 @@ func (v *mvccValue) UnmarshalBinary(data []byte) error {
 	mh.ReadNumber(buf, &v.startTS)
 	mh.ReadNumber(buf, &v.commitTS)
 	mh.ReadSlice(buf, &v.value)
-	return err
+	return mh.err
 }
 
 type marshalHelper struct {
