@@ -66,12 +66,12 @@ func (txn *Transaction) Get(k key.Key) ([]byte, error) {
 		return nil, err
 	}
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	err = txn.tikvStore.CheckVisibility(txn.startTS)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 
 	return ret, nil
@@ -90,7 +90,7 @@ func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
 			continue
 		}
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return nil, err
 		}
 		if len(val) != 0 {
 			bufferValues[i] = val
@@ -98,7 +98,7 @@ func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
 	}
 	storageValues, err := txn.snapshot.BatchGet(shrinkKeys)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 	for i, key := range keys {
 		if bufferValues[i] == nil {
@@ -199,7 +199,7 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
-		return errors.WithStack(err)
+		return err
 	}
 	for _, lockKey := range txn.lockKeys {
 		if _, ok := mutations[string(lockKey)]; !ok {
@@ -215,14 +215,14 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 
 	committer, err := store.NewTxnCommitter(txn.tikvStore, txn.startTS, txn.startTime, mutations)
 	if err != nil || committer == nil {
-		return errors.WithStack(err)
+		return err
 	}
 
 	// latches disabled
 	if txn.tikvStore.GetTxnLatches() == nil {
 		err = committer.Execute(ctx)
 		log.Debug("[kv]", txn.startTS, " txnLatches disabled, 2pc directly:", err)
-		return errors.WithStack(err)
+		return err
 	}
 
 	// latches enabled
@@ -243,7 +243,7 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 		lock.SetCommitTS(committer.GetCommitTS())
 	}
 	log.Debug("[kv]", txn.startTS, " txnLatches enabled while txn retryable:", err)
-	return errors.WithStack(err)
+	return err
 }
 
 func (txn *Transaction) Rollback() error {
