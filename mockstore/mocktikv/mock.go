@@ -14,7 +14,6 @@
 package mocktikv
 
 import (
-	"github.com/pkg/errors"
 	"github.com/pingcap/pd/client"
 )
 
@@ -29,7 +28,7 @@ func NewTiKVAndPDClient(cluster *Cluster, mvccStore MVCCStore, path string) (*RP
 		var err error
 		mvccStore, err = NewMVCCLevelDB(path)
 		if err != nil {
-			return nil, nil, errors.WithStack(err)
+			return nil, nil, err
 		}
 	}
 
