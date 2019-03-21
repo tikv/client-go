@@ -16,7 +16,7 @@ package codec
 import (
 	"encoding/binary"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 )
 
 const signMask uint64 = 0x8000000000000000

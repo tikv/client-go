@@ -13,6 +13,6 @@
 
 package rawkv
 
-import "github.com/pingcap/errors"
+import "github.com/pkg/errors"
 
 var ErrBodyMissing = errors.New("response body is missing")

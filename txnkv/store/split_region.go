@@ -17,8 +17,8 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/retry"
@@ -41,7 +41,7 @@ func SplitRegion(store *TiKVStore, splitKey key.Key) error {
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, splitKey)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if bytes.Equal(splitKey, loc.StartKey) {
 			log.Infof("skip split_region region at %q", splitKey)
@@ -49,16 +49,16 @@ func SplitRegion(store *TiKVStore, splitKey key.Key) error {
 		}
 		res, err := sender.SendReq(bo, req, loc.Region, rpc.ReadTimeoutShort)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		regionErr, err := res.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			err := bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			continue
 		}

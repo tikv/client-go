@@ -20,7 +20,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/metrics"
 )
@@ -178,7 +178,7 @@ func NewBackoffer(ctx context.Context, maxSleep int) *Backoffer {
 func (b *Backoffer) Backoff(typ BackoffType, err error) error {
 	select {
 	case <-b.ctx.Done():
-		return errors.Trace(err)
+		return err
 	default:
 	}
 
