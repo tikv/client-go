@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/txnkv"
@@ -51,32 +50,27 @@ func initStore() {
 func puts(args ...[]byte) error {
 	tx, err := client.Begin()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	for i := 0; i < len(args); i += 2 {
 		key, val := args[i], args[i+1]
 		err := tx.Set(key, val)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
-	err = tx.Commit(context.Background())
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	return nil
+	return tx.Commit(context.Background())
 }
 
 func get(k []byte) (KV, error) {
 	tx, err := client.Begin()
 	if err != nil {
-		return KV{}, errors.Trace(err)
+		return KV{}, err
 	}
 	v, err := tx.Get(k)
 	if err != nil {
-		return KV{}, errors.Trace(err)
+		return KV{}, err
 	}
 	return KV{K: k, V: v}, nil
 }
@@ -84,29 +78,25 @@ func get(k []byte) (KV, error) {
 func dels(keys ...[]byte) error {
 	tx, err := client.Begin()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	for _, key := range keys {
 		err := tx.Delete(key)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
-	err = tx.Commit(context.Background())
-	if err != nil {
-		return errors.Trace(err)
-	}
-	return nil
+	return tx.Commit(context.Background())
 }
 
 func scan(keyPrefix []byte, limit int) ([]KV, error) {
 	tx, err := client.Begin()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	it, err := tx.Iter(key.Key(keyPrefix), nil)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	defer it.Close()
 	var ret []KV

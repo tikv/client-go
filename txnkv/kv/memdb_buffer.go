@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/pingcap/goleveldb/leveldb"
 	"github.com/pingcap/goleveldb/leveldb/comparer"
 	"github.com/pingcap/goleveldb/leveldb/iterator"
@@ -58,7 +58,7 @@ func (m *memDbBuffer) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
 
 	err := i.Next()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return i, nil
 }
@@ -90,7 +90,7 @@ func (m *memDbBuffer) Get(k key.Key) ([]byte, error) {
 // Set associates key with value.
 func (m *memDbBuffer) Set(k key.Key, v []byte) error {
 	if len(v) == 0 {
-		return errors.Trace(ErrCannotSetNilValue)
+		return errors.WithStack(ErrCannotSetNilValue)
 	}
 	if len(k)+len(v) > m.entrySizeLimit {
 		return errors.WithMessage(ErrEntryTooLarge, fmt.Sprintf("entry too large, size: %d", len(k)+len(v)))
@@ -103,13 +103,13 @@ func (m *memDbBuffer) Set(k key.Key, v []byte) error {
 	if m.Len() > int(m.bufferLenLimit) {
 		return errors.WithMessage(ErrTxnTooLarge, fmt.Sprintf("transaction too large, size:%d", m.Size()))
 	}
-	return errors.Trace(err)
+	return errors.WithStack(err)
 }
 
 // Delete removes the entry from buffer with provided key.
 func (m *memDbBuffer) Delete(k key.Key) error {
 	err := m.db.Put(k, nil)
-	return errors.Trace(err)
+	return errors.WithStack(err)
 }
 
 // Size returns sum of keys and values length.
@@ -161,17 +161,17 @@ func (i *memDbIter) Close() {
 func WalkMemBuffer(memBuf MemBuffer, f func(k key.Key, v []byte) error) error {
 	iter, err := memBuf.Iter(nil, nil)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 
 	defer iter.Close()
 	for iter.Valid() {
 		if err = f(iter.Key(), iter.Value()); err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		err = iter.Next()
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 	}
 

@@ -17,8 +17,8 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/rpc"
 )
@@ -61,7 +61,7 @@ func (t *DeleteRangeTask) Execute() error {
 		bo := retry.NewBackoffer(t.ctx, retry.DeleteRangeOneRegionMaxBackoff)
 		loc, err := t.store.GetRegionCache().LocateKey(bo, startKey)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		// Delete to the end of the region, except if it's the last region overlapping the range
@@ -81,22 +81,22 @@ func (t *DeleteRangeTask) Execute() error {
 
 		resp, err := t.store.SendReq(bo, req, loc.Region, rpc.ReadTimeoutMedium)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			continue
 		}
 		deleteRangeResp := resp.DeleteRange
 		if deleteRangeResp == nil {
-			return errors.Trace(rpc.ErrBodyMissing)
+			return errors.WithStack(rpc.ErrBodyMissing)
 		}
 		if err := deleteRangeResp.GetError(); err != "" {
 			return errors.Errorf("unexpected delete range err: %v", err)

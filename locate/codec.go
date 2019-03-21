@@ -16,7 +16,6 @@ package locate
 import (
 	"context"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	pd "github.com/pingcap/pd/client"
 	"github.com/tikv/client-go/codec"
@@ -51,14 +50,14 @@ func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64) (*me
 
 func processRegionResult(region *metapb.Region, peer *metapb.Peer, err error) (*metapb.Region, *metapb.Peer, error) {
 	if err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, err
 	}
 	if region == nil {
 		return nil, nil, nil
 	}
 	err = codec.DecodeRegionMetaKey(region)
 	if err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, err
 	}
 	return region, peer, nil
 }

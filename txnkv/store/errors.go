@@ -16,7 +16,7 @@ package store
 import (
 	"fmt"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/key"
 )
 

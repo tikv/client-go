@@ -17,8 +17,8 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/pingcap/errors"
 	pb "github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/retry"
@@ -54,7 +54,7 @@ func newScanner(snapshot *TiKVSnapshot, startKey []byte, endKey []byte, batchSiz
 	if kv.IsErrNotFound(err) {
 		return scanner, nil
 	}
-	return scanner, errors.Trace(err)
+	return scanner, err
 }
 
 // Valid return valid.
@@ -94,7 +94,7 @@ func (s *Scanner) Next() error {
 			err := s.getData(bo)
 			if err != nil {
 				s.Close()
-				return errors.Trace(err)
+				return err
 			}
 			if s.idx >= len(s.cache) {
 				continue
@@ -112,7 +112,7 @@ func (s *Scanner) Next() error {
 			// 'current' would be modified if the lock being resolved
 			if err := s.resolveCurrentLock(bo, current); err != nil {
 				s.Close()
-				return errors.Trace(err)
+				return err
 			}
 
 			// The check here does not violate the KeyOnly semantic, because current's value
@@ -138,7 +138,7 @@ func (s *Scanner) startTS() uint64 {
 func (s *Scanner) resolveCurrentLock(bo *retry.Backoffer, current *pb.KvPair) error {
 	val, err := s.snapshot.get(bo, key.Key(current.Key))
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	current.Error = nil
 	current.Value = val
@@ -152,7 +152,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 	for {
 		loc, err := s.snapshot.store.regionCache.LocateKey(bo, s.nextStartKey)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		reqEndKey := s.endKey
@@ -176,28 +176,28 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		}
 		resp, err := sender.SendReq(bo, req, loc.Region, rpc.ReadTimeoutMedium)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			log.Debugf("scanner getData failed: %s", regionErr)
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			continue
 		}
 		cmdScanResp := resp.Scan
 		if cmdScanResp == nil {
-			return errors.Trace(rpc.ErrBodyMissing)
+			return errors.WithStack(rpc.ErrBodyMissing)
 		}
 
 		err = s.snapshot.store.CheckVisibility(s.startTS())
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		kvPairs := cmdScanResp.Pairs
@@ -206,7 +206,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			if keyErr := pair.GetError(); keyErr != nil {
 				lock, err := extractLockFromKeyErr(keyErr)
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 				pair.Key = lock.Key
 			}

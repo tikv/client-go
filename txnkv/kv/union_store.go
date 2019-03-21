@@ -14,7 +14,6 @@
 package kv
 
 import (
-	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/key"
 )
 
@@ -187,7 +186,7 @@ func (us *unionStore) Get(k key.Key) ([]byte, error) {
 		v, err = us.BufferStore.r.Get(k)
 	}
 	if err != nil {
-		return v, errors.Trace(err)
+		return v, err
 	}
 	if len(v) == 0 {
 		return nil, ErrNotExist

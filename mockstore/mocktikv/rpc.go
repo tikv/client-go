@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/rpc"
 )
 
@@ -754,7 +754,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *rpc.Reque
 		// copStream, err := handler.handleCopStream(ctx1, r)
 		// if err != nil {
 		// 	cancel()
-		// 	return nil, errors.Trace(err)
+		// 	return nil, err
 		// }
 
 		// streamResp := &rpc.CopStreamResponse{
@@ -766,7 +766,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *rpc.Reque
 
 		// first, err := streamResp.Recv()
 		// if err != nil {
-		// 	return nil, errors.Trace(err)
+		// 	return nil, err
 		// }
 		// streamResp.Response = first
 		// resp.CopStream = streamResp

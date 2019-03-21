@@ -16,7 +16,7 @@ package codec
 import (
 	"bytes"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 )
 
 const (
