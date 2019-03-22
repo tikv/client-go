@@ -27,13 +27,9 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/codec"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/metrics"
 	"github.com/tikv/client-go/retry"
-)
-
-const (
-	btreeDegree             = 32
-	rcDefaultRegionCacheTTL = time.Minute * 10
 )
 
 // CachedRegion encapsulates {Region, TTL}
@@ -45,7 +41,7 @@ type CachedRegion struct {
 func (c *CachedRegion) isValid() bool {
 	lastAccess := atomic.LoadInt64(&c.lastAccess)
 	lastAccessTime := time.Unix(lastAccess, 0)
-	return time.Since(lastAccessTime) < rcDefaultRegionCacheTTL
+	return time.Since(lastAccessTime) < config.RegionCacheTTL
 }
 
 // RegionCache caches Regions loaded from PD.
@@ -69,7 +65,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		pdClient: pdClient,
 	}
 	c.mu.regions = make(map[RegionVerID]*CachedRegion)
-	c.mu.sorted = btree.New(btreeDegree)
+	c.mu.sorted = btree.New(config.RegionCacheBTreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
 	return c
 }

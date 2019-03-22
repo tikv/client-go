@@ -24,20 +24,8 @@ import (
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/tikv/client-go/config"
 	"google.golang.org/grpc"
-)
-
-// Safe point constants.
-const (
-	// This is almost the same as 'tikv_gc_safe_point' in the table 'mysql.tidb',
-	// save this to pd instead of tikv, because we can't use interface of table
-	// if the safepoint on tidb is expired.
-	GcSavedSafePoint = "/tidb/store/gcworker/saved_safe_point"
-
-	GcSafePointCacheInterval       = time.Second * 100
-	gcCPUTimeInaccuracyBound       = time.Second
-	gcSafePointUpdateInterval      = time.Second * 10
-	gcSafePointQuickRepeatInterval = time.Second
 )
 
 // SafePointKV is used for a seamingless integration for mockTest and runtime.
@@ -132,7 +120,7 @@ func (w *EtcdSafePointKV) Get(k string) (string, error) {
 
 func saveSafePoint(kv SafePointKV, key string, t uint64) error {
 	s := strconv.FormatUint(t, 10)
-	err := kv.Put(GcSavedSafePoint, s)
+	err := kv.Put(config.GcSavedSafePoint, s)
 	if err != nil {
 		log.Error("save safepoint failed:", err)
 		return err
@@ -141,7 +129,7 @@ func saveSafePoint(kv SafePointKV, key string, t uint64) error {
 }
 
 func loadSafePoint(kv SafePointKV, key string) (uint64, error) {
-	str, err := kv.Get(GcSavedSafePoint)
+	str, err := kv.Get(config.GcSavedSafePoint)
 
 	if err != nil {
 		return 0, err

@@ -33,9 +33,6 @@ import (
 	"github.com/tikv/client-go/txnkv/oracle/oracles"
 )
 
-// update oracle's lastTS every 2000ms.
-var oracleUpdateInterval = 2000
-
 // TiKVStore contains methods to interact with a TiKV cluster.
 type TiKVStore struct {
 	clusterID    uint64
@@ -67,7 +64,7 @@ func NewStore(pdAddrs []string, security config.Security) (*TiKVStore, error) {
 		return nil, err
 	}
 
-	oracle, err := oracles.NewPdOracle(pdCli, time.Duration(oracleUpdateInterval)*time.Millisecond)
+	oracle, err := oracles.NewPdOracle(pdCli, time.Duration(config.OracleUpdateInterval)*time.Millisecond)
 	if err != nil {
 		return nil, err
 	}
@@ -180,21 +177,21 @@ func (s *TiKVStore) GetTimestampWithRetry(bo *retry.Backoffer) (uint64, error) {
 }
 
 func (s *TiKVStore) runSafePointChecker() {
-	d := gcSafePointUpdateInterval
+	d := config.GcSafePointUpdateInterval
 	for {
 		select {
 		case spCachedTime := <-time.After(d):
-			cachedSafePoint, err := loadSafePoint(s.spkv, GcSavedSafePoint)
+			cachedSafePoint, err := loadSafePoint(s.spkv, config.GcSavedSafePoint)
 			if err == nil {
 				metrics.LoadSafepointCounter.WithLabelValues("ok").Inc()
 				s.spMutex.Lock()
 				s.safePoint, s.spTime = cachedSafePoint, spCachedTime
 				s.spMutex.Unlock()
-				d = gcSafePointUpdateInterval
+				d = config.GcSafePointUpdateInterval
 			} else {
 				metrics.LoadSafepointCounter.WithLabelValues("fail").Inc()
 				log.Errorf("fail to load safepoint from pd: %v", err)
-				d = gcSafePointQuickRepeatInterval
+				d = config.GcSafePointQuickRepeatInterval
 			}
 		case <-s.Closed():
 			return
@@ -211,7 +208,7 @@ func (s *TiKVStore) CheckVisibility(startTS uint64) error {
 	s.spMutex.RUnlock()
 	diff := time.Since(cachedTime)
 
-	if diff > (GcSafePointCacheInterval - gcCPUTimeInaccuracyBound) {
+	if diff > (config.GcSafePointCacheInterval - config.GcCPUTimeInaccuracyBound) {
 		return errors.WithStack(ErrPDServerTimeout)
 	}
 

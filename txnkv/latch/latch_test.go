@@ -19,6 +19,7 @@ import (
 	"time"
 
 	. "github.com/pingcap/check"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/txnkv/oracle"
 )
 
@@ -142,7 +143,7 @@ func (s *testLatchSuite) TestRecycle(c *C) {
 	}
 	c.Assert(allEmpty, IsFalse)
 
-	currentTS := oracle.ComposeTS(oracle.GetPhysical(now.Add(expireDuration)), 3)
+	currentTS := oracle.ComposeTS(oracle.GetPhysical(now.Add(config.LatchExpireDuration)), 3)
 	latches.recycle(currentTS)
 
 	for i := 0; i < len(latches.slots); i++ {

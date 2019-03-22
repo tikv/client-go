@@ -143,15 +143,15 @@ func txnLockTTL(startTime time.Time, txnSize int) uint64 {
 	// The formula is `ttl = ttlFactor * sqrt(sizeInMiB)`.
 	// When writeSize is less than 256KB, the base ttl is defaultTTL (3s);
 	// When writeSize is 1MiB, 100MiB, or 400MiB, ttl is 6s, 60s, 120s correspondingly;
-	lockTTL := defaultLockTTL
-	if txnSize >= txnCommitBatchSize {
+	lockTTL := config.TxnDefaultLockTTL
+	if txnSize >= config.TxnCommitBatchSize {
 		sizeMiB := float64(txnSize) / bytesPerMiB
-		lockTTL = uint64(float64(ttlFactor) * math.Sqrt(sizeMiB))
-		if lockTTL < defaultLockTTL {
-			lockTTL = defaultLockTTL
+		lockTTL = uint64(float64(config.TxnTTLFactor) * math.Sqrt(sizeMiB))
+		if lockTTL < config.TxnDefaultLockTTL {
+			lockTTL = config.TxnDefaultLockTTL
 		}
-		if lockTTL > maxLockTTL {
-			lockTTL = maxLockTTL
+		if lockTTL > config.TxnMaxLockTTL {
+			lockTTL = config.TxnMaxLockTTL
 		}
 	}
 
@@ -183,10 +183,10 @@ func (c *TxnCommitter) doActionOnKeys(bo *retry.Backoffer, action commitAction, 
 		atomic.AddInt32(&c.detail.PrewriteRegionNum, int32(len(groups)))
 	}
 	// Make sure the group that contains primary key goes first.
-	batches = appendBatchBySize(batches, firstRegion, groups[firstRegion], sizeFunc, txnCommitBatchSize)
+	batches = appendBatchBySize(batches, firstRegion, groups[firstRegion], sizeFunc, config.TxnCommitBatchSize)
 	delete(groups, firstRegion)
 	for id, g := range groups {
-		batches = appendBatchBySize(batches, id, g, sizeFunc, txnCommitBatchSize)
+		batches = appendBatchBySize(batches, id, g, sizeFunc, config.TxnCommitBatchSize)
 	}
 
 	firstIsPrimary := bytes.Equal(keys[0], c.primary())
@@ -318,7 +318,7 @@ func (c *TxnCommitter) prewriteSingleBatch(bo *retry.Backoffer, batch batchKeys)
 		},
 	}
 	for {
-		resp, err := c.store.SendReq(bo, req, batch.region, rpc.ReadTimeoutShort)
+		resp, err := c.store.SendReq(bo, req, batch.region, config.ReadTimeoutShort)
 		if err != nil {
 			return err
 		}
@@ -399,7 +399,7 @@ func (c *TxnCommitter) commitSingleBatch(bo *retry.Backoffer, batch batchKeys) e
 	req.Context.Priority = c.Priority
 
 	sender := rpc.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetRPCClient())
-	resp, err := sender.SendReq(bo, req, batch.region, rpc.ReadTimeoutShort)
+	resp, err := sender.SendReq(bo, req, batch.region, config.ReadTimeoutShort)
 
 	// If we fail to receive response for the request that commits primary key, it will be undetermined whether this
 	// transaction has been successfully committed.
@@ -470,7 +470,7 @@ func (c *TxnCommitter) cleanupSingleBatch(bo *retry.Backoffer, batch batchKeys) 
 			SyncLog:  c.SyncLog,
 		},
 	}
-	resp, err := c.store.SendReq(bo, req, batch.region, rpc.ReadTimeoutShort)
+	resp, err := c.store.SendReq(bo, req, batch.region, config.ReadTimeoutShort)
 	if err != nil {
 		return err
 	}
