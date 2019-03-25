@@ -21,25 +21,29 @@ import (
 	"github.com/tikv/client-go/txnkv/store"
 )
 
-type TxnClient struct {
+// Client is a transactional client of TiKV server.
+type Client struct {
 	tikvStore *store.TiKVStore
 }
 
-func NewTxnClient(pdAddrs []string, security config.Security) (*TxnClient, error) {
+// NewClient creates a client with PD addresses.
+func NewClient(pdAddrs []string, security config.Security) (*Client, error) {
 	tikvStore, err := store.NewStore(pdAddrs, security)
 	if err != nil {
 		return nil, err
 	}
-	return &TxnClient{
+	return &Client{
 		tikvStore: tikvStore,
 	}, nil
 }
 
-func (c *TxnClient) Close() error {
+// Close stop the client.
+func (c *Client) Close() error {
 	return c.tikvStore.Close()
 }
 
-func (c *TxnClient) Begin() (*Transaction, error) {
+// Begin creates a transaction for read/write.
+func (c *Client) Begin() (*Transaction, error) {
 	ts, err := c.GetTS()
 	if err != nil {
 		return nil, err
@@ -47,10 +51,12 @@ func (c *TxnClient) Begin() (*Transaction, error) {
 	return c.BeginWithTS(ts), nil
 }
 
-func (c *TxnClient) BeginWithTS(ts uint64) *Transaction {
+// BeginWithTS creates a transaction which is normally readonly.
+func (c *Client) BeginWithTS(ts uint64) *Transaction {
 	return newTransaction(c.tikvStore, ts)
 }
 
-func (c *TxnClient) GetTS() (uint64, error) {
+// GetTS returns a latest timestamp.
+func (c *Client) GetTS() (uint64, error) {
 	return c.tikvStore.GetTimestampWithRetry(retry.NewBackoffer(context.TODO(), retry.TsoMaxBackoff))
 }

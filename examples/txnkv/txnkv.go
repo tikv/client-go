@@ -24,6 +24,7 @@ import (
 	"github.com/tikv/client-go/txnkv"
 )
 
+// KV represents a Key-Value pair.
 type KV struct {
 	K, V []byte
 }
@@ -33,14 +34,14 @@ func (kv KV) String() string {
 }
 
 var (
-	client *txnkv.TxnClient
+	client *txnkv.Client
 	pdAddr = flag.String("pd", "127.0.0.1:2379", "pd address")
 )
 
 // Init initializes information.
 func initStore() {
 	var err error
-	client, err = txnkv.NewTxnClient([]string{*pdAddr}, config.Security{})
+	client, err = txnkv.NewClient([]string{*pdAddr}, config.Security{})
 	if err != nil {
 		panic(err)
 	}

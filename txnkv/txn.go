@@ -27,6 +27,7 @@ import (
 	"github.com/tikv/client-go/txnkv/store"
 )
 
+// Transaction is a key-value transaction.
 type Transaction struct {
 	tikvStore *store.TiKVStore
 	snapshot  *store.TiKVSnapshot
@@ -77,6 +78,7 @@ func (txn *Transaction) Get(k key.Key) ([]byte, error) {
 	return ret, nil
 }
 
+// BatchGet gets a batch of values from TiKV server.
 func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
 	if txn.IsReadOnly() {
 		return txn.snapshot.BatchGet(keys)
@@ -109,6 +111,7 @@ func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
 	return storageValues, nil
 }
 
+// Set sets the value for key k as v into kv store.
 func (txn *Transaction) Set(k key.Key, v []byte) error {
 	txn.setCnt++
 	return txn.us.Set(k, v)
@@ -118,6 +121,10 @@ func (txn *Transaction) String() string {
 	return fmt.Sprintf("txn-%d", txn.startTS)
 }
 
+// Iter creates an Iterator positioned on the first entry that k <= entry's key.
+// If such entry is not found, it returns an invalid Iterator with no error.
+// It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
+// The Iterator must be Closed after use.
 func (txn *Transaction) Iter(k key.Key, upperBound key.Key) (kv.Iterator, error) {
 	metrics.TxnCmdCounter.WithLabelValues("seek").Inc()
 	start := time.Now()
@@ -137,15 +144,19 @@ func (txn *Transaction) IterReverse(k key.Key) (kv.Iterator, error) {
 	return txn.us.IterReverse(k)
 }
 
+// IsReadOnly returns if there are pending key-value to commit in the transaction.
 func (txn *Transaction) IsReadOnly() bool {
 	return txn.us.GetMemBuffer().Len() == 0 && len(txn.lockKeys) == 0
 }
 
+// Delete removes the entry for key k from kv store.
 func (txn *Transaction) Delete(k key.Key) error {
 	metrics.TxnCmdCounter.WithLabelValues("delete").Inc()
 	return txn.us.Delete(k)
 }
 
+// SetOption sets an option with a value, when val is nil, uses the default
+// value of this option.
 func (txn *Transaction) SetOption(opt kv.Option, val interface{}) {
 	txn.us.SetOption(opt, val)
 	switch opt {
@@ -160,6 +171,7 @@ func (txn *Transaction) SetOption(opt kv.Option, val interface{}) {
 	}
 }
 
+// DelOption deletes an option.
 func (txn *Transaction) DelOption(opt kv.Option) {
 	txn.us.DelOption(opt)
 }
@@ -168,6 +180,7 @@ func (txn *Transaction) close() {
 	txn.valid = false
 }
 
+// Commit commits the transaction operations to KV store.
 func (txn *Transaction) Commit(ctx context.Context) error {
 	if !txn.valid {
 		return kv.ErrInvalidTxn
@@ -246,6 +259,7 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 	return err
 }
 
+// Rollback undoes the transaction operations to KV store.
 func (txn *Transaction) Rollback() error {
 	if !txn.valid {
 		return kv.ErrInvalidTxn
@@ -257,6 +271,7 @@ func (txn *Transaction) Rollback() error {
 	return nil
 }
 
+// LockKeys tries to lock the entries with the keys in KV store.
 func (txn *Transaction) LockKeys(keys ...key.Key) error {
 	metrics.TxnCmdCounter.WithLabelValues("lock_keys").Inc()
 	for _, key := range keys {
@@ -265,14 +280,18 @@ func (txn *Transaction) LockKeys(keys ...key.Key) error {
 	return nil
 }
 
+// Valid returns if the transaction is valid.
+// A transaction become invalid after commit or rollback.
 func (txn *Transaction) Valid() bool {
 	return txn.valid
 }
 
+// Len returns the count of key-value pairs in the transaction's memory buffer.
 func (txn *Transaction) Len() int {
 	return txn.us.Len()
 }
 
+// Size returns the length (in bytes) of the transaction's memory buffer.
 func (txn *Transaction) Size() int {
 	return txn.us.Size()
 }

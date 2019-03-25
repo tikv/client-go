@@ -31,7 +31,7 @@ func TestT(t *testing.T) {
 
 type testRawKVSuite struct {
 	cluster *mocktikv.Cluster
-	client  *RawKVClient
+	client  *Client
 	bo      *retry.Backoffer
 }
 
@@ -42,7 +42,7 @@ func (s *testRawKVSuite) SetUpTest(c *C) {
 	mocktikv.BootstrapWithSingleStore(s.cluster)
 	pdClient := mocktikv.NewPDClient(s.cluster)
 	mvccStore := mocktikv.MustNewMVCCStore()
-	s.client = &RawKVClient{
+	s.client = &Client{
 		clusterID:   0,
 		regionCache: locate.NewRegionCache(pdClient),
 		pdClient:    pdClient,
