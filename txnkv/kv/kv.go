@@ -40,7 +40,7 @@ type Retriever interface {
 	// Iter creates an Iterator positioned on the first entry that k <= entry's key.
 	// If such entry is not found, it returns an invalid Iterator with no error.
 	// It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
-	// The Iterator must be Closed after use.
+	// The Iterator must be closed after use.
 	Iter(k key.Key, upperBound key.Key) (Iterator, error)
 
 	// IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.

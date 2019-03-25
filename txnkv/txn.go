@@ -124,7 +124,7 @@ func (txn *Transaction) String() string {
 // Iter creates an Iterator positioned on the first entry that k <= entry's key.
 // If such entry is not found, it returns an invalid Iterator with no error.
 // It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
-// The Iterator must be Closed after use.
+// The Iterator must be closed after use.
 func (txn *Transaction) Iter(k key.Key, upperBound key.Key) (kv.Iterator, error) {
 	metrics.TxnCmdCounter.WithLabelValues("seek").Inc()
 	start := time.Now()
@@ -281,7 +281,7 @@ func (txn *Transaction) LockKeys(keys ...key.Key) error {
 }
 
 // Valid returns if the transaction is valid.
-// A transaction become invalid after commit or rollback.
+// A transaction becomes invalid after commit or rollback.
 func (txn *Transaction) Valid() bool {
 	return txn.valid
 }
