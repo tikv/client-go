@@ -108,9 +108,9 @@ var (
 var (
 	// MaxRawKVScanLimit is the maximum scan limit for rawkv Scan.
 	MaxRawKVScanLimit = 10240
-	// rawBatchPutSize is the maximum size limit for rawkv each batch put request.
+	// RawBatchPutSize is the maximum size limit for rawkv each batch put request.
 	RawBatchPutSize = 16 * 1024
-	// rawBatchPairCount is the maximum limit for rawkv each batch get/delete request.
+	// RawBatchPairCount is the maximum limit for rawkv each batch get/delete request.
 	RawBatchPairCount = 512
 )
 
