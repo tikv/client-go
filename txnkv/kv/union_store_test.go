@@ -16,6 +16,7 @@ package kv
 import (
 	. "github.com/pingcap/check"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/config"
 )
 
 var _ = Suite(&testUnionStoreSuite{})
@@ -26,7 +27,7 @@ type testUnionStoreSuite struct {
 }
 
 func (s *testUnionStoreSuite) SetUpTest(c *C) {
-	s.store = NewMemDbBuffer(DefaultTxnMembufCap)
+	s.store = NewMemDbBuffer(config.DefaultTxnMembufCap)
 	s.us = NewUnionStore(&mockSnapshot{s.store})
 }
 
