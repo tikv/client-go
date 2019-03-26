@@ -24,16 +24,12 @@ import (
 	pb "github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/metrics"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/rpc"
 	"github.com/tikv/client-go/txnkv/kv"
-)
-
-const (
-	scanBatchSize = 256
-	batchGetSize  = 5120
 )
 
 // TiKVSnapshot supports read from TiKV.
@@ -102,7 +98,7 @@ func (s *TiKVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte,
 
 	var batches []batchKeys
 	for id, g := range groups {
-		batches = appendBatchBySize(batches, id, g, func([]byte) int { return 1 }, batchGetSize)
+		batches = appendBatchBySize(batches, id, g, func([]byte) int { return 1 }, config.TxnBatchGetSize)
 	}
 
 	if len(batches) == 0 {
@@ -145,7 +141,7 @@ func (s *TiKVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys
 				NotFillCache: s.NotFillCache,
 			},
 		}
-		resp, err := sender.SendReq(bo, req, batch.region, rpc.ReadTimeoutMedium)
+		resp, err := sender.SendReq(bo, req, batch.region, config.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}
@@ -230,7 +226,7 @@ func (s *TiKVSnapshot) get(bo *retry.Backoffer, k key.Key) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		resp, err := sender.SendReq(bo, req, loc.Region, rpc.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +269,7 @@ func (s *TiKVSnapshot) get(bo *retry.Backoffer, k key.Key) ([]byte, error) {
 
 // Iter returns a list of key-value pair after `k`.
 func (s *TiKVSnapshot) Iter(k key.Key, upperBound key.Key) (kv.Iterator, error) {
-	scanner, err := newScanner(s, k, upperBound, scanBatchSize)
+	scanner, err := newScanner(s, k, upperBound, config.TxnScanBatchSize)
 	return scanner, err
 }
 

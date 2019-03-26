@@ -14,6 +14,7 @@
 package kv
 
 import (
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 )
 
@@ -73,7 +74,7 @@ type unionStore struct {
 // NewUnionStore builds a new UnionStore.
 func NewUnionStore(snapshot Snapshot) UnionStore {
 	return &unionStore{
-		BufferStore:        NewBufferStore(snapshot, DefaultTxnMembufCap),
+		BufferStore:        NewBufferStore(snapshot, config.DefaultTxnMembufCap),
 		snapshot:           snapshot,
 		lazyConditionPairs: make(map[string]*conditionPair),
 		opts:               make(map[Option]interface{}),

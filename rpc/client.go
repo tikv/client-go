@@ -37,40 +37,6 @@ import (
 	gstatus "google.golang.org/grpc/status"
 )
 
-// MaxConnectionCount is the max gRPC connections that will be established with
-// each tikv-server.
-var MaxConnectionCount uint = 16
-
-// GrpcKeepAliveTime is the duration of time after which if the client doesn't see
-// any activity it pings the server to see if the transport is still alive.
-var GrpcKeepAliveTime = time.Duration(10) * time.Second
-
-// GrpcKeepAliveTimeout is the duration of time for which the client waits after having
-// pinged for keepalive check and if no activity is seen even after that the connection
-// is closed.
-var GrpcKeepAliveTimeout = time.Duration(3) * time.Second
-
-// MaxSendMsgSize set max gRPC request message size sent to server. If any request message size is larger than
-// current value, an error will be reported from gRPC.
-var MaxSendMsgSize = 1<<31 - 1
-
-// MaxCallMsgSize set max gRPC receive message size received from server. If any message size is larger than
-// current value, an error will be reported from gRPC.
-var MaxCallMsgSize = 1<<31 - 1
-
-// Timeout durations.
-const (
-	dialTimeout               = 5 * time.Second
-	ReadTimeoutShort          = 20 * time.Second  // For requests that read/write several key-values.
-	ReadTimeoutMedium         = 60 * time.Second  // For requests that may need scan region.
-	ReadTimeoutLong           = 150 * time.Second // For requests that may need scan region multiple times.
-	GCTimeout                 = 5 * time.Minute
-	UnsafeDestroyRangeTimeout = 5 * time.Minute
-
-	grpcInitialWindowSize     = 1 << 30
-	grpcInitialConnWindowSize = 1 << 30
-)
-
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client interface {
@@ -223,21 +189,21 @@ func (a *connArray) Init(addr string, security config.Security) error {
 
 	allowBatch := config.MaxBatchSize > 0
 	for i := range a.v {
-		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), config.DialTimeout)
 		conn, err := grpc.DialContext(
 			ctx,
 			addr,
 			opt,
-			grpc.WithInitialWindowSize(grpcInitialWindowSize),
-			grpc.WithInitialConnWindowSize(grpcInitialConnWindowSize),
+			grpc.WithInitialWindowSize(int32(config.GrpcInitialWindowSize)),
+			grpc.WithInitialConnWindowSize(int32(config.GrpcInitialConnWindowSize)),
 			grpc.WithUnaryInterceptor(unaryInterceptor),
 			grpc.WithStreamInterceptor(streamInterceptor),
-			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxCallMsgSize)),
-			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(MaxSendMsgSize)),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(config.MaxCallMsgSize)),
+			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(config.MaxSendMsgSize)),
 			grpc.WithBackoffMaxDelay(time.Second*3),
 			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:                GrpcKeepAliveTime,
-				Timeout:             GrpcKeepAliveTimeout,
+				Time:                config.GrpcKeepAliveTime,
+				Timeout:             config.GrpcKeepAliveTimeout,
 				PermitWithoutStream: true,
 			}),
 		)
@@ -489,7 +455,7 @@ func (c *rpcClient) createConnArray(addr string) (*connArray, error) {
 	array, ok := c.conns[addr]
 	if !ok {
 		var err error
-		array, err = newConnArray(MaxConnectionCount, addr, c.security)
+		array, err = newConnArray(config.MaxConnectionCount, addr, c.security)
 		if err != nil {
 			return nil, err
 		}

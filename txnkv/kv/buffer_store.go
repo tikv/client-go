@@ -14,16 +14,8 @@
 package kv
 
 import (
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
-)
-
-var (
-	// DefaultTxnMembufCap is the default transaction membuf capability.
-	DefaultTxnMembufCap = 4 * 1024
-	// ImportingTxnMembufCap is the capability of tidb importing data situation.
-	ImportingTxnMembufCap = 32 * 1024
-	// TempTxnMemBufCap is the capability of temporary membuf.
-	TempTxnMemBufCap = 64
 )
 
 // BufferStore wraps a Retriever for read and a MemBuffer for buffered write.
@@ -41,7 +33,7 @@ type BufferStore struct {
 // NewBufferStore creates a BufferStore using r for read.
 func NewBufferStore(r Retriever, cap int) *BufferStore {
 	if cap <= 0 {
-		cap = DefaultTxnMembufCap
+		cap = config.DefaultTxnMembufCap
 	}
 	return &BufferStore{
 		r:         r,

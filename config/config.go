@@ -97,3 +97,107 @@ var (
 	EnableTxnLocalLatch        = false
 	TxnLocalLatchCapacity uint = 2048000
 )
+
+// RegionCache configurations.
+var (
+	RegionCacheBTreeDegree = 32
+	RegionCacheTTL         = time.Minute * 10
+)
+
+// RawKV configurations.
+var (
+	// MaxRawKVScanLimit is the maximum scan limit for rawkv Scan.
+	MaxRawKVScanLimit = 10240
+	// RawBatchPutSize is the maximum size limit for rawkv each batch put request.
+	RawBatchPutSize = 16 * 1024
+	// RawBatchPairCount is the maximum limit for rawkv each batch get/delete request.
+	RawBatchPairCount = 512
+)
+
+// RPC configurations.
+var (
+	// MaxConnectionCount is the max gRPC connections that will be established with
+	// each tikv-server.
+	MaxConnectionCount uint = 16
+
+	// GrpcKeepAliveTime is the duration of time after which if the client doesn't see
+	// any activity it pings the server to see if the transport is still alive.
+	GrpcKeepAliveTime = time.Duration(10) * time.Second
+
+	// GrpcKeepAliveTimeout is the duration of time for which the client waits after having
+	// pinged for keepalive check and if no activity is seen even after that the connection
+	// is closed.
+	GrpcKeepAliveTimeout = time.Duration(3) * time.Second
+
+	// MaxSendMsgSize set max gRPC request message size sent to server. If any request message size is larger than
+	// current value, an error will be reported from gRPC.
+	MaxSendMsgSize = 1<<31 - 1
+
+	// MaxCallMsgSize set max gRPC receive message size received from server. If any message size is larger than
+	// current value, an error will be reported from gRPC.
+	MaxCallMsgSize = 1<<31 - 1
+
+	DialTimeout               = 5 * time.Second
+	ReadTimeoutShort          = 20 * time.Second  // For requests that read/write several key-values.
+	ReadTimeoutMedium         = 60 * time.Second  // For requests that may need scan region.
+	ReadTimeoutLong           = 150 * time.Second // For requests that may need scan region multiple times.
+	GCTimeout                 = 5 * time.Minute
+	UnsafeDestroyRangeTimeout = 5 * time.Minute
+
+	GrpcInitialWindowSize     = 1 << 30
+	GrpcInitialConnWindowSize = 1 << 30
+)
+
+// KV configurations.
+var (
+	// DefaultTxnMembufCap is the default transaction membuf capability.
+	DefaultTxnMembufCap = 4 * 1024
+)
+
+// Latch configurations.
+var (
+	LatchExpireDuration = 2 * time.Minute
+	LatchCheckInterval  = 1 * time.Minute
+	LatchCheckCounter   = 50000
+	LatchListCount      = 5
+	LatchLockChanSize   = 100
+)
+
+// Oracle configurations.
+var (
+	TsoSlowThreshold = 30 * time.Millisecond
+	// update oracle's lastTS every 2000ms.
+	OracleUpdateInterval = 2000
+)
+
+// Txn configurations.
+var (
+	// TiKV recommends each RPC packet should be less than ~1MB. We keep each packet's
+	// Key+Value size below 16KB.
+	TxnCommitBatchSize = 16 * 1024
+
+	// By default, locks after 3000ms is considered unusual (the client created the
+	// lock might be dead). Other client may cleanup this kind of lock.
+	// For locks created recently, we will do backoff and retry.
+	TxnDefaultLockTTL uint64 = 3000
+	// TODO: Consider if it's appropriate.
+	TxnMaxLockTTL uint64 = 120000
+	// ttl = ttlFactor * sqrt(writeSizeInMiB)
+	TxnTTLFactor = 6000
+	// TxnResolvedCacheSize is max number of cached txn status.
+	TxnResolvedCacheSize = 2048
+
+	// SafePoint.
+	// This is almost the same as 'tikv_gc_safe_point' in the table 'mysql.tidb',
+	// save this to pd instead of tikv, because we can't use interface of table
+	// if the safepoint on tidb is expired.
+	GcSavedSafePoint = "/tidb/store/gcworker/saved_safe_point"
+
+	GcSafePointCacheInterval       = time.Second * 100
+	GcCPUTimeInaccuracyBound       = time.Second
+	GcSafePointUpdateInterval      = time.Second * 10
+	GcSafePointQuickRepeatInterval = time.Second
+
+	TxnScanBatchSize = 256
+	TxnBatchGetSize  = 5120
+)

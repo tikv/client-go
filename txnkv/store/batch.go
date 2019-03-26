@@ -15,10 +15,6 @@ package store
 
 import "github.com/tikv/client-go/locate"
 
-// TiKV recommends each RPC packet should be less than ~1MB. We keep each packet's
-// Key+Value size below 16KB.
-const txnCommitBatchSize = 16 * 1024
-
 // batchKeys is a batch of keys in the same region.
 type batchKeys struct {
 	region locate.RegionVerID

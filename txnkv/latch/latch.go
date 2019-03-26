@@ -23,6 +23,7 @@ import (
 	"github.com/cznic/mathutil"
 	log "github.com/sirupsen/logrus"
 	"github.com/spaolacci/murmur3"
+	"github.com/tikv/client-go/config"
 )
 
 type node struct {
@@ -227,7 +228,7 @@ func (latches *Latches) acquireSlot(lock *Lock) acquireResult {
 	defer latch.Unlock()
 
 	// Try to recycle to limit the memory usage.
-	if latch.count >= latchListCount {
+	if latch.count >= config.LatchListCount {
 		latch.recycle(lock.startTS)
 	}
 
@@ -268,7 +269,7 @@ func (l *latch) recycle(currentTS uint64) int {
 	fakeHead := node{next: l.queue}
 	prev := &fakeHead
 	for curr := prev.next; curr != nil; curr = curr.next {
-		if tsoSub(currentTS, curr.maxCommitTS) >= expireDuration && curr.value == nil {
+		if tsoSub(currentTS, curr.maxCommitTS) >= config.LatchExpireDuration && curr.value == nil {
 			l.count--
 			prev.next = curr.next
 			total++

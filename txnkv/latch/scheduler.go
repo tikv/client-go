@@ -17,10 +17,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/txnkv/oracle"
 )
-
-const lockChanSize = 100
 
 // LatchesScheduler is used to schedule latches for transactions.
 type LatchesScheduler struct {
@@ -34,7 +33,7 @@ type LatchesScheduler struct {
 // NewScheduler create the LatchesScheduler.
 func NewScheduler(size uint) *LatchesScheduler {
 	latches := NewLatches(size)
-	unlockCh := make(chan *Lock, lockChanSize)
+	unlockCh := make(chan *Lock, config.LatchLockChanSize)
 	scheduler := &LatchesScheduler{
 		latches:  latches,
 		unlockCh: unlockCh,
@@ -43,11 +42,6 @@ func NewScheduler(size uint) *LatchesScheduler {
 	go scheduler.run()
 	return scheduler
 }
-
-const expireDuration = 2 * time.Minute
-const checkInterval = 1 * time.Minute
-const checkCounter = 50000
-const latchListCount = 5
 
 func (scheduler *LatchesScheduler) run() {
 	var counter int
@@ -61,7 +55,7 @@ func (scheduler *LatchesScheduler) run() {
 		if lock.commitTS > lock.startTS {
 			currentTS := lock.commitTS
 			elapsed := tsoSub(currentTS, scheduler.lastRecycleTime)
-			if elapsed > checkInterval || counter > checkCounter {
+			if elapsed > config.LatchCheckInterval || counter > config.LatchCheckCounter {
 				go scheduler.latches.recycle(lock.commitTS)
 				scheduler.lastRecycleTime = currentTS
 				counter = 0

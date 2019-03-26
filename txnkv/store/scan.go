@@ -20,6 +20,7 @@ import (
 	pb "github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/rpc"
@@ -41,7 +42,7 @@ type Scanner struct {
 func newScanner(snapshot *TiKVSnapshot, startKey []byte, endKey []byte, batchSize int) (*Scanner, error) {
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
-		batchSize = scanBatchSize
+		batchSize = config.TxnScanBatchSize
 	}
 	scanner := &Scanner{
 		snapshot:     snapshot,
@@ -174,7 +175,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				NotFillCache: s.snapshot.NotFillCache,
 			},
 		}
-		resp, err := sender.SendReq(bo, req, loc.Region, rpc.ReadTimeoutMedium)
+		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}

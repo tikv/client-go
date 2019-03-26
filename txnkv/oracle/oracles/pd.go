@@ -20,13 +20,12 @@ import (
 
 	"github.com/pingcap/pd/client"
 	log "github.com/sirupsen/logrus"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/metrics"
 	"github.com/tikv/client-go/txnkv/oracle"
 )
 
 var _ oracle.Oracle = &pdOracle{}
-
-const slowDist = 30 * time.Millisecond
 
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
@@ -103,7 +102,7 @@ func (o *pdOracle) getTimestamp(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 	dist := time.Since(now)
-	if dist > slowDist {
+	if dist > config.TsoSlowThreshold {
 		log.Warnf("get timestamp too slow: %s", dist)
 	}
 	return oracle.ComposeTS(physical, logical), nil
