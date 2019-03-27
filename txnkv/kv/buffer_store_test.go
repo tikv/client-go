@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	. "github.com/pingcap/check"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 )
 
@@ -31,7 +32,7 @@ type testBufferStoreSuite struct{}
 var _ = Suite(testBufferStoreSuite{})
 
 func (s testBufferStoreSuite) TestGetSet(c *C) {
-	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(DefaultTxnMembufCap)}, DefaultTxnMembufCap)
+	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(config.DefaultTxnMembufCap)}, config.DefaultTxnMembufCap)
 	key := key.Key("key")
 	_, err := bs.Get(key)
 	c.Check(err, NotNil)
@@ -45,7 +46,7 @@ func (s testBufferStoreSuite) TestGetSet(c *C) {
 }
 
 func (s testBufferStoreSuite) TestSaveTo(c *C) {
-	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(DefaultTxnMembufCap)}, DefaultTxnMembufCap)
+	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(config.DefaultTxnMembufCap)}, config.DefaultTxnMembufCap)
 	var buf bytes.Buffer
 	for i := 0; i < 10; i++ {
 		fmt.Fprint(&buf, i)
@@ -55,7 +56,7 @@ func (s testBufferStoreSuite) TestSaveTo(c *C) {
 	}
 	bs.Set(key.Key("novalue"), nil)
 
-	mutator := NewMemDbBuffer(DefaultTxnMembufCap)
+	mutator := NewMemDbBuffer(config.DefaultTxnMembufCap)
 	err := bs.SaveTo(mutator)
 	c.Check(err, IsNil)
 

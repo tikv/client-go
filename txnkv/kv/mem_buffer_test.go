@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	. "github.com/pingcap/check"
+	"github.com/tikv/client-go/config"
 )
 
 const (
@@ -37,11 +38,11 @@ type testKVSuite struct {
 
 func (s *testKVSuite) SetUpSuite(c *C) {
 	s.bs = make([]MemBuffer, 1)
-	s.bs[0] = NewMemDbBuffer(DefaultTxnMembufCap)
+	s.bs[0] = NewMemDbBuffer(config.DefaultTxnMembufCap)
 }
 
 func (s *testKVSuite) ResetMembuffers() {
-	s.bs[0] = NewMemDbBuffer(DefaultTxnMembufCap)
+	s.bs[0] = NewMemDbBuffer(config.DefaultTxnMembufCap)
 }
 
 func insertData(c *C, buffer MemBuffer) {
@@ -184,7 +185,7 @@ func (s *testKVSuite) TestNewIteratorMin(c *C) {
 }
 
 func (s *testKVSuite) TestBufferLimit(c *C) {
-	buffer := NewMemDbBuffer(DefaultTxnMembufCap).(*memDbBuffer)
+	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap).(*memDbBuffer)
 	buffer.bufferSizeLimit = 1000
 	buffer.entrySizeLimit = 500
 
@@ -196,7 +197,7 @@ func (s *testKVSuite) TestBufferLimit(c *C) {
 	err = buffer.Set([]byte("yz"), make([]byte, 499))
 	c.Assert(err, NotNil) // buffer size limit
 
-	buffer = NewMemDbBuffer(DefaultTxnMembufCap).(*memDbBuffer)
+	buffer = NewMemDbBuffer(config.DefaultTxnMembufCap).(*memDbBuffer)
 	buffer.bufferLenLimit = 10
 	for i := 0; i < 10; i++ {
 		err = buffer.Set([]byte{byte(i)}, []byte{byte(i)})
@@ -213,7 +214,7 @@ func BenchmarkMemDbBufferSequential(b *testing.B) {
 	for i := 0; i < opCnt; i++ {
 		data[i] = encodeInt(i)
 	}
-	buffer := NewMemDbBuffer(DefaultTxnMembufCap)
+	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap)
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
@@ -224,20 +225,20 @@ func BenchmarkMemDbBufferRandom(b *testing.B) {
 		data[i] = encodeInt(i)
 	}
 	shuffle(data)
-	buffer := NewMemDbBuffer(DefaultTxnMembufCap)
+	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap)
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
 
 func BenchmarkMemDbIter(b *testing.B) {
-	buffer := NewMemDbBuffer(DefaultTxnMembufCap)
+	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap)
 	benchIterator(b, buffer)
 	b.ReportAllocs()
 }
 
 func BenchmarkMemDbCreation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		NewMemDbBuffer(DefaultTxnMembufCap)
+		NewMemDbBuffer(config.DefaultTxnMembufCap)
 	}
 	b.ReportAllocs()
 }

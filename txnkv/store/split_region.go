@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/rpc"
@@ -47,7 +48,7 @@ func SplitRegion(store *TiKVStore, splitKey key.Key) error {
 			log.Infof("skip split_region region at %q", splitKey)
 			return nil
 		}
-		res, err := sender.SendReq(bo, req, loc.Region, rpc.ReadTimeoutShort)
+		res, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
 		if err != nil {
 			return err
 		}

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	. "github.com/pingcap/check"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/locate"
 	"github.com/tikv/client-go/mockstore/mocktikv"
 	"github.com/tikv/client-go/retry"
@@ -178,7 +179,7 @@ func (s *testRawKVSuite) TestRawBatch(c *C) {
 	size := 0
 	var testKeys [][]byte
 	var testValues [][]byte
-	for i := 0; size/rawBatchPutSize < 4; i++ {
+	for i := 0; size/config.RawBatchPutSize < 4; i++ {
 		key := fmt.Sprint("key", i)
 		size += len(key)
 		testKeys = append(testKeys, []byte(key))

@@ -29,17 +29,8 @@ import (
 )
 
 var (
-	// MaxRawKVScanLimit is the maximum scan limit for rawkv Scan.
-	MaxRawKVScanLimit = 10240
 	// ErrMaxScanLimitExceeded is returned when the limit for rawkv Scan is to large.
 	ErrMaxScanLimitExceeded = errors.New("limit should be less than MaxRawKVScanLimit")
-)
-
-const (
-	// rawBatchPutSize is the maximum size limit for rawkv each batch put request.
-	rawBatchPutSize = 16 * 1024
-	// rawBatchPairCount is the maximum limit for rawkv each batch get/delete request.
-	rawBatchPairCount = 512
 )
 
 // Client is a rawkv client of TiKV server which is used as a key-value storage,
@@ -278,7 +269,7 @@ func (c *Client) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("raw_scan").Observe(time.Since(start).Seconds()) }()
 
-	if limit > MaxRawKVScanLimit {
+	if limit > config.MaxRawKVScanLimit {
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
@@ -319,7 +310,7 @@ func (c *Client) sendReq(key []byte, req *rpc.Request) (*rpc.Response, *locate.K
 		if err != nil {
 			return nil, nil, err
 		}
-		resp, err := sender.SendReq(bo, req, loc.Region, rpc.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -346,7 +337,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, cmdType rpc.Cm
 
 	var batches []batch
 	for regionID, groupKeys := range groups {
-		batches = appendKeyBatches(batches, regionID, groupKeys, rawBatchPairCount)
+		batches = appendKeyBatches(batches, regionID, groupKeys, config.RawBatchPairCount)
 	}
 	bo, cancel := bo.Fork()
 	ches := make(chan singleBatchResp, len(batches))
@@ -405,7 +396,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.CmdTyp
 	}
 
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
-	resp, err := sender.SendReq(bo, req, batch.regionID, rpc.ReadTimeoutShort)
+	resp, err := sender.SendReq(bo, req, batch.regionID, config.ReadTimeoutShort)
 
 	batchResp := singleBatchResp{}
 	if err != nil {
@@ -473,7 +464,7 @@ func (c *Client) sendDeleteRangeReq(startKey []byte, endKey []byte) (*rpc.Respon
 			},
 		}
 
-		resp, err := sender.SendReq(bo, req, loc.Region, rpc.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -504,7 +495,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error 
 	var batches []batch
 	// split the keys by size and RegionVerID
 	for regionID, groupKeys := range groups {
-		batches = appendBatches(batches, regionID, groupKeys, keyToValue, rawBatchPutSize)
+		batches = appendBatches(batches, regionID, groupKeys, keyToValue, config.RawBatchPutSize)
 	}
 	bo, cancel := bo.Fork()
 	ch := make(chan error, len(batches))
@@ -583,7 +574,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch batch) error {
 	}
 
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
-	resp, err := sender.SendReq(bo, req, batch.regionID, rpc.ReadTimeoutShort)
+	resp, err := sender.SendReq(bo, req, batch.regionID, config.ReadTimeoutShort)
 	if err != nil {
 		return err
 	}

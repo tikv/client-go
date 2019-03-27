@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/rpc"
 )
@@ -79,7 +80,7 @@ func (t *DeleteRangeTask) Execute() error {
 			},
 		}
 
-		resp, err := t.store.SendReq(bo, req, loc.Region, rpc.ReadTimeoutMedium)
+		resp, err := t.store.SendReq(bo, req, loc.Region, config.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}

@@ -29,9 +29,6 @@ import (
 	"github.com/tikv/client-go/rpc"
 )
 
-// ResolvedCacheSize is max number of cached txn status.
-const ResolvedCacheSize = 2048
-
 // LockResolver resolves locks and also caches resolved txn status.
 type LockResolver struct {
 	store *TiKVStore
@@ -76,17 +73,6 @@ func (s TxnStatus) IsCommitted() bool { return s > 0 }
 // CommitTS returns the txn's commitTS. It is valid iff `IsCommitted` is true.
 func (s TxnStatus) CommitTS() uint64 { return uint64(s) }
 
-// By default, locks after 3000ms is considered unusual (the client created the
-// lock might be dead). Other client may cleanup this kind of lock.
-// For locks created recently, we will do backoff and retry.
-var defaultLockTTL uint64 = 3000
-
-// TODO: Consider if it's appropriate.
-var maxLockTTL uint64 = 120000
-
-// ttl = ttlFactor * sqrt(writeSizeInMiB)
-var ttlFactor = 6000
-
 // Lock represents a lock from tikv server.
 type Lock struct {
 	Key     []byte
@@ -99,7 +85,7 @@ type Lock struct {
 func NewLock(l *kvrpcpb.LockInfo) *Lock {
 	ttl := l.GetLockTtl()
 	if ttl == 0 {
-		ttl = defaultLockTTL
+		ttl = config.TxnDefaultLockTTL
 	}
 	return &Lock{
 		Key:     l.GetKey(),
@@ -118,7 +104,7 @@ func (lr *LockResolver) saveResolved(txnID uint64, status TxnStatus) {
 	}
 	lr.mu.resolved[txnID] = status
 	lr.mu.recentResolved.PushBack(txnID)
-	if len(lr.mu.resolved) > ResolvedCacheSize {
+	if len(lr.mu.resolved) > config.TxnResolvedCacheSize {
 		front := lr.mu.recentResolved.Front()
 		delete(lr.mu.resolved, front.Value.(uint64))
 		lr.mu.recentResolved.Remove(front)
@@ -185,7 +171,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		},
 	}
 	startTime = time.Now()
-	resp, err := lr.store.SendReq(bo, req, loc, rpc.ReadTimeoutShort)
+	resp, err := lr.store.SendReq(bo, req, loc, config.ReadTimeoutShort)
 	if err != nil {
 		return false, err
 	}
@@ -296,7 +282,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		if err != nil {
 			return status, err
 		}
-		resp, err := lr.store.SendReq(bo, req, loc.Region, rpc.ReadTimeoutShort)
+		resp, err := lr.store.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
 		if err != nil {
 			return status, err
 		}
@@ -350,7 +336,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if status.IsCommitted() {
 			req.ResolveLock.CommitVersion = status.CommitTS()
 		}
-		resp, err := lr.store.SendReq(bo, req, loc.Region, rpc.ReadTimeoutShort)
+		resp, err := lr.store.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
 		if err != nil {
 			return err
 		}
