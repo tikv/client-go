@@ -33,17 +33,17 @@ var (
 	ErrMaxScanLimitExceeded = errors.New("limit should be less than MaxRawKVScanLimit")
 )
 
-// RawKVClient is a client of TiKV server which is used as a key-value storage,
+// Client is a rawkv client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
-type RawKVClient struct {
+type Client struct {
 	clusterID   uint64
 	regionCache *locate.RegionCache
 	pdClient    pd.Client
 	rpcClient   rpc.Client
 }
 
-// NewRawKVClient creates a client with PD cluster addrs.
-func NewRawKVClient(pdAddrs []string, security config.Security) (*RawKVClient, error) {
+// NewClient creates a client with PD cluster addrs.
+func NewClient(pdAddrs []string, security config.Security) (*Client, error) {
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
 		CAPath:   security.SSLCA,
 		CertPath: security.SSLCert,
@@ -52,7 +52,7 @@ func NewRawKVClient(pdAddrs []string, security config.Security) (*RawKVClient, e
 	if err != nil {
 		return nil, err
 	}
-	return &RawKVClient{
+	return &Client{
 		clusterID:   pdCli.GetClusterID(context.TODO()),
 		regionCache: locate.NewRegionCache(pdCli),
 		pdClient:    pdCli,
@@ -61,18 +61,18 @@ func NewRawKVClient(pdAddrs []string, security config.Security) (*RawKVClient, e
 }
 
 // Close closes the client.
-func (c *RawKVClient) Close() error {
+func (c *Client) Close() error {
 	c.pdClient.Close()
 	return c.rpcClient.Close()
 }
 
 // ClusterID returns the TiKV cluster ID.
-func (c *RawKVClient) ClusterID() uint64 {
+func (c *Client) ClusterID() uint64 {
 	return c.clusterID
 }
 
 // Get queries value with the key. When the key does not exist, it returns `nil, nil`.
-func (c *RawKVClient) Get(key []byte) ([]byte, error) {
+func (c *Client) Get(key []byte) ([]byte, error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
 
@@ -88,7 +88,7 @@ func (c *RawKVClient) Get(key []byte) ([]byte, error) {
 	}
 	cmdResp := resp.RawGet
 	if cmdResp == nil {
-		return nil, errors.WithStack(ErrBodyMissing)
+		return nil, errors.WithStack(rpc.ErrBodyMissing)
 	}
 	if cmdResp.GetError() != "" {
 		return nil, errors.New(cmdResp.GetError())
@@ -100,7 +100,7 @@ func (c *RawKVClient) Get(key []byte) ([]byte, error) {
 }
 
 // BatchGet queries values with the keys.
-func (c *RawKVClient) BatchGet(keys [][]byte) ([][]byte, error) {
+func (c *Client) BatchGet(keys [][]byte) ([][]byte, error) {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds())
@@ -114,7 +114,7 @@ func (c *RawKVClient) BatchGet(keys [][]byte) ([][]byte, error) {
 
 	cmdResp := resp.RawBatchGet
 	if cmdResp == nil {
-		return nil, errors.WithStack(ErrBodyMissing)
+		return nil, errors.WithStack(rpc.ErrBodyMissing)
 	}
 
 	keyToValue := make(map[string][]byte, len(keys))
@@ -130,7 +130,7 @@ func (c *RawKVClient) BatchGet(keys [][]byte) ([][]byte, error) {
 }
 
 // Put stores a key-value pair to TiKV.
-func (c *RawKVClient) Put(key, value []byte) error {
+func (c *Client) Put(key, value []byte) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("put").Observe(time.Since(start).Seconds()) }()
 	metrics.RawkvSizeHistogram.WithLabelValues("key").Observe(float64(len(key)))
@@ -153,7 +153,7 @@ func (c *RawKVClient) Put(key, value []byte) error {
 	}
 	cmdResp := resp.RawPut
 	if cmdResp == nil {
-		return errors.WithStack(ErrBodyMissing)
+		return errors.WithStack(rpc.ErrBodyMissing)
 	}
 	if cmdResp.GetError() != "" {
 		return errors.New(cmdResp.GetError())
@@ -162,7 +162,7 @@ func (c *RawKVClient) Put(key, value []byte) error {
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (c *RawKVClient) BatchPut(keys, values [][]byte) error {
+func (c *Client) BatchPut(keys, values [][]byte) error {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds())
@@ -181,7 +181,7 @@ func (c *RawKVClient) BatchPut(keys, values [][]byte) error {
 }
 
 // Delete deletes a key-value pair from TiKV.
-func (c *RawKVClient) Delete(key []byte) error {
+func (c *Client) Delete(key []byte) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("delete").Observe(time.Since(start).Seconds()) }()
 
@@ -197,7 +197,7 @@ func (c *RawKVClient) Delete(key []byte) error {
 	}
 	cmdResp := resp.RawDelete
 	if cmdResp == nil {
-		return errors.WithStack(ErrBodyMissing)
+		return errors.WithStack(rpc.ErrBodyMissing)
 	}
 	if cmdResp.GetError() != "" {
 		return errors.New(cmdResp.GetError())
@@ -206,7 +206,7 @@ func (c *RawKVClient) Delete(key []byte) error {
 }
 
 // BatchDelete deletes key-value pairs from TiKV
-func (c *RawKVClient) BatchDelete(keys [][]byte) error {
+func (c *Client) BatchDelete(keys [][]byte) error {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogram.WithLabelValues("batch_delete").Observe(time.Since(start).Seconds())
@@ -219,7 +219,7 @@ func (c *RawKVClient) BatchDelete(keys [][]byte) error {
 	}
 	cmdResp := resp.RawBatchDelete
 	if cmdResp == nil {
-		return errors.WithStack(ErrBodyMissing)
+		return errors.WithStack(rpc.ErrBodyMissing)
 	}
 	if cmdResp.GetError() != "" {
 		return errors.New(cmdResp.GetError())
@@ -228,7 +228,7 @@ func (c *RawKVClient) BatchDelete(keys [][]byte) error {
 }
 
 // DeleteRange deletes all key-value pairs in a range from TiKV
-func (c *RawKVClient) DeleteRange(startKey []byte, endKey []byte) error {
+func (c *Client) DeleteRange(startKey []byte, endKey []byte) error {
 	start := time.Now()
 	var err error
 	defer func() {
@@ -249,7 +249,7 @@ func (c *RawKVClient) DeleteRange(startKey []byte, endKey []byte) error {
 		}
 		cmdResp := resp.RawDeleteRange
 		if cmdResp == nil {
-			return errors.WithStack(ErrBodyMissing)
+			return errors.WithStack(rpc.ErrBodyMissing)
 		}
 		if cmdResp.GetError() != "" {
 			return errors.New(cmdResp.GetError())
@@ -265,7 +265,7 @@ func (c *RawKVClient) DeleteRange(startKey []byte, endKey []byte) error {
 // If you want to exclude the startKey or include the endKey, append a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
 // `Scan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
-func (c *RawKVClient) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("raw_scan").Observe(time.Since(start).Seconds()) }()
 
@@ -288,7 +288,7 @@ func (c *RawKVClient) Scan(startKey, endKey []byte, limit int) (keys [][]byte, v
 		}
 		cmdResp := resp.RawScan
 		if cmdResp == nil {
-			return nil, nil, errors.WithStack(ErrBodyMissing)
+			return nil, nil, errors.WithStack(rpc.ErrBodyMissing)
 		}
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
@@ -302,7 +302,7 @@ func (c *RawKVClient) Scan(startKey, endKey []byte, limit int) (keys [][]byte, v
 	return
 }
 
-func (c *RawKVClient) sendReq(key []byte, req *rpc.Request) (*rpc.Response, *locate.KeyLocation, error) {
+func (c *Client) sendReq(key []byte, req *rpc.Request) (*rpc.Response, *locate.KeyLocation, error) {
 	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	for {
@@ -329,7 +329,7 @@ func (c *RawKVClient) sendReq(key []byte, req *rpc.Request) (*rpc.Response, *loc
 	}
 }
 
-func (c *RawKVClient) sendBatchReq(bo *retry.Backoffer, keys [][]byte, cmdType rpc.CmdType) (*rpc.Response, error) { // split the keys
+func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, cmdType rpc.CmdType) (*rpc.Response, error) { // split the keys
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys)
 	if err != nil {
 		return nil, err
@@ -376,7 +376,7 @@ func (c *RawKVClient) sendBatchReq(bo *retry.Backoffer, keys [][]byte, cmdType r
 	return resp, firstError
 }
 
-func (c *RawKVClient) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.CmdType) singleBatchResp {
+func (c *Client) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.CmdType) singleBatchResp {
 	var req *rpc.Request
 	switch cmdType {
 	case rpc.CmdRawBatchGet:
@@ -426,7 +426,7 @@ func (c *RawKVClient) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.C
 	case rpc.CmdRawBatchDelete:
 		cmdResp := resp.RawBatchDelete
 		if cmdResp == nil {
-			batchResp.err = errors.WithStack(ErrBodyMissing)
+			batchResp.err = errors.WithStack(rpc.ErrBodyMissing)
 			return batchResp
 		}
 		if cmdResp.GetError() != "" {
@@ -442,7 +442,7 @@ func (c *RawKVClient) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.C
 // If the given range spans over more than one regions, the actual endKey is the end of the first region.
 // We can't use sendReq directly, because we need to know the end of the region before we send the request
 // TODO: Is there any better way to avoid duplicating code with func `sendReq` ?
-func (c *RawKVClient) sendDeleteRangeReq(startKey []byte, endKey []byte) (*rpc.Response, []byte, error) {
+func (c *Client) sendDeleteRangeReq(startKey []byte, endKey []byte) (*rpc.Response, []byte, error) {
 	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	for {
@@ -483,7 +483,7 @@ func (c *RawKVClient) sendDeleteRangeReq(startKey []byte, endKey []byte) (*rpc.R
 	}
 }
 
-func (c *RawKVClient) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error {
+func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error {
 	keyToValue := make(map[string][]byte)
 	for i, key := range keys {
 		keyToValue[string(key)] = values[i]
@@ -560,7 +560,7 @@ func appendBatches(batches []batch, regionID locate.RegionVerID, groupKeys [][]b
 	return batches
 }
 
-func (c *RawKVClient) doBatchPut(bo *retry.Backoffer, batch batch) error {
+func (c *Client) doBatchPut(bo *retry.Backoffer, batch batch) error {
 	kvPair := make([]*kvrpcpb.KvPair, 0, len(batch.keys))
 	for i, key := range batch.keys {
 		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.values[i]})
@@ -593,7 +593,7 @@ func (c *RawKVClient) doBatchPut(bo *retry.Backoffer, batch batch) error {
 
 	cmdResp := resp.RawBatchPut
 	if cmdResp == nil {
-		return errors.WithStack(ErrBodyMissing)
+		return errors.WithStack(rpc.ErrBodyMissing)
 	}
 	if cmdResp.GetError() != "" {
 		return errors.New(cmdResp.GetError())

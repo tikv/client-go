@@ -15,11 +15,6 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-const (
-	LabelBatchRecvLoop = "batch-recv-loop"
-	LabelBatchSendLoop = "batch-send-loop"
-)
-
 // Client metrics.
 // TODO: Create new grafana page for the metrics.
 var (
