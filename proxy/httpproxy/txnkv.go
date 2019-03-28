@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/gorilla/mux"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/proxy"
 )
@@ -28,9 +29,6 @@ type txnkvHandler struct {
 
 // TxnRequest is the structure of a txnkv request that the http proxy accepts.
 type TxnRequest struct {
-	ClientUUID string   `json:"client_uuid,omitempty"` // identify client
-	TxnUUID    string   `json:"txn_uuid,omitempty"`    // identify txn
-	IterUUID   string   `json:"iter_uuid,omitempty"`   // identify iter
 	PDAddrs    []string `json:"pd_addrs,omitempty"`    // for new
 	TS         uint64   `json:"ts,omitempty"`          // for beginWithTS
 	Key        []byte   `json:"key,omitempty"`         // for get, set, delete, iter, iterReverse
@@ -41,9 +39,7 @@ type TxnRequest struct {
 
 // TxnResponse is the structure of a txnkv response that the http proxy sends.
 type TxnResponse struct {
-	ClientUUID string   `json:"client_uuid,omitempty"` // identify client
-	TxnUUID    string   `json:"txn_uuid,omitempty"`    // identify txn
-	IterUUID   string   `json:"iter_uuid,omitempty"`   // identify iter
+	ID         string   `json:"id,omitempty"`          // for new, begin, beginWithTS, iter, iterReverse
 	TS         uint64   `json:"ts,omitempty"`          // for getTS
 	Key        []byte   `json:"key,omitempty"`         // for iterKey
 	Value      []byte   `json:"value,omitempty"`       // for get, iterValue
@@ -55,56 +51,56 @@ type TxnResponse struct {
 	Length     int      `json:"length,omitempty"`      // for length
 }
 
-func (h txnkvHandler) New(r *TxnRequest) (*TxnResponse, int, error) {
+func (h txnkvHandler) New(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
 	id, err := h.p.New(r.PDAddrs, config.Security{})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{ClientUUID: string(id)}, http.StatusOK, nil
+	return &TxnResponse{ID: string(id)}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) Close(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.Close(proxy.UUID(r.ClientUUID))
+func (h txnkvHandler) Close(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.Close(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{ClientUUID: r.ClientUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) Begin(r *TxnRequest) (*TxnResponse, int, error) {
-	txnID, err := h.p.Begin(proxy.UUID(r.ClientUUID))
+func (h txnkvHandler) Begin(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	txnID, err := h.p.Begin(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{ClientUUID: r.ClientUUID, TxnUUID: string(txnID)}, http.StatusCreated, nil
+	return &TxnResponse{ID: string(txnID)}, http.StatusCreated, nil
 }
 
-func (h txnkvHandler) BeginWithTS(r *TxnRequest) (*TxnResponse, int, error) {
-	txnID, err := h.p.BeginWithTS(proxy.UUID(r.ClientUUID), r.TS)
+func (h txnkvHandler) BeginWithTS(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	txnID, err := h.p.BeginWithTS(proxy.UUID(vars["id"]), r.TS)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{ClientUUID: r.ClientUUID, TxnUUID: string(txnID)}, http.StatusOK, nil
+	return &TxnResponse{ID: string(txnID)}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) GetTS(r *TxnRequest) (*TxnResponse, int, error) {
-	ts, err := h.p.GetTS(proxy.UUID(r.ClientUUID))
+func (h txnkvHandler) GetTS(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	ts, err := h.p.GetTS(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{ClientUUID: r.ClientUUID, TS: ts}, http.StatusOK, nil
+	return &TxnResponse{TS: ts}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnGet(r *TxnRequest) (*TxnResponse, int, error) {
-	val, err := h.p.TxnGet(proxy.UUID(r.TxnUUID), r.Key)
+func (h txnkvHandler) TxnGet(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	val, err := h.p.TxnGet(proxy.UUID(vars["id"]), r.Key)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, Value: val}, http.StatusOK, nil
+	return &TxnResponse{Value: val}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnBatchGet(r *TxnRequest) (*TxnResponse, int, error) {
-	m, err := h.p.TxnBatchGet(proxy.UUID(r.TxnUUID), r.Keys)
+func (h txnkvHandler) TxnBatchGet(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	m, err := h.p.TxnBatchGet(proxy.UUID(vars["id"]), r.Keys)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -113,138 +109,138 @@ func (h txnkvHandler) TxnBatchGet(r *TxnRequest) (*TxnResponse, int, error) {
 		keys = append(keys, []byte(k))
 		values = append(values, v)
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, Keys: keys, Values: values}, http.StatusOK, nil
+	return &TxnResponse{Keys: keys, Values: values}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnSet(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.TxnSet(proxy.UUID(r.TxnUUID), r.Key, r.Value)
+func (h txnkvHandler) TxnSet(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.TxnSet(proxy.UUID(vars["id"]), r.Key, r.Value)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnIter(r *TxnRequest) (*TxnResponse, int, error) {
-	iterID, err := h.p.TxnIter(proxy.UUID(r.TxnUUID), r.Key, r.UpperBound)
+func (h txnkvHandler) TxnIter(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	iterID, err := h.p.TxnIter(proxy.UUID(vars["id"]), r.Key, r.UpperBound)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, IterUUID: string(iterID)}, http.StatusCreated, nil
+	return &TxnResponse{ID: string(iterID)}, http.StatusCreated, nil
 }
 
-func (h txnkvHandler) TxnIterReverse(r *TxnRequest) (*TxnResponse, int, error) {
-	iterID, err := h.p.TxnIterReverse(proxy.UUID(r.TxnUUID), r.Key)
+func (h txnkvHandler) TxnIterReverse(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	iterID, err := h.p.TxnIterReverse(proxy.UUID(vars["id"]), r.Key)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, IterUUID: string(iterID)}, http.StatusCreated, nil
+	return &TxnResponse{ID: string(iterID)}, http.StatusCreated, nil
 }
 
-func (h txnkvHandler) TxnIsReadOnly(r *TxnRequest) (*TxnResponse, int, error) {
-	readonly, err := h.p.TxnIsReadOnly(proxy.UUID(r.TxnUUID))
+func (h txnkvHandler) TxnIsReadOnly(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	readonly, err := h.p.TxnIsReadOnly(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, IsReadOnly: readonly}, http.StatusOK, nil
+	return &TxnResponse{IsReadOnly: readonly}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnDelete(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.TxnDelete(proxy.UUID(r.TxnUUID), r.Key)
+func (h txnkvHandler) TxnDelete(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.TxnDelete(proxy.UUID(vars["id"]), r.Key)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnCommit(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.TxnCommit(proxy.UUID(r.TxnUUID))
+func (h txnkvHandler) TxnCommit(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.TxnCommit(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnRollback(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.TxnRollback(proxy.UUID(r.TxnUUID))
+func (h txnkvHandler) TxnRollback(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.TxnRollback(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnLockKeys(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.TxnLockKeys(proxy.UUID(r.TxnUUID), r.Keys)
+func (h txnkvHandler) TxnLockKeys(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.TxnLockKeys(proxy.UUID(vars["id"]), r.Keys)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnValid(r *TxnRequest) (*TxnResponse, int, error) {
-	valid, err := h.p.TxnValid(proxy.UUID(r.TxnUUID))
+func (h txnkvHandler) TxnValid(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	valid, err := h.p.TxnValid(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, IsValid: valid}, http.StatusOK, nil
+	return &TxnResponse{IsValid: valid}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnLen(r *TxnRequest) (*TxnResponse, int, error) {
-	length, err := h.p.TxnLen(proxy.UUID(r.TxnUUID))
+func (h txnkvHandler) TxnLen(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	length, err := h.p.TxnLen(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, Length: length}, http.StatusOK, nil
+	return &TxnResponse{Length: length}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) TxnSize(r *TxnRequest) (*TxnResponse, int, error) {
-	size, err := h.p.TxnSize(proxy.UUID(r.TxnUUID))
+func (h txnkvHandler) TxnSize(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	size, err := h.p.TxnSize(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{TxnUUID: r.TxnUUID, Size: size}, http.StatusOK, nil
+	return &TxnResponse{Size: size}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) IterValid(r *TxnRequest) (*TxnResponse, int, error) {
-	valid, err := h.p.IterValid(proxy.UUID(r.IterUUID))
+func (h txnkvHandler) IterValid(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	valid, err := h.p.IterValid(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{IterUUID: r.IterUUID, IsValid: valid}, http.StatusOK, nil
+	return &TxnResponse{IsValid: valid}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) IterKey(r *TxnRequest) (*TxnResponse, int, error) {
-	key, err := h.p.IterKey(proxy.UUID(r.IterUUID))
+func (h txnkvHandler) IterKey(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	key, err := h.p.IterKey(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{IterUUID: r.IterUUID, Key: key}, http.StatusOK, nil
+	return &TxnResponse{Key: key}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) IterValue(r *TxnRequest) (*TxnResponse, int, error) {
-	val, err := h.p.IterValue(proxy.UUID(r.IterUUID))
+func (h txnkvHandler) IterValue(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	val, err := h.p.IterValue(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{IterUUID: r.IterUUID, Value: val}, http.StatusOK, nil
+	return &TxnResponse{Value: val}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) IterNext(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.IterNext(proxy.UUID(r.IterUUID))
+func (h txnkvHandler) IterNext(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.IterNext(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{IterUUID: r.IterUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) IterClose(r *TxnRequest) (*TxnResponse, int, error) {
-	err := h.p.IterClose(proxy.UUID(r.IterUUID))
+func (h txnkvHandler) IterClose(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
+	err := h.p.IterClose(proxy.UUID(vars["id"]))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return &TxnResponse{IterUUID: r.IterUUID}, http.StatusOK, nil
+	return &TxnResponse{}, http.StatusOK, nil
 }
 
-func (h txnkvHandler) handlerFunc(f func(*TxnRequest) (*TxnResponse, int, error)) func(http.ResponseWriter, *http.Request) {
+func (h txnkvHandler) handlerFunc(f func(map[string]string, *TxnRequest) (*TxnResponse, int, error)) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -256,7 +252,7 @@ func (h txnkvHandler) handlerFunc(f func(*TxnRequest) (*TxnResponse, int, error)
 			sendError(w, err, http.StatusBadRequest)
 			return
 		}
-		res, status, err := f(&req)
+		res, status, err := f(mux.Vars(r), &req)
 		if err != nil {
 			sendError(w, err, status)
 			return
