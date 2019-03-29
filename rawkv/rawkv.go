@@ -205,7 +205,7 @@ func (c *Client) Delete(key []byte) error {
 	return nil
 }
 
-// BatchDelete deletes key-value pairs from TiKV
+// BatchDelete deletes key-value pairs from TiKV.
 func (c *Client) BatchDelete(keys [][]byte) error {
 	start := time.Now()
 	defer func() {

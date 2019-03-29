@@ -61,5 +61,10 @@ func NewHTTPProxyHandler() http.Handler {
 	router.HandleFunc("/txnkv/iter/{id}/next", txnkv.handlerFunc(txnkv.IterNext))
 	router.HandleFunc("/txnkv/iter/{id}/close", txnkv.handlerFunc(txnkv.IterClose))
 
+	router.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+		w.Write([]byte("not implemented"))
+	})
+
 	return router
 }
