@@ -230,7 +230,7 @@ func (p TxnKVProxy) TxnSize(id UUID) (int, error) {
 func (p TxnKVProxy) IterValid(id UUID) (bool, error) {
 	iter, ok := p.iterators.Load(id)
 	if !ok {
-		return false, errors.WithStack(ErrTxnNotFound)
+		return false, errors.WithStack(ErrIterNotFound)
 	}
 	return iter.(kv.Iterator).Valid(), nil
 }
