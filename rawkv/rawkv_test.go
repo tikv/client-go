@@ -129,6 +129,26 @@ func (s *testRawKVSuite) mustScanRange(c *C, startKey string, endKey string, lim
 	}
 }
 
+func (s *testRawKVSuite) mustReverseScan(c *C, startKey []byte, limit int, expect ...string) {
+	keys, values, err := s.client.ReverseScan(startKey, nil, limit)
+	c.Assert(err, IsNil)
+	c.Assert(len(keys)*2, Equals, len(expect))
+	for i := range keys {
+		c.Assert(string(keys[i]), Equals, expect[i*2])
+		c.Assert(string(values[i]), Equals, expect[i*2+1])
+	}
+}
+
+func (s *testRawKVSuite) mustReverseScanRange(c *C, startKey, endKey []byte, limit int, expect ...string) {
+	keys, values, err := s.client.ReverseScan(startKey, endKey, limit)
+	c.Assert(err, IsNil)
+	c.Assert(len(keys)*2, Equals, len(expect))
+	for i := range keys {
+		c.Assert(string(keys[i]), Equals, expect[i*2])
+		c.Assert(string(values[i]), Equals, expect[i*2+1])
+	}
+}
+
 func (s *testRawKVSuite) mustDeleteRange(c *C, startKey, endKey []byte, expected map[string]string) {
 	err := s.client.DeleteRange(startKey, endKey)
 	c.Assert(err, IsNil)
