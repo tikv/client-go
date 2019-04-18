@@ -23,6 +23,7 @@ import (
 
 // LatchesScheduler is used to schedule latches for transactions.
 type LatchesScheduler struct {
+	conf            *config.Latch
 	latches         *Latches
 	unlockCh        chan *Lock
 	closed          bool
@@ -31,10 +32,11 @@ type LatchesScheduler struct {
 }
 
 // NewScheduler create the LatchesScheduler.
-func NewScheduler(size uint) *LatchesScheduler {
-	latches := NewLatches(size)
-	unlockCh := make(chan *Lock, config.LatchLockChanSize)
+func NewScheduler(conf *config.Latch) *LatchesScheduler {
+	latches := NewLatches(conf)
+	unlockCh := make(chan *Lock, conf.LockChanSize)
 	scheduler := &LatchesScheduler{
+		conf:     conf,
 		latches:  latches,
 		unlockCh: unlockCh,
 		closed:   false,
@@ -55,7 +57,7 @@ func (scheduler *LatchesScheduler) run() {
 		if lock.commitTS > lock.startTS {
 			currentTS := lock.commitTS
 			elapsed := tsoSub(currentTS, scheduler.lastRecycleTime)
-			if elapsed > config.LatchCheckInterval || counter > config.LatchCheckCounter {
+			if elapsed > scheduler.conf.CheckInterval || counter > scheduler.conf.CheckCounter {
 				go scheduler.latches.recycle(lock.commitTS)
 				scheduler.lastRecycleTime = currentTS
 				counter = 0

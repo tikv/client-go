@@ -43,9 +43,11 @@ func (s *testRawKVSuite) SetUpTest(c *C) {
 	mocktikv.BootstrapWithSingleStore(s.cluster)
 	pdClient := mocktikv.NewPDClient(s.cluster)
 	mvccStore := mocktikv.MustNewMVCCStore()
+	conf := config.Default()
 	s.client = &Client{
+		conf:        &conf,
 		clusterID:   0,
-		regionCache: locate.NewRegionCache(pdClient),
+		regionCache: locate.NewRegionCache(pdClient, &conf.RegionCache),
 		pdClient:    pdClient,
 		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore),
 	}
@@ -179,7 +181,7 @@ func (s *testRawKVSuite) TestRawBatch(c *C) {
 	size := 0
 	var testKeys [][]byte
 	var testValues [][]byte
-	for i := 0; size/config.RawBatchPutSize < 4; i++ {
+	for i := 0; size/s.client.conf.Raw.MaxBatchPutSize < 4; i++ {
 		key := fmt.Sprint("key", i)
 		size += len(key)
 		testKeys = append(testKeys, []byte(key))

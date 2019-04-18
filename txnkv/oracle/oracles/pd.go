@@ -29,23 +29,25 @@ var _ oracle.Oracle = &pdOracle{}
 
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
+	conf   *config.Txn
 	c      pd.Client
 	lastTS uint64
 	quit   chan struct{}
 }
 
-// NewPdOracle create an Oracle that uses a pd client source.
-// Refer https://github.com/pingcap/pd/blob/master/client/client.go for more details.
+// NewPdOracle create an Oracle that uses a pd client source. Refer
+// https://github.com/pingcap/pd/blob/master/client/client.go for more details.
 // PdOracle mantains `lastTS` to store the last timestamp got from PD server. If
-// `GetTimestamp()` is not called after `updateInterval`, it will be called by
-// itself to keep up with the timestamp on PD server.
-func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracle, error) {
+// `GetTimestamp()` is not called after `conf.OracleUpdateInterval`, it will be
+// called by itself to keep up with the timestamp on PD server.
+func NewPdOracle(pdClient pd.Client, conf *config.Txn) (oracle.Oracle, error) {
 	o := &pdOracle{
+		conf: conf,
 		c:    pdClient,
 		quit: make(chan struct{}),
 	}
 	ctx := context.TODO()
-	go o.updateTS(ctx, updateInterval)
+	go o.updateTS(ctx, conf.OracleUpdateInterval)
 	// Initialize lastTS by Get.
 	_, err := o.GetTimestamp(ctx)
 	if err != nil {
@@ -102,7 +104,7 @@ func (o *pdOracle) getTimestamp(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 	dist := time.Since(now)
-	if dist > config.TsoSlowThreshold {
+	if dist > o.conf.TsoSlowThreshold {
 		log.Warnf("get timestamp too slow: %s", dist)
 	}
 	return oracle.ComposeTS(physical, logical), nil

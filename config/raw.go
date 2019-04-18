@@ -13,20 +13,23 @@
 
 package config
 
-// Config contains configurations for tikv client.
-type Config struct {
-	RPC         RPC
-	Raw         Raw
-	Txn         Txn
-	RegionCache RegionCache
+// Raw is rawkv configurations.
+type Raw struct {
+	// MaxScanLimit is the maximum scan limit for rawkv Scan.
+	MaxScanLimit int
+
+	// MaxBatchPutSize is the maximum size limit for rawkv each batch put request.
+	MaxBatchPutSize int
+
+	// BatchPairCount is the maximum limit for rawkv each batch get/delete request.
+	BatchPairCount int
 }
 
-// Default returns the default config.
-func Default() Config {
-	return Config{
-		RPC:         DefaultRPC(),
-		Raw:         DefaultRaw(),
-		Txn:         DefaultTxn(),
-		RegionCache: DefaultRegionCache(),
+// DefaultRaw returns default rawkv configuration.
+func DefaultRaw() Raw {
+	return Raw{
+		MaxScanLimit:    10240,
+		MaxBatchPutSize: 16 * 1024,
+		BatchPairCount:  512,
 	}
 }

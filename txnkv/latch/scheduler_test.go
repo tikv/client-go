@@ -20,6 +20,7 @@ import (
 	"time"
 
 	. "github.com/pingcap/check"
+	"github.com/tikv/client-go/config"
 )
 
 var _ = Suite(&testSchedulerSuite{})
@@ -31,7 +32,9 @@ func (s *testSchedulerSuite) SetUpTest(c *C) {
 }
 
 func (s *testSchedulerSuite) TestWithConcurrency(c *C) {
-	sched := NewScheduler(7)
+	conf := config.DefaultLatch()
+	conf.Capacity = 7
+	sched := NewScheduler(&conf)
 	defer sched.Close()
 	rand.Seed(time.Now().Unix())
 

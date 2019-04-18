@@ -37,6 +37,7 @@ type node struct {
 
 // latch stores a key's waiting transactions information.
 type latch struct {
+	conf    *config.Latch
 	queue   *node
 	count   int
 	waiting []*Lock
@@ -94,6 +95,7 @@ func (l *Lock) SetCommitTS(commitTS uint64) {
 // Each latch is indexed by a slot's ID, hence the term latch and slot are used in interchangeable,
 // but conceptually a latch is a queue, and a slot is an index to the queue
 type Latches struct {
+	conf  *config.Latch
 	slots []latch
 }
 
@@ -113,10 +115,11 @@ func (s bytesSlice) Less(i, j int) bool {
 
 // NewLatches create a Latches with fixed length,
 // the size will be rounded up to the power of 2.
-func NewLatches(size uint) *Latches {
-	powerOfTwoSize := 1 << uint32(bits.Len32(uint32(size-1)))
+func NewLatches(conf *config.Latch) *Latches {
+	powerOfTwoSize := 1 << uint32(bits.Len32(uint32(conf.Capacity-1)))
 	slots := make([]latch, powerOfTwoSize)
 	return &Latches{
+		conf:  conf,
 		slots: slots,
 	}
 }
@@ -228,8 +231,8 @@ func (latches *Latches) acquireSlot(lock *Lock) acquireResult {
 	defer latch.Unlock()
 
 	// Try to recycle to limit the memory usage.
-	if latch.count >= config.LatchListCount {
-		latch.recycle(lock.startTS)
+	if latch.count >= latches.conf.ListCount {
+		latch.recycle(lock.startTS, latches.conf.ExpireDuration)
 	}
 
 	find := findNode(latch.queue, key)
@@ -264,12 +267,12 @@ func (latches *Latches) acquireSlot(lock *Lock) acquireResult {
 }
 
 // recycle is not thread safe, the latch should acquire its lock before executing this function.
-func (l *latch) recycle(currentTS uint64) int {
+func (l *latch) recycle(currentTS uint64, expireDuration time.Duration) int {
 	total := 0
 	fakeHead := node{next: l.queue}
 	prev := &fakeHead
 	for curr := prev.next; curr != nil; curr = curr.next {
-		if tsoSub(currentTS, curr.maxCommitTS) >= config.LatchExpireDuration && curr.value == nil {
+		if tsoSub(currentTS, curr.maxCommitTS) >= expireDuration && curr.value == nil {
 			l.count--
 			prev.next = curr.next
 			total++
@@ -286,7 +289,7 @@ func (latches *Latches) recycle(currentTS uint64) {
 	for i := 0; i < len(latches.slots); i++ {
 		latch := &latches.slots[i]
 		latch.Lock()
-		total += latch.recycle(currentTS)
+		total += latch.recycle(currentTS, latches.conf.ExpireDuration)
 		latch.Unlock()
 	}
 	log.Debugf("recycle run at %v, recycle count = %d...\n", time.Now(), total)

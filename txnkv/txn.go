@@ -44,7 +44,7 @@ type Transaction struct {
 
 func newTransaction(tikvStore *store.TiKVStore, ts uint64) *Transaction {
 	snapshot := tikvStore.GetSnapshot(ts)
-	us := kv.NewUnionStore(snapshot)
+	us := kv.NewUnionStore(&tikvStore.GetConfig().Txn, snapshot)
 	return &Transaction{
 		tikvStore: tikvStore,
 		snapshot:  snapshot,

@@ -13,20 +13,18 @@
 
 package config
 
-// Config contains configurations for tikv client.
-type Config struct {
-	RPC         RPC
-	Raw         Raw
-	Txn         Txn
-	RegionCache RegionCache
+import "time"
+
+// RegionCache contains the configurations for region cache.
+type RegionCache struct {
+	BTreeDegree int
+	CacheTTL    time.Duration
 }
 
-// Default returns the default config.
-func Default() Config {
-	return Config{
-		RPC:         DefaultRPC(),
-		Raw:         DefaultRaw(),
-		Txn:         DefaultTxn(),
-		RegionCache: DefaultRegionCache(),
+// DefaultRegionCache returns the default region cache config.
+func DefaultRegionCache() RegionCache {
+	return RegionCache{
+		BTreeDegree: 32,
+		CacheTTL:    10 * time.Minute,
 	}
 }

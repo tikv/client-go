@@ -72,9 +72,9 @@ type unionStore struct {
 }
 
 // NewUnionStore builds a new UnionStore.
-func NewUnionStore(snapshot Snapshot) UnionStore {
+func NewUnionStore(conf *config.Txn, snapshot Snapshot) UnionStore {
 	return &unionStore{
-		BufferStore:        NewBufferStore(snapshot, config.DefaultTxnMembufCap),
+		BufferStore:        NewBufferStore(snapshot, conf),
 		snapshot:           snapshot,
 		lazyConditionPairs: make(map[string]*conditionPair),
 		opts:               make(map[Option]interface{}),
@@ -105,8 +105,9 @@ func (it invalidIterator) Close() {}
 
 // lazyMemBuffer wraps a MemBuffer which is to be initialized when it is modified.
 type lazyMemBuffer struct {
-	mb  MemBuffer
-	cap int
+	mb   MemBuffer
+	cap  int
+	conf *config.Txn
 }
 
 func (lmb *lazyMemBuffer) Get(k key.Key) ([]byte, error) {
@@ -119,7 +120,7 @@ func (lmb *lazyMemBuffer) Get(k key.Key) ([]byte, error) {
 
 func (lmb *lazyMemBuffer) Set(key key.Key, value []byte) error {
 	if lmb.mb == nil {
-		lmb.mb = NewMemDbBuffer(lmb.cap)
+		lmb.mb = NewMemDbBuffer(lmb.conf, lmb.cap)
 	}
 
 	return lmb.mb.Set(key, value)
@@ -127,7 +128,7 @@ func (lmb *lazyMemBuffer) Set(key key.Key, value []byte) error {
 
 func (lmb *lazyMemBuffer) Delete(k key.Key) error {
 	if lmb.mb == nil {
-		lmb.mb = NewMemDbBuffer(lmb.cap)
+		lmb.mb = NewMemDbBuffer(lmb.conf, lmb.cap)
 	}
 
 	return lmb.mb.Delete(k)

@@ -32,6 +32,7 @@ import (
 // LockResolver resolves locks and also caches resolved txn status.
 type LockResolver struct {
 	store *TiKVStore
+	conf  *config.Config
 	mu    struct {
 		sync.RWMutex
 		// resolved caches resolved txns (FIFO, txn id -> txnStatus).
@@ -43,6 +44,7 @@ type LockResolver struct {
 func newLockResolver(store *TiKVStore) *LockResolver {
 	r := &LockResolver{
 		store: store,
+		conf:  store.GetConfig(),
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
 	r.mu.recentResolved = list.New()
@@ -55,8 +57,8 @@ var _ = NewLockResolver
 // NewLockResolver creates a LockResolver.
 // It is exported for other pkg to use. For instance, binlog service needs
 // to determine a transaction's commit state.
-func NewLockResolver(etcdAddrs []string, security config.Security) (*LockResolver, error) {
-	s, err := NewStore(etcdAddrs, security)
+func NewLockResolver(etcdAddrs []string, conf config.Config) (*LockResolver, error) {
+	s, err := NewStore(etcdAddrs, conf)
 	if err != nil {
 		return nil, err
 	}
@@ -82,10 +84,10 @@ type Lock struct {
 }
 
 // NewLock creates a new *Lock.
-func NewLock(l *kvrpcpb.LockInfo) *Lock {
+func NewLock(l *kvrpcpb.LockInfo, defaultTTL uint64) *Lock {
 	ttl := l.GetLockTtl()
 	if ttl == 0 {
-		ttl = config.TxnDefaultLockTTL
+		ttl = defaultTTL
 	}
 	return &Lock{
 		Key:     l.GetKey(),
@@ -104,7 +106,7 @@ func (lr *LockResolver) saveResolved(txnID uint64, status TxnStatus) {
 	}
 	lr.mu.resolved[txnID] = status
 	lr.mu.recentResolved.PushBack(txnID)
-	if len(lr.mu.resolved) > config.TxnResolvedCacheSize {
+	if len(lr.mu.resolved) > lr.conf.Txn.ResolveCacheSize {
 		front := lr.mu.recentResolved.Front()
 		delete(lr.mu.resolved, front.Value.(uint64))
 		lr.mu.recentResolved.Remove(front)
@@ -171,7 +173,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		},
 	}
 	startTime = time.Now()
-	resp, err := lr.store.SendReq(bo, req, loc, config.ReadTimeoutShort)
+	resp, err := lr.store.SendReq(bo, req, loc, lr.conf.RPC.ReadTimeoutShort)
 	if err != nil {
 		return false, err
 	}
@@ -282,7 +284,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		if err != nil {
 			return status, err
 		}
-		resp, err := lr.store.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
+		resp, err := lr.store.SendReq(bo, req, loc.Region, lr.conf.RPC.ReadTimeoutShort)
 		if err != nil {
 			return status, err
 		}
@@ -336,7 +338,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		if status.IsCommitted() {
 			req.ResolveLock.CommitVersion = status.CommitTS()
 		}
-		resp, err := lr.store.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
+		resp, err := lr.store.SendReq(bo, req, loc.Region, lr.conf.RPC.ReadTimeoutShort)
 		if err != nil {
 			return err
 		}

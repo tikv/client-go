@@ -37,26 +37,28 @@ var (
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
 	clusterID   uint64
+	conf        *config.Config
 	regionCache *locate.RegionCache
 	pdClient    pd.Client
 	rpcClient   rpc.Client
 }
 
 // NewClient creates a client with PD cluster addrs.
-func NewClient(pdAddrs []string, security config.Security) (*Client, error) {
+func NewClient(pdAddrs []string, conf config.Config) (*Client, error) {
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   security.SSLCA,
-		CertPath: security.SSLCert,
-		KeyPath:  security.SSLKey,
+		CAPath:   conf.RPC.Security.SSLCA,
+		CertPath: conf.RPC.Security.SSLCert,
+		KeyPath:  conf.RPC.Security.SSLKey,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &Client{
 		clusterID:   pdCli.GetClusterID(context.TODO()),
-		regionCache: locate.NewRegionCache(pdCli),
+		conf:        &conf,
+		regionCache: locate.NewRegionCache(pdCli, &conf.RegionCache),
 		pdClient:    pdCli,
-		rpcClient:   rpc.NewRPCClient(security),
+		rpcClient:   rpc.NewRPCClient(&conf.RPC),
 	}, nil
 }
 
@@ -269,7 +271,7 @@ func (c *Client) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("raw_scan").Observe(time.Since(start).Seconds()) }()
 
-	if limit > config.MaxRawKVScanLimit {
+	if limit > c.conf.Raw.MaxScanLimit {
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
@@ -310,7 +312,7 @@ func (c *Client) sendReq(key []byte, req *rpc.Request) (*rpc.Response, *locate.K
 		if err != nil {
 			return nil, nil, err
 		}
-		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, loc.Region, c.conf.RPC.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -337,7 +339,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, cmdType rpc.Cm
 
 	var batches []batch
 	for regionID, groupKeys := range groups {
-		batches = appendKeyBatches(batches, regionID, groupKeys, config.RawBatchPairCount)
+		batches = appendKeyBatches(batches, regionID, groupKeys, c.conf.Raw.BatchPairCount)
 	}
 	bo, cancel := bo.Fork()
 	ches := make(chan singleBatchResp, len(batches))
@@ -396,7 +398,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.CmdTyp
 	}
 
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
-	resp, err := sender.SendReq(bo, req, batch.regionID, config.ReadTimeoutShort)
+	resp, err := sender.SendReq(bo, req, batch.regionID, c.conf.RPC.ReadTimeoutShort)
 
 	batchResp := singleBatchResp{}
 	if err != nil {
@@ -464,7 +466,7 @@ func (c *Client) sendDeleteRangeReq(startKey []byte, endKey []byte) (*rpc.Respon
 			},
 		}
 
-		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, loc.Region, c.conf.RPC.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -495,7 +497,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error 
 	var batches []batch
 	// split the keys by size and RegionVerID
 	for regionID, groupKeys := range groups {
-		batches = appendBatches(batches, regionID, groupKeys, keyToValue, config.RawBatchPutSize)
+		batches = appendBatches(batches, regionID, groupKeys, keyToValue, c.conf.Raw.MaxBatchPutSize)
 	}
 	bo, cancel := bo.Fork()
 	ch := make(chan error, len(batches))
@@ -574,7 +576,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch batch) error {
 	}
 
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
-	resp, err := sender.SendReq(bo, req, batch.regionID, config.ReadTimeoutShort)
+	resp, err := sender.SendReq(bo, req, batch.regionID, c.conf.RPC.ReadTimeoutShort)
 	if err != nil {
 		return err
 	}

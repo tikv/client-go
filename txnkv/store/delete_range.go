@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/retry"
 	"github.com/tikv/client-go/rpc"
 )
@@ -51,6 +50,8 @@ func NewDeleteRangeTask(ctx context.Context, store *TiKVStore, startKey []byte, 
 
 // Execute performs the delete range operation.
 func (t *DeleteRangeTask) Execute() error {
+	conf := t.store.GetConfig()
+
 	startKey, rangeEndKey := t.startKey, t.endKey
 	for {
 		select {
@@ -80,7 +81,7 @@ func (t *DeleteRangeTask) Execute() error {
 			},
 		}
 
-		resp, err := t.store.SendReq(bo, req, loc.Region, config.ReadTimeoutMedium)
+		resp, err := t.store.SendReq(bo, req, loc.Region, conf.RPC.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}

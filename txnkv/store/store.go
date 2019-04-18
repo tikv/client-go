@@ -35,6 +35,7 @@ import (
 
 // TiKVStore contains methods to interact with a TiKV cluster.
 type TiKVStore struct {
+	conf         *config.Config
 	clusterID    uint64
 	uuid         string
 	oracle       oracle.Oracle
@@ -54,22 +55,24 @@ type TiKVStore struct {
 }
 
 // NewStore creates a TiKVStore instance.
-func NewStore(pdAddrs []string, security config.Security) (*TiKVStore, error) {
+func NewStore(pdAddrs []string, conf config.Config) (*TiKVStore, error) {
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   security.SSLCA,
-		CertPath: security.SSLCert,
-		KeyPath:  security.SSLKey,
+		CAPath:   conf.RPC.Security.SSLCA,
+		CertPath: conf.RPC.Security.SSLCert,
+		KeyPath:  conf.RPC.Security.SSLKey,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	oracle, err := oracles.NewPdOracle(pdCli, time.Duration(config.OracleUpdateInterval)*time.Millisecond)
+	pdClient := &locate.CodecPDClient{Client: pdCli}
+
+	oracle, err := oracles.NewPdOracle(pdCli, &conf.Txn)
 	if err != nil {
 		return nil, err
 	}
 
-	tlsConfig, err := security.ToTLSConfig()
+	tlsConfig, err := conf.RPC.Security.ToTLSConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -82,12 +85,13 @@ func NewStore(pdAddrs []string, security config.Security) (*TiKVStore, error) {
 	clusterID := pdCli.GetClusterID(context.TODO())
 
 	store := &TiKVStore{
+		conf:        &conf,
 		clusterID:   clusterID,
 		uuid:        fmt.Sprintf("tikv-%d", clusterID),
 		oracle:      oracle,
-		client:      rpc.NewRPCClient(security),
-		pdClient:    &locate.CodecPDClient{Client: pdCli},
-		regionCache: locate.NewRegionCache(pdCli),
+		client:      rpc.NewRPCClient(&conf.RPC),
+		pdClient:    pdClient,
+		regionCache: locate.NewRegionCache(pdClient, &conf.RegionCache),
 		etcdAddrs:   pdAddrs,
 		tlsConfig:   tlsConfig,
 		spkv:        spkv,
@@ -97,12 +101,17 @@ func NewStore(pdAddrs []string, security config.Security) (*TiKVStore, error) {
 
 	store.lockResolver = newLockResolver(store)
 
-	if config.EnableTxnLocalLatch {
-		store.txnLatches = latch.NewScheduler(config.TxnLocalLatchCapacity)
+	if conf.Txn.Latch.Enable {
+		store.txnLatches = latch.NewScheduler(&conf.Txn.Latch)
 	}
 
 	go store.runSafePointChecker()
 	return store, nil
+}
+
+// GetConfig returns the store's configurations.
+func (s *TiKVStore) GetConfig() *config.Config {
+	return s.conf
 }
 
 // GetLockResolver returns the lock resolver instance.
@@ -177,21 +186,21 @@ func (s *TiKVStore) GetTimestampWithRetry(bo *retry.Backoffer) (uint64, error) {
 }
 
 func (s *TiKVStore) runSafePointChecker() {
-	d := config.GcSafePointUpdateInterval
+	d := s.conf.Txn.GcSafePointUpdateInterval
 	for {
 		select {
 		case spCachedTime := <-time.After(d):
-			cachedSafePoint, err := loadSafePoint(s.spkv, config.GcSavedSafePoint)
+			cachedSafePoint, err := loadSafePoint(s.spkv, s.conf.Txn.GcSavedSafePoint)
 			if err == nil {
 				metrics.LoadSafepointCounter.WithLabelValues("ok").Inc()
 				s.spMutex.Lock()
 				s.safePoint, s.spTime = cachedSafePoint, spCachedTime
 				s.spMutex.Unlock()
-				d = config.GcSafePointUpdateInterval
+				d = s.conf.Txn.GcSafePointUpdateInterval
 			} else {
 				metrics.LoadSafepointCounter.WithLabelValues("fail").Inc()
 				log.Errorf("fail to load safepoint from pd: %v", err)
-				d = config.GcSafePointQuickRepeatInterval
+				d = s.conf.Txn.GcSafePointQuickRepeatInterval
 			}
 		case <-s.Closed():
 			return
@@ -208,7 +217,7 @@ func (s *TiKVStore) CheckVisibility(startTS uint64) error {
 	s.spMutex.RUnlock()
 	diff := time.Since(cachedTime)
 
-	if diff > (config.GcSafePointCacheInterval - config.GcCPUTimeInaccuracyBound) {
+	if diff > (s.conf.Txn.GcSafePointCacheInterval - s.conf.Txn.GcCPUTimeInaccuracyBound) {
 		return errors.WithStack(ErrPDServerTimeout)
 	}
 

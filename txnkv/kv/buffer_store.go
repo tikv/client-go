@@ -31,13 +31,10 @@ type BufferStore struct {
 }
 
 // NewBufferStore creates a BufferStore using r for read.
-func NewBufferStore(r Retriever, cap int) *BufferStore {
-	if cap <= 0 {
-		cap = config.DefaultTxnMembufCap
-	}
+func NewBufferStore(r Retriever, conf *config.Txn) *BufferStore {
 	return &BufferStore{
 		r:         r,
-		MemBuffer: &lazyMemBuffer{cap: cap},
+		MemBuffer: &lazyMemBuffer{conf: conf},
 	}
 }
 

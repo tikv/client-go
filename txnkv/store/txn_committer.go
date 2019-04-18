@@ -63,6 +63,7 @@ type TxnCommitter struct {
 	ConnID   uint64 // ConnID is used for log.
 
 	store     *TiKVStore
+	conf      *config.Config
 	startTS   uint64
 	keys      [][]byte
 	mutations map[string]*pb.Mutation
@@ -91,6 +92,7 @@ func NewTxnCommitter(store *TiKVStore, startTS uint64, startTime time.Time, muta
 		lockCnt int
 	)
 
+	conf := store.GetConfig()
 	for key, mut := range mutations {
 		switch mut.Op {
 		case pb.Op_Put, pb.Op_Insert:
@@ -102,7 +104,7 @@ func NewTxnCommitter(store *TiKVStore, startTS uint64, startTime time.Time, muta
 		}
 		keys = append(keys, []byte(key))
 		entrySize := len(mut.Key) + len(mut.Value)
-		if entrySize > config.TxnEntrySizeLimit {
+		if entrySize > conf.Txn.EntrySizeLimit {
 			return nil, kv.ErrEntryTooLarge
 		}
 		size += entrySize
@@ -112,21 +114,22 @@ func NewTxnCommitter(store *TiKVStore, startTS uint64, startTime time.Time, muta
 		return nil, nil
 	}
 
-	if len(keys) > int(config.TxnEntryCountLimit) || size > config.TxnTotalSizeLimit {
+	if len(keys) > int(conf.Txn.EntryCountLimit) || size > conf.Txn.TotalSizeLimit {
 		return nil, kv.ErrTxnTooLarge
 	}
 
 	// Convert from sec to ms
-	maxTxnTimeUse := uint64(config.MaxTxnTimeUse) * 1000
+	maxTxnTimeUse := uint64(conf.Txn.MaxTimeUse) * 1000
 
 	metrics.TxnWriteKVCountHistogram.Observe(float64(len(keys)))
 	metrics.TxnWriteSizeHistogram.Observe(float64(size))
 	return &TxnCommitter{
 		store:         store,
+		conf:          conf,
 		startTS:       startTS,
 		keys:          keys,
 		mutations:     mutations,
-		lockTTL:       txnLockTTL(startTime, size),
+		lockTTL:       txnLockTTL(conf, startTime, size),
 		maxTxnTimeUse: maxTxnTimeUse,
 		detail:        CommitDetails{WriteSize: size, WriteKeys: len(keys)},
 	}, nil
@@ -138,20 +141,20 @@ func (c *TxnCommitter) primary() []byte {
 
 const bytesPerMiB = 1024 * 1024
 
-func txnLockTTL(startTime time.Time, txnSize int) uint64 {
+func txnLockTTL(conf *config.Config, startTime time.Time, txnSize int) uint64 {
 	// Increase lockTTL for large transactions.
 	// The formula is `ttl = ttlFactor * sqrt(sizeInMiB)`.
 	// When writeSize is less than 256KB, the base ttl is defaultTTL (3s);
 	// When writeSize is 1MiB, 100MiB, or 400MiB, ttl is 6s, 60s, 120s correspondingly;
-	lockTTL := config.TxnDefaultLockTTL
-	if txnSize >= config.TxnCommitBatchSize {
+	lockTTL := conf.Txn.DefaultLockTTL
+	if txnSize >= conf.Txn.CommitBatchSize {
 		sizeMiB := float64(txnSize) / bytesPerMiB
-		lockTTL = uint64(float64(config.TxnTTLFactor) * math.Sqrt(sizeMiB))
-		if lockTTL < config.TxnDefaultLockTTL {
-			lockTTL = config.TxnDefaultLockTTL
+		lockTTL = uint64(float64(conf.Txn.TTLFactor) * math.Sqrt(sizeMiB))
+		if lockTTL < conf.Txn.DefaultLockTTL {
+			lockTTL = conf.Txn.DefaultLockTTL
 		}
-		if lockTTL > config.TxnMaxLockTTL {
-			lockTTL = config.TxnMaxLockTTL
+		if lockTTL > conf.Txn.MaxLockTTL {
+			lockTTL = conf.Txn.MaxLockTTL
 		}
 	}
 
@@ -183,10 +186,10 @@ func (c *TxnCommitter) doActionOnKeys(bo *retry.Backoffer, action commitAction, 
 		atomic.AddInt32(&c.detail.PrewriteRegionNum, int32(len(groups)))
 	}
 	// Make sure the group that contains primary key goes first.
-	batches = appendBatchBySize(batches, firstRegion, groups[firstRegion], sizeFunc, config.TxnCommitBatchSize)
+	batches = appendBatchBySize(batches, firstRegion, groups[firstRegion], sizeFunc, c.conf.Txn.CommitBatchSize)
 	delete(groups, firstRegion)
 	for id, g := range groups {
-		batches = appendBatchBySize(batches, id, g, sizeFunc, config.TxnCommitBatchSize)
+		batches = appendBatchBySize(batches, id, g, sizeFunc, c.conf.Txn.CommitBatchSize)
 	}
 
 	firstIsPrimary := bytes.Equal(keys[0], c.primary())
@@ -318,7 +321,7 @@ func (c *TxnCommitter) prewriteSingleBatch(bo *retry.Backoffer, batch batchKeys)
 		},
 	}
 	for {
-		resp, err := c.store.SendReq(bo, req, batch.region, config.ReadTimeoutShort)
+		resp, err := c.store.SendReq(bo, req, batch.region, c.conf.RPC.ReadTimeoutShort)
 		if err != nil {
 			return err
 		}
@@ -349,7 +352,7 @@ func (c *TxnCommitter) prewriteSingleBatch(bo *retry.Backoffer, batch batchKeys)
 			}
 
 			// Extract lock from key error
-			lock, err1 := extractLockFromKeyErr(keyErr)
+			lock, err1 := extractLockFromKeyErr(keyErr, c.conf.Txn.DefaultLockTTL)
 			if err1 != nil {
 				return err1
 			}
@@ -399,7 +402,7 @@ func (c *TxnCommitter) commitSingleBatch(bo *retry.Backoffer, batch batchKeys) e
 	req.Context.Priority = c.Priority
 
 	sender := rpc.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetRPCClient())
-	resp, err := sender.SendReq(bo, req, batch.region, config.ReadTimeoutShort)
+	resp, err := sender.SendReq(bo, req, batch.region, c.conf.RPC.ReadTimeoutShort)
 
 	// If we fail to receive response for the request that commits primary key, it will be undetermined whether this
 	// transaction has been successfully committed.
@@ -470,7 +473,7 @@ func (c *TxnCommitter) cleanupSingleBatch(bo *retry.Backoffer, batch batchKeys) 
 			SyncLog:  c.SyncLog,
 		},
 	}
-	resp, err := c.store.SendReq(bo, req, batch.region, config.ReadTimeoutShort)
+	resp, err := c.store.SendReq(bo, req, batch.region, c.conf.RPC.ReadTimeoutShort)
 	if err != nil {
 		return err
 	}
