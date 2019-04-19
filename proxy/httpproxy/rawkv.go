@@ -48,7 +48,7 @@ type RawResponse struct {
 }
 
 func (h rawkvHandler) New(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	id, err := h.p.New(r.PDAddrs, config.Security{})
+	id, err := h.p.New(r.PDAddrs, config.Default())
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

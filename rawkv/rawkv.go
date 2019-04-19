@@ -317,7 +317,7 @@ func (c *Client) ReverseScan(startKey, endKey []byte, limit int) (keys [][]byte,
 		metrics.RawkvCmdHistogram.WithLabelValues("raw_reverse_scan").Observe(time.Since(start).Seconds())
 	}()
 
-	if limit > config.MaxRawKVScanLimit {
+	if limit > c.conf.Raw.MaxScanLimit {
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
