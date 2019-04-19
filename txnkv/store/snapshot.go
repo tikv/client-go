@@ -36,6 +36,7 @@ import (
 type TiKVSnapshot struct {
 	store *TiKVStore
 	ts    uint64
+	conf  *config.Config
 
 	Priority     pb.CommandPri
 	NotFillCache bool
@@ -47,6 +48,7 @@ func newTiKVSnapshot(store *TiKVStore, ts uint64) *TiKVSnapshot {
 	return &TiKVSnapshot{
 		store:    store,
 		ts:       ts,
+		conf:     store.GetConfig(),
 		Priority: pb.CommandPri_Normal,
 	}
 }
@@ -98,7 +100,7 @@ func (s *TiKVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte,
 
 	var batches []batchKeys
 	for id, g := range groups {
-		batches = appendBatchBySize(batches, id, g, func([]byte) int { return 1 }, config.TxnBatchGetSize)
+		batches = appendBatchBySize(batches, id, g, func([]byte) int { return 1 }, s.conf.Txn.BatchGetSize)
 	}
 
 	if len(batches) == 0 {
@@ -141,7 +143,7 @@ func (s *TiKVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys
 				NotFillCache: s.NotFillCache,
 			},
 		}
-		resp, err := sender.SendReq(bo, req, batch.region, config.ReadTimeoutMedium)
+		resp, err := sender.SendReq(bo, req, batch.region, s.conf.RPC.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}
@@ -170,7 +172,7 @@ func (s *TiKVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys
 				collectF(pair.GetKey(), pair.GetValue())
 				continue
 			}
-			lock, err := extractLockFromKeyErr(keyErr)
+			lock, err := extractLockFromKeyErr(keyErr, s.conf.Txn.DefaultLockTTL)
 			if err != nil {
 				return err
 			}
@@ -226,7 +228,7 @@ func (s *TiKVSnapshot) get(bo *retry.Backoffer, k key.Key) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, loc.Region, s.conf.RPC.ReadTimeoutShort)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +249,7 @@ func (s *TiKVSnapshot) get(bo *retry.Backoffer, k key.Key) ([]byte, error) {
 		}
 		val := cmdGetResp.GetValue()
 		if keyErr := cmdGetResp.GetError(); keyErr != nil {
-			lock, err := extractLockFromKeyErr(keyErr)
+			lock, err := extractLockFromKeyErr(keyErr, s.conf.Txn.DefaultLockTTL)
 			if err != nil {
 				return nil, err
 			}
@@ -269,7 +271,7 @@ func (s *TiKVSnapshot) get(bo *retry.Backoffer, k key.Key) ([]byte, error) {
 
 // Iter returns a list of key-value pair after `k`.
 func (s *TiKVSnapshot) Iter(k key.Key, upperBound key.Key) (kv.Iterator, error) {
-	scanner, err := newScanner(s, k, upperBound, config.TxnScanBatchSize)
+	scanner, err := newScanner(s, k, upperBound, s.conf.Txn.ScanBatchSize)
 	return scanner, err
 }
 
@@ -283,9 +285,9 @@ func (s *TiKVSnapshot) SetPriority(priority int) {
 	s.Priority = pb.CommandPri(priority)
 }
 
-func extractLockFromKeyErr(keyErr *pb.KeyError) (*Lock, error) {
+func extractLockFromKeyErr(keyErr *pb.KeyError, defaultTTL uint64) (*Lock, error) {
 	if locked := keyErr.GetLocked(); locked != nil {
-		return NewLock(locked), nil
+		return NewLock(locked, defaultTTL), nil
 	}
 	if keyErr.Conflict != nil {
 		err := errors.New(conflictToString(keyErr.Conflict))

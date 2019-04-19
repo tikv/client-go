@@ -38,14 +38,15 @@ type CachedRegion struct {
 	lastAccess int64
 }
 
-func (c *CachedRegion) isValid() bool {
+func (c *CachedRegion) isValid(ttl time.Duration) bool {
 	lastAccess := atomic.LoadInt64(&c.lastAccess)
 	lastAccessTime := time.Unix(lastAccess, 0)
-	return time.Since(lastAccessTime) < config.RegionCacheTTL
+	return time.Since(lastAccessTime) < ttl
 }
 
 // RegionCache caches Regions loaded from PD.
 type RegionCache struct {
+	conf     *config.RegionCache
 	pdClient pd.Client
 
 	mu struct {
@@ -60,12 +61,13 @@ type RegionCache struct {
 }
 
 // NewRegionCache creates a RegionCache.
-func NewRegionCache(pdClient pd.Client) *RegionCache {
+func NewRegionCache(pdClient pd.Client, conf *config.RegionCache) *RegionCache {
 	c := &RegionCache{
+		conf:     conf,
 		pdClient: pdClient,
 	}
 	c.mu.regions = make(map[RegionVerID]*CachedRegion)
-	c.mu.sorted = btree.New(config.RegionCacheBTreeDegree)
+	c.mu.sorted = btree.New(conf.BTreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
 	return c
 }
@@ -279,7 +281,7 @@ func (c *RegionCache) getCachedRegion(id RegionVerID) *Region {
 	if !ok {
 		return nil
 	}
-	if cachedRegion.isValid() {
+	if cachedRegion.isValid(c.conf.CacheTTL) {
 		atomic.StoreInt64(&cachedRegion.lastAccess, time.Now().Unix())
 		return cachedRegion.region
 	}

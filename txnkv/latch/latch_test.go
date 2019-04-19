@@ -36,7 +36,9 @@ type testLatchSuite struct {
 }
 
 func (s *testLatchSuite) SetUpTest(c *C) {
-	s.latches = NewLatches(256)
+	conf := config.DefaultLatch()
+	conf.Capacity = 256
+	s.latches = NewLatches(&conf)
 }
 
 func (s *testLatchSuite) newLock(keys [][]byte) (startTS uint64, lock *Lock) {
@@ -109,7 +111,9 @@ func (s *testLatchSuite) TestFirstAcquireFailedWithStale(c *C) {
 }
 
 func (s *testLatchSuite) TestRecycle(c *C) {
-	latches := NewLatches(8)
+	conf := config.DefaultLatch()
+	conf.Capacity = 8
+	latches := NewLatches(&conf)
 	now := time.Now()
 	startTS := oracle.ComposeTS(oracle.GetPhysical(now), 0)
 	lock := latches.genLock(startTS, [][]byte{
@@ -143,7 +147,7 @@ func (s *testLatchSuite) TestRecycle(c *C) {
 	}
 	c.Assert(allEmpty, IsFalse)
 
-	currentTS := oracle.ComposeTS(oracle.GetPhysical(now.Add(config.LatchExpireDuration)), 3)
+	currentTS := oracle.ComposeTS(oracle.GetPhysical(now.Add(conf.ExpireDuration)), 3)
 	latches.recycle(currentTS)
 
 	for i := 0; i < len(latches.slots); i++ {

@@ -52,7 +52,7 @@ type TxnResponse struct {
 }
 
 func (h txnkvHandler) New(vars map[string]string, r *TxnRequest) (*TxnResponse, int, error) {
-	id, err := h.p.New(r.PDAddrs, config.Security{})
+	id, err := h.p.New(r.PDAddrs, config.Default())
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

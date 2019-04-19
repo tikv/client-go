@@ -17,14 +17,13 @@ package kv
 
 import (
 	"fmt"
-	"sync/atomic"
 
-	"github.com/pkg/errors"
 	"github.com/pingcap/goleveldb/leveldb"
 	"github.com/pingcap/goleveldb/leveldb/comparer"
 	"github.com/pingcap/goleveldb/leveldb/iterator"
 	"github.com/pingcap/goleveldb/leveldb/memdb"
 	"github.com/pingcap/goleveldb/leveldb/util"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 )
@@ -33,7 +32,7 @@ import (
 type memDbBuffer struct {
 	db              *memdb.DB
 	entrySizeLimit  int
-	bufferLenLimit  uint64
+	bufferLenLimit  int
 	bufferSizeLimit int
 }
 
@@ -43,12 +42,15 @@ type memDbIter struct {
 }
 
 // NewMemDbBuffer creates a new memDbBuffer.
-func NewMemDbBuffer(cap int) MemBuffer {
+func NewMemDbBuffer(conf *config.Txn, cap int) MemBuffer {
+	if cap <= 0 {
+		cap = conf.DefaultMembufCap
+	}
 	return &memDbBuffer{
 		db:              memdb.New(comparer.DefaultComparer, cap),
-		entrySizeLimit:  config.TxnEntrySizeLimit,
-		bufferLenLimit:  atomic.LoadUint64(&config.TxnEntryCountLimit),
-		bufferSizeLimit: config.TxnTotalSizeLimit,
+		entrySizeLimit:  conf.EntrySizeLimit,
+		bufferLenLimit:  conf.EntryCountLimit,
+		bufferSizeLimit: conf.TotalSizeLimit,
 	}
 }
 

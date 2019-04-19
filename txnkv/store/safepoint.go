@@ -24,7 +24,6 @@ import (
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"github.com/tikv/client-go/config"
 	"google.golang.org/grpc"
 )
 
@@ -120,7 +119,7 @@ func (w *EtcdSafePointKV) Get(k string) (string, error) {
 
 func saveSafePoint(kv SafePointKV, key string, t uint64) error {
 	s := strconv.FormatUint(t, 10)
-	err := kv.Put(config.GcSavedSafePoint, s)
+	err := kv.Put(key, s)
 	if err != nil {
 		log.Error("save safepoint failed:", err)
 		return err
@@ -129,7 +128,7 @@ func saveSafePoint(kv SafePointKV, key string, t uint64) error {
 }
 
 func loadSafePoint(kv SafePointKV, key string) (uint64, error) {
-	str, err := kv.Get(config.GcSavedSafePoint)
+	str, err := kv.Get(key)
 
 	if err != nil {
 		return 0, err

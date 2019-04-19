@@ -32,7 +32,8 @@ type testBufferStoreSuite struct{}
 var _ = Suite(testBufferStoreSuite{})
 
 func (s testBufferStoreSuite) TestGetSet(c *C) {
-	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(config.DefaultTxnMembufCap)}, config.DefaultTxnMembufCap)
+	conf := config.DefaultTxn()
+	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(&conf, 0)}, &conf)
 	key := key.Key("key")
 	_, err := bs.Get(key)
 	c.Check(err, NotNil)
@@ -46,7 +47,8 @@ func (s testBufferStoreSuite) TestGetSet(c *C) {
 }
 
 func (s testBufferStoreSuite) TestSaveTo(c *C) {
-	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(config.DefaultTxnMembufCap)}, config.DefaultTxnMembufCap)
+	conf := config.DefaultTxn()
+	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(&conf, 0)}, &conf)
 	var buf bytes.Buffer
 	for i := 0; i < 10; i++ {
 		fmt.Fprint(&buf, i)
@@ -56,7 +58,7 @@ func (s testBufferStoreSuite) TestSaveTo(c *C) {
 	}
 	bs.Set(key.Key("novalue"), nil)
 
-	mutator := NewMemDbBuffer(config.DefaultTxnMembufCap)
+	mutator := NewMemDbBuffer(&conf, 0)
 	err := bs.SaveTo(mutator)
 	c.Check(err, IsNil)
 

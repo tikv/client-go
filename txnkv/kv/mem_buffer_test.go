@@ -37,12 +37,14 @@ type testKVSuite struct {
 }
 
 func (s *testKVSuite) SetUpSuite(c *C) {
+	conf := config.DefaultTxn()
 	s.bs = make([]MemBuffer, 1)
-	s.bs[0] = NewMemDbBuffer(config.DefaultTxnMembufCap)
+	s.bs[0] = NewMemDbBuffer(&conf, 0)
 }
 
 func (s *testKVSuite) ResetMembuffers() {
-	s.bs[0] = NewMemDbBuffer(config.DefaultTxnMembufCap)
+	conf := config.DefaultTxn()
+	s.bs[0] = NewMemDbBuffer(&conf, 0)
 }
 
 func insertData(c *C, buffer MemBuffer) {
@@ -185,7 +187,8 @@ func (s *testKVSuite) TestNewIteratorMin(c *C) {
 }
 
 func (s *testKVSuite) TestBufferLimit(c *C) {
-	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap).(*memDbBuffer)
+	conf := config.DefaultTxn()
+	buffer := NewMemDbBuffer(&conf, 0).(*memDbBuffer)
 	buffer.bufferSizeLimit = 1000
 	buffer.entrySizeLimit = 500
 
@@ -197,7 +200,7 @@ func (s *testKVSuite) TestBufferLimit(c *C) {
 	err = buffer.Set([]byte("yz"), make([]byte, 499))
 	c.Assert(err, NotNil) // buffer size limit
 
-	buffer = NewMemDbBuffer(config.DefaultTxnMembufCap).(*memDbBuffer)
+	buffer = NewMemDbBuffer(&conf, 0).(*memDbBuffer)
 	buffer.bufferLenLimit = 10
 	for i := 0; i < 10; i++ {
 		err = buffer.Set([]byte{byte(i)}, []byte{byte(i)})
@@ -210,35 +213,39 @@ func (s *testKVSuite) TestBufferLimit(c *C) {
 var opCnt = 100000
 
 func BenchmarkMemDbBufferSequential(b *testing.B) {
+	conf := config.DefaultTxn()
 	data := make([][]byte, opCnt)
 	for i := 0; i < opCnt; i++ {
 		data[i] = encodeInt(i)
 	}
-	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap)
+	buffer := NewMemDbBuffer(&conf, 0)
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
 
 func BenchmarkMemDbBufferRandom(b *testing.B) {
+	conf := config.DefaultTxn()
 	data := make([][]byte, opCnt)
 	for i := 0; i < opCnt; i++ {
 		data[i] = encodeInt(i)
 	}
 	shuffle(data)
-	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap)
+	buffer := NewMemDbBuffer(&conf, 0)
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
 
 func BenchmarkMemDbIter(b *testing.B) {
-	buffer := NewMemDbBuffer(config.DefaultTxnMembufCap)
+	conf := config.DefaultTxn()
+	buffer := NewMemDbBuffer(&conf, 0)
 	benchIterator(b, buffer)
 	b.ReportAllocs()
 }
 
 func BenchmarkMemDbCreation(b *testing.B) {
+	conf := config.DefaultTxn()
 	for i := 0; i < b.N; i++ {
-		NewMemDbBuffer(config.DefaultTxnMembufCap)
+		NewMemDbBuffer(&conf, 0)
 	}
 	b.ReportAllocs()
 }
