@@ -155,10 +155,10 @@ func newConnArray(addr string, conf *config.RPC) (*connArray, error) {
 	a := &connArray{
 		conf:                 conf,
 		index:                0,
-		conns:                make([]*grpc.ClientConn, conf.GrpcMaxCallMsgSize),
+		conns:                make([]*grpc.ClientConn, conf.MaxConnectionCount),
 		streamTimeout:        make(chan *Lease, 1024),
 		batchCommandsCh:      make(chan *batchCommandsEntry, conf.Batch.MaxBatchSize),
-		batchCommandsClients: make([]*batchCommandsClient, 0, conf.GrpcMaxCallMsgSize),
+		batchCommandsClients: make([]*batchCommandsClient, 0, conf.Batch.MaxBatchSize),
 		transportLayerLoad:   0,
 	}
 	if err := a.Init(addr); err != nil {
