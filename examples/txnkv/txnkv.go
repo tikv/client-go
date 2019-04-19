@@ -41,7 +41,7 @@ var (
 // Init initializes information.
 func initStore() {
 	var err error
-	client, err = txnkv.NewClient([]string{*pdAddr}, config.Security{})
+	client, err = txnkv.NewClient([]string{*pdAddr}, config.Default())
 	if err != nil {
 		panic(err)
 	}

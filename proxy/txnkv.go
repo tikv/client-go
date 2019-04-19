@@ -43,8 +43,8 @@ func NewTxn() TxnKVProxy {
 }
 
 // New creates a new client and returns the client's UUID.
-func (p TxnKVProxy) New(pdAddrs []string, security config.Security) (UUID, error) {
-	client, err := txnkv.NewClient(pdAddrs, security)
+func (p TxnKVProxy) New(pdAddrs []string, conf config.Config) (UUID, error) {
+	client, err := txnkv.NewClient(pdAddrs, conf)
 	if err != nil {
 		return "", err
 	}

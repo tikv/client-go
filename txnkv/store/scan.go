@@ -30,6 +30,7 @@ import (
 // Scanner support tikv scan
 type Scanner struct {
 	snapshot     *TiKVSnapshot
+	conf         *config.Config
 	batchSize    int
 	valid        bool
 	cache        []*pb.KvPair
@@ -42,10 +43,11 @@ type Scanner struct {
 func newScanner(snapshot *TiKVSnapshot, startKey []byte, endKey []byte, batchSize int) (*Scanner, error) {
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
-		batchSize = config.TxnScanBatchSize
+		batchSize = snapshot.conf.Txn.ScanBatchSize
 	}
 	scanner := &Scanner{
 		snapshot:     snapshot,
+		conf:         snapshot.conf,
 		batchSize:    batchSize,
 		valid:        true,
 		nextStartKey: startKey,
@@ -175,7 +177,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				NotFillCache: s.snapshot.NotFillCache,
 			},
 		}
-		resp, err := sender.SendReq(bo, req, loc.Region, config.ReadTimeoutMedium)
+		resp, err := sender.SendReq(bo, req, loc.Region, s.conf.RPC.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}
@@ -205,7 +207,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		// Check if kvPair contains error, it should be a Lock.
 		for _, pair := range kvPairs {
 			if keyErr := pair.GetError(); keyErr != nil {
-				lock, err := extractLockFromKeyErr(keyErr)
+				lock, err := extractLockFromKeyErr(keyErr, s.conf.Txn.DefaultLockTTL)
 				if err != nil {
 					return err
 				}

@@ -35,8 +35,8 @@ func NewRaw() RawKVProxy {
 }
 
 // New creates a new client and returns the client's UUID.
-func (p RawKVProxy) New(pdAddrs []string, security config.Security) (UUID, error) {
-	client, err := rawkv.NewClient(pdAddrs, security)
+func (p RawKVProxy) New(pdAddrs []string, conf config.Config) (UUID, error) {
+	client, err := rawkv.NewClient(pdAddrs, conf)
 	if err != nil {
 		return "", err
 	}

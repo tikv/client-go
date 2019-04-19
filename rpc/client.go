@@ -47,8 +47,9 @@ type Client interface {
 }
 
 type connArray struct {
+	conf  *config.RPC
 	index uint32
-	v     []*grpc.ClientConn
+	conns []*grpc.ClientConn
 	// Bind with a background goroutine to process coprocessor streaming timeout.
 	streamTimeout chan *Lease
 
@@ -59,6 +60,7 @@ type connArray struct {
 }
 
 type batchCommandsClient struct {
+	conf               *config.Batch
 	conn               *grpc.ClientConn
 	client             tikvpb.Tikv_BatchCommandsClient
 	batched            sync.Map
@@ -142,32 +144,33 @@ func (c *batchCommandsClient) batchRecvLoop() {
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
-		if transportLayerLoad > 0.0 && config.MaxBatchWaitTime > 0 {
+		if transportLayerLoad > 0.0 && c.conf.MaxWaitTime > 0 {
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(c.transportLayerLoad, transportLayerLoad)
 		}
 	}
 }
 
-func newConnArray(maxSize uint, addr string, security config.Security) (*connArray, error) {
+func newConnArray(addr string, conf *config.RPC) (*connArray, error) {
 	a := &connArray{
+		conf:                 conf,
 		index:                0,
-		v:                    make([]*grpc.ClientConn, maxSize),
+		conns:                make([]*grpc.ClientConn, conf.GrpcMaxCallMsgSize),
 		streamTimeout:        make(chan *Lease, 1024),
-		batchCommandsCh:      make(chan *batchCommandsEntry, config.MaxBatchSize),
-		batchCommandsClients: make([]*batchCommandsClient, 0, maxSize),
+		batchCommandsCh:      make(chan *batchCommandsEntry, conf.Batch.MaxBatchSize),
+		batchCommandsClients: make([]*batchCommandsClient, 0, conf.GrpcMaxCallMsgSize),
 		transportLayerLoad:   0,
 	}
-	if err := a.Init(addr, security); err != nil {
+	if err := a.Init(addr); err != nil {
 		return nil, err
 	}
 	return a, nil
 }
 
-func (a *connArray) Init(addr string, security config.Security) error {
+func (a *connArray) Init(addr string) error {
 	opt := grpc.WithInsecure()
-	if len(security.SSLCA) != 0 {
-		tlsConfig, err := security.ToTLSConfig()
+	if len(a.conf.Security.SSLCA) != 0 {
+		tlsConfig, err := a.conf.Security.ToTLSConfig()
 		if err != nil {
 			return err
 		}
@@ -176,7 +179,7 @@ func (a *connArray) Init(addr string, security config.Security) error {
 
 	unaryInterceptor := grpc_prometheus.UnaryClientInterceptor
 	streamInterceptor := grpc_prometheus.StreamClientInterceptor
-	if config.EnableOpenTracing {
+	if a.conf.EnableOpenTracing {
 		unaryInterceptor = grpc_middleware.ChainUnaryClient(
 			unaryInterceptor,
 			grpc_opentracing.UnaryClientInterceptor(),
@@ -187,23 +190,23 @@ func (a *connArray) Init(addr string, security config.Security) error {
 		)
 	}
 
-	allowBatch := config.MaxBatchSize > 0
-	for i := range a.v {
-		ctx, cancel := context.WithTimeout(context.Background(), config.DialTimeout)
+	allowBatch := a.conf.Batch.MaxBatchSize > 0
+	for i := range a.conns {
+		ctx, cancel := context.WithTimeout(context.Background(), a.conf.DialTimeout)
 		conn, err := grpc.DialContext(
 			ctx,
 			addr,
 			opt,
-			grpc.WithInitialWindowSize(int32(config.GrpcInitialWindowSize)),
-			grpc.WithInitialConnWindowSize(int32(config.GrpcInitialConnWindowSize)),
+			grpc.WithInitialWindowSize(int32(a.conf.GrpcInitialWindowSize)),
+			grpc.WithInitialConnWindowSize(int32(a.conf.GrpcInitialConnWindowSize)),
 			grpc.WithUnaryInterceptor(unaryInterceptor),
 			grpc.WithStreamInterceptor(streamInterceptor),
-			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(config.MaxCallMsgSize)),
-			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(config.MaxSendMsgSize)),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(a.conf.GrpcMaxCallMsgSize)),
+			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(a.conf.GrpcMaxSendMsgSize)),
 			grpc.WithBackoffMaxDelay(time.Second*3),
 			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:                config.GrpcKeepAliveTime,
-				Timeout:             config.GrpcKeepAliveTimeout,
+				Time:                a.conf.GrpcKeepAliveTime,
+				Timeout:             a.conf.GrpcKeepAliveTimeout,
 				PermitWithoutStream: true,
 			}),
 		)
@@ -213,7 +216,7 @@ func (a *connArray) Init(addr string, security config.Security) error {
 			a.Close()
 			return errors.WithStack(err)
 		}
-		a.v[i] = conn
+		a.conns[i] = conn
 
 		if allowBatch {
 			// Initialize batch streaming clients.
@@ -224,6 +227,7 @@ func (a *connArray) Init(addr string, security config.Security) error {
 				return errors.WithStack(err)
 			}
 			batchClient := &batchCommandsClient{
+				conf:               &a.conf.Batch,
 				conn:               conn,
 				client:             streamClient,
 				batched:            sync.Map{},
@@ -244,8 +248,8 @@ func (a *connArray) Init(addr string, security config.Security) error {
 }
 
 func (a *connArray) Get() *grpc.ClientConn {
-	next := atomic.AddUint32(&a.index, 1) % uint32(len(a.v))
-	return a.v[next]
+	next := atomic.AddUint32(&a.index, 1) % uint32(len(a.conns))
+	return a.conns[next]
 }
 
 func (a *connArray) Close() {
@@ -255,10 +259,10 @@ func (a *connArray) Close() {
 		atomic.StoreInt32(&c.closed, 1)
 	}
 	close(a.batchCommandsCh)
-	for i, c := range a.v {
+	for i, c := range a.conns {
 		if c != nil {
 			c.Close()
-			a.v[i] = nil
+			a.conns[i] = nil
 		}
 	}
 	close(a.streamTimeout)
@@ -356,13 +360,15 @@ func (a *connArray) batchSendLoop() {
 		}
 	}()
 
-	entries := make([]*batchCommandsEntry, 0, config.MaxBatchSize)
-	requests := make([]*tikvpb.BatchCommandsRequest_Request, 0, config.MaxBatchSize)
-	requestIDs := make([]uint64, 0, config.MaxBatchSize)
+	conf := &a.conf.Batch
+
+	entries := make([]*batchCommandsEntry, 0, conf.MaxBatchSize)
+	requests := make([]*tikvpb.BatchCommandsRequest_Request, 0, conf.MaxBatchSize)
+	requestIDs := make([]uint64, 0, conf.MaxBatchSize)
 
 	for {
 		// Choose a connection by round-robbin.
-		next := atomic.AddUint32(&a.index, 1) % uint32(len(a.v))
+		next := atomic.AddUint32(&a.index, 1) % uint32(len(a.conns))
 		batchCommandsClient := a.batchCommandsClients[next]
 
 		entries = entries[:0]
@@ -370,15 +376,15 @@ func (a *connArray) batchSendLoop() {
 		requestIDs = requestIDs[:0]
 
 		metrics.PendingBatchRequests.Set(float64(len(a.batchCommandsCh)))
-		fetchAllPendingRequests(a.batchCommandsCh, int(config.MaxBatchSize), &entries, &requests)
+		fetchAllPendingRequests(a.batchCommandsCh, int(conf.MaxBatchSize), &entries, &requests)
 
-		if len(entries) < int(config.MaxBatchSize) && config.MaxBatchWaitTime > 0 {
+		if len(entries) < int(conf.MaxBatchSize) && conf.MaxWaitTime > 0 {
 			transportLayerLoad := atomic.LoadUint64(batchCommandsClient.transportLayerLoad)
 			// If the target TiKV is overload, wait a while to collect more requests.
-			if uint(transportLayerLoad) >= config.OverloadThreshold {
+			if uint(transportLayerLoad) >= conf.OverloadThreshold {
 				fetchMorePendingRequests(
-					a.batchCommandsCh, int(config.MaxBatchSize), int(config.BatchWaitSize),
-					config.MaxBatchWaitTime, &entries, &requests,
+					a.batchCommandsCh, int(conf.MaxBatchSize), int(conf.MaxWaitSize),
+					conf.MaxWaitTime, &entries, &requests,
 				)
 			}
 		}
@@ -420,14 +426,14 @@ type rpcClient struct {
 	sync.RWMutex
 	isClosed bool
 	conns    map[string]*connArray
-	security config.Security
+	conf     *config.RPC
 }
 
 // NewRPCClient manages connections and rpc calls with tikv-servers.
-func NewRPCClient(security config.Security) Client {
+func NewRPCClient(conf *config.RPC) Client {
 	return &rpcClient{
-		conns:    make(map[string]*connArray),
-		security: security,
+		conns: make(map[string]*connArray),
+		conf:  conf,
 	}
 }
 
@@ -455,7 +461,7 @@ func (c *rpcClient) createConnArray(addr string) (*connArray, error) {
 	array, ok := c.conns[addr]
 	if !ok {
 		var err error
-		array, err = newConnArray(config.MaxConnectionCount, addr, c.security)
+		array, err = newConnArray(addr, c.conf)
 		if err != nil {
 			return nil, err
 		}
@@ -526,7 +532,7 @@ func (c *rpcClient) SendRequest(ctx context.Context, addr string, req *Request, 
 		return nil, err
 	}
 
-	if config.MaxBatchSize > 0 {
+	if c.conf.Batch.MaxBatchSize > 0 {
 		if batchReq := req.ToBatchCommandsRequest(); batchReq != nil {
 			return sendBatchRequest(ctx, addr, connArray, batchReq, timeout)
 		}
