@@ -49,7 +49,7 @@ type Client interface {
 type connArray struct {
 	conf  *config.RPC
 	index uint32
-	v     []*grpc.ClientConn
+	conns []*grpc.ClientConn
 	// Bind with a background goroutine to process coprocessor streaming timeout.
 	streamTimeout chan *Lease
 
@@ -155,7 +155,7 @@ func newConnArray(addr string, conf *config.RPC) (*connArray, error) {
 	a := &connArray{
 		conf:                 conf,
 		index:                0,
-		v:                    make([]*grpc.ClientConn, conf.GrpcMaxCallMsgSize),
+		conns:                make([]*grpc.ClientConn, conf.GrpcMaxCallMsgSize),
 		streamTimeout:        make(chan *Lease, 1024),
 		batchCommandsCh:      make(chan *batchCommandsEntry, conf.Batch.MaxBatchSize),
 		batchCommandsClients: make([]*batchCommandsClient, 0, conf.GrpcMaxCallMsgSize),
@@ -191,7 +191,7 @@ func (a *connArray) Init(addr string) error {
 	}
 
 	allowBatch := a.conf.Batch.MaxBatchSize > 0
-	for i := range a.v {
+	for i := range a.conns {
 		ctx, cancel := context.WithTimeout(context.Background(), a.conf.DialTimeout)
 		conn, err := grpc.DialContext(
 			ctx,
@@ -216,7 +216,7 @@ func (a *connArray) Init(addr string) error {
 			a.Close()
 			return errors.WithStack(err)
 		}
-		a.v[i] = conn
+		a.conns[i] = conn
 
 		if allowBatch {
 			// Initialize batch streaming clients.
@@ -248,8 +248,8 @@ func (a *connArray) Init(addr string) error {
 }
 
 func (a *connArray) Get() *grpc.ClientConn {
-	next := atomic.AddUint32(&a.index, 1) % uint32(len(a.v))
-	return a.v[next]
+	next := atomic.AddUint32(&a.index, 1) % uint32(len(a.conns))
+	return a.conns[next]
 }
 
 func (a *connArray) Close() {
@@ -259,10 +259,10 @@ func (a *connArray) Close() {
 		atomic.StoreInt32(&c.closed, 1)
 	}
 	close(a.batchCommandsCh)
-	for i, c := range a.v {
+	for i, c := range a.conns {
 		if c != nil {
 			c.Close()
-			a.v[i] = nil
+			a.conns[i] = nil
 		}
 	}
 	close(a.streamTimeout)
@@ -368,7 +368,7 @@ func (a *connArray) batchSendLoop() {
 
 	for {
 		// Choose a connection by round-robbin.
-		next := atomic.AddUint32(&a.index, 1) % uint32(len(a.v))
+		next := atomic.AddUint32(&a.index, 1) % uint32(len(a.conns))
 		batchCommandsClient := a.batchCommandsClients[next]
 
 		entries = entries[:0]
