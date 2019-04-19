@@ -186,10 +186,11 @@ func (c *TxnCommitter) doActionOnKeys(bo *retry.Backoffer, action commitAction, 
 		atomic.AddInt32(&c.detail.PrewriteRegionNum, int32(len(groups)))
 	}
 	// Make sure the group that contains primary key goes first.
-	batches = appendBatchBySize(batches, firstRegion, groups[firstRegion], sizeFunc, c.conf.Txn.CommitBatchSize)
+	commitBatchSize := c.conf.Txn.CommitBatchSize
+	batches = appendBatchBySize(batches, firstRegion, groups[firstRegion], sizeFunc, commitBatchSize)
 	delete(groups, firstRegion)
 	for id, g := range groups {
-		batches = appendBatchBySize(batches, id, g, sizeFunc, c.conf.Txn.CommitBatchSize)
+		batches = appendBatchBySize(batches, id, g, sizeFunc, commitBatchSize)
 	}
 
 	firstIsPrimary := bytes.Equal(keys[0], c.primary())

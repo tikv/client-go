@@ -43,7 +43,7 @@ type memDbIter struct {
 
 // NewMemDbBuffer creates a new memDbBuffer.
 func NewMemDbBuffer(conf *config.Txn, cap int) MemBuffer {
-	if cap == 0 {
+	if cap <= 0 {
 		cap = conf.DefaultMembufCap
 	}
 	return &memDbBuffer{

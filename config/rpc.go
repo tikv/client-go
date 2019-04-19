@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,13 +37,13 @@ type RPC struct {
 	// is closed.
 	GrpcKeepAliveTimeout time.Duration
 
-	// MaxSendMsgSize set max gRPC request message size sent to server. If any request message size is larger than
+	// GrpcMaxSendMsgSize set max gRPC request message size sent to server. If any request message size is larger than
 	// current value, an error will be reported from gRPC.
-	MaxSendMsgSize int
+	GrpcMaxSendMsgSize int
 
-	// MaxCallMsgSize set max gRPC receive message size received from server. If any message size is larger than
+	// GrpcMaxCallMsgSize set max gRPC receive message size received from server. If any message size is larger than
 	// current value, an error will be reported from gRPC.
-	MaxCallMsgSize int
+	GrpcMaxCallMsgSize int
 
 	// The value for initial window size on a gRPC stream.
 	GrpcInitialWindowSize int
@@ -78,8 +78,8 @@ func DefaultRPC() RPC {
 		MaxConnectionCount:        16,
 		GrpcKeepAliveTime:         10 * time.Second,
 		GrpcKeepAliveTimeout:      3 * time.Second,
-		MaxSendMsgSize:            1<<31 - 1,
-		MaxCallMsgSize:            1<<31 - 1,
+		GrpcMaxSendMsgSize:        1<<31 - 1,
+		GrpcMaxCallMsgSize:        1<<31 - 1,
 		GrpcInitialWindowSize:     1 << 30,
 		GrpcInitialConnWindowSize: 1 << 30,
 		DialTimeout:               5 * time.Second,

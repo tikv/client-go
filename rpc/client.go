@@ -155,10 +155,10 @@ func newConnArray(addr string, conf *config.RPC) (*connArray, error) {
 	a := &connArray{
 		conf:                 conf,
 		index:                0,
-		v:                    make([]*grpc.ClientConn, conf.MaxCallMsgSize),
+		v:                    make([]*grpc.ClientConn, conf.GrpcMaxCallMsgSize),
 		streamTimeout:        make(chan *Lease, 1024),
 		batchCommandsCh:      make(chan *batchCommandsEntry, conf.Batch.MaxBatchSize),
-		batchCommandsClients: make([]*batchCommandsClient, 0, conf.MaxCallMsgSize),
+		batchCommandsClients: make([]*batchCommandsClient, 0, conf.GrpcMaxCallMsgSize),
 		transportLayerLoad:   0,
 	}
 	if err := a.Init(addr); err != nil {
@@ -201,8 +201,8 @@ func (a *connArray) Init(addr string) error {
 			grpc.WithInitialConnWindowSize(int32(a.conf.GrpcInitialConnWindowSize)),
 			grpc.WithUnaryInterceptor(unaryInterceptor),
 			grpc.WithStreamInterceptor(streamInterceptor),
-			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(a.conf.MaxCallMsgSize)),
-			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(a.conf.MaxSendMsgSize)),
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(a.conf.GrpcMaxCallMsgSize)),
+			grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(a.conf.GrpcMaxSendMsgSize)),
 			grpc.WithBackoffMaxDelay(time.Second*3),
 			grpc.WithKeepaliveParams(keepalive.ClientParameters{
 				Time:                a.conf.GrpcKeepAliveTime,
