@@ -207,7 +207,7 @@ func (c *Client) Delete(key []byte) error {
 	return nil
 }
 
-// BatchDelete deletes key-value pairs from TiKV
+// BatchDelete deletes key-value pairs from TiKV.
 func (c *Client) BatchDelete(keys [][]byte) error {
 	start := time.Now()
 	defer func() {
@@ -282,6 +282,53 @@ func (c *Client) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values
 				StartKey: startKey,
 				EndKey:   endKey,
 				Limit:    uint32(limit - len(keys)),
+			},
+		}
+		resp, loc, err := c.sendReq(startKey, req)
+		if err != nil {
+			return nil, nil, err
+		}
+		cmdResp := resp.RawScan
+		if cmdResp == nil {
+			return nil, nil, errors.WithStack(rpc.ErrBodyMissing)
+		}
+		for _, pair := range cmdResp.Kvs {
+			keys = append(keys, pair.Key)
+			values = append(values, pair.Value)
+		}
+		startKey = loc.EndKey
+		if len(startKey) == 0 {
+			break
+		}
+	}
+	return
+}
+
+// ReverseScan queries continuous kv pairs in range [endKey, startKey), up to limit pairs.
+// Direction is different from Scan, upper to lower.
+// If endKey is empty, it means unbounded.
+// If you want to include the startKey or exclude the endKey, append a '\0' to the key. For example, to scan
+// (endKey, startKey], you can write:
+// `ReverseScan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
+// It doesn't support Scanning from "", because locating the last Region is not yet implemented.
+func (c *Client) ReverseScan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+	start := time.Now()
+	defer func() {
+		metrics.RawkvCmdHistogram.WithLabelValues("raw_reverse_scan").Observe(time.Since(start).Seconds())
+	}()
+
+	if limit > config.MaxRawKVScanLimit {
+		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
+	}
+
+	for len(keys) < limit {
+		req := &rpc.Request{
+			Type: rpc.CmdRawScan,
+			RawScan: &kvrpcpb.RawScanRequest{
+				StartKey: startKey,
+				EndKey:   endKey,
+				Limit:    uint32(limit - len(keys)),
+				Reverse:  true,
 			},
 		}
 		resp, loc, err := c.sendReq(startKey, req)
