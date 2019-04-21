@@ -126,6 +126,14 @@ func (h rawkvHandler) Scan(vars map[string]string, r *RawRequest) (*RawResponse,
 	return &RawResponse{Keys: keys, Values: values}, http.StatusOK, nil
 }
 
+func (h rawkvHandler) ReverseScan(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
+	keys, values, err := h.p.ReverseScan(proxy.UUID(vars["id"]), r.StartKey, r.EndKey, r.Limit)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return &RawResponse{Keys: keys, Values: values}, http.StatusOK, nil
+}
+
 func (h rawkvHandler) handlerFunc(f func(map[string]string, *RawRequest) (*RawResponse, int, error)) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := ioutil.ReadAll(r.Body)
