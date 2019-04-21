@@ -35,6 +35,7 @@ func NewHTTPProxyHandler() http.Handler {
 	router.HandleFunc("/rawkv/client/{id}/batch-delete", rawkv.handlerFunc(rawkv.BatchDelete))
 	router.HandleFunc("/rawkv/client/{id}/delete-range", rawkv.handlerFunc(rawkv.DeleteRange))
 	router.HandleFunc("/rawkv/client/{id}/scan", rawkv.handlerFunc(rawkv.Scan))
+	router.HandleFunc("/rawkv/client/{id}/reverse-scan", rawkv.handlerFunc(rawkv.ReverseScan))
 
 	txnkv := txnkvHandler{p: proxy.NewTxn()}
 	router.HandleFunc("/txnkv/client/new", txnkv.handlerFunc(txnkv.New))

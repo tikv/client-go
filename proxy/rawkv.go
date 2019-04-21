@@ -127,3 +127,13 @@ func (p RawKVProxy) Scan(id UUID, startKey, endKey []byte, limit int) ([][]byte,
 	}
 	return client.(*rawkv.Client).Scan(startKey, endKey, limit)
 }
+
+// ReverseScan queries continuous kv pairs in range [endKey, startKey), up to limit pairs.
+// Direction is different from Scan, upper to lower.
+func (p RawKVProxy) ReverseScan(id UUID, startKey, endKey []byte, limit int) ([][]byte, [][]byte, error) {
+	client, ok := p.clients.Load(id)
+	if !ok {
+		return nil, nil, errors.WithStack(ErrClientNotFound)
+	}
+	return client.(*rawkv.Client).ReverseScan(startKey, endKey, limit)
+}
