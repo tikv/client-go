@@ -59,13 +59,13 @@ func (s *testRawKVSuite) TearDownTest(c *C) {
 }
 
 func (s *testRawKVSuite) mustNotExist(c *C, key []byte) {
-	v, err := s.client.Get(key)
+	v, err := s.client.Get(context.TODO(), key)
 	c.Assert(err, IsNil)
 	c.Assert(v, IsNil)
 }
 
 func (s *testRawKVSuite) mustBatchNotExist(c *C, keys [][]byte) {
-	values, err := s.client.BatchGet(keys)
+	values, err := s.client.BatchGet(context.TODO(), keys)
 	c.Assert(err, IsNil)
 	c.Assert(values, NotNil)
 	c.Assert(len(keys), Equals, len(values))
@@ -75,14 +75,14 @@ func (s *testRawKVSuite) mustBatchNotExist(c *C, keys [][]byte) {
 }
 
 func (s *testRawKVSuite) mustGet(c *C, key, value []byte) {
-	v, err := s.client.Get(key)
+	v, err := s.client.Get(context.TODO(), key)
 	c.Assert(err, IsNil)
 	c.Assert(v, NotNil)
 	c.Assert(v, BytesEquals, value)
 }
 
 func (s *testRawKVSuite) mustBatchGet(c *C, keys, values [][]byte) {
-	checkValues, err := s.client.BatchGet(keys)
+	checkValues, err := s.client.BatchGet(context.TODO(), keys)
 	c.Assert(err, IsNil)
 	c.Assert(checkValues, NotNil)
 	c.Assert(len(keys), Equals, len(checkValues))
@@ -92,27 +92,27 @@ func (s *testRawKVSuite) mustBatchGet(c *C, keys, values [][]byte) {
 }
 
 func (s *testRawKVSuite) mustPut(c *C, key, value []byte) {
-	err := s.client.Put(key, value)
+	err := s.client.Put(context.TODO(), key, value)
 	c.Assert(err, IsNil)
 }
 
 func (s *testRawKVSuite) mustBatchPut(c *C, keys, values [][]byte) {
-	err := s.client.BatchPut(keys, values)
+	err := s.client.BatchPut(context.TODO(), keys, values)
 	c.Assert(err, IsNil)
 }
 
 func (s *testRawKVSuite) mustDelete(c *C, key []byte) {
-	err := s.client.Delete(key)
+	err := s.client.Delete(context.TODO(), key)
 	c.Assert(err, IsNil)
 }
 
 func (s *testRawKVSuite) mustBatchDelete(c *C, keys [][]byte) {
-	err := s.client.BatchDelete(keys)
+	err := s.client.BatchDelete(context.TODO(), keys)
 	c.Assert(err, IsNil)
 }
 
 func (s *testRawKVSuite) mustScan(c *C, startKey string, limit int, expect ...string) {
-	keys, values, err := s.client.Scan([]byte(startKey), nil, limit)
+	keys, values, err := s.client.Scan(context.TODO(), []byte(startKey), nil, limit)
 	c.Assert(err, IsNil)
 	c.Assert(len(keys)*2, Equals, len(expect))
 	for i := range keys {
@@ -122,7 +122,7 @@ func (s *testRawKVSuite) mustScan(c *C, startKey string, limit int, expect ...st
 }
 
 func (s *testRawKVSuite) mustScanRange(c *C, startKey string, endKey string, limit int, expect ...string) {
-	keys, values, err := s.client.Scan([]byte(startKey), []byte(endKey), limit)
+	keys, values, err := s.client.Scan(context.TODO(), []byte(startKey), []byte(endKey), limit)
 	c.Assert(err, IsNil)
 	c.Assert(len(keys)*2, Equals, len(expect))
 	for i := range keys {
@@ -132,7 +132,7 @@ func (s *testRawKVSuite) mustScanRange(c *C, startKey string, endKey string, lim
 }
 
 func (s *testRawKVSuite) mustReverseScan(c *C, startKey []byte, limit int, expect ...string) {
-	keys, values, err := s.client.ReverseScan(startKey, nil, limit)
+	keys, values, err := s.client.ReverseScan(context.TODO(), startKey, nil, limit)
 	c.Assert(err, IsNil)
 	c.Assert(len(keys)*2, Equals, len(expect))
 	for i := range keys {
@@ -142,7 +142,7 @@ func (s *testRawKVSuite) mustReverseScan(c *C, startKey []byte, limit int, expec
 }
 
 func (s *testRawKVSuite) mustReverseScanRange(c *C, startKey, endKey []byte, limit int, expect ...string) {
-	keys, values, err := s.client.ReverseScan(startKey, endKey, limit)
+	keys, values, err := s.client.ReverseScan(context.TODO(), startKey, endKey, limit)
 	c.Assert(err, IsNil)
 	c.Assert(len(keys)*2, Equals, len(expect))
 	for i := range keys {
@@ -152,7 +152,7 @@ func (s *testRawKVSuite) mustReverseScanRange(c *C, startKey, endKey []byte, lim
 }
 
 func (s *testRawKVSuite) mustDeleteRange(c *C, startKey, endKey []byte, expected map[string]string) {
-	err := s.client.DeleteRange(startKey, endKey)
+	err := s.client.DeleteRange(context.TODO(), startKey, endKey)
 	c.Assert(err, IsNil)
 
 	for keyStr := range expected {
@@ -166,7 +166,7 @@ func (s *testRawKVSuite) mustDeleteRange(c *C, startKey, endKey []byte, expected
 }
 
 func (s *testRawKVSuite) checkData(c *C, expected map[string]string) {
-	keys, values, err := s.client.Scan([]byte(""), nil, len(expected)+1)
+	keys, values, err := s.client.Scan(context.TODO(), []byte(""), nil, len(expected)+1)
 	c.Assert(err, IsNil)
 
 	c.Assert(len(expected), Equals, len(keys))
@@ -192,11 +192,12 @@ func (s *testRawKVSuite) TestSimple(c *C) {
 	s.mustGet(c, []byte("key"), []byte("value"))
 	s.mustDelete(c, []byte("key"))
 	s.mustNotExist(c, []byte("key"))
-	err := s.client.Put([]byte("key"), []byte(""))
+	err := s.client.Put(context.TODO(), []byte("key"), []byte(""))
 	c.Assert(err, NotNil)
 }
 
 func (s *testRawKVSuite) TestRawBatch(c *C) {
+
 	testNum := 0
 	size := 0
 	var testKeys [][]byte

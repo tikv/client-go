@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/tikv/client-go/config"
@@ -21,7 +22,7 @@ import (
 )
 
 func main() {
-	cli, err := rawkv.NewClient([]string{"127.0.0.1:2379"}, config.Default())
+	cli, err := rawkv.NewClient(context.TODO(), []string{"127.0.0.1:2379"}, config.Default())
 	if err != nil {
 		panic(err)
 	}
@@ -33,28 +34,28 @@ func main() {
 	val := []byte("PingCAP")
 
 	// put key into tikv
-	err = cli.Put(key, val)
+	err = cli.Put(context.TODO(), key, val)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("Successfully put %s:%s to tikv\n", key, val)
 
 	// get key from tikv
-	val, err = cli.Get(key)
+	val, err = cli.Get(context.TODO(), key)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("found val: %s for key: %s\n", val, key)
 
 	// delete key from tikv
-	err = cli.Delete(key)
+	err = cli.Delete(context.TODO(), key)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("key: %s deleted\n", key)
 
 	// get key again from tikv
-	val, err = cli.Get(key)
+	val, err = cli.Get(context.TODO(), key)
 	if err != nil {
 		panic(err)
 	}

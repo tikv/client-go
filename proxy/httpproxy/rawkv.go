@@ -14,9 +14,11 @@
 package httpproxy
 
 import (
+	"context"
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/tikv/client-go/config"
@@ -47,94 +49,110 @@ type RawResponse struct {
 	Values [][]byte `json:"values,omitempty"` // for batchGet
 }
 
-func (h rawkvHandler) New(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	id, err := h.p.New(r.PDAddrs, config.Default())
+func (h rawkvHandler) New(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	id, err := h.p.New(ctx, r.PDAddrs, config.Default())
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{ID: string(id)}, http.StatusCreated, nil
 }
 
-func (h rawkvHandler) Close(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	if err := h.p.Close(proxy.UUID(vars["id"])); err != nil {
+func (h rawkvHandler) Close(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	if err := h.p.Close(ctx); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) Get(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	val, err := h.p.Get(proxy.UUID(vars["id"]), r.Key)
+func (h rawkvHandler) Get(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	val, err := h.p.Get(ctx, r.Key)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{Value: val}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) BatchGet(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	vals, err := h.p.BatchGet(proxy.UUID(vars["id"]), r.Keys)
+func (h rawkvHandler) BatchGet(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	vals, err := h.p.BatchGet(ctx, r.Keys)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{Values: vals}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) Put(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	err := h.p.Put(proxy.UUID(vars["id"]), r.Key, r.Value)
+func (h rawkvHandler) Put(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	err := h.p.Put(ctx, r.Key, r.Value)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) BatchPut(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	err := h.p.BatchPut(proxy.UUID(vars["id"]), r.Keys, r.Values)
+func (h rawkvHandler) BatchPut(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	err := h.p.BatchPut(ctx, r.Keys, r.Values)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) Delete(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	err := h.p.Delete(proxy.UUID(vars["id"]), r.Key)
+func (h rawkvHandler) Delete(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	err := h.p.Delete(ctx, r.Key)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) BatchDelete(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	err := h.p.BatchDelete(proxy.UUID(vars["id"]), r.Keys)
+func (h rawkvHandler) BatchDelete(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	err := h.p.BatchDelete(ctx, r.Keys)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) DeleteRange(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	err := h.p.DeleteRange(proxy.UUID(vars["id"]), r.StartKey, r.EndKey)
+func (h rawkvHandler) DeleteRange(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	err := h.p.DeleteRange(ctx, r.StartKey, r.EndKey)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) Scan(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	keys, values, err := h.p.Scan(proxy.UUID(vars["id"]), r.StartKey, r.EndKey, r.Limit)
+func (h rawkvHandler) Scan(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	keys, values, err := h.p.Scan(ctx, r.StartKey, r.EndKey, r.Limit)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{Keys: keys, Values: values}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) ReverseScan(vars map[string]string, r *RawRequest) (*RawResponse, int, error) {
-	keys, values, err := h.p.ReverseScan(proxy.UUID(vars["id"]), r.StartKey, r.EndKey, r.Limit)
+func (h rawkvHandler) ReverseScan(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
+	keys, values, err := h.p.ReverseScan(ctx, r.StartKey, r.EndKey, r.Limit)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{Keys: keys, Values: values}, http.StatusOK, nil
 }
 
-func (h rawkvHandler) handlerFunc(f func(map[string]string, *RawRequest) (*RawResponse, int, error)) func(http.ResponseWriter, *http.Request) {
+var defaultTimeout = 20 * time.Second
+
+func reqContext(vars map[string]string) (context.Context, context.CancelFunc) {
+	ctx := context.Background()
+	if id := vars["id"]; id != "" {
+		ctx = context.WithValue(ctx, proxy.ClientIDKey, proxy.UUID(id))
+	}
+
+	d, err := time.ParseDuration(vars["timeout"])
+	if err != nil {
+		d = defaultTimeout
+	}
+
+	return context.WithTimeout(ctx, d)
+}
+
+func (h rawkvHandler) handlerFunc(f func(context.Context, *RawRequest) (*RawResponse, int, error)) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -146,7 +164,9 @@ func (h rawkvHandler) handlerFunc(f func(map[string]string, *RawRequest) (*RawRe
 			sendError(w, err, http.StatusBadRequest)
 			return
 		}
-		res, status, err := f(mux.Vars(r), &req)
+		ctx, cancel := reqContext(mux.Vars(r))
+		res, status, err := f(ctx, &req)
+		cancel()
 		if err != nil {
 			sendError(w, err, status)
 			return

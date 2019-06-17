@@ -14,6 +14,7 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"sync"
 
@@ -27,6 +28,10 @@ var (
 	ErrIterNotFound   = errors.New("iterator not found")
 )
 
+type ContextKey int
+
+var ClientIDKey ContextKey = 1
+
 // UUID is a global unique ID to identify clients, transactions, or iterators.
 type UUID string
 
@@ -37,4 +42,11 @@ func insertWithRetry(m *sync.Map, d interface{}) UUID {
 			return id
 		}
 	}
+}
+
+func uuidFromContext(ctx context.Context) UUID {
+	if id := ctx.Value(ClientIDKey); id != nil {
+		return id.(UUID)
+	}
+	return ""
 }
