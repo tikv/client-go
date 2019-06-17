@@ -131,7 +131,7 @@ func (p TxnKVProxy) TxnIter(ctx context.Context, key []byte, upperBound []byte) 
 	if !ok {
 		return "", errors.WithStack(ErrTxnNotFound)
 	}
-	iter, err := txn.(*txnkv.Transaction).Iter(key, upperBound)
+	iter, err := txn.(*txnkv.Transaction).Iter(ctx, key, upperBound)
 	if err != nil {
 		return "", err
 	}
@@ -145,7 +145,7 @@ func (p TxnKVProxy) TxnIterReverse(ctx context.Context, key []byte) (UUID, error
 	if !ok {
 		return "", errors.WithStack(ErrTxnNotFound)
 	}
-	iter, err := txn.(*txnkv.Transaction).IterReverse(key)
+	iter, err := txn.(*txnkv.Transaction).IterReverse(ctx, key)
 	if err != nil {
 		return "", err
 	}
@@ -262,7 +262,7 @@ func (p TxnKVProxy) IterNext(ctx context.Context) error {
 	if !ok {
 		return errors.WithStack(ErrIterNotFound)
 	}
-	return iter.(kv.Iterator).Next()
+	return iter.(kv.Iterator).Next(ctx)
 }
 
 // IterClose releases an iterator.

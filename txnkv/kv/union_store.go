@@ -91,7 +91,7 @@ func (it invalidIterator) Valid() bool {
 	return false
 }
 
-func (it invalidIterator) Next() error {
+func (it invalidIterator) Next(context.Context) error {
 	return nil
 }
 
@@ -136,18 +136,18 @@ func (lmb *lazyMemBuffer) Delete(k key.Key) error {
 	return lmb.mb.Delete(k)
 }
 
-func (lmb *lazyMemBuffer) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
+func (lmb *lazyMemBuffer) Iter(ctx context.Context, k key.Key, upperBound key.Key) (Iterator, error) {
 	if lmb.mb == nil {
 		return invalidIterator{}, nil
 	}
-	return lmb.mb.Iter(k, upperBound)
+	return lmb.mb.Iter(ctx, k, upperBound)
 }
 
-func (lmb *lazyMemBuffer) IterReverse(k key.Key) (Iterator, error) {
+func (lmb *lazyMemBuffer) IterReverse(ctx context.Context, k key.Key) (Iterator, error) {
 	if lmb.mb == nil {
 		return invalidIterator{}, nil
 	}
-	return lmb.mb.IterReverse(k)
+	return lmb.mb.IterReverse(ctx, k)
 }
 
 func (lmb *lazyMemBuffer) Size() int {

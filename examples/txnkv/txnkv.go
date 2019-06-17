@@ -95,7 +95,7 @@ func scan(keyPrefix []byte, limit int) ([]KV, error) {
 	if err != nil {
 		return nil, err
 	}
-	it, err := tx.Iter(key.Key(keyPrefix), nil)
+	it, err := tx.Iter(context.TODO(), key.Key(keyPrefix), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func scan(keyPrefix []byte, limit int) ([]KV, error) {
 	for it.Valid() && limit > 0 {
 		ret = append(ret, KV{K: it.Key()[:], V: it.Value()[:]})
 		limit--
-		it.Next()
+		it.Next(context.TODO())
 	}
 	return ret, nil
 }

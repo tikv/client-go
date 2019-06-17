@@ -45,13 +45,13 @@ type Retriever interface {
 	// If such entry is not found, it returns an invalid Iterator with no error.
 	// It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 	// The Iterator must be closed after use.
-	Iter(k key.Key, upperBound key.Key) (Iterator, error)
+	Iter(ctx context.Context, k key.Key, upperBound key.Key) (Iterator, error)
 
 	// IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 	// The returned iterator will iterate from greater key to smaller key.
 	// If k is nil, the returned iterator will be positioned at the last key.
 	// TODO: Add lower bound limit
-	IterReverse(k key.Key) (Iterator, error)
+	IterReverse(ctx context.Context, k key.Key) (Iterator, error)
 }
 
 // Mutator is the interface wraps the basic Set and Delete methods.
@@ -97,7 +97,7 @@ type Iterator interface {
 	Valid() bool
 	Key() key.Key
 	Value() []byte
-	Next() error
+	Next(context.Context) error
 	Close()
 }
 

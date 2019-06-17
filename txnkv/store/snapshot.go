@@ -270,13 +270,13 @@ func (s *TiKVSnapshot) get(bo *retry.Backoffer, k key.Key) ([]byte, error) {
 }
 
 // Iter returns a list of key-value pair after `k`.
-func (s *TiKVSnapshot) Iter(k key.Key, upperBound key.Key) (kv.Iterator, error) {
-	scanner, err := newScanner(s, k, upperBound, s.conf.Txn.ScanBatchSize)
+func (s *TiKVSnapshot) Iter(ctx context.Context, k key.Key, upperBound key.Key) (kv.Iterator, error) {
+	scanner, err := newScanner(ctx, s, k, upperBound, s.conf.Txn.ScanBatchSize)
 	return scanner, err
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (s *TiKVSnapshot) IterReverse(k key.Key) (kv.Iterator, error) {
+func (s *TiKVSnapshot) IterReverse(ctx context.Context, k key.Key) (kv.Iterator, error) {
 	return nil, ErrNotImplemented
 }
 

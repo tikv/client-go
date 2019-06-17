@@ -63,21 +63,21 @@ func (s *testUnionStoreSuite) TestSeek(c *C) {
 	s.store.Set([]byte("2"), []byte("2"))
 	s.store.Set([]byte("3"), []byte("3"))
 
-	iter, err := s.us.Iter(nil, nil)
+	iter, err := s.us.Iter(context.TODO(), nil, nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("1"), []byte("2"), []byte("3")}, [][]byte{[]byte("1"), []byte("2"), []byte("3")})
 
-	iter, err = s.us.Iter([]byte("2"), nil)
+	iter, err = s.us.Iter(context.TODO(), []byte("2"), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("3")}, [][]byte{[]byte("2"), []byte("3")})
 
 	s.us.Set([]byte("4"), []byte("4"))
-	iter, err = s.us.Iter([]byte("2"), nil)
+	iter, err = s.us.Iter(context.TODO(), []byte("2"), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("3"), []byte("4")}, [][]byte{[]byte("2"), []byte("3"), []byte("4")})
 
 	s.us.Delete([]byte("3"))
-	iter, err = s.us.Iter([]byte("2"), nil)
+	iter, err = s.us.Iter(context.TODO(), []byte("2"), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("4")}, [][]byte{[]byte("2"), []byte("4")})
 }
@@ -88,21 +88,21 @@ func (s *testUnionStoreSuite) TestIterReverse(c *C) {
 	s.store.Set([]byte("2"), []byte("2"))
 	s.store.Set([]byte("3"), []byte("3"))
 
-	iter, err := s.us.IterReverse(nil)
+	iter, err := s.us.IterReverse(context.TODO(), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("3"), []byte("2"), []byte("1")}, [][]byte{[]byte("3"), []byte("2"), []byte("1")})
 
-	iter, err = s.us.IterReverse([]byte("3"))
+	iter, err = s.us.IterReverse(context.TODO(), []byte("3"))
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("1")}, [][]byte{[]byte("2"), []byte("1")})
 
 	s.us.Set([]byte("0"), []byte("0"))
-	iter, err = s.us.IterReverse([]byte("3"))
+	iter, err = s.us.IterReverse(context.TODO(), []byte("3"))
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("1"), []byte("0")}, [][]byte{[]byte("2"), []byte("1"), []byte("0")})
 
 	s.us.Delete([]byte("1"))
-	iter, err = s.us.IterReverse([]byte("3"))
+	iter, err = s.us.IterReverse(context.TODO(), []byte("3"))
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("0")}, [][]byte{[]byte("2"), []byte("0")})
 }
@@ -140,7 +140,7 @@ func checkIterator(c *C, iter Iterator, keys [][]byte, values [][]byte) {
 		c.Assert(iter.Valid(), IsTrue)
 		c.Assert([]byte(iter.Key()), BytesEquals, k)
 		c.Assert(iter.Value(), BytesEquals, v)
-		c.Assert(iter.Next(), IsNil)
+		c.Assert(iter.Next(context.TODO()), IsNil)
 	}
 	c.Assert(iter.Valid(), IsFalse)
 }

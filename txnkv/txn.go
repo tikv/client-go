@@ -125,23 +125,23 @@ func (txn *Transaction) String() string {
 // If such entry is not found, it returns an invalid Iterator with no error.
 // It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 // The Iterator must be closed after use.
-func (txn *Transaction) Iter(k key.Key, upperBound key.Key) (kv.Iterator, error) {
+func (txn *Transaction) Iter(ctx context.Context, k key.Key, upperBound key.Key) (kv.Iterator, error) {
 	metrics.TxnCmdCounter.WithLabelValues("seek").Inc()
 	start := time.Now()
 	defer func() { metrics.TxnCmdHistogram.WithLabelValues("seek").Observe(time.Since(start).Seconds()) }()
 
-	return txn.us.Iter(k, upperBound)
+	return txn.us.Iter(ctx, k, upperBound)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (txn *Transaction) IterReverse(k key.Key) (kv.Iterator, error) {
+func (txn *Transaction) IterReverse(ctx context.Context, k key.Key) (kv.Iterator, error) {
 	metrics.TxnCmdCounter.WithLabelValues("seek_reverse").Inc()
 	start := time.Now()
 	defer func() {
 		metrics.TxnCmdHistogram.WithLabelValues("seek_reverse").Observe(time.Since(start).Seconds())
 	}()
 
-	return txn.us.IterReverse(k)
+	return txn.us.IterReverse(ctx, k)
 }
 
 // IsReadOnly returns if there are pending key-value to commit in the transaction.

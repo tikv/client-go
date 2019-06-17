@@ -46,10 +46,10 @@ func (s *mockSnapshot) BatchGet(ctx context.Context, keys []key.Key) (map[string
 	return m, nil
 }
 
-func (s *mockSnapshot) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
-	return s.store.Iter(k, upperBound)
+func (s *mockSnapshot) Iter(ctx context.Context, k key.Key, upperBound key.Key) (Iterator, error) {
+	return s.store.Iter(ctx, k, upperBound)
 }
 
-func (s *mockSnapshot) IterReverse(k key.Key) (Iterator, error) {
-	return s.store.IterReverse(k)
+func (s *mockSnapshot) IterReverse(ctx context.Context, k key.Key) (Iterator, error) {
+	return s.store.IterReverse(ctx, k)
 }
