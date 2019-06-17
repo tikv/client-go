@@ -49,7 +49,7 @@ func initStore() {
 
 // key1 val1 key2 val2 ...
 func puts(args ...[]byte) error {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func puts(args ...[]byte) error {
 }
 
 func get(k []byte) (KV, error) {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return KV{}, err
 	}
@@ -77,7 +77,7 @@ func get(k []byte) (KV, error) {
 }
 
 func dels(keys ...[]byte) error {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func dels(keys ...[]byte) error {
 }
 
 func scan(keyPrefix []byte, limit int) ([]KV, error) {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return nil, err
 	}

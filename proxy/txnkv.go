@@ -71,7 +71,7 @@ func (p TxnKVProxy) Begin(ctx context.Context) (UUID, error) {
 	if !ok {
 		return "", errors.WithStack(ErrClientNotFound)
 	}
-	txn, err := client.(*txnkv.Client).Begin()
+	txn, err := client.(*txnkv.Client).Begin(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +84,7 @@ func (p TxnKVProxy) BeginWithTS(ctx context.Context, ts uint64) (UUID, error) {
 	if !ok {
 		return "", errors.WithStack(ErrClientNotFound)
 	}
-	return insertWithRetry(p.txns, client.(*txnkv.Client).BeginWithTS(ts)), nil
+	return insertWithRetry(p.txns, client.(*txnkv.Client).BeginWithTS(ctx, ts)), nil
 }
 
 // GetTS returns a latest timestamp.
@@ -93,7 +93,7 @@ func (p TxnKVProxy) GetTS(ctx context.Context) (uint64, error) {
 	if !ok {
 		return 0, errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*txnkv.Client).GetTS()
+	return client.(*txnkv.Client).GetTS(ctx)
 }
 
 // TxnGet queries value for the given key from TiKV server.
