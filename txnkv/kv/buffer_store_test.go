@@ -15,6 +15,7 @@ package kv
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 
@@ -35,13 +36,13 @@ func (s testBufferStoreSuite) TestGetSet(c *C) {
 	conf := config.DefaultTxn()
 	bs := NewBufferStore(&mockSnapshot{NewMemDbBuffer(&conf, 0)}, &conf)
 	key := key.Key("key")
-	_, err := bs.Get(key)
+	_, err := bs.Get(context.TODO(), key)
 	c.Check(err, NotNil)
 
 	err = bs.Set(key, []byte("value"))
 	c.Check(err, IsNil)
 
-	value, err := bs.Get(key)
+	value, err := bs.Get(context.TODO(), key)
 	c.Check(err, IsNil)
 	c.Check(bytes.Compare(value, []byte("value")), Equals, 0)
 }

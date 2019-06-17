@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	"github.com/tikv/client-go/key"
 )
 
@@ -21,18 +23,18 @@ type mockSnapshot struct {
 	store MemBuffer
 }
 
-func (s *mockSnapshot) Get(k key.Key) ([]byte, error) {
-	return s.store.Get(k)
+func (s *mockSnapshot) Get(ctx context.Context, k key.Key) ([]byte, error) {
+	return s.store.Get(ctx, k)
 }
 
 func (s *mockSnapshot) SetPriority(priority int) {
 
 }
 
-func (s *mockSnapshot) BatchGet(keys []key.Key) (map[string][]byte, error) {
+func (s *mockSnapshot) BatchGet(ctx context.Context, keys []key.Key) (map[string][]byte, error) {
 	m := make(map[string][]byte)
 	for _, k := range keys {
-		v, err := s.store.Get(k)
+		v, err := s.store.Get(ctx, k)
 		if IsErrNotFound(err) {
 			continue
 		}

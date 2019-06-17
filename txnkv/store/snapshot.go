@@ -55,7 +55,7 @@ func newTiKVSnapshot(store *TiKVStore, ts uint64) *TiKVSnapshot {
 
 // BatchGet gets all the keys' value from kv-server and returns a map contains key/value pairs.
 // The map will not contain nonexistent keys.
-func (s *TiKVSnapshot) BatchGet(keys []key.Key) (map[string][]byte, error) {
+func (s *TiKVSnapshot) BatchGet(ctx context.Context, keys []key.Key) (map[string][]byte, error) {
 	m := make(map[string][]byte)
 	if len(keys) == 0 {
 		return m, nil
@@ -66,7 +66,7 @@ func (s *TiKVSnapshot) BatchGet(keys []key.Key) (map[string][]byte, error) {
 
 	// We want [][]byte instead of []key.Key, use some magic to save memory.
 	bytesKeys := *(*[][]byte)(unsafe.Pointer(&keys))
-	bo := retry.NewBackoffer(context.Background(), retry.BatchGetMaxBackoff)
+	bo := retry.NewBackoffer(ctx, retry.BatchGetMaxBackoff)
 
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
@@ -198,8 +198,8 @@ func (s *TiKVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys
 }
 
 // Get gets the value for key k from snapshot.
-func (s *TiKVSnapshot) Get(k key.Key) ([]byte, error) {
-	val, err := s.get(retry.NewBackoffer(context.Background(), retry.GetMaxBackoff), k)
+func (s *TiKVSnapshot) Get(ctx context.Context, k key.Key) ([]byte, error) {
+	val, err := s.get(retry.NewBackoffer(ctx, retry.GetMaxBackoff), k)
 	if err != nil {
 		return nil, err
 	}

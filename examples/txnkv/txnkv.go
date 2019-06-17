@@ -69,7 +69,7 @@ func get(k []byte) (KV, error) {
 	if err != nil {
 		return KV{}, err
 	}
-	v, err := tx.Get(k)
+	v, err := tx.Get(context.TODO(), k)
 	if err != nil {
 		return KV{}, err
 	}

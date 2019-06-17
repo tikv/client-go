@@ -13,7 +13,11 @@
 
 package kv
 
-import "github.com/tikv/client-go/key"
+import (
+	"context"
+
+	"github.com/tikv/client-go/key"
+)
 
 // Priority value for transaction priority.
 const (
@@ -36,7 +40,7 @@ const (
 type Retriever interface {
 	// Get gets the value for key k from kv store.
 	// If corresponding kv pair does not exist, it returns nil and ErrNotExist.
-	Get(k key.Key) ([]byte, error)
+	Get(ctx context.Context, k key.Key) ([]byte, error)
 	// Iter creates an Iterator positioned on the first entry that k <= entry's key.
 	// If such entry is not found, it returns an invalid Iterator with no error.
 	// It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
@@ -83,7 +87,7 @@ type MemBuffer interface {
 type Snapshot interface {
 	Retriever
 	// BatchGet gets a batch of values from snapshot.
-	BatchGet(keys []key.Key) (map[string][]byte, error)
+	BatchGet(ctx context.Context, keys []key.Key) (map[string][]byte, error)
 	// SetPriority snapshot set the priority
 	SetPriority(priority int)
 }

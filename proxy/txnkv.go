@@ -102,7 +102,7 @@ func (p TxnKVProxy) TxnGet(ctx context.Context, key []byte) ([]byte, error) {
 	if !ok {
 		return nil, errors.WithStack(ErrTxnNotFound)
 	}
-	return txn.(*txnkv.Transaction).Get(key)
+	return txn.(*txnkv.Transaction).Get(ctx, key)
 }
 
 // TxnBatchGet gets a batch of values from TiKV server.
@@ -112,7 +112,7 @@ func (p TxnKVProxy) TxnBatchGet(ctx context.Context, keys [][]byte) (map[string]
 		return nil, errors.WithStack(ErrTxnNotFound)
 	}
 	ks := *(*[]key.Key)(unsafe.Pointer(&keys))
-	return txn.(*txnkv.Transaction).BatchGet(ks)
+	return txn.(*txnkv.Transaction).BatchGet(ctx, ks)
 }
 
 // TxnSet sets the value for key k as v into TiKV server.

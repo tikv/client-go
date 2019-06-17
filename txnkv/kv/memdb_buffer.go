@@ -16,6 +16,7 @@
 package kv
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/pingcap/goleveldb/leveldb"
@@ -81,7 +82,7 @@ func (m *memDbBuffer) IterReverse(k key.Key) (Iterator, error) {
 }
 
 // Get returns the value associated with key.
-func (m *memDbBuffer) Get(k key.Key) ([]byte, error) {
+func (m *memDbBuffer) Get(ctx context.Context, k key.Key) ([]byte, error) {
 	v, err := m.db.Get(k)
 	if err == leveldb.ErrNotFound {
 		return nil, ErrNotExist

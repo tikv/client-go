@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 )
@@ -110,12 +112,12 @@ type lazyMemBuffer struct {
 	conf *config.Txn
 }
 
-func (lmb *lazyMemBuffer) Get(k key.Key) ([]byte, error) {
+func (lmb *lazyMemBuffer) Get(ctx context.Context, k key.Key) ([]byte, error) {
 	if lmb.mb == nil {
 		return nil, ErrNotExist
 	}
 
-	return lmb.mb.Get(k)
+	return lmb.mb.Get(ctx, k)
 }
 
 func (lmb *lazyMemBuffer) Set(key key.Key, value []byte) error {
@@ -173,8 +175,8 @@ func (lmb *lazyMemBuffer) SetCap(cap int) {
 }
 
 // Get implements the Retriever interface.
-func (us *unionStore) Get(k key.Key) ([]byte, error) {
-	v, err := us.MemBuffer.Get(k)
+func (us *unionStore) Get(ctx context.Context, k key.Key) ([]byte, error) {
+	v, err := us.MemBuffer.Get(ctx, k)
 	if IsErrNotFound(err) {
 		if _, ok := us.opts.Get(PresumeKeyNotExists); ok {
 			e, ok := us.opts.Get(PresumeKeyNotExistsError)
@@ -185,7 +187,7 @@ func (us *unionStore) Get(k key.Key) ([]byte, error) {
 			}
 			return nil, ErrNotExist
 		}
-		v, err = us.BufferStore.r.Get(k)
+		v, err = us.BufferStore.r.Get(ctx, k)
 	}
 	if err != nil {
 		return v, err

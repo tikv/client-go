@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	. "github.com/pingcap/check"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/config"
@@ -34,11 +36,11 @@ func (s *testUnionStoreSuite) SetUpTest(c *C) {
 
 func (s *testUnionStoreSuite) TestGetSet(c *C) {
 	s.store.Set([]byte("1"), []byte("1"))
-	v, err := s.us.Get([]byte("1"))
+	v, err := s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("1"))
 	s.us.Set([]byte("1"), []byte("2"))
-	v, err = s.us.Get([]byte("1"))
+	v, err = s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("2"))
 }
@@ -47,11 +49,11 @@ func (s *testUnionStoreSuite) TestDelete(c *C) {
 	s.store.Set([]byte("1"), []byte("1"))
 	err := s.us.Delete([]byte("1"))
 	c.Assert(err, IsNil)
-	_, err = s.us.Get([]byte("1"))
+	_, err = s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(IsErrNotFound(err), IsTrue)
 
 	s.us.Set([]byte("1"), []byte("2"))
-	v, err := s.us.Get([]byte("1"))
+	v, err := s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("2"))
 }
@@ -110,13 +112,13 @@ func (s *testUnionStoreSuite) TestLazyConditionCheck(c *C) {
 	s.store.Set([]byte("1"), []byte("1"))
 	s.store.Set([]byte("2"), []byte("2"))
 
-	v, err := s.us.Get([]byte("1"))
+	v, err := s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("1"))
 
 	s.us.SetOption(PresumeKeyNotExists, nil)
 	s.us.SetOption(PresumeKeyNotExistsError, ErrNotExist)
-	_, err = s.us.Get([]byte("2"))
+	_, err = s.us.Get(context.TODO(), []byte("2"))
 	c.Assert(errors.Cause(err) == ErrNotExist, IsTrue, Commentf("err %v", err))
 
 	condionPair1 := s.us.LookupConditionPair([]byte("1"))

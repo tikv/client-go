@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 )
@@ -49,10 +51,10 @@ func (s *BufferStore) SetCap(cap int) {
 }
 
 // Get implements the Retriever interface.
-func (s *BufferStore) Get(k key.Key) ([]byte, error) {
-	val, err := s.MemBuffer.Get(k)
+func (s *BufferStore) Get(ctx context.Context, k key.Key) ([]byte, error) {
+	val, err := s.MemBuffer.Get(ctx, k)
 	if IsErrNotFound(err) {
-		val, err = s.r.Get(k)
+		val, err = s.r.Get(ctx, k)
 	}
 	if err != nil {
 		return nil, err
