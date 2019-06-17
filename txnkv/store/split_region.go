@@ -27,9 +27,9 @@ import (
 
 // SplitRegion splits the region contains splitKey into 2 regions: [start,
 // splitKey) and [splitKey, end).
-func SplitRegion(store *TiKVStore, splitKey key.Key) error {
+func SplitRegion(ctx context.Context, store *TiKVStore, splitKey key.Key) error {
 	log.Infof("start split_region at %q", splitKey)
-	bo := retry.NewBackoffer(context.Background(), retry.SplitRegionBackoff)
+	bo := retry.NewBackoffer(ctx, retry.SplitRegionBackoff)
 	sender := rpc.NewRegionRequestSender(store.GetRegionCache(), store.GetRPCClient())
 	req := &rpc.Request{
 		Type: rpc.CmdSplitRegion,

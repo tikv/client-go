@@ -43,8 +43,8 @@ func NewTxn() TxnKVProxy {
 }
 
 // New creates a new client and returns the client's UUID.
-func (p TxnKVProxy) New(pdAddrs []string, conf config.Config) (UUID, error) {
-	client, err := txnkv.NewClient(pdAddrs, conf)
+func (p TxnKVProxy) New(ctx context.Context, pdAddrs []string, conf config.Config) (UUID, error) {
+	client, err := txnkv.NewClient(ctx, pdAddrs, conf)
 	if err != nil {
 		return "", err
 	}
@@ -52,7 +52,8 @@ func (p TxnKVProxy) New(pdAddrs []string, conf config.Config) (UUID, error) {
 }
 
 // Close releases a txnkv client.
-func (p TxnKVProxy) Close(id UUID) error {
+func (p TxnKVProxy) Close(ctx context.Context) error {
+	id := uuidFromContext(ctx)
 	client, ok := p.clients.Load(id)
 	if !ok {
 		return errors.WithStack(ErrClientNotFound)
@@ -65,8 +66,8 @@ func (p TxnKVProxy) Close(id UUID) error {
 }
 
 // Begin starts a new transaction and returns its UUID.
-func (p TxnKVProxy) Begin(id UUID) (UUID, error) {
-	client, ok := p.clients.Load(id)
+func (p TxnKVProxy) Begin(ctx context.Context) (UUID, error) {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return "", errors.WithStack(ErrClientNotFound)
 	}
@@ -78,8 +79,8 @@ func (p TxnKVProxy) Begin(id UUID) (UUID, error) {
 }
 
 // BeginWithTS starts a new transaction with given ts and returns its UUID.
-func (p TxnKVProxy) BeginWithTS(id UUID, ts uint64) (UUID, error) {
-	client, ok := p.clients.Load(id)
+func (p TxnKVProxy) BeginWithTS(ctx context.Context, ts uint64) (UUID, error) {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return "", errors.WithStack(ErrClientNotFound)
 	}
@@ -87,8 +88,8 @@ func (p TxnKVProxy) BeginWithTS(id UUID, ts uint64) (UUID, error) {
 }
 
 // GetTS returns a latest timestamp.
-func (p TxnKVProxy) GetTS(id UUID) (uint64, error) {
-	client, ok := p.clients.Load(id)
+func (p TxnKVProxy) GetTS(ctx context.Context) (uint64, error) {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return 0, errors.WithStack(ErrClientNotFound)
 	}
@@ -96,8 +97,8 @@ func (p TxnKVProxy) GetTS(id UUID) (uint64, error) {
 }
 
 // TxnGet queries value for the given key from TiKV server.
-func (p TxnKVProxy) TxnGet(id UUID, key []byte) ([]byte, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnGet(ctx context.Context, key []byte) ([]byte, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, errors.WithStack(ErrTxnNotFound)
 	}
@@ -105,8 +106,8 @@ func (p TxnKVProxy) TxnGet(id UUID, key []byte) ([]byte, error) {
 }
 
 // TxnBatchGet gets a batch of values from TiKV server.
-func (p TxnKVProxy) TxnBatchGet(id UUID, keys [][]byte) (map[string][]byte, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnBatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, errors.WithStack(ErrTxnNotFound)
 	}
@@ -115,8 +116,8 @@ func (p TxnKVProxy) TxnBatchGet(id UUID, keys [][]byte) (map[string][]byte, erro
 }
 
 // TxnSet sets the value for key k as v into TiKV server.
-func (p TxnKVProxy) TxnSet(id UUID, k []byte, v []byte) error {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnSet(ctx context.Context, k []byte, v []byte) error {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrTxnNotFound)
 	}
@@ -125,8 +126,8 @@ func (p TxnKVProxy) TxnSet(id UUID, k []byte, v []byte) error {
 
 // TxnIter creates an Iterator positioned on the first entry that key <= entry's
 // key and returns the Iterator's UUID.
-func (p TxnKVProxy) TxnIter(id UUID, key []byte, upperBound []byte) (UUID, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnIter(ctx context.Context, key []byte, upperBound []byte) (UUID, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return "", errors.WithStack(ErrTxnNotFound)
 	}
@@ -139,8 +140,8 @@ func (p TxnKVProxy) TxnIter(id UUID, key []byte, upperBound []byte) (UUID, error
 
 // TxnIterReverse creates a reversed Iterator positioned on the first entry
 // which key is less than key and returns the Iterator's UUID.
-func (p TxnKVProxy) TxnIterReverse(id UUID, key []byte) (UUID, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnIterReverse(ctx context.Context, key []byte) (UUID, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return "", errors.WithStack(ErrTxnNotFound)
 	}
@@ -152,8 +153,8 @@ func (p TxnKVProxy) TxnIterReverse(id UUID, key []byte) (UUID, error) {
 }
 
 // TxnIsReadOnly returns if there are pending key-value to commit in the transaction.
-func (p TxnKVProxy) TxnIsReadOnly(id UUID) (bool, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnIsReadOnly(ctx context.Context) (bool, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return false, errors.WithStack(ErrTxnNotFound)
 	}
@@ -161,8 +162,8 @@ func (p TxnKVProxy) TxnIsReadOnly(id UUID) (bool, error) {
 }
 
 // TxnDelete removes the entry for key from TiKV server.
-func (p TxnKVProxy) TxnDelete(id UUID, key []byte) error {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnDelete(ctx context.Context, key []byte) error {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrTxnNotFound)
 	}
@@ -170,7 +171,8 @@ func (p TxnKVProxy) TxnDelete(id UUID, key []byte) error {
 }
 
 // TxnCommit commits the transaction operations to TiKV server.
-func (p TxnKVProxy) TxnCommit(id UUID) error {
+func (p TxnKVProxy) TxnCommit(ctx context.Context) error {
+	id := uuidFromContext(ctx)
 	txn, ok := p.txns.Load(id)
 	if !ok {
 		return errors.WithStack(ErrTxnNotFound)
@@ -180,7 +182,8 @@ func (p TxnKVProxy) TxnCommit(id UUID) error {
 }
 
 // TxnRollback undoes the transaction operations to TiKV server.
-func (p TxnKVProxy) TxnRollback(id UUID) error {
+func (p TxnKVProxy) TxnRollback(ctx context.Context) error {
+	id := uuidFromContext(ctx)
 	txn, ok := p.txns.Load(id)
 	if !ok {
 		return errors.WithStack(ErrTxnNotFound)
@@ -190,8 +193,8 @@ func (p TxnKVProxy) TxnRollback(id UUID) error {
 }
 
 // TxnLockKeys tries to lock the entries with the keys in TiKV server.
-func (p TxnKVProxy) TxnLockKeys(id UUID, keys [][]byte) error {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnLockKeys(ctx context.Context, keys [][]byte) error {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrTxnNotFound)
 	}
@@ -200,8 +203,8 @@ func (p TxnKVProxy) TxnLockKeys(id UUID, keys [][]byte) error {
 }
 
 // TxnValid returns if the transaction is valid.
-func (p TxnKVProxy) TxnValid(id UUID) (bool, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnValid(ctx context.Context) (bool, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return false, errors.WithStack(ErrTxnNotFound)
 	}
@@ -209,8 +212,8 @@ func (p TxnKVProxy) TxnValid(id UUID) (bool, error) {
 }
 
 // TxnLen returns the count of key-value pairs in the transaction's memory buffer.
-func (p TxnKVProxy) TxnLen(id UUID) (int, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnLen(ctx context.Context) (int, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return 0, errors.WithStack(ErrTxnNotFound)
 	}
@@ -218,8 +221,8 @@ func (p TxnKVProxy) TxnLen(id UUID) (int, error) {
 }
 
 // TxnSize returns the length (in bytes) of the transaction's memory buffer.
-func (p TxnKVProxy) TxnSize(id UUID) (int, error) {
-	txn, ok := p.txns.Load(id)
+func (p TxnKVProxy) TxnSize(ctx context.Context) (int, error) {
+	txn, ok := p.txns.Load(uuidFromContext(ctx))
 	if !ok {
 		return 0, errors.WithStack(ErrTxnNotFound)
 	}
@@ -227,8 +230,8 @@ func (p TxnKVProxy) TxnSize(id UUID) (int, error) {
 }
 
 // IterValid returns if the iterator is valid to use.
-func (p TxnKVProxy) IterValid(id UUID) (bool, error) {
-	iter, ok := p.iterators.Load(id)
+func (p TxnKVProxy) IterValid(ctx context.Context) (bool, error) {
+	iter, ok := p.iterators.Load(uuidFromContext(ctx))
 	if !ok {
 		return false, errors.WithStack(ErrIterNotFound)
 	}
@@ -236,8 +239,8 @@ func (p TxnKVProxy) IterValid(id UUID) (bool, error) {
 }
 
 // IterKey returns the key which the iterator points to.
-func (p TxnKVProxy) IterKey(id UUID) ([]byte, error) {
-	iter, ok := p.iterators.Load(id)
+func (p TxnKVProxy) IterKey(ctx context.Context) ([]byte, error) {
+	iter, ok := p.iterators.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, errors.WithStack(ErrIterNotFound)
 	}
@@ -245,8 +248,8 @@ func (p TxnKVProxy) IterKey(id UUID) ([]byte, error) {
 }
 
 // IterValue returns the value which the iterator points to.
-func (p TxnKVProxy) IterValue(id UUID) ([]byte, error) {
-	iter, ok := p.iterators.Load(id)
+func (p TxnKVProxy) IterValue(ctx context.Context) ([]byte, error) {
+	iter, ok := p.iterators.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, errors.WithStack(ErrIterNotFound)
 	}
@@ -254,8 +257,8 @@ func (p TxnKVProxy) IterValue(id UUID) ([]byte, error) {
 }
 
 // IterNext moves the iterator to next entry.
-func (p TxnKVProxy) IterNext(id UUID) error {
-	iter, ok := p.iterators.Load(id)
+func (p TxnKVProxy) IterNext(ctx context.Context) error {
+	iter, ok := p.iterators.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrIterNotFound)
 	}
@@ -263,7 +266,8 @@ func (p TxnKVProxy) IterNext(id UUID) error {
 }
 
 // IterClose releases an iterator.
-func (p TxnKVProxy) IterClose(id UUID) error {
+func (p TxnKVProxy) IterClose(ctx context.Context) error {
+	id := uuidFromContext(ctx)
 	iter, ok := p.iterators.Load(id)
 	if !ok {
 		return errors.WithStack(ErrIterNotFound)

@@ -27,8 +27,8 @@ type Client struct {
 }
 
 // NewClient creates a client with PD addresses.
-func NewClient(pdAddrs []string, config config.Config) (*Client, error) {
-	tikvStore, err := store.NewStore(pdAddrs, config)
+func NewClient(ctx context.Context, pdAddrs []string, config config.Config) (*Client, error) {
+	tikvStore, err := store.NewStore(ctx, pdAddrs, config)
 	if err != nil {
 		return nil, err
 	}

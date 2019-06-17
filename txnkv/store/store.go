@@ -55,7 +55,7 @@ type TiKVStore struct {
 }
 
 // NewStore creates a TiKVStore instance.
-func NewStore(pdAddrs []string, conf config.Config) (*TiKVStore, error) {
+func NewStore(ctx context.Context, pdAddrs []string, conf config.Config) (*TiKVStore, error) {
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
 		CAPath:   conf.RPC.Security.SSLCA,
 		CertPath: conf.RPC.Security.SSLCert,
@@ -82,7 +82,7 @@ func NewStore(pdAddrs []string, conf config.Config) (*TiKVStore, error) {
 		return nil, err
 	}
 
-	clusterID := pdCli.GetClusterID(context.TODO())
+	clusterID := pdCli.GetClusterID(ctx)
 
 	store := &TiKVStore{
 		conf:        &conf,

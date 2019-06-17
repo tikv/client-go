@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/tikv/client-go/config"
@@ -134,22 +133,6 @@ func (h rawkvHandler) ReverseScan(ctx context.Context, r *RawRequest) (*RawRespo
 		return nil, http.StatusInternalServerError, err
 	}
 	return &RawResponse{Keys: keys, Values: values}, http.StatusOK, nil
-}
-
-var defaultTimeout = 20 * time.Second
-
-func reqContext(vars map[string]string) (context.Context, context.CancelFunc) {
-	ctx := context.Background()
-	if id := vars["id"]; id != "" {
-		ctx = context.WithValue(ctx, proxy.ClientIDKey, proxy.UUID(id))
-	}
-
-	d, err := time.ParseDuration(vars["timeout"])
-	if err != nil {
-		d = defaultTimeout
-	}
-
-	return context.WithTimeout(ctx, d)
 }
 
 func (h rawkvHandler) handlerFunc(f func(context.Context, *RawRequest) (*RawResponse, int, error)) func(http.ResponseWriter, *http.Request) {
