@@ -22,7 +22,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// PushMetrics pushes metrics to Prometheus Pushgateway. `instance` should be global identical.
+// PushMetrics pushes metrics to Prometheus Pushgateway.
+// Note:
+// * Normally, you need to start a goroutine to push metrics: `go
+//   PushMetrics(...)`
+// * `instance` should be global identical -- NO 2 processes share a same
+//   `instance`.
+// * `job` is used to distinguish different workloads, DO NOT use too many `job`
+//   labels since there are grafana panels that groups by `job`.
 func PushMetrics(ctx context.Context, addr string, interval time.Duration, job, instance string) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
