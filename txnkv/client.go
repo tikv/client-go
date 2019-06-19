@@ -27,8 +27,8 @@ type Client struct {
 }
 
 // NewClient creates a client with PD addresses.
-func NewClient(pdAddrs []string, config config.Config) (*Client, error) {
-	tikvStore, err := store.NewStore(pdAddrs, config)
+func NewClient(ctx context.Context, pdAddrs []string, config config.Config) (*Client, error) {
+	tikvStore, err := store.NewStore(ctx, pdAddrs, config)
 	if err != nil {
 		return nil, err
 	}
@@ -43,20 +43,20 @@ func (c *Client) Close() error {
 }
 
 // Begin creates a transaction for read/write.
-func (c *Client) Begin() (*Transaction, error) {
-	ts, err := c.GetTS()
+func (c *Client) Begin(ctx context.Context) (*Transaction, error) {
+	ts, err := c.GetTS(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return c.BeginWithTS(ts), nil
+	return c.BeginWithTS(ctx, ts), nil
 }
 
 // BeginWithTS creates a transaction which is normally readonly.
-func (c *Client) BeginWithTS(ts uint64) *Transaction {
+func (c *Client) BeginWithTS(ctx context.Context, ts uint64) *Transaction {
 	return newTransaction(c.tikvStore, ts)
 }
 
 // GetTS returns a latest timestamp.
-func (c *Client) GetTS() (uint64, error) {
-	return c.tikvStore.GetTimestampWithRetry(retry.NewBackoffer(context.TODO(), retry.TsoMaxBackoff))
+func (c *Client) GetTS(ctx context.Context) (uint64, error) {
+	return c.tikvStore.GetTimestampWithRetry(retry.NewBackoffer(ctx, retry.TsoMaxBackoff))
 }

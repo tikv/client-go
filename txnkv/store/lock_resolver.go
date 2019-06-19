@@ -57,8 +57,8 @@ var _ = NewLockResolver
 // NewLockResolver creates a LockResolver.
 // It is exported for other pkg to use. For instance, binlog service needs
 // to determine a transaction's commit state.
-func NewLockResolver(etcdAddrs []string, conf config.Config) (*LockResolver, error) {
-	s, err := NewStore(etcdAddrs, conf)
+func NewLockResolver(ctx context.Context, etcdAddrs []string, conf config.Config) (*LockResolver, error) {
+	s, err := NewStore(ctx, etcdAddrs, conf)
 	if err != nil {
 		return nil, err
 	}
@@ -259,8 +259,8 @@ func (lr *LockResolver) ResolveLocks(bo *retry.Backoffer, locks []*Lock) (ok boo
 // If the primary key is still locked, it will launch a Rollback to abort it.
 // To avoid unnecessarily aborting too many txns, it is wiser to wait a few
 // seconds before calling it after Prewrite.
-func (lr *LockResolver) GetTxnStatus(txnID uint64, primary []byte) (TxnStatus, error) {
-	bo := retry.NewBackoffer(context.Background(), retry.CleanupMaxBackoff)
+func (lr *LockResolver) GetTxnStatus(ctx context.Context, txnID uint64, primary []byte) (TxnStatus, error) {
+	bo := retry.NewBackoffer(ctx, retry.CleanupMaxBackoff)
 	return lr.getTxnStatus(bo, txnID, primary)
 }
 

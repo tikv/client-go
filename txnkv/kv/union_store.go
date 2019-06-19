@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 )
@@ -89,7 +91,7 @@ func (it invalidIterator) Valid() bool {
 	return false
 }
 
-func (it invalidIterator) Next() error {
+func (it invalidIterator) Next(context.Context) error {
 	return nil
 }
 
@@ -110,12 +112,12 @@ type lazyMemBuffer struct {
 	conf *config.Txn
 }
 
-func (lmb *lazyMemBuffer) Get(k key.Key) ([]byte, error) {
+func (lmb *lazyMemBuffer) Get(ctx context.Context, k key.Key) ([]byte, error) {
 	if lmb.mb == nil {
 		return nil, ErrNotExist
 	}
 
-	return lmb.mb.Get(k)
+	return lmb.mb.Get(ctx, k)
 }
 
 func (lmb *lazyMemBuffer) Set(key key.Key, value []byte) error {
@@ -134,18 +136,18 @@ func (lmb *lazyMemBuffer) Delete(k key.Key) error {
 	return lmb.mb.Delete(k)
 }
 
-func (lmb *lazyMemBuffer) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
+func (lmb *lazyMemBuffer) Iter(ctx context.Context, k key.Key, upperBound key.Key) (Iterator, error) {
 	if lmb.mb == nil {
 		return invalidIterator{}, nil
 	}
-	return lmb.mb.Iter(k, upperBound)
+	return lmb.mb.Iter(ctx, k, upperBound)
 }
 
-func (lmb *lazyMemBuffer) IterReverse(k key.Key) (Iterator, error) {
+func (lmb *lazyMemBuffer) IterReverse(ctx context.Context, k key.Key) (Iterator, error) {
 	if lmb.mb == nil {
 		return invalidIterator{}, nil
 	}
-	return lmb.mb.IterReverse(k)
+	return lmb.mb.IterReverse(ctx, k)
 }
 
 func (lmb *lazyMemBuffer) Size() int {
@@ -173,8 +175,8 @@ func (lmb *lazyMemBuffer) SetCap(cap int) {
 }
 
 // Get implements the Retriever interface.
-func (us *unionStore) Get(k key.Key) ([]byte, error) {
-	v, err := us.MemBuffer.Get(k)
+func (us *unionStore) Get(ctx context.Context, k key.Key) ([]byte, error) {
+	v, err := us.MemBuffer.Get(ctx, k)
 	if IsErrNotFound(err) {
 		if _, ok := us.opts.Get(PresumeKeyNotExists); ok {
 			e, ok := us.opts.Get(PresumeKeyNotExistsError)
@@ -185,7 +187,7 @@ func (us *unionStore) Get(k key.Key) ([]byte, error) {
 			}
 			return nil, ErrNotExist
 		}
-		v, err = us.BufferStore.r.Get(k)
+		v, err = us.BufferStore.r.Get(ctx, k)
 	}
 	if err != nil {
 		return v, err

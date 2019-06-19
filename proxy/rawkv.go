@@ -14,6 +14,7 @@
 package proxy
 
 import (
+	"context"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -35,8 +36,8 @@ func NewRaw() RawKVProxy {
 }
 
 // New creates a new client and returns the client's UUID.
-func (p RawKVProxy) New(pdAddrs []string, conf config.Config) (UUID, error) {
-	client, err := rawkv.NewClient(pdAddrs, conf)
+func (p RawKVProxy) New(ctx context.Context, pdAddrs []string, conf config.Config) (UUID, error) {
+	client, err := rawkv.NewClient(ctx, pdAddrs, conf)
 	if err != nil {
 		return "", err
 	}
@@ -44,7 +45,8 @@ func (p RawKVProxy) New(pdAddrs []string, conf config.Config) (UUID, error) {
 }
 
 // Close releases a rawkv client.
-func (p RawKVProxy) Close(id UUID) error {
+func (p RawKVProxy) Close(ctx context.Context) error {
+	id := uuidFromContext(ctx)
 	client, ok := p.clients.Load(id)
 	if !ok {
 		return errors.WithStack(ErrClientNotFound)
@@ -57,83 +59,83 @@ func (p RawKVProxy) Close(id UUID) error {
 }
 
 // Get queries value with the key.
-func (p RawKVProxy) Get(id UUID, key []byte) ([]byte, error) {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) Get(ctx context.Context, key []byte) ([]byte, error) {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).Get(key)
+	return client.(*rawkv.Client).Get(ctx, key)
 }
 
 // BatchGet queries values with the keys.
-func (p RawKVProxy) BatchGet(id UUID, keys [][]byte) ([][]byte, error) {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).BatchGet(keys)
+	return client.(*rawkv.Client).BatchGet(ctx, keys)
 }
 
 // Put stores a key-value pair to TiKV.
-func (p RawKVProxy) Put(id UUID, key, value []byte) error {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) Put(ctx context.Context, key, value []byte) error {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).Put(key, value)
+	return client.(*rawkv.Client).Put(ctx, key, value)
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (p RawKVProxy) BatchPut(id UUID, keys, values [][]byte) error {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) BatchPut(ctx context.Context, keys, values [][]byte) error {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).BatchPut(keys, values)
+	return client.(*rawkv.Client).BatchPut(ctx, keys, values)
 }
 
 // Delete deletes a key-value pair from TiKV.
-func (p RawKVProxy) Delete(id UUID, key []byte) error {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) Delete(ctx context.Context, key []byte) error {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).Delete(key)
+	return client.(*rawkv.Client).Delete(ctx, key)
 }
 
 // BatchDelete deletes key-value pairs from TiKV.
-func (p RawKVProxy) BatchDelete(id UUID, keys [][]byte) error {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) BatchDelete(ctx context.Context, keys [][]byte) error {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).BatchDelete(keys)
+	return client.(*rawkv.Client).BatchDelete(ctx, keys)
 }
 
 // DeleteRange deletes all key-value pairs in a range from TiKV.
-func (p RawKVProxy) DeleteRange(id UUID, startKey []byte, endKey []byte) error {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) DeleteRange(ctx context.Context, startKey []byte, endKey []byte) error {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).DeleteRange(startKey, endKey)
+	return client.(*rawkv.Client).DeleteRange(ctx, startKey, endKey)
 }
 
 // Scan queries continuous kv pairs in range [startKey, endKey), up to limit pairs.
-func (p RawKVProxy) Scan(id UUID, startKey, endKey []byte, limit int) ([][]byte, [][]byte, error) {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) Scan(ctx context.Context, startKey, endKey []byte, limit int) ([][]byte, [][]byte, error) {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, nil, errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).Scan(startKey, endKey, limit)
+	return client.(*rawkv.Client).Scan(ctx, startKey, endKey, limit)
 }
 
 // ReverseScan queries continuous kv pairs in range [endKey, startKey), up to limit pairs.
 // Direction is different from Scan, upper to lower.
-func (p RawKVProxy) ReverseScan(id UUID, startKey, endKey []byte, limit int) ([][]byte, [][]byte, error) {
-	client, ok := p.clients.Load(id)
+func (p RawKVProxy) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int) ([][]byte, [][]byte, error) {
+	client, ok := p.clients.Load(uuidFromContext(ctx))
 	if !ok {
 		return nil, nil, errors.WithStack(ErrClientNotFound)
 	}
-	return client.(*rawkv.Client).ReverseScan(startKey, endKey, limit)
+	return client.(*rawkv.Client).ReverseScan(ctx, startKey, endKey, limit)
 }

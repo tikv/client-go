@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/key"
 )
@@ -49,10 +51,10 @@ func (s *BufferStore) SetCap(cap int) {
 }
 
 // Get implements the Retriever interface.
-func (s *BufferStore) Get(k key.Key) ([]byte, error) {
-	val, err := s.MemBuffer.Get(k)
+func (s *BufferStore) Get(ctx context.Context, k key.Key) ([]byte, error) {
+	val, err := s.MemBuffer.Get(ctx, k)
 	if IsErrNotFound(err) {
-		val, err = s.r.Get(k)
+		val, err = s.r.Get(ctx, k)
 	}
 	if err != nil {
 		return nil, err
@@ -64,29 +66,29 @@ func (s *BufferStore) Get(k key.Key) ([]byte, error) {
 }
 
 // Iter implements the Retriever interface.
-func (s *BufferStore) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
-	bufferIt, err := s.MemBuffer.Iter(k, upperBound)
+func (s *BufferStore) Iter(ctx context.Context, k key.Key, upperBound key.Key) (Iterator, error) {
+	bufferIt, err := s.MemBuffer.Iter(ctx, k, upperBound)
 	if err != nil {
 		return nil, err
 	}
-	retrieverIt, err := s.r.Iter(k, upperBound)
+	retrieverIt, err := s.r.Iter(ctx, k, upperBound)
 	if err != nil {
 		return nil, err
 	}
-	return NewUnionIter(bufferIt, retrieverIt, false)
+	return NewUnionIter(ctx, bufferIt, retrieverIt, false)
 }
 
 // IterReverse implements the Retriever interface.
-func (s *BufferStore) IterReverse(k key.Key) (Iterator, error) {
-	bufferIt, err := s.MemBuffer.IterReverse(k)
+func (s *BufferStore) IterReverse(ctx context.Context, k key.Key) (Iterator, error) {
+	bufferIt, err := s.MemBuffer.IterReverse(ctx, k)
 	if err != nil {
 		return nil, err
 	}
-	retrieverIt, err := s.r.IterReverse(k)
+	retrieverIt, err := s.r.IterReverse(ctx, k)
 	if err != nil {
 		return nil, err
 	}
-	return NewUnionIter(bufferIt, retrieverIt, true)
+	return NewUnionIter(ctx, bufferIt, retrieverIt, true)
 }
 
 // WalkBuffer iterates all buffered kv pairs.

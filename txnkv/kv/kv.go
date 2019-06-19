@@ -13,7 +13,11 @@
 
 package kv
 
-import "github.com/tikv/client-go/key"
+import (
+	"context"
+
+	"github.com/tikv/client-go/key"
+)
 
 // Priority value for transaction priority.
 const (
@@ -36,18 +40,18 @@ const (
 type Retriever interface {
 	// Get gets the value for key k from kv store.
 	// If corresponding kv pair does not exist, it returns nil and ErrNotExist.
-	Get(k key.Key) ([]byte, error)
+	Get(ctx context.Context, k key.Key) ([]byte, error)
 	// Iter creates an Iterator positioned on the first entry that k <= entry's key.
 	// If such entry is not found, it returns an invalid Iterator with no error.
 	// It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 	// The Iterator must be closed after use.
-	Iter(k key.Key, upperBound key.Key) (Iterator, error)
+	Iter(ctx context.Context, k key.Key, upperBound key.Key) (Iterator, error)
 
 	// IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 	// The returned iterator will iterate from greater key to smaller key.
 	// If k is nil, the returned iterator will be positioned at the last key.
 	// TODO: Add lower bound limit
-	IterReverse(k key.Key) (Iterator, error)
+	IterReverse(ctx context.Context, k key.Key) (Iterator, error)
 }
 
 // Mutator is the interface wraps the basic Set and Delete methods.
@@ -83,7 +87,7 @@ type MemBuffer interface {
 type Snapshot interface {
 	Retriever
 	// BatchGet gets a batch of values from snapshot.
-	BatchGet(keys []key.Key) (map[string][]byte, error)
+	BatchGet(ctx context.Context, keys []key.Key) (map[string][]byte, error)
 	// SetPriority snapshot set the priority
 	SetPriority(priority int)
 }
@@ -93,7 +97,7 @@ type Iterator interface {
 	Valid() bool
 	Key() key.Key
 	Value() []byte
-	Next() error
+	Next(context.Context) error
 	Close()
 }
 
