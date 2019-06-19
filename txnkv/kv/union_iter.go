@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/key"
 )
@@ -32,7 +34,7 @@ type UnionIter struct {
 }
 
 // NewUnionIter returns a union iterator for BufferStore.
-func NewUnionIter(dirtyIt Iterator, snapshotIt Iterator, reverse bool) (*UnionIter, error) {
+func NewUnionIter(ctx context.Context, dirtyIt Iterator, snapshotIt Iterator, reverse bool) (*UnionIter, error) {
 	it := &UnionIter{
 		dirtyIt:       dirtyIt,
 		snapshotIt:    snapshotIt,
@@ -40,7 +42,7 @@ func NewUnionIter(dirtyIt Iterator, snapshotIt Iterator, reverse bool) (*UnionIt
 		snapshotValid: snapshotIt.Valid(),
 		reverse:       reverse,
 	}
-	err := it.updateCur()
+	err := it.updateCur(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -48,20 +50,20 @@ func NewUnionIter(dirtyIt Iterator, snapshotIt Iterator, reverse bool) (*UnionIt
 }
 
 // dirtyNext makes iter.dirtyIt go and update valid status.
-func (iter *UnionIter) dirtyNext() error {
-	err := iter.dirtyIt.Next()
+func (iter *UnionIter) dirtyNext(ctx context.Context) error {
+	err := iter.dirtyIt.Next(ctx)
 	iter.dirtyValid = iter.dirtyIt.Valid()
 	return err
 }
 
 // snapshotNext makes iter.snapshotIt go and update valid status.
-func (iter *UnionIter) snapshotNext() error {
-	err := iter.snapshotIt.Next()
+func (iter *UnionIter) snapshotNext(ctx context.Context) error {
+	err := iter.snapshotIt.Next(ctx)
 	iter.snapshotValid = iter.snapshotIt.Valid()
 	return err
 }
 
-func (iter *UnionIter) updateCur() error {
+func (iter *UnionIter) updateCur(ctx context.Context) error {
 	iter.isValid = true
 	for {
 		if !iter.dirtyValid && !iter.snapshotValid {
@@ -78,7 +80,7 @@ func (iter *UnionIter) updateCur() error {
 			iter.curIsDirty = true
 			// if delete it
 			if len(iter.dirtyIt.Value()) == 0 {
-				if err := iter.dirtyNext(); err != nil {
+				if err := iter.dirtyNext(ctx); err != nil {
 					return err
 				}
 				continue
@@ -99,15 +101,15 @@ func (iter *UnionIter) updateCur() error {
 				if len(iter.dirtyIt.Value()) == 0 {
 					// snapshot has a record, but txn says we have deleted it
 					// just go next
-					if err := iter.dirtyNext(); err != nil {
+					if err := iter.dirtyNext(ctx); err != nil {
 						return err
 					}
-					if err := iter.snapshotNext(); err != nil {
+					if err := iter.snapshotNext(ctx); err != nil {
 						return err
 					}
 					continue
 				}
-				if err := iter.snapshotNext(); err != nil {
+				if err := iter.snapshotNext(ctx); err != nil {
 					return err
 				}
 				iter.curIsDirty = true
@@ -121,7 +123,7 @@ func (iter *UnionIter) updateCur() error {
 				if len(iter.dirtyIt.Value()) == 0 {
 					log.Warnf("[kv] delete a record not exists? k = %q", iter.dirtyIt.Key())
 					// jump over this deletion
-					if err := iter.dirtyNext(); err != nil {
+					if err := iter.dirtyNext(ctx); err != nil {
 						return err
 					}
 					continue
@@ -135,17 +137,17 @@ func (iter *UnionIter) updateCur() error {
 }
 
 // Next implements the Iterator Next interface.
-func (iter *UnionIter) Next() error {
+func (iter *UnionIter) Next(ctx context.Context) error {
 	var err error
 	if !iter.curIsDirty {
-		err = iter.snapshotNext()
+		err = iter.snapshotNext(ctx)
 	} else {
-		err = iter.dirtyNext()
+		err = iter.dirtyNext(ctx)
 	}
 	if err != nil {
 		return err
 	}
-	return iter.updateCur()
+	return iter.updateCur(ctx)
 }
 
 // Value implements the Iterator Value interface.

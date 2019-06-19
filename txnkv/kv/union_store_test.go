@@ -14,6 +14,8 @@
 package kv
 
 import (
+	"context"
+
 	. "github.com/pingcap/check"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/config"
@@ -34,11 +36,11 @@ func (s *testUnionStoreSuite) SetUpTest(c *C) {
 
 func (s *testUnionStoreSuite) TestGetSet(c *C) {
 	s.store.Set([]byte("1"), []byte("1"))
-	v, err := s.us.Get([]byte("1"))
+	v, err := s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("1"))
 	s.us.Set([]byte("1"), []byte("2"))
-	v, err = s.us.Get([]byte("1"))
+	v, err = s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("2"))
 }
@@ -47,11 +49,11 @@ func (s *testUnionStoreSuite) TestDelete(c *C) {
 	s.store.Set([]byte("1"), []byte("1"))
 	err := s.us.Delete([]byte("1"))
 	c.Assert(err, IsNil)
-	_, err = s.us.Get([]byte("1"))
+	_, err = s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(IsErrNotFound(err), IsTrue)
 
 	s.us.Set([]byte("1"), []byte("2"))
-	v, err := s.us.Get([]byte("1"))
+	v, err := s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("2"))
 }
@@ -61,21 +63,21 @@ func (s *testUnionStoreSuite) TestSeek(c *C) {
 	s.store.Set([]byte("2"), []byte("2"))
 	s.store.Set([]byte("3"), []byte("3"))
 
-	iter, err := s.us.Iter(nil, nil)
+	iter, err := s.us.Iter(context.TODO(), nil, nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("1"), []byte("2"), []byte("3")}, [][]byte{[]byte("1"), []byte("2"), []byte("3")})
 
-	iter, err = s.us.Iter([]byte("2"), nil)
+	iter, err = s.us.Iter(context.TODO(), []byte("2"), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("3")}, [][]byte{[]byte("2"), []byte("3")})
 
 	s.us.Set([]byte("4"), []byte("4"))
-	iter, err = s.us.Iter([]byte("2"), nil)
+	iter, err = s.us.Iter(context.TODO(), []byte("2"), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("3"), []byte("4")}, [][]byte{[]byte("2"), []byte("3"), []byte("4")})
 
 	s.us.Delete([]byte("3"))
-	iter, err = s.us.Iter([]byte("2"), nil)
+	iter, err = s.us.Iter(context.TODO(), []byte("2"), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("4")}, [][]byte{[]byte("2"), []byte("4")})
 }
@@ -86,21 +88,21 @@ func (s *testUnionStoreSuite) TestIterReverse(c *C) {
 	s.store.Set([]byte("2"), []byte("2"))
 	s.store.Set([]byte("3"), []byte("3"))
 
-	iter, err := s.us.IterReverse(nil)
+	iter, err := s.us.IterReverse(context.TODO(), nil)
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("3"), []byte("2"), []byte("1")}, [][]byte{[]byte("3"), []byte("2"), []byte("1")})
 
-	iter, err = s.us.IterReverse([]byte("3"))
+	iter, err = s.us.IterReverse(context.TODO(), []byte("3"))
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("1")}, [][]byte{[]byte("2"), []byte("1")})
 
 	s.us.Set([]byte("0"), []byte("0"))
-	iter, err = s.us.IterReverse([]byte("3"))
+	iter, err = s.us.IterReverse(context.TODO(), []byte("3"))
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("1"), []byte("0")}, [][]byte{[]byte("2"), []byte("1"), []byte("0")})
 
 	s.us.Delete([]byte("1"))
-	iter, err = s.us.IterReverse([]byte("3"))
+	iter, err = s.us.IterReverse(context.TODO(), []byte("3"))
 	c.Assert(err, IsNil)
 	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("0")}, [][]byte{[]byte("2"), []byte("0")})
 }
@@ -110,13 +112,13 @@ func (s *testUnionStoreSuite) TestLazyConditionCheck(c *C) {
 	s.store.Set([]byte("1"), []byte("1"))
 	s.store.Set([]byte("2"), []byte("2"))
 
-	v, err := s.us.Get([]byte("1"))
+	v, err := s.us.Get(context.TODO(), []byte("1"))
 	c.Assert(err, IsNil)
 	c.Assert(v, BytesEquals, []byte("1"))
 
 	s.us.SetOption(PresumeKeyNotExists, nil)
 	s.us.SetOption(PresumeKeyNotExistsError, ErrNotExist)
-	_, err = s.us.Get([]byte("2"))
+	_, err = s.us.Get(context.TODO(), []byte("2"))
 	c.Assert(errors.Cause(err) == ErrNotExist, IsTrue, Commentf("err %v", err))
 
 	condionPair1 := s.us.LookupConditionPair([]byte("1"))
@@ -138,7 +140,7 @@ func checkIterator(c *C, iter Iterator, keys [][]byte, values [][]byte) {
 		c.Assert(iter.Valid(), IsTrue)
 		c.Assert([]byte(iter.Key()), BytesEquals, k)
 		c.Assert(iter.Value(), BytesEquals, v)
-		c.Assert(iter.Next(), IsNil)
+		c.Assert(iter.Next(context.TODO()), IsNil)
 	}
 	c.Assert(iter.Valid(), IsFalse)
 }

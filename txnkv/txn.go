@@ -57,12 +57,12 @@ func newTransaction(tikvStore *store.TiKVStore, ts uint64) *Transaction {
 }
 
 // Get implements transaction interface.
-func (txn *Transaction) Get(k key.Key) ([]byte, error) {
+func (txn *Transaction) Get(ctx context.Context, k key.Key) ([]byte, error) {
 	metrics.TxnCmdCounter.WithLabelValues("get").Inc()
 	start := time.Now()
 	defer func() { metrics.TxnCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
 
-	ret, err := txn.us.Get(k)
+	ret, err := txn.us.Get(ctx, k)
 	if kv.IsErrNotFound(err) {
 		return nil, err
 	}
@@ -79,14 +79,14 @@ func (txn *Transaction) Get(k key.Key) ([]byte, error) {
 }
 
 // BatchGet gets a batch of values from TiKV server.
-func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
+func (txn *Transaction) BatchGet(ctx context.Context, keys []key.Key) (map[string][]byte, error) {
 	if txn.IsReadOnly() {
-		return txn.snapshot.BatchGet(keys)
+		return txn.snapshot.BatchGet(ctx, keys)
 	}
 	bufferValues := make([][]byte, len(keys))
 	shrinkKeys := make([]key.Key, 0, len(keys))
 	for i, key := range keys {
-		val, err := txn.us.GetMemBuffer().Get(key)
+		val, err := txn.us.GetMemBuffer().Get(ctx, key)
 		if kv.IsErrNotFound(err) {
 			shrinkKeys = append(shrinkKeys, key)
 			continue
@@ -98,7 +98,7 @@ func (txn *Transaction) BatchGet(keys []key.Key) (map[string][]byte, error) {
 			bufferValues[i] = val
 		}
 	}
-	storageValues, err := txn.snapshot.BatchGet(shrinkKeys)
+	storageValues, err := txn.snapshot.BatchGet(ctx, shrinkKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -125,23 +125,23 @@ func (txn *Transaction) String() string {
 // If such entry is not found, it returns an invalid Iterator with no error.
 // It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 // The Iterator must be closed after use.
-func (txn *Transaction) Iter(k key.Key, upperBound key.Key) (kv.Iterator, error) {
+func (txn *Transaction) Iter(ctx context.Context, k key.Key, upperBound key.Key) (kv.Iterator, error) {
 	metrics.TxnCmdCounter.WithLabelValues("seek").Inc()
 	start := time.Now()
 	defer func() { metrics.TxnCmdHistogram.WithLabelValues("seek").Observe(time.Since(start).Seconds()) }()
 
-	return txn.us.Iter(k, upperBound)
+	return txn.us.Iter(ctx, k, upperBound)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (txn *Transaction) IterReverse(k key.Key) (kv.Iterator, error) {
+func (txn *Transaction) IterReverse(ctx context.Context, k key.Key) (kv.Iterator, error) {
 	metrics.TxnCmdCounter.WithLabelValues("seek_reverse").Inc()
 	start := time.Now()
 	defer func() {
 		metrics.TxnCmdHistogram.WithLabelValues("seek_reverse").Observe(time.Since(start).Seconds())
 	}()
 
-	return txn.us.IterReverse(k)
+	return txn.us.IterReverse(ctx, k)
 }
 
 // IsReadOnly returns if there are pending key-value to commit in the transaction.

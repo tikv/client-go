@@ -41,7 +41,7 @@ var (
 // Init initializes information.
 func initStore() {
 	var err error
-	client, err = txnkv.NewClient([]string{*pdAddr}, config.Default())
+	client, err = txnkv.NewClient(context.TODO(), []string{*pdAddr}, config.Default())
 	if err != nil {
 		panic(err)
 	}
@@ -49,7 +49,7 @@ func initStore() {
 
 // key1 val1 key2 val2 ...
 func puts(args ...[]byte) error {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return err
 	}
@@ -65,11 +65,11 @@ func puts(args ...[]byte) error {
 }
 
 func get(k []byte) (KV, error) {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return KV{}, err
 	}
-	v, err := tx.Get(k)
+	v, err := tx.Get(context.TODO(), k)
 	if err != nil {
 		return KV{}, err
 	}
@@ -77,7 +77,7 @@ func get(k []byte) (KV, error) {
 }
 
 func dels(keys ...[]byte) error {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return err
 	}
@@ -91,11 +91,11 @@ func dels(keys ...[]byte) error {
 }
 
 func scan(keyPrefix []byte, limit int) ([]KV, error) {
-	tx, err := client.Begin()
+	tx, err := client.Begin(context.TODO())
 	if err != nil {
 		return nil, err
 	}
-	it, err := tx.Iter(key.Key(keyPrefix), nil)
+	it, err := tx.Iter(context.TODO(), key.Key(keyPrefix), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func scan(keyPrefix []byte, limit int) ([]KV, error) {
 	for it.Valid() && limit > 0 {
 		ret = append(ret, KV{K: it.Key()[:], V: it.Value()[:]})
 		limit--
-		it.Next()
+		it.Next(context.TODO())
 	}
 	return ret, nil
 }
