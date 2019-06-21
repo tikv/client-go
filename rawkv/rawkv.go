@@ -44,7 +44,7 @@ type Client struct {
 }
 
 // NewClient creates a client with PD cluster addrs.
-func NewClient(pdAddrs []string, conf config.Config) (*Client, error) {
+func NewClient(ctx context.Context, pdAddrs []string, conf config.Config) (*Client, error) {
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
 		CAPath:   conf.RPC.Security.SSLCA,
 		CertPath: conf.RPC.Security.SSLCert,
@@ -54,7 +54,7 @@ func NewClient(pdAddrs []string, conf config.Config) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		clusterID:   pdCli.GetClusterID(context.TODO()),
+		clusterID:   pdCli.GetClusterID(ctx),
 		conf:        &conf,
 		regionCache: locate.NewRegionCache(pdCli, &conf.RegionCache),
 		pdClient:    pdCli,
@@ -74,7 +74,7 @@ func (c *Client) ClusterID() uint64 {
 }
 
 // Get queries value with the key. When the key does not exist, it returns `nil, nil`.
-func (c *Client) Get(key []byte) ([]byte, error) {
+func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
 
@@ -84,7 +84,7 @@ func (c *Client) Get(key []byte) ([]byte, error) {
 			Key: key,
 		},
 	}
-	resp, _, err := c.sendReq(key, req)
+	resp, _, err := c.sendReq(ctx, key, req)
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +102,11 @@ func (c *Client) Get(key []byte) ([]byte, error) {
 }
 
 // BatchGet queries values with the keys.
-func (c *Client) BatchGet(keys [][]byte) ([][]byte, error) {
+func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds()) }()
 
-	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
+	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
 	resp, err := c.sendBatchReq(bo, keys, rpc.CmdRawBatchGet)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func (c *Client) BatchGet(keys [][]byte) ([][]byte, error) {
 }
 
 // Put stores a key-value pair to TiKV.
-func (c *Client) Put(key, value []byte) error {
+func (c *Client) Put(ctx context.Context, key, value []byte) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("put").Observe(time.Since(start).Seconds()) }()
 	metrics.RawkvSizeHistogram.WithLabelValues("key").Observe(float64(len(key)))
@@ -147,7 +147,7 @@ func (c *Client) Put(key, value []byte) error {
 			Value: value,
 		},
 	}
-	resp, _, err := c.sendReq(key, req)
+	resp, _, err := c.sendReq(ctx, key, req)
 	if err != nil {
 		return err
 	}
@@ -162,7 +162,7 @@ func (c *Client) Put(key, value []byte) error {
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (c *Client) BatchPut(keys, values [][]byte) error {
+func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds()) }()
 
@@ -174,12 +174,12 @@ func (c *Client) BatchPut(keys, values [][]byte) error {
 			return errors.New("empty value is not supported")
 		}
 	}
-	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
+	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
 	return c.sendBatchPut(bo, keys, values)
 }
 
 // Delete deletes a key-value pair from TiKV.
-func (c *Client) Delete(key []byte) error {
+func (c *Client) Delete(ctx context.Context, key []byte) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("delete").Observe(time.Since(start).Seconds()) }()
 
@@ -189,7 +189,7 @@ func (c *Client) Delete(key []byte) error {
 			Key: key,
 		},
 	}
-	resp, _, err := c.sendReq(key, req)
+	resp, _, err := c.sendReq(ctx, key, req)
 	if err != nil {
 		return err
 	}
@@ -204,11 +204,11 @@ func (c *Client) Delete(key []byte) error {
 }
 
 // BatchDelete deletes key-value pairs from TiKV.
-func (c *Client) BatchDelete(keys [][]byte) error {
+func (c *Client) BatchDelete(ctx context.Context, keys [][]byte) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_delete").Observe(time.Since(start).Seconds()) }()
 
-	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
+	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
 	resp, err := c.sendBatchReq(bo, keys, rpc.CmdRawBatchDelete)
 	if err != nil {
 		return err
@@ -224,7 +224,7 @@ func (c *Client) BatchDelete(keys [][]byte) error {
 }
 
 // DeleteRange deletes all key-value pairs in a range from TiKV
-func (c *Client) DeleteRange(startKey []byte, endKey []byte) error {
+func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte) error {
 	start := time.Now()
 	var err error
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("delete_range").Observe(time.Since(start).Seconds()) }()
@@ -233,7 +233,7 @@ func (c *Client) DeleteRange(startKey []byte, endKey []byte) error {
 	for !bytes.Equal(startKey, endKey) {
 		var resp *rpc.Response
 		var actualEndKey []byte
-		resp, actualEndKey, err = c.sendDeleteRangeReq(startKey, endKey)
+		resp, actualEndKey, err = c.sendDeleteRangeReq(ctx, startKey, endKey)
 		if err != nil {
 			return err
 		}
@@ -255,7 +255,7 @@ func (c *Client) DeleteRange(startKey []byte, endKey []byte) error {
 // If you want to exclude the startKey or include the endKey, append a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
 // `Scan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
-func (c *Client) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("scan").Observe(time.Since(start).Seconds()) }()
 
@@ -272,7 +272,7 @@ func (c *Client) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values
 				Limit:    uint32(limit - len(keys)),
 			},
 		}
-		resp, loc, err := c.sendReq(startKey, req)
+		resp, loc, err := c.sendReq(ctx, startKey, req)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -299,7 +299,7 @@ func (c *Client) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values
 // (endKey, startKey], you can write:
 // `ReverseScan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
 // It doesn't support Scanning from "", because locating the last Region is not yet implemented.
-func (c *Client) ReverseScan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("reverse_scan").Observe(time.Since(start).Seconds()) }()
 
@@ -317,7 +317,7 @@ func (c *Client) ReverseScan(startKey, endKey []byte, limit int) (keys [][]byte,
 				Reverse:  true,
 			},
 		}
-		resp, loc, err := c.sendReq(startKey, req)
+		resp, loc, err := c.sendReq(ctx, startKey, req)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -337,8 +337,8 @@ func (c *Client) ReverseScan(startKey, endKey []byte, limit int) (keys [][]byte,
 	return
 }
 
-func (c *Client) sendReq(key []byte, req *rpc.Request) (*rpc.Response, *locate.KeyLocation, error) {
-	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
+func (c *Client) sendReq(ctx context.Context, key []byte, req *rpc.Request) (*rpc.Response, *locate.KeyLocation, error) {
+	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	for {
 		loc, err := c.regionCache.LocateKey(bo, key)
@@ -477,8 +477,8 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch batch, cmdType rpc.CmdTyp
 // If the given range spans over more than one regions, the actual endKey is the end of the first region.
 // We can't use sendReq directly, because we need to know the end of the region before we send the request
 // TODO: Is there any better way to avoid duplicating code with func `sendReq` ?
-func (c *Client) sendDeleteRangeReq(startKey []byte, endKey []byte) (*rpc.Response, []byte, error) {
-	bo := retry.NewBackoffer(context.Background(), retry.RawkvMaxBackoff)
+func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey []byte) (*rpc.Response, []byte, error) {
+	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
 	sender := rpc.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	for {
 		loc, err := c.regionCache.LocateKey(bo, startKey)

@@ -40,7 +40,7 @@ type Scanner struct {
 	eof          bool
 }
 
-func newScanner(snapshot *TiKVSnapshot, startKey []byte, endKey []byte, batchSize int) (*Scanner, error) {
+func newScanner(ctx context.Context, snapshot *TiKVSnapshot, startKey []byte, endKey []byte, batchSize int) (*Scanner, error) {
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
 		batchSize = snapshot.conf.Txn.ScanBatchSize
@@ -53,7 +53,7 @@ func newScanner(snapshot *TiKVSnapshot, startKey []byte, endKey []byte, batchSiz
 		nextStartKey: startKey,
 		endKey:       endKey,
 	}
-	err := scanner.Next()
+	err := scanner.Next(ctx)
 	if kv.IsErrNotFound(err) {
 		return scanner, nil
 	}
@@ -82,8 +82,8 @@ func (s *Scanner) Value() []byte {
 }
 
 // Next return next element.
-func (s *Scanner) Next() error {
-	bo := retry.NewBackoffer(context.Background(), retry.ScannerNextMaxBackoff)
+func (s *Scanner) Next(ctx context.Context) error {
+	bo := retry.NewBackoffer(ctx, retry.ScannerNextMaxBackoff)
 	if !s.valid {
 		return errors.New("scanner iterator is invalid")
 	}

@@ -137,35 +137,35 @@ func P(p int, f func()) {
 
 func benchRaw() {
 	var err error
-	rawCli, err = rawkv.NewClient(strings.Split(*pdAddr, ","), newConfig())
+	rawCli, err = rawkv.NewClient(context.TODO(), strings.Split(*pdAddr, ","), newConfig())
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	P(*rawGetP, func() { rawCli.Get(k()) })
-	P(*rawBatchGetP, func() { rawCli.BatchGet(nk(*rawBatchGetN)) })
-	P(*rawPutP, func() { rawCli.Put(k(), v()) })
-	P(*rawBatchPutP, func() { rawCli.BatchPut(nk(*rawBatchPutN), nv(*rawBatchPutN)) })
-	P(*rawDeleteP, func() { rawCli.Delete(k()) })
-	P(*rawBatchDeleteP, func() { rawCli.BatchDelete(nk(*rawBatchDeleteN)) })
-	P(*rawScanP, func() { rawCli.Scan(k(), nil, *rawScanL) })
+	P(*rawGetP, func() { rawCli.Get(context.TODO(), k()) })
+	P(*rawBatchGetP, func() { rawCli.BatchGet(context.TODO(), nk(*rawBatchGetN)) })
+	P(*rawPutP, func() { rawCli.Put(context.TODO(), k(), v()) })
+	P(*rawBatchPutP, func() { rawCli.BatchPut(context.TODO(), nk(*rawBatchPutN), nv(*rawBatchPutN)) })
+	P(*rawDeleteP, func() { rawCli.Delete(context.TODO(), k()) })
+	P(*rawBatchDeleteP, func() { rawCli.BatchDelete(context.TODO(), nk(*rawBatchDeleteN)) })
+	P(*rawScanP, func() { rawCli.Scan(context.TODO(), k(), nil, *rawScanL) })
 }
 
 func benchTxn() {
 	var err error
-	txnCli, err = txnkv.NewClient(strings.Split(*pdAddr, ","), newConfig())
+	txnCli, err = txnkv.NewClient(context.TODO(), strings.Split(*pdAddr, ","), newConfig())
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	t := func(getN, putN, delN, scanN, scanL int) func() {
 		return func() {
-			tx, err := txnCli.Begin()
+			tx, err := txnCli.Begin(context.TODO())
 			if err != nil {
 				return
 			}
 			for i := 0; i < getN; i++ {
-				tx.Get(k())
+				tx.Get(context.TODO(), k())
 			}
 			for i := 0; i < putN; i++ {
 				tx.Set(k(), v())
@@ -174,12 +174,12 @@ func benchTxn() {
 				tx.Delete(k())
 			}
 			for i := 0; i < scanN; i++ {
-				it, err := tx.Iter(k(), nil)
+				it, err := tx.Iter(context.TODO(), k(), nil)
 				if err != nil {
 					continue
 				}
 				for j := 0; j < scanL && it.Valid(); j++ {
-					it.Next()
+					it.Next(context.TODO())
 				}
 				it.Close()
 			}

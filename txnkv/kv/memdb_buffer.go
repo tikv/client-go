@@ -16,6 +16,7 @@
 package kv
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/pingcap/goleveldb/leveldb"
@@ -55,10 +56,10 @@ func NewMemDbBuffer(conf *config.Txn, cap int) MemBuffer {
 }
 
 // Iter creates an Iterator.
-func (m *memDbBuffer) Iter(k key.Key, upperBound key.Key) (Iterator, error) {
+func (m *memDbBuffer) Iter(ctx context.Context, k key.Key, upperBound key.Key) (Iterator, error) {
 	i := &memDbIter{iter: m.db.NewIterator(&util.Range{Start: []byte(k), Limit: []byte(upperBound)}), reverse: false}
 
-	err := i.Next()
+	err := i.Next(ctx)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -69,7 +70,7 @@ func (m *memDbBuffer) SetCap(cap int) {
 
 }
 
-func (m *memDbBuffer) IterReverse(k key.Key) (Iterator, error) {
+func (m *memDbBuffer) IterReverse(ctx context.Context, k key.Key) (Iterator, error) {
 	var i *memDbIter
 	if k == nil {
 		i = &memDbIter{iter: m.db.NewIterator(&util.Range{}), reverse: true}
@@ -81,7 +82,7 @@ func (m *memDbBuffer) IterReverse(k key.Key) (Iterator, error) {
 }
 
 // Get returns the value associated with key.
-func (m *memDbBuffer) Get(k key.Key) ([]byte, error) {
+func (m *memDbBuffer) Get(ctx context.Context, k key.Key) ([]byte, error) {
 	v, err := m.db.Get(k)
 	if err == leveldb.ErrNotFound {
 		return nil, ErrNotExist
@@ -130,7 +131,7 @@ func (m *memDbBuffer) Reset() {
 }
 
 // Next implements the Iterator Next.
-func (i *memDbIter) Next() error {
+func (i *memDbIter) Next(context.Context) error {
 	if i.reverse {
 		i.iter.Prev()
 	} else {
@@ -161,7 +162,7 @@ func (i *memDbIter) Close() {
 
 // WalkMemBuffer iterates all buffered kv pairs in memBuf
 func WalkMemBuffer(memBuf MemBuffer, f func(k key.Key, v []byte) error) error {
-	iter, err := memBuf.Iter(nil, nil)
+	iter, err := memBuf.Iter(context.Background(), nil, nil)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -171,7 +172,7 @@ func WalkMemBuffer(memBuf MemBuffer, f func(k key.Key, v []byte) error) error {
 		if err = f(iter.Key(), iter.Value()); err != nil {
 			return errors.WithStack(err)
 		}
-		err = iter.Next()
+		err = iter.Next(context.Background())
 		if err != nil {
 			return errors.WithStack(err)
 		}

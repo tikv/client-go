@@ -14,7 +14,9 @@
 package httpproxy
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/tikv/client-go/proxy"
@@ -68,4 +70,20 @@ func NewHTTPProxyHandler() http.Handler {
 	})
 
 	return router
+}
+
+var defaultTimeout = 20 * time.Second
+
+func reqContext(vars map[string]string) (context.Context, context.CancelFunc) {
+	ctx := context.Background()
+	if id := vars["id"]; id != "" {
+		ctx = context.WithValue(ctx, proxy.UUIDKey, proxy.UUID(id))
+	}
+
+	d, err := time.ParseDuration(vars["timeout"])
+	if err != nil {
+		d = defaultTimeout
+	}
+
+	return context.WithTimeout(ctx, d)
 }
