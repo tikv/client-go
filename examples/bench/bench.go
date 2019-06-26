@@ -85,21 +85,6 @@ var (
 	txnCli *txnkv.Client
 )
 
-func initClient() {
-	var err error
-	switch *mode {
-	case "raw":
-
-	case "txn":
-
-	default:
-		log.Fatal("unknown mode" + *mode)
-	}
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
 func k() []byte {
 	var t string
 	if *mode == "raw" {
