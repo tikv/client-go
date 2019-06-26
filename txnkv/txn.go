@@ -193,8 +193,10 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 	// }
 
 	start := time.Now()
-	defer func() { metrics.TxnCmdHistogram.WithLabelValues("commit").Observe(time.Since(start).Seconds()) }()
-	defer func() { metrics.TxnHistogram.Observe(time.Since(txn.startTime).Seconds()) }()
+	defer func() {
+		metrics.TxnCmdHistogram.WithLabelValues("commit").Observe(time.Since(start).Seconds())
+		metrics.TxnHistogram.Observe(time.Since(txn.startTime).Seconds())
+	}()
 
 	mutations := make(map[string]*kvrpcpb.Mutation)
 	err := txn.us.WalkBuffer(func(k key.Key, v []byte) error {
@@ -263,8 +265,10 @@ func (txn *Transaction) Rollback() error {
 		return kv.ErrInvalidTxn
 	}
 	start := time.Now()
-	defer func() { metrics.TxnCmdHistogram.WithLabelValues("rollback").Observe(time.Since(start).Seconds()) }()
-	defer func() { metrics.TxnHistogram.Observe(time.Since(txn.startTime).Seconds()) }()
+	defer func() {
+		metrics.TxnCmdHistogram.WithLabelValues("rollback").Observe(time.Since(start).Seconds())
+		metrics.TxnHistogram.Observe(time.Since(txn.startTime).Seconds())
+	}()
 	txn.close()
 	log.Debugf("[kv] Rollback txn %d", txn.startTS)
 
