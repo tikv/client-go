@@ -38,11 +38,11 @@ type Transaction struct {
 	commitTS  uint64
 	valid     bool
 	lockKeys  [][]byte
-
-	setCnt int64
 }
 
 func newTransaction(tikvStore *store.TiKVStore, ts uint64) *Transaction {
+	metrics.TxnCounter.Inc()
+
 	snapshot := tikvStore.GetSnapshot(ts)
 	us := kv.NewUnionStore(&tikvStore.GetConfig().Txn, snapshot)
 	return &Transaction{
@@ -58,7 +58,6 @@ func newTransaction(tikvStore *store.TiKVStore, ts uint64) *Transaction {
 
 // Get implements transaction interface.
 func (txn *Transaction) Get(ctx context.Context, k key.Key) ([]byte, error) {
-	metrics.TxnCmdCounter.WithLabelValues("get").Inc()
 	start := time.Now()
 	defer func() { metrics.TxnCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
 
@@ -80,6 +79,9 @@ func (txn *Transaction) Get(ctx context.Context, k key.Key) ([]byte, error) {
 
 // BatchGet gets a batch of values from TiKV server.
 func (txn *Transaction) BatchGet(ctx context.Context, keys []key.Key) (map[string][]byte, error) {
+	start := time.Now()
+	defer func() { metrics.TxnCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds()) }()
+
 	if txn.IsReadOnly() {
 		return txn.snapshot.BatchGet(ctx, keys)
 	}
@@ -113,7 +115,8 @@ func (txn *Transaction) BatchGet(ctx context.Context, keys []key.Key) (map[strin
 
 // Set sets the value for key k as v into kv store.
 func (txn *Transaction) Set(k key.Key, v []byte) error {
-	txn.setCnt++
+	start := time.Now()
+	defer func() { metrics.TxnCmdHistogram.WithLabelValues("set").Observe(time.Since(start).Seconds()) }()
 	return txn.us.Set(k, v)
 }
 
@@ -126,21 +129,16 @@ func (txn *Transaction) String() string {
 // It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 // The Iterator must be closed after use.
 func (txn *Transaction) Iter(ctx context.Context, k key.Key, upperBound key.Key) (kv.Iterator, error) {
-	metrics.TxnCmdCounter.WithLabelValues("seek").Inc()
 	start := time.Now()
-	defer func() { metrics.TxnCmdHistogram.WithLabelValues("seek").Observe(time.Since(start).Seconds()) }()
+	defer func() { metrics.TxnCmdHistogram.WithLabelValues("iter").Observe(time.Since(start).Seconds()) }()
 
 	return txn.us.Iter(ctx, k, upperBound)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 func (txn *Transaction) IterReverse(ctx context.Context, k key.Key) (kv.Iterator, error) {
-	metrics.TxnCmdCounter.WithLabelValues("seek_reverse").Inc()
 	start := time.Now()
-	defer func() {
-		metrics.TxnCmdHistogram.WithLabelValues("seek_reverse").Observe(time.Since(start).Seconds())
-	}()
-
+	defer func() { metrics.TxnCmdHistogram.WithLabelValues("iter_reverse").Observe(time.Since(start).Seconds()) }()
 	return txn.us.IterReverse(ctx, k)
 }
 
@@ -151,7 +149,8 @@ func (txn *Transaction) IsReadOnly() bool {
 
 // Delete removes the entry for key k from kv store.
 func (txn *Transaction) Delete(k key.Key) error {
-	metrics.TxnCmdCounter.WithLabelValues("delete").Inc()
+	start := time.Now()
+	defer func() { metrics.TxnCmdHistogram.WithLabelValues("delete").Observe(time.Since(start).Seconds()) }()
 	return txn.us.Delete(k)
 }
 
@@ -193,10 +192,11 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 	//	return errors.New("mock commit error")
 	// }
 
-	metrics.TxnCmdCounter.WithLabelValues("set").Add(float64(txn.setCnt))
-	metrics.TxnCmdCounter.WithLabelValues("commit").Inc()
 	start := time.Now()
-	defer func() { metrics.TxnCmdHistogram.WithLabelValues("commit").Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		metrics.TxnCmdHistogram.WithLabelValues("commit").Observe(time.Since(start).Seconds())
+		metrics.TxnHistogram.Observe(time.Since(txn.startTime).Seconds())
+	}()
 
 	mutations := make(map[string]*kvrpcpb.Mutation)
 	err := txn.us.WalkBuffer(func(k key.Key, v []byte) error {
@@ -264,16 +264,21 @@ func (txn *Transaction) Rollback() error {
 	if !txn.valid {
 		return kv.ErrInvalidTxn
 	}
+	start := time.Now()
+	defer func() {
+		metrics.TxnCmdHistogram.WithLabelValues("rollback").Observe(time.Since(start).Seconds())
+		metrics.TxnHistogram.Observe(time.Since(txn.startTime).Seconds())
+	}()
 	txn.close()
 	log.Debugf("[kv] Rollback txn %d", txn.startTS)
-	metrics.TxnCmdCounter.WithLabelValues("rollback").Inc()
 
 	return nil
 }
 
 // LockKeys tries to lock the entries with the keys in KV store.
 func (txn *Transaction) LockKeys(keys ...key.Key) error {
-	metrics.TxnCmdCounter.WithLabelValues("lock_keys").Inc()
+	start := time.Now()
+	defer func() { metrics.TxnCmdHistogram.WithLabelValues("lock_keys").Observe(time.Since(start).Seconds()) }()
 	for _, key := range keys {
 		txn.lockKeys = append(txn.lockKeys, key)
 	}

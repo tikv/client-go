@@ -104,9 +104,7 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 // BatchGet queries values with the keys.
 func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) {
 	start := time.Now()
-	defer func() {
-		metrics.RawkvCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds())
-	}()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds()) }()
 
 	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
 	resp, err := c.sendBatchReq(bo, keys, rpc.CmdRawBatchGet)
@@ -166,9 +164,7 @@ func (c *Client) Put(ctx context.Context, key, value []byte) error {
 // BatchPut stores key-value pairs to TiKV.
 func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
 	start := time.Now()
-	defer func() {
-		metrics.RawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds())
-	}()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds()) }()
 
 	if len(keys) != len(values) {
 		return errors.New("the len of keys is not equal to the len of values")
@@ -210,9 +206,7 @@ func (c *Client) Delete(ctx context.Context, key []byte) error {
 // BatchDelete deletes key-value pairs from TiKV.
 func (c *Client) BatchDelete(ctx context.Context, keys [][]byte) error {
 	start := time.Now()
-	defer func() {
-		metrics.RawkvCmdHistogram.WithLabelValues("batch_delete").Observe(time.Since(start).Seconds())
-	}()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_delete").Observe(time.Since(start).Seconds()) }()
 
 	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
 	resp, err := c.sendBatchReq(bo, keys, rpc.CmdRawBatchDelete)
@@ -233,13 +227,7 @@ func (c *Client) BatchDelete(ctx context.Context, keys [][]byte) error {
 func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte) error {
 	start := time.Now()
 	var err error
-	defer func() {
-		var label = "delete_range"
-		if err != nil {
-			label += "_error"
-		}
-		metrics.RawkvCmdHistogram.WithLabelValues(label).Observe(time.Since(start).Seconds())
-	}()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("delete_range").Observe(time.Since(start).Seconds()) }()
 
 	// Process each affected region respectively
 	for !bytes.Equal(startKey, endKey) {
@@ -269,7 +257,7 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 // `Scan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
 func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
-	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("raw_scan").Observe(time.Since(start).Seconds()) }()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("scan").Observe(time.Since(start).Seconds()) }()
 
 	if limit > c.conf.Raw.MaxScanLimit {
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
@@ -313,9 +301,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 // It doesn't support Scanning from "", because locating the last Region is not yet implemented.
 func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
-	defer func() {
-		metrics.RawkvCmdHistogram.WithLabelValues("raw_reverse_scan").Observe(time.Since(start).Seconds())
-	}()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("reverse_scan").Observe(time.Since(start).Seconds()) }()
 
 	if limit > c.conf.Raw.MaxScanLimit {
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
