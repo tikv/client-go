@@ -16,7 +16,6 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 // Client metrics.
-// TODO: Create new grafana page for the metrics.
 var (
 	TxnCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -26,6 +25,16 @@ var (
 			Help:      "Counter of created txns.",
 		})
 
+	TxnHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tikv",
+			Subsystem: "client_go",
+			Name:      "txn_durations_seconds",
+			Help:      "Bucketed histogram of processing txn",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 20),
+		},
+	)
+
 	SnapshotCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "tikv",
@@ -33,14 +42,6 @@ var (
 			Name:      "snapshot_total",
 			Help:      "Counter of snapshots.",
 		})
-
-	TxnCmdCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "tikv",
-			Subsystem: "client_go",
-			Name:      "txn_cmd_total",
-			Help:      "Counter of txn commands.",
-		}, []string{"type"})
 
 	TxnCmdHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -68,15 +69,6 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 20),
 		})
 
-	ConnPoolHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "tikv",
-			Subsystem: "client_go",
-			Name:      "get_conn_seconds",
-			Help:      "Bucketed histogram of taking conn from conn pool.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 20),
-		}, []string{"type"})
-
 	SendReqHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "tikv",
@@ -85,23 +77,6 @@ var (
 			Help:      "Bucketed histogram of sending request duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 20),
 		}, []string{"type", "store"})
-
-	CoprocessorCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "tikv",
-			Subsystem: "client_go",
-			Name:      "cop_actions_total",
-			Help:      "Counter of coprocessor actions.",
-		}, []string{"type"})
-
-	CoprocessorHistogram = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "tikv",
-			Subsystem: "client_go",
-			Name:      "cop_duration_seconds",
-			Help:      "Run duration of a single coprocessor task, includes backoff time.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 20),
-		})
 
 	LockResolverCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -238,13 +213,11 @@ func RetLabel(err error) string {
 func init() {
 	prometheus.MustRegister(TxnCounter)
 	prometheus.MustRegister(SnapshotCounter)
+	prometheus.MustRegister(TxnHistogram)
 	prometheus.MustRegister(TxnCmdHistogram)
 	prometheus.MustRegister(BackoffCounter)
 	prometheus.MustRegister(BackoffHistogram)
 	prometheus.MustRegister(SendReqHistogram)
-	prometheus.MustRegister(ConnPoolHistogram)
-	prometheus.MustRegister(CoprocessorCounter)
-	prometheus.MustRegister(CoprocessorHistogram)
 	prometheus.MustRegister(LockResolverCounter)
 	prometheus.MustRegister(RegionErrorCounter)
 	prometheus.MustRegister(TxnWriteKVCountHistogram)

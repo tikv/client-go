@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 	"unsafe"
 
 	pb "github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -45,6 +44,8 @@ type TiKVSnapshot struct {
 }
 
 func newTiKVSnapshot(store *TiKVStore, ts uint64) *TiKVSnapshot {
+	metrics.SnapshotCounter.Inc()
+
 	return &TiKVSnapshot{
 		store:    store,
 		ts:       ts,
@@ -60,9 +61,6 @@ func (s *TiKVSnapshot) BatchGet(ctx context.Context, keys []key.Key) (map[string
 	if len(keys) == 0 {
 		return m, nil
 	}
-	metrics.TxnCmdCounter.WithLabelValues("batch_get").Inc()
-	start := time.Now()
-	defer func() { metrics.TxnCmdHistogram.WithLabelValues("batch_get").Observe(time.Since(start).Seconds()) }()
 
 	// We want [][]byte instead of []key.Key, use some magic to save memory.
 	bytesKeys := *(*[][]byte)(unsafe.Pointer(&keys))
