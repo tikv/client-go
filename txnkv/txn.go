@@ -204,6 +204,9 @@ func (txn *Transaction) Commit(ctx context.Context) error {
 		if c := txn.us.LookupConditionPair(k); c != nil && c.ShouldNotExist() {
 			op = kvrpcpb.Op_Insert
 		}
+		if len(v) == 0 {
+			op = kvrpcpb.Op_Del
+		}
 		mutations[string(k)] = &kvrpcpb.Mutation{
 			Op:    op,
 			Key:   k,
