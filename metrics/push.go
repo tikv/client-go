@@ -41,12 +41,7 @@ func PushMetrics(ctx context.Context, addr string, interval time.Duration, job, 
 		case <-ticker.C:
 		}
 
-		err := push.AddFromGatherer(
-			job,
-			map[string]string{"instance": instance},
-			addr,
-			prometheus.DefaultGatherer,
-		)
+		err := push.New(addr, job).Grouping("instance", instance).Gatherer(prometheus.DefaultGatherer).Push()
 		if err != nil {
 			log.Errorf("cannot push metrics to prometheus pushgateway: %v", err)
 		}
