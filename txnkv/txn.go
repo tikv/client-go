@@ -56,7 +56,8 @@ func newTransaction(tikvStore *store.TiKVStore, ts uint64) *Transaction {
 	}
 }
 
-// Get implements transaction interface. kv.IsErrNotFound can be used to check the error is a not found error.
+// Get implements transaction interface. 
+// kv.IsErrNotFound can be used to check the error is a not found error.
 func (txn *Transaction) Get(ctx context.Context, k key.Key) ([]byte, error) {
 	start := time.Now()
 	defer func() { metrics.TxnCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
