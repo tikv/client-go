@@ -26,6 +26,7 @@ import (
 
 type txnkvHandler struct {
 	p proxy.TxnKVProxy
+	c *config.Config
 }
 
 // TxnRequest is the structure of a txnkv request that the http proxy accepts.
@@ -53,7 +54,13 @@ type TxnResponse struct {
 }
 
 func (h txnkvHandler) New(ctx context.Context, r *TxnRequest) (*TxnResponse, int, error) {
-	id, err := h.p.New(ctx, r.PDAddrs, config.Default())
+	var id proxy.UUID
+	var err error
+	if h.c == nil {
+		id, err = h.p.New(ctx, r.PDAddrs, config.Default())
+	} else {
+		id, err = h.p.New(ctx, r.PDAddrs, *h.c)
+	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

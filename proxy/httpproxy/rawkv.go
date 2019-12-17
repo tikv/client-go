@@ -26,6 +26,7 @@ import (
 
 type rawkvHandler struct {
 	p proxy.RawKVProxy
+	c *config.Config
 }
 
 // RawRequest is the structure of a rawkv request that the http proxy accepts.
@@ -49,7 +50,13 @@ type RawResponse struct {
 }
 
 func (h rawkvHandler) New(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
-	id, err := h.p.New(ctx, r.PDAddrs, config.Default())
+	var id proxy.UUID
+	var err error
+	if h.c == nil {
+		id, err = h.p.New(ctx, r.PDAddrs, config.Default())
+	} else {
+		id, err = h.p.New(ctx, r.PDAddrs, *h.c)
+	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
