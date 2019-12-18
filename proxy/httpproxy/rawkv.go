@@ -50,13 +50,7 @@ type RawResponse struct {
 }
 
 func (h rawkvHandler) New(ctx context.Context, r *RawRequest) (*RawResponse, int, error) {
-	var id proxy.UUID
-	var err error
-	if h.c == nil {
-		id, err = h.p.New(ctx, r.PDAddrs, config.Default())
-	} else {
-		id, err = h.p.New(ctx, r.PDAddrs, *h.c)
-	}
+	id, err := h.p.New(ctx, r.PDAddrs, h.getConfig())
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -174,4 +168,11 @@ func (h rawkvHandler) handlerFunc(f func(context.Context, *RawRequest) (*RawResp
 func sendError(w http.ResponseWriter, err error, status int) {
 	w.WriteHeader(status)
 	w.Write([]byte(err.Error()))
+}
+
+func (h rawkvHandler) getConfig() config.Config {
+	if h.c == nil {
+		return config.Default()
+	}
+	return *h.c
 }

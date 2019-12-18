@@ -20,5 +20,7 @@ import (
 )
 
 func main() {
+	h :=  httpproxy.NewHTTPProxyHandlerWithConfig()
+	h.Config.RPC.EnableOpenTracing = true
 	http.ListenAndServe(":8080", httpproxy.NewHTTPProxyHandlerWithConfig())
 }

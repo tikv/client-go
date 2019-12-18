@@ -54,13 +54,7 @@ type TxnResponse struct {
 }
 
 func (h txnkvHandler) New(ctx context.Context, r *TxnRequest) (*TxnResponse, int, error) {
-	var id proxy.UUID
-	var err error
-	if h.c == nil {
-		id, err = h.p.New(ctx, r.PDAddrs, config.Default())
-	} else {
-		id, err = h.p.New(ctx, r.PDAddrs, *h.c)
-	}
+	id, err := h.p.New(ctx, r.PDAddrs, h.getConfig())
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -275,4 +269,11 @@ func (h txnkvHandler) handlerFunc(f func(context.Context, *TxnRequest) (*TxnResp
 		w.WriteHeader(status)
 		w.Write(data)
 	}
+}
+
+func (h txnkvHandler) getConfig() config.Config {
+	if h.c == nil {
+		return config.Default()
+	}
+	return *h.c
 }
