@@ -19,13 +19,31 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/proxy"
 )
 
+type HandlerWithConfig struct {
+	http.Handler
+	Config *config.Config
+}
+
+// NewHTTPProxyHandlerWithConfig creates an http.Handler with the config pointer, users can set the config through it.
+func NewHTTPProxyHandlerWithConfig() HandlerWithConfig {
+	h, c := newHTTPProxyHandler()
+	return HandlerWithConfig{h, c}
+}
+
 // NewHTTPProxyHandler creates an http.Handler that serves as a TiKV client proxy.
 func NewHTTPProxyHandler() http.Handler {
+	h, _ := newHTTPProxyHandler()
+	return h
+}
+
+func newHTTPProxyHandler() (http.Handler, *config.Config) {
 	router := mux.NewRouter()
-	rawkv := rawkvHandler{p: proxy.NewRaw()}
+	cd := config.Default()
+	rawkv := rawkvHandler{p: proxy.NewRaw(), c: &cd}
 
 	router.HandleFunc("/rawkv/client/new", rawkv.handlerFunc(rawkv.New))
 	router.HandleFunc("/rawkv/client/{id}/close", rawkv.handlerFunc(rawkv.Close))
@@ -39,7 +57,7 @@ func NewHTTPProxyHandler() http.Handler {
 	router.HandleFunc("/rawkv/client/{id}/scan", rawkv.handlerFunc(rawkv.Scan))
 	router.HandleFunc("/rawkv/client/{id}/reverse-scan", rawkv.handlerFunc(rawkv.ReverseScan))
 
-	txnkv := txnkvHandler{p: proxy.NewTxn()}
+	txnkv := txnkvHandler{p: proxy.NewTxn(), c: &cd}
 	router.HandleFunc("/txnkv/client/new", txnkv.handlerFunc(txnkv.New))
 	router.HandleFunc("/txnkv/client/{id}/close", txnkv.handlerFunc(txnkv.Close))
 	router.HandleFunc("/txnkv/client/{id}/begin", txnkv.handlerFunc(txnkv.Begin))
@@ -69,7 +87,7 @@ func NewHTTPProxyHandler() http.Handler {
 		w.Write([]byte("not implemented"))
 	})
 
-	return router
+	return router, &cd
 }
 
 var defaultTimeout = 20 * time.Second
