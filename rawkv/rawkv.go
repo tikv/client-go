@@ -288,6 +288,10 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 		if len(startKey) == 0 {
 			break
 		}
+
+		if len(endKey) > 0 && bytes.Compare(startKey, endKey) > 0 {
+			break
+		}
 	}
 	return
 }
@@ -333,6 +337,11 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		if len(startKey) == 0 {
 			break
 		}
+
+		if len(endKey) > 0 && bytes.Compare(startKey, endKey) < 0 {
+			break
+		}
+
 	}
 	return
 }
