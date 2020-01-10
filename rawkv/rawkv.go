@@ -263,7 +263,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
-	for len(keys) < limit {
+	for len(keys) < limit && (len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0) {
 		req := &rpc.Request{
 			Type: rpc.CmdRawScan,
 			RawScan: &kvrpcpb.RawScanRequest{
@@ -288,10 +288,6 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 		if len(startKey) == 0 {
 			break
 		}
-
-		if len(endKey) > 0 && bytes.Compare(startKey, endKey) > 0 {
-			break
-		}
 	}
 	return
 }
@@ -311,7 +307,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
-	for len(keys) < limit {
+	for len(keys) < limit && bytes.Compare(startKey, endKey) > 0 {
 		req := &rpc.Request{
 			Type: rpc.CmdRawScan,
 			RawScan: &kvrpcpb.RawScanRequest{
@@ -337,11 +333,6 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		if len(startKey) == 0 {
 			break
 		}
-
-		if len(endKey) > 0 && bytes.Compare(startKey, endKey) < 0 {
-			break
-		}
-
 	}
 	return
 }
