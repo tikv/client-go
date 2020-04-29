@@ -23,6 +23,9 @@ type Raw struct {
 
 	// BatchPairCount is the maximum limit for rawkv each batch get/delete request.
 	BatchPairCount int
+
+	// Return only keys when scan
+	KeyOnlyScan bool
 }
 
 // DefaultRaw returns default rawkv configuration.
@@ -31,5 +34,6 @@ func DefaultRaw() Raw {
 		MaxScanLimit:    10240,
 		MaxBatchPutSize: 16 * 1024,
 		BatchPairCount:  512,
+		KeyOnlyScan:     false,
 	}
 }

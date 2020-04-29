@@ -270,6 +270,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 				StartKey: startKey,
 				EndKey:   endKey,
 				Limit:    uint32(limit - len(keys)),
+				KeyOnly:  c.conf.Raw.KeyOnlyScan,
 			},
 		}
 		resp, loc, err := c.sendReq(ctx, startKey, req)
@@ -315,6 +316,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 				EndKey:   endKey,
 				Limit:    uint32(limit - len(keys)),
 				Reverse:  true,
+				KeyOnly:  c.conf.Raw.KeyOnlyScan,
 			},
 		}
 		resp, loc, err := c.sendReq(ctx, startKey, req)
