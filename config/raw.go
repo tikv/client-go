@@ -24,7 +24,7 @@ type Raw struct {
 	// BatchPairCount is the maximum limit for rawkv each batch get/delete request.
 	BatchPairCount int
 
-	// Return only keys when scan
+	// If true, the Server will only return keys when using Scan function
 	KeyOnlyScan bool
 }
 
