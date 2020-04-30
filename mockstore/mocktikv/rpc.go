@@ -476,6 +476,16 @@ func (h *rpcHandler) handleKvRawScan(req *kvrpcpb.RawScanRequest) *kvrpcpb.RawSc
 		endKey = req.EndKey
 	}
 	pairs := rawKV.RawScan(req.GetStartKey(), endKey, int(req.GetLimit()))
+	if req.KeyOnly {
+		//filter values when
+		for i := range pairs {
+			pairs[i] = Pair{
+				Key:   pairs[i].Key,
+				Value: nil,
+				Err:   nil,
+			}
+		}
+	}
 	return &kvrpcpb.RawScanResponse{
 		Kvs: convertToPbPairs(pairs),
 	}

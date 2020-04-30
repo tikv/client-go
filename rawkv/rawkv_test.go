@@ -121,6 +121,16 @@ func (s *testRawKVSuite) mustScan(c *C, startKey string, limit int, expect ...st
 	}
 }
 
+func (s *testRawKVSuite) mustScanKeyOnly(c *C, startKey string, limit int, expect ...string) {
+	keys, values, err := s.client.Scan(context.TODO(), []byte(startKey), nil, limit)
+	c.Assert(err, IsNil)
+	c.Assert(len(keys), Equals, len(expect))
+	for i := range keys {
+		c.Assert(string(keys[i]), Equals, expect[i])
+		c.Assert(values[i], IsNil)
+	}
+}
+
 func (s *testRawKVSuite) mustScanRange(c *C, startKey string, endKey string, limit int, expect ...string) {
 	keys, values, err := s.client.Scan(context.TODO(), []byte(startKey), []byte(endKey), limit)
 	c.Assert(err, IsNil)
@@ -138,6 +148,16 @@ func (s *testRawKVSuite) mustReverseScan(c *C, startKey []byte, limit int, expec
 	for i := range keys {
 		c.Assert(string(keys[i]), Equals, expect[i*2])
 		c.Assert(string(values[i]), Equals, expect[i*2+1])
+	}
+}
+
+func (s *testRawKVSuite) mustReverseScanKeyOnly(c *C, startKey string, limit int, expect ...string) {
+	keys, values, err := s.client.ReverseScan(context.TODO(), []byte(startKey), nil, limit)
+	c.Assert(err, IsNil)
+	c.Assert(len(keys), Equals, len(expect))
+	for i := range keys {
+		c.Assert(string(keys[i]), Equals, expect[i])
+		c.Assert(values[i], IsNil)
 	}
 }
 
@@ -259,6 +279,35 @@ func (s *testRawKVSuite) TestScan(c *C) {
 	err = s.split(c, "k2", "k5")
 	c.Assert(err, IsNil)
 	check()
+}
+
+func (s *testRawKVSuite) TestScanOnly(c *C) {
+	s.client.conf.Raw.KeyOnlyScan = true //key only
+	defer func() { s.client.conf.Raw.KeyOnlyScan = false }()
+
+	s.mustPut(c, []byte("k1"), []byte("v1"))
+	s.mustPut(c, []byte("k3"), []byte("v3"))
+	s.mustPut(c, []byte("k5"), []byte("v5"))
+	s.mustPut(c, []byte("k7"), []byte("v7"))
+
+	check := func() {
+		s.mustScanKeyOnly(c, "", 1, "k1")
+		s.mustScanKeyOnly(c, "k1", 2, "k1", "k3")
+		s.mustScanKeyOnly(c, "", 10, "k1", "k3", "k5", "k7")
+		s.mustScanKeyOnly(c, "k2", 2, "k3", "k5")
+		s.mustScanKeyOnly(c, "k2", 3, "k3", "k5", "k7")
+	}
+
+	check()
+
+	err := s.split(c, "k", "k2")
+	c.Assert(err, IsNil)
+	check()
+
+	err = s.split(c, "k2", "k5")
+	c.Assert(err, IsNil)
+	check()
+
 }
 
 func (s *testRawKVSuite) TestDeleteRange(c *C) {
