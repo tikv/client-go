@@ -111,6 +111,18 @@ func (s *testRawKVSuite) mustBatchDelete(c *C, keys [][]byte) {
 	c.Assert(err, IsNil)
 }
 
+func (s *testRawKVSuite) mustScanKeyOnly(c *C, startKey string, limit int, expect ...string) {
+	option := DefaultScanOption()
+	option.KeyOnly = true
+	keys, values, err := s.client.Scan(context.TODO(), []byte(startKey), nil, limit, option)
+	c.Assert(err, IsNil)
+	c.Assert(len(keys), Equals, len(expect))
+	for i := range keys {
+		c.Assert(string(keys[i]), Equals, expect[i])
+		c.Assert(values[i], IsNil)
+	}
+}
+
 func (s *testRawKVSuite) mustScan(c *C, startKey string, limit int, expect ...string) {
 	keys, values, err := s.client.Scan(context.TODO(), []byte(startKey), nil, limit)
 	c.Assert(err, IsNil)
@@ -118,16 +130,6 @@ func (s *testRawKVSuite) mustScan(c *C, startKey string, limit int, expect ...st
 	for i := range keys {
 		c.Assert(string(keys[i]), Equals, expect[i*2])
 		c.Assert(string(values[i]), Equals, expect[i*2+1])
-	}
-}
-
-func (s *testRawKVSuite) mustScanKeyOnly(c *C, startKey string, limit int, expect ...string) {
-	keys, values, err := s.client.Scan(context.TODO(), []byte(startKey), nil, limit)
-	c.Assert(err, IsNil)
-	c.Assert(len(keys), Equals, len(expect))
-	for i := range keys {
-		c.Assert(string(keys[i]), Equals, expect[i])
-		c.Assert(values[i], IsNil)
 	}
 }
 
@@ -141,6 +143,18 @@ func (s *testRawKVSuite) mustScanRange(c *C, startKey string, endKey string, lim
 	}
 }
 
+func (s *testRawKVSuite) mustReverseScanKeyOnly(c *C, startKey string, limit int, expect ...string) {
+	option := DefaultScanOption()
+	option.KeyOnly = true
+	keys, values, err := s.client.ReverseScan(context.TODO(), []byte(startKey), nil, limit, option)
+	c.Assert(err, IsNil)
+	c.Assert(len(keys), Equals, len(expect))
+	for i := range keys {
+		c.Assert(string(keys[i]), Equals, expect[i])
+		c.Assert(values[i], IsNil)
+	}
+}
+
 func (s *testRawKVSuite) mustReverseScan(c *C, startKey []byte, limit int, expect ...string) {
 	keys, values, err := s.client.ReverseScan(context.TODO(), startKey, nil, limit)
 	c.Assert(err, IsNil)
@@ -148,16 +162,6 @@ func (s *testRawKVSuite) mustReverseScan(c *C, startKey []byte, limit int, expec
 	for i := range keys {
 		c.Assert(string(keys[i]), Equals, expect[i*2])
 		c.Assert(string(values[i]), Equals, expect[i*2+1])
-	}
-}
-
-func (s *testRawKVSuite) mustReverseScanKeyOnly(c *C, startKey string, limit int, expect ...string) {
-	keys, values, err := s.client.ReverseScan(context.TODO(), []byte(startKey), nil, limit)
-	c.Assert(err, IsNil)
-	c.Assert(len(keys), Equals, len(expect))
-	for i := range keys {
-		c.Assert(string(keys[i]), Equals, expect[i])
-		c.Assert(values[i], IsNil)
 	}
 }
 
@@ -282,9 +286,6 @@ func (s *testRawKVSuite) TestScan(c *C) {
 }
 
 func (s *testRawKVSuite) TestScanOnly(c *C) {
-	s.client.conf.Raw.KeyOnlyScan = true //key only
-	defer func() { s.client.conf.Raw.KeyOnlyScan = false }()
-
 	s.mustPut(c, []byte("k1"), []byte("v1"))
 	s.mustPut(c, []byte("k3"), []byte("v3"))
 	s.mustPut(c, []byte("k5"), []byte("v5"))

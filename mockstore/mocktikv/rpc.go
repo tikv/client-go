@@ -477,7 +477,7 @@ func (h *rpcHandler) handleKvRawScan(req *kvrpcpb.RawScanRequest) *kvrpcpb.RawSc
 	}
 	pairs := rawKV.RawScan(req.GetStartKey(), endKey, int(req.GetLimit()))
 	if req.KeyOnly {
-		//filter values when
+		//filter values when the client set key only to true.
 		for i := range pairs {
 			pairs[i] = Pair{
 				Key:   pairs[i].Key,
