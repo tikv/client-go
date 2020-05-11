@@ -271,7 +271,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("scan").Observe(time.Since(start).Seconds()) }()
 
 	var option ScanOption
-	if options == nil {
+	if options == nil || len(options) == 0 {
 		option = DefaultScanOption()
 	} else {
 		option = options[0]
@@ -323,7 +323,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("reverse_scan").Observe(time.Since(start).Seconds()) }()
 
 	var option ScanOption
-	if options == nil {
+	if options == nil || len(options) == 0 {
 		option = DefaultScanOption()
 	} else {
 		option = options[0]
