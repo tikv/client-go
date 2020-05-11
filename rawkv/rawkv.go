@@ -33,6 +33,17 @@ var (
 	ErrMaxScanLimitExceeded = errors.New("limit should be less than MaxRawKVScanLimit")
 )
 
+// ScanOption is used to provide additional information for scaning operaiont
+type ScanOption struct {
+	KeyOnly bool // if true, the result will only contains keys
+}
+
+func DefaultScanOption() ScanOption {
+	return ScanOption{
+		KeyOnly: false,
+	}
+}
+
 // Client is a rawkv client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
@@ -255,9 +266,16 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 // If you want to exclude the startKey or include the endKey, append a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
 // `Scan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
-func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, options ...ScanOption) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("scan").Observe(time.Since(start).Seconds()) }()
+
+	var option ScanOption
+	if options == nil {
+		option = DefaultScanOption()
+	} else {
+		option = options[0]
+	}
 
 	if limit > c.conf.Raw.MaxScanLimit {
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
@@ -270,7 +288,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 				StartKey: startKey,
 				EndKey:   endKey,
 				Limit:    uint32(limit - len(keys)),
-				KeyOnly:  c.conf.Raw.KeyOnlyScan,
+				KeyOnly:  option.KeyOnly,
 			},
 		}
 		resp, loc, err := c.sendReq(ctx, startKey, req)
@@ -300,9 +318,16 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 // (endKey, startKey], you can write:
 // `ReverseScan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
 // It doesn't support Scanning from "", because locating the last Region is not yet implemented.
-func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int, options ...ScanOption) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("reverse_scan").Observe(time.Since(start).Seconds()) }()
+
+	var option ScanOption
+	if options == nil {
+		option = DefaultScanOption()
+	} else {
+		option = options[0]
+	}
 
 	if limit > c.conf.Raw.MaxScanLimit {
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
@@ -316,7 +341,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 				EndKey:   endKey,
 				Limit:    uint32(limit - len(keys)),
 				Reverse:  true,
-				KeyOnly:  c.conf.Raw.KeyOnlyScan,
+				KeyOnly:  option.KeyOnly,
 			},
 		}
 		resp, loc, err := c.sendReq(ctx, startKey, req)
