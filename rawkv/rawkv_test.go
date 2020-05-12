@@ -285,7 +285,7 @@ func (s *testRawKVSuite) TestScan(c *C) {
 	check()
 }
 
-func (s *testRawKVSuite) TestScanOnly(c *C) {
+func (s *testRawKVSuite) TestScanWithKeyOnly(c *C) {
 	s.mustPut(c, []byte("k1"), []byte("v1"))
 	s.mustPut(c, []byte("k3"), []byte("v3"))
 	s.mustPut(c, []byte("k5"), []byte("v5"))
