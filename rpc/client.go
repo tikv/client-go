@@ -390,6 +390,10 @@ func (a *connArray) batchSendLoop() {
 		}
 
 		length := len(requests)
+		if uint(length) == 0 {
+			// The batch command channel is closed.
+			return
+		}
 		maxBatchID := atomic.AddUint64(&batchCommandsClient.idAlloc, uint64(length))
 		for i := 0; i < length; i++ {
 			requestID := uint64(i) + maxBatchID - uint64(length)
