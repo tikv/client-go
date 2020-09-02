@@ -35,8 +35,11 @@ type BufferStore struct {
 // NewBufferStore creates a BufferStore using r for read.
 func NewBufferStore(r Retriever, conf *config.Txn) *BufferStore {
 	return &BufferStore{
-		r:         r,
-		MemBuffer: &lazyMemBuffer{conf: conf},
+		r: r,
+		MemBuffer: &lazyMemBuffer{
+			mb:   NewMemDbBuffer(conf, 0),
+			conf: conf,
+		},
 	}
 }
 
