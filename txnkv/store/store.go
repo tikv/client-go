@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	pd "github.com/pingcap/pd/client"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/config"
@@ -31,6 +30,7 @@ import (
 	"github.com/tikv/client-go/txnkv/latch"
 	"github.com/tikv/client-go/txnkv/oracle"
 	"github.com/tikv/client-go/txnkv/oracle/oracles"
+	pd "github.com/tikv/pd/client"
 )
 
 // TiKVStore contains methods to interact with a TiKV cluster.

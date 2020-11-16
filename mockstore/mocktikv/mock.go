@@ -13,9 +13,7 @@
 
 package mocktikv
 
-import (
-	"github.com/pingcap/pd/client"
-)
+import pd "github.com/tikv/pd/client"
 
 // NewTiKVAndPDClient creates a TiKV client and PD client from options.
 func NewTiKVAndPDClient(cluster *Cluster, mvccStore MVCCStore, path string) (*RPCClient, pd.Client, error) {
