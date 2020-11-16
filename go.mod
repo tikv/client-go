@@ -1,5 +1,7 @@
 module github.com/tikv/client-go
 
+go 1.15
+
 require (
 	github.com/coreos/etcd v3.3.25+incompatible
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548

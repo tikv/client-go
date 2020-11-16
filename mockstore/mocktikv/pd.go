@@ -48,11 +48,11 @@ func (c *pdClient) GetClusterID(ctx context.Context) uint64 {
 }
 
 func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
-	return nil, nil
+	panic("unimplemented")
 }
 
 func (c *pdClient) GetLeaderAddr() string {
-	return ""
+	panic("unimplemented")
 }
 
 func (c *pdClient) GetTS(context.Context) (int64, int64, error) {
@@ -82,7 +82,7 @@ func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TS
 }
 
 func (c *pdClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetOperatorResponse, error) {
-	return nil, nil
+	panic("unimplemented")
 }
 
 type mockTSFuture struct {
