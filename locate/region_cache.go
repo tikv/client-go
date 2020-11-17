@@ -23,13 +23,13 @@ import (
 	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/pd/client"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/codec"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/metrics"
 	"github.com/tikv/client-go/retry"
+	pd "github.com/tikv/pd/client"
 )
 
 // CachedRegion encapsulates {Region, TTL}
@@ -335,27 +335,27 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte) (*Region, erro
 				return nil, err
 			}
 		}
-		meta, leader, err := c.pdClient.GetRegion(bo.GetContext(), key)
+		region, err := c.pdClient.GetRegion(bo.GetContext(), key)
 		metrics.RegionCacheCounter.WithLabelValues("get_region", metrics.RetLabel(err)).Inc()
 		if err != nil {
 			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", key, err)
 			continue
 		}
-		if meta == nil {
+		if region.Meta == nil {
 			backoffErr = errors.Errorf("region not found for key %q", key)
 			continue
 		}
-		if len(meta.Peers) == 0 {
+		if len(region.Meta.Peers) == 0 {
 			return nil, errors.New("receive Region with no peer")
 		}
-		region := &Region{
-			meta: meta,
-			peer: meta.Peers[0],
+		r := &Region{
+			meta: region.Meta,
+			peer: region.Meta.Peers[0],
 		}
-		if leader != nil {
-			region.SwitchPeer(leader.GetStoreId())
+		if region.Leader != nil {
+			r.SwitchPeer(region.Leader.GetStoreId())
 		}
-		return region, nil
+		return r, nil
 	}
 }
 
@@ -369,27 +369,27 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 				return nil, err
 			}
 		}
-		meta, leader, err := c.pdClient.GetRegionByID(bo.GetContext(), regionID)
+		region, err := c.pdClient.GetRegionByID(bo.GetContext(), regionID)
 		metrics.RegionCacheCounter.WithLabelValues("get_region_by_id", metrics.RetLabel(err)).Inc()
 		if err != nil {
 			backoffErr = errors.Errorf("loadRegion from PD failed, regionID: %v, err: %v", regionID, err)
 			continue
 		}
-		if meta == nil {
+		if region.Meta == nil {
 			backoffErr = errors.Errorf("region not found for regionID %q", regionID)
 			continue
 		}
-		if len(meta.Peers) == 0 {
+		if len(region.Meta.Peers) == 0 {
 			return nil, errors.New("receive Region with no peer")
 		}
-		region := &Region{
-			meta: meta,
-			peer: meta.Peers[0],
+		r := &Region{
+			meta: region.Meta,
+			peer: region.Meta.Peers[0],
 		}
-		if leader != nil {
-			region.SwitchPeer(leader.GetStoreId())
+		if region.Leader != nil {
+			r.SwitchPeer(region.Leader.GetStoreId())
 		}
-		return region, nil
+		return r, nil
 	}
 }
 
