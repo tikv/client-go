@@ -18,11 +18,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	pd "github.com/pingcap/pd/client"
 	log "github.com/sirupsen/logrus"
 	"github.com/tikv/client-go/config"
 	"github.com/tikv/client-go/metrics"
 	"github.com/tikv/client-go/txnkv/oracle"
+	pd "github.com/tikv/pd/client"
 )
 
 var _ oracle.Oracle = &pdOracle{}
@@ -36,7 +36,7 @@ type pdOracle struct {
 }
 
 // NewPdOracle create an Oracle that uses a pd client source. Refer
-// https://github.com/pingcap/pd/blob/master/client/client.go for more details.
+// https://github.com/tikv/pd/blob/master/client/client.go for more details.
 // PdOracle mantains `lastTS` to store the last timestamp got from PD server. If
 // `GetTimestamp()` is not called after `conf.OracleUpdateInterval`, it will be
 // called by itself to keep up with the timestamp on PD server.

@@ -18,9 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/pd/client"
+	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pkg/errors"
+	pd "github.com/tikv/pd/client"
 )
 
 // Use global variables to prevent pdClients from creating duplicate timestamps.
@@ -46,6 +47,14 @@ func (c *pdClient) GetClusterID(ctx context.Context) uint64 {
 	return 1
 }
 
+func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) GetLeaderAddr() string {
+	panic("unimplemented")
+}
+
 func (c *pdClient) GetTS(context.Context) (int64, int64, error) {
 	tsMu.Lock()
 	defer tsMu.Unlock()
@@ -64,6 +73,18 @@ func (c *pdClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 	return &mockTSFuture{c, ctx}
 }
 
+func (c *pdClient) GetLocalTS(ctx context.Context, dcLocation string) (int64, int64, error) {
+	return c.GetTS(ctx)
+}
+
+func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
+	return c.GetTSAsync(ctx)
+}
+
+func (c *pdClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetOperatorResponse, error) {
+	panic("unimplemented")
+}
+
 type mockTSFuture struct {
 	pdc *pdClient
 	ctx context.Context
@@ -73,19 +94,27 @@ func (m *mockTSFuture) Wait() (int64, int64, error) {
 	return m.pdc.GetTS(m.ctx)
 }
 
-func (c *pdClient) GetRegion(ctx context.Context, key []byte) (*metapb.Region, *metapb.Peer, error) {
+func (c *pdClient) GetRegion(ctx context.Context, key []byte) (*pd.Region, error) {
 	region, peer := c.cluster.GetRegionByKey(key)
-	return region, peer, nil
+	return &pd.Region{Meta: region, Leader: peer}, nil
 }
 
-func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte) (*metapb.Region, *metapb.Peer, error) {
+func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string) (*pd.Region, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte) (*pd.Region, error) {
 	region, peer := c.cluster.GetPrevRegionByKey(key)
-	return region, peer, nil
+	return &pd.Region{Meta: region, Leader: peer}, nil
 }
 
-func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64) (*metapb.Region, *metapb.Peer, error) {
+func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64) (*pd.Region, error) {
 	region, peer := c.cluster.GetRegionByID(regionID)
-	return region, peer, nil
+	return &pd.Region{Meta: region, Leader: peer}, nil
+}
+
+func (c *pdClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int) ([]*pd.Region, error) {
+	panic("unimplemented")
 }
 
 func (c *pdClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
@@ -103,6 +132,18 @@ func (c *pdClient) GetAllStores(ctx context.Context, opts ...pd.GetStoreOption) 
 }
 
 func (c *pdClient) UpdateGCSafePoint(ctx context.Context, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) ScatterRegion(ctx context.Context, regionID uint64) error {
+	panic("unimplemented")
+}
+
+func (c *pdClient) ScatterRegionWithOption(ctx context.Context, regionID uint64, opts ...pd.ScatterRegionOption) error {
 	panic("unimplemented")
 }
 

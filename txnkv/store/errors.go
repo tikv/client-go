@@ -43,5 +43,5 @@ var (
 type ErrKeyAlreadyExist key.Key
 
 func (e ErrKeyAlreadyExist) Error() string {
-	return fmt.Sprintf("key already exists: %q", e)
+	return fmt.Sprintf("key already exists: %q", key.Key(e))
 }
