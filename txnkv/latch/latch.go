@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cznic/mathutil"
 	log "github.com/sirupsen/logrus"
 	"github.com/spaolacci/murmur3"
 	"github.com/tikv/client-go/config"
@@ -186,7 +185,9 @@ func (latches *Latches) releaseSlot(lock *Lock) (nextLock *Lock) {
 	if find.value != lock {
 		panic("releaseSlot wrong")
 	}
-	find.maxCommitTS = mathutil.MaxUint64(find.maxCommitTS, lock.commitTS)
+	if lock.commitTS > find.maxCommitTS {
+		find.maxCommitTS = lock.commitTS
+	}
 	find.value = nil
 	// Make a copy of the key, so latch does not reference the transaction's memory.
 	// If we do not do it, transaction memory can't be recycle by GC and there will
