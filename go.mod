@@ -4,7 +4,6 @@ go 1.15
 
 require (
 	github.com/coreos/etcd v3.3.25+incompatible
-	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/golang/protobuf v1.3.4
 	github.com/google/btree v1.0.0
 	github.com/google/uuid v1.1.1
@@ -18,7 +17,6 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.2.1
 	github.com/prometheus/common v0.9.1
-	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
 	github.com/sirupsen/logrus v1.4.2
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.6.1 // indirect
