@@ -143,7 +143,15 @@ func (c *pdClient) ScatterRegion(ctx context.Context, regionID uint64) error {
 	panic("unimplemented")
 }
 
-func (c *pdClient) ScatterRegionWithOption(ctx context.Context, regionID uint64, opts ...pd.ScatterRegionOption) error {
+func (c *pdClient) ScatterRegionWithOption(ctx context.Context, regionID uint64, opts ...pd.RegionsOption) error {
+	panic("unimplemented")
+}
+
+func (c *pdClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts ...pd.RegionsOption) (*pdpb.ScatterRegionResponse, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
 	panic("unimplemented")
 }
 
