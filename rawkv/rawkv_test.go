@@ -96,6 +96,17 @@ func (s *testRawKVSuite) mustPut(c *C, key, value []byte) {
 	c.Assert(err, IsNil)
 }
 
+func (s *testRawKVSuite) mustPutTTL(c *C, key, value []byte, ttl uint64) {
+	err := s.client.Put(context.TODO(), key, value, PutOption{ ttl: ttl })
+	c.Assert(err, IsNil)
+}
+
+func (s *testRawKVSuite) mustGetKeyTTL(c *C, key []byte, expectedTtl uint64) {
+	ttl, err := s.client.GetKeyTTL(context.TODO(), key)
+	c.Assert(err, IsNil)
+	c.Assert(*ttl, Equals, expectedTtl)
+}
+
 func (s *testRawKVSuite) mustBatchPut(c *C, keys, values [][]byte) {
 	err := s.client.BatchPut(context.TODO(), keys, values)
 	c.Assert(err, IsNil)
@@ -218,6 +229,12 @@ func (s *testRawKVSuite) TestSimple(c *C) {
 	s.mustNotExist(c, []byte("key"))
 	err := s.client.Put(context.TODO(), []byte("key"), []byte(""))
 	c.Assert(err, NotNil)
+}
+
+func (s *testRawKVSuite) TestTTL(c *C) {
+	s.mustNotExist(c, []byte("key"))	
+	s.mustPutTTL(c, []byte("key"), []byte("value"), 100)
+	s.mustGetKeyTTL(c, []byte("key"), 100)
 }
 
 func (s *testRawKVSuite) TestRawBatch(c *C) {

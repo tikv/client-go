@@ -33,9 +33,14 @@ var (
 	ErrMaxScanLimitExceeded = errors.New("limit should be less than MaxRawKVScanLimit")
 )
 
-// ScanOption is used to provide additional information for scaning operaiont
+// ScanOption is used to provide additional information for scaning operation.
 type ScanOption struct {
 	KeyOnly bool // if true, the result will only contains keys
+}
+
+// PutOptions is used to provide additional information for put operation.
+type PutOption struct {
+	ttl uint64
 }
 
 func DefaultScanOption() ScanOption {
@@ -112,6 +117,35 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	return cmdResp.Value, nil
 }
 
+
+// Get queries value with the key. When the key does not exist, it returns `nil, nil`.
+func (c *Client) GetKeyTTL(ctx context.Context, key []byte) (*uint64, error) {
+	start := time.Now()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
+
+	req := &rpc.Request{
+		Type: rpc.CmdRawGetKeyTTL,
+		RawGetKeyTTL: &kvrpcpb.RawGetKeyTTLRequest{
+			Key: key,
+		},
+	}
+	resp, _, err := c.sendReq(ctx, key, req)
+	if err != nil {
+		return nil, err
+	}
+	cmdResp := resp.RawGetKeyTTL
+	if cmdResp == nil {
+		return nil, errors.WithStack(rpc.ErrBodyMissing)
+	}
+	if cmdResp.GetError() != "" {
+		return nil, errors.New(cmdResp.GetError())
+	}
+	if cmdResp.NotFound {
+		return nil, nil
+	}
+	return &cmdResp.Ttl, nil
+}
+
 // BatchGet queries values with the keys.
 func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) {
 	start := time.Now()
@@ -141,7 +175,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) 
 }
 
 // Put stores a key-value pair to TiKV.
-func (c *Client) Put(ctx context.Context, key, value []byte) error {
+func (c *Client) Put(ctx context.Context, key, value []byte, options ...PutOption) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("put").Observe(time.Since(start).Seconds()) }()
 	metrics.RawkvSizeHistogram.WithLabelValues("key").Observe(float64(len(key)))
@@ -151,11 +185,17 @@ func (c *Client) Put(ctx context.Context, key, value []byte) error {
 		return errors.New("empty value is not supported")
 	}
 
+	var ttl uint64 = 0
+	if options != nil && len(options) > 0 {
+		ttl = options[0].ttl
+	}
+
 	req := &rpc.Request{
 		Type: rpc.CmdRawPut,
 		RawPut: &kvrpcpb.RawPutRequest{
 			Key:   key,
 			Value: value,
+			Ttl:  ttl,
 		},
 	}
 	resp, _, err := c.sendReq(ctx, key, req)
@@ -173,9 +213,14 @@ func (c *Client) Put(ctx context.Context, key, value []byte) error {
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
+func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte, options ...PutOption) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds()) }()
+
+	var ttl uint64 = 0
+	if options != nil && len(options) > 0 {
+		ttl = options[0].ttl
+	}
 
 	if len(keys) != len(values) {
 		return errors.New("the len of keys is not equal to the len of values")
@@ -186,7 +231,7 @@ func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
 		}
 	}
 	bo := retry.NewBackoffer(ctx, retry.RawkvMaxBackoff)
-	return c.sendBatchPut(bo, keys, values)
+	return c.sendBatchPut(bo, keys, values, ttl)
 }
 
 // Delete deletes a key-value pair from TiKV.
@@ -545,7 +590,7 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 	}
 }
 
-func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error {
+func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttl uint64) error {
 	keyToValue := make(map[string][]byte)
 	for i, key := range keys {
 		keyToValue[string(key)] = values[i]
@@ -566,7 +611,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error 
 		go func() {
 			singleBatchBackoffer, singleBatchCancel := bo.Fork()
 			defer singleBatchCancel()
-			ch <- c.doBatchPut(singleBatchBackoffer, batch1)
+			ch <- c.doBatchPut(singleBatchBackoffer, batch1, ttl)
 		}()
 	}
 
@@ -622,7 +667,7 @@ func appendBatches(batches []batch, regionID locate.RegionVerID, groupKeys [][]b
 	return batches
 }
 
-func (c *Client) doBatchPut(bo *retry.Backoffer, batch batch) error {
+func (c *Client) doBatchPut(bo *retry.Backoffer, batch batch, ttl uint64) error {
 	kvPair := make([]*kvrpcpb.KvPair, 0, len(batch.keys))
 	for i, key := range batch.keys {
 		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.values[i]})
@@ -632,6 +677,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch batch) error {
 		Type: rpc.CmdRawBatchPut,
 		RawBatchPut: &kvrpcpb.RawBatchPutRequest{
 			Pairs: kvPair,
+			Ttl: ttl,
 		},
 	}
 
@@ -650,7 +696,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch batch) error {
 			return err
 		}
 		// recursive call
-		return c.sendBatchPut(bo, batch.keys, batch.values)
+		return c.sendBatchPut(bo, batch.keys, batch.values, ttl)
 	}
 
 	cmdResp := resp.RawBatchPut
