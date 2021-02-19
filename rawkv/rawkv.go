@@ -33,7 +33,7 @@ var (
 	ErrMaxScanLimitExceeded = errors.New("limit should be less than MaxRawKVScanLimit")
 )
 
-// ScanOption is used to provide additional information for scaning operaion.
+// ScanOption is used to provide additional information for scaning operation.
 type ScanOption struct {
 	KeyOnly bool // if true, the result will only contains keys
 }
