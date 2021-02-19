@@ -117,6 +117,35 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	return cmdResp.Value, nil
 }
 
+
+// Get queries value with the key. When the key does not exist, it returns `nil, nil`.
+func (c *Client) GetKeyTTL(ctx context.Context, key []byte) (*uint64, error) {
+	start := time.Now()
+	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("get").Observe(time.Since(start).Seconds()) }()
+
+	req := &rpc.Request{
+		Type: rpc.CmdRawGetKeyTTL,
+		RawGetKeyTTL: &kvrpcpb.RawGetKeyTTLRequest{
+			Key: key,
+		},
+	}
+	resp, _, err := c.sendReq(ctx, key, req)
+	if err != nil {
+		return nil, err
+	}
+	cmdResp := resp.RawGetKeyTTL
+	if cmdResp == nil {
+		return nil, errors.WithStack(rpc.ErrBodyMissing)
+	}
+	if cmdResp.GetError() != "" {
+		return nil, errors.New(cmdResp.GetError())
+	}
+	if cmdResp.NotFound {
+		return nil, nil
+	}
+	return &cmdResp.Ttl, nil
+}
+
 // BatchGet queries values with the keys.
 func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) {
 	start := time.Now()
@@ -157,7 +186,7 @@ func (c *Client) Put(ctx context.Context, key, value []byte, options ...PutOptio
 	}
 
 	var ttl uint64 = 0
-	if options != nil && len(options) == 0 {
+	if options != nil && len(options) > 0 {
 		ttl = options[0].ttl
 	}
 
@@ -189,7 +218,7 @@ func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte, options ..
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("batch_put").Observe(time.Since(start).Seconds()) }()
 
 	var ttl uint64 = 0
-	if options != nil && len(options) == 0 {
+	if options != nil && len(options) > 0 {
 		ttl = options[0].ttl
 	}
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"time"
+	"encoding/binary"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -407,7 +408,12 @@ func (h *rpcHandler) handleKvRawPut(req *kvrpcpb.RawPutRequest) *kvrpcpb.RawPutR
 			Error: "not implemented",
 		}
 	}
-	rawKV.RawPut(req.GetKey(), req.GetValue())
+	value := req.GetValue()
+	if ttl := req.GetTtl(); ttl != 0 {
+		value = append(value, make([]byte, 8)...)
+		binary.LittleEndian.PutUint64(value[len(value) - 8:], ttl)
+	}
+	rawKV.RawPut(req.GetKey(), value)
 	return &kvrpcpb.RawPutResponse{}
 }
 
@@ -422,7 +428,12 @@ func (h *rpcHandler) handleKvRawBatchPut(req *kvrpcpb.RawBatchPutRequest) *kvrpc
 	values := make([][]byte, 0, len(req.Pairs))
 	for _, pair := range req.Pairs {
 		keys = append(keys, pair.Key)
-		values = append(values, pair.Value)
+		value := pair.Value
+		if ttl := req.GetTtl(); ttl != 0 {
+			value = append(value, make([]byte, 8)...)
+			binary.LittleEndian.PutUint64(value[len(value) - 8:], ttl)
+		}
+		values = append(values, value)
 	}
 	rawKV.RawBatchPut(keys, values)
 	return &kvrpcpb.RawBatchPutResponse{}
@@ -488,6 +499,26 @@ func (h *rpcHandler) handleKvRawScan(req *kvrpcpb.RawScanRequest) *kvrpcpb.RawSc
 	}
 	return &kvrpcpb.RawScanResponse{
 		Kvs: convertToPbPairs(pairs),
+	}
+}
+
+
+func (h *rpcHandler) handleKvRawGetKeyTTL(req *kvrpcpb.RawGetKeyTTLRequest) *kvrpcpb.RawGetKeyTTLResponse {
+	rawKV, ok := h.mvccStore.(RawKV)
+	if !ok {
+		return &kvrpcpb.RawGetKeyTTLResponse{
+			Error: "not implemented",
+		}
+	}
+	value := rawKV.RawGet(req.GetKey())
+	if value == nil {
+		return &kvrpcpb.RawGetKeyTTLResponse{
+			NotFound: true,
+		}
+	} else {
+		return &kvrpcpb.RawGetKeyTTLResponse{
+			Ttl:  binary.LittleEndian.Uint64(value[len(value) - 8:]),
+		}
 	}
 }
 
@@ -721,6 +752,13 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *rpc.Reque
 			return resp, nil
 		}
 		resp.RawScan = handler.handleKvRawScan(r)
+	case rpc.CmdRawGetKeyTTL:
+		r := req.RawGetKeyTTL
+		if err := handler.checkRequest(reqCtx, r.Size()); err != nil {
+			resp.RawGetKeyTTL = &kvrpcpb.RawGetKeyTTLResponse{RegionError: err}
+			return resp, nil
+		}
+		resp.RawGetKeyTTL = handler.handleKvRawGetKeyTTL(r)
 	case rpc.CmdUnsafeDestroyRange:
 		panic("unimplemented")
 	case rpc.CmdCop:

@@ -13,7 +13,7 @@ require (
 	github.com/json-iterator/go v1.1.10 // indirect
 	github.com/pingcap/check v0.0.0-20200212061837-5e12011dc712
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20210219085509-6359b56e2926
+	github.com/pingcap/kvproto v0.0.0-20210219095907-b2375dcc80ad
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.2.1
 	github.com/prometheus/common v0.9.1
