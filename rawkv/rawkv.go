@@ -40,7 +40,7 @@ type ScanOption struct {
 
 // PutOptions is used to provide additional information for put operation.
 type PutOption struct {
-	ttl uint64
+	TTL uint64
 }
 
 func DefaultScanOption() ScanOption {
@@ -187,7 +187,7 @@ func (c *Client) Put(ctx context.Context, key, value []byte, options ...PutOptio
 
 	var ttl uint64 = 0
 	if options != nil && len(options) > 0 {
-		ttl = options[0].ttl
+		ttl = options[0].TTL
 	}
 
 	req := &rpc.Request{
@@ -219,7 +219,7 @@ func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte, options ..
 
 	var ttl uint64 = 0
 	if options != nil && len(options) > 0 {
-		ttl = options[0].ttl
+		ttl = options[0].TTL
 	}
 
 	if len(keys) != len(values) {
