@@ -341,7 +341,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte) (*Region, erro
 			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", key, err)
 			continue
 		}
-		if region.Meta == nil {
+		if region == nil || region.Meta == nil {
 			backoffErr = errors.Errorf("region not found for key %q", key)
 			continue
 		}
