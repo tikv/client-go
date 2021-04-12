@@ -310,7 +310,7 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 // If endKey is empty, it means unbounded.
 // If you want to exclude the startKey or include the endKey, append a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
-// `Scan(append(startKey, '\0'), append(endKey, '\0'), limit)`.
+// `Scan(ctx, append(startKey, '\x00'), append(endKey, '\x00'), limit)`.
 func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, options ...ScanOption) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogram.WithLabelValues("scan").Observe(time.Since(start).Seconds()) }()
