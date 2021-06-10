@@ -6,7 +6,7 @@ cache:
     - $GOPATH/pkg/mod
 
 go:
-  - 1.15
+  - 1.16
 
 script:
   - make all
