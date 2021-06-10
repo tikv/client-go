@@ -16,7 +16,7 @@ package unionstore
 import (
 	"context"
 
-	tikverr "github.com/pingcap/tidb/store/tikv/error"
+	tikverr "github.com/tikv/client-go/v2/error"
 )
 
 type mockSnapshot struct {

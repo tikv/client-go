@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
-	"github.com/pingcap/tidb/store/tikv/kv"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.

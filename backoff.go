@@ -16,8 +16,8 @@ package tikv
 import (
 	"context"
 
-	"github.com/pingcap/tidb/store/tikv/kv"
-	"github.com/pingcap/tidb/store/tikv/retry"
+	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/retry"
 )
 
 // Backoffer is a utility for retrying queries.

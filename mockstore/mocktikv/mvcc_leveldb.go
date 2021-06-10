@@ -27,10 +27,10 @@ import (
 	"github.com/pingcap/goleveldb/leveldb/util"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/parser/terror"
-	"github.com/pingcap/tidb/store/tikv/logutil"
-	"github.com/pingcap/tidb/store/tikv/mockstore/deadlock"
-	"github.com/pingcap/tidb/store/tikv/oracle"
-	"github.com/pingcap/tidb/store/tikv/util/codec"
+	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/mockstore/deadlock"
+	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util/codec"
 	"go.uber.org/zap"
 )
 

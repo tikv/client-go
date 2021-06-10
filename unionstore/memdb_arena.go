@@ -18,7 +18,7 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/pingcap/tidb/store/tikv/kv"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 const (

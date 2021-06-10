@@ -16,7 +16,7 @@ package unionstore
 import (
 	"bytes"
 
-	"github.com/pingcap/tidb/store/tikv/kv"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // MemdbIterator is an Iterator with KeyFlags related functions.

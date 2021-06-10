@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tidb/store/tikv/logutil"
+	"github.com/tikv/client-go/v2/logutil"
 	"go.uber.org/zap"
 )
 

@@ -14,7 +14,7 @@
 package unionstore
 
 import (
-	tikverr "github.com/pingcap/tidb/store/tikv/error"
+	tikverr "github.com/tikv/client-go/v2/error"
 )
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.

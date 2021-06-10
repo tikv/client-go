@@ -16,8 +16,8 @@ package unionstore
 import (
 	"context"
 
-	tikverr "github.com/pingcap/tidb/store/tikv/error"
-	"github.com/pingcap/tidb/store/tikv/kv"
+	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // Iterator is the interface for a iterator on KV store.

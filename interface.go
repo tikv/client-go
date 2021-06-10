@@ -16,9 +16,9 @@ package tikv
 import (
 	"time"
 
-	"github.com/pingcap/tidb/store/tikv/locate"
-	"github.com/pingcap/tidb/store/tikv/oracle"
-	"github.com/pingcap/tidb/store/tikv/tikvrpc"
+	"github.com/tikv/client-go/v2/locate"
+	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 // Storage represent the kv.Storage runs on TiKV.

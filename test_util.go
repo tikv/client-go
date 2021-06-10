@@ -18,7 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tidb/store/tikv/locate"
+	"github.com/tikv/client-go/v2/locate"
 	pd "github.com/tikv/pd/client"
 )
 

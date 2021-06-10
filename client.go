@@ -14,8 +14,8 @@
 package tikv
 
 import (
-	"github.com/pingcap/tidb/store/tikv/client"
-	"github.com/pingcap/tidb/store/tikv/config"
+	"github.com/tikv/client-go/v2/client"
+	"github.com/tikv/client-go/v2/config"
 )
 
 // Client is a client that sends RPC.

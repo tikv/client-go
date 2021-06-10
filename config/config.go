@@ -22,8 +22,8 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tidb/store/tikv/logutil"
-	"github.com/pingcap/tidb/store/tikv/util"
+	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 

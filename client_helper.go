@@ -16,9 +16,9 @@ package tikv
 import (
 	"time"
 
-	"github.com/pingcap/tidb/store/tikv/locate"
-	"github.com/pingcap/tidb/store/tikv/tikvrpc"
-	"github.com/pingcap/tidb/store/tikv/util"
+	"github.com/tikv/client-go/v2/locate"
+	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
 // ClientHelper wraps LockResolver and RegionRequestSender.

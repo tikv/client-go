@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	. "github.com/pingcap/check"
-	"github.com/pingcap/tidb/store/tikv/mockstore"
+	"github.com/tikv/client-go/v2/mockstore"
 )
 
 type OneByOneSuite = mockstore.OneByOneSuite

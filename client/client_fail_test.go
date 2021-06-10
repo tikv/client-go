@@ -23,8 +23,8 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
-	"github.com/pingcap/tidb/store/tikv/config"
-	"github.com/pingcap/tidb/store/tikv/tikvrpc"
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 type testClientFailSuite struct {
@@ -115,7 +115,7 @@ func (s *testClientFailSuite) TestRecvErrorInMultipleRecvLoops(c *C) {
 	}
 	epoch := atomic.LoadUint64(&batchClient.epoch)
 
-	fp := "github.com/pingcap/tidb/store/tikv/client/gotErrorInRecvLoop"
+	fp := "github.com/tikv/client-go/v2/client/gotErrorInRecvLoop"
 	// Send a request to each stream to trigger reconnection.
 	for _, forwardedHost := range forwardedHosts {
 		c.Assert(failpoint.Enable(fp, `1*return("0")`), IsNil)
