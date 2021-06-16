@@ -1215,7 +1215,7 @@ func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
 			stores = append(stores, &Store{
 				addr:    store.addr,
 				storeID: store.storeID,
-				labels:  store.labels,
+				labels:  storeLabel,
 			})
 		}
 	}
