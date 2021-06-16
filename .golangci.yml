@@ -21,6 +21,3 @@ linters:
     - unconvert
     - unused
     - varcheck
-
-  # don't enable:
-  # - errcheck
