@@ -2,6 +2,9 @@
 
 TiKV Go Client provides support for interacting with the [TiKV](https://github.com/tikv/tikv) server in the form of a Go library.
 
+![Stability Active](https://img.shields.io/badge/Stability-Active-yellow)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tikv/client-go/v2.svg)](https://pkg.go.dev/github.com/tikv/client-go/v2)
+
 ## Package versions
 
 There are 2 major versions of the `client-go` package.
