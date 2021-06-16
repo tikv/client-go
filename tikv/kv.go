@@ -313,7 +313,7 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 		// Then mockGetTSErrorInRetry will return retryable error when first retry.
 		// Before PR #8743, we don't cleanup txn after meet error such as error like: PD server timeout
 		// This may cause duplicate data to be written.
-		if val, err := util.EvalFailpoint("mockGetTSErrorInRetry"); err == nil {
+		if val, e := util.EvalFailpoint("mockGetTSErrorInRetry"); e == nil {
 			if val.(bool) && !IsMockCommitErrorEnable() {
 				err = tikverr.NewErrPDServerTimeout("mock PD timeout")
 			}
