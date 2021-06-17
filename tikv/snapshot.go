@@ -500,7 +500,9 @@ func (s *KVSnapshot) get(ctx context.Context, bo *Backoffer, k []byte) ([]byte, 
 		})
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
+	txnScope := s.mu.txnScope
 	s.mu.RUnlock()
+	req.TxnScope = txnScope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
 		req.EnableStaleRead()
