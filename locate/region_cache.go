@@ -516,16 +516,6 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	for _, op := range opts {
 		op(options)
 	}
-	if val, err := util.EvalFailpoint("assertStoreLabels"); err == nil {
-		if len(opts) > 0 {
-			kv := strings.Split(val.(string), "_")
-			for _, label := range options.labels {
-				if label.Key == kv[0] && label.Value != kv[1] {
-					panic(fmt.Sprintf("StoreSelectorOption's label %v is not %v", kv[0], kv[1]))
-				}
-			}
-		}
-	}
 	isLeaderReq := false
 	switch replicaRead {
 	case kv.ReplicaReadFollower:
