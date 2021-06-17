@@ -4,6 +4,8 @@ TiKV Go Client provides support for interacting with the [TiKV](https://github.c
 
 ![Stability Active](https://img.shields.io/badge/Stability-Active-yellow)
 [![Go Reference](https://pkg.go.dev/badge/github.com/tikv/client-go/v2.svg)](https://pkg.go.dev/github.com/tikv/client-go/v2)
+![Test Status](https://github.com/tikv/client-go/actions/workflows/test.yml/badge.svg?branch=v2)
+
 
 ## Package versions
 
