@@ -144,17 +144,24 @@ func UpdateGlobal(f func(conf *Config)) func() {
 
 // GetTxnScopeFromConfig returns whether it's global scope and extracts @@txn_scope value from config.
 func GetTxnScopeFromConfig() (bool, string) {
+	var (
+		enableLocalTxn bool
+		txnScope       string
+	)
+	if kvcfg := GetGlobalConfig(); kvcfg != nil {
+		enableLocalTxn = kvcfg.EnableLocalTxn
+		txnScope = kvcfg.TxnScope
+	}
+	if val, err := util.EvalFailpoint("injectEnableLocalTxn"); err == nil {
+		enableLocalTxn = val.(bool)
+	}
 	if val, err := util.EvalFailpoint("injectTxnScope"); err == nil {
-		v := val.(string)
-		if len(v) > 0 {
-			return false, v
-		}
-		return true, oracle.GlobalTxnScope
+		txnScope = val.(string)
 	}
 
 	// If EnableLocalTxn is false, we will always return it's global.
-	if kvcfg := GetGlobalConfig(); kvcfg != nil && kvcfg.EnableLocalTxn && len(kvcfg.TxnScope) > 0 {
-		return false, kvcfg.TxnScope
+	if enableLocalTxn && len(txnScope) > 0 {
+		return false, txnScope
 	}
 	return true, oracle.GlobalTxnScope
 }
