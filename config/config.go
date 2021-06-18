@@ -159,9 +159,9 @@ func GetTxnScopeFromConfig() (bool, string) {
 		txnScope = val.(string)
 	}
 
-	// If EnableLocalTxn is false, we will always return it's global.
-	if enableLocalTxn && len(txnScope) > 0 {
-		return false, txnScope
+	if len(txnScope) > 0 {
+		// If EnableLocalTxn is false, we will always return it's global.
+		return !enableLocalTxn, txnScope
 	}
 	return true, oracle.GlobalTxnScope
 }
