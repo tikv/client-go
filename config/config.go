@@ -152,11 +152,9 @@ func GetTxnScopeFromConfig() (bool, string) {
 		return true, oracle.GlobalTxnScope
 	}
 
-	if kvcfg := GetGlobalConfig(); kvcfg != nil && len(kvcfg.TxnScope) > 0 {
-		if kvcfg.EnableLocalTxn {
-			return false, kvcfg.TxnScope
-		}
-		// If EnableLocalTxn is false, we will always return it's global.
+	// If EnableLocalTxn is false, we will always return it's global.
+	if kvcfg := GetGlobalConfig(); kvcfg != nil && kvcfg.EnableLocalTxn && len(kvcfg.TxnScope) > 0 {
+		return false, kvcfg.TxnScope
 	}
 	return true, oracle.GlobalTxnScope
 }
