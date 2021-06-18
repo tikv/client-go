@@ -57,7 +57,6 @@ type Config struct {
 	Path                  string
 	EnableForwarding      bool
 	TxnScope              string
-	EnableLocalTxn        bool
 }
 
 // DefaultConfig returns the default configuration.
@@ -73,7 +72,6 @@ func DefaultConfig() Config {
 		Path:                  "",
 		EnableForwarding:      false,
 		TxnScope:              "",
-		EnableLocalTxn:        false,
 	}
 }
 
