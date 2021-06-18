@@ -29,12 +29,16 @@ To run tests, run the following command
   go test ./...
 ```
 
+## Contributing to client-go
+
+Pull Requests and issues are welcomed. Please check [CONTRIBUTING.md](./CONTRIBUTING.md).
+
 ## Used By
 
 This project is used by the following projects:
 
-- TiDB (https://github.com/pingcap/tidb)
-
+- TiDB: TiDB is an open source distributed HTAP database compatible with the MySQL protocol (https://github.com/pingcap/tidb)
+- BR: A command-line tool for distributed backup and restoration of the TiDB cluster data (https://github.com/pingcap/br)
 
 ## License
 
