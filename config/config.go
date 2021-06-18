@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -56,6 +57,7 @@ type Config struct {
 	Path                  string
 	EnableForwarding      bool
 	TxnScope              string
+	EnableLocalTxn        bool
 }
 
 // DefaultConfig returns the default configuration.
@@ -71,6 +73,7 @@ func DefaultConfig() Config {
 		Path:                  "",
 		EnableForwarding:      false,
 		TxnScope:              "",
+		EnableLocalTxn:        false,
 	}
 }
 
@@ -139,24 +142,23 @@ func UpdateGlobal(f func(conf *Config)) func() {
 	return restore
 }
 
-const (
-	globalTxnScope = "global"
-)
-
-// GetTxnScopeFromConfig extracts @@txn_scope value from config
+// GetTxnScopeFromConfig returns whether it's global scope and extracts @@txn_scope value from config.
 func GetTxnScopeFromConfig() (bool, string) {
 	if val, err := util.EvalFailpoint("injectTxnScope"); err == nil {
 		v := val.(string)
 		if len(v) > 0 {
 			return false, v
 		}
-		return true, globalTxnScope
+		return true, oracle.GlobalTxnScope
 	}
 
 	if kvcfg := GetGlobalConfig(); kvcfg != nil && len(kvcfg.TxnScope) > 0 {
-		return false, kvcfg.TxnScope
+		if kvcfg.EnableLocalTxn {
+			return false, kvcfg.TxnScope
+		}
+		// If EnableLocalTxn is false, we will always return it's global.
 	}
-	return true, globalTxnScope
+	return true, oracle.GlobalTxnScope
 }
 
 // ParsePath parses this path.
