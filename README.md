@@ -21,12 +21,37 @@ There are 2 major versions of the `client-go` package.
   go get github.com/tikv/client-go/v2@COMMIT_HASH_OR_TAG_VERSION
 ```
 
-## Running Tests
+## Contributing to client-go
 
-To run tests, run the following command
+Pull Requests and issues are welcomed. Please check [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Developing
+
+### Running Tests
+
+Note: All the following tests are included in the [CI](https://github.com/tikv/client-go/actions) and you can submit a Pull Request directly to hand over the work.
+
+To run unit tests, use following command
 
 ```bash
-  go test ./...
+go test -v ./...
+```
+
+To run code linter, make sure `golangci-lint` is [installed](https://golangci-lint.run/usage/install/#local-installation). Then use following command
+
+```bash
+golangci-lint run
+```
+
+`integration_tests` can run against a real TiKV cluster. Here is an example:
+
+```bash
+./pd-server &
+sleep 5
+./tikv-server &
+sleep 10
+cd integration_tests
+go test -v --with-tikv=true --pd-addrs=127.0.0.1:2379
 ```
 
 ## Contributing to client-go
