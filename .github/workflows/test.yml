@@ -1,4 +1,4 @@
-name: Go
+name: Unit Test
 
 on:
   push:
@@ -7,8 +7,7 @@ on:
     branches: [ v2 ]
 
 jobs:
-
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
@@ -17,9 +16,6 @@ jobs:
       uses: actions/setup-go@v2
       with:
         go-version: 1.16
-
-    - name: Tidy
-      run: go mod tidy
 
     - name: Test
       run: go test -v ./...
