@@ -21,20 +21,68 @@ There are 2 major versions of the `client-go` package.
   go get github.com/tikv/client-go/v2@COMMIT_HASH_OR_TAG_VERSION
 ```
 
-## Running Tests
+## Contributing to client-go
 
-To run tests, run the following command
+Pull Requests and issues are welcomed. Please check [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Developing
+
+### Running Tests
+
+Note: All the following tests are included in the [CI](https://github.com/tikv/client-go/actions) and you can submit a Pull Request directly to hand over the work.
+
+To run unit tests, use following command
 
 ```bash
-  go test ./...
+go test -v ./...
+```
+
+To run code linter, make sure `golangci-lint` is [installed](https://golangci-lint.run/usage/install/#local-installation). Then use following command
+
+```bash
+golangci-lint run
+```
+
+`integration_tests` can run against a real TiKV cluster. Here is an example:
+
+```bash
+./pd-server &
+sleep 5
+./tikv-server &
+sleep 10
+cd integration_tests
+go test -v --with-tikv=true --pd-addrs=127.0.0.1:2379
+```
+
+### Test with TiDB
+
+It is a common task to update client-go and then test it with TiDB.
+
+If you only need to test locally, you can directly use the modified client-go on the same host by replacing:
+
+```bash
+go mod edit -replace=github.com/tikv/client-go/v2=/path/to/client-go
+```
+
+If you want to push your TiDB code to GitHub for running CI or for code review, you need to change the client-go used by TiDB to your developing branch using the following steps:
+
+```bash
+go get -d github.com/GITHUB_USERNAME/client-go@DEV_BRANCH
+# Output:
+# go get: github.com/GITHUB_USERNAME/client-go/v2@none updating to
+#         github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX: parsing go.mod:
+#         module declares its path as: github.com/tikv/client-go/v2
+#                 but was required as: github.com/GITHUB_USERNAME/client-go/v2
+go mod edit -replace=github.com/tikv/client-go/v2=github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX
+go mod download github.com/tikv/client-go/v2
 ```
 
 ## Used By
 
 This project is used by the following projects:
 
-- TiDB (https://github.com/pingcap/tidb)
-
+- TiDB: TiDB is an open source distributed HTAP database compatible with the MySQL protocol (https://github.com/pingcap/tidb)
+- BR: A command-line tool for distributed backup and restoration of the TiDB cluster data (https://github.com/pingcap/br)
 
 ## License
 
