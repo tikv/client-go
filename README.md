@@ -54,9 +54,28 @@ cd integration_tests
 go test -v --with-tikv=true --pd-addrs=127.0.0.1:2379
 ```
 
-## Contributing to client-go
+### Test with TiDB
 
-Pull Requests and issues are welcomed. Please check [CONTRIBUTING.md](./CONTRIBUTING.md).
+It is a common task to update client-go and then test it with TiDB.
+
+If you only need to test locally, you can directly use the modified client-go on the same host by replacing:
+
+```bash
+go mod edit -replace=github.com/tikv/client-go/v2=/path/to/client-go
+```
+
+If you want to push your TiDB code to GitHub for running CI or for code review, you need to change the client-go used by TiDB to your developing branch using the following steps:
+
+```bash
+go get -d github.com/GITHUB_USERNAME/client-go@DEV_BRANCH
+# Output:
+# go get: github.com/GITHUB_USERNAME/client-go/v2@none updating to
+#         github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX: parsing go.mod:
+#         module declares its path as: github.com/tikv/client-go/v2
+#                 but was required as: github.com/GITHUB_USERNAME/client-go/v2
+go mod edit -replace=github.com/tikv/client-go/v2=github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX
+go mod download github.com/tikv/client-go/v2
+```
 
 ## Used By
 
