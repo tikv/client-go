@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -139,24 +140,19 @@ func UpdateGlobal(f func(conf *Config)) func() {
 	return restore
 }
 
-const (
-	globalTxnScope = "global"
-)
-
-// GetTxnScopeFromConfig extracts @@txn_scope value from config
-func GetTxnScopeFromConfig() (bool, string) {
+// GetTxnScopeFromConfig extracts @@txn_scope value from the config.
+func GetTxnScopeFromConfig() string {
+	var txnScope string
+	if kvcfg := GetGlobalConfig(); kvcfg != nil {
+		txnScope = kvcfg.TxnScope
+	}
 	if val, err := util.EvalFailpoint("injectTxnScope"); err == nil {
-		v := val.(string)
-		if len(v) > 0 {
-			return false, v
-		}
-		return true, globalTxnScope
+		txnScope = val.(string)
 	}
-
-	if kvcfg := GetGlobalConfig(); kvcfg != nil && len(kvcfg.TxnScope) > 0 {
-		return false, kvcfg.TxnScope
+	if len(txnScope) > 0 {
+		return txnScope
 	}
-	return true, globalTxnScope
+	return oracle.GlobalTxnScope
 }
 
 // ParsePath parses this path.
