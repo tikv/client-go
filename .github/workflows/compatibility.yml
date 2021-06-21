@@ -54,6 +54,7 @@ jobs:
 
     - name: Check build
       run: |
+        cp go.mod1 go.mod && cp go.sum1 go.sum
         go mod edit -replace=github.com/tikv/client-go/v2=../client-go
         go build ./...
       working-directory: br
