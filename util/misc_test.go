@@ -17,19 +17,13 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestT(t *testing.T) {
-	TestingT(t)
-}
+func TestCompatibleParseGCTime(t *testing.T) {
+	assert, require := assert.New(t), require.New(t)
 
-var _ = Suite(&testMiscSuite{})
-
-type testMiscSuite struct {
-}
-
-func (s *testMiscSuite) TestCompatibleParseGCTime(c *C) {
 	values := []string{
 		"20181218-19:53:37 +0800 CST",
 		"20181218-19:53:37 +0800 MST",
@@ -55,19 +49,19 @@ func (s *testMiscSuite) TestCompatibleParseGCTime(c *C) {
 	expectedTimeFormatted := "20181218-19:53:37 +0800"
 
 	beijing, err := time.LoadLocation("Asia/Shanghai")
-	c.Assert(err, IsNil)
+	require.Nil(err)
 
 	for _, value := range values {
 		t, err := CompatibleParseGCTime(value)
-		c.Assert(err, IsNil)
-		c.Assert(t.Equal(expectedTime), Equals, true)
+		assert.Nil(err)
+		assert.True(t.Equal(expectedTime))
 
 		formatted := t.In(beijing).Format(GCTimeFormat)
-		c.Assert(formatted, Equals, expectedTimeFormatted)
+		assert.Equal(formatted, expectedTimeFormatted)
 	}
 
 	for _, value := range invalidValues {
 		_, err := CompatibleParseGCTime(value)
-		c.Assert(err, NotNil)
+		assert.NotNil(err)
 	}
 }

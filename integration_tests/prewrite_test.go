@@ -14,35 +14,31 @@
 package tikv_test
 
 import (
-	. "github.com/pingcap/check"
+	"testing"
+
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/store/mockstore/unistore"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
-type testPrewriteSuite struct {
-	store *tikv.KVStore
-}
+func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
+	require, assert := require.New(t), assert.New(t)
 
-var _ = Suite(&testPrewriteSuite{})
-
-func (s *testPrewriteSuite) SetUpTest(c *C) {
 	client, pdClient, cluster, err := unistore.New("")
-	c.Assert(err, IsNil)
+	require.Nil(err)
 	unistore.BootstrapWithSingleStore(cluster)
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
-	c.Assert(err, IsNil)
-	s.store = store
-}
+	require.Nil(err)
 
-func (s *testPrewriteSuite) TestSetMinCommitTSInAsyncCommit(c *C) {
-	t, err := s.store.Begin()
-	c.Assert(err, IsNil)
-	txn := tikv.TxnProbe{KVTxn: t}
+	tx, err := store.Begin()
+	require.Nil(err)
+	txn := tikv.TxnProbe{KVTxn: tx}
 	err = txn.Set([]byte("k"), []byte("v"))
-	c.Assert(err, IsNil)
+	assert.Nil(err)
 	committer, err := txn.NewCommitter(1)
-	c.Assert(err, IsNil)
+	assert.Nil(err)
 	committer.SetUseAsyncCommit()
 
 	buildRequest := func() *kvrpcpb.PrewriteRequest {
@@ -52,16 +48,16 @@ func (s *testPrewriteSuite) TestSetMinCommitTSInAsyncCommit(c *C) {
 
 	// no forUpdateTS
 	req := buildRequest()
-	c.Assert(req.MinCommitTs, Equals, txn.StartTS()+1)
+	assert.Equal(req.MinCommitTs, txn.StartTS()+1)
 
 	// forUpdateTS is set
 	committer.SetForUpdateTS(txn.StartTS() + (5 << 18))
 	req = buildRequest()
-	c.Assert(req.MinCommitTs, Equals, committer.GetForUpdateTS()+1)
+	assert.Equal(req.MinCommitTs, committer.GetForUpdateTS()+1)
 
 	// minCommitTS is set
 	committer.SetMinCommitTS(txn.StartTS() + (10 << 18))
 	req = buildRequest()
-	c.Assert(req.MinCommitTs, Equals, committer.GetMinCommitTS())
+	assert.Equal(req.MinCommitTs, committer.GetMinCommitTS())
 
 }
