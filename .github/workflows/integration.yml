@@ -5,15 +5,10 @@ on:
     branches: [ v2 ]
   pull_request:
     branches: [ v2 ]
-  workflow_dispatch:
-    inputs:
-      name:
-        description: 'TiDB version'
-        default: 'github.com/pingcap/tidb@master'
 
 jobs:
 
-  integration-unistore:
+  integration-local:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
