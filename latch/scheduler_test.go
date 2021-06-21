@@ -17,20 +17,11 @@ import (
 	"bytes"
 	"math/rand"
 	"sync"
+	"testing"
 	"time"
-
-	. "github.com/pingcap/check"
 )
 
-var _ = Suite(&testSchedulerSuite{})
-
-type testSchedulerSuite struct {
-}
-
-func (s *testSchedulerSuite) SetUpTest(c *C) {
-}
-
-func (s *testSchedulerSuite) TestWithConcurrency(c *C) {
+func TestWithConcurrency(t *testing.T) {
 	sched := NewScheduler(7)
 	defer sched.Close()
 	rand.Seed(time.Now().Unix())
