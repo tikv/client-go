@@ -1,0 +1,10 @@
+[server]
+addr = "127.0.0.1:20160"
+[storage]
+reserve-space = "1MB"
+[pd]
+endpoints = ["127.0.0.1:2379"]
+[rocksdb]
+max-open-files = 10000
+[raftdb]
+max-open-files = 10000
