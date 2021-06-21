@@ -14,30 +14,33 @@
 package util
 
 import (
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 )
 
-func (s *testMiscSuite) TestRateLimit(c *C) {
+func TestRateLimit(t *testing.T) {
+	assert := assert.New(t)
+
 	done := make(chan struct{}, 1)
 	rl := NewRateLimit(1)
-	c.Assert(rl.PutToken, PanicMatches, "put a redundant token")
+	assert.PanicsWithValue("put a redundant token", rl.PutToken)
 	exit := rl.GetToken(done)
-	c.Assert(exit, Equals, false)
+	assert.False(exit)
 	rl.PutToken()
-	c.Assert(rl.PutToken, PanicMatches, "put a redundant token")
+	assert.PanicsWithValue("put a redundant token", rl.PutToken)
 
 	exit = rl.GetToken(done)
-	c.Assert(exit, Equals, false)
+	assert.False(exit)
 	done <- struct{}{}
 	exit = rl.GetToken(done) // blocked but exit
-	c.Assert(exit, Equals, true)
+	assert.True(exit)
 
 	sig := make(chan int, 1)
 	go func() {
 		exit = rl.GetToken(done) // blocked
-		c.Assert(exit, Equals, false)
+		assert.False(exit)
 		close(sig)
 	}()
 	time.Sleep(200 * time.Millisecond)
