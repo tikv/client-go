@@ -35,53 +35,45 @@ package deadlock
 import (
 	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestT(t *testing.T) {
-	TestingT(t)
-}
-
-var _ = Suite(&testDeadlockSuite{})
-
-type testDeadlockSuite struct{}
-
-func (s *testDeadlockSuite) TestDeadlock(c *C) {
+func TestDeadlock(t *testing.T) {
+	assert := assert.New(t)
 	detector := NewDetector()
 	err := detector.Detect(1, 2, 100)
-	c.Assert(err, IsNil)
+	assert.Nil(err)
 	err = detector.Detect(2, 3, 200)
-	c.Assert(err, IsNil)
+	assert.Nil(err)
 	err = detector.Detect(3, 1, 300)
-	c.Assert(err, NotNil)
-	c.Assert(err.Error(), Equals, "deadlock(200)")
+	assert.EqualError(err, "deadlock(200)")
 	detector.CleanUp(2)
 	list2 := detector.waitForMap[2]
-	c.Assert(list2, IsNil)
+	assert.Nil(list2)
 
 	// After cycle is broken, no deadlock now.
 	err = detector.Detect(3, 1, 300)
-	c.Assert(err, IsNil)
+	assert.Nil(err)
 	list3 := detector.waitForMap[3]
-	c.Assert(list3.txns, HasLen, 1)
+	assert.Len(list3.txns, 1)
 
 	// Different keyHash grows the list.
 	err = detector.Detect(3, 1, 400)
-	c.Assert(err, IsNil)
-	c.Assert(list3.txns, HasLen, 2)
+	assert.Nil(err)
+	assert.Len(list3.txns, 2)
 
 	// Same waitFor and key hash doesn't grow the list.
 	err = detector.Detect(3, 1, 400)
-	c.Assert(err, IsNil)
-	c.Assert(list3.txns, HasLen, 2)
+	assert.Nil(err)
+	assert.Len(list3.txns, 2)
 
 	detector.CleanUpWaitFor(3, 1, 300)
-	c.Assert(list3.txns, HasLen, 1)
+	assert.Len(list3.txns, 1)
 	detector.CleanUpWaitFor(3, 1, 400)
 	list3 = detector.waitForMap[3]
-	c.Assert(list3, IsNil)
+	assert.Nil(list3)
 	detector.Expire(1)
-	c.Assert(detector.waitForMap, HasLen, 1)
+	assert.Len(detector.waitForMap, 1)
 	detector.Expire(2)
-	c.Assert(detector.waitForMap, HasLen, 0)
+	assert.Len(detector.waitForMap, 0)
 }
