@@ -36,34 +36,10 @@ import (
 	"math"
 	"testing"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
-
-func TestT(t *testing.T) {
-	TestingT(t)
-}
-
-// testMockTiKVSuite tests MVCCStore interface.
-// SetUpTest should set specific MVCCStore implementation.
-type testMockTiKVSuite struct {
-	store MVCCStore
-}
-
-type testMarshal struct{}
-
-// testMVCCLevelDB is used to test MVCCLevelDB implementation.
-type testMVCCLevelDB struct {
-	testMockTiKVSuite
-}
-
-var (
-	_ = Suite(&testMockTiKVSuite{})
-	_ = Suite(&testMVCCLevelDB{})
-	_ = Suite(testMarshal{})
 )
 
 func lock(key, primary string, ts uint64) *kvrpcpb.LockInfo {
@@ -667,7 +643,7 @@ func TestRC(t *testing.T) {
 	mustGetRC(t, store, "key", 20, "v1")
 }
 
-func (s testMarshal) TestMarshalmvccLock(t *testing.T) {
+func TestMarshalmvccLock(t *testing.T) {
 	assert := assert.New(t)
 	l := mvccLock{
 		startTS:     47,
@@ -692,7 +668,7 @@ func (s testMarshal) TestMarshalmvccLock(t *testing.T) {
 	assert.Equal(l.minCommitTS, l1.minCommitTS)
 }
 
-func (s testMarshal) TestMarshalmvccValue(t *testing.T) {
+func TestMarshalmvccValue(t *testing.T) {
 	assert := assert.New(t)
 	v := mvccValue{
 		valueType: typePut,
@@ -713,62 +689,67 @@ func (s testMarshal) TestMarshalmvccValue(t *testing.T) {
 	assert.Equal(string(v.value), string(v.value))
 }
 
-func (s *testMVCCLevelDB) TestErrors(c *C) {
+func TestErrors(t *testing.T) {
+	assert := assert.New(t)
 	assert.Equal((&ErrKeyAlreadyExist{}).Error(), `key already exist, key: ""`)
 	assert.Equal(ErrAbort("txn").Error(), "abort: txn")
 	assert.Equal(ErrAlreadyCommitted(0).Error(), "txn already committed")
 	assert.Equal((&ErrConflict{}).Error(), "write conflict")
 }
 
-func (s *testMVCCLevelDB) TestCheckTxnStatus(c *C) {
-	startTS := uint64(5 << 18)
-	s.mustPrewriteWithTTLOK(c, putMutations("pk", "val"), "pk", startTS, 666)
+func TestCheckTxnStatus(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	assert := assert.New(t)
 
-	ttl, commitTS, action, err := s.store.CheckTxnStatus([]byte("pk"), startTS, startTS+100, 666, false, false)
+	startTS := uint64(5 << 18)
+	mustPrewriteWithTTLOK(t, store, putMutations("pk", "val"), "pk", startTS, 666)
+
+	ttl, commitTS, action, err := store.CheckTxnStatus([]byte("pk"), startTS, startTS+100, 666, false, false)
 	assert.Nil(err)
 	assert.Equal(ttl, uint64(666))
 	assert.Equal(commitTS, uint64(0))
 	assert.Equal(action, kvrpcpb.Action_MinCommitTSPushed)
 
 	// MaxUint64 as callerStartTS shouldn't update minCommitTS but return Action_MinCommitTSPushed.
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("pk"), startTS, math.MaxUint64, 666, false, false)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("pk"), startTS, math.MaxUint64, 666, false, false)
 	assert.Nil(err)
 	assert.Equal(ttl, uint64(666))
 	assert.Equal(commitTS, uint64(0))
 	assert.Equal(action, kvrpcpb.Action_MinCommitTSPushed)
 	mustCommitOK(t, store, [][]byte{[]byte("pk")}, startTS, startTS+101)
 
-	ttl, commitTS, _, err = s.store.CheckTxnStatus([]byte("pk"), startTS, 0, 666, false, false)
+	ttl, commitTS, _, err = store.CheckTxnStatus([]byte("pk"), startTS, 0, 666, false, false)
 	assert.Nil(err)
 	assert.Equal(ttl, uint64(0))
 	assert.Equal(commitTS, startTS+101)
 
-	s.mustPrewriteWithTTLOK(c, putMutations("pk1", "val"), "pk1", startTS, 666)
+	mustPrewriteWithTTLOK(t, store, putMutations("pk1", "val"), "pk1", startTS, 666)
 	mustRollbackOK(t, store, [][]byte{[]byte("pk1")}, startTS)
 
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("pk1"), startTS, 0, 666, false, false)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("pk1"), startTS, 0, 666, false, false)
 	assert.Nil(err)
 	assert.Equal(ttl, uint64(0))
 	assert.Equal(commitTS, uint64(0))
 	assert.Equal(action, kvrpcpb.Action_NoAction)
 
-	s.mustPrewriteWithTTLOK(c, putMutations("pk2", "val"), "pk2", startTS, 666)
+	mustPrewriteWithTTLOK(t, store, putMutations("pk2", "val"), "pk2", startTS, 666)
 	currentTS := uint64(777 << 18)
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("pk2"), startTS, 0, currentTS, false, false)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("pk2"), startTS, 0, currentTS, false, false)
 	assert.Nil(err)
 	assert.Equal(ttl, uint64(0))
 	assert.Equal(commitTS, uint64(0))
 	assert.Equal(action, kvrpcpb.Action_TTLExpireRollback)
 
 	// Cover the TxnNotFound case.
-	_, _, _, err = s.store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, false, false)
+	_, _, _, err = store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, false, false)
 	assert.NotNil(err)
 	notFound, ok := errors.Cause(err).(*ErrTxnNotFound)
 	assert.True(ok)
 	assert.Equal(notFound.StartTs, uint64(5))
 	assert.Equal(string(notFound.PrimaryKey), "txnNotFound")
 
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, true, false)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, true, false)
 	assert.Nil(err)
 	assert.Equal(ttl, uint64(0))
 	assert.Equal(commitTS, uint64(0))
@@ -781,25 +762,31 @@ func (s *testMVCCLevelDB) TestCheckTxnStatus(c *C) {
 		StartVersion: 4,
 		MinCommitTs:  6,
 	}
-	errs := s.store.Prewrite(req)
+	errs := store.Prewrite(req)
 	assert.NotNil(errs)
 }
 
-func (s *testMVCCLevelDB) TestRejectCommitTS(c *C) {
+func TestRejectCommitTS(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
 	mustPrewriteOK(t, store, putMutations("x", "A"), "x", 5)
 	// Push the minCommitTS
-	_, _, _, err := s.store.CheckTxnStatus([]byte("x"), 5, 100, 100, false, false)
-	assert.Nil(err)
-	err = s.store.Commit([][]byte{[]byte("x")}, 5, 10)
+	_, _, _, err = store.CheckTxnStatus([]byte("x"), 5, 100, 100, false, false)
+	assert.Nil(t, err)
+	err = store.Commit([][]byte{[]byte("x")}, 5, 10)
 	e, ok := errors.Cause(err).(*ErrCommitTSExpired)
-	assert.True(ok)
-	assert.Equal(e.MinCommitTs, uint64(101))
+	assert.True(t, ok)
+	assert.Equal(t, e.MinCommitTs, uint64(101))
 }
 
-func (s *testMVCCLevelDB) TestMvccGetByKey(c *C) {
+func TestMvccGetByKey(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
 	mustPrewriteOK(t, store, putMutations("q1", "v5"), "p1", 5)
-	debugger, ok := s.store.(MVCCDebugger)
-	assert.True(ok)
+	var istore interface{} = store
+	debugger, ok := istore.(MVCCDebugger)
+	assert.True(t, ok)
 	mvccInfo := debugger.MvccGetByKey([]byte("q1"))
 	except := &kvrpcpb.MvccInfo{
 		Lock: &kvrpcpb.MvccLock{
@@ -809,24 +796,28 @@ func (s *testMVCCLevelDB) TestMvccGetByKey(c *C) {
 			ShortValue: []byte("v5"),
 		},
 	}
-	assert.Eq(mvccInfo, except)
+	assert.Equal(t, mvccInfo, except)
 }
 
-func (s *testMVCCLevelDB) TestTxnHeartBeat(c *C) {
-	s.mustPrewriteWithTTLOK(c, putMutations("pk", "val"), "pk", 5, 666)
+func TestTxnHeartBeat(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	assert := assert.New(t)
+
+	mustPrewriteWithTTLOK(t, store, putMutations("pk", "val"), "pk", 5, 666)
 
 	// Update the ttl
-	ttl, err := s.store.TxnHeartBeat([]byte("pk"), 5, 888)
+	ttl, err := store.TxnHeartBeat([]byte("pk"), 5, 888)
 	assert.Nil(err)
-	c.Assert(ttl, Greater, uint64(666))
+	assert.Greater(ttl, uint64(666))
 
 	// Advise ttl is small
-	ttl, err = s.store.TxnHeartBeat([]byte("pk"), 5, 300)
+	ttl, err = store.TxnHeartBeat([]byte("pk"), 5, 300)
 	assert.Nil(err)
-	c.Assert(ttl, Greater, uint64(300))
+	assert.Greater(ttl, uint64(300))
 
 	// The lock has already been clean up
-	assert.Nil(s.store.Cleanup([]byte("pk"), 5, math.MaxUint64))
-	_, err = s.store.TxnHeartBeat([]byte("pk"), 5, 1000)
+	assert.Nil(store.Cleanup([]byte("pk"), 5, math.MaxUint64))
+	_, err = store.TxnHeartBeat([]byte("pk"), 5, 1000)
 	assert.NotNil(err)
 }
