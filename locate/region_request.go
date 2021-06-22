@@ -324,16 +324,22 @@ func (s *replicaSelector) next(bo *retry.Backoffer) (*RPCContext, error) {
 	}
 }
 
-func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
+func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) error {
 	metrics.RegionCacheCounterWithSendFail.Inc()
 	replica := s.replicas[s.nextReplicaIdx-1]
 	if replica.store.requestLiveness(bo, s.regionCache) == reachable {
 		s.rewind()
-		return
+		return nil
 	}
 
 	store := replica.store
-	// invalidate regions in store.
+
+	logutil.BgLogger().Debug("send failure and store not available", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
+	if bo.GetBackoffTimes()[retry.BoRegionStoreUnavailable.String()] > 100 {
+		return err
+	}
+
+	// Invalidate regions in store to speed up recovering from putting a node offline.
 	if atomic.CompareAndSwapUint32(&store.epoch, replica.epoch, replica.epoch+1) {
 		logutil.BgLogger().Info("mark store's regions need be refill", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
@@ -344,6 +350,7 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	if s.isExhausted() {
 		s.region.scheduleReload()
 	}
+	return bo.Backoff(retry.BoRegionStoreUnavailable, err)
 }
 
 // OnSendSuccess updates the leader of the cached region since the replicaSelector
@@ -823,7 +830,8 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 
 	if ctx.Meta != nil {
 		if s.leaderReplicaSelector != nil {
-			s.leaderReplicaSelector.onSendFailure(bo, err)
+			err := s.leaderReplicaSelector.onSendFailure(bo, err)
+			return errors.Trace(err)
 		} else {
 			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
 		}
@@ -831,7 +839,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 
 	// Retry on send request failure when it's not canceled.
 	// When a store is not available, the leader of related region should be elected quickly.
-	// TODO: the number of retry time should be limited:since region may be unavailable
+	// TODO: the number of retry time should be limited: since region may be unavailable
 	// when some unrecoverable disaster happened.
 	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlash {
 		err = bo.Backoff(retry.BoTiFlashRPC, errors.Errorf("send tiflash request error: %v, ctx: %v, try next peer later", err, ctx))

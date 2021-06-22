@@ -52,16 +52,17 @@ var (
 	RawkvSizeHistogramWithKey          prometheus.Observer
 	RawkvSizeHistogramWithValue        prometheus.Observer
 
-	BackoffHistogramRPC              prometheus.Observer
-	BackoffHistogramLock             prometheus.Observer
-	BackoffHistogramLockFast         prometheus.Observer
-	BackoffHistogramPD               prometheus.Observer
-	BackoffHistogramRegionMiss       prometheus.Observer
-	BackoffHistogramRegionScheduling prometheus.Observer
-	BackoffHistogramServerBusy       prometheus.Observer
-	BackoffHistogramStaleCmd         prometheus.Observer
-	BackoffHistogramDataNotReady     prometheus.Observer
-	BackoffHistogramEmpty            prometheus.Observer
+	BackoffHistogramRPC                    prometheus.Observer
+	BackoffHistogramLock                   prometheus.Observer
+	BackoffHistogramLockFast               prometheus.Observer
+	BackoffHistogramPD                     prometheus.Observer
+	BackoffHistogramRegionMiss             prometheus.Observer
+	BackoffHistogramRegionScheduling       prometheus.Observer
+	BackoffHistogramServerBusy             prometheus.Observer
+	BackoffHistogramStaleCmd               prometheus.Observer
+	BackoffHistogramDataNotReady           prometheus.Observer
+	BackoffHistogramRegionStoreUnavailable prometheus.Observer
+	BackoffHistogramEmpty                  prometheus.Observer
 
 	TxnRegionsNumHistogramWithSnapshot         prometheus.Observer
 	TxnRegionsNumHistogramPrewrite             prometheus.Observer
@@ -145,6 +146,7 @@ func initShortcuts() {
 	BackoffHistogramServerBusy = TiKVBackoffHistogram.WithLabelValues("serverBusy")
 	BackoffHistogramStaleCmd = TiKVBackoffHistogram.WithLabelValues("staleCommand")
 	BackoffHistogramDataNotReady = TiKVBackoffHistogram.WithLabelValues("dataNotReady")
+	BackoffHistogramRegionStoreUnavailable = TiKVBackoffHistogram.WithLabelValues("regionStoreUnavailable")
 	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")
 
 	TxnRegionsNumHistogramWithSnapshot = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot")
