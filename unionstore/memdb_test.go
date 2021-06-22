@@ -574,8 +574,8 @@ func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
 		assert.Equal(it1.Value(), it2.Value())
 
 		it, _ := p1.Iter(it2.Key(), nil)
-		assert.Equal(it1.Key(), it2.Key())
-		assert.Equal(it1.Value(), it2.Value())
+		assert.Equal(it.Key(), it2.Key())
+		assert.Equal(it.Value(), it2.Value())
 
 		if prevKey != nil {
 			it, _ = p1.IterReverse(it2.Key())
