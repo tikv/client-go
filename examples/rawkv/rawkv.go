@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	cli, err := tikv.NewRawKVClient([]string{"172.16.6.153:2379"}, config.DefaultConfig().Security)
+	cli, err := tikv.NewRawKVClient([]string{"127.0.0.1:2379"}, config.DefaultConfig().Security)
 	if err != nil {
 		panic(err)
 	}
