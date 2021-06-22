@@ -1,3 +1,22 @@
+// Copyright 2021 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// NOTE: The code in this file is based on code from the
+// TiDB project, licensed under the Apache License v 2.0
+//
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/latch/latch_test.go
+//
+
 // Copyright 2018 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,100 +33,90 @@
 package latch
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 )
 
-func TestT(t *testing.T) {
-	TestingT(t)
+var tso atomic.Uint64
+
+func getTso() uint64 {
+	return tso.Inc()
 }
 
-var _ = Suite(&testLatchSuite{})
-
-var baseTso uint64
-
-type testLatchSuite struct {
-	latches *Latches
-}
-
-func (s *testLatchSuite) SetUpTest(c *C) {
-	s.latches = NewLatches(256)
-}
-
-func (s *testLatchSuite) newLock(keys [][]byte) (startTS uint64, lock *Lock) {
-	startTS = getTso()
-	lock = s.latches.genLock(startTS, keys)
+func newLock(latches *Latches, keys [][]byte) (startTs uint64, lock *Lock) {
+	startTs = getTso()
+	lock = latches.genLock(startTs, keys)
 	return
 }
 
-func getTso() uint64 {
-	return atomic.AddUint64(&baseTso, uint64(1))
-}
+func TestWakeUp(t *testing.T) {
+	latches := NewLatches(256)
 
-func (s *testLatchSuite) TestWakeUp(c *C) {
-	keysA := [][]byte{
-		[]byte("a"), []byte("b"), []byte("c")}
-	_, lockA := s.newLock(keysA)
+	keysA := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+	_, lockA := newLock(latches, keysA)
 
 	keysB := [][]byte{[]byte("d"), []byte("e"), []byte("a"), []byte("c")}
-	startTSB, lockB := s.newLock(keysB)
+	startTSB, lockB := newLock(latches, keysB)
 
 	// A acquire lock success.
-	result := s.latches.acquire(lockA)
-	c.Assert(result, Equals, acquireSuccess)
+	result := latches.acquire(lockA)
+	assert.Equal(t, acquireSuccess, result)
 
 	// B acquire lock failed.
-	result = s.latches.acquire(lockB)
-	c.Assert(result, Equals, acquireLocked)
+	result = latches.acquire(lockB)
+	assert.Equal(t, acquireLocked, result)
 
 	// A release lock, and get wakeup list.
 	commitTSA := getTso()
 	wakeupList := make([]*Lock, 0)
 	lockA.SetCommitTS(commitTSA)
-	wakeupList = s.latches.release(lockA, wakeupList)
-	c.Assert(wakeupList[0].startTS, Equals, startTSB)
+	wakeupList = latches.release(lockA, wakeupList)
+	assert.Equal(t, startTSB, wakeupList[0].startTS)
 
 	// B acquire failed since startTSB has stale for some keys.
-	result = s.latches.acquire(lockB)
-	c.Assert(result, Equals, acquireStale)
+	result = latches.acquire(lockB)
+	assert.Equal(t, acquireStale, result)
 
 	// B release lock since it received a stale.
-	wakeupList = s.latches.release(lockB, wakeupList)
-	c.Assert(wakeupList, HasLen, 0)
+	wakeupList = latches.release(lockB, wakeupList)
+	assert.Len(t, wakeupList, 0)
 
 	// B restart:get a new startTS.
 	startTSB = getTso()
-	lockB = s.latches.genLock(startTSB, keysB)
-	result = s.latches.acquire(lockB)
-	c.Assert(result, Equals, acquireSuccess)
+	lockB = latches.genLock(startTSB, keysB)
+	result = latches.acquire(lockB)
+	assert.Equal(t, acquireSuccess, result)
 }
 
-func (s *testLatchSuite) TestFirstAcquireFailedWithStale(c *C) {
-	keys := [][]byte{
-		[]byte("a"), []byte("b"), []byte("c")}
-	_, lockA := s.newLock(keys)
-	startTSB, lockB := s.newLock(keys)
+func TestFirstAcquireFailedWithStale(t *testing.T) {
+	latches := NewLatches(256)
+
+	keys := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+	_, lockA := newLock(latches, keys)
+	startTSB, lockB := newLock(latches, keys)
+
 	// acquire lockA success
-	result := s.latches.acquire(lockA)
-	c.Assert(result, Equals, acquireSuccess)
+	result := latches.acquire(lockA)
+	assert.Equal(t, acquireSuccess, result)
+
 	// release lockA
 	commitTSA := getTso()
 	wakeupList := make([]*Lock, 0)
 	lockA.SetCommitTS(commitTSA)
-	s.latches.release(lockA, wakeupList)
+	latches.release(lockA, wakeupList)
+	assert.Greater(t, commitTSA, startTSB)
 
-	c.Assert(commitTSA, Greater, startTSB)
 	// acquire lockB first time, should be failed with stale since commitTSA > startTSB
-	result = s.latches.acquire(lockB)
-	c.Assert(result, Equals, acquireStale)
-	s.latches.release(lockB, wakeupList)
+	result = latches.acquire(lockB)
+	assert.Equal(t, acquireStale, result)
+	latches.release(lockB, wakeupList)
 }
 
-func (s *testLatchSuite) TestRecycle(c *C) {
+func TestRecycle(t *testing.T) {
 	latches := NewLatches(8)
 	now := time.Now()
 	startTS := oracle.GoTimeToTS(now)
@@ -117,8 +126,8 @@ func (s *testLatchSuite) TestRecycle(c *C) {
 	lock1 := latches.genLock(startTS, [][]byte{
 		[]byte("b"), []byte("c"),
 	})
-	c.Assert(latches.acquire(lock), Equals, acquireSuccess)
-	c.Assert(latches.acquire(lock1), Equals, acquireLocked)
+	assert.Equal(t, acquireSuccess, latches.acquire(lock))
+	assert.Equal(t, acquireLocked, latches.acquire(lock1))
 	lock.SetCommitTS(startTS + 1)
 	var wakeupList []*Lock
 	latches.release(lock, wakeupList)
@@ -129,7 +138,7 @@ func (s *testLatchSuite) TestRecycle(c *C) {
 	lock2 := latches.genLock(startTS+3, [][]byte{
 		[]byte("b"), []byte("c"),
 	})
-	c.Assert(latches.acquire(lock2), Equals, acquireSuccess)
+	assert.Equal(t, acquireSuccess, latches.acquire(lock2))
 	wakeupList = wakeupList[:0]
 	latches.release(lock2, wakeupList)
 
@@ -140,13 +149,13 @@ func (s *testLatchSuite) TestRecycle(c *C) {
 			allEmpty = false
 		}
 	}
-	c.Assert(allEmpty, IsFalse)
+	assert.False(t, allEmpty)
 
 	currentTS := oracle.GoTimeToTS(now.Add(expireDuration)) + 3
 	latches.recycle(currentTS)
 
 	for i := 0; i < len(latches.slots); i++ {
 		latch := &latches.slots[i]
-		c.Assert(latch.queue, IsNil)
+		assert.Nil(t, latch.queue)
 	}
 }
