@@ -642,60 +642,6 @@ func TestRC(t *testing.T) {
 	mustGetRC(t, store, "key", 20, "v1")
 }
 
-func TestMarshalmvccLock(t *testing.T) {
-	assert := assert.New(t)
-	l := mvccLock{
-		startTS:     47,
-		primary:     []byte{'a', 'b', 'c'},
-		value:       []byte{'d', 'e'},
-		op:          kvrpcpb.Op_Put,
-		ttl:         444,
-		minCommitTS: 666,
-	}
-	bin, err := l.MarshalBinary()
-	assert.Nil(err)
-
-	var l1 mvccLock
-	err = l1.UnmarshalBinary(bin)
-	assert.Nil(err)
-
-	assert.Equal(l.startTS, l1.startTS)
-	assert.Equal(l.op, l1.op)
-	assert.Equal(l.ttl, l1.ttl)
-	assert.Equal(string(l.primary), string(l1.primary))
-	assert.Equal(string(l.value), string(l1.value))
-	assert.Equal(l.minCommitTS, l1.minCommitTS)
-}
-
-func TestMarshalmvccValue(t *testing.T) {
-	assert := assert.New(t)
-	v := mvccValue{
-		valueType: typePut,
-		startTS:   42,
-		commitTS:  55,
-		value:     []byte{'d', 'e'},
-	}
-	bin, err := v.MarshalBinary()
-	assert.Nil(err)
-
-	var v1 mvccValue
-	err = v1.UnmarshalBinary(bin)
-	assert.Nil(err)
-
-	assert.Equal(v.valueType, v1.valueType)
-	assert.Equal(v.startTS, v1.startTS)
-	assert.Equal(v.commitTS, v1.commitTS)
-	assert.Equal(string(v.value), string(v.value))
-}
-
-func TestErrors(t *testing.T) {
-	assert := assert.New(t)
-	assert.Equal((&ErrKeyAlreadyExist{}).Error(), `key already exist, key: ""`)
-	assert.Equal(ErrAbort("txn").Error(), "abort: txn")
-	assert.Equal(ErrAlreadyCommitted(0).Error(), "txn already committed")
-	assert.Equal((&ErrConflict{}).Error(), "write conflict")
-}
-
 func TestCheckTxnStatus(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
