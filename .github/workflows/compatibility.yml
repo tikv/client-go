@@ -33,19 +33,6 @@ jobs:
         go build ./...
       working-directory: tidb
 
-  br-compatibility:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Set up Go
-      uses: actions/setup-go@v2
-      with:
-        go-version: 1.16
-
-    - name: Checkout Client-Go
-      uses: actions/checkout@v2
-      with:
-        path: client-go
-    
     - name: Checkout BR
       uses: actions/checkout@v2
       with:
@@ -56,21 +43,9 @@ jobs:
       run: |
         cp go.mod1 go.mod && cp go.sum1 go.sum
         go mod edit -replace=github.com/tikv/client-go/v2=../client-go
+        go mod edit -replace=github.com/pingcap/tidb=../tidb
         go build ./...
       working-directory: br
-
-  ticdc-compatibility:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Set up Go
-      uses: actions/setup-go@v2
-      with:
-        go-version: 1.16
-
-    - name: Checkout Client-Go
-      uses: actions/checkout@v2
-      with:
-        path: client-go
     
     - name: Checkout TiCDC
       uses: actions/checkout@v2
@@ -81,5 +56,6 @@ jobs:
     - name: Check build
       run: |
         go mod edit -replace=github.com/tikv/client-go/v2=../client-go
+        go mod edit -replace=github.com/pingcap/tidb=../tidb
         go build ./...
       working-directory: ticdc
