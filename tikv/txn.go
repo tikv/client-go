@@ -194,6 +194,13 @@ func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
 	return ret, nil
 }
 
+// BatchGet gets kv from the memory buffer of statement and transaction, and the kv storage.
+// Do not use len(value) == 0 or value == nil to represent non-exist.
+// If a key doesn't exist, there shouldn't be any corresponding entry in the result map.
+func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys)
+}
+
 // Set sets the value for key k as v into kv store.
 // v must NOT be nil or empty, otherwise it returns ErrCannotSetNilValue.
 func (txn *KVTxn) Set(k []byte, v []byte) error {
