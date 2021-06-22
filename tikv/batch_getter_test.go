@@ -38,7 +38,6 @@ import (
 	. "github.com/pingcap/check"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/unionstore"
 )
 
 var _ = Suite(&testBatchGetterSuite{})
@@ -56,11 +55,11 @@ func (s *testBatchGetterSuite) TestBufferBatchGetter(c *C) {
 	snap.Set(kc, kc)
 	snap.Set(kd, kd)
 
-	buffer := unionstore.NewUnionStore(snap)
-	buffer.GetMemBuffer().Set(ka, []byte("a1"))
-	buffer.GetMemBuffer().Delete(kb)
+	buffer := newMockStore()
+	buffer.Set(ka, []byte("a1"))
+	buffer.Delete(kb)
 
-	batchGetter := NewBufferBatchGetter(buffer.GetMemBuffer(), snap)
+	batchGetter := NewBufferBatchGetter(buffer, snap)
 	result, err := batchGetter.BatchGet(context.Background(), [][]byte{ka, kb, kc, kd})
 	c.Assert(err, IsNil)
 	c.Assert(len(result), Equals, 3)
@@ -85,7 +84,7 @@ func (s *mockBatchGetterStore) Len() int {
 	return len(s.index)
 }
 
-func (s *mockBatchGetterStore) Get(ctx context.Context, k []byte) ([]byte, error) {
+func (s *mockBatchGetterStore) Get(k []byte) ([]byte, error) {
 	for i, key := range s.index {
 		if kv.CmpKey(key, k) == 0 {
 			return s.value[i], nil
@@ -97,7 +96,7 @@ func (s *mockBatchGetterStore) Get(ctx context.Context, k []byte) ([]byte, error
 func (s *mockBatchGetterStore) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 	m := make(map[string][]byte)
 	for _, k := range keys {
-		v, err := s.Get(ctx, k)
+		v, err := s.Get(k)
 		if err == nil {
 			m[string(k)] = v
 			continue
@@ -125,12 +124,4 @@ func (s *mockBatchGetterStore) Set(k []byte, v []byte) error {
 func (s *mockBatchGetterStore) Delete(k []byte) error {
 	s.Set(k, []byte{})
 	return nil
-}
-
-func (s *mockBatchGetterStore) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error) {
-	panic("unimplemented")
-}
-
-func (s *mockBatchGetterStore) IterReverse(k []byte) (unionstore.Iterator, error) {
-	panic("unimplemented")
 }
