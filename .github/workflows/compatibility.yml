@@ -60,5 +60,5 @@ jobs:
         go mod edit -replace=github.com/tikv/client-go/v2=../client-go
         go mod edit -replace=github.com/pingcap/tidb=../tidb
         go mod tidy
-        go build ./...
+        make
       working-directory: ticdc
