@@ -1,3 +1,22 @@
+// Copyright 2021 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// NOTE: The code in this file is based on code from the
+// TiDB project, licensed under the Apache License v 2.0
+//
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/config/config.go
+//
+
 // Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +42,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -139,24 +159,19 @@ func UpdateGlobal(f func(conf *Config)) func() {
 	return restore
 }
 
-const (
-	globalTxnScope = "global"
-)
-
-// GetTxnScopeFromConfig extracts @@txn_scope value from config
-func GetTxnScopeFromConfig() (bool, string) {
+// GetTxnScopeFromConfig extracts @@txn_scope value from the config.
+func GetTxnScopeFromConfig() string {
+	var txnScope string
+	if kvcfg := GetGlobalConfig(); kvcfg != nil {
+		txnScope = kvcfg.TxnScope
+	}
 	if val, err := util.EvalFailpoint("injectTxnScope"); err == nil {
-		v := val.(string)
-		if len(v) > 0 {
-			return false, v
-		}
-		return true, globalTxnScope
+		txnScope = val.(string)
 	}
-
-	if kvcfg := GetGlobalConfig(); kvcfg != nil && len(kvcfg.TxnScope) > 0 {
-		return false, kvcfg.TxnScope
+	if len(txnScope) > 0 {
+		return txnScope
 	}
-	return true, globalTxnScope
+	return oracle.GlobalTxnScope
 }
 
 // ParsePath parses this path.

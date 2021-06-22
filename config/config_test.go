@@ -1,3 +1,22 @@
+// Copyright 2021 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// NOTE: The code in this file is based on code from the
+// TiDB project, licensed under the Apache License v 2.0
+//
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/config/config_test.go
+//
+
 // Copyright 2017 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,39 +33,42 @@
 package config
 
 import (
-	. "github.com/pingcap/check"
+	"testing"
+
 	"github.com/pingcap/failpoint"
+	"github.com/stretchr/testify/assert"
 )
 
-var _ = SerialSuites(&testConfigSuite{})
-
-func (s *testConfigSuite) TestParsePath(c *C) {
+func TestParsePath(t *testing.T) {
 	etcdAddrs, disableGC, err := ParsePath("tikv://node1:2379,node2:2379")
-	c.Assert(err, IsNil)
-	c.Assert(etcdAddrs, DeepEquals, []string{"node1:2379", "node2:2379"})
-	c.Assert(disableGC, IsFalse)
+
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"node1:2379", "node2:2379"}, etcdAddrs)
+	assert.False(t, disableGC)
 
 	_, _, err = ParsePath("tikv://node1:2379")
-	c.Assert(err, IsNil)
+	assert.Nil(t, err)
+
 	_, disableGC, err = ParsePath("tikv://node1:2379?disableGC=true")
-	c.Assert(err, IsNil)
-	c.Assert(disableGC, IsTrue)
+	assert.Nil(t, err)
+	assert.True(t, disableGC)
 }
 
-func (s *testConfigSuite) TestTxnScopeValue(c *C) {
-	c.Assert(failpoint.Enable("tikvclient/injectTxnScope", `return("bj")`), IsNil)
-	isGlobal, v := GetTxnScopeFromConfig()
-	c.Assert(isGlobal, IsFalse)
-	c.Assert(v, Equals, "bj")
-	c.Assert(failpoint.Disable("tikvclient/injectTxnScope"), IsNil)
-	c.Assert(failpoint.Enable("tikvclient/injectTxnScope", `return("")`), IsNil)
-	isGlobal, v = GetTxnScopeFromConfig()
-	c.Assert(isGlobal, IsTrue)
-	c.Assert(v, Equals, "global")
-	c.Assert(failpoint.Disable("tikvclient/injectTxnScope"), IsNil)
-	c.Assert(failpoint.Enable("tikvclient/injectTxnScope", `return("global")`), IsNil)
-	isGlobal, v = GetTxnScopeFromConfig()
-	c.Assert(isGlobal, IsFalse)
-	c.Assert(v, Equals, "global")
-	c.Assert(failpoint.Disable("tikvclient/injectTxnScope"), IsNil)
+func TestTxnScopeValue(t *testing.T) {
+	var err error
+
+	err = failpoint.Enable("tikvclient/injectTxnScope", `return("bj")`)
+	assert.Nil(t, err)
+	assert.Equal(t, "bj", GetTxnScopeFromConfig())
+
+	err = failpoint.Enable("tikvclient/injectTxnScope", `return("")`)
+	assert.Nil(t, err)
+	assert.Equal(t, "global", GetTxnScopeFromConfig())
+
+	err = failpoint.Enable("tikvclient/injectTxnScope", `return("global")`)
+	assert.Nil(t, err)
+	assert.Equal(t, "global", GetTxnScopeFromConfig())
+
+	err = failpoint.Disable("tikvclient/injectTxnScope")
+	assert.Nil(t, err)
 }
