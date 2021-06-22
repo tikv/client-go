@@ -134,7 +134,7 @@ func (s *testClientFailSuite) TestRecvErrorInMultipleRecvLoops(c *C) {
 	}
 	epoch := atomic.LoadUint64(&batchClient.epoch)
 
-	fp := "github.com/tikv/client-go/v2/client/gotErrorInRecvLoop"
+	fp := "tikvclient/gotErrorInRecvLoop"
 	// Send a request to each stream to trigger reconnection.
 	for _, forwardedHost := range forwardedHosts {
 		c.Assert(failpoint.Enable(fp, `1*return("0")`), IsNil)
