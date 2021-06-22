@@ -38,26 +38,37 @@ import (
 	"runtime"
 	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 )
 
-var _ = SerialSuites(&testConfigSuite{})
+func TestTLSConfig(t *testing.T) {
+	_, localFile, _, _ := runtime.Caller(0)
+	certFile := filepath.Join(filepath.Dir(localFile), "cert.pem")
+	keyFile := filepath.Join(filepath.Dir(localFile), "key.pem")
+	perm := os.FileMode(0666)
 
-type testConfigSuite struct{}
+	assert.Nil(t, os.WriteFile(certFile, []byte(cert), perm))
+	assert.Nil(t, os.WriteFile(keyFile, []byte(key), perm))
 
-func TestT(t *testing.T) {
-	CustomVerboseFlag = true
-	TestingT(t)
+	security := Security{
+		ClusterSSLCA:   certFile,
+		ClusterSSLCert: certFile,
+		ClusterSSLKey:  keyFile,
+	}
+
+	tlsConfig, err := security.ToTLSConfig()
+	assert.Nil(t, err)
+	assert.NotNil(t, tlsConfig)
+
+	// Note that on windows, we can't Remove a file if the file is not closed.
+	// The behavior is different on linux, we can always Remove a file even
+	// if it's open. The OS maintains a reference count for open/close, the file
+	// is recycled when the reference count drops to 0.
+	assert.Nil(t, os.Remove(certFile))
+	assert.Nil(t, os.Remove(keyFile))
 }
 
-func (s *testConfigSuite) TestConfig(c *C) {
-	// Test for TLS config.
-	certFile := "cert.pem"
-	_, localFile, _, _ := runtime.Caller(0)
-	certFile = filepath.Join(filepath.Dir(localFile), certFile)
-	f, err := os.Create(certFile)
-	c.Assert(err, IsNil)
-	_, err = f.WriteString(`-----BEGIN CERTIFICATE-----
+var cert = `-----BEGIN CERTIFICATE-----
 MIIC+jCCAeKgAwIBAgIRALsvlisKJzXtiwKcv7toreswDQYJKoZIhvcNAQELBQAw
 EjEQMA4GA1UEChMHQWNtZSBDbzAeFw0xOTAzMTMwNzExNDhaFw0yMDAzMTIwNzEx
 NDhaMBIxEDAOBgNVBAoTB0FjbWUgQ28wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw
@@ -75,15 +86,9 @@ If0KbvbS6qDfimA+m0m6n5yDzc5tPl+kgKyeivSyqeG7T9m40gvCLAMgI7iTFhIZ
 BvUPi88z3wGa8rmhn9dOvkwauLFU5i5dqoz6m9HXmaEKzAAigGzgU8vPDt/Dxxgu
 c933WW1E0hCtvuGxWFIFtoJMQoyH0Pl4ACmY/6CokCCZKDInrPdhhf3MGRjkkw==
 -----END CERTIFICATE-----
-`)
-	c.Assert(err, IsNil)
-	c.Assert(f.Close(), IsNil)
+`
 
-	keyFile := "key.pem"
-	keyFile = filepath.Join(filepath.Dir(localFile), keyFile)
-	f, err = os.Create(keyFile)
-	c.Assert(err, IsNil)
-	_, err = f.WriteString(`-----BEGIN RSA PRIVATE KEY-----
+var key = `-----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQEAxAsmOXGeEnHEHZOFwoBDcDi7BPdrmb7rQXGB5PJ3SKcbsUJ5
 kv9mnycVpXbioGrri5cEWK88L5lELpswdCyCSMGTd+yjHnqU7/nH9SL9FNU8Nj8l
 2u4w9VcXHCO5R8ajm2K5y3WdQDhtkslqCaf4Oo2am3Rp2AGwcW2V2L/RcgOodBZL
@@ -110,23 +115,4 @@ hApKLQKBgHUG+SjrxQjiFipE52YNGFLzbMR6Uga4baACW05uGPpao/+MkCGRAidL
 d/8eU66iPNt/23iVAbqkF8mRpCxC0+O5HRqTEzgrlWKabXfmhYqIVjq+tkonJ0NU
 xkNuJ2BlEGkwWLiRbKy1lNBBFUXKuhh3L/EIY10WTnr3TQzeL6H1
 -----END RSA PRIVATE KEY-----
-`)
-	c.Assert(err, IsNil)
-	c.Assert(f.Close(), IsNil)
-	security := Security{
-		ClusterSSLCA:   certFile,
-		ClusterSSLCert: certFile,
-		ClusterSSLKey:  keyFile,
-	}
-
-	tlsConfig, err := security.ToTLSConfig()
-	c.Assert(err, IsNil)
-	c.Assert(tlsConfig, NotNil)
-
-	// Note that on windows, we can't Remove a file if the file is not closed.
-	// The behavior is different on linux, we can always Remove a file even
-	// if it's open. The OS maintains a reference count for open/close, the file
-	// is recycled when the reference count drops to 0.
-	c.Assert(os.Remove(certFile), IsNil)
-	c.Assert(os.Remove(keyFile), IsNil)
-}
+`
