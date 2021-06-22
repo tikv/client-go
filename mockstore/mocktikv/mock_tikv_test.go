@@ -208,8 +208,7 @@ func TestGetWithLock(t *testing.T) {
 	mutations := []*kvrpcpb.Mutation{{
 		Op:  kvrpcpb.Op_Lock,
 		Key: []byte(key),
-	},
-	}
+	}}
 	// test with lock's type is lock
 	mustPrewriteOK(t, store, mutations, key, 20)
 	mustGetOK(t, store, key, 25, value)
