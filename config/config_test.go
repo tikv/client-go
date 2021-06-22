@@ -33,31 +33,42 @@
 package config
 
 import (
-	. "github.com/pingcap/check"
+	"testing"
+
 	"github.com/pingcap/failpoint"
+	"github.com/stretchr/testify/assert"
 )
 
-var _ = SerialSuites(&testConfigSuite{})
-
-func (s *testConfigSuite) TestParsePath(c *C) {
+func TestParsePath(t *testing.T) {
 	etcdAddrs, disableGC, err := ParsePath("tikv://node1:2379,node2:2379")
-	c.Assert(err, IsNil)
-	c.Assert(etcdAddrs, DeepEquals, []string{"node1:2379", "node2:2379"})
-	c.Assert(disableGC, IsFalse)
+
+	assert.Nil(t, err)
+	assert.Equal(t, []string{"node1:2379", "node2:2379"}, etcdAddrs)
+	assert.False(t, disableGC)
 
 	_, _, err = ParsePath("tikv://node1:2379")
-	c.Assert(err, IsNil)
+	assert.Nil(t, err)
+
 	_, disableGC, err = ParsePath("tikv://node1:2379?disableGC=true")
-	c.Assert(err, IsNil)
-	c.Assert(disableGC, IsTrue)
+	assert.Nil(t, err)
+	assert.True(t, disableGC)
 }
 
-func (s *testConfigSuite) TestTxnScopeValue(c *C) {
-	c.Assert(failpoint.Enable("tikvclient/injectTxnScope", `return("bj")`), IsNil)
-	c.Assert(GetTxnScopeFromConfig(), Equals, "bj")
-	c.Assert(failpoint.Enable("tikvclient/injectTxnScope", `return("")`), IsNil)
-	c.Assert(GetTxnScopeFromConfig(), Equals, "global")
-	c.Assert(failpoint.Enable("tikvclient/injectTxnScope", `return("global")`), IsNil)
-	c.Assert(GetTxnScopeFromConfig(), Equals, "global")
-	c.Assert(failpoint.Disable("tikvclient/injectTxnScope"), IsNil)
+func TestTxnScopeValue(t *testing.T) {
+	var err error
+
+	err = failpoint.Enable("tikvclient/injectTxnScope", `return("bj")`)
+	assert.Nil(t, err)
+	assert.Equal(t, "bj", GetTxnScopeFromConfig())
+
+	err = failpoint.Enable("tikvclient/injectTxnScope", `return("")`)
+	assert.Nil(t, err)
+	assert.Equal(t, "global", GetTxnScopeFromConfig())
+
+	err = failpoint.Enable("tikvclient/injectTxnScope", `return("global")`)
+	assert.Nil(t, err)
+	assert.Equal(t, "global", GetTxnScopeFromConfig())
+
+	err = failpoint.Disable("tikvclient/injectTxnScope")
+	assert.Nil(t, err)
 }
