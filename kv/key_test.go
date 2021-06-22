@@ -33,60 +33,20 @@
 package kv
 
 import (
-	"bytes"
-	"encoding/hex"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// NextKey returns the next key in byte-order.
-func NextKey(k []byte) []byte {
-	// add 0x0 to the end of key
-	buf := make([]byte, len(k)+1)
-	copy(buf, k)
-	return buf
-}
+func TestPrefixNextKey(t *testing.T) {
+	k1 := []byte{0xff}
+	k2 := []byte{0xff, 0xff}
+	k3 := []byte{0xff, 0xff, 0xff, 0xff}
 
-// PrefixNextKey returns the next prefix key.
-//
-// Assume there are keys like:
-//
-//   rowkey1
-//   rowkey1_column1
-//   rowkey1_column2
-//   rowKey2
-//
-// If we seek 'rowkey1' NextKey, we will get 'rowkey1_column1'.
-// If we seek 'rowkey1' PrefixNextKey, we will get 'rowkey2'.
-func PrefixNextKey(k []byte) []byte {
-	buf := make([]byte, len(k))
-	copy(buf, k)
-	var i int
-	for i = len(k) - 1; i >= 0; i-- {
-		buf[i]++
-		if buf[i] != 0 {
-			break
-		}
-	}
-	if i == -1 {
-		// Unlike TiDB, for the specific key 0xFF
-		// we return empty slice instead of {0xFF, 0x0}
-		buf = make([]byte, 0)
-	}
-	return buf
-}
-
-// CmpKey returns the comparison result of two key.
-// The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
-func CmpKey(k, another []byte) int {
-	return bytes.Compare(k, another)
-}
-
-// StrKey returns string for key.
-func StrKey(k []byte) string {
-	return hex.EncodeToString(k)
-}
-
-// KeyRange represents a range where StartKey <= key < EndKey.
-type KeyRange struct {
-	StartKey []byte
-	EndKey   []byte
+	pk1 := PrefixNextKey(k1)
+	pk2 := PrefixNextKey(k2)
+	pk3 := PrefixNextKey(k3)
+	assert.Equal(t, []byte(""), pk1)
+	assert.Equal(t, []byte(""), pk2)
+	assert.Equal(t, []byte(""), pk3)
 }
