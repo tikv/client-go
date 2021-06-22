@@ -50,7 +50,7 @@ func TestPDOracle_UntilExpired(t *testing.T) {
 	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
 	lockTs := oracle.GoTimeToTS(start.Add(time.Duration(lockAfter)*time.Millisecond)) + 1
 	waitTs := o.UntilExpired(lockTs, uint64(lockExp), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	assert.Equal(t, lockAfter+lockExp, waitTs)
+	assert.Equal(t, int64(lockAfter+lockExp), waitTs)
 }
 
 func TestPdOracle_GetStaleTimestamp(t *testing.T) {
