@@ -1,0 +1,64 @@
+name: Compatibility Test
+
+on:
+  push:
+    branches: [ v2 ]
+  pull_request:
+    branches: [ v2 ]
+
+jobs:
+
+  tidb-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.16
+
+    - name: Checkout Client-Go
+      uses: actions/checkout@v2
+      with:
+        path: client-go
+    
+    - name: Checkout TiDB
+      uses: actions/checkout@v2
+      with:
+        repository: pingcap/tidb
+        path: tidb
+
+    - name: Check build
+      run: |
+        go mod edit -replace=github.com/tikv/client-go/v2=../client-go
+        go mod tidy
+        make server
+      working-directory: tidb
+
+    - name: Checkout BR
+      uses: actions/checkout@v2
+      with:
+        repository: pingcap/br
+        path: br
+
+    - name: Check build
+      run: |
+        cp go.mod1 go.mod && cp go.sum1 go.sum
+        go mod edit -replace=github.com/tikv/client-go/v2=../client-go
+        go mod edit -replace=github.com/pingcap/tidb=../tidb
+        go mod tidy
+        go build ./...
+      working-directory: br
+    
+    - name: Checkout TiCDC
+      uses: actions/checkout@v2
+      with:
+        repository: pingcap/ticdc
+        path: ticdc
+
+    - name: Check build
+      run: |
+        go mod edit -replace=github.com/tikv/client-go/v2=../client-go
+        go mod edit -replace=github.com/pingcap/tidb=../tidb
+        go mod tidy
+        make
+      working-directory: ticdc
