@@ -34,17 +34,14 @@ package tikv
 
 import (
 	"context"
+	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
 
-var _ = Suite(&testBatchGetterSuite{})
-
-type testBatchGetterSuite struct{}
-
-func (s *testBatchGetterSuite) TestBufferBatchGetter(c *C) {
+func TestBufferBatchGetter(t *testing.T) {
 	snap := newMockStore()
 	ka := []byte("a")
 	kb := []byte("b")
@@ -61,11 +58,11 @@ func (s *testBatchGetterSuite) TestBufferBatchGetter(c *C) {
 
 	batchGetter := NewBufferBatchGetter(buffer, snap)
 	result, err := batchGetter.BatchGet(context.Background(), [][]byte{ka, kb, kc, kd})
-	c.Assert(err, IsNil)
-	c.Assert(len(result), Equals, 3)
-	c.Assert(string(result[string(ka)]), Equals, "a1")
-	c.Assert(string(result[string(kc)]), Equals, "c")
-	c.Assert(string(result[string(kd)]), Equals, "d")
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(result))
+	assert.Equal(t, "a1", string(result[string(ka)]))
+	assert.Equal(t, "c", string(result[string(kc)]))
+	assert.Equal(t, "d", string(result[string(kd)]))
 }
 
 type mockBatchGetterStore struct {
