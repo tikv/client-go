@@ -8,14 +8,26 @@ import (
 	"github.com/tikv/client-go/v2/unionstore"
 )
 
+// BatchBufferGetter is the interface for BatchGet.
+type BatchBufferGetter interface {
+	Len() int
+	unionstore.Getter
+}
+
+// BatchGetter is the interface for BatchGet.
+type BatchGetter interface {
+	// BatchGet gets a batch of values.
+	BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error)
+}
+
 // BufferBatchGetter is the type for BatchGet with MemBuffer.
 type BufferBatchGetter struct {
-	buffer   *unionstore.MemDB
-	snapshot *KVSnapshot
+	buffer   BatchBufferGetter
+	snapshot BatchGetter
 }
 
 // NewBufferBatchGetter creates a new BufferBatchGetter.
-func NewBufferBatchGetter(buffer *unionstore.MemDB, snapshot *KVSnapshot) *BufferBatchGetter {
+func NewBufferBatchGetter(buffer BatchBufferGetter, snapshot BatchGetter) *BufferBatchGetter {
 	return &BufferBatchGetter{buffer: buffer, snapshot: snapshot}
 }
 
