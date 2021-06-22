@@ -14,10 +14,10 @@
 // NOTE: The code in this file is based on code from the
 // TiDB project, licensed under the Apache License v 2.0
 //
-// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/mockstore/deadlock/deadlock_test.go
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/kv/key.go
 //
 
-// Copyright 2019 PingCAP, Inc.
+// Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deadlock
+package kv
 
 import (
 	"testing"
@@ -38,42 +38,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDeadlock(t *testing.T) {
-	assert := assert.New(t)
-	detector := NewDetector()
-	err := detector.Detect(1, 2, 100)
-	assert.Nil(err)
-	err = detector.Detect(2, 3, 200)
-	assert.Nil(err)
-	err = detector.Detect(3, 1, 300)
-	assert.EqualError(err, "deadlock(200)")
-	detector.CleanUp(2)
-	list2 := detector.waitForMap[2]
-	assert.Nil(list2)
+func TestPrefixNextKey(t *testing.T) {
+	k1 := []byte{0xff}
+	k2 := []byte{0xff, 0xff}
+	k3 := []byte{0xff, 0xff, 0xff, 0xff}
 
-	// After cycle is broken, no deadlock now.
-	err = detector.Detect(3, 1, 300)
-	assert.Nil(err)
-	list3 := detector.waitForMap[3]
-	assert.Len(list3.txns, 1)
-
-	// Different keyHash grows the list.
-	err = detector.Detect(3, 1, 400)
-	assert.Nil(err)
-	assert.Len(list3.txns, 2)
-
-	// Same waitFor and key hash doesn't grow the list.
-	err = detector.Detect(3, 1, 400)
-	assert.Nil(err)
-	assert.Len(list3.txns, 2)
-
-	detector.CleanUpWaitFor(3, 1, 300)
-	assert.Len(list3.txns, 1)
-	detector.CleanUpWaitFor(3, 1, 400)
-	list3 = detector.waitForMap[3]
-	assert.Nil(list3)
-	detector.Expire(1)
-	assert.Len(detector.waitForMap, 1)
-	detector.Expire(2)
-	assert.Len(detector.waitForMap, 0)
+	pk1 := PrefixNextKey(k1)
+	pk2 := PrefixNextKey(k2)
+	pk3 := PrefixNextKey(k3)
+	assert.Equal(t, []byte(""), pk1)
+	assert.Equal(t, []byte(""), pk2)
+	assert.Equal(t, []byte(""), pk3)
 }

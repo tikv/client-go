@@ -4,7 +4,10 @@ TiKV Go Client provides support for interacting with the [TiKV](https://github.c
 
 ![Stability Active](https://img.shields.io/badge/Stability-Active-yellow)
 [![Go Reference](https://pkg.go.dev/badge/github.com/tikv/client-go/v2.svg)](https://pkg.go.dev/github.com/tikv/client-go/v2)
-![Test Status](https://github.com/tikv/client-go/actions/workflows/test.yml/badge.svg?branch=v2)
+
+[![Unit Test](https://github.com/tikv/client-go/actions/workflows/test.yml/badge.svg)](https://github.com/tikv/client-go/actions/workflows/test.yml)
+[![Integration Test](https://github.com/tikv/client-go/actions/workflows/integration.yml/badge.svg)](https://github.com/tikv/client-go/actions/workflows/integration.yml)
+[![Compatibility Test](https://github.com/tikv/client-go/actions/workflows/compatibility.yml/badge.svg)](https://github.com/tikv/client-go/actions/workflows/compatibility.yml)
 
 
 ## Package versions
@@ -20,6 +23,8 @@ There are 2 major versions of the `client-go` package.
 ```bash
   go get github.com/tikv/client-go/v2@COMMIT_HASH_OR_TAG_VERSION
 ```
+
+More examples can be found in [examples directory](https://github.com/tikv/client-go/tree/v2/examples).
 
 ## Contributing to client-go
 
@@ -79,10 +84,11 @@ go mod download github.com/tikv/client-go/v2
 
 ## Used By
 
-This project is used by the following projects:
+`client-go` is used by the following projects:
 
 - TiDB: TiDB is an open source distributed HTAP database compatible with the MySQL protocol (https://github.com/pingcap/tidb)
 - BR: A command-line tool for distributed backup and restoration of the TiDB cluster data (https://github.com/pingcap/br)
+- TiCDC: Change data capture for TiDB (https://github.com/pingcap/ticdc)
 
 ## License
 

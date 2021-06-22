@@ -36,39 +36,11 @@ import (
 	"math"
 	"testing"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-func TestT(t *testing.T) {
-	TestingT(t)
-}
-
-// testMockTiKVSuite tests MVCCStore interface.
-// SetUpTest should set specific MVCCStore implementation.
-type testMockTiKVSuite struct {
-	store MVCCStore
-}
-
-type testMarshal struct{}
-
-// testMVCCLevelDB is used to test MVCCLevelDB implementation.
-type testMVCCLevelDB struct {
-	testMockTiKVSuite
-}
-
-var (
-	_ = Suite(&testMockTiKVSuite{})
-	_ = Suite(&testMVCCLevelDB{})
-	_ = Suite(testMarshal{})
-)
-
-func (s *testMockTiKVSuite) SetUpTest(c *C) {
-	var err error
-	s.store, err = NewMVCCLevelDB("")
-	c.Assert(err, IsNil)
-}
 
 func lock(key, primary string, ts uint64) *kvrpcpb.LockInfo {
 	return &kvrpcpb.LockInfo{
@@ -78,45 +50,45 @@ func lock(key, primary string, ts uint64) *kvrpcpb.LockInfo {
 	}
 }
 
-func (s *testMockTiKVSuite) mustGetNone(c *C, key string, ts uint64) {
-	val, err := s.store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_SI, nil)
-	c.Assert(err, IsNil)
-	c.Assert(val, IsNil)
+func mustGetNone(t *testing.T, store MVCCStore, key string, ts uint64) {
+	val, err := store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_SI, nil)
+	assert.Nil(t, err)
+	assert.Nil(t, val)
 }
 
-func (s *testMockTiKVSuite) mustGetErr(c *C, key string, ts uint64) {
-	val, err := s.store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_SI, nil)
-	c.Assert(err, NotNil)
-	c.Assert(val, IsNil)
+func mustGetErr(t *testing.T, store MVCCStore, key string, ts uint64) {
+	val, err := store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_SI, nil)
+	assert.Error(t, err)
+	assert.Nil(t, val)
 }
 
-func (s *testMockTiKVSuite) mustGetOK(c *C, key string, ts uint64, expect string) {
-	val, err := s.store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_SI, nil)
-	c.Assert(err, IsNil)
-	c.Assert(string(val), Equals, expect)
+func mustGetOK(t *testing.T, store MVCCStore, key string, ts uint64, expect string) {
+	val, err := store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_SI, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, string(val), expect)
 }
 
-func (s *testMockTiKVSuite) mustGetRC(c *C, key string, ts uint64, expect string) {
-	val, err := s.store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_RC, nil)
-	c.Assert(err, IsNil)
-	c.Assert(string(val), Equals, expect)
+func mustGetRC(t *testing.T, store MVCCStore, key string, ts uint64, expect string) {
+	val, err := store.Get([]byte(key), ts, kvrpcpb.IsolationLevel_RC, nil)
+	assert.Nil(t, err)
+	assert.Equal(t, string(val), expect)
 }
 
-func (s *testMockTiKVSuite) mustPutOK(c *C, key, value string, startTS, commitTS uint64) {
+func mustPutOK(t *testing.T, store MVCCStore, key, value string, startTS, commitTS uint64) {
 	req := &kvrpcpb.PrewriteRequest{
 		Mutations:    putMutations(key, value),
 		PrimaryLock:  []byte(key),
 		StartVersion: startTS,
 	}
-	errs := s.store.Prewrite(req)
+	errs := store.Prewrite(req)
 	for _, err := range errs {
-		c.Assert(err, IsNil)
+		assert.Nil(t, err)
 	}
-	err := s.store.Commit([][]byte{[]byte(key)}, startTS, commitTS)
-	c.Assert(err, IsNil)
+	err := store.Commit([][]byte{[]byte(key)}, startTS, commitTS)
+	assert.Nil(t, err)
 }
 
-func (s *testMockTiKVSuite) mustDeleteOK(c *C, key string, startTS, commitTS uint64) {
+func mustDeleteOK(t *testing.T, store MVCCStore, key string, startTS, commitTS uint64) {
 	mutations := []*kvrpcpb.Mutation{
 		{
 			Op:  kvrpcpb.Op_Del,
@@ -128,200 +100,214 @@ func (s *testMockTiKVSuite) mustDeleteOK(c *C, key string, startTS, commitTS uin
 		PrimaryLock:  []byte(key),
 		StartVersion: startTS,
 	}
-	errs := s.store.Prewrite(req)
+	errs := store.Prewrite(req)
 	for _, err := range errs {
-		c.Assert(err, IsNil)
+		assert.Nil(t, err)
 	}
-	err := s.store.Commit([][]byte{[]byte(key)}, startTS, commitTS)
-	c.Assert(err, IsNil)
+	err := store.Commit([][]byte{[]byte(key)}, startTS, commitTS)
+	assert.Nil(t, err)
 }
 
-func (s *testMockTiKVSuite) mustScanOK(c *C, start string, limit int, ts uint64, expect ...string) {
-	s.mustRangeScanOK(c, start, "", limit, ts, expect...)
+func mustScanOK(t *testing.T, store MVCCStore, start string, limit int, ts uint64, expect ...string) {
+	mustRangeScanOK(t, store, start, "", limit, ts, expect...)
 }
 
-func (s *testMockTiKVSuite) mustRangeScanOK(c *C, start, end string, limit int, ts uint64, expect ...string) {
-	pairs := s.store.Scan([]byte(start), []byte(end), limit, ts, kvrpcpb.IsolationLevel_SI, nil)
-	c.Assert(len(pairs)*2, Equals, len(expect))
+func mustRangeScanOK(t *testing.T, store MVCCStore, start, end string, limit int, ts uint64, expect ...string) {
+	assert := assert.New(t)
+	pairs := store.Scan([]byte(start), []byte(end), limit, ts, kvrpcpb.IsolationLevel_SI, nil)
+	assert.Equal(len(pairs)*2, len(expect))
 	for i := 0; i < len(pairs); i++ {
-		c.Assert(pairs[i].Err, IsNil)
-		c.Assert(pairs[i].Key, BytesEquals, []byte(expect[i*2]))
-		c.Assert(string(pairs[i].Value), Equals, expect[i*2+1])
+		assert.Nil(pairs[i].Err)
+		assert.Equal(pairs[i].Key, []byte(expect[i*2]))
+		assert.Equal(string(pairs[i].Value), expect[i*2+1])
 	}
 }
 
-func (s *testMockTiKVSuite) mustReverseScanOK(c *C, end string, limit int, ts uint64, expect ...string) {
-	s.mustRangeReverseScanOK(c, "", end, limit, ts, expect...)
+func mustReverseScanOK(t *testing.T, store MVCCStore, end string, limit int, ts uint64, expect ...string) {
+	mustRangeReverseScanOK(t, store, "", end, limit, ts, expect...)
 }
 
-func (s *testMockTiKVSuite) mustRangeReverseScanOK(c *C, start, end string, limit int, ts uint64, expect ...string) {
-	pairs := s.store.ReverseScan([]byte(start), []byte(end), limit, ts, kvrpcpb.IsolationLevel_SI, nil)
-	c.Assert(len(pairs)*2, Equals, len(expect))
+func mustRangeReverseScanOK(t *testing.T, store MVCCStore, start, end string, limit int, ts uint64, expect ...string) {
+	assert := assert.New(t)
+	pairs := store.ReverseScan([]byte(start), []byte(end), limit, ts, kvrpcpb.IsolationLevel_SI, nil)
+	assert.Equal(len(pairs)*2, len(expect))
 	for i := 0; i < len(pairs); i++ {
-		c.Assert(pairs[i].Err, IsNil)
-		c.Assert(pairs[i].Key, BytesEquals, []byte(expect[i*2]))
-		c.Assert(string(pairs[i].Value), Equals, expect[i*2+1])
+		assert.Nil(pairs[i].Err)
+		assert.Equal(pairs[i].Key, []byte(expect[i*2]))
+		assert.Equal(string(pairs[i].Value), expect[i*2+1])
 	}
 }
 
-func (s *testMockTiKVSuite) mustPrewriteOK(c *C, mutations []*kvrpcpb.Mutation, primary string, startTS uint64) {
-	s.mustPrewriteWithTTLOK(c, mutations, primary, startTS, 0)
+func mustPrewriteOK(t *testing.T, store MVCCStore, mutations []*kvrpcpb.Mutation, primary string, startTS uint64) {
+	mustPrewriteWithTTLOK(t, store, mutations, primary, startTS, 0)
 }
 
-func (s *testMockTiKVSuite) mustPrewriteWithTTLOK(c *C, mutations []*kvrpcpb.Mutation, primary string, startTS uint64, ttl uint64) {
-	c.Assert(mustPrewriteWithTTL(s.store, mutations, primary, startTS, ttl), IsTrue)
+func mustPrewriteWithTTLOK(t *testing.T, store MVCCStore, mutations []*kvrpcpb.Mutation, primary string, startTS uint64, ttl uint64) {
+	assert.True(t, mustPrewriteWithTTL(store, mutations, primary, startTS, ttl))
 }
 
-func (s *testMockTiKVSuite) mustCommitOK(c *C, keys [][]byte, startTS, commitTS uint64) {
-	err := s.store.Commit(keys, startTS, commitTS)
-	c.Assert(err, IsNil)
+func mustCommitOK(t *testing.T, store MVCCStore, keys [][]byte, startTS, commitTS uint64) {
+	err := store.Commit(keys, startTS, commitTS)
+	assert.Nil(t, err)
 }
 
-func (s *testMockTiKVSuite) mustCommitErr(c *C, keys [][]byte, startTS, commitTS uint64) {
-	err := s.store.Commit(keys, startTS, commitTS)
-	c.Assert(err, NotNil)
+func mustCommitErr(t *testing.T, store MVCCStore, keys [][]byte, startTS, commitTS uint64) {
+	err := store.Commit(keys, startTS, commitTS)
+	assert.NotNil(t, err)
 }
 
-func (s *testMockTiKVSuite) mustRollbackOK(c *C, keys [][]byte, startTS uint64) {
-	err := s.store.Rollback(keys, startTS)
-	c.Assert(err, IsNil)
+func mustRollbackOK(t *testing.T, store MVCCStore, keys [][]byte, startTS uint64) {
+	err := store.Rollback(keys, startTS)
+	assert.Nil(t, err)
 }
 
-func (s *testMockTiKVSuite) mustRollbackErr(c *C, keys [][]byte, startTS uint64) {
-	err := s.store.Rollback(keys, startTS)
-	c.Assert(err, NotNil)
+func mustRollbackErr(t *testing.T, store MVCCStore, keys [][]byte, startTS uint64) {
+	err := store.Rollback(keys, startTS)
+	assert.NotNil(t, err)
 }
 
-func (s *testMockTiKVSuite) mustScanLock(c *C, maxTs uint64, expect []*kvrpcpb.LockInfo) {
-	locks, err := s.store.ScanLock(nil, nil, maxTs)
-	c.Assert(err, IsNil)
-	c.Assert(locks, DeepEquals, expect)
+func mustScanLock(t *testing.T, store MVCCStore, maxTs uint64, expect []*kvrpcpb.LockInfo) {
+	locks, err := store.ScanLock(nil, nil, maxTs)
+	assert.Nil(t, err)
+	assert.Equal(t, locks, expect)
 }
 
-func (s *testMockTiKVSuite) mustResolveLock(c *C, startTS, commitTS uint64) {
-	c.Assert(s.store.ResolveLock(nil, nil, startTS, commitTS), IsNil)
+func mustResolveLock(t *testing.T, store MVCCStore, startTS, commitTS uint64) {
+	assert.Nil(t, store.ResolveLock(nil, nil, startTS, commitTS))
 }
 
-func (s *testMockTiKVSuite) mustBatchResolveLock(c *C, txnInfos map[uint64]uint64) {
-	c.Assert(s.store.BatchResolveLock(nil, nil, txnInfos), IsNil)
+func mustBatchResolveLock(t *testing.T, store MVCCStore, txnInfos map[uint64]uint64) {
+	assert.Nil(t, store.BatchResolveLock(nil, nil, txnInfos))
 }
 
-func (s *testMockTiKVSuite) mustGC(c *C, safePoint uint64) {
-	c.Assert(s.store.GC(nil, nil, safePoint), IsNil)
+func mustGC(t *testing.T, store MVCCStore, safePoint uint64) {
+	assert.Nil(t, store.GC(nil, nil, safePoint))
 }
 
-func (s *testMockTiKVSuite) mustDeleteRange(c *C, startKey, endKey string) {
-	err := s.store.DeleteRange([]byte(startKey), []byte(endKey))
-	c.Assert(err, IsNil)
+func mustDeleteRange(t *testing.T, store MVCCStore, startKey, endKey string) {
+	assert.Nil(t, store.DeleteRange([]byte(startKey), []byte(endKey)))
 }
 
-func (s *testMockTiKVSuite) TestGet(c *C) {
-	s.mustGetNone(c, "x", 10)
-	s.mustPutOK(c, "x", "x", 5, 10)
-	s.mustGetNone(c, "x", 9)
-	s.mustGetOK(c, "x", 10, "x")
-	s.mustGetOK(c, "x", 11, "x")
+func TestGet(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	mustGetNone(t, store, "x", 10)
+	mustPutOK(t, store, "x", "x", 5, 10)
+	mustGetNone(t, store, "x", 9)
+	mustGetOK(t, store, "x", 10, "x")
+	mustGetOK(t, store, "x", 11, "x")
 }
 
-func (s *testMockTiKVSuite) TestGetWithLock(c *C) {
+func TestGetWithLock(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
 	key := "key"
 	value := "value"
-	s.mustPutOK(c, key, value, 5, 10)
+	mustPutOK(t, store, key, value, 5, 10)
 	mutations := []*kvrpcpb.Mutation{{
 		Op:  kvrpcpb.Op_Lock,
 		Key: []byte(key),
-	},
-	}
+	}}
 	// test with lock's type is lock
-	s.mustPrewriteOK(c, mutations, key, 20)
-	s.mustGetOK(c, key, 25, value)
-	s.mustCommitOK(c, [][]byte{[]byte(key)}, 20, 30)
+	mustPrewriteOK(t, store, mutations, key, 20)
+	mustGetOK(t, store, key, 25, value)
+	mustCommitOK(t, store, [][]byte{[]byte(key)}, 20, 30)
 
 	// test get with lock's max ts and primary key
-	s.mustPrewriteOK(c, putMutations(key, "value2", "key2", "v5"), key, 40)
-	s.mustGetErr(c, key, 41)
-	s.mustGetErr(c, "key2", math.MaxUint64)
-	s.mustGetOK(c, key, math.MaxUint64, "value")
+	mustPrewriteOK(t, store, putMutations(key, "value2", "key2", "v5"), key, 40)
+	mustGetErr(t, store, key, 41)
+	mustGetErr(t, store, "key2", math.MaxUint64)
+	mustGetOK(t, store, key, math.MaxUint64, "value")
 }
 
-func (s *testMockTiKVSuite) TestDelete(c *C) {
-	s.mustPutOK(c, "x", "x5-10", 5, 10)
-	s.mustDeleteOK(c, "x", 15, 20)
-	s.mustGetNone(c, "x", 5)
-	s.mustGetNone(c, "x", 9)
-	s.mustGetOK(c, "x", 10, "x5-10")
-	s.mustGetOK(c, "x", 19, "x5-10")
-	s.mustGetNone(c, "x", 20)
-	s.mustGetNone(c, "x", 21)
+func TestDelete(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
+	mustPutOK(t, store, "x", "x5-10", 5, 10)
+	mustDeleteOK(t, store, "x", 15, 20)
+	mustGetNone(t, store, "x", 5)
+	mustGetNone(t, store, "x", 9)
+	mustGetOK(t, store, "x", 10, "x5-10")
+	mustGetOK(t, store, "x", 19, "x5-10")
+	mustGetNone(t, store, "x", 20)
+	mustGetNone(t, store, "x", 21)
 }
 
-func (s *testMockTiKVSuite) TestCleanupRollback(c *C) {
-	s.mustPutOK(c, "secondary", "s-0", 1, 2)
-	s.mustPrewriteOK(c, putMutations("primary", "p-5", "secondary", "s-5"), "primary", 5)
-	s.mustGetErr(c, "secondary", 8)
-	s.mustGetErr(c, "secondary", 12)
-	s.mustCommitOK(c, [][]byte{[]byte("primary")}, 5, 10)
-	s.mustRollbackErr(c, [][]byte{[]byte("primary")}, 5)
+func TestCleanupRollback(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
+	mustPutOK(t, store, "secondary", "s-0", 1, 2)
+	mustPrewriteOK(t, store, putMutations("primary", "p-5", "secondary", "s-5"), "primary", 5)
+	mustGetErr(t, store, "secondary", 8)
+	mustGetErr(t, store, "secondary", 12)
+	mustCommitOK(t, store, [][]byte{[]byte("primary")}, 5, 10)
+	mustRollbackErr(t, store, [][]byte{[]byte("primary")}, 5)
 }
 
-func (s *testMockTiKVSuite) TestReverseScan(c *C) {
+func TestReverseScan(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
 	// ver10: A(10) - B(_) - C(10) - D(_) - E(10)
-	s.mustPutOK(c, "A", "A10", 5, 10)
-	s.mustPutOK(c, "C", "C10", 5, 10)
-	s.mustPutOK(c, "E", "E10", 5, 10)
+	mustPutOK(t, store, "A", "A10", 5, 10)
+	mustPutOK(t, store, "C", "C10", 5, 10)
+	mustPutOK(t, store, "E", "E10", 5, 10)
 
 	checkV10 := func() {
-		s.mustReverseScanOK(c, "Z", 0, 10)
-		s.mustReverseScanOK(c, "Z", 1, 10, "E", "E10")
-		s.mustReverseScanOK(c, "Z", 2, 10, "E", "E10", "C", "C10")
-		s.mustReverseScanOK(c, "Z", 3, 10, "E", "E10", "C", "C10", "A", "A10")
-		s.mustReverseScanOK(c, "Z", 4, 10, "E", "E10", "C", "C10", "A", "A10")
-		s.mustReverseScanOK(c, "E\x00", 3, 10, "E", "E10", "C", "C10", "A", "A10")
-		s.mustReverseScanOK(c, "C\x00", 3, 10, "C", "C10", "A", "A10")
-		s.mustReverseScanOK(c, "C\x00", 4, 10, "C", "C10", "A", "A10")
-		s.mustReverseScanOK(c, "B", 1, 10, "A", "A10")
-		s.mustRangeReverseScanOK(c, "", "E", 5, 10, "C", "C10", "A", "A10")
-		s.mustRangeReverseScanOK(c, "", "C\x00", 5, 10, "C", "C10", "A", "A10")
-		s.mustRangeReverseScanOK(c, "A\x00", "C", 5, 10)
+		mustReverseScanOK(t, store, "Z", 0, 10)
+		mustReverseScanOK(t, store, "Z", 1, 10, "E", "E10")
+		mustReverseScanOK(t, store, "Z", 2, 10, "E", "E10", "C", "C10")
+		mustReverseScanOK(t, store, "Z", 3, 10, "E", "E10", "C", "C10", "A", "A10")
+		mustReverseScanOK(t, store, "Z", 4, 10, "E", "E10", "C", "C10", "A", "A10")
+		mustReverseScanOK(t, store, "E\x00", 3, 10, "E", "E10", "C", "C10", "A", "A10")
+		mustReverseScanOK(t, store, "C\x00", 3, 10, "C", "C10", "A", "A10")
+		mustReverseScanOK(t, store, "C\x00", 4, 10, "C", "C10", "A", "A10")
+		mustReverseScanOK(t, store, "B", 1, 10, "A", "A10")
+		mustRangeReverseScanOK(t, store, "", "E", 5, 10, "C", "C10", "A", "A10")
+		mustRangeReverseScanOK(t, store, "", "C\x00", 5, 10, "C", "C10", "A", "A10")
+		mustRangeReverseScanOK(t, store, "A\x00", "C", 5, 10)
 	}
 	checkV10()
 
 	// ver20: A(10) - B(20) - C(10) - D(20) - E(10)
-	s.mustPutOK(c, "B", "B20", 15, 20)
-	s.mustPutOK(c, "D", "D20", 15, 20)
+	mustPutOK(t, store, "B", "B20", 15, 20)
+	mustPutOK(t, store, "D", "D20", 15, 20)
 
 	checkV20 := func() {
-		s.mustReverseScanOK(c, "Z", 5, 20, "E", "E10", "D", "D20", "C", "C10", "B", "B20", "A", "A10")
-		s.mustReverseScanOK(c, "C\x00", 5, 20, "C", "C10", "B", "B20", "A", "A10")
-		s.mustReverseScanOK(c, "A\x00", 1, 20, "A", "A10")
-		s.mustRangeReverseScanOK(c, "B", "D", 5, 20, "C", "C10", "B", "B20")
-		s.mustRangeReverseScanOK(c, "B", "D\x00", 5, 20, "D", "D20", "C", "C10", "B", "B20")
-		s.mustRangeReverseScanOK(c, "B\x00", "D\x00", 5, 20, "D", "D20", "C", "C10")
+		mustReverseScanOK(t, store, "Z", 5, 20, "E", "E10", "D", "D20", "C", "C10", "B", "B20", "A", "A10")
+		mustReverseScanOK(t, store, "C\x00", 5, 20, "C", "C10", "B", "B20", "A", "A10")
+		mustReverseScanOK(t, store, "A\x00", 1, 20, "A", "A10")
+		mustRangeReverseScanOK(t, store, "B", "D", 5, 20, "C", "C10", "B", "B20")
+		mustRangeReverseScanOK(t, store, "B", "D\x00", 5, 20, "D", "D20", "C", "C10", "B", "B20")
+		mustRangeReverseScanOK(t, store, "B\x00", "D\x00", 5, 20, "D", "D20", "C", "C10")
 	}
 	checkV10()
 	checkV20()
 
 	// ver30: A(_) - B(20) - C(10) - D(_) - E(10)
-	s.mustDeleteOK(c, "A", 25, 30)
-	s.mustDeleteOK(c, "D", 25, 30)
+	mustDeleteOK(t, store, "A", 25, 30)
+	mustDeleteOK(t, store, "D", 25, 30)
 
 	checkV30 := func() {
-		s.mustReverseScanOK(c, "Z", 5, 30, "E", "E10", "C", "C10", "B", "B20")
-		s.mustReverseScanOK(c, "C", 1, 30, "B", "B20")
-		s.mustReverseScanOK(c, "C\x00", 5, 30, "C", "C10", "B", "B20")
+		mustReverseScanOK(t, store, "Z", 5, 30, "E", "E10", "C", "C10", "B", "B20")
+		mustReverseScanOK(t, store, "C", 1, 30, "B", "B20")
+		mustReverseScanOK(t, store, "C\x00", 5, 30, "C", "C10", "B", "B20")
 	}
 	checkV10()
 	checkV20()
 	checkV30()
 
 	// ver40: A(_) - B(_) - C(40) - D(40) - E(10)
-	s.mustDeleteOK(c, "B", 35, 40)
-	s.mustPutOK(c, "C", "C40", 35, 40)
-	s.mustPutOK(c, "D", "D40", 35, 40)
+	mustDeleteOK(t, store, "B", 35, 40)
+	mustPutOK(t, store, "C", "C40", 35, 40)
+	mustPutOK(t, store, "D", "D40", 35, 40)
 
 	checkV40 := func() {
-		s.mustReverseScanOK(c, "Z", 5, 40, "E", "E10", "D", "D40", "C", "C40")
-		s.mustReverseScanOK(c, "Z", 5, 100, "E", "E10", "D", "D40", "C", "C40")
+		mustReverseScanOK(t, store, "Z", 5, 40, "E", "E10", "D", "D40", "C", "C40")
+		mustReverseScanOK(t, store, "Z", 5, 100, "E", "E10", "D", "D40", "C", "C40")
 	}
 	checkV10()
 	checkV20()
@@ -329,64 +315,67 @@ func (s *testMockTiKVSuite) TestReverseScan(c *C) {
 	checkV40()
 }
 
-func (s *testMockTiKVSuite) TestScan(c *C) {
+func TestScan(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
 	// ver10: A(10) - B(_) - C(10) - D(_) - E(10)
-	s.mustPutOK(c, "A", "A10", 5, 10)
-	s.mustPutOK(c, "C", "C10", 5, 10)
-	s.mustPutOK(c, "E", "E10", 5, 10)
+	mustPutOK(t, store, "A", "A10", 5, 10)
+	mustPutOK(t, store, "C", "C10", 5, 10)
+	mustPutOK(t, store, "E", "E10", 5, 10)
 
 	checkV10 := func() {
-		s.mustScanOK(c, "", 0, 10)
-		s.mustScanOK(c, "", 1, 10, "A", "A10")
-		s.mustScanOK(c, "", 2, 10, "A", "A10", "C", "C10")
-		s.mustScanOK(c, "", 3, 10, "A", "A10", "C", "C10", "E", "E10")
-		s.mustScanOK(c, "", 4, 10, "A", "A10", "C", "C10", "E", "E10")
-		s.mustScanOK(c, "A", 3, 10, "A", "A10", "C", "C10", "E", "E10")
-		s.mustScanOK(c, "A\x00", 3, 10, "C", "C10", "E", "E10")
-		s.mustScanOK(c, "C", 4, 10, "C", "C10", "E", "E10")
-		s.mustScanOK(c, "F", 1, 10)
-		s.mustRangeScanOK(c, "", "E", 5, 10, "A", "A10", "C", "C10")
-		s.mustRangeScanOK(c, "", "C\x00", 5, 10, "A", "A10", "C", "C10")
-		s.mustRangeScanOK(c, "A\x00", "C", 5, 10)
+		mustScanOK(t, store, "", 0, 10)
+		mustScanOK(t, store, "", 1, 10, "A", "A10")
+		mustScanOK(t, store, "", 2, 10, "A", "A10", "C", "C10")
+		mustScanOK(t, store, "", 3, 10, "A", "A10", "C", "C10", "E", "E10")
+		mustScanOK(t, store, "", 4, 10, "A", "A10", "C", "C10", "E", "E10")
+		mustScanOK(t, store, "A", 3, 10, "A", "A10", "C", "C10", "E", "E10")
+		mustScanOK(t, store, "A\x00", 3, 10, "C", "C10", "E", "E10")
+		mustScanOK(t, store, "C", 4, 10, "C", "C10", "E", "E10")
+		mustScanOK(t, store, "F", 1, 10)
+		mustRangeScanOK(t, store, "", "E", 5, 10, "A", "A10", "C", "C10")
+		mustRangeScanOK(t, store, "", "C\x00", 5, 10, "A", "A10", "C", "C10")
+		mustRangeScanOK(t, store, "A\x00", "C", 5, 10)
 	}
 	checkV10()
 
 	// ver20: A(10) - B(20) - C(10) - D(20) - E(10)
-	s.mustPutOK(c, "B", "B20", 15, 20)
-	s.mustPutOK(c, "D", "D20", 15, 20)
+	mustPutOK(t, store, "B", "B20", 15, 20)
+	mustPutOK(t, store, "D", "D20", 15, 20)
 
 	checkV20 := func() {
-		s.mustScanOK(c, "", 5, 20, "A", "A10", "B", "B20", "C", "C10", "D", "D20", "E", "E10")
-		s.mustScanOK(c, "C", 5, 20, "C", "C10", "D", "D20", "E", "E10")
-		s.mustScanOK(c, "D\x00", 1, 20, "E", "E10")
-		s.mustRangeScanOK(c, "B", "D", 5, 20, "B", "B20", "C", "C10")
-		s.mustRangeScanOK(c, "B", "D\x00", 5, 20, "B", "B20", "C", "C10", "D", "D20")
-		s.mustRangeScanOK(c, "B\x00", "D\x00", 5, 20, "C", "C10", "D", "D20")
+		mustScanOK(t, store, "", 5, 20, "A", "A10", "B", "B20", "C", "C10", "D", "D20", "E", "E10")
+		mustScanOK(t, store, "C", 5, 20, "C", "C10", "D", "D20", "E", "E10")
+		mustScanOK(t, store, "D\x00", 1, 20, "E", "E10")
+		mustRangeScanOK(t, store, "B", "D", 5, 20, "B", "B20", "C", "C10")
+		mustRangeScanOK(t, store, "B", "D\x00", 5, 20, "B", "B20", "C", "C10", "D", "D20")
+		mustRangeScanOK(t, store, "B\x00", "D\x00", 5, 20, "C", "C10", "D", "D20")
 	}
 	checkV10()
 	checkV20()
 
 	// ver30: A(_) - B(20) - C(10) - D(_) - E(10)
-	s.mustDeleteOK(c, "A", 25, 30)
-	s.mustDeleteOK(c, "D", 25, 30)
+	mustDeleteOK(t, store, "A", 25, 30)
+	mustDeleteOK(t, store, "D", 25, 30)
 
 	checkV30 := func() {
-		s.mustScanOK(c, "", 5, 30, "B", "B20", "C", "C10", "E", "E10")
-		s.mustScanOK(c, "A", 1, 30, "B", "B20")
-		s.mustScanOK(c, "C\x00", 5, 30, "E", "E10")
+		mustScanOK(t, store, "", 5, 30, "B", "B20", "C", "C10", "E", "E10")
+		mustScanOK(t, store, "A", 1, 30, "B", "B20")
+		mustScanOK(t, store, "C\x00", 5, 30, "E", "E10")
 	}
 	checkV10()
 	checkV20()
 	checkV30()
 
 	// ver40: A(_) - B(_) - C(40) - D(40) - E(10)
-	s.mustDeleteOK(c, "B", 35, 40)
-	s.mustPutOK(c, "C", "C40", 35, 40)
-	s.mustPutOK(c, "D", "D40", 35, 40)
+	mustDeleteOK(t, store, "B", 35, 40)
+	mustPutOK(t, store, "C", "C40", 35, 40)
+	mustPutOK(t, store, "D", "D40", 35, 40)
 
 	checkV40 := func() {
-		s.mustScanOK(c, "", 5, 40, "C", "C40", "D", "D40", "E", "E10")
-		s.mustScanOK(c, "", 5, 100, "C", "C40", "D", "D40", "E", "E10")
+		mustScanOK(t, store, "", 5, 40, "C", "C40", "D", "D40", "E", "E10")
+		mustScanOK(t, store, "", 5, 100, "C", "C40", "D", "D40", "E", "E10")
 	}
 	checkV10()
 	checkV20()
@@ -394,35 +383,43 @@ func (s *testMockTiKVSuite) TestScan(c *C) {
 	checkV40()
 }
 
-func (s *testMockTiKVSuite) TestBatchGet(c *C) {
-	s.mustPutOK(c, "k1", "v1", 1, 2)
-	s.mustPutOK(c, "k2", "v2", 1, 2)
-	s.mustPutOK(c, "k2", "v2", 3, 4)
-	s.mustPutOK(c, "k3", "v3", 1, 2)
+func TestBatchGet(t *testing.T) {
+	assert := assert.New(t)
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
+	mustPutOK(t, store, "k1", "v1", 1, 2)
+	mustPutOK(t, store, "k2", "v2", 1, 2)
+	mustPutOK(t, store, "k2", "v2", 3, 4)
+	mustPutOK(t, store, "k3", "v3", 1, 2)
 	batchKeys := [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")}
-	pairs := s.store.BatchGet(batchKeys, 5, kvrpcpb.IsolationLevel_SI, nil)
+	pairs := store.BatchGet(batchKeys, 5, kvrpcpb.IsolationLevel_SI, nil)
 	for _, pair := range pairs {
-		c.Assert(pair.Err, IsNil)
+		assert.Nil(pair.Err)
 	}
-	c.Assert(string(pairs[0].Value), Equals, "v1")
-	c.Assert(string(pairs[1].Value), Equals, "v2")
-	c.Assert(string(pairs[2].Value), Equals, "v3")
+	assert.Equal(string(pairs[0].Value), "v1")
+	assert.Equal(string(pairs[1].Value), "v2")
+	assert.Equal(string(pairs[2].Value), "v3")
 }
 
-func (s *testMockTiKVSuite) TestScanLock(c *C) {
-	s.mustPutOK(c, "k1", "v1", 1, 2)
-	s.mustPrewriteOK(c, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
-	s.mustPrewriteOK(c, putMutations("p2", "v10", "s2", "v10"), "p2", 10)
-	s.mustPrewriteOK(c, putMutations("p3", "v20", "s3", "v20"), "p3", 20)
+func TestScanLock(t *testing.T) {
+	assert := assert.New(t)
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
 
-	locks, err := s.store.ScanLock([]byte("a"), []byte("r"), 12)
-	c.Assert(err, IsNil)
-	c.Assert(locks, DeepEquals, []*kvrpcpb.LockInfo{
+	mustPutOK(t, store, "k1", "v1", 1, 2)
+	mustPrewriteOK(t, store, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
+	mustPrewriteOK(t, store, putMutations("p2", "v10", "s2", "v10"), "p2", 10)
+	mustPrewriteOK(t, store, putMutations("p3", "v20", "s3", "v20"), "p3", 20)
+
+	locks, err := store.ScanLock([]byte("a"), []byte("r"), 12)
+	assert.Nil(err)
+	assert.Equal(locks, []*kvrpcpb.LockInfo{
 		lock("p1", "p1", 5),
 		lock("p2", "p2", 10),
 	})
 
-	s.mustScanLock(c, 10, []*kvrpcpb.LockInfo{
+	mustScanLock(t, store, 10, []*kvrpcpb.LockInfo{
 		lock("p1", "p1", 5),
 		lock("p2", "p2", 10),
 		lock("s1", "p1", 5),
@@ -430,303 +427,278 @@ func (s *testMockTiKVSuite) TestScanLock(c *C) {
 	})
 }
 
-func (s *testMockTiKVSuite) TestScanWithResolvedLock(c *C) {
-	s.mustPrewriteOK(c, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
-	s.mustPrewriteOK(c, putMutations("p2", "v10", "s2", "v10"), "p1", 5)
+func TestScanWithResolvedLock(t *testing.T) {
+	assert := assert.New(t)
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
 
-	pairs := s.store.Scan([]byte("p1"), nil, 3, 10, kvrpcpb.IsolationLevel_SI, nil)
+	mustPrewriteOK(t, store, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
+	mustPrewriteOK(t, store, putMutations("p2", "v10", "s2", "v10"), "p1", 5)
+
+	pairs := store.Scan([]byte("p1"), nil, 3, 10, kvrpcpb.IsolationLevel_SI, nil)
 	lock, ok := errors.Cause(pairs[0].Err).(*ErrLocked)
-	c.Assert(ok, IsTrue)
+	assert.True(ok)
 	_, ok = errors.Cause(pairs[1].Err).(*ErrLocked)
-	c.Assert(ok, IsTrue)
+	assert.True(ok)
 
 	// Mock the request after resolving lock.
-	pairs = s.store.Scan([]byte("p1"), nil, 3, 10, kvrpcpb.IsolationLevel_SI, []uint64{lock.StartTS})
+	pairs = store.Scan([]byte("p1"), nil, 3, 10, kvrpcpb.IsolationLevel_SI, []uint64{lock.StartTS})
 	for _, pair := range pairs {
-		c.Assert(pair.Err, IsNil)
+		assert.Nil(pair.Err)
 	}
 }
 
-func (s *testMockTiKVSuite) TestCommitConflict(c *C) {
+func TestCommitConflict(t *testing.T) {
+	assert := assert.New(t)
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
 	// txn A want set x to A
 	// txn B want set x to B
 	// A prewrite.
-	s.mustPrewriteOK(c, putMutations("x", "A"), "x", 5)
+	mustPrewriteOK(t, store, putMutations("x", "A"), "x", 5)
 	// B prewrite and find A's lock.
 	req := &kvrpcpb.PrewriteRequest{
 		Mutations:    putMutations("x", "B"),
 		PrimaryLock:  []byte("x"),
 		StartVersion: 10,
 	}
-	errs := s.store.Prewrite(req)
-	c.Assert(errs[0], NotNil)
+	errs := store.Prewrite(req)
+	assert.NotNil(errs[0])
 	// B find rollback A because A exist too long.
-	s.mustRollbackOK(c, [][]byte{[]byte("x")}, 5)
+	mustRollbackOK(t, store, [][]byte{[]byte("x")}, 5)
 	// if A commit here, it would find its lock removed, report error txn not found.
-	s.mustCommitErr(c, [][]byte{[]byte("x")}, 5, 10)
+	mustCommitErr(t, store, [][]byte{[]byte("x")}, 5, 10)
 	// B prewrite itself after it rollback A.
-	s.mustPrewriteOK(c, putMutations("x", "B"), "x", 10)
+	mustPrewriteOK(t, store, putMutations("x", "B"), "x", 10)
 	// if A commit here, it would find its lock replaced by others and commit fail.
-	s.mustCommitErr(c, [][]byte{[]byte("x")}, 5, 20)
+	mustCommitErr(t, store, [][]byte{[]byte("x")}, 5, 20)
 	// B commit success.
-	s.mustCommitOK(c, [][]byte{[]byte("x")}, 10, 20)
+	mustCommitOK(t, store, [][]byte{[]byte("x")}, 10, 20)
 	// if B commit again, it will success because the key already committed.
-	s.mustCommitOK(c, [][]byte{[]byte("x")}, 10, 20)
+	mustCommitOK(t, store, [][]byte{[]byte("x")}, 10, 20)
 }
 
-func (s *testMockTiKVSuite) TestResolveLock(c *C) {
-	s.mustPrewriteOK(c, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
-	s.mustPrewriteOK(c, putMutations("p2", "v10", "s2", "v10"), "p2", 10)
-	s.mustResolveLock(c, 5, 0)
-	s.mustResolveLock(c, 10, 20)
-	s.mustGetNone(c, "p1", 20)
-	s.mustGetNone(c, "s1", 30)
-	s.mustGetOK(c, "p2", 20, "v10")
-	s.mustGetOK(c, "s2", 30, "v10")
-	s.mustScanLock(c, 30, nil)
+func TestResolveLock(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
+	mustPrewriteOK(t, store, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
+	mustPrewriteOK(t, store, putMutations("p2", "v10", "s2", "v10"), "p2", 10)
+	mustResolveLock(t, store, 5, 0)
+	mustResolveLock(t, store, 10, 20)
+	mustGetNone(t, store, "p1", 20)
+	mustGetNone(t, store, "s1", 30)
+	mustGetOK(t, store, "p2", 20, "v10")
+	mustGetOK(t, store, "s2", 30, "v10")
+	mustScanLock(t, store, 30, nil)
 }
 
-func (s *testMockTiKVSuite) TestBatchResolveLock(c *C) {
-	s.mustPrewriteOK(c, putMutations("p1", "v11", "s1", "v11"), "p1", 11)
-	s.mustPrewriteOK(c, putMutations("p2", "v12", "s2", "v12"), "p2", 12)
-	s.mustPrewriteOK(c, putMutations("p3", "v13"), "p3", 13)
-	s.mustPrewriteOK(c, putMutations("p4", "v14", "s3", "v14", "s4", "v14"), "p4", 14)
-	s.mustPrewriteOK(c, putMutations("p5", "v15", "s5", "v15"), "p5", 15)
+func TestBatchResolveLock(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
+	mustPrewriteOK(t, store, putMutations("p1", "v11", "s1", "v11"), "p1", 11)
+	mustPrewriteOK(t, store, putMutations("p2", "v12", "s2", "v12"), "p2", 12)
+	mustPrewriteOK(t, store, putMutations("p3", "v13"), "p3", 13)
+	mustPrewriteOK(t, store, putMutations("p4", "v14", "s3", "v14", "s4", "v14"), "p4", 14)
+	mustPrewriteOK(t, store, putMutations("p5", "v15", "s5", "v15"), "p5", 15)
 	txnInfos := map[uint64]uint64{
 		11: 0,
 		12: 22,
 		13: 0,
 		14: 24,
 	}
-	s.mustBatchResolveLock(c, txnInfos)
-	s.mustGetNone(c, "p1", 20)
-	s.mustGetNone(c, "p3", 30)
-	s.mustGetOK(c, "p2", 30, "v12")
-	s.mustGetOK(c, "s4", 30, "v14")
-	s.mustScanLock(c, 30, []*kvrpcpb.LockInfo{
+	mustBatchResolveLock(t, store, txnInfos)
+	mustGetNone(t, store, "p1", 20)
+	mustGetNone(t, store, "p3", 30)
+	mustGetOK(t, store, "p2", 30, "v12")
+	mustGetOK(t, store, "s4", 30, "v14")
+	mustScanLock(t, store, 30, []*kvrpcpb.LockInfo{
 		lock("p5", "p5", 15),
 		lock("s5", "p5", 15),
 	})
 	txnInfos = map[uint64]uint64{
 		15: 0,
 	}
-	s.mustBatchResolveLock(c, txnInfos)
-	s.mustScanLock(c, 30, nil)
+	mustBatchResolveLock(t, store, txnInfos)
+	mustScanLock(t, store, 30, nil)
 }
 
-func (s *testMockTiKVSuite) TestGC(c *C) {
+func TestGC(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
 	var safePoint uint64 = 100
 
 	// Prepare data
-	s.mustPutOK(c, "k1", "v1", 1, 2)
-	s.mustPutOK(c, "k1", "v2", 11, 12)
+	mustPutOK(t, store, "k1", "v1", 1, 2)
+	mustPutOK(t, store, "k1", "v2", 11, 12)
 
-	s.mustPutOK(c, "k2", "v1", 1, 2)
-	s.mustPutOK(c, "k2", "v2", 11, 12)
-	s.mustPutOK(c, "k2", "v3", 101, 102)
+	mustPutOK(t, store, "k2", "v1", 1, 2)
+	mustPutOK(t, store, "k2", "v2", 11, 12)
+	mustPutOK(t, store, "k2", "v3", 101, 102)
 
-	s.mustPutOK(c, "k3", "v1", 1, 2)
-	s.mustPutOK(c, "k3", "v2", 11, 12)
-	s.mustDeleteOK(c, "k3", 101, 102)
+	mustPutOK(t, store, "k3", "v1", 1, 2)
+	mustPutOK(t, store, "k3", "v2", 11, 12)
+	mustDeleteOK(t, store, "k3", 101, 102)
 
-	s.mustPutOK(c, "k4", "v1", 1, 2)
-	s.mustDeleteOK(c, "k4", 11, 12)
+	mustPutOK(t, store, "k4", "v1", 1, 2)
+	mustDeleteOK(t, store, "k4", 11, 12)
 
 	// Check prepared data
-	s.mustGetOK(c, "k1", 5, "v1")
-	s.mustGetOK(c, "k1", 15, "v2")
-	s.mustGetOK(c, "k2", 5, "v1")
-	s.mustGetOK(c, "k2", 15, "v2")
-	s.mustGetOK(c, "k2", 105, "v3")
-	s.mustGetOK(c, "k3", 5, "v1")
-	s.mustGetOK(c, "k3", 15, "v2")
-	s.mustGetNone(c, "k3", 105)
-	s.mustGetOK(c, "k4", 5, "v1")
-	s.mustGetNone(c, "k4", 105)
+	mustGetOK(t, store, "k1", 5, "v1")
+	mustGetOK(t, store, "k1", 15, "v2")
+	mustGetOK(t, store, "k2", 5, "v1")
+	mustGetOK(t, store, "k2", 15, "v2")
+	mustGetOK(t, store, "k2", 105, "v3")
+	mustGetOK(t, store, "k3", 5, "v1")
+	mustGetOK(t, store, "k3", 15, "v2")
+	mustGetNone(t, store, "k3", 105)
+	mustGetOK(t, store, "k4", 5, "v1")
+	mustGetNone(t, store, "k4", 105)
 
-	s.mustGC(c, safePoint)
+	mustGC(t, store, safePoint)
 
-	s.mustGetNone(c, "k1", 5)
-	s.mustGetOK(c, "k1", 15, "v2")
-	s.mustGetNone(c, "k2", 5)
-	s.mustGetOK(c, "k2", 15, "v2")
-	s.mustGetOK(c, "k2", 105, "v3")
-	s.mustGetNone(c, "k3", 5)
-	s.mustGetOK(c, "k3", 15, "v2")
-	s.mustGetNone(c, "k3", 105)
-	s.mustGetNone(c, "k4", 5)
-	s.mustGetNone(c, "k4", 105)
+	mustGetNone(t, store, "k1", 5)
+	mustGetOK(t, store, "k1", 15, "v2")
+	mustGetNone(t, store, "k2", 5)
+	mustGetOK(t, store, "k2", 15, "v2")
+	mustGetOK(t, store, "k2", 105, "v3")
+	mustGetNone(t, store, "k3", 5)
+	mustGetOK(t, store, "k3", 15, "v2")
+	mustGetNone(t, store, "k3", 105)
+	mustGetNone(t, store, "k4", 5)
+	mustGetNone(t, store, "k4", 105)
 }
 
-func (s *testMockTiKVSuite) TestRollbackAndWriteConflict(c *C) {
-	s.mustPutOK(c, "test", "test", 1, 3)
+func TestRollbackAndWriteConflict(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	mustPutOK(t, store, "test", "test", 1, 3)
 	req := &kvrpcpb.PrewriteRequest{
 		Mutations:    putMutations("lock", "lock", "test", "test1"),
 		PrimaryLock:  []byte("test"),
 		StartVersion: 2,
 		LockTtl:      2,
 	}
-	errs := s.store.Prewrite(req)
-	s.mustWriteWriteConflict(c, errs, 1)
+	errs := store.Prewrite(req)
+	mustWriteWriteConflict(t, errs, 1)
 
-	s.mustPutOK(c, "test", "test2", 5, 8)
+	mustPutOK(t, store, "test", "test2", 5, 8)
 
 	// simulate `getTxnStatus` for txn 2.
-	err := s.store.Cleanup([]byte("test"), 2, math.MaxUint64)
-	c.Assert(err, IsNil)
+	assert.Nil(t, store.Cleanup([]byte("test"), 2, math.MaxUint64))
 	req = &kvrpcpb.PrewriteRequest{
 		Mutations:    putMutations("test", "test3"),
 		PrimaryLock:  []byte("test"),
 		StartVersion: 6,
 		LockTtl:      1,
 	}
-	errs = s.store.Prewrite(req)
-	s.mustWriteWriteConflict(c, errs, 0)
+	errs = store.Prewrite(req)
+	mustWriteWriteConflict(t, errs, 0)
 }
 
-func (s *testMockTiKVSuite) TestDeleteRange(c *C) {
+func TestDeleteRange(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
 	for i := 1; i <= 5; i++ {
 		key := string(byte(i) + byte('0'))
 		value := "v" + key
-		s.mustPutOK(c, key, value, uint64(1+2*i), uint64(2+2*i))
+		mustPutOK(t, store, key, value, uint64(1+2*i), uint64(2+2*i))
 	}
 
-	s.mustScanOK(c, "0", 10, 20, "1", "v1", "2", "v2", "3", "v3", "4", "v4", "5", "v5")
+	mustScanOK(t, store, "0", 10, 20, "1", "v1", "2", "v2", "3", "v3", "4", "v4", "5", "v5")
 
-	s.mustDeleteRange(c, "2", "4")
-	s.mustScanOK(c, "0", 10, 30, "1", "v1", "4", "v4", "5", "v5")
+	mustDeleteRange(t, store, "2", "4")
+	mustScanOK(t, store, "0", 10, 30, "1", "v1", "4", "v4", "5", "v5")
 
-	s.mustDeleteRange(c, "5", "5")
-	s.mustScanOK(c, "0", 10, 40, "1", "v1", "4", "v4", "5", "v5")
+	mustDeleteRange(t, store, "5", "5")
+	mustScanOK(t, store, "0", 10, 40, "1", "v1", "4", "v4", "5", "v5")
 
-	s.mustDeleteRange(c, "41", "42")
-	s.mustScanOK(c, "0", 10, 50, "1", "v1", "4", "v4", "5", "v5")
+	mustDeleteRange(t, store, "41", "42")
+	mustScanOK(t, store, "0", 10, 50, "1", "v1", "4", "v4", "5", "v5")
 
-	s.mustDeleteRange(c, "4\x00", "5\x00")
-	s.mustScanOK(c, "0", 10, 60, "1", "v1", "4", "v4")
+	mustDeleteRange(t, store, "4\x00", "5\x00")
+	mustScanOK(t, store, "0", 10, 60, "1", "v1", "4", "v4")
 
-	s.mustDeleteRange(c, "0", "9")
-	s.mustScanOK(c, "0", 10, 70)
+	mustDeleteRange(t, store, "0", "9")
+	mustScanOK(t, store, "0", 10, 70)
 }
 
-func (s *testMockTiKVSuite) mustWriteWriteConflict(c *C, errs []error, i int) {
-	c.Assert(errs[i], NotNil)
+func mustWriteWriteConflict(t *testing.T, errs []error, i int) {
+	assert.NotNil(t, errs[i])
 	_, ok := errs[i].(*ErrConflict)
-	c.Assert(ok, IsTrue)
+	assert.True(t, ok)
 }
 
-func (s *testMockTiKVSuite) TestRC(c *C) {
-	s.mustPutOK(c, "key", "v1", 5, 10)
-	s.mustPrewriteOK(c, putMutations("key", "v2"), "key", 15)
-	s.mustGetErr(c, "key", 20)
-	s.mustGetRC(c, "key", 12, "v1")
-	s.mustGetRC(c, "key", 20, "v1")
+func TestRC(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	mustPutOK(t, store, "key", "v1", 5, 10)
+	mustPrewriteOK(t, store, putMutations("key", "v2"), "key", 15)
+	mustGetErr(t, store, "key", 20)
+	mustGetRC(t, store, "key", 12, "v1")
+	mustGetRC(t, store, "key", 20, "v1")
 }
 
-func (s testMarshal) TestMarshalmvccLock(c *C) {
-	l := mvccLock{
-		startTS:     47,
-		primary:     []byte{'a', 'b', 'c'},
-		value:       []byte{'d', 'e'},
-		op:          kvrpcpb.Op_Put,
-		ttl:         444,
-		minCommitTS: 666,
-	}
-	bin, err := l.MarshalBinary()
-	c.Assert(err, IsNil)
+func TestCheckTxnStatus(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	assert := assert.New(t)
 
-	var l1 mvccLock
-	err = l1.UnmarshalBinary(bin)
-	c.Assert(err, IsNil)
-
-	c.Assert(l.startTS, Equals, l1.startTS)
-	c.Assert(l.op, Equals, l1.op)
-	c.Assert(l.ttl, Equals, l1.ttl)
-	c.Assert(string(l.primary), Equals, string(l1.primary))
-	c.Assert(string(l.value), Equals, string(l1.value))
-	c.Assert(l.minCommitTS, Equals, l1.minCommitTS)
-}
-
-func (s testMarshal) TestMarshalmvccValue(c *C) {
-	v := mvccValue{
-		valueType: typePut,
-		startTS:   42,
-		commitTS:  55,
-		value:     []byte{'d', 'e'},
-	}
-	bin, err := v.MarshalBinary()
-	c.Assert(err, IsNil)
-
-	var v1 mvccValue
-	err = v1.UnmarshalBinary(bin)
-	c.Assert(err, IsNil)
-
-	c.Assert(v.valueType, Equals, v1.valueType)
-	c.Assert(v.startTS, Equals, v1.startTS)
-	c.Assert(v.commitTS, Equals, v1.commitTS)
-	c.Assert(string(v.value), Equals, string(v.value))
-}
-
-func (s *testMVCCLevelDB) TestErrors(c *C) {
-	c.Assert((&ErrKeyAlreadyExist{}).Error(), Equals, `key already exist, key: ""`)
-	c.Assert(ErrAbort("txn").Error(), Equals, "abort: txn")
-	c.Assert(ErrAlreadyCommitted(0).Error(), Equals, "txn already committed")
-	c.Assert((&ErrConflict{}).Error(), Equals, "write conflict")
-}
-
-func (s *testMVCCLevelDB) TestCheckTxnStatus(c *C) {
 	startTS := uint64(5 << 18)
-	s.mustPrewriteWithTTLOK(c, putMutations("pk", "val"), "pk", startTS, 666)
+	mustPrewriteWithTTLOK(t, store, putMutations("pk", "val"), "pk", startTS, 666)
 
-	ttl, commitTS, action, err := s.store.CheckTxnStatus([]byte("pk"), startTS, startTS+100, 666, false, false)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Equals, uint64(666))
-	c.Assert(commitTS, Equals, uint64(0))
-	c.Assert(action, Equals, kvrpcpb.Action_MinCommitTSPushed)
+	ttl, commitTS, action, err := store.CheckTxnStatus([]byte("pk"), startTS, startTS+100, 666, false, false)
+	assert.Nil(err)
+	assert.Equal(ttl, uint64(666))
+	assert.Equal(commitTS, uint64(0))
+	assert.Equal(action, kvrpcpb.Action_MinCommitTSPushed)
 
 	// MaxUint64 as callerStartTS shouldn't update minCommitTS but return Action_MinCommitTSPushed.
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("pk"), startTS, math.MaxUint64, 666, false, false)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Equals, uint64(666))
-	c.Assert(commitTS, Equals, uint64(0))
-	c.Assert(action, Equals, kvrpcpb.Action_MinCommitTSPushed)
-	s.mustCommitOK(c, [][]byte{[]byte("pk")}, startTS, startTS+101)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("pk"), startTS, math.MaxUint64, 666, false, false)
+	assert.Nil(err)
+	assert.Equal(ttl, uint64(666))
+	assert.Equal(commitTS, uint64(0))
+	assert.Equal(action, kvrpcpb.Action_MinCommitTSPushed)
+	mustCommitOK(t, store, [][]byte{[]byte("pk")}, startTS, startTS+101)
 
-	ttl, commitTS, _, err = s.store.CheckTxnStatus([]byte("pk"), startTS, 0, 666, false, false)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Equals, uint64(0))
-	c.Assert(commitTS, Equals, startTS+101)
+	ttl, commitTS, _, err = store.CheckTxnStatus([]byte("pk"), startTS, 0, 666, false, false)
+	assert.Nil(err)
+	assert.Equal(ttl, uint64(0))
+	assert.Equal(commitTS, startTS+101)
 
-	s.mustPrewriteWithTTLOK(c, putMutations("pk1", "val"), "pk1", startTS, 666)
-	s.mustRollbackOK(c, [][]byte{[]byte("pk1")}, startTS)
+	mustPrewriteWithTTLOK(t, store, putMutations("pk1", "val"), "pk1", startTS, 666)
+	mustRollbackOK(t, store, [][]byte{[]byte("pk1")}, startTS)
 
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("pk1"), startTS, 0, 666, false, false)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Equals, uint64(0))
-	c.Assert(commitTS, Equals, uint64(0))
-	c.Assert(action, Equals, kvrpcpb.Action_NoAction)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("pk1"), startTS, 0, 666, false, false)
+	assert.Nil(err)
+	assert.Equal(ttl, uint64(0))
+	assert.Equal(commitTS, uint64(0))
+	assert.Equal(action, kvrpcpb.Action_NoAction)
 
-	s.mustPrewriteWithTTLOK(c, putMutations("pk2", "val"), "pk2", startTS, 666)
+	mustPrewriteWithTTLOK(t, store, putMutations("pk2", "val"), "pk2", startTS, 666)
 	currentTS := uint64(777 << 18)
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("pk2"), startTS, 0, currentTS, false, false)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Equals, uint64(0))
-	c.Assert(commitTS, Equals, uint64(0))
-	c.Assert(action, Equals, kvrpcpb.Action_TTLExpireRollback)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("pk2"), startTS, 0, currentTS, false, false)
+	assert.Nil(err)
+	assert.Equal(ttl, uint64(0))
+	assert.Equal(commitTS, uint64(0))
+	assert.Equal(action, kvrpcpb.Action_TTLExpireRollback)
 
 	// Cover the TxnNotFound case.
-	_, _, _, err = s.store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, false, false)
-	c.Assert(err, NotNil)
+	_, _, _, err = store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, false, false)
+	assert.NotNil(err)
 	notFound, ok := errors.Cause(err).(*ErrTxnNotFound)
-	c.Assert(ok, IsTrue)
-	c.Assert(notFound.StartTs, Equals, uint64(5))
-	c.Assert(string(notFound.PrimaryKey), Equals, "txnNotFound")
+	assert.True(ok)
+	assert.Equal(notFound.StartTs, uint64(5))
+	assert.Equal(string(notFound.PrimaryKey), "txnNotFound")
 
-	ttl, commitTS, action, err = s.store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, true, false)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Equals, uint64(0))
-	c.Assert(commitTS, Equals, uint64(0))
-	c.Assert(action, Equals, kvrpcpb.Action_LockNotExistRollback)
+	ttl, commitTS, action, err = store.CheckTxnStatus([]byte("txnNotFound"), 5, 0, 666, true, false)
+	assert.Nil(err)
+	assert.Equal(ttl, uint64(0))
+	assert.Equal(commitTS, uint64(0))
+	assert.Equal(action, kvrpcpb.Action_LockNotExistRollback)
 
 	// Check the rollback tombstone blocks this prewrite which comes with a smaller startTS.
 	req := &kvrpcpb.PrewriteRequest{
@@ -735,25 +707,31 @@ func (s *testMVCCLevelDB) TestCheckTxnStatus(c *C) {
 		StartVersion: 4,
 		MinCommitTs:  6,
 	}
-	errs := s.store.Prewrite(req)
-	c.Assert(errs, NotNil)
+	errs := store.Prewrite(req)
+	assert.NotNil(errs)
 }
 
-func (s *testMVCCLevelDB) TestRejectCommitTS(c *C) {
-	s.mustPrewriteOK(c, putMutations("x", "A"), "x", 5)
+func TestRejectCommitTS(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	mustPrewriteOK(t, store, putMutations("x", "A"), "x", 5)
 	// Push the minCommitTS
-	_, _, _, err := s.store.CheckTxnStatus([]byte("x"), 5, 100, 100, false, false)
-	c.Assert(err, IsNil)
-	err = s.store.Commit([][]byte{[]byte("x")}, 5, 10)
+	_, _, _, err = store.CheckTxnStatus([]byte("x"), 5, 100, 100, false, false)
+	assert.Nil(t, err)
+	err = store.Commit([][]byte{[]byte("x")}, 5, 10)
 	e, ok := errors.Cause(err).(*ErrCommitTSExpired)
-	c.Assert(ok, IsTrue)
-	c.Assert(e.MinCommitTs, Equals, uint64(101))
+	assert.True(t, ok)
+	assert.Equal(t, e.MinCommitTs, uint64(101))
 }
 
-func (s *testMVCCLevelDB) TestMvccGetByKey(c *C) {
-	s.mustPrewriteOK(c, putMutations("q1", "v5"), "p1", 5)
-	debugger, ok := s.store.(MVCCDebugger)
-	c.Assert(ok, IsTrue)
+func TestMvccGetByKey(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+
+	mustPrewriteOK(t, store, putMutations("q1", "v5"), "p1", 5)
+	var istore interface{} = store
+	debugger, ok := istore.(MVCCDebugger)
+	assert.True(t, ok)
 	mvccInfo := debugger.MvccGetByKey([]byte("q1"))
 	except := &kvrpcpb.MvccInfo{
 		Lock: &kvrpcpb.MvccLock{
@@ -763,24 +741,28 @@ func (s *testMVCCLevelDB) TestMvccGetByKey(c *C) {
 			ShortValue: []byte("v5"),
 		},
 	}
-	c.Assert(mvccInfo, DeepEquals, except)
+	assert.Equal(t, mvccInfo, except)
 }
 
-func (s *testMVCCLevelDB) TestTxnHeartBeat(c *C) {
-	s.mustPrewriteWithTTLOK(c, putMutations("pk", "val"), "pk", 5, 666)
+func TestTxnHeartBeat(t *testing.T) {
+	store, err := NewMVCCLevelDB("")
+	require.Nil(t, err)
+	assert := assert.New(t)
+
+	mustPrewriteWithTTLOK(t, store, putMutations("pk", "val"), "pk", 5, 666)
 
 	// Update the ttl
-	ttl, err := s.store.TxnHeartBeat([]byte("pk"), 5, 888)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Greater, uint64(666))
+	ttl, err := store.TxnHeartBeat([]byte("pk"), 5, 888)
+	assert.Nil(err)
+	assert.Greater(ttl, uint64(666))
 
 	// Advise ttl is small
-	ttl, err = s.store.TxnHeartBeat([]byte("pk"), 5, 300)
-	c.Assert(err, IsNil)
-	c.Assert(ttl, Greater, uint64(300))
+	ttl, err = store.TxnHeartBeat([]byte("pk"), 5, 300)
+	assert.Nil(err)
+	assert.Greater(ttl, uint64(300))
 
 	// The lock has already been clean up
-	c.Assert(s.store.Cleanup([]byte("pk"), 5, math.MaxUint64), IsNil)
-	_, err = s.store.TxnHeartBeat([]byte("pk"), 5, 1000)
-	c.Assert(err, NotNil)
+	assert.Nil(store.Cleanup([]byte("pk"), 5, math.MaxUint64))
+	_, err = store.TxnHeartBeat([]byte("pk"), 5, 1000)
+	assert.NotNil(err)
 }
