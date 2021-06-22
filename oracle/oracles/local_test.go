@@ -53,7 +53,7 @@ func TestLocalOracle(t *testing.T) {
 		m[ts] = struct{}{}
 	}
 
-	assert.Len(t, m, 100000)
+	assert.Len(t, m, 100000, "should generate same ts")
 }
 
 func TestIsExpired(t *testing.T) {
