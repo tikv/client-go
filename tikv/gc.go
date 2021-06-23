@@ -1,9 +1,21 @@
+// Copyright 2021 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package tikv
 
 import (
 	"bytes"
 	"context"
-	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -11,7 +23,6 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/locate"
 	"github.com/tikv/client-go/v2/logutil"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	zap "go.uber.org/zap"
@@ -30,19 +41,12 @@ import (
 ///
 /// This is a simplified version of [GC in TiDB](https://docs.pingcap.com/tidb/stable/garbage-collection-overview).
 /// We skip the second step "delete ranges" which is an optimization for TiDB.
-func (s *KVStore) GC(ctx context.Context, safepoint time.Time) (newSafePoint time.Time, err error) {
-	safepointTS := oracle.GoTimeToTS(safepoint)
-	err = s.resolveLocks(ctx, safepointTS, 8)
+func (s *KVStore) GC(ctx context.Context, safepoint uint64) (newSafePoint uint64, err error) {
+	err = s.resolveLocks(ctx, newSafePoint, 8)
 	if err != nil {
 		return
 	}
-
-	t, err := s.pdClient.UpdateGCSafePoint(ctx, safepointTS)
-	if err != nil {
-		return
-	}
-	newSafePoint = oracle.GetTimeFromTS(t)
-	return
+	return s.pdClient.UpdateGCSafePoint(ctx, newSafePoint)
 }
 
 func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrency int) error {
