@@ -117,7 +117,7 @@ var (
 	BoMaxDataNotReady         = NewConfig("dataNotReady", &metrics.BackoffHistogramDataNotReady, NewBackoffFnCfg(100, 2000, NoJitter), tikverr.ErrRegionDataNotReady)
 	BoMaxRegionNotInitialized = NewConfig("regionNotInitialized", &metrics.BackoffHistogramEmpty, NewBackoffFnCfg(2, 1000, NoJitter), tikverr.ErrRegionNotInitialized)
 	// TxnLockFast's `base` load from vars.BackoffLockFast when create BackoffFn.
-	BoTxnLockFast            = NewConfig(txnLockFastName, &metrics.BackoffHistogramLockFast, NewBackoffFnCfg(2, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
+	BoTxnLockFast = NewConfig(txnLockFastName, &metrics.BackoffHistogramLockFast, NewBackoffFnCfg(2, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
 	// BoRegionStoreUnavailable reuses the ErrRegionUnavailable error
 	BoRegionStoreUnavailable = NewConfig("regionStoreUnavailable", &metrics.BackoffHistogramRegionStoreUnavailable, NewBackoffFnCfg(100, 10000, NoJitter), tikverr.ErrRegionUnavailable)
 )
