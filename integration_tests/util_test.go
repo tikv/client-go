@@ -102,9 +102,6 @@ func clearStorage(store *tikv.KVStore) error {
 	return txn.Commit(context.Background())
 }
 
-// OneByOneSuite is a suite, When with-tikv flag is true, there is only one storage, so the test suite have to run one by one.
-type OneByOneSuite = mockstore.OneByOneSuite
-
 func encodeKey(prefix, s string) []byte {
 	return codec.EncodeBytes(nil, []byte(fmt.Sprintf("%s_%s", prefix, s)))
 }

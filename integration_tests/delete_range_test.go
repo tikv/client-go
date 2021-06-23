@@ -46,12 +46,11 @@ import (
 )
 
 type testDeleteRangeSuite struct {
-	OneByOneSuite
 	cluster cluster.Cluster
 	store   *tikv.KVStore
 }
 
-var _ = Suite(&testDeleteRangeSuite{})
+var _ = SerialSuites(&testDeleteRangeSuite{})
 
 func (s *testDeleteRangeSuite) SetUpTest(c *C) {
 	client, cluster, pdClient, err := mocktikv.NewTiKVAndPDClient("", mockcopr.NewCoprRPCHandler())

@@ -73,7 +73,6 @@ type testRegionRequestToSingleStoreSuite struct {
 }
 
 type testRegionRequestToThreeStoresSuite struct {
-	OneByOneSuite
 	cluster             *mocktikv.Cluster
 	storeIDs            []uint64
 	peerIDs             []uint64
@@ -85,8 +84,8 @@ type testRegionRequestToThreeStoresSuite struct {
 	mvccStore           mocktikv.MVCCStore
 }
 
-var _ = Suite(&testRegionRequestToSingleStoreSuite{})
-var _ = Suite(&testRegionRequestToThreeStoresSuite{})
+var _ = SerialSuites(&testRegionRequestToSingleStoreSuite{})
+var _ = SerialSuites(&testRegionRequestToThreeStoresSuite{})
 
 func (s *testRegionRequestToSingleStoreSuite) SetUpTest(c *C) {
 	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())
