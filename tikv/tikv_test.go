@@ -36,12 +36,9 @@ import (
 	"testing"
 
 	. "github.com/pingcap/check"
-	"github.com/tikv/client-go/v2/mockstore"
 )
 
-type OneByOneSuite = mockstore.OneByOneSuite
 type testTiKVSuite struct {
-	OneByOneSuite
 }
 
 func TestT(t *testing.T) {
@@ -49,7 +46,7 @@ func TestT(t *testing.T) {
 	TestingT(t)
 }
 
-var _ = Suite(&testTiKVSuite{})
+var _ = SerialSuites(&testTiKVSuite{})
 
 func (s *testTiKVSuite) TestBasicFunc(c *C) {
 	if IsMockCommitErrorEnable() {

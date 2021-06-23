@@ -47,7 +47,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/retry"
@@ -55,9 +54,7 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-type OneByOneSuite = mockstore.OneByOneSuite
 type testRegionCacheSuite struct {
-	OneByOneSuite
 	cluster *mocktikv.Cluster
 	store1  uint64 // store1 is leader
 	store2  uint64 // store2 is follower
@@ -68,7 +65,7 @@ type testRegionCacheSuite struct {
 	bo      *retry.Backoffer
 }
 
-var _ = Suite(&testRegionCacheSuite{})
+var _ = SerialSuites(&testRegionCacheSuite{})
 
 func (s *testRegionCacheSuite) SetUpTest(c *C) {
 	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())

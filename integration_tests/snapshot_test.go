@@ -51,16 +51,14 @@ import (
 )
 
 type testSnapshotSuite struct {
-	OneByOneSuite
 	store   tikv.StoreProbe
 	prefix  string
 	rowNums []int
 }
 
-var _ = Suite(&testSnapshotSuite{})
+var _ = SerialSuites(&testSnapshotSuite{})
 
 func (s *testSnapshotSuite) SetUpSuite(c *C) {
-	s.OneByOneSuite.SetUpSuite(c)
 	s.store = tikv.StoreProbe{KVStore: NewTestStore(c)}
 	s.prefix = fmt.Sprintf("snapshot_%d", time.Now().Unix())
 	s.rowNums = append(s.rowNums, 1, 100, 191)
@@ -81,7 +79,6 @@ func (s *testSnapshotSuite) TearDownSuite(c *C) {
 	c.Assert(err, IsNil)
 	err = s.store.Close()
 	c.Assert(err, IsNil)
-	s.OneByOneSuite.TearDownSuite(c)
 }
 
 func (s *testSnapshotSuite) beginTxn(c *C) tikv.TxnProbe {
