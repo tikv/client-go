@@ -49,7 +49,6 @@ import (
 )
 
 type testAsyncCommitFailSuite struct {
-	OneByOneSuite
 	testAsyncCommitCommon
 }
 

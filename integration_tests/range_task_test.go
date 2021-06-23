@@ -47,7 +47,6 @@ import (
 )
 
 type testRangeTaskSuite struct {
-	OneByOneSuite
 	cluster cluster.Cluster
 	store   *tikv.KVStore
 
@@ -55,7 +54,7 @@ type testRangeTaskSuite struct {
 	expectedRanges [][]kv.KeyRange
 }
 
-var _ = Suite(&testRangeTaskSuite{})
+var _ = SerialSuites(&testRangeTaskSuite{})
 
 func makeRange(startKey string, endKey string) kv.KeyRange {
 	return kv.KeyRange{

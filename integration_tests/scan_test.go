@@ -49,7 +49,6 @@ import (
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()
 
 type testScanSuite struct {
-	OneByOneSuite
 	store        *tikv.KVStore
 	recordPrefix []byte
 	rowNums      []int
@@ -59,7 +58,6 @@ type testScanSuite struct {
 var _ = SerialSuites(&testScanSuite{})
 
 func (s *testScanSuite) SetUpSuite(c *C) {
-	s.OneByOneSuite.SetUpSuite(c)
 	s.store = NewTestStore(c)
 	s.recordPrefix = []byte("prefix")
 	s.rowNums = append(s.rowNums, 1, scanBatchSize, scanBatchSize+1, scanBatchSize*3)
@@ -82,7 +80,6 @@ func (s *testScanSuite) TearDownSuite(c *C) {
 	c.Assert(err, IsNil)
 	err = s.store.Close()
 	c.Assert(err, IsNil)
-	s.OneByOneSuite.TearDownSuite(c)
 }
 
 func (s *testScanSuite) beginTxn(c *C) *tikv.KVTxn {

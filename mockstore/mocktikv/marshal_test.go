@@ -14,10 +14,10 @@
 // NOTE: The code in this file is based on code from the
 // TiDB project, licensed under the Apache License v 2.0
 //
-// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/mockstore/deadlock/deadlock_test.go
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/mockstore/mocktikv/mock_tikv_test.go
 //
 
-// Copyright 2019 PingCAP, Inc.
+// Copyright 2016 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,50 +30,57 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deadlock
+package mocktikv
 
 import (
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDeadlock(t *testing.T) {
+func TestMarshalmvccLock(t *testing.T) {
 	assert := assert.New(t)
-	detector := NewDetector()
-	err := detector.Detect(1, 2, 100)
+	l := mvccLock{
+		startTS:     47,
+		primary:     []byte{'a', 'b', 'c'},
+		value:       []byte{'d', 'e'},
+		op:          kvrpcpb.Op_Put,
+		ttl:         444,
+		minCommitTS: 666,
+	}
+	bin, err := l.MarshalBinary()
 	assert.Nil(err)
-	err = detector.Detect(2, 3, 200)
-	assert.Nil(err)
-	err = detector.Detect(3, 1, 300)
-	assert.EqualError(err, "deadlock(200)")
-	detector.CleanUp(2)
-	list2 := detector.waitForMap[2]
-	assert.Nil(list2)
 
-	// After cycle is broken, no deadlock now.
-	err = detector.Detect(3, 1, 300)
+	var l1 mvccLock
+	err = l1.UnmarshalBinary(bin)
 	assert.Nil(err)
-	list3 := detector.waitForMap[3]
-	assert.Len(list3.txns, 1)
 
-	// Different keyHash grows the list.
-	err = detector.Detect(3, 1, 400)
+	assert.Equal(l.startTS, l1.startTS)
+	assert.Equal(l.op, l1.op)
+	assert.Equal(l.ttl, l1.ttl)
+	assert.Equal(string(l.primary), string(l1.primary))
+	assert.Equal(string(l.value), string(l1.value))
+	assert.Equal(l.minCommitTS, l1.minCommitTS)
+}
+
+func TestMarshalmvccValue(t *testing.T) {
+	assert := assert.New(t)
+	v := mvccValue{
+		valueType: typePut,
+		startTS:   42,
+		commitTS:  55,
+		value:     []byte{'d', 'e'},
+	}
+	bin, err := v.MarshalBinary()
 	assert.Nil(err)
-	assert.Len(list3.txns, 2)
 
-	// Same waitFor and key hash doesn't grow the list.
-	err = detector.Detect(3, 1, 400)
+	var v1 mvccValue
+	err = v1.UnmarshalBinary(bin)
 	assert.Nil(err)
-	assert.Len(list3.txns, 2)
 
-	detector.CleanUpWaitFor(3, 1, 300)
-	assert.Len(list3.txns, 1)
-	detector.CleanUpWaitFor(3, 1, 400)
-	list3 = detector.waitForMap[3]
-	assert.Nil(list3)
-	detector.Expire(1)
-	assert.Len(detector.waitForMap, 1)
-	detector.Expire(2)
-	assert.Len(detector.waitForMap, 0)
+	assert.Equal(v.valueType, v1.valueType)
+	assert.Equal(v.startTS, v1.startTS)
+	assert.Equal(v.commitTS, v1.commitTS)
+	assert.Equal(string(v.value), string(v.value))
 }

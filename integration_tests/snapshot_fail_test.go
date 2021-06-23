@@ -46,24 +46,18 @@ import (
 )
 
 type testSnapshotFailSuite struct {
-	OneByOneSuite
 	store tikv.StoreProbe
 }
 
 var _ = SerialSuites(&testSnapshotFailSuite{})
 
 func (s *testSnapshotFailSuite) SetUpSuite(c *C) {
-	s.OneByOneSuite.SetUpSuite(c)
 	client, pdClient, cluster, err := unistore.New("")
 	c.Assert(err, IsNil)
 	unistore.BootstrapWithSingleStore(cluster)
 	store, err := tikv.NewTestTiKVStore(fpClient{Client: client}, pdClient, nil, nil, 0)
 	c.Assert(err, IsNil)
 	s.store = tikv.StoreProbe{KVStore: store}
-}
-
-func (s *testSnapshotFailSuite) TearDownSuite(c *C) {
-	s.OneByOneSuite.TearDownSuite(c)
 }
 
 func (s *testSnapshotFailSuite) cleanup(c *C) {

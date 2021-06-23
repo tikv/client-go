@@ -48,13 +48,12 @@ import (
 )
 
 type testSplitSuite struct {
-	OneByOneSuite
 	cluster cluster.Cluster
 	store   tikv.StoreProbe
 	bo      *tikv.Backoffer
 }
 
-var _ = Suite(&testSplitSuite{})
+var _ = SerialSuites(&testSplitSuite{})
 
 func (s *testSplitSuite) SetUpTest(c *C) {
 	client, cluster, pdClient, err := mocktikv.NewTiKVAndPDClient("", mockcopr.NewCoprRPCHandler())

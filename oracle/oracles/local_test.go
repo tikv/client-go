@@ -34,49 +34,52 @@ package oracles_test
 
 import (
 	"context"
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 )
 
-var _ = Suite(&testOraclesSuite{})
-
-type testOraclesSuite struct{}
-
-func (s *testOraclesSuite) TestLocalOracle(c *C) {
+func TestLocalOracle(t *testing.T) {
 	l := oracles.NewLocalOracle()
 	defer l.Close()
 	m := map[uint64]struct{}{}
 	for i := 0; i < 100000; i++ {
 		ts, err := l.GetTimestamp(context.Background(), &oracle.Option{})
-		c.Assert(err, IsNil)
+		require.Nil(t, err)
 		m[ts] = struct{}{}
 	}
 
-	c.Assert(len(m), Equals, 100000, Commentf("should generate same ts"))
+	assert.Len(t, m, 100000, "should generate same ts")
 }
 
-func (s *testOraclesSuite) TestIsExpired(c *C) {
+func TestIsExpired(t *testing.T) {
 	o := oracles.NewLocalOracle()
 	defer o.Close()
+
 	start := time.Now()
 	oracles.SetOracleHookCurrentTime(o, start)
 	ts, _ := o.GetTimestamp(context.Background(), &oracle.Option{})
 	oracles.SetOracleHookCurrentTime(o, start.Add(10*time.Millisecond))
+
 	expire := o.IsExpired(ts, 5, &oracle.Option{})
-	c.Assert(expire, IsTrue, Commentf("should expire"))
+	assert.True(t, expire)
+
 	expire = o.IsExpired(ts, 200, &oracle.Option{})
-	c.Assert(expire, IsFalse, Commentf("should not expire"))
+	assert.False(t, expire)
 }
 
-func (s *testOraclesSuite) TestLocalOracle_UntilExpired(c *C) {
+func TestLocalOracle_UntilExpired(t *testing.T) {
 	o := oracles.NewLocalOracle()
 	defer o.Close()
 	start := time.Now()
 	oracles.SetOracleHookCurrentTime(o, start)
 	ts, _ := o.GetTimestamp(context.Background(), &oracle.Option{})
+
 	oracles.SetOracleHookCurrentTime(o, start.Add(10*time.Millisecond))
-	c.Assert(o.UntilExpired(ts, 5, &oracle.Option{}) == -5 && o.UntilExpired(ts, 15, &oracle.Option{}) == 5, IsTrue, Commentf("before it is expired, it should be +-5"))
+	assert.Equal(t, int64(-4), o.UntilExpired(ts, 6, &oracle.Option{}))
+	assert.Equal(t, int64(4), o.UntilExpired(ts, 14, &oracle.Option{}))
 }
