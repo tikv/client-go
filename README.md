@@ -14,7 +14,7 @@ TiKV Go Client provides support for interacting with the [TiKV](https://github.c
 
 There are 2 major versions of the `client-go` package.
 
-- `v2` is the new stable and active version. This version was extracted from [pingcap/tidb](https://github.com/pingcap/tidb) and it includes new TiKV features like Follower Read, 1PC, Async Commit. The development of this version is on the `v2` branch. The documentation for this version is below.
+- `v2` is the new stable and active version. This version was extracted from [pingcap/tidb](https://github.com/pingcap/tidb) and it includes new TiKV features like Follower Read, 1PC, Async Commit. The development of this version is on the `master` branch. The documentation for this version is below.
 
 - `v1` is the previous stable version and is only maintained for bug fixes. You can read the documentation [here](https://tikv.org/docs/4.0/reference/clients/go/).
 
@@ -24,7 +24,7 @@ There are 2 major versions of the `client-go` package.
   go get github.com/tikv/client-go/v2@COMMIT_HASH_OR_TAG_VERSION
 ```
 
-More examples can be found in [examples directory](https://github.com/tikv/client-go/tree/v2/examples).
+More examples can be found in [examples directory](https://github.com/tikv/client-go/tree/master/examples).
 
 ## Contributing to client-go
 
