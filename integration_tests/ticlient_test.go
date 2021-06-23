@@ -35,113 +35,191 @@ package tikv_test
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
+	"github.com/ninedraft/israce"
 	"github.com/pingcap/tidb/kv"
+	"github.com/stretchr/testify/suite"
 	tikvstore "github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
+func TestTiclient(t *testing.T) {
+	suite.Run(t, new(testTiclientSuite))
+}
+
 type testTiclientSuite struct {
+	suite.Suite
 	store *tikv.KVStore
 	// prefix is prefix of each key in this test. It is used for table isolation,
 	// or it may pollute other data.
 	prefix string
 }
 
-var _ = SerialSuites(&testTiclientSuite{})
-
-func (s *testTiclientSuite) SetUpSuite(c *C) {
-	s.store = NewTestStore(c)
+func (s *testTiclientSuite) SetupSuite() {
+	s.store = NewTestStoreT(s.T())
 	s.prefix = fmt.Sprintf("ticlient_%d", time.Now().Unix())
 }
 
-func (s *testTiclientSuite) TearDownSuite(c *C) {
+func (s *testTiclientSuite) TearDownSuite() {
 	// Clean all data, or it may pollute other data.
-	txn := s.beginTxn(c)
+	txn := s.beginTxn()
 	scanner, err := txn.Iter(encodeKey(s.prefix, ""), nil)
-	c.Assert(err, IsNil)
-	c.Assert(scanner, NotNil)
+	s.Require().Nil(err)
+	s.Require().NotNil(scanner)
 	for scanner.Valid() {
 		k := scanner.Key()
 		err = txn.Delete(k)
-		c.Assert(err, IsNil)
+		s.Require().Nil(err)
 		scanner.Next()
 	}
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	err = s.store.Close()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 }
 
-func (s *testTiclientSuite) beginTxn(c *C) *tikv.KVTxn {
+func (s *testTiclientSuite) beginTxn() *tikv.KVTxn {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	return txn
 }
 
-func (s *testTiclientSuite) TestSingleKey(c *C) {
-	txn := s.beginTxn(c)
+func (s *testTiclientSuite) TestSingleKey() {
+	txn := s.beginTxn()
 	err := txn.Set(encodeKey(s.prefix, "key"), []byte("value"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.LockKeys(context.Background(), new(tikvstore.LockCtx), encodeKey(s.prefix, "key"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	txn = s.beginTxn(c)
+	txn = s.beginTxn()
 	val, err := txn.Get(context.TODO(), encodeKey(s.prefix, "key"))
-	c.Assert(err, IsNil)
-	c.Assert(val, BytesEquals, []byte("value"))
+	s.Nil(err)
+	s.Equal(val, []byte("value"))
 
-	txn = s.beginTxn(c)
+	txn = s.beginTxn()
 	err = txn.Delete(encodeKey(s.prefix, "key"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 }
 
-func (s *testTiclientSuite) TestMultiKeys(c *C) {
+func (s *testTiclientSuite) TestMultiKeys() {
 	const keyNum = 100
 
-	txn := s.beginTxn(c)
+	txn := s.beginTxn()
 	for i := 0; i < keyNum; i++ {
 		err := txn.Set(encodeKey(s.prefix, s08d("key", i)), valueBytes(i))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	err := txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	txn = s.beginTxn(c)
+	txn = s.beginTxn()
 	for i := 0; i < keyNum; i++ {
 		val, err1 := txn.Get(context.TODO(), encodeKey(s.prefix, s08d("key", i)))
-		c.Assert(err1, IsNil)
-		c.Assert(val, BytesEquals, valueBytes(i))
+		s.Nil(err1)
+		s.Equal(val, valueBytes(i))
 	}
 
-	txn = s.beginTxn(c)
+	txn = s.beginTxn()
 	for i := 0; i < keyNum; i++ {
 		err = txn.Delete(encodeKey(s.prefix, s08d("key", i)))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 }
 
-func (s *testTiclientSuite) TestNotExist(c *C) {
-	txn := s.beginTxn(c)
+func (s *testTiclientSuite) TestNotExist() {
+	txn := s.beginTxn()
 	_, err := txn.Get(context.TODO(), encodeKey(s.prefix, "noSuchKey"))
-	c.Assert(err, NotNil)
+	s.NotNil(err)
 }
 
-func (s *testTiclientSuite) TestLargeRequest(c *C) {
+func (s *testTiclientSuite) TestLargeRequest() {
 	largeValue := make([]byte, 9*1024*1024) // 9M value.
-	txn := s.beginTxn(c)
+	txn := s.beginTxn()
 	txn.GetUnionStore().SetEntrySizeLimit(1024*1024, 100*1024*1024)
 	err := txn.Set([]byte("key"), largeValue)
-	c.Assert(err, NotNil)
+	s.NotNil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
-	c.Assert(kv.IsTxnRetryableError(err), IsFalse)
+	s.Nil(err)
+	s.False(kv.IsTxnRetryableError(err))
+}
+
+func (s *testTiclientSuite) TestSplitRegionIn2PC() {
+	if *mockstore.WithTiKV {
+		s.T().Skip("scatter will timeout with single node TiKV")
+	}
+	if israce.Race {
+		s.T().Skip("skip slow test when race is enabled")
+	}
+
+	config := tikv.ConfigProbe{}
+	const preSplitThresholdInTest = 500
+	old := config.LoadPreSplitDetectThreshold()
+	defer config.StorePreSplitDetectThreshold(old)
+	config.StorePreSplitDetectThreshold(preSplitThresholdInTest)
+
+	old = config.LoadPreSplitSizeThreshold()
+	defer config.StorePreSplitSizeThreshold(old)
+	config.StorePreSplitSizeThreshold(5000)
+
+	bo := tikv.NewBackofferWithVars(context.Background(), 1, nil)
+	checkKeyRegion := func(bo *tikv.Backoffer, start, end []byte, eq bool) {
+		// Check regions after split.
+		loc1, err := s.store.GetRegionCache().LocateKey(bo, start)
+		s.Nil(err)
+		loc2, err := s.store.GetRegionCache().LocateKey(bo, end)
+		s.Nil(err)
+		s.Equal(loc1.Region.GetID() == loc2.Region.GetID(), eq)
+	}
+	mode := []string{"optimistic", "pessimistic"}
+	var (
+		startKey []byte
+		endKey   []byte
+	)
+	ctx := context.Background()
+	for _, m := range mode {
+		if m == "optimistic" {
+			startKey = encodeKey(s.prefix, s08d("key", 0))
+			endKey = encodeKey(s.prefix, s08d("key", preSplitThresholdInTest))
+		} else {
+			startKey = encodeKey(s.prefix, s08d("pkey", 0))
+			endKey = encodeKey(s.prefix, s08d("pkey", preSplitThresholdInTest))
+		}
+		// Check before test.
+		checkKeyRegion(bo, startKey, endKey, true)
+		txn := s.beginTxn()
+		if m == "pessimistic" {
+			txn.SetPessimistic(true)
+			lockCtx := &kv.LockCtx{}
+			lockCtx.ForUpdateTS = txn.StartTS()
+			keys := make([][]byte, 0, preSplitThresholdInTest)
+			for i := 0; i < preSplitThresholdInTest; i++ {
+				keys = append(keys, encodeKey(s.prefix, s08d("pkey", i)))
+			}
+			err := txn.LockKeys(ctx, lockCtx, keys...)
+			s.Nil(err)
+			checkKeyRegion(bo, startKey, endKey, false)
+		}
+		var err error
+		for i := 0; i < preSplitThresholdInTest; i++ {
+			if m == "optimistic" {
+				err = txn.Set(encodeKey(s.prefix, s08d("key", i)), valueBytes(i))
+			} else {
+				err = txn.Set(encodeKey(s.prefix, s08d("pkey", i)), valueBytes(i))
+			}
+			s.Nil(err)
+		}
+		err = txn.Commit(context.Background())
+		s.Nil(err)
+		// Check region split after test.
+		checkKeyRegion(bo, startKey, endKey, false)
+	}
 }
