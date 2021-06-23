@@ -160,7 +160,7 @@ func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []
 }
 
 // batchResolveLocksInARegion resolves locks in a region.
-// It returns the real location of the resloved locks if resolve locks success.
+// It returns the real location of the resolved locks if resolve locks success.
 // It returns error when meet an unretryable error.
 // When the locks are not in one region, resolve locks should be failed, it returns with nil resolveLocation and nil err.
 // Used it in gcworker only!
