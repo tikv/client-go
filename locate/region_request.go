@@ -332,14 +332,6 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) error {
 		s.rewind()
 		return nil
 	}
-	if !isMajorityAlive(states) {
-		logutil.BgLogger().Warn("send failure and a majority of stores are not available",
-			zap.Uint64("regionID", s.region.GetID()))
-		if bo.GetBackoffTimes()[retry.BoRegionStoreUnavailable.String()] > maxRegionStoreUnavailableAttempt {
-			return errors.Errorf("request error because a majority of peers of region %d seem down", s.region.GetID())
-		}
-		return bo.Backoff(retry.BoRegionStoreUnavailable, err)
-	}
 
 	replica := s.replicas[s.nextReplicaIdx-1]
 	store := replica.store
@@ -353,6 +345,15 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) error {
 	// TODO(youjiali1995): It's not necessary, but some tests depend on it and it's not easy to fix.
 	if s.isExhausted() {
 		s.region.scheduleReload()
+	}
+
+	if !isMajorityAlive(states) {
+		logutil.BgLogger().Warn("send failure and a majority of stores are not available",
+			zap.Uint64("regionID", s.region.GetID()))
+		if bo.GetBackoffTimes()[retry.BoRegionStoreUnavailable.String()] > maxRegionStoreUnavailableAttempt {
+			return errors.Errorf("request error because a majority of peers of region %d seem down", s.region.GetID())
+		}
+		return bo.Backoff(retry.BoRegionStoreUnavailable, err)
 	}
 	return bo.Backoff(retry.BoRegionMiss, err)
 }
