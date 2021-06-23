@@ -279,6 +279,7 @@ func (s *replicaSelector) nextReplica() *replica {
 }
 
 const maxReplicaAttempt = 10
+const maxRegionStoreUnavailableAttempt = 20
 
 // next creates the RPCContext of the current candidate replica.
 // It returns a SendError if runs out of all replicas or the cached region is invalidated.
@@ -326,19 +327,22 @@ func (s *replicaSelector) next(bo *retry.Backoffer) (*RPCContext, error) {
 
 func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) error {
 	metrics.RegionCacheCounterWithSendFail.Inc()
-	replica := s.replicas[s.nextReplicaIdx-1]
-	if replica.store.requestLiveness(bo, s.regionCache) == reachable {
+	states := s.checkLiveness(bo)
+	if states[s.nextReplicaIdx-1] == reachable {
 		s.rewind()
 		return nil
 	}
-
-	store := replica.store
-
-	logutil.BgLogger().Debug("send failure and store not available", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
-	if bo.GetBackoffTimes()[retry.BoRegionStoreUnavailable.String()] > 100 {
-		return err
+	if !isMajorityAlive(states) {
+		logutil.BgLogger().Warn("send failure and a majority of stores are not available",
+			zap.Uint64("regionID", s.region.GetID()))
+		if bo.GetBackoffTimes()[retry.BoRegionStoreUnavailable.String()] > maxRegionStoreUnavailableAttempt {
+			return errors.Errorf("request error because a majority of peers of region %d seem down", s.region.GetID())
+		}
+		return bo.Backoff(retry.BoRegionStoreUnavailable, err)
 	}
 
+	replica := s.replicas[s.nextReplicaIdx-1]
+	store := replica.store
 	// Invalidate regions in store to speed up recovering from putting a node offline.
 	if atomic.CompareAndSwapUint32(&store.epoch, replica.epoch, replica.epoch+1) {
 		logutil.BgLogger().Info("mark store's regions need be refill", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
@@ -350,7 +354,7 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) error {
 	if s.isExhausted() {
 		s.region.scheduleReload()
 	}
-	return bo.Backoff(retry.BoRegionStoreUnavailable, err)
+	return bo.Backoff(retry.BoRegionMiss, err)
 }
 
 // OnSendSuccess updates the leader of the cached region since the replicaSelector
@@ -407,6 +411,33 @@ func (s *replicaSelector) invalidateRegion() {
 	if s.region != nil {
 		s.region.invalidate(Other)
 	}
+}
+
+func (s *replicaSelector) checkLiveness(bo *retry.Backoffer) []livenessState {
+	states := make([]livenessState, len(s.replicas))
+	var wg sync.WaitGroup
+	for i, replica := range s.replicas {
+		wg.Add(1)
+		go func(i int, store *Store) {
+			states[i] = store.requestLiveness(bo, s.regionCache)
+			wg.Done()
+		}(i, replica.store)
+	}
+	wg.Wait()
+	return states
+}
+
+func isMajorityAlive(states []livenessState) bool {
+	aliveCount := 0
+	for _, state := range states {
+		if state == reachable {
+			aliveCount++
+			if aliveCount > len(states)/2 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *RegionRequestSender) getRPCContext(

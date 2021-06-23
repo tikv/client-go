@@ -119,7 +119,7 @@ var (
 	// TxnLockFast's `base` load from vars.BackoffLockFast when create BackoffFn.
 	BoTxnLockFast            = NewConfig(txnLockFastName, &metrics.BackoffHistogramLockFast, NewBackoffFnCfg(2, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
 	// BoRegionStoreUnavailable reuses the ErrRegionUnavailable error
-	BoRegionStoreUnavailable = NewConfig("regionStoreUnavailable", &metrics.BackoffHistogramRegionStoreUnavailable, NewBackoffFnCfg(2, 500, NoJitter), tikverr.ErrRegionUnavailable)
+	BoRegionStoreUnavailable = NewConfig("regionStoreUnavailable", &metrics.BackoffHistogramRegionStoreUnavailable, NewBackoffFnCfg(100, 10000, NoJitter), tikverr.ErrRegionUnavailable)
 )
 
 const (
