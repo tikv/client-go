@@ -44,17 +44,15 @@ import (
 )
 
 type testTiclientSuite struct {
-	OneByOneSuite
 	store *tikv.KVStore
 	// prefix is prefix of each key in this test. It is used for table isolation,
 	// or it may pollute other data.
 	prefix string
 }
 
-var _ = Suite(&testTiclientSuite{})
+var _ = SerialSuites(&testTiclientSuite{})
 
 func (s *testTiclientSuite) SetUpSuite(c *C) {
-	s.OneByOneSuite.SetUpSuite(c)
 	s.store = NewTestStore(c)
 	s.prefix = fmt.Sprintf("ticlient_%d", time.Now().Unix())
 }
@@ -75,7 +73,6 @@ func (s *testTiclientSuite) TearDownSuite(c *C) {
 	c.Assert(err, IsNil)
 	err = s.store.Close()
 	c.Assert(err, IsNil)
-	s.OneByOneSuite.TearDownSuite(c)
 }
 
 func (s *testTiclientSuite) beginTxn(c *C) *tikv.KVTxn {

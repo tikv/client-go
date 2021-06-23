@@ -49,20 +49,17 @@ import (
 // testIsolationSuite represents test isolation suite.
 // The test suite takes too long under the race detector.
 type testIsolationSuite struct {
-	OneByOneSuite
 	store *tikv.KVStore
 }
 
-var _ = Suite(&testIsolationSuite{})
+var _ = SerialSuites(&testIsolationSuite{})
 
 func (s *testIsolationSuite) SetUpSuite(c *C) {
-	s.OneByOneSuite.SetUpSuite(c)
 	s.store = NewTestStore(c)
 }
 
 func (s *testIsolationSuite) TearDownSuite(c *C) {
 	s.store.Close()
-	s.OneByOneSuite.TearDownSuite(c)
 }
 
 type writeRecord struct {

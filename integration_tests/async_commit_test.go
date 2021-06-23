@@ -164,7 +164,6 @@ func (s *testAsyncCommitCommon) begin(c *C) tikv.TxnProbe {
 }
 
 type testAsyncCommitSuite struct {
-	OneByOneSuite
 	testAsyncCommitCommon
 	bo *tikv.Backoffer
 }

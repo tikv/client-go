@@ -45,7 +45,7 @@ func TestT(t *testing.T) {
 
 type testBatchCommand struct{}
 
-var _ = Suite(&testBatchCommand{})
+var _ = SerialSuites(&testBatchCommand{})
 
 func (s *testBatchCommand) TestBatchResponse(c *C) {
 	resp := &tikvpb.BatchCommandsResponse_Response{}

@@ -56,11 +56,10 @@ import (
 var getMaxBackoff = tikv.ConfigProbe{}.GetGetMaxBackoff()
 
 type testLockSuite struct {
-	OneByOneSuite
 	store tikv.StoreProbe
 }
 
-var _ = Suite(&testLockSuite{})
+var _ = SerialSuites(&testLockSuite{})
 
 func (s *testLockSuite) SetUpTest(c *C) {
 	s.store = tikv.StoreProbe{KVStore: NewTestStore(c)}
