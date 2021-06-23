@@ -47,13 +47,9 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"google.golang.org/grpc/metadata"
 )
-
-// OneByOneSuite is a suite, When with-tikv flag is true, there is only one storage, so the test suite have to run one by one.
-type OneByOneSuite = mockstore.OneByOneSuite
 
 func TestT(t *testing.T) {
 	CustomVerboseFlag = true
@@ -61,14 +57,12 @@ func TestT(t *testing.T) {
 }
 
 type testClientSuite struct {
-	OneByOneSuite
 }
 
 type testClientSerialSuite struct {
-	OneByOneSuite
 }
 
-var _ = Suite(&testClientSuite{})
+var _ = SerialSuites(&testClientSuite{})
 var _ = SerialSuites(&testClientFailSuite{})
 var _ = SerialSuites(&testClientSerialSuite{})
 
