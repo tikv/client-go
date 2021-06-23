@@ -66,15 +66,10 @@ func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, st
 	// for scan lock request, we must return all locks even if they are generated
 	// by the same transaction. because gc worker need to make sure all locks have been
 	// cleaned.
-	req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
-		MaxVersion: safePoint,
-		Limit:      gcScanLockLimit,
-	})
 
 	var stat RangeTaskStat
 	key := startKey
 	bo := NewGcResolveLockMaxBackoffer(ctx)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -82,56 +77,28 @@ func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, st
 		default:
 		}
 
-		req.ScanLock().StartKey = key
-		loc, err := s.GetRegionCache().LocateKey(bo, key)
+		locks, loc, err := s.scanLocksInRegionWithStartKey(bo, key, safePoint, gcScanLockLimit)
 		if err != nil {
-			return stat, errors.Trace(err)
-		}
-		req.ScanLock().EndKey = loc.EndKey
-		resp, err := s.SendReq(bo, req, loc.Region, ReadTimeoutMedium)
-		if err != nil {
-			return stat, errors.Trace(err)
-		}
-		regionErr, err := resp.GetRegionError()
-		if err != nil {
-			return stat, errors.Trace(err)
-		}
-		if regionErr != nil {
-			err = bo.Backoff(BoRegionMiss(), errors.New(regionErr.String()))
-			if err != nil {
-				return stat, errors.Trace(err)
-			}
-			continue
-		}
-		if resp.Resp == nil {
-			return stat, errors.Trace(tikverr.ErrBodyMissing)
-		}
-		locksResp := resp.Resp.(*kvrpcpb.ScanLockResponse)
-		if locksResp.GetError() != nil {
-			return stat, errors.Errorf("unexpected scanlock error: %s", locksResp)
-		}
-		locksInfo := locksResp.GetLocks()
-		locks := make([]*Lock, len(locksInfo))
-		for i := range locksInfo {
-			locks[i] = NewLock(locksInfo[i])
+			return stat, err
 		}
 
-		ok, err1 := s.BatchResolveLockWithRetry(bo, locks, loc.Region, 10)
+		resolvedLocation, err1 := s.batchResolveLocksInARegion(bo, locks, loc)
 		if err1 != nil {
 			return stat, errors.Trace(err1)
 		}
-		// Resolve current locks failed, retry to scan locks again.
-		if !ok {
+		// resolve locks failed since the locks are not in one region anymore, need retry.
+		if resolvedLocation == nil {
 			continue
 		}
-
 		if len(locks) < gcScanLockLimit {
 			stat.CompletedRegions++
 			key = loc.EndKey
 			logutil.Logger(ctx).Info("[gc worker] one region finshed ",
+				zap.Int("regionID", int(resolvedLocation.Region.GetID())),
 				zap.Int("resolvedLocksNum", len(locks)))
 		} else {
 			logutil.Logger(ctx).Info("[gc worker] region has more than limit locks",
+				zap.Int("regionID", int(resolvedLocation.Region.GetID())),
 				zap.Int("resolvedLocksNum", len(locks)),
 				zap.Int("scan lock limit", gcScanLockLimit))
 			key = locks[len(locks)-1].Key
@@ -145,30 +112,76 @@ func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, st
 	return stat, nil
 }
 
-// BatchResolveLockWithRetry resolve locks in a region with retry.
-// It returns true if resolve locks success. ok is false if resolve locks failed.
-// When resolve locks failed, if err is nil means the locks are not in the same region any more and the client should retry to scan these locks.
+func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []byte, maxVersion uint64, limit uint32) (locks []*Lock, loc *locate.KeyLocation, err error) {
+	for {
+		loc, err := s.GetRegionCache().LocateKey(bo, startKey)
+		if err != nil {
+			return nil, loc, errors.Trace(err)
+		}
+		req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
+			MaxVersion: maxVersion,
+			Limit:      gcScanLockLimit,
+			StartKey:   startKey,
+			EndKey:     loc.EndKey,
+		})
+		resp, err := s.SendReq(bo, req, loc.Region, ReadTimeoutMedium)
+		if err != nil {
+			return nil, loc, errors.Trace(err)
+		}
+		regionErr, err := resp.GetRegionError()
+		if err != nil {
+			return nil, loc, errors.Trace(err)
+		}
+		if regionErr != nil {
+			err = bo.Backoff(BoRegionMiss(), errors.New(regionErr.String()))
+			if err != nil {
+				return nil, loc, errors.Trace(err)
+			}
+			continue
+		}
+		if resp.Resp == nil {
+			return nil, loc, errors.Trace(tikverr.ErrBodyMissing)
+		}
+		locksResp := resp.Resp.(*kvrpcpb.ScanLockResponse)
+		if locksResp.GetError() != nil {
+			return nil, loc, errors.Errorf("unexpected scanlock error: %s", locksResp)
+		}
+		locksInfo := locksResp.GetLocks()
+		locks = make([]*Lock, len(locksInfo))
+		for i := range locksInfo {
+			locks[i] = NewLock(locksInfo[i])
+		}
+		return locks, loc, nil
+	}
+}
+
+// batchResolveLocksInARegion resolves locks in a region.
+// It returns the real location of the resloved locks if resolve locks success.
+// It returns error when meet an unretryable error.
+// When the locks are not in one region, resolve locks should be failed, it returns with nil resolveLocation and nil err.
 // Used it in gcworker only!
-func (s *KVStore) BatchResolveLockWithRetry(bo *Backoffer, locks []*Lock, loc locate.RegionVerID, retryTime int) (ok bool, err error) {
-	for t := 0; t < retryTime; t++ {
-		ok, err = s.GetLockResolver().BatchResolveLocks(bo, locks, loc)
+func (s *KVStore) batchResolveLocksInARegion(bo *Backoffer, locks []*Lock, expectedLoc *locate.KeyLocation) (resolvedLocation *locate.KeyLocation, err error) {
+	resolvedLocation = expectedLoc
+	for {
+		ok, err := s.GetLockResolver().BatchResolveLocks(bo, locks, resolvedLocation.Region)
 		if ok {
-			return
+			return resolvedLocation, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		err = bo.Backoff(retry.BoTxnLock, errors.Errorf("remain locks: %d", len(locks)))
 		if err != nil {
-			return ok, errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 		region, err1 := s.GetRegionCache().LocateKey(bo, locks[0].Key)
 		if err1 != nil {
-			return ok, errors.Trace(err1)
+			return nil, errors.Trace(err1)
 		}
 		if !region.Contains(locks[len(locks)-1].Key) {
 			// retry scan since the locks are not in the same region anymore.
-			return
+			return nil, nil
 		}
-		loc = region.Region
+		resolvedLocation = region
 	}
-	//retry scan since failed with too much retry.
-	return false, nil
 }
