@@ -43,7 +43,6 @@ import (
 )
 
 type testRawkvSuite struct {
-	OneByOneSuite
 	cluster *mocktikv.Cluster
 	store1  uint64 // store1 is leader
 	store2  uint64 // store2 is follower
@@ -53,7 +52,7 @@ type testRawkvSuite struct {
 	bo      *retry.Backoffer
 }
 
-var _ = Suite(&testRawkvSuite{})
+var _ = SerialSuites(&testRawkvSuite{})
 
 func (s *testRawkvSuite) SetUpTest(c *C) {
 	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())

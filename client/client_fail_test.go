@@ -47,16 +47,6 @@ import (
 )
 
 type testClientFailSuite struct {
-	OneByOneSuite
-}
-
-func (s *testClientFailSuite) SetUpSuite(_ *C) {
-	// This lock make testClientFailSuite runs exclusively.
-	s.LockGlobalTiKV()
-}
-
-func (s testClientFailSuite) TearDownSuite(_ *C) {
-	s.UnLockGlobalTiKV()
 }
 
 func (s *testClientFailSuite) TestPanicInRecvLoop(c *C) {
