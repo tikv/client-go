@@ -35,33 +35,37 @@ package tikv_test
 import (
 	"context"
 	"sync"
+	"testing"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/tidb/store/mockstore/mockcopr"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/mockstore/cluster"
 	"github.com/tikv/client-go/v2/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 )
 
+func TestSplit(t *testing.T) {
+	suite.Run(t, new(testSplitSuite))
+}
+
 type testSplitSuite struct {
+	suite.Suite
 	cluster cluster.Cluster
 	store   tikv.StoreProbe
 	bo      *tikv.Backoffer
 }
 
-var _ = SerialSuites(&testSplitSuite{})
-
-func (s *testSplitSuite) SetUpTest(c *C) {
+func (s *testSplitSuite) SetupTest() {
 	client, cluster, pdClient, err := mocktikv.NewTiKVAndPDClient("", mockcopr.NewCoprRPCHandler())
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	mocktikv.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 
 	// TODO: make this possible
 	// store, err := mockstore.NewMockStore(
@@ -75,60 +79,60 @@ func (s *testSplitSuite) SetUpTest(c *C) {
 	s.bo = tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
-func (s *testSplitSuite) begin(c *C) tikv.TxnProbe {
+func (s *testSplitSuite) begin() tikv.TxnProbe {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	return txn
 }
 
-func (s *testSplitSuite) split(c *C, regionID uint64, key []byte) {
+func (s *testSplitSuite) split(regionID uint64, key []byte) {
 	newRegionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
 	s.cluster.Split(regionID, newRegionID, key, []uint64{peerID}, peerID)
 }
 
-func (s *testSplitSuite) TestSplitBatchGet(c *C) {
+func (s *testSplitSuite) TestSplitBatchGet() {
 	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 
-	txn := s.begin(c)
+	txn := s.begin()
 
 	keys := [][]byte{{'a'}, {'b'}, {'c'}}
 	_, region, err := s.store.GetRegionCache().GroupKeysByRegion(s.bo, keys, nil)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	s.split(c, loc.Region.GetID(), []byte("b"))
+	s.split(loc.Region.GetID(), []byte("b"))
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	// mocktikv will panic if it meets a not-in-region key.
 	err = txn.BatchGetSingleRegion(s.bo, region, keys, func([]byte, []byte) {})
-	c.Assert(err, IsNil)
+	s.Nil(err)
 }
 
-func (s *testSplitSuite) TestStaleEpoch(c *C) {
+func (s *testSplitSuite) TestStaleEpoch() {
 	mockPDClient := &mockPDClient{client: s.store.GetRegionCache().PDClient()}
 	s.store.SetRegionCachePDClient(mockPDClient)
 
 	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 
-	txn := s.begin(c)
+	txn := s.begin()
 	err = txn.Set([]byte("a"), []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Set([]byte("c"), []byte("c"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// Initiate a split and disable the PD client. If it still works, the
 	// new region is updated from kvrpc.
-	s.split(c, loc.Region.GetID(), []byte("b"))
+	s.split(loc.Region.GetID(), []byte("b"))
 	mockPDClient.disable()
 
-	txn = s.begin(c)
+	txn = s.begin()
 	_, err = txn.Get(context.TODO(), []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	_, err = txn.Get(context.TODO(), []byte("c"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 }
 
 var errStopped = errors.New("stopped")
