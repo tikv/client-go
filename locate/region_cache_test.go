@@ -42,10 +42,10 @@ import (
 	"time"
 
 	"github.com/google/btree"
-	. "github.com/pingcap/check"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -54,7 +54,12 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
+func TestRegionCache(t *testing.T) {
+	suite.Run(t, new(testRegionCacheSuite))
+}
+
 type testRegionCacheSuite struct {
+	suite.Suite
 	cluster *mocktikv.Cluster
 	store1  uint64 // store1 is leader
 	store2  uint64 // store2 is follower
@@ -65,9 +70,7 @@ type testRegionCacheSuite struct {
 	bo      *retry.Backoffer
 }
 
-var _ = SerialSuites(&testRegionCacheSuite{})
-
-func (s *testRegionCacheSuite) SetUpTest(c *C) {
+func (s *testRegionCacheSuite) SetupTest() {
 	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())
 	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 2)
 	s.region1 = regionID
@@ -80,7 +83,7 @@ func (s *testRegionCacheSuite) SetUpTest(c *C) {
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
-func (s *testRegionCacheSuite) TearDownTest(c *C) {
+func (s *testRegionCacheSuite) TearDownTest() {
 	s.cache.Close()
 }
 
@@ -88,11 +91,11 @@ func (s *testRegionCacheSuite) storeAddr(id uint64) string {
 	return fmt.Sprintf("store%d", id)
 }
 
-func (s *testRegionCacheSuite) checkCache(c *C, len int) {
+func (s *testRegionCacheSuite) checkCache(len int) {
 	ts := time.Now().Unix()
-	c.Assert(validRegions(s.cache.mu.regions, ts), Equals, len)
-	c.Assert(validRegionsSearchedByVersions(s.cache.mu.latestVersions, s.cache.mu.regions, ts), Equals, len)
-	c.Assert(validRegionsInBtree(s.cache.mu.sorted, ts), Equals, len)
+	s.Equal(validRegions(s.cache.mu.regions, ts), len)
+	s.Equal(validRegionsSearchedByVersions(s.cache.mu.latestVersions, s.cache.mu.regions, ts), len)
+	s.Equal(validRegionsInBtree(s.cache.mu.sorted, ts), len)
 }
 
 func validRegionsSearchedByVersions(
@@ -132,34 +135,34 @@ func validRegionsInBtree(t *btree.BTree, ts int64) (len int) {
 	return
 }
 
-func (s *testRegionCacheSuite) getRegion(c *C, key []byte) *Region {
+func (s *testRegionCacheSuite) getRegion(key []byte) *Region {
 	_, err := s.cache.LocateKey(s.bo, key)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	r := s.cache.searchCachedRegion(key, false)
-	c.Assert(r, NotNil)
+	s.NotNil(r)
 	return r
 }
 
-func (s *testRegionCacheSuite) getRegionWithEndKey(c *C, key []byte) *Region {
+func (s *testRegionCacheSuite) getRegionWithEndKey(key []byte) *Region {
 	_, err := s.cache.LocateEndKey(s.bo, key)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	r := s.cache.searchCachedRegion(key, true)
-	c.Assert(r, NotNil)
+	s.NotNil(r)
 	return r
 }
 
-func (s *testRegionCacheSuite) getAddr(c *C, key []byte, replicaRead kv.ReplicaReadType, seed uint32) string {
+func (s *testRegionCacheSuite) getAddr(key []byte, replicaRead kv.ReplicaReadType, seed uint32) string {
 	loc, err := s.cache.LocateKey(s.bo, key)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, replicaRead, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if ctx == nil {
 		return ""
 	}
 	return ctx.Addr
 }
 
-func (s *testRegionCacheSuite) TestStoreLabels(c *C) {
+func (s *testRegionCacheSuite) TestStoreLabels() {
 	testcases := []struct {
 		storeID uint64
 	}{
@@ -171,10 +174,10 @@ func (s *testRegionCacheSuite) TestStoreLabels(c *C) {
 		},
 	}
 	for _, testcase := range testcases {
-		c.Log(testcase.storeID)
+		s.T().Log(testcase.storeID)
 		store := s.cache.getStoreByStoreID(testcase.storeID)
 		_, err := store.initResolve(s.bo, s.cache)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		labels := []*metapb.StoreLabel{
 			{
 				Key:   "id",
@@ -182,41 +185,41 @@ func (s *testRegionCacheSuite) TestStoreLabels(c *C) {
 			},
 		}
 		stores := s.cache.getStoresByLabels(labels)
-		c.Assert(len(stores), Equals, 1)
-		c.Assert(stores[0].labels, DeepEquals, labels)
+		s.Equal(len(stores), 1)
+		s.Equal(stores[0].labels, labels)
 	}
 }
 
-func (s *testRegionCacheSuite) TestSimple(c *C) {
+func (s *testRegionCacheSuite) TestSimple() {
 	seed := rand.Uint32()
-	r := s.getRegion(c, []byte("a"))
-	c.Assert(r, NotNil)
-	c.Assert(r.GetID(), Equals, s.region1)
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(s.store1))
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed), Equals, s.storeAddr(s.store2))
-	s.checkCache(c, 1)
-	c.Assert(r.GetMeta(), DeepEquals, r.meta)
-	c.Assert(r.GetLeaderPeerID(), Equals, r.meta.Peers[r.getStore().workTiKVIdx].Id)
+	r := s.getRegion([]byte("a"))
+	s.NotNil(r)
+	s.Equal(r.GetID(), s.region1)
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadLeader, 0), s.storeAddr(s.store1))
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed), s.storeAddr(s.store2))
+	s.checkCache(1)
+	s.Equal(r.GetMeta(), r.meta)
+	s.Equal(r.GetLeaderPeerID(), r.meta.Peers[r.getStore().workTiKVIdx].Id)
 	s.cache.mu.regions[r.VerID()].lastAccess = 0
 	r = s.cache.searchCachedRegion([]byte("a"), true)
-	c.Assert(r, IsNil)
+	s.Nil(r)
 }
 
 // TestResolveStateTransition verifies store's resolve state transition. For example,
 // a newly added store is in unresolved state and will be resolved soon if it's an up store,
 // or in tombstone state if it's a tombstone.
-func (s *testRegionCacheSuite) TestResolveStateTransition(c *C) {
+func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	cache := s.cache
 	bo := retry.NewNoopBackoff(context.Background())
 
 	// Check resolving normal stores. The resolve state should be resolved.
 	for _, storeMeta := range s.cluster.GetAllStores() {
 		store := cache.getStoreByStoreID(storeMeta.GetId())
-		c.Assert(store.getResolveState(), Equals, unresolved)
+		s.Equal(store.getResolveState(), unresolved)
 		addr, err := store.initResolve(bo, cache)
-		c.Assert(err, IsNil)
-		c.Assert(addr, Equals, storeMeta.GetAddress())
-		c.Assert(store.getResolveState(), Equals, resolved)
+		s.Nil(err)
+		s.Equal(addr, storeMeta.GetAddress())
+		s.Equal(store.getResolveState(), resolved)
 	}
 
 	waitResolve := func(s *Store) {
@@ -232,25 +235,25 @@ func (s *testRegionCacheSuite) TestResolveStateTransition(c *C) {
 	store := cache.getStoreByStoreID(s.store1)
 	store.markNeedCheck(cache.notifyCheckCh)
 	waitResolve(store)
-	c.Assert(store.getResolveState(), Equals, resolved)
+	s.Equal(store.getResolveState(), resolved)
 
 	// Mark the store needCheck and it becomes a tombstone. The resolve state should be tombstone.
 	s.cluster.MarkTombstone(s.store1)
 	store.markNeedCheck(cache.notifyCheckCh)
 	waitResolve(store)
-	c.Assert(store.getResolveState(), Equals, tombstone)
+	s.Equal(store.getResolveState(), tombstone)
 	s.cluster.StartStore(s.store1)
 
 	// Mark the store needCheck and it's deleted from PD. The resolve state should be tombstone.
 	cache.clear()
 	store = cache.getStoreByStoreID(s.store1)
 	store.initResolve(bo, cache)
-	c.Assert(store.getResolveState(), Equals, resolved)
+	s.Equal(store.getResolveState(), resolved)
 	storeMeta := s.cluster.GetStore(s.store1)
 	s.cluster.RemoveStore(s.store1)
 	store.markNeedCheck(cache.notifyCheckCh)
 	waitResolve(store)
-	c.Assert(store.getResolveState(), Equals, tombstone)
+	s.Equal(store.getResolveState(), tombstone)
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
 
 	// Mark the store needCheck and its address and labels are changed.
@@ -258,15 +261,15 @@ func (s *testRegionCacheSuite) TestResolveStateTransition(c *C) {
 	cache.clear()
 	store = cache.getStoreByStoreID(s.store1)
 	store.initResolve(bo, cache)
-	c.Assert(store.getResolveState(), Equals, resolved)
+	s.Equal(store.getResolveState(), resolved)
 	s.cluster.UpdateStoreAddr(s.store1, store.addr+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
 	store.markNeedCheck(cache.notifyCheckCh)
 	waitResolve(store)
-	c.Assert(store.getResolveState(), Equals, deleted)
+	s.Equal(store.getResolveState(), deleted)
 	newStore := cache.getStoreByStoreID(s.store1)
-	c.Assert(newStore.getResolveState(), Equals, resolved)
-	c.Assert(newStore.addr, Equals, store.addr+"0")
-	c.Assert(newStore.labels, DeepEquals, []*metapb.StoreLabel{{Key: "k", Value: "v"}})
+	s.Equal(newStore.getResolveState(), resolved)
+	s.Equal(newStore.addr, store.addr+"0")
+	s.Equal(newStore.labels, []*metapb.StoreLabel{{Key: "k", Value: "v"}})
 
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
 	cache.clear()
@@ -274,9 +277,9 @@ func (s *testRegionCacheSuite) TestResolveStateTransition(c *C) {
 	store = cache.getStoreByStoreID(s.store1)
 	for i := 0; i < 2; i++ {
 		addr, err := store.initResolve(bo, cache)
-		c.Assert(err, IsNil)
-		c.Assert(addr, Equals, "")
-		c.Assert(store.getResolveState(), Equals, tombstone)
+		s.Nil(err)
+		s.Equal(addr, "")
+		s.Equal(store.getResolveState(), tombstone)
 	}
 	s.cluster.StartStore(s.store1)
 	cache.clear()
@@ -288,9 +291,9 @@ func (s *testRegionCacheSuite) TestResolveStateTransition(c *C) {
 	store = cache.getStoreByStoreID(s.store1)
 	for i := 0; i < 2; i++ {
 		addr, err := store.initResolve(bo, cache)
-		c.Assert(err, IsNil)
-		c.Assert(addr, Equals, "")
-		c.Assert(store.getResolveState(), Equals, tombstone)
+		s.Nil(err)
+		s.Equal(addr, "")
+		s.Equal(store.getResolveState(), tombstone)
 	}
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
 }
@@ -298,50 +301,50 @@ func (s *testRegionCacheSuite) TestResolveStateTransition(c *C) {
 // TestFilterDownPeersOrPeersOnTombstoneOrDroppedStore verifies the RegionCache filter
 // region's down peers and peers on tombstone or dropped stores. RegionCache shouldn't
 // report errors in such cases if there are available peers.
-func (s *testRegionCacheSuite) TestFilterDownPeersOrPeersOnTombstoneOrDroppedStores(c *C) {
+func (s *testRegionCacheSuite) TestFilterDownPeersOrPeersOnTombstoneOrDroppedStores() {
 	key := []byte("a")
 	bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
 
 	verifyGetRPCCtx := func(meta *metapb.Region) {
 		loc, err := s.cache.LocateKey(bo, key)
-		c.Assert(loc, NotNil)
-		c.Assert(err, IsNil)
+		s.NotNil(loc)
+		s.Nil(err)
 		ctx, err := s.cache.GetTiKVRPCContext(bo, loc.Region, kv.ReplicaReadLeader, 0)
-		c.Assert(err, IsNil)
-		c.Assert(ctx, NotNil)
-		c.Assert(ctx.Meta, DeepEquals, meta)
+		s.Nil(err)
+		s.NotNil(ctx)
+		s.Equal(ctx.Meta, meta)
 		ctx, err = s.cache.GetTiKVRPCContext(bo, loc.Region, kv.ReplicaReadFollower, rand.Uint32())
-		c.Assert(err, IsNil)
-		c.Assert(ctx, NotNil)
-		c.Assert(ctx.Meta, DeepEquals, meta)
+		s.Nil(err)
+		s.NotNil(ctx)
+		s.Equal(ctx.Meta, meta)
 	}
 
 	// When all peers are normal, the cached region should contain all peers.
 	reg, err := s.cache.findRegionByKey(bo, key, false)
-	c.Assert(reg, NotNil)
-	c.Assert(err, IsNil)
+	s.NotNil(reg)
+	s.Nil(err)
 	regInPD, _ := s.cluster.GetRegion(reg.GetID())
-	c.Assert(reg.meta, DeepEquals, regInPD)
-	c.Assert(len(reg.meta.GetPeers()), Equals, len(reg.getStore().stores))
+	s.Equal(reg.meta, regInPD)
+	s.Equal(len(reg.meta.GetPeers()), len(reg.getStore().stores))
 	verifyGetRPCCtx(reg.meta)
-	s.checkCache(c, 1)
+	s.checkCache(1)
 	s.cache.clear()
 
 	// Shouldn't contain the peer on the tombstone store.
 	s.cluster.MarkTombstone(s.store1)
 	reg, err = s.cache.findRegionByKey(bo, key, false)
-	c.Assert(reg, NotNil)
-	c.Assert(err, IsNil)
-	c.Assert(len(reg.meta.GetPeers()), Equals, len(regInPD.GetPeers())-1)
-	c.Assert(len(reg.meta.GetPeers()), Equals, len(reg.getStore().stores))
+	s.NotNil(reg)
+	s.Nil(err)
+	s.Equal(len(reg.meta.GetPeers()), len(regInPD.GetPeers())-1)
+	s.Equal(len(reg.meta.GetPeers()), len(reg.getStore().stores))
 	for _, peer := range reg.meta.GetPeers() {
-		c.Assert(peer.GetStoreId(), Not(Equals), s.store1)
+		s.NotEqual(peer.GetStoreId(), s.store1)
 	}
 	for _, store := range reg.getStore().stores {
-		c.Assert(store.storeID, Not(Equals), s.store1)
+		s.NotEqual(store.storeID, s.store1)
 	}
 	verifyGetRPCCtx(reg.meta)
-	s.checkCache(c, 1)
+	s.checkCache(1)
 	s.cache.clear()
 	s.cluster.StartStore(s.store1)
 
@@ -349,18 +352,18 @@ func (s *testRegionCacheSuite) TestFilterDownPeersOrPeersOnTombstoneOrDroppedSto
 	store := s.cluster.GetStore(s.store1)
 	s.cluster.RemoveStore(s.store1)
 	reg, err = s.cache.findRegionByKey(bo, key, false)
-	c.Assert(reg, NotNil)
-	c.Assert(err, IsNil)
-	c.Assert(len(reg.meta.GetPeers()), Equals, len(regInPD.GetPeers())-1)
-	c.Assert(len(reg.meta.GetPeers()), Equals, len(reg.getStore().stores))
+	s.NotNil(reg)
+	s.Nil(err)
+	s.Equal(len(reg.meta.GetPeers()), len(regInPD.GetPeers())-1)
+	s.Equal(len(reg.meta.GetPeers()), len(reg.getStore().stores))
 	for _, peer := range reg.meta.GetPeers() {
-		c.Assert(peer.GetStoreId(), Not(Equals), s.store1)
+		s.NotEqual(peer.GetStoreId(), s.store1)
 	}
 	for _, store := range reg.getStore().stores {
-		c.Assert(store.storeID, Not(Equals), s.store1)
+		s.NotEqual(store.storeID, s.store1)
 	}
 	verifyGetRPCCtx(reg.meta)
-	s.checkCache(c, 1)
+	s.checkCache(1)
 	s.cache.clear()
 	s.cluster.AddStore(store.GetId(), store.GetAddress(), store.GetLabels()...)
 
@@ -368,36 +371,36 @@ func (s *testRegionCacheSuite) TestFilterDownPeersOrPeersOnTombstoneOrDroppedSto
 	s.cluster.MarkTombstone(s.store1)
 	s.cluster.MarkTombstone(s.store2)
 	_, err = s.cache.findRegionByKey(bo, key, false)
-	c.Assert(err, NotNil)
-	c.Assert(err.Error(), Matches, ".*no available peers.*")
+	s.NotNil(err)
+	s.Regexp(".*no available peers.", err.Error())
 	s.cluster.StartStore(s.store1)
 	s.cluster.StartStore(s.store2)
 }
 
-func (s *testRegionCacheSuite) TestUpdateLeader(c *C) {
+func (s *testRegionCacheSuite) TestUpdateLeader() {
 	seed := rand.Uint32()
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	// tikv-server reports `NotLeader`
 	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, 0)
 
-	r := s.getRegion(c, []byte("a"))
-	c.Assert(r, NotNil)
-	c.Assert(r.GetID(), Equals, s.region1)
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(s.store2))
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed), Equals, s.storeAddr(s.store1))
+	r := s.getRegion([]byte("a"))
+	s.NotNil(r)
+	s.Equal(r.GetID(), s.region1)
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadLeader, 0), s.storeAddr(s.store2))
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed), s.storeAddr(s.store1))
 
-	r = s.getRegionWithEndKey(c, []byte("z"))
-	c.Assert(r, NotNil)
-	c.Assert(r.GetID(), Equals, s.region1)
-	c.Assert(s.getAddr(c, []byte("z"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(s.store2))
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed), Equals, s.storeAddr(s.store1))
+	r = s.getRegionWithEndKey([]byte("z"))
+	s.NotNil(r)
+	s.Equal(r.GetID(), s.region1)
+	s.Equal(s.getAddr([]byte("z"), kv.ReplicaReadLeader, 0), s.storeAddr(s.store2))
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed), s.storeAddr(s.store1))
 }
 
-func (s *testRegionCacheSuite) TestUpdateLeader2(c *C) {
+func (s *testRegionCacheSuite) TestUpdateLeader2() {
 	seed := rand.Uint32()
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	// new store3 becomes leader
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -407,51 +410,51 @@ func (s *testRegionCacheSuite) TestUpdateLeader2(c *C) {
 	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: peer3, StoreId: store3}, 0)
 
 	// Store3 does not exist in cache, causes a reload from PD.
-	r := s.getRegion(c, []byte("a"))
-	c.Assert(r, NotNil)
-	c.Assert(r.GetID(), Equals, s.region1)
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(s.store1))
-	follower := s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed)
+	r := s.getRegion([]byte("a"))
+	s.NotNil(r)
+	s.Equal(r.GetID(), s.region1)
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadLeader, 0), s.storeAddr(s.store1))
+	follower := s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed)
 	if seed%2 == 0 {
-		c.Assert(follower, Equals, s.storeAddr(s.store2))
+		s.Equal(follower, s.storeAddr(s.store2))
 	} else {
-		c.Assert(follower, Equals, s.storeAddr(store3))
+		s.Equal(follower, s.storeAddr(store3))
 	}
-	follower2 := s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed+1)
+	follower2 := s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed+1)
 	if (seed+1)%2 == 0 {
-		c.Assert(follower2, Equals, s.storeAddr(s.store2))
+		s.Equal(follower2, s.storeAddr(s.store2))
 	} else {
-		c.Assert(follower2, Equals, s.storeAddr(store3))
+		s.Equal(follower2, s.storeAddr(store3))
 	}
-	c.Assert(follower, Not(Equals), follower2)
+	s.NotEqual(follower, follower2)
 
 	// tikv-server notifies new leader to pd-server.
 	s.cluster.ChangeLeader(s.region1, peer3)
 	// tikv-server reports `NotLeader` again.
 	s.cache.UpdateLeader(r.VerID(), &metapb.Peer{Id: peer3, StoreId: store3}, 0)
-	r = s.getRegion(c, []byte("a"))
-	c.Assert(r, NotNil)
-	c.Assert(r.GetID(), Equals, s.region1)
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(store3))
-	follower = s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed)
+	r = s.getRegion([]byte("a"))
+	s.NotNil(r)
+	s.Equal(r.GetID(), s.region1)
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadLeader, 0), s.storeAddr(store3))
+	follower = s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed)
 	if seed%2 == 0 {
-		c.Assert(follower, Equals, s.storeAddr(s.store1))
+		s.Equal(follower, s.storeAddr(s.store1))
 	} else {
-		c.Assert(follower, Equals, s.storeAddr(s.store2))
+		s.Equal(follower, s.storeAddr(s.store2))
 	}
-	follower2 = s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed+1)
+	follower2 = s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed+1)
 	if (seed+1)%2 == 0 {
-		c.Assert(follower2, Equals, s.storeAddr(s.store1))
+		s.Equal(follower2, s.storeAddr(s.store1))
 	} else {
-		c.Assert(follower2, Equals, s.storeAddr(s.store2))
+		s.Equal(follower2, s.storeAddr(s.store2))
 	}
-	c.Assert(follower, Not(Equals), follower2)
+	s.NotEqual(follower, follower2)
 }
 
-func (s *testRegionCacheSuite) TestUpdateLeader3(c *C) {
+func (s *testRegionCacheSuite) TestUpdateLeader3() {
 	seed := rand.Uint32()
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	// store2 becomes leader
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	// store2 gone, store3 becomes leader
@@ -466,31 +469,31 @@ func (s *testRegionCacheSuite) TestUpdateLeader3(c *C) {
 	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, 0)
 
 	// Store2 does not exist any more, causes a reload from PD.
-	r := s.getRegion(c, []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(r, NotNil)
-	c.Assert(r.GetID(), Equals, s.region1)
+	r := s.getRegion([]byte("a"))
+	s.Nil(err)
+	s.NotNil(r)
+	s.Equal(r.GetID(), s.region1)
 	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	// return resolved store2 address and send fail
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, seed)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Addr, Equals, "store2")
+	s.Nil(err)
+	s.Equal(ctx.Addr, "store2")
 	s.cache.OnSendFail(retry.NewNoopBackoff(context.Background()), ctx, false, errors.New("send fail"))
 	s.cache.checkAndResolve(nil, func(*Store) bool { return true })
 	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, 0)
-	addr := s.getAddr(c, []byte("a"), kv.ReplicaReadLeader, 0)
-	c.Assert(addr, Equals, "")
-	addr = s.getAddr(c, []byte("a"), kv.ReplicaReadLeader, 0)
-	c.Assert(addr, Equals, s.storeAddr(store3))
+	addr := s.getAddr([]byte("a"), kv.ReplicaReadLeader, 0)
+	s.Equal(addr, "")
+	addr = s.getAddr([]byte("a"), kv.ReplicaReadLeader, 0)
+	s.Equal(addr, s.storeAddr(store3))
 
-	addr = s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed)
-	addr2 := s.getAddr(c, []byte("a"), kv.ReplicaReadFollower, seed+1)
-	c.Assert(addr, Not(Equals), s.storeAddr(store3))
-	c.Assert(addr2, Not(Equals), s.storeAddr(store3))
+	addr = s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed)
+	addr2 := s.getAddr([]byte("a"), kv.ReplicaReadFollower, seed+1)
+	s.NotEqual(addr, s.storeAddr(store3))
+	s.NotEqual(addr2, s.storeAddr(store3))
 }
 
-func (s *testRegionCacheSuite) TestSendFailedButLeaderNotChange(c *C) {
+func (s *testRegionCacheSuite) TestSendFailedButLeaderNotChange() {
 	// 3 nodes and no.1 is leader.
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -499,78 +502,78 @@ func (s *testRegionCacheSuite) TestSendFailedButLeaderNotChange(c *C) {
 	s.cluster.ChangeLeader(s.region1, s.peer1)
 
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer1)
-	c.Assert(len(ctx.Meta.Peers), Equals, 3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer1)
+	s.Equal(len(ctx.Meta.Peers), 3)
 
 	// verify follower to be one of store2 and store3
 	seed := rand.Uint32()
 	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower2.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Equals, ctxFollower2.Peer.Id)
+	s.Equal(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// send fail leader switch to 2
 	s.cache.OnSendFail(s.bo, ctx, false, nil)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer2)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer2)
 
 	// verify follower to be one of store1 and store3
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower1.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed+1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if (seed+1)%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower2.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Not(Equals), ctxFollower2.Peer.Id)
+	s.NotEqual(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// access 1 it will return NotLeader, leader back to 2 again
 	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, ctx.AccessIdx)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer2)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer2)
 
 	// verify follower to be one of store1 and store3
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower1.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed+1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if (seed+1)%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower2.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Not(Equals), ctxFollower2.Peer.Id)
+	s.NotEqual(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 }
 
-func (s *testRegionCacheSuite) TestSendFailedInHibernateRegion(c *C) {
+func (s *testRegionCacheSuite) TestSendFailedInHibernateRegion() {
 	// 3 nodes and no.1 is leader.
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -579,104 +582,104 @@ func (s *testRegionCacheSuite) TestSendFailedInHibernateRegion(c *C) {
 	s.cluster.ChangeLeader(s.region1, s.peer1)
 
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer1)
-	c.Assert(len(ctx.Meta.Peers), Equals, 3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer1)
+	s.Equal(len(ctx.Meta.Peers), 3)
 
 	// verify follower to be one of store2 and store3
 	seed := rand.Uint32()
 	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower2.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Equals, ctxFollower2.Peer.Id)
+	s.Equal(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// send fail leader switch to 2
 	s.cache.OnSendFail(s.bo, ctx, false, nil)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer2)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer2)
 
 	// verify follower to be one of store1 and store3
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower1.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id == s.peer1 || ctxFollower1.Peer.Id == peer3, IsTrue)
+	s.True(ctxFollower1.Peer.Id == s.peer1 || ctxFollower1.Peer.Id == peer3)
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed+1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if (seed+1)%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower2.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Not(Equals), ctxFollower2.Peer.Id)
+	s.NotEqual(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// access 2, it's in hibernate and return 0 leader, so switch to 3
 	s.cache.UpdateLeader(loc.Region, nil, ctx.AccessIdx)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, peer3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, peer3)
 
 	// verify follower to be one of store1 and store2
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower1.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	}
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower2.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower2.Peer.Id, s.peer2)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Equals, ctxFollower2.Peer.Id)
+	s.Equal(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// again peer back to 1
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	s.cache.UpdateLeader(loc.Region, nil, ctx.AccessIdx)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer1)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer1)
 
 	// verify follower to be one of store2 and store3
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed+1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if (seed+1)%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower2.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Not(Equals), ctxFollower2.Peer.Id)
+	s.NotEqual(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 }
 
-func (s *testRegionCacheSuite) TestSendFailInvalidateRegionsInSameStore(c *C) {
+func (s *testRegionCacheSuite) TestSendFailInvalidateRegionsInSameStore() {
 	// key range: ['' - 'm' - 'z']
 	region2 := s.cluster.AllocID()
 	newPeers := s.cluster.AllocIDs(2)
@@ -684,24 +687,24 @@ func (s *testRegionCacheSuite) TestSendFailInvalidateRegionsInSameStore(c *C) {
 
 	// Check the two regions.
 	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(loc1.Region.id, Equals, s.region1)
+	s.Nil(err)
+	s.Equal(loc1.Region.id, s.region1)
 	loc2, err := s.cache.LocateKey(s.bo, []byte("x"))
-	c.Assert(err, IsNil)
-	c.Assert(loc2.Region.id, Equals, region2)
+	s.Nil(err)
+	s.Equal(loc2.Region.id, region2)
 
 	// Send fail on region1
 	ctx, _ := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
-	s.checkCache(c, 2)
+	s.checkCache(2)
 	s.cache.OnSendFail(s.bo, ctx, false, errors.New("test error"))
 
 	// Get region2 cache will get nil then reload.
 	ctx2, err := s.cache.GetTiKVRPCContext(s.bo, loc2.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(ctx2, IsNil)
-	c.Assert(err, IsNil)
+	s.Nil(ctx2)
+	s.Nil(err)
 }
 
-func (s *testRegionCacheSuite) TestSendFailEnableForwarding(c *C) {
+func (s *testRegionCacheSuite) TestSendFailEnableForwarding() {
 	s.cache.enableForwarding = true
 
 	// key range: ['' - 'm' - 'z']
@@ -716,47 +719,47 @@ func (s *testRegionCacheSuite) TestSendFailEnableForwarding(c *C) {
 
 	// Check the two regions.
 	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(loc1.Region.id, Equals, s.region1)
+	s.Nil(err)
+	s.Equal(loc1.Region.id, s.region1)
 
 	// Invoke OnSendFail so that the store will be marked as needForwarding
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx, NotNil)
+	s.Nil(err)
+	s.NotNil(ctx)
 	s.cache.OnSendFail(s.bo, ctx, false, errors.New("test error"))
 
 	// ...then on next retry, proxy will be used
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx, NotNil)
-	c.Assert(ctx.ProxyStore, NotNil)
-	c.Assert(ctx.ProxyStore.storeID, Equals, s.store2)
+	s.Nil(err)
+	s.NotNil(ctx)
+	s.NotNil(ctx.ProxyStore)
+	s.Equal(ctx.ProxyStore.storeID, s.store2)
 
 	// Proxy will be also applied to other regions whose leader is on the store
 	loc2, err := s.cache.LocateKey(s.bo, []byte("x"))
-	c.Assert(err, IsNil)
-	c.Assert(loc2.Region.id, Equals, region2)
+	s.Nil(err)
+	s.Equal(loc2.Region.id, region2)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc2.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx, NotNil)
-	c.Assert(ctx.ProxyStore, NotNil)
-	c.Assert(ctx.ProxyStore.storeID, Equals, s.store2)
+	s.Nil(err)
+	s.NotNil(ctx)
+	s.NotNil(ctx.ProxyStore)
+	s.Equal(ctx.ProxyStore.storeID, s.store2)
 
 	// Recover the store
 	atomic.StoreUint32(&storeState, uint32(reachable))
 	// The proxy should be unset after several retries
 	for retry := 0; retry < 15; retry++ {
 		ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		if ctx.ProxyStore == nil {
 			break
 		}
 		time.Sleep(time.Millisecond * 200)
 	}
-	c.Assert(ctx.ProxyStore, IsNil)
+	s.Nil(ctx.ProxyStore)
 }
 
-func (s *testRegionCacheSuite) TestSendFailedInMultipleNode(c *C) {
+func (s *testRegionCacheSuite) TestSendFailedInMultipleNode() {
 	// 3 nodes and no.1 is leader.
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -765,102 +768,102 @@ func (s *testRegionCacheSuite) TestSendFailedInMultipleNode(c *C) {
 	s.cluster.ChangeLeader(s.region1, s.peer1)
 
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer1)
-	c.Assert(len(ctx.Meta.Peers), Equals, 3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer1)
+	s.Equal(len(ctx.Meta.Peers), 3)
 
 	// verify follower to be one of store2 and store3
 	seed := rand.Uint32()
 	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower2.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Equals, ctxFollower2.Peer.Id)
+	s.Equal(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// send fail leader switch to 2
 	s.cache.OnSendFail(s.bo, ctx, false, nil)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer2)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer2)
 
 	// verify follower to be one of store1 and store3
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower1.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed+1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if (seed+1)%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower2.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Not(Equals), ctxFollower2.Peer.Id)
+	s.NotEqual(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// send 2 fail leader switch to 3
 	s.cache.OnSendFail(s.bo, ctx, false, nil)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, peer3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, peer3)
 
 	// verify follower to be one of store1 and store2
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower1.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	}
-	c.Assert(ctxFollower1.Peer.Id == s.peer1 || ctxFollower1.Peer.Id == s.peer2, IsTrue)
+	s.True(ctxFollower1.Peer.Id == s.peer1 || ctxFollower1.Peer.Id == s.peer2)
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer1)
+		s.Equal(ctxFollower2.Peer.Id, s.peer1)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower2.Peer.Id, s.peer2)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Equals, ctxFollower2.Peer.Id)
+	s.Equal(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// 3 can be access, so switch to 1
 	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer1, StoreId: s.store1}, ctx.AccessIdx)
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer1)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer1)
 
 	// verify follower to be one of store2 and store3
 	ctxFollower1, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if seed%2 == 0 {
-		c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower1.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower1.Peer.Id, peer3)
 	}
 	ctxFollower2, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, seed+1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	if (seed+1)%2 == 0 {
-		c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+		s.Equal(ctxFollower2.Peer.Id, s.peer2)
 	} else {
-		c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
+		s.Equal(ctxFollower2.Peer.Id, peer3)
 	}
-	c.Assert(ctxFollower1.Peer.Id, Not(Equals), ctxFollower2.Peer.Id)
+	s.NotEqual(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 }
 
-func (s *testRegionCacheSuite) TestLabelSelectorTiKVPeer(c *C) {
+func (s *testRegionCacheSuite) TestLabelSelectorTiKVPeer() {
 	dc1Label := []*metapb.StoreLabel{
 		{
 			Key:   "zone",
@@ -889,7 +892,7 @@ func (s *testRegionCacheSuite) TestLabelSelectorTiKVPeer(c *C) {
 	s.cluster.UpdateStoreLabels(store3, dc1Label)
 	// Region have 3 peer, leader located in dc-1, followers located in dc-1, dc-2
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	seed := rand.Uint32()
 
 	testcases := []struct {
@@ -942,20 +945,20 @@ func (s *testRegionCacheSuite) TestLabelSelectorTiKVPeer(c *C) {
 	}
 
 	for _, testcase := range testcases {
-		c.Log(testcase.name)
+		s.T().Log(testcase.name)
 		ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, testcase.t, seed, WithMatchLabels(testcase.labels))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		_, exist := testcase.expectStoreIDRange[ctx.Store.storeID]
-		c.Assert(exist, Equals, true)
+		s.Equal(exist, true)
 	}
 }
 
-func (s *testRegionCacheSuite) TestSplit(c *C) {
+func (s *testRegionCacheSuite) TestSplit() {
 	seed := rand.Uint32()
-	r := s.getRegion(c, []byte("x"))
-	c.Assert(r.GetID(), Equals, s.region1)
-	c.Assert(s.getAddr(c, []byte("x"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(s.store1))
-	c.Assert(s.getAddr(c, []byte("x"), kv.ReplicaReadFollower, seed), Equals, s.storeAddr(s.store2))
+	r := s.getRegion([]byte("x"))
+	s.Equal(r.GetID(), s.region1)
+	s.Equal(s.getAddr([]byte("x"), kv.ReplicaReadLeader, 0), s.storeAddr(s.store1))
+	s.Equal(s.getAddr([]byte("x"), kv.ReplicaReadFollower, seed), s.storeAddr(s.store2))
 
 	// split to ['' - 'm' - 'z']
 	region2 := s.cluster.AllocID()
@@ -964,59 +967,59 @@ func (s *testRegionCacheSuite) TestSplit(c *C) {
 
 	// tikv-server reports `NotInRegion`
 	s.cache.InvalidateCachedRegion(r.VerID())
-	s.checkCache(c, 0)
+	s.checkCache(0)
 
-	r = s.getRegion(c, []byte("x"))
-	c.Assert(r.GetID(), Equals, region2)
-	c.Assert(s.getAddr(c, []byte("x"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(s.store1))
-	c.Assert(s.getAddr(c, []byte("x"), kv.ReplicaReadFollower, seed), Equals, s.storeAddr(s.store2))
-	s.checkCache(c, 1)
+	r = s.getRegion([]byte("x"))
+	s.Equal(r.GetID(), region2)
+	s.Equal(s.getAddr([]byte("x"), kv.ReplicaReadLeader, 0), s.storeAddr(s.store1))
+	s.Equal(s.getAddr([]byte("x"), kv.ReplicaReadFollower, seed), s.storeAddr(s.store2))
+	s.checkCache(1)
 
-	r = s.getRegionWithEndKey(c, []byte("m"))
-	c.Assert(r.GetID(), Equals, s.region1)
-	s.checkCache(c, 2)
+	r = s.getRegionWithEndKey([]byte("m"))
+	s.Equal(r.GetID(), s.region1)
+	s.checkCache(2)
 }
 
-func (s *testRegionCacheSuite) TestMerge(c *C) {
+func (s *testRegionCacheSuite) TestMerge() {
 	// key range: ['' - 'm' - 'z']
 	region2 := s.cluster.AllocID()
 	newPeers := s.cluster.AllocIDs(2)
 	s.cluster.Split(s.region1, region2, []byte("m"), newPeers, newPeers[0])
 
 	loc, err := s.cache.LocateKey(s.bo, []byte("x"))
-	c.Assert(err, IsNil)
-	c.Assert(loc.Region.id, Equals, region2)
+	s.Nil(err)
+	s.Equal(loc.Region.id, region2)
 
 	// merge to single region
 	s.cluster.Merge(s.region1, region2)
 
 	// tikv-server reports `NotInRegion`
 	s.cache.InvalidateCachedRegion(loc.Region)
-	s.checkCache(c, 0)
+	s.checkCache(0)
 
 	loc, err = s.cache.LocateKey(s.bo, []byte("x"))
-	c.Assert(err, IsNil)
-	c.Assert(loc.Region.id, Equals, s.region1)
-	s.checkCache(c, 1)
+	s.Nil(err)
+	s.Equal(loc.Region.id, s.region1)
+	s.checkCache(1)
 }
 
-func (s *testRegionCacheSuite) TestReconnect(c *C) {
+func (s *testRegionCacheSuite) TestReconnect() {
 	seed := rand.Uint32()
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// connect tikv-server failed, cause drop cache
 	s.cache.InvalidateCachedRegion(loc.Region)
 
-	r := s.getRegion(c, []byte("a"))
-	c.Assert(r, NotNil)
-	c.Assert(r.GetID(), Equals, s.region1)
-	c.Assert(s.getAddr(c, []byte("a"), kv.ReplicaReadLeader, 0), Equals, s.storeAddr(s.store1))
-	c.Assert(s.getAddr(c, []byte("x"), kv.ReplicaReadFollower, seed), Equals, s.storeAddr(s.store2))
-	s.checkCache(c, 1)
+	r := s.getRegion([]byte("a"))
+	s.NotNil(r)
+	s.Equal(r.GetID(), s.region1)
+	s.Equal(s.getAddr([]byte("a"), kv.ReplicaReadLeader, 0), s.storeAddr(s.store1))
+	s.Equal(s.getAddr([]byte("x"), kv.ReplicaReadFollower, seed), s.storeAddr(s.store2))
+	s.checkCache(1)
 }
 
-func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV(c *C) {
+func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	// Create a separated region cache to do this test.
 	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
 	cache := NewRegionCache(pdCli)
@@ -1033,13 +1036,13 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV(c *C) {
 	bo := retry.NewBackofferWithVars(context.Background(), 2000000, nil)
 
 	_, err := cache.OnRegionEpochNotMatch(bo, &RPCContext{Region: region.VerID()}, []*metapb.Region{&r1})
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	_, err = cache.OnRegionEpochNotMatch(bo, &RPCContext{Region: region.VerID()}, []*metapb.Region{&r2})
-	c.Assert(err, IsNil)
-	c.Assert(bo.ErrorsNum(), Equals, 2)
+	s.Nil(err)
+	s.Equal(bo.ErrorsNum(), 2)
 }
 
-func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash(c *C) {
+func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	// add store3 as tiflash
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -1050,16 +1053,16 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash(c *C) {
 
 	// pre-load region cache
 	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(loc1.Region.id, Equals, s.region1)
+	s.Nil(err)
+	s.Equal(loc1.Region.id, s.region1)
 	lctx, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(lctx.Peer.Id, Equals, peer3)
+	s.Nil(err)
+	s.Equal(lctx.Peer.Id, peer3)
 
 	// epoch-not-match on tiflash
 	ctxTiFlash, err := s.cache.GetTiFlashRPCContext(s.bo, loc1.Region, true)
-	c.Assert(err, IsNil)
-	c.Assert(ctxTiFlash.Peer.Id, Equals, s.peer1)
+	s.Nil(err)
+	s.Equal(ctxTiFlash.Peer.Id, s.peer1)
 	ctxTiFlash.Peer.Role = metapb.PeerRole_Learner
 	r := ctxTiFlash.Meta
 	reqSend := NewRegionRequestSender(s.cache, nil)
@@ -1068,14 +1071,14 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash(c *C) {
 
 	// check leader read should not go to tiflash
 	lctx, err = s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(lctx.Peer.Id, Not(Equals), s.peer1)
+	s.Nil(err)
+	s.NotEqual(lctx.Peer.Id, s.peer1)
 }
 
-func (s *testRegionCacheSuite) TestRegionDataNotReady(c *C) {
+func (s *testRegionCacheSuite) TestRegionDataNotReady() {
 	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(loc1.Region.id, Equals, s.region1)
+	s.Nil(err)
+	s.Equal(loc1.Region.id, s.region1)
 	testcases := []struct {
 		scope         string
 		readType      kv.ReplicaReadType
@@ -1101,8 +1104,8 @@ func (s *testRegionCacheSuite) TestRegionDataNotReady(c *C) {
 
 	for _, testcase := range testcases {
 		fctx, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, testcase.readType, 0)
-		c.Assert(err, IsNil)
-		c.Assert(fctx.Peer.Id, Equals, testcase.expectPeerID)
+		s.Nil(err)
+		s.Equal(fctx.Peer.Id, testcase.expectPeerID)
 		reqSend := NewRegionRequestSender(s.cache, nil)
 		regionErr := &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}
 		var opts []StoreSelectorOption
@@ -1110,10 +1113,10 @@ func (s *testRegionCacheSuite) TestRegionDataNotReady(c *C) {
 		s.bo.Reset()
 		req := &tikvrpc.Request{TxnScope: testcase.scope, Context: kvrpcpb.Context{StaleRead: true}, ReplicaReadSeed: &seed}
 		retry, err := reqSend.onRegionError(s.bo, fctx, req, regionErr, &opts)
-		c.Assert(err, IsNil)
-		c.Assert(retry, IsTrue)
-		c.Assert(len(opts), Equals, testcase.expectOptsLen)
-		c.Assert(*req.GetReplicaReadSeed(), Equals, testcase.expectSeed)
+		s.Nil(err)
+		s.True(retry)
+		s.Equal(len(opts), testcase.expectOptsLen)
+		s.Equal(*req.GetReplicaReadSeed(), testcase.expectSeed)
 	}
 }
 
@@ -1142,25 +1145,25 @@ func loadRegionsToCache(cache *RegionCache, regionCnt int) {
 	}
 }
 
-func (s *testRegionCacheSuite) TestListRegionIDsInCache(c *C) {
+func (s *testRegionCacheSuite) TestListRegionIDsInCache() {
 	// ['' - 'm' - 'z']
 	region2 := s.cluster.AllocID()
 	newPeers := s.cluster.AllocIDs(2)
 	s.cluster.Split(s.region1, region2, []byte("m"), newPeers, newPeers[0])
 
 	regionIDs, err := s.cache.ListRegionIDsInKeyRange(s.bo, []byte("a"), []byte("z"))
-	c.Assert(err, IsNil)
-	c.Assert(regionIDs, DeepEquals, []uint64{s.region1, region2})
+	s.Nil(err)
+	s.Equal(regionIDs, []uint64{s.region1, region2})
 	regionIDs, err = s.cache.ListRegionIDsInKeyRange(s.bo, []byte("m"), []byte("z"))
-	c.Assert(err, IsNil)
-	c.Assert(regionIDs, DeepEquals, []uint64{region2})
+	s.Nil(err)
+	s.Equal(regionIDs, []uint64{region2})
 
 	regionIDs, err = s.cache.ListRegionIDsInKeyRange(s.bo, []byte("a"), []byte("m"))
-	c.Assert(err, IsNil)
-	c.Assert(regionIDs, DeepEquals, []uint64{s.region1, region2})
+	s.Nil(err)
+	s.Equal(regionIDs, []uint64{s.region1, region2})
 }
 
-func (s *testRegionCacheSuite) TestScanRegions(c *C) {
+func (s *testRegionCacheSuite) TestScanRegions() {
 	// Split at "a", "b", "c", "d"
 	regions := s.cluster.AllocIDs(4)
 	regions = append([]uint64{s.region1}, regions...)
@@ -1175,51 +1178,51 @@ func (s *testRegionCacheSuite) TestScanRegions(c *C) {
 	}
 
 	scannedRegions, err := s.cache.scanRegions(s.bo, []byte(""), nil, 100)
-	c.Assert(err, IsNil)
-	c.Assert(len(scannedRegions), Equals, 5)
+	s.Nil(err)
+	s.Equal(len(scannedRegions), 5)
 	for i := 0; i < 5; i++ {
 		r := scannedRegions[i]
 		_, p, _, _ := r.WorkStorePeer(r.getStore())
 
-		c.Assert(r.meta.Id, Equals, regions[i])
-		c.Assert(p.Id, Equals, peers[i][0])
+		s.Equal(r.meta.Id, regions[i])
+		s.Equal(p.Id, peers[i][0])
 	}
 
 	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a"), nil, 3)
-	c.Assert(err, IsNil)
-	c.Assert(len(scannedRegions), Equals, 3)
+	s.Nil(err)
+	s.Equal(len(scannedRegions), 3)
 	for i := 1; i < 4; i++ {
 		r := scannedRegions[i-1]
 		_, p, _, _ := r.WorkStorePeer(r.getStore())
 
-		c.Assert(r.meta.Id, Equals, regions[i])
-		c.Assert(p.Id, Equals, peers[i][0])
+		s.Equal(r.meta.Id, regions[i])
+		s.Equal(p.Id, peers[i][0])
 	}
 
 	scannedRegions, err = s.cache.scanRegions(s.bo, []byte("a1"), nil, 1)
-	c.Assert(err, IsNil)
-	c.Assert(len(scannedRegions), Equals, 1)
+	s.Nil(err)
+	s.Equal(len(scannedRegions), 1)
 
 	r0 := scannedRegions[0]
 	_, p0, _, _ := r0.WorkStorePeer(r0.getStore())
-	c.Assert(r0.meta.Id, Equals, regions[1])
-	c.Assert(p0.Id, Equals, peers[1][0])
+	s.Equal(r0.meta.Id, regions[1])
+	s.Equal(p0.Id, peers[1][0])
 
 	// Test region with no leader
 	s.cluster.GiveUpLeader(regions[1])
 	s.cluster.GiveUpLeader(regions[3])
 	scannedRegions, err = s.cache.scanRegions(s.bo, []byte(""), nil, 5)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for i := 0; i < 3; i++ {
 		r := scannedRegions[i]
 		_, p, _, _ := r.WorkStorePeer(r.getStore())
 
-		c.Assert(r.meta.Id, Equals, regions[i*2])
-		c.Assert(p.Id, Equals, peers[i*2][0])
+		s.Equal(r.meta.Id, regions[i*2])
+		s.Equal(p.Id, peers[i*2][0])
 	}
 }
 
-func (s *testRegionCacheSuite) TestBatchLoadRegions(c *C) {
+func (s *testRegionCacheSuite) TestBatchLoadRegions() {
 	// Split at "a", "b", "c", "d"
 	regions := s.cluster.AllocIDs(4)
 	regions = append([]uint64{s.region1}, regions...)
@@ -1249,24 +1252,24 @@ func (s *testRegionCacheSuite) TestBatchLoadRegions(c *C) {
 
 	for _, tc := range testCases {
 		key, err := s.cache.BatchLoadRegionsFromKey(s.bo, tc.startKey, tc.limit)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		if tc.expectKey != nil {
-			c.Assert(key, DeepEquals, tc.expectKey)
+			s.Equal(key, tc.expectKey)
 		} else {
-			c.Assert(key, HasLen, 0)
+			s.Len(key, 0)
 		}
 		loadRegions, err := s.cache.BatchLoadRegionsWithKeyRange(s.bo, tc.startKey, tc.endKey, tc.limit)
-		c.Assert(err, IsNil)
-		c.Assert(loadRegions, HasLen, len(tc.expectRegions))
+		s.Nil(err)
+		s.Len(loadRegions, len(tc.expectRegions))
 		for i := range loadRegions {
-			c.Assert(loadRegions[i].GetID(), Equals, tc.expectRegions[i])
+			s.Equal(loadRegions[i].GetID(), tc.expectRegions[i])
 		}
 	}
 
-	s.checkCache(c, len(regions))
+	s.checkCache(len(regions))
 }
 
-func (s *testRegionCacheSuite) TestFollowerReadFallback(c *C) {
+func (s *testRegionCacheSuite) TestFollowerReadFallback() {
 	// 3 nodes and no.1 is leader.
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -1275,29 +1278,29 @@ func (s *testRegionCacheSuite) TestFollowerReadFallback(c *C) {
 	s.cluster.ChangeLeader(s.region1, s.peer1)
 
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer1)
-	c.Assert(len(ctx.Meta.Peers), Equals, 3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer1)
+	s.Equal(len(ctx.Meta.Peers), 3)
 
 	// verify follower to be store2 and store3
 	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
+	s.Nil(err)
+	s.Equal(ctxFollower1.Peer.Id, s.peer2)
 	ctxFollower2, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, 1)
-	c.Assert(err, IsNil)
-	c.Assert(ctxFollower2.Peer.Id, Equals, peer3)
-	c.Assert(ctxFollower1.Peer.Id, Not(Equals), ctxFollower2.Peer.Id)
+	s.Nil(err)
+	s.Equal(ctxFollower2.Peer.Id, peer3)
+	s.NotEqual(ctxFollower1.Peer.Id, ctxFollower2.Peer.Id)
 
 	// send fail on store2, next follower read is going to fallback to store3
 	s.cache.OnSendFail(s.bo, ctxFollower1, false, errors.New("test error"))
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, peer3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, peer3)
 }
 
-func (s *testRegionCacheSuite) TestMixedReadFallback(c *C) {
+func (s *testRegionCacheSuite) TestMixedReadFallback() {
 	// 3 nodes and no.1 is leader.
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -1306,33 +1309,33 @@ func (s *testRegionCacheSuite) TestMixedReadFallback(c *C) {
 	s.cluster.ChangeLeader(s.region1, s.peer1)
 
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer1)
-	c.Assert(len(ctx.Meta.Peers), Equals, 3)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer1)
+	s.Equal(len(ctx.Meta.Peers), 3)
 
 	// verify follower to be store1, store2 and store3
 	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadMixed, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
+	s.Nil(err)
+	s.Equal(ctxFollower1.Peer.Id, s.peer1)
 
 	ctxFollower2, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadMixed, 1)
-	c.Assert(err, IsNil)
-	c.Assert(ctxFollower2.Peer.Id, Equals, s.peer2)
+	s.Nil(err)
+	s.Equal(ctxFollower2.Peer.Id, s.peer2)
 
 	ctxFollower3, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadMixed, 2)
-	c.Assert(err, IsNil)
-	c.Assert(ctxFollower3.Peer.Id, Equals, peer3)
+	s.Nil(err)
+	s.Equal(ctxFollower3.Peer.Id, peer3)
 
 	// send fail on store2, next follower read is going to fallback to store3
 	s.cache.OnSendFail(s.bo, ctxFollower1, false, errors.New("test error"))
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadMixed, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.Id, Equals, s.peer2)
+	s.Nil(err)
+	s.Equal(ctx.Peer.Id, s.peer2)
 }
 
-func (s *testRegionCacheSuite) TestFollowerMeetEpochNotMatch(c *C) {
+func (s *testRegionCacheSuite) TestFollowerMeetEpochNotMatch() {
 	// 3 nodes and no.1 is region1 leader.
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -1342,28 +1345,28 @@ func (s *testRegionCacheSuite) TestFollowerMeetEpochNotMatch(c *C) {
 
 	// Check the two regions.
 	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(loc1.Region.id, Equals, s.region1)
+	s.Nil(err)
+	s.Equal(loc1.Region.id, s.region1)
 
 	reqSend := NewRegionRequestSender(s.cache, nil)
 
 	// follower read failed on store2
 	followReqSeed := uint32(0)
 	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadFollower, followReqSeed)
-	c.Assert(err, IsNil)
-	c.Assert(ctxFollower1.Peer.Id, Equals, s.peer2)
-	c.Assert(ctxFollower1.Store.storeID, Equals, s.store2)
+	s.Nil(err)
+	s.Equal(ctxFollower1.Peer.Id, s.peer2)
+	s.Equal(ctxFollower1.Store.storeID, s.store2)
 
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 	reqSend.onRegionError(s.bo, ctxFollower1, &tikvrpc.Request{ReplicaReadSeed: &followReqSeed}, regionErr, nil)
-	c.Assert(followReqSeed, Equals, uint32(1))
+	s.Equal(followReqSeed, uint32(1))
 
 	regionErr = &errorpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}
 	reqSend.onRegionError(s.bo, ctxFollower1, &tikvrpc.Request{ReplicaReadSeed: &followReqSeed}, regionErr, nil)
-	c.Assert(followReqSeed, Equals, uint32(2))
+	s.Equal(followReqSeed, uint32(2))
 }
 
-func (s *testRegionCacheSuite) TestMixedMeetEpochNotMatch(c *C) {
+func (s *testRegionCacheSuite) TestMixedMeetEpochNotMatch() {
 	// 3 nodes and no.1 is region1 leader.
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -1373,35 +1376,35 @@ func (s *testRegionCacheSuite) TestMixedMeetEpochNotMatch(c *C) {
 
 	// Check the two regions.
 	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(loc1.Region.id, Equals, s.region1)
+	s.Nil(err)
+	s.Equal(loc1.Region.id, s.region1)
 
 	reqSend := NewRegionRequestSender(s.cache, nil)
 
 	// follower read failed on store1
 	followReqSeed := uint32(0)
 	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadMixed, followReqSeed)
-	c.Assert(err, IsNil)
-	c.Assert(ctxFollower1.Peer.Id, Equals, s.peer1)
-	c.Assert(ctxFollower1.Store.storeID, Equals, s.store1)
+	s.Nil(err)
+	s.Equal(ctxFollower1.Peer.Id, s.peer1)
+	s.Equal(ctxFollower1.Store.storeID, s.store1)
 
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 	reqSend.onRegionError(s.bo, ctxFollower1, &tikvrpc.Request{ReplicaReadSeed: &followReqSeed}, regionErr, nil)
-	c.Assert(followReqSeed, Equals, uint32(1))
+	s.Equal(followReqSeed, uint32(1))
 }
 
-func (s *testRegionCacheSuite) TestPeersLenChange(c *C) {
+func (s *testRegionCacheSuite) TestPeersLenChange() {
 	// 2 peers [peer1, peer2] and let peer2 become leader
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, 0)
 
 	// current leader is peer2 in [peer1, peer2]
 	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-	c.Assert(err, IsNil)
-	c.Assert(ctx.Peer.StoreId, Equals, s.store2)
+	s.Nil(err)
+	s.Equal(ctx.Peer.StoreId, s.store2)
 
 	// simulate peer1 became down in kv heartbeat and loaded before response back.
 	cpMeta := &metapb.Region{
@@ -1419,7 +1422,7 @@ func (s *testRegionCacheSuite) TestPeersLenChange(c *C) {
 	filterUnavailablePeers(cpRegion)
 	region := &Region{meta: cpRegion.Meta}
 	err = region.init(s.bo, s.cache)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	s.cache.insertRegionToCache(region)
 
 	// OnSendFail should not panic
@@ -1435,49 +1438,49 @@ func createSampleRegion(startKey, endKey []byte) *Region {
 	}
 }
 
-func (s *testRegionCacheSuite) TestContains(c *C) {
-	c.Assert(createSampleRegion(nil, nil).Contains([]byte{}), IsTrue)
-	c.Assert(createSampleRegion(nil, nil).Contains([]byte{10}), IsTrue)
-	c.Assert(createSampleRegion([]byte{10}, nil).Contains([]byte{}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, nil).Contains([]byte{9}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, nil).Contains([]byte{10}), IsTrue)
-	c.Assert(createSampleRegion(nil, []byte{10}).Contains([]byte{}), IsTrue)
-	c.Assert(createSampleRegion(nil, []byte{10}).Contains([]byte{9}), IsTrue)
-	c.Assert(createSampleRegion(nil, []byte{10}).Contains([]byte{10}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, []byte{20}).Contains([]byte{}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, []byte{20}).Contains([]byte{15}), IsTrue)
-	c.Assert(createSampleRegion([]byte{10}, []byte{20}).Contains([]byte{30}), IsFalse)
+func (s *testRegionCacheSuite) TestContains() {
+	s.True(createSampleRegion(nil, nil).Contains([]byte{}))
+	s.True(createSampleRegion(nil, nil).Contains([]byte{10}))
+	s.False(createSampleRegion([]byte{10}, nil).Contains([]byte{}))
+	s.False(createSampleRegion([]byte{10}, nil).Contains([]byte{9}))
+	s.True(createSampleRegion([]byte{10}, nil).Contains([]byte{10}))
+	s.True(createSampleRegion(nil, []byte{10}).Contains([]byte{}))
+	s.True(createSampleRegion(nil, []byte{10}).Contains([]byte{9}))
+	s.False(createSampleRegion(nil, []byte{10}).Contains([]byte{10}))
+	s.False(createSampleRegion([]byte{10}, []byte{20}).Contains([]byte{}))
+	s.True(createSampleRegion([]byte{10}, []byte{20}).Contains([]byte{15}))
+	s.False(createSampleRegion([]byte{10}, []byte{20}).Contains([]byte{30}))
 }
 
-func (s *testRegionCacheSuite) TestContainsByEnd(c *C) {
-	c.Assert(createSampleRegion(nil, nil).ContainsByEnd([]byte{}), IsFalse)
-	c.Assert(createSampleRegion(nil, nil).ContainsByEnd([]byte{10}), IsTrue)
-	c.Assert(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{10}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{11}), IsTrue)
-	c.Assert(createSampleRegion(nil, []byte{10}).ContainsByEnd([]byte{}), IsFalse)
-	c.Assert(createSampleRegion(nil, []byte{10}).ContainsByEnd([]byte{10}), IsTrue)
-	c.Assert(createSampleRegion(nil, []byte{10}).ContainsByEnd([]byte{11}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, []byte{20}).ContainsByEnd([]byte{}), IsFalse)
-	c.Assert(createSampleRegion([]byte{10}, []byte{20}).ContainsByEnd([]byte{15}), IsTrue)
-	c.Assert(createSampleRegion([]byte{10}, []byte{20}).ContainsByEnd([]byte{30}), IsFalse)
+func (s *testRegionCacheSuite) TestContainsByEnd() {
+	s.False(createSampleRegion(nil, nil).ContainsByEnd([]byte{}))
+	s.True(createSampleRegion(nil, nil).ContainsByEnd([]byte{10}))
+	s.False(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{}))
+	s.False(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{10}))
+	s.True(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{11}))
+	s.False(createSampleRegion(nil, []byte{10}).ContainsByEnd([]byte{}))
+	s.True(createSampleRegion(nil, []byte{10}).ContainsByEnd([]byte{10}))
+	s.False(createSampleRegion(nil, []byte{10}).ContainsByEnd([]byte{11}))
+	s.False(createSampleRegion([]byte{10}, []byte{20}).ContainsByEnd([]byte{}))
+	s.True(createSampleRegion([]byte{10}, []byte{20}).ContainsByEnd([]byte{15}))
+	s.False(createSampleRegion([]byte{10}, []byte{20}).ContainsByEnd([]byte{30}))
 }
 
-func (s *testRegionCacheSuite) TestSwitchPeerWhenNoLeader(c *C) {
+func (s *testRegionCacheSuite) TestSwitchPeerWhenNoLeader() {
 	var prevCtx *RPCContext
 	for i := 0; i <= len(s.cluster.GetAllStores()); i++ {
 		loc, err := s.cache.LocateKey(s.bo, []byte("a"))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		if prevCtx == nil {
-			c.Assert(i, Equals, 0)
+			s.Equal(i, 0)
 		} else {
-			c.Assert(ctx.AccessIdx, Not(Equals), prevCtx.AccessIdx)
-			c.Assert(ctx.Peer, Not(DeepEquals), prevCtx.Peer)
+			s.NotEqual(ctx.AccessIdx, prevCtx.AccessIdx)
+			s.NotEqual(ctx.Peer, prevCtx.Peer)
 		}
 		s.cache.InvalidateCachedRegionWithReason(loc.Region, NoLeader)
-		c.Assert(s.cache.GetCachedRegionWithRLock(loc.Region).invalidReason, Equals, NoLeader)
+		s.Equal(s.cache.GetCachedRegionWithRLock(loc.Region).invalidReason, NoLeader)
 		prevCtx = ctx
 	}
 }
