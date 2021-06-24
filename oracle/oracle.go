@@ -39,7 +39,7 @@ import (
 
 // Option represents available options for the oracle.Oracle.
 type Option struct {
-	TxnScope string
+	IsLocal bool
 }
 
 // Oracle is the interface that provides strictly ascending timestamps.
@@ -48,7 +48,7 @@ type Oracle interface {
 	GetTimestampAsync(ctx context.Context, opt *Option) Future
 	GetLowResolutionTimestamp(ctx context.Context, opt *Option) (uint64, error)
 	GetLowResolutionTimestampAsync(ctx context.Context, opt *Option) Future
-	GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (uint64, error)
+	GetStaleTimestamp(ctx context.Context, opt *Option, prevSecond uint64) (uint64, error)
 	IsExpired(lockTimestamp, TTL uint64, opt *Option) bool
 	UntilExpired(lockTimeStamp, TTL uint64, opt *Option) int64
 	Close()

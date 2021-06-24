@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -74,7 +75,7 @@ func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracl
 	ctx := context.TODO()
 	go o.updateTS(ctx, updateInterval)
 	// Initialize the timestamp of the global txnScope by Get.
-	_, err := o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	_, err := o.GetTimestamp(ctx, &oracle.Option{IsLocal: false})
 	if err != nil {
 		o.Close()
 		return nil, errors.Trace(err)
@@ -85,7 +86,11 @@ func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracl
 // IsExpired returns whether lockTS+TTL is expired, both are ms. It uses `lastTS`
 // to compare, may return false negative result temporarily.
 func (o *pdOracle) IsExpired(lockTS, TTL uint64, opt *oracle.Option) bool {
-	lastTS, exist := o.getLastTS(opt.TxnScope)
+	txnScope := oracle.GlobalTxnScope
+	if opt.IsLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+	}
+	lastTS, exist := o.getLastTS(txnScope)
 	if !exist {
 		return true
 	}
@@ -94,11 +99,15 @@ func (o *pdOracle) IsExpired(lockTS, TTL uint64, opt *oracle.Option) bool {
 
 // GetTimestamp gets a new increasing time.
 func (o *pdOracle) GetTimestamp(ctx context.Context, opt *oracle.Option) (uint64, error) {
-	ts, err := o.getTimestamp(ctx, opt.TxnScope)
+	txnScope := oracle.GlobalTxnScope
+	if opt.IsLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+	}
+	ts, err := o.getTimestamp(ctx, txnScope)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	o.setLastTS(ts, opt.TxnScope)
+	o.setLastTS(ts, txnScope)
 	return ts, nil
 }
 
@@ -123,12 +132,16 @@ func (f *tsFuture) Wait() (uint64, error) {
 
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
 	var ts pd.TSFuture
-	if opt.TxnScope == oracle.GlobalTxnScope || opt.TxnScope == "" {
+	txnScope := oracle.GlobalTxnScope
+	if opt.IsLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+	}
+	if txnScope == oracle.GlobalTxnScope {
 		ts = o.c.GetTSAsync(ctx)
 	} else {
-		ts = o.c.GetLocalTSAsync(ctx, opt.TxnScope)
+		ts = o.c.GetLocalTSAsync(ctx, txnScope)
 	}
-	return &tsFuture{ts, o, opt.TxnScope}
+	return &tsFuture{ts, o, txnScope}
 }
 
 func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, error) {
@@ -137,7 +150,7 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 		physical, logical int64
 		err               error
 	)
-	if txnScope == oracle.GlobalTxnScope || txnScope == "" {
+	if txnScope == oracle.GlobalTxnScope {
 		physical, logical, err = o.c.GetTS(ctx)
 	} else {
 		physical, logical, err = o.c.GetLocalTS(ctx, txnScope)
@@ -158,9 +171,6 @@ func (o *pdOracle) getArrivalTimestamp() uint64 {
 }
 
 func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
-	if txnScope == "" {
-		txnScope = oracle.GlobalTxnScope
-	}
 	lastTSInterface, ok := o.lastTSMap.Load(txnScope)
 	if !ok {
 		lastTSInterface, _ = o.lastTSMap.LoadOrStore(txnScope, new(uint64))
@@ -199,9 +209,6 @@ func (o *pdOracle) setLastArrivalTS(ts uint64, txnScope string) {
 }
 
 func (o *pdOracle) getLastTS(txnScope string) (uint64, bool) {
-	if txnScope == "" {
-		txnScope = oracle.GlobalTxnScope
-	}
 	lastTSInterface, ok := o.lastTSMap.Load(txnScope)
 	if !ok {
 		return 0, false
@@ -245,7 +252,11 @@ func (o *pdOracle) updateTS(ctx context.Context, interval time.Duration) {
 
 // UntilExpired implement oracle.Oracle interface.
 func (o *pdOracle) UntilExpired(lockTS uint64, TTL uint64, opt *oracle.Option) int64 {
-	lastTS, ok := o.getLastTS(opt.TxnScope)
+	txnScope := oracle.GlobalTxnScope
+	if opt.IsLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+	}
+	lastTS, ok := o.getLastTS(txnScope)
 	if !ok {
 		return 0
 	}
@@ -269,19 +280,27 @@ func (f lowResolutionTsFuture) Wait() (uint64, error) {
 
 // GetLowResolutionTimestamp gets a new increasing time.
 func (o *pdOracle) GetLowResolutionTimestamp(ctx context.Context, opt *oracle.Option) (uint64, error) {
-	lastTS, ok := o.getLastTS(opt.TxnScope)
+	txnScope := oracle.GlobalTxnScope
+	if opt.IsLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+	}
+	lastTS, ok := o.getLastTS(txnScope)
 	if !ok {
-		return 0, errors.Errorf("get low resolution timestamp fail, invalid txnScope = %s", opt.TxnScope)
+		return 0, errors.Errorf("get low resolution timestamp fail, invalid txnScope = %s", txnScope)
 	}
 	return lastTS, nil
 }
 
 func (o *pdOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
-	lastTS, ok := o.getLastTS(opt.TxnScope)
+	txnScope := oracle.GlobalTxnScope
+	if opt.IsLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+	}
+	lastTS, ok := o.getLastTS(txnScope)
 	if !ok {
 		return lowResolutionTsFuture{
 			ts:  0,
-			err: errors.Errorf("get low resolution timestamp async fail, invalid txnScope = %s", opt.TxnScope),
+			err: errors.Errorf("get low resolution timestamp async fail, invalid txnScope = %s", txnScope),
 		}
 	}
 	return lowResolutionTsFuture{
@@ -311,12 +330,16 @@ func (o *pdOracle) getStaleTimestamp(txnScope string, prevSecond uint64) (uint64
 }
 
 // GetStaleTimestamp generate a TSO which represents for the TSO prevSecond secs ago.
-func (o *pdOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (ts uint64, err error) {
+func (o *pdOracle) GetStaleTimestamp(ctx context.Context, opt *oracle.Option, prevSecond uint64) (ts uint64, err error) {
+	txnScope := oracle.GlobalTxnScope
+	if opt.IsLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+	}
 	ts, err = o.getStaleTimestamp(txnScope, prevSecond)
 	if err != nil {
 		if !strings.HasPrefix(err.Error(), "invalid prevSecond") {
 			// If any error happened, we will try to fetch tso and set it as last ts.
-			_, tErr := o.GetTimestamp(ctx, &oracle.Option{TxnScope: txnScope})
+			_, tErr := o.GetTimestamp(ctx, &oracle.Option{IsLocal: opt.IsLocal})
 			if tErr != nil {
 				return 0, errors.Trace(tErr)
 			}

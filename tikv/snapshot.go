@@ -36,6 +36,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/oracle"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -45,7 +48,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/client"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
@@ -116,16 +118,14 @@ type KVSnapshot struct {
 	// It's OK as long as there are no zero-byte values in the protocol.
 	mu struct {
 		sync.RWMutex
-		hitCnt      int64
-		cached      map[string][]byte
-		cachedSize  int
-		stats       *SnapshotRuntimeStats
-		replicaRead kv.ReplicaReadType
-		taskID      uint64
-		isStaleness bool
-		txnScope    string
-		// MatchStoreLabels indicates the labels the store should be matched
-		matchStoreLabels []*metapb.StoreLabel
+		hitCnt       int64
+		cached       map[string][]byte
+		cachedSize   int
+		stats        *SnapshotRuntimeStats
+		replicaRead  kv.ReplicaReadType
+		taskID       uint64
+		isStaleness  bool
+		isLocalStore bool
 	}
 	sampleStep uint32
 	// resourceGroupTag is use to set the kv request resource group tag.
@@ -349,10 +349,10 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *Backoffer, batch batchKeys, collec
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.resourceGroupTag,
 		})
-		txnScope := s.mu.txnScope
+		isLocalStore := s.mu.isLocalStore
 		isStaleness := s.mu.isStaleness
-		matchStoreLabels := s.mu.matchStoreLabels
 		s.mu.RUnlock()
+		txnScope, matchStoreLabels := handleIsLocalStore(isLocalStore)
 		req.TxnScope = txnScope
 		if isStaleness {
 			req.EnableStaleRead()
@@ -518,9 +518,9 @@ func (s *KVSnapshot) get(ctx context.Context, bo *Backoffer, k []byte) ([]byte, 
 			ResourceGroupTag: s.resourceGroupTag,
 		})
 	isStaleness := s.mu.isStaleness
-	matchStoreLabels := s.mu.matchStoreLabels
-	txnScope := s.mu.txnScope
+	isLocalStore := s.mu.isLocalStore
 	s.mu.RUnlock()
+	txnScope, matchStoreLabels := handleIsLocalStore(isLocalStore)
 	req.TxnScope = txnScope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
@@ -676,25 +676,18 @@ func (s *KVSnapshot) SetRuntimeStats(stats *SnapshotRuntimeStats) {
 	s.mu.stats = stats
 }
 
-// SetTxnScope sets up the txn scope.
-func (s *KVSnapshot) SetTxnScope(txnScope string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mu.txnScope = txnScope
-}
-
-// SetIsStatenessReadOnly indicates whether the transaction is staleness read only transaction
-func (s *KVSnapshot) SetIsStatenessReadOnly(b bool) {
+// SetIsStalenessReadOnly indicates whether the transaction is staleness read only transaction
+func (s *KVSnapshot) SetIsStalenessReadOnly(b bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mu.isStaleness = b
 }
 
-// SetMatchStoreLabels sets up labels to filter target stores.
-func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
+// SetIsLocalStore sets up whether the query visited local store in same zone
+func (s *KVSnapshot) SetIsLocalStore(isLocalStore bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mu.matchStoreLabels = labels
+	s.mu.isLocalStore = isLocalStore
 }
 
 // SetResourceGroupTag sets resource group of the kv request.
@@ -877,4 +870,17 @@ func (rs *SnapshotRuntimeStats) String() string {
 		buf.WriteString(scanDetail)
 	}
 	return buf.String()
+}
+
+func handleIsLocalStore(isLocal bool) (txnScope string, matchStoreLabels []*metapb.StoreLabel) {
+	txnScope = oracle.GlobalTxnScope
+	matchStoreLabels = make([]*metapb.StoreLabel, 0)
+	if isLocal {
+		txnScope = config.GetTxnScopeFromConfig()
+		matchStoreLabels = append(matchStoreLabels, &metapb.StoreLabel{
+			Key:   DCLabelKey,
+			Value: txnScope,
+		})
+	}
+	return
 }

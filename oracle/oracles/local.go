@@ -98,7 +98,7 @@ func (l *localOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *o
 }
 
 // GetStaleTimestamp return physical
-func (l *localOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (ts uint64, err error) {
+func (l *localOracle) GetStaleTimestamp(ctx context.Context, opt *oracle.Option, prevSecond uint64) (ts uint64, err error) {
 	return oracle.GoTimeToTS(time.Now().Add(-time.Second * time.Duration(prevSecond))), nil
 }
 
