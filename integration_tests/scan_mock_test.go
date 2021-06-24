@@ -34,76 +34,80 @@ package tikv_test
 
 import (
 	"context"
+	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
-type testScanMockSuite struct {
+func TestScanMock(t *testing.T) {
+	suite.Run(t, new(testScanMockSuite))
 }
 
-var _ = SerialSuites(&testScanMockSuite{})
+type testScanMockSuite struct {
+	suite.Suite
+}
 
-func (s *testScanMockSuite) TestScanMultipleRegions(c *C) {
-	store := tikv.StoreProbe{KVStore: NewTestStore(c)}
+func (s *testScanMockSuite) TestScanMultipleRegions() {
+	store := tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
 	defer store.Close()
 
 	txn, err := store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for ch := byte('a'); ch <= byte('z'); ch++ {
 		err = txn.Set([]byte{ch}, []byte{ch})
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	txn, err = store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	scanner, err := txn.NewScanner([]byte("a"), nil, 10, false)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for ch := byte('a'); ch <= byte('z'); ch++ {
-		c.Assert([]byte{ch}, BytesEquals, scanner.Key())
-		c.Assert(scanner.Next(), IsNil)
+		s.Equal([]byte{ch}, scanner.Key())
+		s.Nil(scanner.Next())
 	}
-	c.Assert(scanner.Valid(), IsFalse)
+	s.False(scanner.Valid())
 
 	scanner, err = txn.NewScanner([]byte("a"), []byte("i"), 10, false)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for ch := byte('a'); ch <= byte('h'); ch++ {
-		c.Assert([]byte{ch}, BytesEquals, scanner.Key())
-		c.Assert(scanner.Next(), IsNil)
+		s.Equal([]byte{ch}, scanner.Key())
+		s.Nil(scanner.Next())
 	}
-	c.Assert(scanner.Valid(), IsFalse)
+	s.False(scanner.Valid())
 }
 
-func (s *testScanMockSuite) TestReverseScan(c *C) {
-	store := tikv.StoreProbe{KVStore: NewTestStore(c)}
+func (s *testScanMockSuite) TestReverseScan() {
+	store := tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
 	defer store.Close()
 
 	txn, err := store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for ch := byte('a'); ch <= byte('z'); ch++ {
 		err = txn.Set([]byte{ch}, []byte{ch})
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	txn, err = store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	scanner, err := txn.NewScanner(nil, []byte("z"), 10, true)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for ch := byte('y'); ch >= byte('a'); ch-- {
-		c.Assert(string([]byte{ch}), Equals, string(scanner.Key()))
-		c.Assert(scanner.Next(), IsNil)
+		s.Equal(string([]byte{ch}), string(scanner.Key()))
+		s.Nil(scanner.Next())
 	}
-	c.Assert(scanner.Valid(), IsFalse)
+	s.False(scanner.Valid())
 
 	scanner, err = txn.NewScanner([]byte("a"), []byte("i"), 10, true)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for ch := byte('h'); ch >= byte('a'); ch-- {
-		c.Assert(string([]byte{ch}), Equals, string(scanner.Key()))
-		c.Assert(scanner.Next(), IsNil)
+		s.Equal(string([]byte{ch}), string(scanner.Key()))
+		s.Nil(scanner.Next())
 	}
-	c.Assert(scanner.Valid(), IsFalse)
+	s.False(scanner.Valid())
 }
