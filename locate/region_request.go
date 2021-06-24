@@ -355,7 +355,7 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) error {
 		}
 		return bo.Backoff(retry.BoRegionStoreUnavailable, err)
 	}
-	return bo.Backoff(retry.BoRegionMiss, err)
+	return nil
 }
 
 // OnSendSuccess updates the leader of the cached region since the replicaSelector
@@ -862,8 +862,9 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 
 	if ctx.Meta != nil {
 		if s.leaderReplicaSelector != nil {
-			err := s.leaderReplicaSelector.onSendFailure(bo, err)
-			return errors.Trace(err)
+			if err := s.leaderReplicaSelector.onSendFailure(bo, err); err != nil {
+				return errors.Trace(err)
+			}
 		} else {
 			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
 		}
@@ -871,8 +872,6 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 
 	// Retry on send request failure when it's not canceled.
 	// When a store is not available, the leader of related region should be elected quickly.
-	// TODO: the number of retry time should be limited: since region may be unavailable
-	// when some unrecoverable disaster happened.
 	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlash {
 		err = bo.Backoff(retry.BoTiFlashRPC, errors.Errorf("send tiflash request error: %v, ctx: %v, try next peer later", err, ctx))
 	} else {
