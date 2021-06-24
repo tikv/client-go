@@ -40,7 +40,6 @@ import (
 	"testing"
 	"unsafe"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/kv"
 	txndriver "github.com/pingcap/tidb/store/driver/txn"
@@ -84,36 +83,6 @@ func NewTestStoreT(t *testing.T) *tikv.KVStore {
 	unistore.BootstrapWithSingleStore(cluster)
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
 	require.Nil(t, err)
-	return store
-}
-
-// NewTestStore creates a KVStore for testing purpose.
-// TODO: remove it after we get rid of pingcap/check.
-func NewTestStore(c *C) *tikv.KVStore {
-	if !flag.Parsed() {
-		flag.Parse()
-	}
-
-	if *mockstore.WithTiKV {
-		addrs := strings.Split(*pdAddrs, ",")
-		pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
-		c.Assert(err, IsNil)
-		var securityConfig config.Security
-		tlsConfig, err := securityConfig.ToTLSConfig()
-		c.Assert(err, IsNil)
-		spKV, err := tikv.NewEtcdSafePointKV(addrs, tlsConfig)
-		c.Assert(err, IsNil)
-		store, err := tikv.NewKVStore("test-store", &tikv.CodecPDClient{Client: pdClient}, spKV, tikv.NewRPCClient(securityConfig))
-		c.Assert(err, IsNil)
-		err = clearStorage(store)
-		c.Assert(err, IsNil)
-		return store
-	}
-	client, pdClient, cluster, err := unistore.New("")
-	c.Assert(err, IsNil)
-	unistore.BootstrapWithSingleStore(cluster)
-	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
-	c.Assert(err, IsNil)
 	return store
 }
 
