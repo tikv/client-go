@@ -35,207 +35,206 @@ package tikv_test
 import (
 	"context"
 	"math"
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/store/mockstore/unistore"
+	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
+func TestSnapshotFail(t *testing.T) {
+	suite.Run(t, new(testSnapshotFailSuite))
+}
+
 type testSnapshotFailSuite struct {
+	suite.Suite
 	store tikv.StoreProbe
 }
 
-var _ = SerialSuites(&testSnapshotFailSuite{})
-
-func (s *testSnapshotFailSuite) SetUpSuite(c *C) {
+func (s *testSnapshotFailSuite) SetupSuite() {
 	client, pdClient, cluster, err := unistore.New("")
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	unistore.BootstrapWithSingleStore(cluster)
 	store, err := tikv.NewTestTiKVStore(fpClient{Client: client}, pdClient, nil, nil, 0)
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 
-func (s *testSnapshotFailSuite) cleanup(c *C) {
+func (s *testSnapshotFailSuite) TearDownTest() {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	iter, err := txn.Iter([]byte(""), []byte(""))
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	for iter.Valid() {
 		err = txn.Delete(iter.Key())
-		c.Assert(err, IsNil)
+		s.Require().Nil(err)
 		err = iter.Next()
-		c.Assert(err, IsNil)
+		s.Require().Nil(err)
 	}
-	c.Assert(txn.Commit(context.TODO()), IsNil)
+	s.Require().Nil(txn.Commit(context.TODO()))
 }
 
-func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError(c *C) {
+func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 	// Meaningless to test with tikv because it has a mock key error
 	if *mockstore.WithTiKV {
 		return
 	}
-	defer s.cleanup(c)
 
 	// Put two KV pairs
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	err = txn.Set([]byte("k1"), []byte("v1"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Set([]byte("k2"), []byte("v2"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	c.Assert(failpoint.Enable("tikvclient/rpcBatchGetResult", `1*return("keyError")`), IsNil)
+	s.Require().Nil(failpoint.Enable("tikvclient/rpcBatchGetResult", `1*return("keyError")`))
 	defer func() {
-		c.Assert(failpoint.Disable("tikvclient/rpcBatchGetResult"), IsNil)
+		s.Require().Nil(failpoint.Disable("tikvclient/rpcBatchGetResult"))
 	}()
 
 	txn, err = s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	res, err := toTiDBTxn(&txn).BatchGet(context.Background(), toTiDBKeys([][]byte{[]byte("k1"), []byte("k2")}))
-	c.Assert(err, IsNil)
-	c.Assert(res, DeepEquals, map[string][]byte{"k1": []byte("v1"), "k2": []byte("v2")})
+	s.Nil(err)
+	s.Equal(res, map[string][]byte{"k1": []byte("v1"), "k2": []byte("v2")})
 }
 
-func (s *testSnapshotFailSuite) TestScanResponseKeyError(c *C) {
+func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
 	// Meaningless to test with tikv because it has a mock key error
 	if *mockstore.WithTiKV {
 		return
 	}
-	defer s.cleanup(c)
 
 	// Put two KV pairs
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	err = txn.Set([]byte("k1"), []byte("v1"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Set([]byte("k2"), []byte("v2"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Set([]byte("k3"), []byte("v3"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	c.Assert(failpoint.Enable("tikvclient/rpcScanResult", `1*return("keyError")`), IsNil)
+	s.Require().Nil(failpoint.Enable("tikvclient/rpcScanResult", `1*return("keyError")`))
 	txn, err = s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	iter, err := txn.Iter([]byte("a"), []byte("z"))
-	c.Assert(err, IsNil)
-	c.Assert(iter.Key(), DeepEquals, []byte("k1"))
-	c.Assert(iter.Value(), DeepEquals, []byte("v1"))
-	c.Assert(iter.Next(), IsNil)
-	c.Assert(iter.Key(), DeepEquals, []byte("k2"))
-	c.Assert(iter.Value(), DeepEquals, []byte("v2"))
-	c.Assert(iter.Next(), IsNil)
-	c.Assert(iter.Key(), DeepEquals, []byte("k3"))
-	c.Assert(iter.Value(), DeepEquals, []byte("v3"))
-	c.Assert(iter.Next(), IsNil)
-	c.Assert(iter.Valid(), IsFalse)
-	c.Assert(failpoint.Disable("tikvclient/rpcScanResult"), IsNil)
+	s.Nil(err)
+	s.Equal(iter.Key(), []byte("k1"))
+	s.Equal(iter.Value(), []byte("v1"))
+	s.Nil(iter.Next())
+	s.Equal(iter.Key(), []byte("k2"))
+	s.Equal(iter.Value(), []byte("v2"))
+	s.Nil(iter.Next())
+	s.Equal(iter.Key(), []byte("k3"))
+	s.Equal(iter.Value(), []byte("v3"))
+	s.Nil(iter.Next())
+	s.False(iter.Valid())
+	s.Require().Nil(failpoint.Disable("tikvclient/rpcScanResult"))
 
-	c.Assert(failpoint.Enable("tikvclient/rpcScanResult", `1*return("keyError")`), IsNil)
+	s.Require().Nil(failpoint.Enable("tikvclient/rpcScanResult", `1*return("keyError")`))
 	txn, err = s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	iter, err = txn.Iter([]byte("k2"), []byte("k4"))
-	c.Assert(err, IsNil)
-	c.Assert(iter.Key(), DeepEquals, []byte("k2"))
-	c.Assert(iter.Value(), DeepEquals, []byte("v2"))
-	c.Assert(iter.Next(), IsNil)
-	c.Assert(iter.Key(), DeepEquals, []byte("k3"))
-	c.Assert(iter.Value(), DeepEquals, []byte("v3"))
-	c.Assert(iter.Next(), IsNil)
-	c.Assert(iter.Valid(), IsFalse)
-	c.Assert(failpoint.Disable("tikvclient/rpcScanResult"), IsNil)
+	s.Nil(err)
+	s.Equal(iter.Key(), []byte("k2"))
+	s.Equal(iter.Value(), []byte("v2"))
+	s.Nil(iter.Next())
+	s.Equal(iter.Key(), []byte("k3"))
+	s.Equal(iter.Value(), []byte("v3"))
+	s.Nil(iter.Next())
+	s.False(iter.Valid())
+	s.Require().Nil(failpoint.Disable("tikvclient/rpcScanResult"))
 }
 
-func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock(c *C) {
-	defer s.cleanup(c)
+func (s *testSnapshotFailSuite) TestRetryMaxTsPointGetSkipLock() {
 
 	// Prewrite k1 and k2 with async commit but don't commit them
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	err = txn.Set([]byte("k1"), []byte("v1"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Set([]byte("k2"), []byte("v2"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	txn.SetEnableAsyncCommit(true)
 
-	c.Assert(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"), IsNil)
-	c.Assert(failpoint.Enable("tikvclient/twoPCShortLockTTL", "return"), IsNil)
+	s.Require().Nil(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"))
+	s.Require().Nil(failpoint.Enable("tikvclient/twoPCShortLockTTL", "return"))
 	committer, err := txn.NewCommitter(1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = committer.Execute(context.Background())
-	c.Assert(err, IsNil)
-	c.Assert(failpoint.Disable("tikvclient/twoPCShortLockTTL"), IsNil)
+	s.Nil(err)
+	s.Require().Nil(failpoint.Disable("tikvclient/twoPCShortLockTTL"))
 
 	snapshot := s.store.GetSnapshot(math.MaxUint64)
 	getCh := make(chan []byte)
 	go func() {
 		// Sleep a while to make the TTL of the first txn expire, then we make sure we resolve lock by this get
 		time.Sleep(200 * time.Millisecond)
-		c.Assert(failpoint.Enable("tikvclient/beforeSendPointGet", "1*off->pause"), IsNil)
+		s.Require().Nil(failpoint.Enable("tikvclient/beforeSendPointGet", "1*off->pause"))
 		res, err := snapshot.Get(context.Background(), []byte("k2"))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		getCh <- res
 	}()
 	// The get should be blocked by the failpoint. But the lock should have been resolved.
 	select {
 	case res := <-getCh:
-		c.Errorf("too early %s", string(res))
+		s.Fail("too early %s", string(res))
 	case <-time.After(1 * time.Second):
 	}
 
 	// Prewrite k1 and k2 again without committing them
 	txn, err = s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	txn.SetEnableAsyncCommit(true)
 	err = txn.Set([]byte("k1"), []byte("v3"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Set([]byte("k2"), []byte("v4"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	committer, err = txn.NewCommitter(1)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = committer.Execute(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	c.Assert(failpoint.Disable("tikvclient/beforeSendPointGet"), IsNil)
+	s.Require().Nil(failpoint.Disable("tikvclient/beforeSendPointGet"))
 
 	// After disabling the failpoint, the get request should bypass the new locks and read the old result
 	select {
 	case res := <-getCh:
-		c.Assert(res, DeepEquals, []byte("v2"))
+		s.Equal(res, []byte("v2"))
 	case <-time.After(1 * time.Second):
-		c.Errorf("get timeout")
+		s.Fail("get timeout")
 	}
 }
 
-func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS(c *C) {
-	defer s.cleanup(c)
-
+func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
-	c.Assert(txn.Set([]byte("k1"), []byte("v1")), IsNil)
+	s.Require().Nil(err)
+	s.Nil(txn.Set([]byte("k1"), []byte("v1")))
 	err = txn.Set([]byte("k2"), []byte("v2"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	txn.SetEnableAsyncCommit(false)
 	txn.SetEnable1PC(false)
 	txn.SetCausalConsistency(true)
 
 	// Prewrite the lock without committing it
-	c.Assert(failpoint.Enable("tikvclient/beforeCommit", `pause`), IsNil)
+	s.Require().Nil(failpoint.Enable("tikvclient/beforeCommit", `pause`))
 	ch := make(chan struct{})
 	committer, err := txn.NewCommitter(1)
-	c.Assert(committer.GetPrimaryKey(), DeepEquals, []byte("k1"))
+	s.Equal(committer.GetPrimaryKey(), []byte("k1"))
 	go func() {
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		err = committer.Execute(context.Background())
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		ch <- struct{}{}
 	}()
 
@@ -244,15 +243,15 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS(c *C) {
 	// Should get nothing with max version, and **not pushing forward minCommitTS** of the primary lock
 	snapshot := s.store.GetSnapshot(math.MaxUint64)
 	_, err = snapshot.Get(context.Background(), []byte("k2"))
-	c.Assert(tikverr.IsErrNotFound(err), IsTrue)
+	s.True(tikverr.IsErrNotFound(err))
 
 	initialCommitTS := committer.GetCommitTS()
-	c.Assert(failpoint.Disable("tikvclient/beforeCommit"), IsNil)
+	s.Require().Nil(failpoint.Disable("tikvclient/beforeCommit"))
 
 	<-ch
 	// check the minCommitTS is not pushed forward
 	snapshot = s.store.GetSnapshot(initialCommitTS)
 	v, err := snapshot.Get(context.Background(), []byte("k2"))
-	c.Assert(err, IsNil)
-	c.Assert(v, DeepEquals, []byte("v2"))
+	s.Nil(err)
+	s.Equal(v, []byte("v2"))
 }
