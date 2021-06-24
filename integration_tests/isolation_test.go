@@ -59,8 +59,6 @@ type testIsolationSuite struct {
 	store *tikv.KVStore
 }
 
-var _ = SerialSuites(&testIsolationSuite{})
-
 func (s *testIsolationSuite) SetupSuite() {
 	s.store = NewTestStoreT(s.T())
 }
