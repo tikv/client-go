@@ -176,24 +176,10 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 	err = txn.Commit(context.Background())
 	s.Nil(err)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	s.Nil(failpoint.Enable("tikvclient/rpcServerBusy", `return(true)`))
-	go func() {
-		defer wg.Done()
-		time.Sleep(time.Millisecond * 100)
-		s.Nil(failpoint.Disable("tikvclient/rpcServerBusy"))
-	}()
-
-	go func() {
-		defer wg.Done()
-		txn, err := s.store.Begin()
-		s.Require().Nil(err)
-		val, err := txn.Get(context.TODO(), []byte("key"))
-		s.Nil(err)
-		s.Equal(val, []byte("value"))
-	}()
-
-	wg.Wait()
+	txn, err = s.store.Begin()
+	s.Require().Nil(err)
+	s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("busy")->return("")`))
+	val, err := txn.Get(context.TODO(), []byte("key"))
+	s.Nil(err)
+	s.Equal(val, []byte("value"))
 }
