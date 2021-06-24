@@ -42,11 +42,12 @@ import (
 /// This is a simplified version of [GC in TiDB](https://docs.pingcap.com/tidb/stable/garbage-collection-overview).
 /// We skip the second step "delete ranges" which is an optimization for TiDB.
 func (s *KVStore) GC(ctx context.Context, safepoint uint64) (newSafePoint uint64, err error) {
-	err = s.resolveLocks(ctx, newSafePoint, 8)
+	err = s.resolveLocks(ctx, safepoint, 8)
 	if err != nil {
 		return
 	}
-	return s.pdClient.UpdateGCSafePoint(ctx, newSafePoint)
+
+	return s.pdClient.UpdateGCSafePoint(ctx, safepoint)
 }
 
 func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrency int) error {
