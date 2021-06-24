@@ -36,25 +36,24 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
-type testClientFailSuite struct {
-}
-
-func (s *testClientFailSuite) TestPanicInRecvLoop(c *C) {
-	c.Assert(failpoint.Enable("tikvclient/panicInFailPendingRequests", `panic`), IsNil)
-	c.Assert(failpoint.Enable("tikvclient/gotErrorInRecvLoop", `return("0")`), IsNil)
+func TestPanicInRecvLoop(t *testing.T) {
+	require.Nil(t, failpoint.Enable("tikvclient/panicInFailPendingRequests", `panic`))
+	require.Nil(t, failpoint.Enable("tikvclient/gotErrorInRecvLoop", `return("0")`))
 
 	server, port := startMockTikvService()
-	c.Assert(port > 0, IsTrue)
+	require.True(t, port > 0)
 	defer server.Stop()
 
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
@@ -64,24 +63,24 @@ func (s *testClientFailSuite) TestPanicInRecvLoop(c *C) {
 
 	// Start batchRecvLoop, and it should panic in `failPendingRequests`.
 	_, err := rpcClient.getConnArray(addr, true, func(cfg *config.TiKVClient) { cfg.GrpcConnectionCount = 1 })
-	c.Assert(err, IsNil, Commentf("cannot establish local connection due to env problems(e.g. heavy load in test machine), please retry again"))
+	assert.Nil(t, err, "cannot establish local connection due to env problems(e.g. heavy load in test machine), please retry again")
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, time.Second/2)
-	c.Assert(err, NotNil)
+	assert.NotNil(t, err)
 
-	c.Assert(failpoint.Disable("tikvclient/gotErrorInRecvLoop"), IsNil)
-	c.Assert(failpoint.Disable("tikvclient/panicInFailPendingRequests"), IsNil)
+	require.Nil(t, failpoint.Disable("tikvclient/gotErrorInRecvLoop"))
+	require.Nil(t, failpoint.Disable("tikvclient/panicInFailPendingRequests"))
 	time.Sleep(time.Second * 2)
 
 	req = tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, time.Second*4)
-	c.Assert(err, IsNil)
+	assert.Nil(t, err)
 }
 
-func (s *testClientFailSuite) TestRecvErrorInMultipleRecvLoops(c *C) {
+func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
 	server, port := startMockTikvService()
-	c.Assert(port > 0, IsTrue)
+	require.True(t, port > 0)
 	defer server.Stop()
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
 
@@ -100,20 +99,20 @@ func (s *testClientFailSuite) TestRecvErrorInMultipleRecvLoops(c *C) {
 	for _, forwardedHost := range forwardedHosts {
 		prewriteReq.ForwardedHost = forwardedHost
 		_, err := rpcClient.SendRequest(context.Background(), addr, prewriteReq, 10*time.Second)
-		c.Assert(err, IsNil)
+		assert.Nil(t, err)
 	}
 	connArray, err := rpcClient.getConnArray(addr, true)
-	c.Assert(connArray, NotNil)
-	c.Assert(err, IsNil)
+	assert.NotNil(t, connArray)
+	assert.Nil(t, err)
 	batchConn := connArray.batchConn
-	c.Assert(batchConn, NotNil)
-	c.Assert(len(batchConn.batchCommandsClients), Equals, 1)
+	assert.NotNil(t, batchConn)
+	assert.Equal(t, len(batchConn.batchCommandsClients), 1)
 	batchClient := batchConn.batchCommandsClients[0]
-	c.Assert(batchClient.client, NotNil)
-	c.Assert(batchClient.client.forwardedHost, Equals, "")
-	c.Assert(len(batchClient.forwardedClients), Equals, 3)
+	assert.NotNil(t, batchClient.client)
+	assert.Equal(t, batchClient.client.forwardedHost, "")
+	assert.Equal(t, len(batchClient.forwardedClients), 3)
 	for _, forwardedHosts := range forwardedHosts[1:] {
-		c.Assert(batchClient.forwardedClients[forwardedHosts].forwardedHost, Equals, forwardedHosts)
+		assert.Equal(t, batchClient.forwardedClients[forwardedHosts].forwardedHost, forwardedHosts)
 	}
 
 	// Save all streams
@@ -127,12 +126,12 @@ func (s *testClientFailSuite) TestRecvErrorInMultipleRecvLoops(c *C) {
 	fp := "tikvclient/gotErrorInRecvLoop"
 	// Send a request to each stream to trigger reconnection.
 	for _, forwardedHost := range forwardedHosts {
-		c.Assert(failpoint.Enable(fp, `1*return("0")`), IsNil)
+		require.Nil(t, failpoint.Enable(fp, `1*return("0")`))
 		prewriteReq.ForwardedHost = forwardedHost
 		_, err := rpcClient.SendRequest(context.Background(), addr, prewriteReq, 10*time.Second)
-		c.Assert(err, IsNil)
+		assert.Nil(t, err)
 		time.Sleep(100 * time.Millisecond)
-		c.Assert(failpoint.Disable(fp), IsNil)
+		assert.Nil(t, failpoint.Disable(fp))
 	}
 
 	// Wait for finishing reconnection.
@@ -150,14 +149,14 @@ func (s *testClientFailSuite) TestRecvErrorInMultipleRecvLoops(c *C) {
 	for _, forwardedHost := range forwardedHosts {
 		prewriteReq.ForwardedHost = forwardedHost
 		_, err := rpcClient.SendRequest(context.Background(), addr, prewriteReq, 10*time.Second)
-		c.Assert(err, IsNil)
+		assert.Nil(t, err)
 	}
 	// Should only reconnect once.
-	c.Assert(atomic.LoadUint64(&batchClient.epoch), Equals, epoch+1)
+	assert.Equal(t, atomic.LoadUint64(&batchClient.epoch), epoch+1)
 	// All streams are refreshed.
-	c.Assert(batchClient.client.Tikv_BatchCommandsClient, Not(Equals), clientSave)
-	c.Assert(len(batchClient.forwardedClients), Equals, len(forwardedClientsSave))
+	assert.NotEqual(t, batchClient.client.Tikv_BatchCommandsClient, clientSave)
+	assert.Equal(t, len(batchClient.forwardedClients), len(forwardedClientsSave))
 	for host, clientSave := range forwardedClientsSave {
-		c.Assert(batchClient.forwardedClients[host].Tikv_BatchCommandsClient, Not(Equals), clientSave)
+		assert.NotEqual(t, batchClient.forwardedClients[host].Tikv_BatchCommandsClient, clientSave)
 	}
 }
