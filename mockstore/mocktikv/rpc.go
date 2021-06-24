@@ -671,12 +671,6 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
 
-	if val, err := util.EvalFailpoint("rpcServerBusy"); err == nil {
-		if val.(bool) {
-			return tikvrpc.GenRegionErrorResp(req, &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}})
-		}
-	}
-
 	// increase coverage for mock tikv
 	_ = req.Type.String()
 	_ = req.ToBatchCommandsRequest()
