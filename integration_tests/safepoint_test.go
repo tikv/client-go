@@ -35,35 +35,39 @@ package tikv_test
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/terror"
-	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
+func TestSafepoint(t *testing.T) {
+	suite.Run(t, new(testSafePointSuite))
+}
+
 type testSafePointSuite struct {
+	suite.Suite
 	store  tikv.StoreProbe
 	prefix string
 }
 
-var _ = SerialSuites(&testSafePointSuite{})
-
-func (s *testSafePointSuite) SetUpSuite(c *C) {
-	s.store = tikv.StoreProbe{KVStore: NewTestStore(c)}
+func (s *testSafePointSuite) SetupSuite() {
+	s.store = tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
 	s.prefix = fmt.Sprintf("seek_%d", time.Now().Unix())
 }
 
-func (s *testSafePointSuite) TearDownSuite(c *C) {
+func (s *testSafePointSuite) TearDownSuite() {
 	err := s.store.Close()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 }
 
-func (s *testSafePointSuite) beginTxn(c *C) tikv.TxnProbe {
+func (s *testSafePointSuite) beginTxn() tikv.TxnProbe {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	return txn
 }
 
@@ -89,52 +93,52 @@ func (s *testSafePointSuite) waitUntilErrorPlugIn(t uint64) {
 	}
 }
 
-func (s *testSafePointSuite) TestSafePoint(c *C) {
-	txn := s.beginTxn(c)
+func (s *testSafePointSuite) TestSafePoint() {
+	txn := s.beginTxn()
 	for i := 0; i < 10; i++ {
 		err := txn.Set(encodeKey(s.prefix, s08d("key", i)), valueBytes(i))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	err := txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// for txn get
-	txn2 := s.beginTxn(c)
+	txn2 := s.beginTxn()
 	_, err = txn2.Get(context.TODO(), encodeKey(s.prefix, s08d("key", 0)))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	s.waitUntilErrorPlugIn(txn2.StartTS())
 
 	_, geterr2 := txn2.Get(context.TODO(), encodeKey(s.prefix, s08d("key", 0)))
-	c.Assert(geterr2, NotNil)
+	s.NotNil(geterr2)
 
-	_, isFallBehind := errors.Cause(geterr2).(*tikverr.ErrGCTooEarly)
-	isMayFallBehind := terror.ErrorEqual(errors.Cause(geterr2), tikverr.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
+	_, isFallBehind := errors.Cause(geterr2).(*error.ErrGCTooEarly)
+	isMayFallBehind := terror.ErrorEqual(errors.Cause(geterr2), error.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
 	isBehind := isFallBehind || isMayFallBehind
-	c.Assert(isBehind, IsTrue)
+	s.True(isBehind)
 
 	// for txn seek
-	txn3 := s.beginTxn(c)
+	txn3 := s.beginTxn()
 
 	s.waitUntilErrorPlugIn(txn3.StartTS())
 
 	_, seekerr := txn3.Iter(encodeKey(s.prefix, ""), nil)
-	c.Assert(seekerr, NotNil)
-	_, isFallBehind = errors.Cause(geterr2).(*tikverr.ErrGCTooEarly)
-	isMayFallBehind = terror.ErrorEqual(errors.Cause(geterr2), tikverr.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
+	s.NotNil(seekerr)
+	_, isFallBehind = errors.Cause(geterr2).(*error.ErrGCTooEarly)
+	isMayFallBehind = terror.ErrorEqual(errors.Cause(geterr2), error.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
 	isBehind = isFallBehind || isMayFallBehind
-	c.Assert(isBehind, IsTrue)
+	s.True(isBehind)
 
 	// for snapshot batchGet
 	keys := mymakeKeys(10, s.prefix)
-	txn4 := s.beginTxn(c)
+	txn4 := s.beginTxn()
 
 	s.waitUntilErrorPlugIn(txn4.StartTS())
 
 	_, batchgeterr := toTiDBTxn(&txn4).BatchGet(context.Background(), toTiDBKeys(keys))
-	c.Assert(batchgeterr, NotNil)
-	_, isFallBehind = errors.Cause(geterr2).(*tikverr.ErrGCTooEarly)
-	isMayFallBehind = terror.ErrorEqual(errors.Cause(geterr2), tikverr.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
+	s.NotNil(batchgeterr)
+	_, isFallBehind = errors.Cause(geterr2).(*error.ErrGCTooEarly)
+	isMayFallBehind = terror.ErrorEqual(errors.Cause(geterr2), error.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
 	isBehind = isFallBehind || isMayFallBehind
-	c.Assert(isBehind, IsTrue)
+	s.True(isBehind)
 }

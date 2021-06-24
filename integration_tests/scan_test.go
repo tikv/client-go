@@ -36,8 +36,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/tikv"
@@ -48,43 +49,46 @@ import (
 
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()
 
+func TestScan(t *testing.T) {
+	suite.Run(t, new(testScanSuite))
+}
+
 type testScanSuite struct {
+	suite.Suite
 	store        *tikv.KVStore
 	recordPrefix []byte
 	rowNums      []int
 	ctx          context.Context
 }
 
-var _ = SerialSuites(&testScanSuite{})
-
-func (s *testScanSuite) SetUpSuite(c *C) {
-	s.store = NewTestStore(c)
+func (s *testScanSuite) SetupSuite() {
+	s.store = NewTestStoreT(s.T())
 	s.recordPrefix = []byte("prefix")
 	s.rowNums = append(s.rowNums, 1, scanBatchSize, scanBatchSize+1, scanBatchSize*3)
 	// Avoid using async commit logic.
 	s.ctx = context.WithValue(context.Background(), util.SessionID, uint64(0))
 }
 
-func (s *testScanSuite) TearDownSuite(c *C) {
-	txn := s.beginTxn(c)
+func (s *testScanSuite) TearDownSuite() {
+	txn := s.beginTxn()
 	scanner, err := txn.Iter(s.recordPrefix, nil)
-	c.Assert(err, IsNil)
-	c.Assert(scanner, NotNil)
+	s.Require().Nil(err)
+	s.Require().NotNil(scanner)
 	for scanner.Valid() {
 		k := scanner.Key()
 		err = txn.Delete(k)
-		c.Assert(err, IsNil)
+		s.Require().Nil(err)
 		scanner.Next()
 	}
 	err = txn.Commit(s.ctx)
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	err = s.store.Close()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 }
 
-func (s *testScanSuite) beginTxn(c *C) *tikv.KVTxn {
+func (s *testScanSuite) beginTxn() *tikv.KVTxn {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	return txn
 }
 
@@ -99,8 +103,8 @@ func (s *testScanSuite) makeValue(i int) []byte {
 	return []byte(fmt.Sprintf("%d", i))
 }
 
-func (s *testScanSuite) TestScan(c *C) {
-	check := func(c *C, scan unionstore.Iterator, rowNum int, keyOnly bool) {
+func (s *testScanSuite) TestScan() {
+	check := func(scan unionstore.Iterator, rowNum int, keyOnly bool) {
 		for i := 0; i < rowNum; i++ {
 			k := scan.Key()
 			expectedKey := s.makeKey(i)
@@ -113,10 +117,10 @@ func (s *testScanSuite) TestScan(c *C) {
 					zap.String("expected", kv.StrKey(expectedKey)),
 					zap.Bool("keyOnly", keyOnly))
 			}
-			c.Assert(k, BytesEquals, expectedKey)
+			s.Equal(k, expectedKey)
 			if !keyOnly {
 				v := scan.Value()
-				c.Assert(v, BytesEquals, s.makeValue(i))
+				s.Equal(v, s.makeValue(i))
 			}
 			// Because newScan return first item without calling scan.Next() just like go-hbase,
 			// for-loop count will decrease 1.
@@ -125,61 +129,61 @@ func (s *testScanSuite) TestScan(c *C) {
 			}
 		}
 		scan.Next()
-		c.Assert(scan.Valid(), IsFalse)
+		s.False(scan.Valid())
 	}
 
 	for _, rowNum := range s.rowNums {
-		txn := s.beginTxn(c)
+		txn := s.beginTxn()
 		for i := 0; i < rowNum; i++ {
 			err := txn.Set(s.makeKey(i), s.makeValue(i))
-			c.Assert(err, IsNil)
+			s.Nil(err)
 		}
 		err := txn.Commit(s.ctx)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		mockTableID := int64(999)
 		if rowNum > 123 {
 			_, err = s.store.SplitRegions(s.ctx, [][]byte{s.makeKey(123)}, false, &mockTableID)
-			c.Assert(err, IsNil)
+			s.Nil(err)
 		}
 
 		if rowNum > 456 {
 			_, err = s.store.SplitRegions(s.ctx, [][]byte{s.makeKey(456)}, false, &mockTableID)
-			c.Assert(err, IsNil)
+			s.Nil(err)
 		}
 
-		txn2 := s.beginTxn(c)
+		txn2 := s.beginTxn()
 		val, err := txn2.Get(context.TODO(), s.makeKey(0))
-		c.Assert(err, IsNil)
-		c.Assert(val, BytesEquals, s.makeValue(0))
+		s.Nil(err)
+		s.Equal(val, s.makeValue(0))
 		// Test scan without upperBound
 		scan, err := txn2.Iter(s.recordPrefix, nil)
-		c.Assert(err, IsNil)
-		check(c, scan, rowNum, false)
+		s.Nil(err)
+		check(scan, rowNum, false)
 		// Test scan with upperBound
 		upperBound := rowNum / 2
 		scan, err = txn2.Iter(s.recordPrefix, s.makeKey(upperBound))
-		c.Assert(err, IsNil)
-		check(c, scan, upperBound, false)
+		s.Nil(err)
+		check(scan, upperBound, false)
 
-		txn3 := s.beginTxn(c)
+		txn3 := s.beginTxn()
 		txn3.GetSnapshot().SetKeyOnly(true)
 		// Test scan without upper bound
 		scan, err = txn3.Iter(s.recordPrefix, nil)
-		c.Assert(err, IsNil)
-		check(c, scan, rowNum, true)
+		s.Nil(err)
+		check(scan, rowNum, true)
 		// test scan with upper bound
 		scan, err = txn3.Iter(s.recordPrefix, s.makeKey(upperBound))
-		c.Assert(err, IsNil)
-		check(c, scan, upperBound, true)
+		s.Nil(err)
+		check(scan, upperBound, true)
 
 		// Restore KeyOnly to false
 		txn3.GetSnapshot().SetKeyOnly(false)
 		scan, err = txn3.Iter(s.recordPrefix, nil)
-		c.Assert(err, IsNil)
-		check(c, scan, rowNum, true)
+		s.Nil(err)
+		check(scan, rowNum, true)
 		// test scan with upper bound
 		scan, err = txn3.Iter(s.recordPrefix, s.makeKey(upperBound))
-		c.Assert(err, IsNil)
-		check(c, scan, upperBound, true)
+		s.Nil(err)
+		check(scan, upperBound, true)
 	}
 }
