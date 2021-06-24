@@ -37,15 +37,17 @@ package unionstore
 import (
 	"encoding/binary"
 	"math/rand"
+	"testing"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/goleveldb/leveldb/comparer"
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
+	"github.com/stretchr/testify/require"
 )
 
 // The test takes too long under the race detector.
-func (s testMemDBSuite) TestRandom(c *C) {
-	c.Parallel()
+func TestRandom(t *testing.T) {
+	require := require.New(t)
+
 	const cnt = 500000
 	keys := make([][]byte, cnt)
 	for i := range keys {
@@ -60,8 +62,8 @@ func (s testMemDBSuite) TestRandom(c *C) {
 		_ = p2.Put(k, k)
 	}
 
-	c.Check(p1.Len(), Equals, p2.Len())
-	c.Check(p1.Size(), Equals, p2.Size())
+	require.Equal(p1.Len(), p2.Len())
+	require.Equal(p1.Size(), p2.Size())
 
 	rand.Shuffle(cnt, func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
 
@@ -77,18 +79,17 @@ func (s testMemDBSuite) TestRandom(c *C) {
 			_ = p2.Put(k, newValue)
 		}
 	}
-	s.checkConsist(c, p1, p2)
+	checkConsist(t, p1, p2)
 }
 
 // The test takes too long under the race detector.
-func (s testMemDBSuite) TestRandomDerive(c *C) {
-	c.Parallel()
+func TestRandomDerive(t *testing.T) {
 	db := newMemDB()
 	golden := leveldb.New(comparer.DefaultComparer, 4*1024)
-	s.testRandomDeriveRecur(c, db, golden, 0)
+	testRandomDeriveRecur(t, db, golden, 0)
 }
 
-func (s testMemDBSuite) testRandomDeriveRecur(c *C, db *MemDB, golden *leveldb.DB, depth int) [][2][]byte {
+func testRandomDeriveRecur(t *testing.T, db *MemDB, golden *leveldb.DB, depth int) [][2][]byte {
 	var keys [][]byte
 	if op := rand.Float64(); op < 0.33 {
 		start, end := rand.Intn(512), rand.Intn(512)+512
@@ -132,7 +133,7 @@ func (s testMemDBSuite) testRandomDeriveRecur(c *C, db *MemDB, golden *leveldb.D
 	}
 
 	if depth < 2000 {
-		childOps := s.testRandomDeriveRecur(c, db, golden, depth+1)
+		childOps := testRandomDeriveRecur(t, db, golden, depth+1)
 		opLog = append(opLog, childOps...)
 	}
 
@@ -151,7 +152,7 @@ func (s testMemDBSuite) testRandomDeriveRecur(c *C, db *MemDB, golden *leveldb.D
 	}
 
 	if depth%200 == 0 {
-		s.checkConsist(c, db, golden)
+		checkConsist(t, db, golden)
 	}
 
 	return opLog

@@ -45,6 +45,35 @@ func NextKey(k []byte) []byte {
 	return buf
 }
 
+// PrefixNextKey returns the next prefix key.
+//
+// Assume there are keys like:
+//
+//   rowkey1
+//   rowkey1_column1
+//   rowkey1_column2
+//   rowKey2
+//
+// If we seek 'rowkey1' NextKey, we will get 'rowkey1_column1'.
+// If we seek 'rowkey1' PrefixNextKey, we will get 'rowkey2'.
+func PrefixNextKey(k []byte) []byte {
+	buf := make([]byte, len(k))
+	copy(buf, k)
+	var i int
+	for i = len(k) - 1; i >= 0; i-- {
+		buf[i]++
+		if buf[i] != 0 {
+			break
+		}
+	}
+	if i == -1 {
+		// Unlike TiDB, for the specific key 0xFF
+		// we return empty slice instead of {0xFF, 0x0}
+		buf = make([]byte, 0)
+	}
+	return buf
+}
+
 // CmpKey returns the comparison result of two key.
 // The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
 func CmpKey(k, another []byte) int {

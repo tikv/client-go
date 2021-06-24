@@ -64,7 +64,6 @@ var (
 )
 
 type testCommitterSuite struct {
-	OneByOneSuite
 	cluster cluster.Cluster
 	store   tikv.StoreProbe
 }
@@ -73,7 +72,6 @@ var _ = SerialSuites(&testCommitterSuite{})
 
 func (s *testCommitterSuite) SetUpSuite(c *C) {
 	atomic.StoreUint64(&tikv.ManagedLockTTL, 3000) // 3s
-	s.OneByOneSuite.SetUpSuite(c)
 	atomic.StoreUint64(&tikv.CommitMaxBackoff, 1000)
 	atomic.StoreUint64(&tikv.VeryLongMaxBackoff, 1000)
 }
@@ -88,7 +86,7 @@ func (s *testCommitterSuite) SetUpTest(c *C) {
 	pdCli := &tikv.CodecPDClient{Client: mocktikv.NewPDClient(cluster)}
 	spkv := tikv.NewMockSafePointKV()
 	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client)
-	store.EnableTxnLocalLatches(1024000)
+	store.EnableTxnLocalLatches(8096)
 	c.Assert(err, IsNil)
 
 	// TODO: make it possible
@@ -112,7 +110,6 @@ func (s *testCommitterSuite) TearDownSuite(c *C) {
 	atomic.StoreUint64(&tikv.CommitMaxBackoff, 20000)
 	atomic.StoreUint64(&tikv.VeryLongMaxBackoff, 600000)
 	s.store.Close()
-	s.OneByOneSuite.TearDownSuite(c)
 }
 
 func (s *testCommitterSuite) begin(c *C) tikv.TxnProbe {

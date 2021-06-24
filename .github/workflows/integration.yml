@@ -2,11 +2,42 @@ name: Integration Test
 
 on:
   push:
-    branches: [ v2 ]
+    branches: [ master ]
   pull_request:
-    branches: [ v2 ]
+    branches: [ master ]
 
 jobs:
+
+  integration-local:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.16
+
+      - name: Test
+        run: go test -v
+        working-directory: integration_tests
+
+  integration-local-race:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.16
+
+      - name: Test
+        run: go test -v -race
+        working-directory: integration_tests
+
   integration-tikv:
     runs-on: ubuntu-latest
     steps:
@@ -41,6 +72,7 @@ jobs:
           ./tikv-server -C tikv.toml > tikv.log 2>&1 &
           sleep 15
         working-directory: integration_tests
+
       - name: Test
         run: go test -v --with-tikv=true --pd-addrs=127.0.0.1:2379
         working-directory: integration_tests

@@ -51,7 +51,6 @@ func (s *testAsyncCommitCommon) begin1PC(c *C) tikv.TxnProbe {
 }
 
 type testOnePCSuite struct {
-	OneByOneSuite
 	testAsyncCommitCommon
 	bo *tikv.Backoffer
 }

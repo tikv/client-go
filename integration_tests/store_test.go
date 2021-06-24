@@ -54,11 +54,10 @@ type testStoreSerialSuite struct {
 }
 
 type testStoreSuiteBase struct {
-	OneByOneSuite
 	store tikv.StoreProbe
 }
 
-var _ = Suite(&testStoreSuite{})
+var _ = SerialSuites(&testStoreSuite{})
 var _ = SerialSuites(&testStoreSerialSuite{})
 
 func (s *testStoreSuiteBase) SetUpTest(c *C) {

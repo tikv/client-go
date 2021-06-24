@@ -34,125 +34,131 @@ package unionstore
 
 import (
 	"context"
+	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/util/testleak"
 )
 
-var _ = Suite(&testUnionStoreSuite{})
+func TestUnionStoreGetSet(t *testing.T) {
+	defer testleak.AfterTestT(t)()
+	assert := assert.New(t)
+	store := newMemDB()
+	us := NewUnionStore(&mockSnapshot{store})
 
-type testUnionStoreSuite struct {
-	store *MemDB
-	us    *KVUnionStore
+	err := store.Set([]byte("1"), []byte("1"))
+	assert.Nil(err)
+	v, err := us.Get(context.TODO(), []byte("1"))
+	assert.Nil(err)
+	assert.Equal(v, []byte("1"))
+	err = us.GetMemBuffer().Set([]byte("1"), []byte("2"))
+	assert.Nil(err)
+	v, err = us.Get(context.TODO(), []byte("1"))
+	assert.Nil(err)
+	assert.Equal(v, []byte("2"))
+	assert.Equal(us.GetMemBuffer().Size(), 2)
+	assert.Equal(us.GetMemBuffer().Len(), 1)
 }
 
-func (s *testUnionStoreSuite) SetUpTest(c *C) {
-	s.store = newMemDB()
-	s.us = NewUnionStore(&mockSnapshot{s.store})
+func TestUnionStoreDelete(t *testing.T) {
+	defer testleak.AfterTestT(t)()
+	assert := assert.New(t)
+	store := newMemDB()
+	us := NewUnionStore(&mockSnapshot{store})
+
+	err := store.Set([]byte("1"), []byte("1"))
+	assert.Nil(err)
+	err = us.GetMemBuffer().Delete([]byte("1"))
+	assert.Nil(err)
+	_, err = us.Get(context.TODO(), []byte("1"))
+	assert.True(tikverr.IsErrNotFound(err))
+
+	err = us.GetMemBuffer().Set([]byte("1"), []byte("2"))
+	assert.Nil(err)
+	v, err := us.Get(context.TODO(), []byte("1"))
+	assert.Nil(err)
+	assert.Equal(v, []byte("2"))
 }
 
-func (s *testUnionStoreSuite) TestGetSet(c *C) {
-	defer testleak.AfterTest(c)()
-	err := s.store.Set([]byte("1"), []byte("1"))
-	c.Assert(err, IsNil)
-	v, err := s.us.Get(context.TODO(), []byte("1"))
-	c.Assert(err, IsNil)
-	c.Assert(v, BytesEquals, []byte("1"))
-	err = s.us.GetMemBuffer().Set([]byte("1"), []byte("2"))
-	c.Assert(err, IsNil)
-	v, err = s.us.Get(context.TODO(), []byte("1"))
-	c.Assert(err, IsNil)
-	c.Assert(v, BytesEquals, []byte("2"))
-	c.Assert(s.us.GetMemBuffer().Size(), Equals, 2)
-	c.Assert(s.us.GetMemBuffer().Len(), Equals, 1)
+func TestUnionStoreSeek(t *testing.T) {
+	defer testleak.AfterTestT(t)()
+	assert := assert.New(t)
+	store := newMemDB()
+	us := NewUnionStore(&mockSnapshot{store})
+
+	err := store.Set([]byte("1"), []byte("1"))
+	assert.Nil(err)
+	err = store.Set([]byte("2"), []byte("2"))
+	assert.Nil(err)
+	err = store.Set([]byte("3"), []byte("3"))
+	assert.Nil(err)
+
+	iter, err := us.Iter(nil, nil)
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("1"), []byte("2"), []byte("3")}, [][]byte{[]byte("1"), []byte("2"), []byte("3")})
+
+	iter, err = us.Iter([]byte("2"), nil)
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("3")}, [][]byte{[]byte("2"), []byte("3")})
+
+	err = us.GetMemBuffer().Set([]byte("4"), []byte("4"))
+	assert.Nil(err)
+	iter, err = us.Iter([]byte("2"), nil)
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("3"), []byte("4")}, [][]byte{[]byte("2"), []byte("3"), []byte("4")})
+
+	err = us.GetMemBuffer().Delete([]byte("3"))
+	assert.Nil(err)
+	iter, err = us.Iter([]byte("2"), nil)
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("4")}, [][]byte{[]byte("2"), []byte("4")})
 }
 
-func (s *testUnionStoreSuite) TestDelete(c *C) {
-	defer testleak.AfterTest(c)()
-	err := s.store.Set([]byte("1"), []byte("1"))
-	c.Assert(err, IsNil)
-	err = s.us.GetMemBuffer().Delete([]byte("1"))
-	c.Assert(err, IsNil)
-	_, err = s.us.Get(context.TODO(), []byte("1"))
-	c.Assert(tikverr.IsErrNotFound(err), IsTrue)
+func TestUnionStoreIterReverse(t *testing.T) {
+	defer testleak.AfterTestT(t)()
+	assert := assert.New(t)
+	store := newMemDB()
+	us := NewUnionStore(&mockSnapshot{store})
 
-	err = s.us.GetMemBuffer().Set([]byte("1"), []byte("2"))
-	c.Assert(err, IsNil)
-	v, err := s.us.Get(context.TODO(), []byte("1"))
-	c.Assert(err, IsNil)
-	c.Assert(v, BytesEquals, []byte("2"))
+	err := store.Set([]byte("1"), []byte("1"))
+	assert.Nil(err)
+	err = store.Set([]byte("2"), []byte("2"))
+	assert.Nil(err)
+	err = store.Set([]byte("3"), []byte("3"))
+	assert.Nil(err)
+
+	iter, err := us.IterReverse(nil)
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("3"), []byte("2"), []byte("1")}, [][]byte{[]byte("3"), []byte("2"), []byte("1")})
+
+	iter, err = us.IterReverse([]byte("3"))
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("1")}, [][]byte{[]byte("2"), []byte("1")})
+
+	err = us.GetMemBuffer().Set([]byte("0"), []byte("0"))
+	assert.Nil(err)
+	iter, err = us.IterReverse([]byte("3"))
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("1"), []byte("0")}, [][]byte{[]byte("2"), []byte("1"), []byte("0")})
+
+	err = us.GetMemBuffer().Delete([]byte("1"))
+	assert.Nil(err)
+	iter, err = us.IterReverse([]byte("3"))
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("0")}, [][]byte{[]byte("2"), []byte("0")})
 }
 
-func (s *testUnionStoreSuite) TestSeek(c *C) {
-	defer testleak.AfterTest(c)()
-	err := s.store.Set([]byte("1"), []byte("1"))
-	c.Assert(err, IsNil)
-	err = s.store.Set([]byte("2"), []byte("2"))
-	c.Assert(err, IsNil)
-	err = s.store.Set([]byte("3"), []byte("3"))
-	c.Assert(err, IsNil)
-
-	iter, err := s.us.Iter(nil, nil)
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("1"), []byte("2"), []byte("3")}, [][]byte{[]byte("1"), []byte("2"), []byte("3")})
-
-	iter, err = s.us.Iter([]byte("2"), nil)
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("3")}, [][]byte{[]byte("2"), []byte("3")})
-
-	err = s.us.GetMemBuffer().Set([]byte("4"), []byte("4"))
-	c.Assert(err, IsNil)
-	iter, err = s.us.Iter([]byte("2"), nil)
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("3"), []byte("4")}, [][]byte{[]byte("2"), []byte("3"), []byte("4")})
-
-	err = s.us.GetMemBuffer().Delete([]byte("3"))
-	c.Assert(err, IsNil)
-	iter, err = s.us.Iter([]byte("2"), nil)
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("4")}, [][]byte{[]byte("2"), []byte("4")})
-}
-
-func (s *testUnionStoreSuite) TestIterReverse(c *C) {
-	defer testleak.AfterTest(c)()
-	err := s.store.Set([]byte("1"), []byte("1"))
-	c.Assert(err, IsNil)
-	err = s.store.Set([]byte("2"), []byte("2"))
-	c.Assert(err, IsNil)
-	err = s.store.Set([]byte("3"), []byte("3"))
-	c.Assert(err, IsNil)
-
-	iter, err := s.us.IterReverse(nil)
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("3"), []byte("2"), []byte("1")}, [][]byte{[]byte("3"), []byte("2"), []byte("1")})
-
-	iter, err = s.us.IterReverse([]byte("3"))
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("1")}, [][]byte{[]byte("2"), []byte("1")})
-
-	err = s.us.GetMemBuffer().Set([]byte("0"), []byte("0"))
-	c.Assert(err, IsNil)
-	iter, err = s.us.IterReverse([]byte("3"))
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("1"), []byte("0")}, [][]byte{[]byte("2"), []byte("1"), []byte("0")})
-
-	err = s.us.GetMemBuffer().Delete([]byte("1"))
-	c.Assert(err, IsNil)
-	iter, err = s.us.IterReverse([]byte("3"))
-	c.Assert(err, IsNil)
-	checkIterator(c, iter, [][]byte{[]byte("2"), []byte("0")}, [][]byte{[]byte("2"), []byte("0")})
-}
-
-func checkIterator(c *C, iter Iterator, keys [][]byte, values [][]byte) {
+func checkIterator(t *testing.T, iter Iterator, keys [][]byte, values [][]byte) {
+	assert := assert.New(t)
 	defer iter.Close()
-	c.Assert(len(keys), Equals, len(values))
+	assert.Equal(len(keys), len(values))
 	for i, k := range keys {
 		v := values[i]
-		c.Assert(iter.Valid(), IsTrue)
-		c.Assert(iter.Key(), BytesEquals, k)
-		c.Assert(iter.Value(), BytesEquals, v)
-		c.Assert(iter.Next(), IsNil)
+		assert.True(iter.Valid())
+		assert.Equal(iter.Key(), k)
+		assert.Equal(iter.Value(), v)
+		assert.Nil(iter.Next())
 	}
-	c.Assert(iter.Valid(), IsFalse)
+	assert.False(iter.Valid())
 }

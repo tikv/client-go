@@ -44,13 +44,12 @@ import (
 )
 
 type testRawKVSuite struct {
-	OneByOneSuite
 	cluster cluster.Cluster
 	client  tikv.RawKVClientProbe
 	bo      *tikv.Backoffer
 }
 
-var _ = Suite(&testRawKVSuite{})
+var _ = SerialSuites(&testRawKVSuite{})
 
 func (s *testRawKVSuite) SetUpTest(c *C) {
 	client, pdClient, cluster, err := unistore.New("")
