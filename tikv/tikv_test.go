@@ -35,20 +35,10 @@ package tikv
 import (
 	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 )
 
-type testTiKVSuite struct {
-}
-
-func TestT(t *testing.T) {
-	CustomVerboseFlag = true
-	TestingT(t)
-}
-
-var _ = SerialSuites(&testTiKVSuite{})
-
-func (s *testTiKVSuite) TestBasicFunc(c *C) {
+func TestBasicFunc(t *testing.T) {
 	if IsMockCommitErrorEnable() {
 		defer MockCommitErrorEnable()
 	} else {
@@ -56,7 +46,7 @@ func (s *testTiKVSuite) TestBasicFunc(c *C) {
 	}
 
 	MockCommitErrorEnable()
-	c.Assert(IsMockCommitErrorEnable(), IsTrue)
+	assert.True(t, IsMockCommitErrorEnable())
 	MockCommitErrorDisable()
-	c.Assert(IsMockCommitErrorEnable(), IsFalse)
+	assert.False(t, IsMockCommitErrorEnable())
 }
