@@ -14,10 +14,10 @@
 // NOTE: The code in this file is based on code from the
 // TiDB project, licensed under the Apache License v 2.0
 //
-// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/tikvrpc/tikvrpc_test.go
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/kv/key.go
 //
 
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,26 +30,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikvrpc
+package kv
 
 import (
 	"testing"
 
-	. "github.com/pingcap/check"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestT(t *testing.T) {
-	TestingT(t)
-}
+func TestPrefixNextKey(t *testing.T) {
+	k1 := []byte{0xff}
+	k2 := []byte{0xff, 0xff}
+	k3 := []byte{0xff, 0xff, 0xff, 0xff}
 
-type testBatchCommand struct{}
-
-var _ = SerialSuites(&testBatchCommand{})
-
-func (s *testBatchCommand) TestBatchResponse(c *C) {
-	resp := &tikvpb.BatchCommandsResponse_Response{}
-	batchResp, err := FromBatchCommandsResponse(resp)
-	c.Assert(batchResp == nil, IsTrue)
-	c.Assert(err != nil, IsTrue)
+	pk1 := PrefixNextKey(k1)
+	pk2 := PrefixNextKey(k2)
+	pk3 := PrefixNextKey(k3)
+	assert.Equal(t, []byte(""), pk1)
+	assert.Equal(t, []byte(""), pk2)
+	assert.Equal(t, []byte(""), pk3)
 }

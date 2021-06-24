@@ -38,70 +38,35 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 )
 
-func TestT(t *testing.T) {
-	TestingT(t)
-}
-
-var _ = Suite(&testPDSuite{})
-
-type testPDSuite struct{}
-
-func (s *testPDSuite) TestPDOracle_UntilExpired(c *C) {
+func TestPDOracle_UntilExpired(t *testing.T) {
 	lockAfter, lockExp := 10, 15
 	o := oracles.NewEmptyPDOracle()
 	start := time.Now()
 	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
-	lockTs := oracle.GoTimeToTS((start.Add(time.Duration(lockAfter) * time.Millisecond))) + 1
+	lockTs := oracle.GoTimeToTS(start.Add(time.Duration(lockAfter)*time.Millisecond)) + 1
 	waitTs := o.UntilExpired(lockTs, uint64(lockExp), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	c.Assert(waitTs, Equals, int64(lockAfter+lockExp), Commentf("waitTs shoulb be %d but got %d", int64(lockAfter+lockExp), waitTs))
+	assert.Equal(t, int64(lockAfter+lockExp), waitTs)
 }
 
-func (s *testPDSuite) TestPdOracle_GetStaleTimestamp(c *C) {
+func TestPdOracle_GetStaleTimestamp(t *testing.T) {
 	o := oracles.NewEmptyPDOracle()
+
 	start := time.Now()
 	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
 	ts, err := o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, 10)
-	c.Assert(err, IsNil)
-
-	duration := start.Sub(oracle.GetTimeFromTS(ts))
-	c.Assert(duration <= 12*time.Second && duration >= 8*time.Second, IsTrue, Commentf("stable TS have accuracy err, expect: %d +-2, obtain: %d", 10, duration))
+	assert.Nil(t, err)
+	assert.WithinDuration(t, start.Add(-10*time.Second), oracle.GetTimeFromTS(ts), 2*time.Second)
 
 	_, err = o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, 1e12)
-	c.Assert(err, NotNil, Commentf("expect exceed err but get nil"))
+	assert.NotNil(t, err)
+	assert.Regexp(t, ".*invalid prevSecond.*", err.Error())
 
-	testcases := []struct {
-		name      string
-		preSec    uint64
-		expectErr string
-	}{
-		{
-			name:      "normal case",
-			preSec:    6,
-			expectErr: "",
-		},
-		{
-			name:      "preSec too large",
-			preSec:    math.MaxUint64,
-			expectErr: ".*invalid prevSecond.*",
-		},
-	}
-
-	for _, testcase := range testcases {
-		comment := Commentf("%s", testcase.name)
-		start = time.Now()
-		oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
-		ts, err = o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, testcase.preSec)
-		if testcase.expectErr == "" {
-			c.Assert(err, IsNil, comment)
-			duration = start.Sub(oracle.GetTimeFromTS(ts))
-			c.Assert(duration <= time.Duration(testcase.preSec+2)*time.Second && duration >= time.Duration(testcase.preSec-2)*time.Second, IsTrue, Commentf("%s: stable TS have accuracy err, expect: %d +-2, obtain: %d", comment.CheckCommentString(), testcase.preSec, duration))
-		} else {
-			c.Assert(err, ErrorMatches, testcase.expectErr, comment)
-		}
-	}
+	_, err = o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, math.MaxUint64)
+	assert.NotNil(t, err)
+	assert.Regexp(t, ".*invalid prevSecond.*", err.Error())
 }

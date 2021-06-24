@@ -32,22 +32,22 @@
 
 package mocktikv
 
-import . "github.com/pingcap/check"
+import (
+	"testing"
 
-var _ = Suite(testMvccSuite{})
+	"github.com/stretchr/testify/assert"
+)
 
-type testMvccSuite struct {
-}
-
-func (s testMvccSuite) TestRegionContains(c *C) {
-	c.Check(regionContains([]byte{}, []byte{}, []byte{}), IsTrue)
-	c.Check(regionContains([]byte{}, []byte{}, []byte{1}), IsTrue)
-	c.Check(regionContains([]byte{1, 1, 1}, []byte{}, []byte{1, 1, 0}), IsFalse)
-	c.Check(regionContains([]byte{1, 1, 1}, []byte{}, []byte{1, 1, 1}), IsTrue)
-	c.Check(regionContains([]byte{}, []byte{2, 2, 2}, []byte{2, 2, 1}), IsTrue)
-	c.Check(regionContains([]byte{}, []byte{2, 2, 2}, []byte{2, 2, 2}), IsFalse)
-	c.Check(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{1, 1, 0}), IsFalse)
-	c.Check(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{1, 1, 1}), IsTrue)
-	c.Check(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{2, 2, 1}), IsTrue)
-	c.Check(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{2, 2, 2}), IsFalse)
+func TestRegionContains(t *testing.T) {
+	assert := assert.New(t)
+	assert.True(regionContains([]byte{}, []byte{}, []byte{}))
+	assert.True(regionContains([]byte{}, []byte{}, []byte{1}))
+	assert.False(regionContains([]byte{1, 1, 1}, []byte{}, []byte{1, 1, 0}))
+	assert.True(regionContains([]byte{1, 1, 1}, []byte{}, []byte{1, 1, 1}))
+	assert.True(regionContains([]byte{}, []byte{2, 2, 2}, []byte{2, 2, 1}))
+	assert.False(regionContains([]byte{}, []byte{2, 2, 2}, []byte{2, 2, 2}))
+	assert.False(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{1, 1, 0}))
+	assert.True(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{1, 1, 1}))
+	assert.True(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{2, 2, 1}))
+	assert.False(regionContains([]byte{1, 1, 1}, []byte{2, 2, 2}, []byte{2, 2, 2}))
 }

@@ -47,16 +47,6 @@ import (
 )
 
 type testClientFailSuite struct {
-	OneByOneSuite
-}
-
-func (s *testClientFailSuite) SetUpSuite(_ *C) {
-	// This lock make testClientFailSuite runs exclusively.
-	s.LockGlobalTiKV()
-}
-
-func (s testClientFailSuite) TearDownSuite(_ *C) {
-	s.UnLockGlobalTiKV()
 }
 
 func (s *testClientFailSuite) TestPanicInRecvLoop(c *C) {
@@ -134,7 +124,7 @@ func (s *testClientFailSuite) TestRecvErrorInMultipleRecvLoops(c *C) {
 	}
 	epoch := atomic.LoadUint64(&batchClient.epoch)
 
-	fp := "github.com/tikv/client-go/v2/client/gotErrorInRecvLoop"
+	fp := "tikvclient/gotErrorInRecvLoop"
 	// Send a request to each stream to trigger reconnection.
 	for _, forwardedHost := range forwardedHosts {
 		c.Assert(failpoint.Enable(fp, `1*return("0")`), IsNil)

@@ -37,6 +37,7 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"testing"
 	"unsafe"
 
 	. "github.com/pingcap/check"
@@ -44,6 +45,7 @@ import (
 	"github.com/pingcap/tidb/kv"
 	txndriver "github.com/pingcap/tidb/store/driver/txn"
 	"github.com/pingcap/tidb/store/mockstore/unistore"
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
@@ -55,7 +57,38 @@ var (
 	pdAddrs = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
 )
 
+// NewTestStoreT creates a KVStore for testing purpose.
+// It accepts `*testing.T` instead of `check.C`.
+func NewTestStoreT(t *testing.T) *tikv.KVStore {
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+
+	if *mockstore.WithTiKV {
+		addrs := strings.Split(*pdAddrs, ",")
+		pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
+		require.Nil(t, err)
+		var securityConfig config.Security
+		tlsConfig, err := securityConfig.ToTLSConfig()
+		require.Nil(t, err)
+		spKV, err := tikv.NewEtcdSafePointKV(addrs, tlsConfig)
+		require.Nil(t, err)
+		store, err := tikv.NewKVStore("test-store", &tikv.CodecPDClient{Client: pdClient}, spKV, tikv.NewRPCClient(securityConfig))
+		require.Nil(t, err)
+		err = clearStorage(store)
+		require.Nil(t, err)
+		return store
+	}
+	client, pdClient, cluster, err := unistore.New("")
+	require.Nil(t, err)
+	unistore.BootstrapWithSingleStore(cluster)
+	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.Nil(t, err)
+	return store
+}
+
 // NewTestStore creates a KVStore for testing purpose.
+// TODO: remove it after we get rid of pingcap/check.
 func NewTestStore(c *C) *tikv.KVStore {
 	if !flag.Parsed() {
 		flag.Parse()
@@ -101,9 +134,6 @@ func clearStorage(store *tikv.KVStore) error {
 	}
 	return txn.Commit(context.Background())
 }
-
-// OneByOneSuite is a suite, When with-tikv flag is true, there is only one storage, so the test suite have to run one by one.
-type OneByOneSuite = mockstore.OneByOneSuite
 
 func encodeKey(prefix, s string) []byte {
 	return codec.EncodeBytes(nil, []byte(fmt.Sprintf("%s_%s", prefix, s)))

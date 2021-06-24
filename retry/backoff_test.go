@@ -35,18 +35,15 @@ package retry
 import (
 	"context"
 	"errors"
+	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/assert"
 )
 
-type testBackoffSuite struct {
-}
-
-var _ = Suite(&testBackoffSuite{})
-
-func (s *testBackoffSuite) TestBackoffWithMax(c *C) {
+func TestBackoffWithMax(t *testing.T) {
 	b := NewBackofferWithVars(context.TODO(), 2000, nil)
 	err := b.BackoffWithMaxSleepTxnLockFast(30, errors.New("test"))
-	c.Assert(err, IsNil)
-	c.Assert(b.totalSleep, Equals, 30)
+
+	assert.Nil(t, err)
+	assert.Equal(t, 30, b.totalSleep)
 }

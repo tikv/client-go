@@ -40,10 +40,9 @@ import (
 )
 
 type testScanMockSuite struct {
-	OneByOneSuite
 }
 
-var _ = Suite(&testScanMockSuite{})
+var _ = SerialSuites(&testScanMockSuite{})
 
 func (s *testScanMockSuite) TestScanMultipleRegions(c *C) {
 	store := tikv.StoreProbe{KVStore: NewTestStore(c)}
