@@ -42,7 +42,6 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikv"
