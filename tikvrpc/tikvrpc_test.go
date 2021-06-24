@@ -33,10 +33,10 @@
 package tikvrpc
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/tikvpb"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBatchResponse(t *testing.T) {
