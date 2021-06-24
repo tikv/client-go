@@ -37,62 +37,56 @@ import (
 	"context"
 	"math/rand"
 	"sort"
+	"testing"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/store/mockstore/mockcopr"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/mockstore/cluster"
 	"github.com/tikv/client-go/v2/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
+func TestDeleteRange(t *testing.T) {
+	suite.Run(t, new(testDeleteRangeSuite))
+}
+
 type testDeleteRangeSuite struct {
+	suite.Suite
 	cluster cluster.Cluster
 	store   *tikv.KVStore
 }
 
-var _ = SerialSuites(&testDeleteRangeSuite{})
-
-func (s *testDeleteRangeSuite) SetUpTest(c *C) {
+func (s *testDeleteRangeSuite) SetupTest() {
 	client, cluster, pdClient, err := mocktikv.NewTiKVAndPDClient("", mockcopr.NewCoprRPCHandler())
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	mocktikv.BootstrapWithMultiRegions(cluster, []byte("b"), []byte("c"), []byte("d"))
 	s.cluster = cluster
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
-	c.Check(err, IsNil)
-
-	// TODO: make this possible
-	// store, err := mockstore.NewMockStore(
-	// 	mockstore.WithStoreType(mockstore.MockTiKV),
-	// 	mockstore.WithClusterInspector(func(c cluster.Cluster) {
-	// 		mockstore.BootstrapWithMultiRegions(c, []byte("b"), []byte("c"), []byte("d"))
-	// 		s.cluster = c
-	// 	}),
-	// )
-	// c.Assert(err, IsNil)
+	s.Require().Nil(err)
 
 	s.store = store
 }
 
-func (s *testDeleteRangeSuite) TearDownTest(c *C) {
+func (s *testDeleteRangeSuite) TearDownTest() {
 	err := s.store.Close()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 }
 
-func (s *testDeleteRangeSuite) checkData(c *C, expectedData map[string]string) {
+func (s *testDeleteRangeSuite) checkData(expectedData map[string]string) {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	it, err := txn.Iter([]byte("a"), nil)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// Scan all data and save into a map
 	data := map[string]string{}
 	for it.Valid() {
 		data[string(it.Key())] = string(it.Value())
 		err = it.Next()
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// Print log
 	actualKeys := make([]string, 0, len(data))
@@ -105,18 +99,18 @@ func (s *testDeleteRangeSuite) checkData(c *C, expectedData map[string]string) {
 	}
 	sort.Strings(actualKeys)
 	sort.Strings(expectedKeys)
-	c.Log("Actual:   ", actualKeys)
-	c.Log("Expected: ", expectedKeys)
+	s.T().Log("Actual:   ", actualKeys)
+	s.T().Log("Expected: ", expectedKeys)
 
 	// Assert data in the store is the same as expected
-	c.Assert(data, DeepEquals, expectedData)
+	s.Equal(data, expectedData)
 }
 
-func (s *testDeleteRangeSuite) deleteRange(c *C, startKey []byte, endKey []byte) int {
+func (s *testDeleteRangeSuite) deleteRange(startKey []byte, endKey []byte) int {
 	task := tikv.NewDeleteRangeTask(s.store, startKey, endKey, 1)
 
 	err := task.Execute(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	return task.CompletedRegions()
 }
@@ -132,17 +126,17 @@ func deleteRangeFromMap(m map[string]string, startKey []byte, endKey []byte) {
 }
 
 // mustDeleteRange does delete range on both the map and the storage, and assert they are equal after deleting
-func (s *testDeleteRangeSuite) mustDeleteRange(c *C, startKey []byte, endKey []byte, expected map[string]string, regions int) {
-	completedRegions := s.deleteRange(c, startKey, endKey)
+func (s *testDeleteRangeSuite) mustDeleteRange(startKey []byte, endKey []byte, expected map[string]string, regions int) {
+	completedRegions := s.deleteRange(startKey, endKey)
 	deleteRangeFromMap(expected, startKey, endKey)
-	s.checkData(c, expected)
-	c.Assert(completedRegions, Equals, regions)
+	s.checkData(expected)
+	s.Equal(completedRegions, regions)
 }
 
-func (s *testDeleteRangeSuite) TestDeleteRange(c *C) {
+func (s *testDeleteRangeSuite) TestDeleteRange() {
 	// Write some key-value pairs
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	testData := map[string]string{}
 
@@ -153,19 +147,19 @@ func (s *testDeleteRangeSuite) TestDeleteRange(c *C) {
 			value := []byte{byte(rand.Intn(256)), byte(rand.Intn(256))}
 			testData[string(key)] = string(value)
 			err := txn.Set(key, value)
-			c.Assert(err, IsNil)
+			s.Nil(err)
 		}
 	}
 
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	s.checkData(c, testData)
+	s.checkData(testData)
 
-	s.mustDeleteRange(c, []byte("b"), []byte("c0"), testData, 2)
-	s.mustDeleteRange(c, []byte("c11"), []byte("c12"), testData, 1)
-	s.mustDeleteRange(c, []byte("d0"), []byte("d0"), testData, 0)
-	s.mustDeleteRange(c, []byte("d0\x00"), []byte("d1\x00"), testData, 1)
-	s.mustDeleteRange(c, []byte("c5"), []byte("d5"), testData, 2)
-	s.mustDeleteRange(c, []byte("a"), []byte("z"), testData, 4)
+	s.mustDeleteRange([]byte("b"), []byte("c0"), testData, 2)
+	s.mustDeleteRange([]byte("c11"), []byte("c12"), testData, 1)
+	s.mustDeleteRange([]byte("d0"), []byte("d0"), testData, 0)
+	s.mustDeleteRange([]byte("d0\x00"), []byte("d1\x00"), testData, 1)
+	s.mustDeleteRange([]byte("c5"), []byte("d5"), testData, 2)
+	s.mustDeleteRange([]byte("a"), []byte("z"), testData, 4)
 }
