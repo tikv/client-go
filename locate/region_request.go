@@ -485,6 +485,10 @@ func (s *RegionRequestSender) SendReqCtx(
 					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
 				}, nil, nil
 			}
+		case "busy":
+			return &tikvrpc.Response{
+				Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+			}, nil, nil
 		case "requestTiDBStoreError":
 			if et == tikvrpc.TiDB {
 				return nil, nil, tikverr.ErrTiKVServerTimeout
