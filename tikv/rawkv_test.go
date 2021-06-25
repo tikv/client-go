@@ -49,17 +49,19 @@ func TestRawKV(t *testing.T) {
 
 type testRawkvSuite struct {
 	suite.Suite
-	cluster *mocktikv.Cluster
-	store1  uint64 // store1 is leader
-	store2  uint64 // store2 is follower
-	peer1   uint64 // peer1 is leader
-	peer2   uint64 // peer2 is follower
-	region1 uint64
-	bo      *retry.Backoffer
+	mvccStore mocktikv.MVCCStore
+	cluster   *mocktikv.Cluster
+	store1    uint64 // store1 is leader
+	store2    uint64 // store2 is follower
+	peer1     uint64 // peer1 is leader
+	peer2     uint64 // peer2 is follower
+	region1   uint64
+	bo        *retry.Backoffer
 }
 
 func (s *testRawkvSuite) SetupTest() {
-	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())
+	s.mvccStore = mocktikv.MustNewMVCCStore()
+	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 2)
 	s.region1 = regionID
 	s.store1 = storeIDs[0]
@@ -67,6 +69,10 @@ func (s *testRawkvSuite) SetupTest() {
 	s.peer1 = peerIDs[0]
 	s.peer2 = peerIDs[1]
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
+}
+
+func (s *testRawkvSuite) TearDownTest() {
+	s.mvccStore.Close()
 }
 
 func (s *testRawkvSuite) storeAddr(id uint64) string {

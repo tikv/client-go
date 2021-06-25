@@ -74,18 +74,19 @@ type testRegionRequestToSingleStoreSuite struct {
 }
 
 func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
-	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())
+	s.mvccStore = mocktikv.MustNewMVCCStore()
+	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.store, s.peer, s.region = mocktikv.BootstrapWithSingleStore(s.cluster)
 	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
-	s.mvccStore = mocktikv.MustNewMVCCStore()
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
 	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 	s.cache.Close()
+	s.mvccStore.Close()
 }
 
 type fnClient struct {
@@ -485,6 +486,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 	// cleanup
 	server.Stop()
 	wg.Wait()
+	cli.Close()
+	client1.Close()
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnMaxTimestampNotSyncedError() {

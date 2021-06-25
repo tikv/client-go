@@ -191,6 +191,7 @@ func mustDeleteRange(t *testing.T, store MVCCStore, startKey, endKey string) {
 func TestGet(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 	mustGetNone(t, store, "x", 10)
 	mustPutOK(t, store, "x", "x", 5, 10)
 	mustGetNone(t, store, "x", 9)
@@ -201,6 +202,7 @@ func TestGet(t *testing.T) {
 func TestGetWithLock(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	key := "key"
 	value := "value"
@@ -224,6 +226,7 @@ func TestGetWithLock(t *testing.T) {
 func TestDelete(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPutOK(t, store, "x", "x5-10", 5, 10)
 	mustDeleteOK(t, store, "x", 15, 20)
@@ -238,6 +241,7 @@ func TestDelete(t *testing.T) {
 func TestCleanupRollback(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPutOK(t, store, "secondary", "s-0", 1, 2)
 	mustPrewriteOK(t, store, putMutations("primary", "p-5", "secondary", "s-5"), "primary", 5)
@@ -250,6 +254,7 @@ func TestCleanupRollback(t *testing.T) {
 func TestReverseScan(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	// ver10: A(10) - B(_) - C(10) - D(_) - E(10)
 	mustPutOK(t, store, "A", "A10", 5, 10)
@@ -318,6 +323,7 @@ func TestReverseScan(t *testing.T) {
 func TestScan(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	// ver10: A(10) - B(_) - C(10) - D(_) - E(10)
 	mustPutOK(t, store, "A", "A10", 5, 10)
@@ -387,6 +393,7 @@ func TestBatchGet(t *testing.T) {
 	assert := assert.New(t)
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPutOK(t, store, "k1", "v1", 1, 2)
 	mustPutOK(t, store, "k2", "v2", 1, 2)
@@ -406,6 +413,7 @@ func TestScanLock(t *testing.T) {
 	assert := assert.New(t)
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPutOK(t, store, "k1", "v1", 1, 2)
 	mustPrewriteOK(t, store, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
@@ -431,6 +439,7 @@ func TestScanWithResolvedLock(t *testing.T) {
 	assert := assert.New(t)
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPrewriteOK(t, store, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
 	mustPrewriteOK(t, store, putMutations("p2", "v10", "s2", "v10"), "p1", 5)
@@ -452,6 +461,7 @@ func TestCommitConflict(t *testing.T) {
 	assert := assert.New(t)
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	// txn A want set x to A
 	// txn B want set x to B
@@ -482,6 +492,7 @@ func TestCommitConflict(t *testing.T) {
 func TestResolveLock(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPrewriteOK(t, store, putMutations("p1", "v5", "s1", "v5"), "p1", 5)
 	mustPrewriteOK(t, store, putMutations("p2", "v10", "s2", "v10"), "p2", 10)
@@ -497,6 +508,7 @@ func TestResolveLock(t *testing.T) {
 func TestBatchResolveLock(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPrewriteOK(t, store, putMutations("p1", "v11", "s1", "v11"), "p1", 11)
 	mustPrewriteOK(t, store, putMutations("p2", "v12", "s2", "v12"), "p2", 12)
@@ -528,6 +540,7 @@ func TestBatchResolveLock(t *testing.T) {
 func TestGC(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 	var safePoint uint64 = 100
 
 	// Prepare data
@@ -574,6 +587,8 @@ func TestGC(t *testing.T) {
 func TestRollbackAndWriteConflict(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
+
 	mustPutOK(t, store, "test", "test", 1, 3)
 	req := &kvrpcpb.PrewriteRequest{
 		Mutations:    putMutations("lock", "lock", "test", "test1"),
@@ -601,6 +616,7 @@ func TestRollbackAndWriteConflict(t *testing.T) {
 func TestDeleteRange(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	for i := 1; i <= 5; i++ {
 		key := string(byte(i) + byte('0'))
@@ -635,6 +651,8 @@ func mustWriteWriteConflict(t *testing.T, errs []error, i int) {
 func TestRC(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
+
 	mustPutOK(t, store, "key", "v1", 5, 10)
 	mustPrewriteOK(t, store, putMutations("key", "v2"), "key", 15)
 	mustGetErr(t, store, "key", 20)
@@ -645,6 +663,7 @@ func TestRC(t *testing.T) {
 func TestCheckTxnStatus(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 	assert := assert.New(t)
 
 	startTS := uint64(5 << 18)
@@ -714,6 +733,7 @@ func TestCheckTxnStatus(t *testing.T) {
 func TestRejectCommitTS(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 	mustPrewriteOK(t, store, putMutations("x", "A"), "x", 5)
 	// Push the minCommitTS
 	_, _, _, err = store.CheckTxnStatus([]byte("x"), 5, 100, 100, false, false)
@@ -727,6 +747,7 @@ func TestRejectCommitTS(t *testing.T) {
 func TestMvccGetByKey(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 
 	mustPrewriteOK(t, store, putMutations("q1", "v5"), "p1", 5)
 	var istore interface{} = store
@@ -747,6 +768,7 @@ func TestMvccGetByKey(t *testing.T) {
 func TestTxnHeartBeat(t *testing.T) {
 	store, err := NewMVCCLevelDB("")
 	require.Nil(t, err)
+	defer store.Close()
 	assert := assert.New(t)
 
 	mustPrewriteWithTTLOK(t, store, putMutations("pk", "val"), "pk", 5, 666)

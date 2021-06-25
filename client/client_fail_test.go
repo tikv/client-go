@@ -76,6 +76,8 @@ func TestPanicInRecvLoop(t *testing.T) {
 	req = tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, time.Second*4)
 	assert.Nil(t, err)
+
+	rpcClient.closeConns()
 }
 
 func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
