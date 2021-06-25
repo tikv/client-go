@@ -65,7 +65,7 @@ func TestConn(t *testing.T) {
 
 	conn2, err := client.getConnArray(addr, true)
 	assert.Nil(t, err)
-	assert.NotEqual(t, conn2.Get(), conn1.Get())
+	assert.False(t, conn2.Get() == conn1.Get())
 
 	client.Close()
 	conn3, err := client.getConnArray(addr, true)
