@@ -68,7 +68,7 @@ type testAsyncCommitCommon struct {
 
 func (s *testAsyncCommitCommon) setUpTest() {
 	if *mockstore.WithTiKV {
-		s.store = NewTestStoreT(s.T())
+		s.store = NewTestStore(s.T())
 		return
 	}
 

@@ -62,7 +62,7 @@ type testScanSuite struct {
 }
 
 func (s *testScanSuite) SetupSuite() {
-	s.store = NewTestStoreT(s.T())
+	s.store = NewTestStore(s.T())
 	s.recordPrefix = []byte("prefix")
 	s.rowNums = append(s.rowNums, 1, scanBatchSize, scanBatchSize+1, scanBatchSize*3)
 	// Avoid using async commit logic.

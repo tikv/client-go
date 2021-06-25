@@ -56,9 +56,8 @@ var (
 	pdAddrs = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
 )
 
-// NewTestStoreT creates a KVStore for testing purpose.
-// It accepts `*testing.T` instead of `check.C`.
-func NewTestStoreT(t *testing.T) *tikv.KVStore {
+// NewTestStore creates a KVStore for testing purpose.
+func NewTestStore(t *testing.T) *tikv.KVStore {
 	if !flag.Parsed() {
 		flag.Parse()
 	}
