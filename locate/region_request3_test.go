@@ -69,18 +69,19 @@ type testRegionRequestToThreeStoresSuite struct {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
-	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())
+	s.mvccStore = mocktikv.MustNewMVCCStore()
+	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.storeIDs, s.peerIDs, s.regionID, s.leaderPeer = mocktikv.BootstrapWithMultiStores(s.cluster, 3)
 	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
-	s.mvccStore = mocktikv.MustNewMVCCStore()
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
 	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TearDownTest() {
 	s.cache.Close()
+	s.mvccStore.Close()
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestGetRPCContext() {

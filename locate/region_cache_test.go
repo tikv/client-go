@@ -60,18 +60,20 @@ func TestRegionCache(t *testing.T) {
 
 type testRegionCacheSuite struct {
 	suite.Suite
-	cluster *mocktikv.Cluster
-	store1  uint64 // store1 is leader
-	store2  uint64 // store2 is follower
-	peer1   uint64 // peer1 is leader
-	peer2   uint64 // peer2 is follower
-	region1 uint64
-	cache   *RegionCache
-	bo      *retry.Backoffer
+	mvccStore mocktikv.MVCCStore
+	cluster   *mocktikv.Cluster
+	store1    uint64 // store1 is leader
+	store2    uint64 // store2 is follower
+	peer1     uint64 // peer1 is leader
+	peer2     uint64 // peer2 is follower
+	region1   uint64
+	cache     *RegionCache
+	bo        *retry.Backoffer
 }
 
 func (s *testRegionCacheSuite) SetupTest() {
-	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())
+	s.mvccStore = mocktikv.MustNewMVCCStore()
+	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 2)
 	s.region1 = regionID
 	s.store1 = storeIDs[0]
@@ -85,6 +87,7 @@ func (s *testRegionCacheSuite) SetupTest() {
 
 func (s *testRegionCacheSuite) TearDownTest() {
 	s.cache.Close()
+	s.mvccStore.Close()
 }
 
 func (s *testRegionCacheSuite) storeAddr(id uint64) string {
