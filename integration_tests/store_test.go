@@ -57,7 +57,7 @@ type testStoreSuite struct {
 }
 
 func (s *testStoreSuite) SetupTest() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
+	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 }
 
 func (s *testStoreSuite) TearDownTest() {

@@ -59,7 +59,7 @@ type testIsolationSuite struct {
 }
 
 func (s *testIsolationSuite) SetupSuite() {
-	s.store = NewTestStoreT(s.T())
+	s.store = NewTestStore(s.T())
 }
 
 func (s *testIsolationSuite) TearDownSuite() {

@@ -56,7 +56,7 @@ type testSafePointSuite struct {
 }
 
 func (s *testSafePointSuite) SetupSuite() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
+	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 	s.prefix = fmt.Sprintf("seek_%d", time.Now().Unix())
 }
 
