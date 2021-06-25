@@ -35,21 +35,13 @@ package tikvrpc
 import (
 	"testing"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestT(t *testing.T) {
-	TestingT(t)
-}
-
-type testBatchCommand struct{}
-
-var _ = SerialSuites(&testBatchCommand{})
-
-func (s *testBatchCommand) TestBatchResponse(c *C) {
+func TestBatchResponse(t *testing.T) {
 	resp := &tikvpb.BatchCommandsResponse_Response{}
 	batchResp, err := FromBatchCommandsResponse(resp)
-	c.Assert(batchResp == nil, IsTrue)
-	c.Assert(err != nil, IsTrue)
+	assert.Nil(t, batchResp)
+	assert.NotNil(t, err)
 }

@@ -49,7 +49,7 @@ type testScanMockSuite struct {
 }
 
 func (s *testScanMockSuite) TestScanMultipleRegions() {
-	store := tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
+	store := tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 	defer store.Close()
 
 	txn, err := store.Begin()
@@ -81,7 +81,7 @@ func (s *testScanMockSuite) TestScanMultipleRegions() {
 }
 
 func (s *testScanMockSuite) TestReverseScan() {
-	store := tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
+	store := tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 	defer store.Close()
 
 	txn, err := store.Begin()

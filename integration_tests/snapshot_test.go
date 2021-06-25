@@ -63,7 +63,7 @@ type testSnapshotSuite struct {
 }
 
 func (s *testSnapshotSuite) SetupSuite() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStoreT(s.T())}
+	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 	s.prefix = fmt.Sprintf("snapshot_%d", time.Now().Unix())
 	s.rowNums = append(s.rowNums, 1, 100, 191)
 }
