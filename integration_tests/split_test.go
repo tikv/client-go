@@ -79,6 +79,10 @@ func (s *testSplitSuite) SetupTest() {
 	s.bo = tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
+func (s *testSplitSuite) TearDownTest() {
+	s.store.Close()
+}
+
 func (s *testSplitSuite) begin() tikv.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)

@@ -82,7 +82,10 @@ func (s StoreProbe) SetRegionCachePDClient(client pd.Client) {
 
 // ClearTxnLatches clears store's txn latch scheduler.
 func (s StoreProbe) ClearTxnLatches() {
-	s.txnLatches = nil
+	if s.txnLatches != nil {
+		s.txnLatches.Close()
+		s.txnLatches = nil
+	}
 }
 
 // SendTxnHeartbeat renews a txn's ttl.

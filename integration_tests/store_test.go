@@ -65,6 +65,7 @@ func (s *testStoreSuite) TearDownTest() {
 }
 
 func (s *testStoreSuite) TestOracle() {
+	s.store.GetOracle().Close()
 	o := &oracles.MockOracle{}
 	s.store.SetOracle(o)
 

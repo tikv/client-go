@@ -64,6 +64,10 @@ func (s *testSnapshotFailSuite) SetupSuite() {
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 
+func (s *testSnapshotFailSuite) TearDownSuite() {
+	s.store.Close()
+}
+
 func (s *testSnapshotFailSuite) TearDownTest() {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)

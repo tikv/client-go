@@ -58,6 +58,10 @@ func (s *testOnePCSuite) SetupTest() {
 	s.bo = tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
+func (s *testOnePCSuite) TearDownTest() {
+	s.testAsyncCommitCommon.tearDownTest()
+}
+
 func (s *testOnePCSuite) Test1PC() {
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 
