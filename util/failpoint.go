@@ -33,13 +33,34 @@
 package util
 
 import (
+	"errors"
+
 	"github.com/pingcap/failpoint"
+	"go.uber.org/atomic"
 )
 
 const failpointPrefix = "tikvclient/"
 
+var (
+	failpointsEnabled atomic.Bool
+	errDisabled       = errors.New("failpoints are disabled")
+)
+
+// EnableFailpoints enables use of failpoints.
+func EnableFailpoints() {
+	failpointsEnabled.Store(true)
+}
+
+// DisableFailpoints turns failpoints off all.
+func DisableFailpoints() {
+	failpointsEnabled.Store(false)
+}
+
 // EvalFailpoint injects code for testing. It is used to replace `failpoint.Inject`
 // to make it possible to be used in a library.
 func EvalFailpoint(name string) (interface{}, error) {
+	if !failpointsEnabled.Load() {
+		return nil, errDisabled
+	}
 	return failpoint.Eval(failpointPrefix + name)
 }

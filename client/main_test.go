@@ -16,9 +16,11 @@ package client
 import (
 	"testing"
 
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
+	util.EnableFailpoints()
 	goleak.VerifyTestMain(m)
 }

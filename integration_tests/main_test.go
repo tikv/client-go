@@ -11,16 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package config
+package tikv_test
 
 import (
 	"testing"
 
-	"github.com/tikv/client-go/v2/util"
-	"go.uber.org/goleak"
+	"github.com/tikv/client-go/v2/tikv"
 )
 
 func TestMain(m *testing.M) {
-	util.EnableFailpoints()
-	goleak.VerifyTestMain(m)
+	tikv.EnableFailpoints()
+	m.Run()
 }
