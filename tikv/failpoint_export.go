@@ -17,7 +17,6 @@ import "github.com/tikv/client-go/v2/util"
 
 var (
 	// EnableFailpoints enables use of failpoints.
+	// It should be called before using client to avoid data race.
 	EnableFailpoints = util.EnableFailpoints
-	// DisableFailpoints turns failpoints off all.
-	DisableFailpoints = util.DisableFailpoints
 )
