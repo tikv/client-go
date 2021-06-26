@@ -54,7 +54,6 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/unionstore"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -616,13 +615,13 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 }
 
 // Iter return a list of key-value pair after `k`.
-func (s *KVSnapshot) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error) {
+func (s *KVSnapshot) Iter(k []byte, upperBound []byte) (Iterator, error) {
 	scanner, err := newScanner(s, k, upperBound, scanBatchSize, false)
 	return scanner, errors.Trace(err)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (s *KVSnapshot) IterReverse(k []byte) (unionstore.Iterator, error) {
+func (s *KVSnapshot) IterReverse(k []byte) (Iterator, error) {
 	scanner, err := newScanner(s, nil, k, scanBatchSize, true)
 	return scanner, errors.Trace(err)
 }

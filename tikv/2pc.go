@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/client"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/locate"
 	"github.com/tikv/client-go/v2/logutil"
@@ -58,7 +59,6 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/unionstore"
 	"github.com/tikv/client-go/v2/util"
 	zap "go.uber.org/zap"
 )
@@ -136,11 +136,11 @@ type twoPhaseCommitter struct {
 }
 
 type memBufferMutations struct {
-	storage *unionstore.MemDB
+	storage *MemDB
 	handles []unionstore.MemKeyHandle
 }
 
-func newMemBufferMutations(sizeHint int, storage *unionstore.MemDB) *memBufferMutations {
+func newMemBufferMutations(sizeHint int, storage *MemDB) *memBufferMutations {
 	return &memBufferMutations{
 		handles: make([]unionstore.MemKeyHandle, 0, sizeHint),
 		storage: storage,
