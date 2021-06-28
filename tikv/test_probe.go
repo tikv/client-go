@@ -41,10 +41,10 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/tikv/client-go/v2/locate"
+	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/unionstore"
 	pd "github.com/tikv/pd/client"
 )
 

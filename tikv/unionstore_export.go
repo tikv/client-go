@@ -14,10 +14,10 @@
 // NOTE: The code in this file is based on code from the
 // TiDB project, licensed under the Apache License v 2.0
 //
-// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/util/failpoint.go
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/txn.go
 //
 
-// Copyright 2021 PingCAP, Inc.
+// Copyright 2016 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,32 +30,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package tikv
 
-import (
-	"errors"
+import "github.com/tikv/client-go/v2/internal/unionstore"
 
-	"github.com/pingcap/failpoint"
-)
+// Getter is the interface for the Get method.
+type Getter = unionstore.Getter
 
-const failpointPrefix = "tikvclient/"
+// Iterator is the interface for a iterator on KV store.
+type Iterator = unionstore.Iterator
 
-var (
-	failpointsEnabled bool
-	errDisabled       = errors.New("failpoints are disabled")
-)
-
-// EnableFailpoints enables use of failpoints.
-// It should be called before using client to avoid data race.
-func EnableFailpoints() {
-	failpointsEnabled = true
-}
-
-// EvalFailpoint injects code for testing. It is used to replace `failpoint.Inject`
-// to make it possible to be used in a library.
-func EvalFailpoint(name string) (interface{}, error) {
-	if !failpointsEnabled {
-		return nil, errDisabled
-	}
-	return failpoint.Eval(failpointPrefix + name)
-}
+// MemDB is rollbackable Red-Black Tree optimized for transaction states buffer use scenario.
+// You can think MemDB is a combination of two separate tree map, one for key => value and another for key => keyFlags.
+//
+// The value map is rollbackable, that means you can use the `Staging`, `Release` and `Cleanup` API to safely modify KVs.
+//
+// The flags map is not rollbackable. There are two types of flag, persistent and non-persistent.
+// When discarding a newly added KV in `Cleanup`, the non-persistent flags will be cleared.
+// If there are persistent flags associated with key, we will keep this key in node without value.
+type MemDB = unionstore.MemDB
