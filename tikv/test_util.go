@@ -37,7 +37,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
-	"github.com/tikv/client-go/v2/locate"
+	"github.com/tikv/client-go/v2/internal/locate"
 	pd "github.com/tikv/pd/client"
 )
 
