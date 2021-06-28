@@ -50,9 +50,9 @@ import (
 	"github.com/tikv/client-go/v2/client"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/latch"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/latch"
-	"github.com/tikv/client-go/v2/locate"
 	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -108,8 +108,7 @@ type KVStore struct {
 	kv        SafePointKV
 	safePoint uint64
 	spTime    time.Time
-	spMutex   sync.RWMutex  // this is used to update safePoint and spTime
-	closed    chan struct{} // this is used to notify when the store is closed
+	spMutex   sync.RWMutex // this is used to update safePoint and spTime
 
 	// storeID -> safeTS, stored as map[uint64]uint64
 	// safeTS here will be used during the Stale Read process,
@@ -117,6 +116,10 @@ type KVStore struct {
 	safeTSMap sync.Map
 
 	replicaReadSeed uint32 // this is used to load balance followers / learners when replica read is enabled
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // UpdateSPCache updates cached safepoint.
@@ -157,6 +160,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	store := &KVStore{
 		clusterID:       pdClient.GetClusterID(context.TODO()),
 		uuid:            uuid,
@@ -166,12 +170,14 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		kv:              spkv,
 		safePoint:       0,
 		spTime:          time.Now(),
-		closed:          make(chan struct{}),
 		replicaReadSeed: rand.Uint32(),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 	store.clientMu.client = client.NewReqCollapse(tikvclient)
 	store.lockResolver = newLockResolver(store)
 
+	store.wg.Add(2)
 	go store.runSafePointChecker()
 	go store.safeTSUpdater()
 
@@ -246,6 +252,7 @@ func (s *KVStore) IsLatchEnabled() bool {
 }
 
 func (s *KVStore) runSafePointChecker() {
+	defer s.wg.Done()
 	d := gcSafePointUpdateInterval
 	for {
 		select {
@@ -260,7 +267,7 @@ func (s *KVStore) runSafePointChecker() {
 				logutil.BgLogger().Error("fail to load safepoint from pd", zap.Error(err))
 				d = gcSafePointQuickRepeatInterval
 			}
-		case <-s.Closed():
+		case <-s.ctx.Done():
 			return
 		}
 	}
@@ -285,10 +292,12 @@ func (s *KVStore) GetSnapshot(ts uint64) *KVSnapshot {
 
 // Close store
 func (s *KVStore) Close() error {
+	s.cancel()
+	s.wg.Wait()
+
 	s.oracle.Close()
 	s.pdClient.Close()
 
-	close(s.closed)
 	if err := s.GetTiKVClient().Close(); err != nil {
 		return errors.Trace(err)
 	}
@@ -385,7 +394,7 @@ func (s *KVStore) GetLockResolver() *LockResolver {
 
 // Closed returns a channel that indicates if the store is closed.
 func (s *KVStore) Closed() <-chan struct{} {
-	return s.closed
+	return s.ctx.Done()
 }
 
 // GetSafePointKV returns the kv store that used for safepoint.
@@ -466,13 +475,14 @@ func (s *KVStore) getMinSafeTSByStores(stores []*locate.Store) uint64 {
 }
 
 func (s *KVStore) safeTSUpdater() {
+	defer s.wg.Done()
 	t := time.NewTicker(time.Second * 2)
 	defer t.Stop()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	for {
 		select {
-		case <-s.Closed():
+		case <-s.ctx.Done():
 			return
 		case <-t.C:
 			s.updateSafeTS(ctx)

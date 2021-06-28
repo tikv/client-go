@@ -39,26 +39,30 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/tidb/kv"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikv"
 )
+
+func TestIsolation(t *testing.T) {
+	suite.Run(t, new(testIsolationSuite))
+}
 
 // testIsolationSuite represents test isolation suite.
 // The test suite takes too long under the race detector.
 type testIsolationSuite struct {
+	suite.Suite
 	store *tikv.KVStore
 }
 
-var _ = SerialSuites(&testIsolationSuite{})
-
-func (s *testIsolationSuite) SetUpSuite(c *C) {
-	s.store = NewTestStore(c)
+func (s *testIsolationSuite) SetupSuite() {
+	s.store = NewTestStore(s.T())
 }
 
-func (s *testIsolationSuite) TearDownSuite(c *C) {
+func (s *testIsolationSuite) TearDownSuite() {
 	s.store.Close()
 }
 
@@ -73,15 +77,15 @@ func (r writeRecords) Len() int           { return len(r) }
 func (r writeRecords) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r writeRecords) Less(i, j int) bool { return r[i].startTS <= r[j].startTS }
 
-func (s *testIsolationSuite) SetWithRetry(c *C, k, v []byte) writeRecord {
+func (s *testIsolationSuite) SetWithRetry(k, v []byte) writeRecord {
 	for {
 		txnRaw, err := s.store.Begin()
-		c.Assert(err, IsNil)
+		s.Nil(err)
 
 		txn := tikv.TxnProbe{KVTxn: txnRaw}
 
 		err = txn.Set(k, v)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 
 		err = txn.Commit(context.Background())
 		if err == nil {
@@ -104,10 +108,10 @@ func (r readRecords) Len() int           { return len(r) }
 func (r readRecords) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r readRecords) Less(i, j int) bool { return r[i].startTS <= r[j].startTS }
 
-func (s *testIsolationSuite) GetWithRetry(c *C, k []byte) readRecord {
+func (s *testIsolationSuite) GetWithRetry(k []byte) readRecord {
 	for {
 		txn, err := s.store.Begin()
-		c.Assert(err, IsNil)
+		s.Nil(err)
 
 		val, err := txn.Get(context.TODO(), k)
 		if err == nil {
@@ -116,11 +120,11 @@ func (s *testIsolationSuite) GetWithRetry(c *C, k []byte) readRecord {
 				value:   val,
 			}
 		}
-		c.Assert(kv.IsTxnRetryableError(err), IsTrue)
+		s.True(kv.IsTxnRetryableError(err))
 	}
 }
 
-func (s *testIsolationSuite) TestWriteWriteConflict(c *C) {
+func (s *testIsolationSuite) TestWriteWriteConflict() {
 	const (
 		threadCount  = 10
 		setPerThread = 50
@@ -135,7 +139,7 @@ func (s *testIsolationSuite) TestWriteWriteConflict(c *C) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < setPerThread; j++ {
-				w := s.SetWithRetry(c, []byte("k"), []byte("v"))
+				w := s.SetWithRetry([]byte("k"), []byte("v"))
 				mu.Lock()
 				writes = append(writes, w)
 				mu.Unlock()
@@ -147,11 +151,11 @@ func (s *testIsolationSuite) TestWriteWriteConflict(c *C) {
 	// Check all transactions' [startTS, commitTS] are not overlapped.
 	sort.Sort(writeRecords(writes))
 	for i := 0; i < len(writes)-1; i++ {
-		c.Assert(writes[i].commitTS, Less, writes[i+1].startTS)
+		s.Less(writes[i].commitTS, writes[i+1].startTS)
 	}
 }
 
-func (s *testIsolationSuite) TestReadWriteConflict(c *C) {
+func (s *testIsolationSuite) TestReadWriteConflict() {
 	const (
 		readThreadCount = 10
 		writeCount      = 10
@@ -164,12 +168,12 @@ func (s *testIsolationSuite) TestReadWriteConflict(c *C) {
 		wg     sync.WaitGroup
 	)
 
-	s.SetWithRetry(c, []byte("k"), []byte("0"))
+	s.SetWithRetry([]byte("k"), []byte("0"))
 
 	writeDone := make(chan struct{})
 	go func() {
 		for i := 1; i <= writeCount; i++ {
-			w := s.SetWithRetry(c, []byte("k"), []byte(fmt.Sprintf("%d", i)))
+			w := s.SetWithRetry([]byte("k"), []byte(fmt.Sprintf("%d", i)))
 			writes = append(writes, w)
 			time.Sleep(time.Microsecond * 10)
 		}
@@ -186,7 +190,7 @@ func (s *testIsolationSuite) TestReadWriteConflict(c *C) {
 					return
 				default:
 				}
-				r := s.GetWithRetry(c, []byte("k"))
+				r := s.GetWithRetry([]byte("k"))
 				mu.Lock()
 				reads = append(reads, r)
 				mu.Unlock()
@@ -205,10 +209,10 @@ func (s *testIsolationSuite) TestReadWriteConflict(c *C) {
 			if r.startTS >= w.commitTS {
 				break
 			}
-			c.Assert(string(r.value), Equals, fmt.Sprintf("%d", i))
+			s.Equal(string(r.value), fmt.Sprintf("%d", i))
 		}
 	}
 	for ; j < len(reads); j++ {
-		c.Assert(string(reads[j].value), Equals, fmt.Sprintf("%d", len(writes)))
+		s.Equal(string(reads[j].value), fmt.Sprintf("%d", len(writes)))
 	}
 }

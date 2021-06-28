@@ -41,10 +41,10 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/store/mockstore/unistore"
+	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/mockstore/cluster"
@@ -54,112 +54,124 @@ import (
 	"github.com/tikv/client-go/v2/util"
 )
 
-func TestT(t *testing.T) {
-	CustomVerboseFlag = true
-	TestingT(t)
+func TestAsyncCommit(t *testing.T) {
+	suite.Run(t, new(testAsyncCommitSuite))
 }
 
 // testAsyncCommitCommon is used to put common parts that will be both used by
 // testAsyncCommitSuite and testAsyncCommitFailSuite.
 type testAsyncCommitCommon struct {
+	suite.Suite
 	cluster cluster.Cluster
 	store   *tikv.KVStore
 }
 
-func (s *testAsyncCommitCommon) setUpTest(c *C) {
+func (s *testAsyncCommitCommon) setUpTest() {
 	if *mockstore.WithTiKV {
-		s.store = NewTestStore(c)
+		s.store = NewTestStore(s.T())
 		return
 	}
 
 	client, pdClient, cluster, err := unistore.New("")
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
+
 	unistore.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
 	store, err := tikv.NewTestTiKVStore(fpClient{Client: client}, pdClient, nil, nil, 0)
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 
 	s.store = store
 }
 
-func (s *testAsyncCommitCommon) putAlphabets(c *C, enableAsyncCommit bool) {
+func (s *testAsyncCommitCommon) tearDownTest() {
+	s.store.Close()
+}
+
+func (s *testAsyncCommitCommon) putAlphabets(enableAsyncCommit bool) {
 	for ch := byte('a'); ch <= byte('z'); ch++ {
-		s.putKV(c, []byte{ch}, []byte{ch}, enableAsyncCommit)
+		s.putKV([]byte{ch}, []byte{ch}, enableAsyncCommit)
 	}
 }
 
-func (s *testAsyncCommitCommon) putKV(c *C, key, value []byte, enableAsyncCommit bool) (uint64, uint64) {
-	txn := s.beginAsyncCommit(c)
+func (s *testAsyncCommitCommon) putKV(key, value []byte, enableAsyncCommit bool) (uint64, uint64) {
+	txn := s.beginAsyncCommit()
 	err := txn.Set(key, value)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	return txn.StartTS(), txn.GetCommitTS()
 }
 
-func (s *testAsyncCommitCommon) mustGetFromTxn(c *C, txn tikv.TxnProbe, key, expectedValue []byte) {
+func (s *testAsyncCommitCommon) mustGetFromTxn(txn tikv.TxnProbe, key, expectedValue []byte) {
 	v, err := txn.Get(context.Background(), key)
-	c.Assert(err, IsNil)
-	c.Assert(v, BytesEquals, expectedValue)
+	s.Nil(err)
+	s.Equal(v, expectedValue)
 }
 
-func (s *testAsyncCommitCommon) mustGetLock(c *C, key []byte) *tikv.Lock {
+func (s *testAsyncCommitCommon) mustGetLock(key []byte) *tikv.Lock {
 	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
 		Key:     key,
 		Version: ver,
 	})
 	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 	loc, err := s.store.GetRegionCache().LocateKey(bo, key)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	resp, err := s.store.SendReq(bo, req, loc.Region, time.Second*10)
-	c.Assert(err, IsNil)
-	c.Assert(resp.Resp, NotNil)
+	s.Nil(err)
+	s.NotNil(resp.Resp)
 	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
-	c.Assert(keyErr, NotNil)
+	s.NotNil(keyErr)
 	var lockutil tikv.LockProbe
 	lock, err := lockutil.ExtractLockFromKeyErr(keyErr)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	return lock
 }
 
-func (s *testAsyncCommitCommon) mustPointGet(c *C, key, expectedValue []byte) {
+func (s *testAsyncCommitCommon) mustPointGet(key, expectedValue []byte) {
 	snap := s.store.GetSnapshot(math.MaxUint64)
 	value, err := snap.Get(context.Background(), key)
-	c.Assert(err, IsNil)
-	c.Assert(value, BytesEquals, expectedValue)
+	s.Nil(err)
+	s.Equal(value, expectedValue)
 }
 
-func (s *testAsyncCommitCommon) mustGetFromSnapshot(c *C, version uint64, key, expectedValue []byte) {
+func (s *testAsyncCommitCommon) mustGetFromSnapshot(version uint64, key, expectedValue []byte) {
 	snap := s.store.GetSnapshot(version)
 	value, err := snap.Get(context.Background(), key)
-	c.Assert(err, IsNil)
-	c.Assert(value, BytesEquals, expectedValue)
+	s.Nil(err)
+	s.Equal(value, expectedValue)
 }
 
-func (s *testAsyncCommitCommon) mustGetNoneFromSnapshot(c *C, version uint64, key []byte) {
+func (s *testAsyncCommitCommon) mustGetNoneFromSnapshot(version uint64, key []byte) {
 	snap := s.store.GetSnapshot(version)
 	_, err := snap.Get(context.Background(), key)
-	c.Assert(errors.Cause(err), Equals, tikverr.ErrNotExist)
+	s.Equal(errors.Cause(err), tikverr.ErrNotExist)
 }
 
-func (s *testAsyncCommitCommon) beginAsyncCommitWithLinearizability(c *C) tikv.TxnProbe {
-	txn := s.beginAsyncCommit(c)
+func (s *testAsyncCommitCommon) beginAsyncCommitWithLinearizability() tikv.TxnProbe {
+	txn := s.beginAsyncCommit()
 	txn.SetCausalConsistency(false)
 	return txn
 }
 
-func (s *testAsyncCommitCommon) beginAsyncCommit(c *C) tikv.TxnProbe {
+func (s *testAsyncCommitCommon) beginAsyncCommit() tikv.TxnProbe {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	txn.SetEnableAsyncCommit(true)
 	return tikv.TxnProbe{KVTxn: txn}
 }
 
-func (s *testAsyncCommitCommon) begin(c *C) tikv.TxnProbe {
+func (s *testAsyncCommitCommon) begin() tikv.TxnProbe {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
+	return tikv.TxnProbe{KVTxn: txn}
+}
+
+func (s *testAsyncCommitCommon) begin1PC() tikv.TxnProbe {
+	txn, err := s.store.Begin()
+	s.Nil(err)
+	txn.SetEnable1PC(true)
 	return tikv.TxnProbe{KVTxn: txn}
 }
 
@@ -168,16 +180,18 @@ type testAsyncCommitSuite struct {
 	bo *tikv.Backoffer
 }
 
-var _ = SerialSuites(&testAsyncCommitSuite{})
-
-func (s *testAsyncCommitSuite) SetUpTest(c *C) {
-	s.testAsyncCommitCommon.setUpTest(c)
+func (s *testAsyncCommitSuite) SetupTest() {
+	s.testAsyncCommitCommon.setUpTest()
 	s.bo = tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
-func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(c *C, keys, values [][]byte, primaryKey, primaryValue []byte, commitPrimary bool) (uint64, uint64) {
+func (s *testAsyncCommitSuite) TearDownTest() {
+	s.testAsyncCommitCommon.tearDownTest()
+}
+
+func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(keys, values [][]byte, primaryKey, primaryValue []byte, commitPrimary bool) (uint64, uint64) {
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	txn.SetEnableAsyncCommit(true)
 	for i, k := range keys {
 		if len(values[i]) > 0 {
@@ -185,69 +199,69 @@ func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(c *C, keys, values [][]by
 		} else {
 			err = txn.Delete(k)
 		}
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	if len(primaryValue) > 0 {
 		err = txn.Set(primaryKey, primaryValue)
 	} else {
 		err = txn.Delete(primaryKey)
 	}
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	txnProbe := tikv.TxnProbe{KVTxn: txn}
 	tpc, err := txnProbe.NewCommitter(0)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	tpc.SetPrimaryKey(primaryKey)
 
 	ctx := context.Background()
 	err = tpc.PrewriteAllMutations(ctx)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	if commitPrimary {
 		commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		tpc.SetCommitTS(commitTS)
 		err = tpc.CommitMutations(ctx)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 	return txn.StartTS(), tpc.GetCommitTS()
 }
 
-func (s *testAsyncCommitSuite) TestCheckSecondaries(c *C) {
+func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	// This test doesn't support tikv mode.
 	if *mockstore.WithTiKV {
 		return
 	}
 
-	s.putAlphabets(c, true)
+	s.putAlphabets(true)
 
 	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	newRegionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
 	s.cluster.Split(loc.Region.GetID(), newRegionID, []byte("e"), []uint64{peerID}, peerID)
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	// No locks to check, only primary key is locked, should be successful.
-	s.lockKeysWithAsyncCommit(c, [][]byte{}, [][]byte{}, []byte("z"), []byte("z"), false)
-	lock := s.mustGetLock(c, []byte("z"))
+	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, []byte("z"), []byte("z"), false)
+	lock := s.mustGetLock([]byte("z"))
 	lock.UseAsyncCommit = true
 	ts, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	var lockutil tikv.LockProbe
 	status := lockutil.NewLockStatus(nil, true, ts)
 
 	resolver := tikv.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
 	err = resolver.ResolveLockAsync(s.bo, lock, status)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	status, err = resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("z"), currentTS, currentTS, true, false, nil)
-	c.Assert(err, IsNil)
-	c.Assert(status.IsCommitted(), IsTrue)
-	c.Assert(status.CommitTS(), Equals, ts)
+	s.Nil(err)
+	s.True(status.IsCommitted())
+	s.Equal(status.CommitTS(), ts)
 
 	// One key is committed (i), one key is locked (a). Should get committed.
 	ts, err = s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	commitTs := ts + 10
 
 	gotCheckA := int64(0)
@@ -313,18 +327,18 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries(c *C) {
 		MinCommitTS:    ts + 5,
 	}
 
-	_ = s.beginAsyncCommit(c)
+	_ = s.beginAsyncCommit()
 
 	err = resolver.ResolveLockAsync(s.bo, lock, status)
-	c.Assert(err, IsNil)
-	c.Assert(gotCheckA, Equals, int64(1))
-	c.Assert(gotCheckB, Equals, int64(1))
-	c.Assert(gotOther, Equals, int64(0))
-	c.Assert(gotResolve, Equals, int64(1))
+	s.Nil(err)
+	s.Equal(gotCheckA, int64(1))
+	s.Equal(gotCheckB, int64(1))
+	s.Equal(gotOther, int64(0))
+	s.Equal(gotResolve, int64(1))
 
 	// One key has been rolled back (b), one is locked (a). Should be rolled back.
 	ts, err = s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	commitTs = ts + 10
 
 	gotCheckA = int64(0)
@@ -353,45 +367,45 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries(c *C) {
 	lock.MinCommitTS = ts + 5
 
 	err = resolver.ResolveLockAsync(s.bo, lock, status)
-	c.Assert(err, IsNil)
-	c.Assert(gotCheckA, Equals, int64(1))
-	c.Assert(gotCheckB, Equals, int64(1))
-	c.Assert(gotResolve, Equals, int64(1))
-	c.Assert(gotOther, Equals, int64(0))
+	s.Nil(err)
+	s.Equal(gotCheckA, int64(1))
+	s.Equal(gotCheckB, int64(1))
+	s.Equal(gotResolve, int64(1))
+	s.Equal(gotOther, int64(0))
 }
 
-func (s *testAsyncCommitSuite) TestRepeatableRead(c *C) {
+func (s *testAsyncCommitSuite) TestRepeatableRead() {
 	var sessionID uint64 = 0
 	test := func(isPessimistic bool) {
-		s.putKV(c, []byte("k1"), []byte("v1"), true)
+		s.putKV([]byte("k1"), []byte("v1"), true)
 
 		sessionID++
 		ctx := context.WithValue(context.Background(), util.SessionID, sessionID)
-		txn1 := s.beginAsyncCommit(c)
+		txn1 := s.beginAsyncCommit()
 		txn1.SetPessimistic(isPessimistic)
-		s.mustGetFromTxn(c, txn1, []byte("k1"), []byte("v1"))
+		s.mustGetFromTxn(txn1, []byte("k1"), []byte("v1"))
 		txn1.Set([]byte("k1"), []byte("v2"))
 
 		for i := 0; i < 20; i++ {
 			_, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-			c.Assert(err, IsNil)
+			s.Nil(err)
 		}
 
-		txn2 := s.beginAsyncCommit(c)
-		s.mustGetFromTxn(c, txn2, []byte("k1"), []byte("v1"))
+		txn2 := s.beginAsyncCommit()
+		s.mustGetFromTxn(txn2, []byte("k1"), []byte("v1"))
 
 		err := txn1.Commit(ctx)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		// Check txn1 is committed in async commit.
-		c.Assert(txn1.IsAsyncCommit(), IsTrue)
-		s.mustGetFromTxn(c, txn2, []byte("k1"), []byte("v1"))
+		s.True(txn1.IsAsyncCommit())
+		s.mustGetFromTxn(txn2, []byte("k1"), []byte("v1"))
 		err = txn2.Rollback()
-		c.Assert(err, IsNil)
+		s.Nil(err)
 
-		txn3 := s.beginAsyncCommit(c)
-		s.mustGetFromTxn(c, txn3, []byte("k1"), []byte("v2"))
+		txn3 := s.beginAsyncCommit()
+		s.mustGetFromTxn(txn3, []byte("k1"), []byte("v2"))
 		err = txn3.Rollback()
-		c.Assert(err, IsNil)
+		s.Nil(err)
 	}
 
 	test(false)
@@ -400,69 +414,69 @@ func (s *testAsyncCommitSuite) TestRepeatableRead(c *C) {
 
 // It's just a simple validation of linearizability.
 // Extra tests are needed to test this feature with the control of the TiKV cluster.
-func (s *testAsyncCommitSuite) TestAsyncCommitLinearizability(c *C) {
-	t1 := s.beginAsyncCommitWithLinearizability(c)
-	t2 := s.beginAsyncCommitWithLinearizability(c)
+func (s *testAsyncCommitSuite) TestAsyncCommitLinearizability() {
+	t1 := s.beginAsyncCommitWithLinearizability()
+	t2 := s.beginAsyncCommitWithLinearizability()
 	err := t1.Set([]byte("a"), []byte("a1"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = t2.Set([]byte("b"), []byte("b1"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	// t2 commits earlier than t1
 	err = t2.Commit(ctx)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = t1.Commit(ctx)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	commitTS1 := t1.GetCommitTS()
 	commitTS2 := t2.GetCommitTS()
-	c.Assert(commitTS2, Less, commitTS1)
+	s.Less(commitTS2, commitTS1)
 }
 
 // TestAsyncCommitWithMultiDC tests that async commit can only be enabled in global transactions
-func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC(c *C) {
+func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC() {
 	// It requires setting placement rules to run with TiKV
 	if *mockstore.WithTiKV {
 		return
 	}
 
-	localTxn := s.beginAsyncCommit(c)
+	localTxn := s.beginAsyncCommit()
 	err := localTxn.Set([]byte("a"), []byte("a1"))
 	localTxn.SetScope("bj")
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = localTxn.Commit(ctx)
-	c.Assert(err, IsNil)
-	c.Assert(localTxn.IsAsyncCommit(), IsFalse)
+	s.Nil(err)
+	s.False(localTxn.IsAsyncCommit())
 
-	globalTxn := s.beginAsyncCommit(c)
+	globalTxn := s.beginAsyncCommit()
 	err = globalTxn.Set([]byte("b"), []byte("b1"))
 	globalTxn.SetScope(oracle.GlobalTxnScope)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = globalTxn.Commit(ctx)
-	c.Assert(err, IsNil)
-	c.Assert(globalTxn.IsAsyncCommit(), IsTrue)
+	s.Nil(err)
+	s.True(globalTxn.IsAsyncCommit())
 }
 
-func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit(c *C) {
+func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 	keys := [][]byte{[]byte("k0"), []byte("k1")}
 	values := [][]byte{[]byte("v00"), []byte("v10")}
 	initTest := func() tikv.CommitterProbe {
-		t0 := s.begin(c)
+		t0 := s.begin()
 		err := t0.Set(keys[0], values[0])
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		err = t0.Set(keys[1], values[1])
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		err = t0.Commit(context.Background())
-		c.Assert(err, IsNil)
+		s.Nil(err)
 
-		t1 := s.beginAsyncCommit(c)
+		t1 := s.beginAsyncCommit()
 		err = t1.Set(keys[0], []byte("v01"))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		err = t1.Set(keys[1], []byte("v11"))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 
 		committer, err := t1.NewCommitter(1)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		committer.SetLockTTL(1)
 		committer.SetUseAsyncCommit()
 		return committer
@@ -470,23 +484,23 @@ func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit(c *C) {
 	prewriteKey := func(committer tikv.CommitterProbe, idx int, fallback bool) {
 		bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 		loc, err := s.store.GetRegionCache().LocateKey(bo, keys[idx])
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		req := committer.BuildPrewriteRequest(loc.Region.GetID(), loc.Region.GetConfVer(), loc.Region.GetVer(),
 			committer.GetMutations().Slice(idx, idx+1), 1)
 		if fallback {
 			req.Req.(*kvrpcpb.PrewriteRequest).MaxCommitTs = 1
 		}
 		resp, err := s.store.SendReq(bo, req, loc.Region, 5000)
-		c.Assert(err, IsNil)
-		c.Assert(resp.Resp, NotNil)
+		s.Nil(err)
+		s.NotNil(resp.Resp)
 	}
 	readKey := func(idx int) {
-		t2 := s.begin(c)
+		t2 := s.begin()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		val, err := t2.Get(ctx, keys[idx])
-		c.Assert(err, IsNil)
-		c.Assert(val, DeepEquals, values[idx])
+		s.Nil(err)
+		s.Equal(val, values[idx])
 	}
 
 	// Case 1: Fallback primary, read primary

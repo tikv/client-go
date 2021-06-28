@@ -14,7 +14,7 @@
 // NOTE: The code in this file is based on code from the
 // TiDB project, licensed under the Apache License v 2.0
 //
-// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/tests/2pc_slow_test.go
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/txn.go
 //
 
 // Copyright 2016 PingCAP, Inc.
@@ -30,29 +30,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// +build !race
+package tikv
 
-package tikv_test
+import "github.com/tikv/client-go/v2/internal/unionstore"
 
-import (
-	. "github.com/pingcap/check"
-)
+// Getter is the interface for the Get method.
+type Getter = unionstore.Getter
 
-// TestCommitMultipleRegions tests commit multiple regions.
-// The test takes too long under the race detector.
-func (s *testCommitterSuite) TestCommitMultipleRegions(c *C) {
-	m := make(map[string]string)
-	for i := 0; i < 100; i++ {
-		k, v := randKV(10, 10)
-		m[k] = v
-	}
-	s.mustCommit(c, m)
+// Iterator is the interface for a iterator on KV store.
+type Iterator = unionstore.Iterator
 
-	// Test big values.
-	m = make(map[string]string)
-	for i := 0; i < 50; i++ {
-		k, v := randKV(11, int(txnCommitBatchSize)/7)
-		m[k] = v
-	}
-	s.mustCommit(c, m)
-}
+// MemDB is rollbackable Red-Black Tree optimized for transaction states buffer use scenario.
+// You can think MemDB is a combination of two separate tree map, one for key => value and another for key => keyFlags.
+//
+// The value map is rollbackable, that means you can use the `Staging`, `Release` and `Cleanup` API to safely modify KVs.
+//
+// The flags map is not rollbackable. There are two types of flag, persistent and non-persistent.
+// When discarding a newly added KV in `Cleanup`, the non-persistent flags will be cleared.
+// If there are persistent flags associated with key, we will keep this key in node without value.
+type MemDB = unionstore.MemDB

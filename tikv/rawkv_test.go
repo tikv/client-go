@@ -35,27 +35,33 @@ package tikv
 import (
 	"context"
 	"fmt"
+	"testing"
 
-	. "github.com/pingcap/check"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/retry"
 )
 
-type testRawkvSuite struct {
-	cluster *mocktikv.Cluster
-	store1  uint64 // store1 is leader
-	store2  uint64 // store2 is follower
-	peer1   uint64 // peer1 is leader
-	peer2   uint64 // peer2 is follower
-	region1 uint64
-	bo      *retry.Backoffer
+func TestRawKV(t *testing.T) {
+	suite.Run(t, new(testRawkvSuite))
 }
 
-var _ = SerialSuites(&testRawkvSuite{})
+type testRawkvSuite struct {
+	suite.Suite
+	mvccStore mocktikv.MVCCStore
+	cluster   *mocktikv.Cluster
+	store1    uint64 // store1 is leader
+	store2    uint64 // store2 is follower
+	peer1     uint64 // peer1 is leader
+	peer2     uint64 // peer2 is follower
+	region1   uint64
+	bo        *retry.Backoffer
+}
 
-func (s *testRawkvSuite) SetUpTest(c *C) {
-	s.cluster = mocktikv.NewCluster(mocktikv.MustNewMVCCStore())
+func (s *testRawkvSuite) SetupTest() {
+	s.mvccStore = mocktikv.MustNewMVCCStore()
+	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	storeIDs, peerIDs, regionID, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 2)
 	s.region1 = regionID
 	s.store1 = storeIDs[0]
@@ -65,11 +71,15 @@ func (s *testRawkvSuite) SetUpTest(c *C) {
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
+func (s *testRawkvSuite) TearDownTest() {
+	s.mvccStore.Close()
+}
+
 func (s *testRawkvSuite) storeAddr(id uint64) string {
 	return fmt.Sprintf("store%d", id)
 }
 
-func (s *testRawkvSuite) TestReplaceAddrWithNewStore(c *C) {
+func (s *testRawkvSuite) TestReplaceAddrWithNewStore() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
@@ -82,7 +92,7 @@ func (s *testRawkvSuite) TestReplaceAddrWithNewStore(c *C) {
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
 	err := client.Put(testKey, testValue)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// make store2 using store1's addr and store1 offline
 	store1Addr := s.storeAddr(s.store1)
@@ -94,11 +104,11 @@ func (s *testRawkvSuite) TestReplaceAddrWithNewStore(c *C) {
 
 	getVal, err := client.Get(testKey)
 
-	c.Assert(err, IsNil)
-	c.Assert(getVal, BytesEquals, testValue)
+	s.Nil(err)
+	s.Equal(getVal, testValue)
 }
 
-func (s *testRawkvSuite) TestUpdateStoreAddr(c *C) {
+func (s *testRawkvSuite) TestUpdateStoreAddr() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
@@ -111,7 +121,7 @@ func (s *testRawkvSuite) TestUpdateStoreAddr(c *C) {
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
 	err := client.Put(testKey, testValue)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	// tikv-server reports `StoreNotMatch` And retry
 	store1Addr := s.storeAddr(s.store1)
 	s.cluster.UpdateStoreAddr(s.store1, s.storeAddr(s.store2))
@@ -119,11 +129,11 @@ func (s *testRawkvSuite) TestUpdateStoreAddr(c *C) {
 
 	getVal, err := client.Get(testKey)
 
-	c.Assert(err, IsNil)
-	c.Assert(getVal, BytesEquals, testValue)
+	s.Nil(err)
+	s.Equal(getVal, testValue)
 }
 
-func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately(c *C) {
+func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
@@ -136,15 +146,15 @@ func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately(c *C) {
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
 	err := client.Put(testKey, testValue)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// pre-load store2's address into cache via follower-read.
 	loc, err := client.regionCache.LocateKey(s.bo, testKey)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	fctx, err := client.regionCache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadFollower, 0)
-	c.Assert(err, IsNil)
-	c.Assert(fctx.Store.StoreID(), Equals, s.store2)
-	c.Assert(fctx.Addr, Equals, "store2")
+	s.Nil(err)
+	s.Equal(fctx.Store.StoreID(), s.store2)
+	s.Equal(fctx.Addr, "store2")
 
 	// make store2 using store1's addr and store1 offline
 	store1Addr := s.storeAddr(s.store1)
@@ -155,11 +165,11 @@ func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately(c *C) {
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
 	getVal, err := client.Get(testKey)
-	c.Assert(err, IsNil)
-	c.Assert(getVal, BytesEquals, testValue)
+	s.Nil(err)
+	s.Equal(getVal, testValue)
 }
 
-func (s *testRawkvSuite) TestReplaceStore(c *C) {
+func (s *testRawkvSuite) TestReplaceStore() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
@@ -172,7 +182,7 @@ func (s *testRawkvSuite) TestReplaceStore(c *C) {
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
 	err := client.Put(testKey, testValue)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	s.cluster.MarkTombstone(s.store1)
 	store3 := s.cluster.AllocID()
@@ -183,5 +193,5 @@ func (s *testRawkvSuite) TestReplaceStore(c *C) {
 	s.cluster.ChangeLeader(s.region1, peer3)
 
 	err = client.Put(testKey, testValue)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 }

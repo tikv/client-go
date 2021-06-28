@@ -59,7 +59,7 @@ type testTiclientSuite struct {
 }
 
 func (s *testTiclientSuite) SetupSuite() {
-	s.store = NewTestStoreT(s.T())
+	s.store = NewTestStore(s.T())
 	s.prefix = fmt.Sprintf("ticlient_%d", time.Now().Unix())
 }
 

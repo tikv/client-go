@@ -50,6 +50,7 @@ func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 	unistore.BootstrapWithSingleStore(cluster)
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
 	require.Nil(err)
+	defer store.Close()
 
 	tx, err := store.Begin()
 	require.Nil(err)

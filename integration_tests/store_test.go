@@ -35,57 +35,53 @@ package tikv_test
 import (
 	"context"
 	"sync"
+	"testing"
 	"time"
 
-	. "github.com/pingcap/check"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
+func TestStore(t *testing.T) {
+	suite.Run(t, new(testStoreSuite))
+}
+
 type testStoreSuite struct {
-	testStoreSuiteBase
-}
-
-type testStoreSerialSuite struct {
-	testStoreSuiteBase
-}
-
-type testStoreSuiteBase struct {
+	suite.Suite
 	store tikv.StoreProbe
 }
 
-var _ = SerialSuites(&testStoreSuite{})
-var _ = SerialSuites(&testStoreSerialSuite{})
-
-func (s *testStoreSuiteBase) SetUpTest(c *C) {
-	s.store = tikv.StoreProbe{KVStore: NewTestStore(c)}
+func (s *testStoreSuite) SetupTest() {
+	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 }
 
-func (s *testStoreSuiteBase) TearDownTest(c *C) {
-	c.Assert(s.store.Close(), IsNil)
+func (s *testStoreSuite) TearDownTest() {
+	s.Require().Nil(s.store.Close())
 }
 
-func (s *testStoreSuite) TestOracle(c *C) {
+func (s *testStoreSuite) TestOracle() {
+	s.store.GetOracle().Close()
 	o := &oracles.MockOracle{}
 	s.store.SetOracle(o)
 
 	ctx := context.Background()
 	t1, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 100, nil), false)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	t2, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 100, nil), false)
-	c.Assert(err, IsNil)
-	c.Assert(t1, Less, t2)
-
+	s.Nil(err)
+	s.Less(t1, t2)
 	t1, err = o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	t2, err = o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
-	c.Assert(err, IsNil)
-	c.Assert(t1, Less, t2)
+	s.Nil(err)
+	s.Less(t1, t2)
 	f := o.GetLowResolutionTimestampAsync(ctx, &oracle.Option{})
-	c.Assert(f, NotNil)
+	s.NotNil(f)
 	_ = o.UntilExpired(0, 0, &oracle.Option{})
 
 	// Check retry.
@@ -102,10 +98,10 @@ func (s *testStoreSuite) TestOracle(c *C) {
 	go func() {
 		defer wg.Done()
 		t3, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 5000, nil), false)
-		c.Assert(err, IsNil)
-		c.Assert(t2, Less, t3)
+		s.Nil(err)
+		s.Less(t2, t3)
 		expired := s.store.GetOracle().IsExpired(t2, 50, &oracle.Option{})
-		c.Assert(expired, IsTrue)
+		s.True(expired)
 	}()
 
 	wg.Wait()
@@ -130,7 +126,7 @@ func (c *checkRequestClient) SendRequest(ctx context.Context, addr string, req *
 	return resp, err
 }
 
-func (s *testStoreSuite) TestRequestPriority(c *C) {
+func (s *testStoreSuite) TestRequestPriority() {
 	client := &checkRequestClient{
 		Client: s.store.GetTiKVClient(),
 	}
@@ -138,36 +134,52 @@ func (s *testStoreSuite) TestRequestPriority(c *C) {
 
 	// Cover 2PC commit.
 	txn, err := s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	client.priority = kvrpcpb.CommandPri_High
 	txn.SetPriority(tikv.PriorityHigh)
 	err = txn.Set([]byte("key"), []byte("value"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = txn.Commit(context.Background())
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// Cover the basic Get request.
 	txn, err = s.store.Begin()
-	c.Assert(err, IsNil)
+	s.Require().Nil(err)
 	client.priority = kvrpcpb.CommandPri_Low
 	txn.SetPriority(tikv.PriorityLow)
 	_, err = txn.Get(context.TODO(), []byte("key"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
 	// A counter example.
 	client.priority = kvrpcpb.CommandPri_Low
 	txn.SetPriority(tikv.PriorityNormal)
 	_, err = txn.Get(context.TODO(), []byte("key"))
 	// err is translated to "try again later" by backoffer, so doesn't check error value here.
-	c.Assert(err, NotNil)
+	s.NotNil(err)
 
 	// Cover Seek request.
 	client.priority = kvrpcpb.CommandPri_High
 	txn.SetPriority(tikv.PriorityHigh)
 	iter, err := txn.Iter([]byte("key"), nil)
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	for iter.Valid() {
-		c.Assert(iter.Next(), IsNil)
+		s.Nil(iter.Next())
 	}
 	iter.Close()
+}
+
+func (s *testStoreSuite) TestFailBusyServerKV() {
+	txn, err := s.store.Begin()
+	s.Require().Nil(err)
+	err = txn.Set([]byte("key"), []byte("value"))
+	s.Nil(err)
+	err = txn.Commit(context.Background())
+	s.Nil(err)
+
+	txn, err = s.store.Begin()
+	s.Require().Nil(err)
+	s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("busy")->return("")`))
+	val, err := txn.Get(context.TODO(), []byte("key"))
+	s.Nil(err)
+	s.Equal(val, []byte("value"))
 }

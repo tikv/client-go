@@ -36,63 +36,70 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"testing"
 
-	. "github.com/pingcap/check"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/parser/terror"
+	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/util"
 )
 
+func TestAsyncCommitFail(t *testing.T) {
+	suite.Run(t, new(testAsyncCommitFailSuite))
+}
+
 type testAsyncCommitFailSuite struct {
 	testAsyncCommitCommon
 }
 
-var _ = SerialSuites(&testAsyncCommitFailSuite{})
+func (s *testAsyncCommitFailSuite) SetupTest() {
+	s.testAsyncCommitCommon.setUpTest()
+}
 
-func (s *testAsyncCommitFailSuite) SetUpTest(c *C) {
-	s.testAsyncCommitCommon.setUpTest(c)
+func (s *testAsyncCommitFailSuite) TearDownTest() {
+	s.testAsyncCommitCommon.tearDownTest()
 }
 
 // TestFailCommitPrimaryRpcErrors tests rpc errors are handled properly when
 // committing primary region task.
-func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors(c *C) {
+func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 	// This test doesn't support tikv mode because it needs setting failpoint in unistore.
 	if *mockstore.WithTiKV {
 		return
 	}
 
-	c.Assert(failpoint.Enable("tikvclient/noRetryOnRpcError", "return(true)"), IsNil)
-	c.Assert(failpoint.Enable("tikvclient/rpcPrewriteTimeout", `return(true)`), IsNil)
+	s.Nil(failpoint.Enable("tikvclient/noRetryOnRpcError", "return(true)"))
+	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteTimeout", `return(true)`))
 	defer func() {
-		c.Assert(failpoint.Disable("tikvclient/rpcPrewriteTimeout"), IsNil)
-		c.Assert(failpoint.Disable("tikvclient/noRetryOnRpcError"), IsNil)
+		s.Nil(failpoint.Disable("tikvclient/rpcPrewriteTimeout"))
+		s.Nil(failpoint.Disable("tikvclient/noRetryOnRpcError"))
 	}()
 	// The rpc error will be wrapped to ErrResultUndetermined.
-	t1 := s.beginAsyncCommit(c)
+	t1 := s.beginAsyncCommit()
 	err := t1.Set([]byte("a"), []byte("a1"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = t1.Commit(ctx)
-	c.Assert(err, NotNil)
-	c.Assert(terror.ErrorEqual(err, terror.ErrResultUndetermined), IsTrue, Commentf("%s", errors.ErrorStack(err)))
+	s.NotNil(err)
+	s.True(terror.ErrorEqual(err, terror.ErrResultUndetermined), errors.ErrorStack(err))
 
 	// We don't need to call "Rollback" after "Commit" fails.
 	err = t1.Rollback()
-	c.Assert(err, Equals, tikverr.ErrInvalidTxn)
+	s.Equal(err, tikverr.ErrInvalidTxn)
 
 	// Create a new transaction to check. The previous transaction should actually commit.
-	t2 := s.beginAsyncCommit(c)
+	t2 := s.beginAsyncCommit()
 	res, err := t2.Get(context.Background(), []byte("a"))
-	c.Assert(err, IsNil)
-	c.Assert(bytes.Equal(res, []byte("a1")), IsTrue)
+	s.Nil(err)
+	s.True(bytes.Equal(res, []byte("a1")))
 }
 
-func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled(c *C) {
+func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled() {
 	// This test doesn't support tikv mode because it needs setting failpoint in unistore.
 	if *mockstore.WithTiKV {
 		return
@@ -102,69 +109,69 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled(c *C) {
 	splitKey := "s"
 	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 	loc, err := s.store.GetRegionCache().LocateKey(bo, []byte(splitKey))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
 	s.cluster.Split(loc.Region.GetID(), newRegionID, []byte(splitKey), []uint64{newPeerID}, newPeerID)
 	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
-	c.Assert(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("writeConflict")->sleep(50)`), IsNil)
+	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("writeConflict")->sleep(50)`))
 	defer func() {
-		c.Assert(failpoint.Disable("tikvclient/rpcPrewriteResult"), IsNil)
+		s.Nil(failpoint.Disable("tikvclient/rpcPrewriteResult"))
 	}()
 
-	t1 := s.beginAsyncCommit(c)
+	t1 := s.beginAsyncCommit()
 	err = t1.Set([]byte("a"), []byte("a"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	err = t1.Set([]byte("z"), []byte("z"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = t1.Commit(ctx)
-	c.Assert(err, NotNil)
+	s.NotNil(err)
 	_, ok := errors.Cause(err).(*tikverr.ErrWriteConflict)
-	c.Assert(ok, IsTrue, Commentf("%s", errors.ErrorStack(err)))
+	s.True(ok, errors.ErrorStack(err))
 }
 
-func (s *testAsyncCommitFailSuite) TestPointGetWithAsyncCommit(c *C) {
-	s.putAlphabets(c, true)
+func (s *testAsyncCommitFailSuite) TestPointGetWithAsyncCommit() {
+	s.putAlphabets(true)
 
-	txn := s.beginAsyncCommit(c)
+	txn := s.beginAsyncCommit()
 	txn.Set([]byte("a"), []byte("v1"))
 	txn.Set([]byte("b"), []byte("v2"))
-	s.mustPointGet(c, []byte("a"), []byte("a"))
-	s.mustPointGet(c, []byte("b"), []byte("b"))
+	s.mustPointGet([]byte("a"), []byte("a"))
+	s.mustPointGet([]byte("b"), []byte("b"))
 
 	// PointGet cannot ignore async commit transactions' locks.
-	c.Assert(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"), IsNil)
+	s.Nil(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"))
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err := txn.Commit(ctx)
-	c.Assert(err, IsNil)
-	c.Assert(txn.GetCommitter().IsAsyncCommit(), IsTrue)
-	s.mustPointGet(c, []byte("a"), []byte("v1"))
-	s.mustPointGet(c, []byte("b"), []byte("v2"))
-	c.Assert(failpoint.Disable("tikvclient/asyncCommitDoNothing"), IsNil)
+	s.Nil(err)
+	s.True(txn.GetCommitter().IsAsyncCommit())
+	s.mustPointGet([]byte("a"), []byte("v1"))
+	s.mustPointGet([]byte("b"), []byte("v2"))
+	s.Nil(failpoint.Disable("tikvclient/asyncCommitDoNothing"))
 
 	// PointGet will not push the `max_ts` to its ts which is MaxUint64.
-	txn2 := s.beginAsyncCommit(c)
-	s.mustGetFromTxn(c, txn2, []byte("a"), []byte("v1"))
-	s.mustGetFromTxn(c, txn2, []byte("b"), []byte("v2"))
+	txn2 := s.beginAsyncCommit()
+	s.mustGetFromTxn(txn2, []byte("a"), []byte("v1"))
+	s.mustGetFromTxn(txn2, []byte("b"), []byte("v2"))
 	err = txn2.Rollback()
-	c.Assert(err, IsNil)
+	s.Nil(err)
 }
 
-func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock(c *C) {
+func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 	// This test doesn't support tikv mode.
 	if *mockstore.WithTiKV {
 		return
 	}
 
-	s.putAlphabets(c, true)
+	s.putAlphabets(true)
 
 	// Split into several regions.
 	for _, splitKey := range []string{"h", "o", "u"} {
 		bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 		loc, err := s.store.GetRegionCache().LocateKey(bo, []byte(splitKey))
-		c.Assert(err, IsNil)
+		s.Nil(err)
 		newRegionID := s.cluster.AllocID()
 		newPeerID := s.cluster.AllocID()
 		s.cluster.Split(loc.Region.GetID(), newRegionID, []byte(splitKey), []uint64{newPeerID}, newPeerID)
@@ -174,37 +181,37 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock(c *C) {
 	// Ensure the region has been split
 	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 	loc, err := s.store.GetRegionCache().LocateKey(bo, []byte("i"))
-	c.Assert(err, IsNil)
-	c.Assert(loc.StartKey, BytesEquals, []byte("h"))
-	c.Assert(loc.EndKey, BytesEquals, []byte("o"))
+	s.Nil(err)
+	s.Equal(loc.StartKey, []byte("h"))
+	s.Equal(loc.EndKey, []byte("o"))
 
 	loc, err = s.store.GetRegionCache().LocateKey(bo, []byte("p"))
-	c.Assert(err, IsNil)
-	c.Assert(loc.StartKey, BytesEquals, []byte("o"))
-	c.Assert(loc.EndKey, BytesEquals, []byte("u"))
+	s.Nil(err)
+	s.Equal(loc.StartKey, []byte("o"))
+	s.Equal(loc.EndKey, []byte("u"))
 
 	var sessionID uint64 = 0
 	test := func(keys []string, values []string) {
 		sessionID++
 		ctx := context.WithValue(context.Background(), util.SessionID, sessionID)
 
-		txn := s.beginAsyncCommit(c)
+		txn := s.beginAsyncCommit()
 		for i := range keys {
 			txn.Set([]byte(keys[i]), []byte(values[i]))
 		}
 
-		c.Assert(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"), IsNil)
+		s.Nil(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"))
 
 		err = txn.Commit(ctx)
-		c.Assert(err, IsNil)
+		s.Nil(err)
 
 		primary := txn.GetCommitter().GetPrimaryKey()
 		bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 		lockResolver := tikv.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
 		txnStatus, err := lockResolver.GetTxnStatus(bo, txn.StartTS(), primary, 0, 0, false, false, nil)
-		c.Assert(err, IsNil)
-		c.Assert(txnStatus.IsCommitted(), IsFalse)
-		c.Assert(txnStatus.Action(), Equals, kvrpcpb.Action_NoAction)
+		s.Nil(err)
+		s.False(txnStatus.IsCommitted())
+		s.Equal(txnStatus.Action(), kvrpcpb.Action_NoAction)
 		// Currently when the transaction has no secondary, the `secondaries` field of the txnStatus
 		// will be set nil. So here initialize the `expectedSecondaries` to nil too.
 		var expectedSecondaries [][]byte
@@ -222,9 +229,9 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock(c *C) {
 			return bytes.Compare(gotSecondaries[i], gotSecondaries[j]) < 0
 		})
 
-		c.Assert(gotSecondaries, DeepEquals, expectedSecondaries)
+		s.Equal(gotSecondaries, expectedSecondaries)
 
-		c.Assert(failpoint.Disable("tikvclient/asyncCommitDoNothing"), IsNil)
+		s.Nil(failpoint.Disable("tikvclient/asyncCommitDoNothing"))
 		txn.GetCommitter().Cleanup(context.Background())
 	}
 
@@ -235,68 +242,68 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock(c *C) {
 	test([]string{"i", "a", "z", "u", "b"}, []string{"i5", "a5", "z5", "u5", "b5"})
 }
 
-func (s *testAsyncCommitFailSuite) TestAsyncCommitContextCancelCausingUndetermined(c *C) {
+func (s *testAsyncCommitFailSuite) TestAsyncCommitContextCancelCausingUndetermined() {
 	// For an async commit transaction, if RPC returns context.Canceled error when prewriting, the
 	// transaction should go to undetermined state.
-	txn := s.beginAsyncCommit(c)
+	txn := s.beginAsyncCommit()
 	err := txn.Set([]byte("a"), []byte("va"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	c.Assert(failpoint.Enable("tikvclient/rpcContextCancelErr", `return(true)`), IsNil)
+	s.Nil(failpoint.Enable("tikvclient/rpcContextCancelErr", `return(true)`))
 	defer func() {
-		c.Assert(failpoint.Disable("tikvclient/rpcContextCancelErr"), IsNil)
+		s.Nil(failpoint.Disable("tikvclient/rpcContextCancelErr"))
 	}()
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = txn.Commit(ctx)
-	c.Assert(err, NotNil)
-	c.Assert(txn.GetCommitter().GetUndeterminedErr(), NotNil)
+	s.NotNil(err)
+	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
 }
 
 // TestAsyncCommitRPCErrorThenWriteConflict verifies that the determined failure error overwrites undetermined error.
-func (s *testAsyncCommitFailSuite) TestAsyncCommitRPCErrorThenWriteConflict(c *C) {
+func (s *testAsyncCommitFailSuite) TestAsyncCommitRPCErrorThenWriteConflict() {
 	// This test doesn't support tikv mode because it needs setting failpoint in unistore.
 	if *mockstore.WithTiKV {
 		return
 	}
 
-	txn := s.beginAsyncCommit(c)
+	txn := s.beginAsyncCommit()
 	err := txn.Set([]byte("a"), []byte("va"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	c.Assert(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("timeout")->return("writeConflict")`), IsNil)
+	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("timeout")->return("writeConflict")`))
 	defer func() {
-		c.Assert(failpoint.Disable("tikvclient/rpcPrewriteResult"), IsNil)
+		s.Nil(failpoint.Disable("tikvclient/rpcPrewriteResult"))
 	}()
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = txn.Commit(ctx)
-	c.Assert(err, NotNil)
-	c.Assert(txn.GetCommitter().GetUndeterminedErr(), IsNil)
+	s.NotNil(err)
+	s.Nil(txn.GetCommitter().GetUndeterminedErr())
 }
 
 // TestAsyncCommitRPCErrorThenWriteConflictInChild verifies that the determined failure error in a child recursion
 // overwrites the undetermined error in the parent.
-func (s *testAsyncCommitFailSuite) TestAsyncCommitRPCErrorThenWriteConflictInChild(c *C) {
+func (s *testAsyncCommitFailSuite) TestAsyncCommitRPCErrorThenWriteConflictInChild() {
 	// This test doesn't support tikv mode because it needs setting failpoint in unistore.
 	if *mockstore.WithTiKV {
 		return
 	}
 
-	txn := s.beginAsyncCommit(c)
+	txn := s.beginAsyncCommit()
 	err := txn.Set([]byte("a"), []byte("va"))
-	c.Assert(err, IsNil)
+	s.Nil(err)
 
-	c.Assert(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("timeout")->return("writeConflict")`), IsNil)
-	c.Assert(failpoint.Enable("tikvclient/forceRecursion", `return`), IsNil)
+	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("timeout")->return("writeConflict")`))
+	s.Nil(failpoint.Enable("tikvclient/forceRecursion", `return`))
 
 	defer func() {
-		c.Assert(failpoint.Disable("tikvclient/rpcPrewriteResult"), IsNil)
-		c.Assert(failpoint.Disable("tikvclient/forceRecursion"), IsNil)
+		s.Nil(failpoint.Disable("tikvclient/rpcPrewriteResult"))
+		s.Nil(failpoint.Disable("tikvclient/forceRecursion"))
 	}()
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = txn.Commit(ctx)
-	c.Assert(err, NotNil)
-	c.Assert(txn.GetCommitter().GetUndeterminedErr(), IsNil)
+	s.NotNil(err)
+	s.Nil(txn.GetCommitter().GetUndeterminedErr())
 }
