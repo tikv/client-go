@@ -74,12 +74,17 @@ func (s *testAsyncCommitCommon) setUpTest() {
 
 	client, pdClient, cluster, err := unistore.New("")
 	s.Require().Nil(err)
+
 	unistore.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
 	store, err := tikv.NewTestTiKVStore(fpClient{Client: client}, pdClient, nil, nil, 0)
 	s.Require().Nil(err)
 
 	s.store = store
+}
+
+func (s *testAsyncCommitCommon) tearDownTest() {
+	s.store.Close()
 }
 
 func (s *testAsyncCommitCommon) putAlphabets(enableAsyncCommit bool) {
@@ -178,6 +183,10 @@ type testAsyncCommitSuite struct {
 func (s *testAsyncCommitSuite) SetupTest() {
 	s.testAsyncCommitCommon.setUpTest()
 	s.bo = tikv.NewBackofferWithVars(context.Background(), 5000, nil)
+}
+
+func (s *testAsyncCommitSuite) TearDownTest() {
+	s.testAsyncCommitCommon.tearDownTest()
 }
 
 func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(keys, values [][]byte, primaryKey, primaryValue []byte, commitPrimary bool) (uint64, uint64) {
