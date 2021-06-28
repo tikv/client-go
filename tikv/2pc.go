@@ -133,6 +133,9 @@ type twoPhaseCommitter struct {
 	binlog BinlogExecutor
 
 	resourceGroupTag []byte
+
+	storeWg  *sync.WaitGroup
+	storeCtx context.Context
 }
 
 type memBufferMutations struct {
@@ -330,6 +333,8 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		},
 		isPessimistic: txn.IsPessimistic(),
 		binlog:        txn.binlog,
+		storeWg:       &txn.store.wg,
+		storeCtx:      txn.store.ctx,
 	}, nil
 }
 
@@ -671,8 +676,10 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 	}
 	// Already spawned a goroutine for async commit transaction.
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
-		secondaryBo := retry.NewBackofferWithVars(context.Background(), CommitSecondaryMaxBackoff, c.txn.vars)
+		secondaryBo := retry.NewBackofferWithVars(c.storeCtx, CommitSecondaryMaxBackoff, c.txn.vars)
+		c.storeWg.Add(1)
 		go func() {
+			defer c.storeWg.Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
 					if s, ok := v.(string); !ok {
@@ -978,7 +985,9 @@ var VeryLongMaxBackoff = uint64(600000) // 10mins
 
 func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 	c.cleanWg.Add(1)
+	c.storeWg.Add(1)
 	go func() {
+		defer c.storeWg.Done()
 		if _, err := util.EvalFailpoint("commitFailedSkipCleanup"); err == nil {
 			logutil.Logger(ctx).Info("[failpoint] injected skip cleanup secondaries on failure",
 				zap.Uint64("txnStartTS", c.startTS))
@@ -986,7 +995,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 			return
 		}
 
-		cleanupKeysCtx := context.WithValue(context.Background(), retry.TxnStartKey, ctx.Value(retry.TxnStartKey))
+		cleanupKeysCtx := context.WithValue(c.storeCtx, retry.TxnStartKey, ctx.Value(retry.TxnStartKey))
 		var err error
 		if !c.isOnePC() {
 			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
@@ -1275,11 +1284,13 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Debug("2PC will use async commit protocol to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
+		c.storeWg.Add(1)
 		go func() {
+			defer c.storeWg.Done()
 			if _, err := util.EvalFailpoint("asyncCommitDoNothing"); err == nil {
 				return
 			}
-			commitBo := retry.NewBackofferWithVars(ctx, CommitSecondaryMaxBackoff, c.txn.vars)
+			commitBo := retry.NewBackofferWithVars(c.storeCtx, CommitSecondaryMaxBackoff, c.txn.vars)
 			err := c.commitMutations(commitBo, c.mutations)
 			if err != nil {
 				logutil.Logger(ctx).Warn("2PC async commit failed", zap.Uint64("sessionID", c.sessionID),
