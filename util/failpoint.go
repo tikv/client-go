@@ -33,13 +33,29 @@
 package util
 
 import (
+	"errors"
+
 	"github.com/pingcap/failpoint"
 )
 
 const failpointPrefix = "tikvclient/"
 
+var (
+	failpointsEnabled bool
+	errDisabled       = errors.New("failpoints are disabled")
+)
+
+// EnableFailpoints enables use of failpoints.
+// It should be called before using client to avoid data race.
+func EnableFailpoints() {
+	failpointsEnabled = true
+}
+
 // EvalFailpoint injects code for testing. It is used to replace `failpoint.Inject`
 // to make it possible to be used in a library.
 func EvalFailpoint(name string) (interface{}, error) {
+	if !failpointsEnabled {
+		return nil, errDisabled
+	}
 	return failpoint.Eval(failpointPrefix + name)
 }

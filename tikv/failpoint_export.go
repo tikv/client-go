@@ -11,16 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package config
+package tikv
 
-import (
-	"testing"
+import "github.com/tikv/client-go/v2/util"
 
-	"github.com/tikv/client-go/v2/util"
-	"go.uber.org/goleak"
+var (
+	// EnableFailpoints enables use of failpoints.
+	// It should be called before using client to avoid data race.
+	EnableFailpoints = util.EnableFailpoints
 )
-
-func TestMain(m *testing.M) {
-	util.EnableFailpoints()
-	goleak.VerifyTestMain(m)
-}
