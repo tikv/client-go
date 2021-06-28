@@ -17,9 +17,16 @@ import (
 	"testing"
 
 	"github.com/tikv/client-go/v2/tikv"
+	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
 	tikv.EnableFailpoints()
-	m.Run()
+
+	opts := []goleak.Option{
+		goleak.IgnoreTopFunction("github.com/pingcap/goleveldb/leveldb.(*DB).mpoolDrain"),
+		goleak.IgnoreTopFunction("github.com/tikv/client-go/v2/tikv.(*ttlManager).keepAlive"), // TODO: fix ttlManager goroutine leak
+	}
+
+	goleak.VerifyTestMain(m, opts...)
 }

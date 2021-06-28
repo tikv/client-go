@@ -83,6 +83,11 @@ func (s *testCommitterSuite) SetupSuite() {
 	atomic.StoreUint64(&tikv.VeryLongMaxBackoff, 1000)
 }
 
+func (s *testCommitterSuite) TearDownSuite() {
+	atomic.StoreUint64(&tikv.CommitMaxBackoff, 20000)
+	atomic.StoreUint64(&tikv.VeryLongMaxBackoff, 600000)
+}
+
 func (s *testCommitterSuite) SetupTest() {
 	mvccStore, err := mocktikv.NewMVCCLevelDB("")
 	s.Require().Nil(err)
@@ -99,9 +104,7 @@ func (s *testCommitterSuite) SetupTest() {
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 
-func (s *testCommitterSuite) TearDownSuite() {
-	atomic.StoreUint64(&tikv.CommitMaxBackoff, 20000)
-	atomic.StoreUint64(&tikv.VeryLongMaxBackoff, 600000)
+func (s *testCommitterSuite) TearDownTest() {
 	s.store.Close()
 }
 

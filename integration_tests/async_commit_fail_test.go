@@ -61,6 +61,10 @@ func (s *testAsyncCommitFailSuite) SetupTest() {
 	s.testAsyncCommitCommon.setUpTest()
 }
 
+func (s *testAsyncCommitFailSuite) TearDownTest() {
+	s.testAsyncCommitCommon.tearDownTest()
+}
+
 // TestFailCommitPrimaryRpcErrors tests rpc errors are handled properly when
 // committing primary region task.
 func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
