@@ -59,8 +59,8 @@ func (s StoreProbe) NewLockResolver() LockResolverProbe {
 }
 
 // GetTimestampWithRetry returns latest timestamp.
-func (s StoreProbe) GetTimestampWithRetry(bo *Backoffer, scope string) (uint64, error) {
-	return s.getTimestampWithRetry(bo, scope)
+func (s StoreProbe) GetTimestampWithRetry(bo *Backoffer, isLocalStore bool) (uint64, error) {
+	return s.getTimestampWithRetry(bo, isLocalStore)
 }
 
 // Begin starts a transaction.

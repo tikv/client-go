@@ -49,7 +49,7 @@ func TestPDOracle_UntilExpired(t *testing.T) {
 	start := time.Now()
 	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
 	lockTs := oracle.GoTimeToTS(start.Add(time.Duration(lockAfter)*time.Millisecond)) + 1
-	waitTs := o.UntilExpired(lockTs, uint64(lockExp), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	waitTs := o.UntilExpired(lockTs, uint64(lockExp), &oracle.Option{IsLocal: false})
 	assert.Equal(t, int64(lockAfter+lockExp), waitTs)
 }
 
@@ -58,15 +58,16 @@ func TestPdOracle_GetStaleTimestamp(t *testing.T) {
 
 	start := time.Now()
 	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
-	ts, err := o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, 10)
+	opt := &oracle.Option{IsLocal: false}
+	ts, err := o.GetStaleTimestamp(context.Background(), opt, 10)
 	assert.Nil(t, err)
 	assert.WithinDuration(t, start.Add(-10*time.Second), oracle.GetTimeFromTS(ts), 2*time.Second)
 
-	_, err = o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, 1e12)
+	_, err = o.GetStaleTimestamp(context.Background(), opt, 1e12)
 	assert.NotNil(t, err)
 	assert.Regexp(t, ".*invalid prevSecond.*", err.Error())
 
-	_, err = o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, math.MaxUint64)
+	_, err = o.GetStaleTimestamp(context.Background(), opt, math.MaxUint64)
 	assert.NotNil(t, err)
 	assert.Regexp(t, ".*invalid prevSecond.*", err.Error())
 }

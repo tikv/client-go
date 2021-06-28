@@ -74,7 +74,7 @@ type Storage interface {
 	// UUID return a unique ID which represents a Storage.
 	UUID() string
 	// CurrentTimestamp returns current timestamp with the given txnScope (local or global).
-	CurrentTimestamp(txnScope string) (uint64, error)
+	CurrentTimestamp(isLocalStore bool) (uint64, error)
 	// GetOracle gets a timestamp oracle client.
 	GetOracle() oracle.Oracle
 	// SupportDeleteRange gets the storage support delete range or not.

@@ -37,6 +37,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/oracle"
 	"math/rand"
 	"runtime/trace"
 	"sort"
@@ -52,7 +54,6 @@ import (
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/retry"
 	"github.com/tikv/client-go/v2/unionstore"
 	"github.com/tikv/client-go/v2/util"
@@ -74,13 +75,13 @@ type SchemaAmender interface {
 // `TxnScope` must be set for each object
 // Every other fields are optional, but currently at most one of them can be set
 type StartTSOption struct {
-	TxnScope string
-	StartTS  *uint64
+	IsLocalStore bool
+	StartTS      *uint64
 }
 
 // DefaultStartTSOption creates a default StartTSOption, ie. Work in GlobalTxnScope and get start ts when got used
 func DefaultStartTSOption() StartTSOption {
-	return StartTSOption{TxnScope: oracle.GlobalTxnScope}
+	return StartTSOption{IsLocalStore: false}
 }
 
 // SetStartTS returns a new StartTSOption with StartTS set to the given startTS
@@ -89,9 +90,9 @@ func (to StartTSOption) SetStartTS(startTS uint64) StartTSOption {
 	return to
 }
 
-// SetTxnScope returns a new StartTSOption with TxnScope set to txnScope
-func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
-	to.TxnScope = txnScope
+// SetIsLocalStore returns whether is LocalStore
+func (to StartTSOption) SetIsLocalStore(isLocalStore bool) StartTSOption {
+	to.IsLocalStore = isLocalStore
 	return to
 }
 
@@ -126,7 +127,7 @@ type KVTxn struct {
 	enableAsyncCommit  bool
 	enable1PC          bool
 	causalConsistency  bool
-	scope              string
+	isLocalStore       bool
 	kvFilter           KVFilter
 	resourceGroupTag   []byte
 }
@@ -137,27 +138,24 @@ func ExtractStartTS(store *KVStore, option StartTSOption) (uint64, error) {
 		return *option.StartTS, nil
 	}
 	bo := NewBackofferWithVars(context.Background(), tsoMaxBackoff, nil)
-	return store.getTimestampWithRetry(bo, option.TxnScope)
+	return store.getTimestampWithRetry(bo, option.IsLocalStore)
 }
 
 func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error) {
-	if options.TxnScope == "" {
-		options.TxnScope = oracle.GlobalTxnScope
-	}
 	startTS, err := ExtractStartTS(store, options)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	snapshot := newTiKVSnapshot(store, startTS, store.nextReplicaReadSeed())
 	newTiKVTxn := &KVTxn{
-		snapshot:  snapshot,
-		us:        unionstore.NewUnionStore(snapshot),
-		store:     store,
-		startTS:   startTS,
-		startTime: time.Now(),
-		valid:     true,
-		vars:      tikv.DefaultVars,
-		scope:     options.TxnScope,
+		snapshot:     snapshot,
+		us:           unionstore.NewUnionStore(snapshot),
+		store:        store,
+		startTS:      startTS,
+		startTime:    time.Now(),
+		valid:        true,
+		vars:         tikv.DefaultVars,
+		isLocalStore: options.IsLocalStore,
 	}
 	return newTiKVTxn, nil
 }
@@ -292,8 +290,8 @@ func (txn *KVTxn) SetCausalConsistency(b bool) {
 }
 
 // SetScope sets the geographical scope of the transaction.
-func (txn *KVTxn) SetScope(scope string) {
-	txn.scope = scope
+func (txn *KVTxn) SetIsLocalStore(isLocalStore bool) {
+	txn.isLocalStore = isLocalStore
 }
 
 // SetKVFilter sets the filter to ignore key-values in memory buffer.
@@ -313,8 +311,8 @@ func (txn *KVTxn) IsCasualConsistency() bool {
 }
 
 // GetScope returns the geographical scope of the transaction.
-func (txn *KVTxn) GetScope() string {
-	return txn.scope
+func (txn *KVTxn) IsLocalStore() bool {
+	return txn.isLocalStore
 }
 
 // Commit commits the transaction operations to KV store.
@@ -490,9 +488,13 @@ func (txn *KVTxn) onCommitted(err error) {
 		} else if isAsyncCommit {
 			commitMode = "async_commit"
 		}
+		txnScope := oracle.GlobalTxnScope
+		if txn.isLocalStore {
+			txnScope = config.GetTxnScopeFromConfig()
+		}
 
 		info := TxnInfo{
-			TxnScope:            txn.GetScope(),
+			TxnScope:            txnScope,
 			StartTS:             txn.startTS,
 			CommitTS:            txn.commitTS,
 			TxnCommitMode:       commitMode,

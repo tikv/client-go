@@ -73,9 +73,9 @@ func (s *testStoreSuite) TestOracle(c *C) {
 	s.store.SetOracle(o)
 
 	ctx := context.Background()
-	t1, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 100, nil), oracle.GlobalTxnScope)
+	t1, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 100, nil), false)
 	c.Assert(err, IsNil)
-	t2, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 100, nil), oracle.GlobalTxnScope)
+	t2, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 100, nil), false)
 	c.Assert(err, IsNil)
 	c.Assert(t1, Less, t2)
 
@@ -101,7 +101,7 @@ func (s *testStoreSuite) TestOracle(c *C) {
 
 	go func() {
 		defer wg.Done()
-		t3, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 5000, nil), oracle.GlobalTxnScope)
+		t3, err := s.store.GetTimestampWithRetry(tikv.NewBackofferWithVars(ctx, 5000, nil), false)
 		c.Assert(err, IsNil)
 		c.Assert(t2, Less, t3)
 		expired := s.store.GetOracle().IsExpired(t2, 50, &oracle.Option{})

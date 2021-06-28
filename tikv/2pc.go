@@ -805,7 +805,7 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter) {
 				return
 			}
 			bo := retry.NewBackofferWithVars(context.Background(), keepAliveMaxBackoff, c.txn.vars)
-			now, err := c.store.getTimestampWithRetry(bo, c.txn.GetScope())
+			now, err := c.store.getTimestampWithRetry(bo, c.txn.IsLocalStore())
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Warn("keepAlive get tso fail",
 					zap.Error(err))
@@ -900,7 +900,7 @@ func sendTxnHeartBeat(bo *Backoffer, store *KVStore, primary []byte, startTS, tt
 // checkAsyncCommit checks if async commit protocol is available for current transaction commit, true is returned if possible.
 func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 	// Disable async commit in local transactions
-	if c.txn.GetScope() != oracle.GlobalTxnScope {
+	if c.txn.IsLocalStore() {
 		return false
 	}
 
@@ -925,7 +925,7 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 // checkOnePC checks if 1PC protocol is available for current transaction.
 func (c *twoPhaseCommitter) checkOnePC() bool {
 	// Disable 1PC in local transactions
-	if c.txn.GetScope() != oracle.GlobalTxnScope {
+	if c.txn.IsLocalStore() {
 		return false
 	}
 
@@ -1087,7 +1087,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// from PD and plus one as our MinCommitTS.
 	if commitTSMayBeCalculated && c.needLinearizability() {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
-		latestTS, err := c.store.getTimestampWithRetry(bo, c.txn.GetScope())
+		latestTS, err := c.store.getTimestampWithRetry(bo, c.txn.IsLocalStore())
 		// If we fail to get a timestamp from PD, we just propagate the failure
 		// instead of falling back to the normal 2PC because a normal 2PC will
 		// also be likely to fail due to the same timestamp issue.
@@ -1196,7 +1196,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
-		commitTS, err = c.store.getTimestampWithRetry(retry.NewBackofferWithVars(ctx, tsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+		commitTS, err = c.store.getTimestampWithRetry(retry.NewBackofferWithVars(ctx, tsoMaxBackoff, c.txn.vars), c.txn.IsLocalStore())
 		if err != nil {
 			logutil.Logger(ctx).Warn("2PC get commitTS failed",
 				zap.Error(err),
@@ -1242,7 +1242,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
 
-	if c.store.oracle.IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
+	if c.store.oracle.IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{IsLocal: false}) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
 			c.sessionID, c.startTS, c.commitTS)
 		return err
@@ -1392,7 +1392,7 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 			if err != nil {
 				// KeysNeedToLock won't change, so don't async rollback pessimistic locks here for write conflict.
 				if _, ok := errors.Cause(err).(*tikverr.ErrWriteConflict); ok {
-					newForUpdateTSVer, err := c.store.CurrentTimestamp(oracle.GlobalTxnScope)
+					newForUpdateTSVer, err := c.store.CurrentTimestamp(false)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -1466,7 +1466,7 @@ func (c *twoPhaseCommitter) tryAmendTxn(ctx context.Context, startInfoSchema Sch
 func (c *twoPhaseCommitter) getCommitTS(ctx context.Context, commitDetail *util.CommitDetails) (uint64, error) {
 	start := time.Now()
 	logutil.Event(ctx, "start get commit ts")
-	commitTS, err := c.store.getTimestampWithRetry(retry.NewBackofferWithVars(ctx, tsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+	commitTS, err := c.store.getTimestampWithRetry(retry.NewBackofferWithVars(ctx, tsoMaxBackoff, c.txn.vars), c.txn.IsLocalStore())
 	if err != nil {
 		logutil.Logger(ctx).Warn("2PC get commitTS failed",
 			zap.Error(err),

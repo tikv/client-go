@@ -310,16 +310,16 @@ func (s *KVStore) UUID() string {
 }
 
 // CurrentTimestamp returns current timestamp with the given txnScope (local or global).
-func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
+func (s *KVStore) CurrentTimestamp(isLocalStore bool) (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), tsoMaxBackoff, nil)
-	startTS, err := s.getTimestampWithRetry(bo, txnScope)
+	startTS, err := s.getTimestampWithRetry(bo, isLocalStore)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
 	return startTS, nil
 }
 
-func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64, error) {
+func (s *KVStore) getTimestampWithRetry(bo *Backoffer, isLocalStore bool) (uint64, error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("TiKVStore.getTimestampWithRetry", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -327,7 +327,7 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 	}
 
 	for {
-		startTS, err := s.oracle.GetTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: txnScope})
+		startTS, err := s.oracle.GetTimestamp(bo.GetCtx(), &oracle.Option{IsLocal: isLocalStore})
 		// mockGetTSErrorInRetry should wait MockCommitErrorOnce first, then will run into retry() logic.
 		// Then mockGetTSErrorInRetry will return retryable error when first retry.
 		// Before PR #8743, we don't cleanup txn after meet error such as error like: PD server timeout
