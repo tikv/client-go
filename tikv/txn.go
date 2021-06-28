@@ -49,12 +49,12 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/retry"
-	"github.com/tikv/client-go/v2/unionstore"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -217,12 +217,12 @@ func (txn *KVTxn) String() string {
 // If such entry is not found, it returns an invalid Iterator with no error.
 // It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 // The Iterator must be Closed after use.
-func (txn *KVTxn) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error) {
+func (txn *KVTxn) Iter(k []byte, upperBound []byte) (Iterator, error) {
 	return txn.us.Iter(k, upperBound)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (txn *KVTxn) IterReverse(k []byte) (unionstore.Iterator, error) {
+func (txn *KVTxn) IterReverse(k []byte) (Iterator, error) {
 	return txn.us.IterReverse(k)
 }
 
@@ -763,7 +763,7 @@ func (txn *KVTxn) GetUnionStore() *unionstore.KVUnionStore {
 }
 
 // GetMemBuffer return the MemBuffer binding to this transaction.
-func (txn *KVTxn) GetMemBuffer() *unionstore.MemDB {
+func (txn *KVTxn) GetMemBuffer() *MemDB {
 	return txn.us.GetMemBuffer()
 }
 

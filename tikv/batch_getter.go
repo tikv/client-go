@@ -37,13 +37,12 @@ import (
 
 	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/unionstore"
 )
 
 // BatchBufferGetter is the interface for BatchGet.
 type BatchBufferGetter interface {
 	Len() int
-	unionstore.Getter
+	Getter
 }
 
 // BatchGetter is the interface for BatchGet.

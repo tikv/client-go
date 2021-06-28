@@ -42,7 +42,6 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/unionstore"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -104,7 +103,7 @@ func (s *testScanSuite) makeValue(i int) []byte {
 }
 
 func (s *testScanSuite) TestScan() {
-	check := func(scan unionstore.Iterator, rowNum int, keyOnly bool) {
+	check := func(scan tikv.Iterator, rowNum int, keyOnly bool) {
 		for i := 0; i < rowNum; i++ {
 			k := scan.Key()
 			expectedKey := s.makeKey(i)
