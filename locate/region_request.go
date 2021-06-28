@@ -347,9 +347,20 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) error {
 		s.region.scheduleReload()
 	}
 
-	if !isMajorityAlive(states) {
+	unreachableStores := make([]uint64, len(states))
+	for i := range states {
+		if states[i] != unreachable {
+			unreachableStores = append(unreachableStores, s.replicas[i].store.storeID)
+		}
+	}
+
+	// If a majority of stores of this region are unreachable, record a `maxRegionStoreUnavailable` backoff.
+	// If the request experiences too many times of `maxRegionStoreUnavailable`, we consider it as a permanent
+	// error and throw it to the user.
+	if len(unreachableStores) > len(s.replicas)/2 {
 		logutil.BgLogger().Warn("send failure and a majority of stores are not available",
-			zap.Uint64("regionID", s.region.GetID()))
+			zap.Uint64("regionID", s.region.GetID()),
+			zap.Uint64s("unreachableStores", unreachableStores))
 		if bo.GetBackoffTimes()[retry.BoRegionStoreUnavailable.String()] > maxRegionStoreUnavailableAttempt {
 			return errors.Errorf("request error because a majority of peers of region %d seem down", s.region.GetID())
 		}
@@ -426,19 +437,6 @@ func (s *replicaSelector) checkLiveness(bo *retry.Backoffer) []livenessState {
 	}
 	wg.Wait()
 	return states
-}
-
-func isMajorityAlive(states []livenessState) bool {
-	aliveCount := 0
-	for _, state := range states {
-		if state == reachable {
-			aliveCount++
-			if aliveCount > len(states)/2 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (s *RegionRequestSender) getRPCContext(
