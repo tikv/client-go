@@ -478,7 +478,7 @@ func (s *KVStore) safeTSUpdater() {
 	defer s.wg.Done()
 	t := time.NewTicker(time.Second * 2)
 	defer t.Stop()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	for {
 		select {
