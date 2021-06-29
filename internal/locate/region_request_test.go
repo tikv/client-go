@@ -51,8 +51,8 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/client"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"google.golang.org/grpc"
 )
