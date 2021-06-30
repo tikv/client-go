@@ -89,6 +89,7 @@ go mod download github.com/tikv/client-go/v2
 - TiDB: TiDB is an open source distributed HTAP database compatible with the MySQL protocol (https://github.com/pingcap/tidb)
 - BR: A command-line tool for distributed backup and restoration of the TiDB cluster data (https://github.com/pingcap/br)
 - TiCDC: Change data capture for TiDB (https://github.com/pingcap/ticdc)
+- go-ycsb: A Go port of Yahoo! Cloud Serving Benchmark (YCSB) (https://github.com/pingcap/go-ycsb)
 
 ## License
 
