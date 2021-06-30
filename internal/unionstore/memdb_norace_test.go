@@ -151,7 +151,7 @@ func testRandomDeriveRecur(t *testing.T, db *MemDB, golden *leveldb.DB, depth in
 		db.Release(h)
 	}
 
-	if depth%20 == 0 {
+	if depth%10 == 0 {
 		checkConsist(t, db, golden)
 	}
 
