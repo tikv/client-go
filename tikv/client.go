@@ -47,11 +47,6 @@ const (
 	ReadTimeoutShort  = client.ReadTimeoutShort
 )
 
-// NewTestRPCClient is for some external tests.
-func NewTestRPCClient(security config.Security) Client {
-	return client.NewTestRPCClient(security)
-}
-
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(security config.Security, opts ...func(c *client.RPCClient)) *client.RPCClient {
 	return client.NewRPCClient(security, opts...)
