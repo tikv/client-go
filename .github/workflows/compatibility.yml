@@ -62,3 +62,16 @@ jobs:
         go mod tidy
         make
       working-directory: ticdc
+
+    - name: Checkout go-ycsb
+      uses: actions/checkout@v2
+      with:
+        repository: pingcap/go-ycsb
+        path: go-ycsb
+
+    - name: Check build
+      run: |
+        go mod edit -replace=github.com/tikv/client-go/v2=../client-go
+        go mod tidy
+        go build cmd/go-ycsb/*
+      working-directory: go-ycsb
