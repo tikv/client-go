@@ -271,11 +271,6 @@ func NewRPCClient(security config.Security, opts ...func(c *RPCClient)) *RPCClie
 	return cli
 }
 
-// NewTestRPCClient is for some external tests.
-func NewTestRPCClient(security config.Security) Client {
-	return NewRPCClient(security)
-}
-
 func (c *RPCClient) getConnArray(addr string, enableBatch bool, opt ...func(cfg *config.TiKVClient)) (*connArray, error) {
 	c.RLock()
 	if c.isClosed {
