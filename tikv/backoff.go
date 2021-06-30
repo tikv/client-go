@@ -35,8 +35,8 @@ package tikv
 import (
 	"context"
 
+	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/retry"
 )
 
 // Backoffer is a utility for retrying queries.
@@ -103,3 +103,6 @@ func BoTiKVRPC() *BackoffConfig {
 func NewGcResolveLockMaxBackoffer(ctx context.Context) *Backoffer {
 	return retry.NewBackofferWithVars(ctx, gcResolveLockMaxBackoff, nil)
 }
+
+// NewNoopBackoff create a Backoffer do nothing just return error directly
+var NewNoopBackoff = retry.NewNoopBackoff
