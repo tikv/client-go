@@ -48,7 +48,7 @@ import (
 func TestRandom(t *testing.T) {
 	require := require.New(t)
 
-	const cnt = 500000
+	const cnt = 50000
 	keys := make([][]byte, cnt)
 	for i := range keys {
 		keys[i] = make([]byte, rand.Intn(19)+1)
@@ -132,7 +132,7 @@ func testRandomDeriveRecur(t *testing.T, db *MemDB, golden *leveldb.DB, depth in
 		golden.Put(keys[i], vals[i])
 	}
 
-	if depth < 2000 {
+	if depth < 100 {
 		childOps := testRandomDeriveRecur(t, db, golden, depth+1)
 		opLog = append(opLog, childOps...)
 	}
@@ -151,7 +151,7 @@ func testRandomDeriveRecur(t *testing.T, db *MemDB, golden *leveldb.DB, depth in
 		db.Release(h)
 	}
 
-	if depth%200 == 0 {
+	if depth%10 == 0 {
 		checkConsist(t, db, golden)
 	}
 
