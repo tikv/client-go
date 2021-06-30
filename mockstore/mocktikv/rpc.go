@@ -37,7 +37,6 @@ import (
 	"context"
 	"math"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
@@ -592,11 +591,6 @@ type RPCClient struct {
 	Cluster     *Cluster
 	MvccStore   MVCCStore
 	coprHandler CoprRPCHandler
-	// rpcCli uses to redirects RPC request to TiDB rpc server, It is only use for test.
-	// Mock TiDB rpc service will have circle import problem, so just use a real RPC client to send this RPC  server.
-	// sync.Once uses to avoid concurrency initialize rpcCli.
-	sync.Once
-	rpcCli Client
 }
 
 // NewRPCClient creates an RPCClient.
@@ -644,25 +638,6 @@ func (c *RPCClient) checkArgs(ctx context.Context, addr string) (*Session, error
 	return session, nil
 }
 
-// GRPCClientFactory is the GRPC client factory.
-// Use global variable to avoid circle import.
-// TODO: remove this global variable.
-var GRPCClientFactory func() Client
-
-// redirectRequestToRPCServer redirects RPC request to TiDB rpc server, It is only use for test.
-// Mock TiDB rpc service will have circle import problem, so just use a real RPC client to send this RPC  server.
-func (c *RPCClient) redirectRequestToRPCServer(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	c.Once.Do(func() {
-		if GRPCClientFactory != nil {
-			c.rpcCli = GRPCClientFactory()
-		}
-	})
-	if c.rpcCli == nil {
-		return nil, errors.Errorf("GRPCClientFactory is nil")
-	}
-	return c.rpcCli.SendRequest(ctx, addr, req, timeout)
-}
-
 // SendRequest sends a request to mock cluster.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
@@ -677,10 +652,6 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 	reqCtx := &req.Context
 	resp := &tikvrpc.Response{}
-	// When the store type is TiDB, the request should handle over to TiDB rpc server to handle.
-	if req.StoreTp == tikvrpc.TiDB {
-		return c.redirectRequestToRPCServer(ctx, addr, req, timeout)
-	}
 
 	session, err := c.checkArgs(ctx, addr)
 	if err != nil {
@@ -977,13 +948,6 @@ func (c *RPCClient) Close() error {
 	var err error
 	if c.MvccStore != nil {
 		err = c.MvccStore.Close()
-		if err != nil {
-			return err
-		}
-	}
-
-	if c.rpcCli != nil {
-		err = c.rpcCli.Close()
 		if err != nil {
 			return err
 		}
