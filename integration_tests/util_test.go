@@ -46,14 +46,14 @@ import (
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
 )
 
 var (
-	pdAddrs = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
+	withTiKV = flag.Bool("with-tikv", false, "run tests with TiKV cluster started. (not use the mock server)")
+	pdAddrs  = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
 )
 
 // NewTestStore creates a KVStore for testing purpose.
@@ -62,7 +62,7 @@ func NewTestStore(t *testing.T) *tikv.KVStore {
 		flag.Parse()
 	}
 
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		addrs := strings.Split(*pdAddrs, ",")
 		pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
 		require.Nil(t, err)
