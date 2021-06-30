@@ -86,10 +86,10 @@ go mod download github.com/tikv/client-go/v2
 
 `client-go` is used by the following projects:
 
-- TiDB: TiDB is an open source distributed HTAP database compatible with the MySQL protocol (https://github.com/pingcap/tidb)
-- BR: A command-line tool for distributed backup and restoration of the TiDB cluster data (https://github.com/pingcap/br)
-- TiCDC: Change data capture for TiDB (https://github.com/pingcap/ticdc)
-- go-ycsb: A Go port of Yahoo! Cloud Serving Benchmark (YCSB) (https://github.com/pingcap/go-ycsb)
+- [TiDB](https://github.com/pingcap/tidb): TiDB is an open source distributed HTAP database compatible with the MySQL protocol
+- [BR](https://github.com/pingcap/br): A command-line tool for distributed backup and restoration of the TiDB cluster data
+- [TiCDC](https://github.com/pingcap/ticdc): Change data capture for TiDB
+- [go-ycsb](https://github.com/pingcap/go-ycsb): A Go port of Yahoo! Cloud Serving Benchmark (YCSB)
 
 ## License
 
