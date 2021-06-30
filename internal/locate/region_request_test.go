@@ -163,8 +163,6 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart()
 	resp, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
-	// The RPC error should be nil since it's evaluated successfully.
-	s.Nil(s.regionRequestSender.rpcError)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStoreThenUseNewOne() {
