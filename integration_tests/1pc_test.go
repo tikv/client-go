@@ -38,7 +38,6 @@ import (
 
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/util"
@@ -198,7 +197,7 @@ func (s *testOnePCSuite) Test1PCIsolation() {
 
 func (s *testOnePCSuite) Test1PCDisallowMultiRegion() {
 	// This test doesn't support tikv mode.
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 
@@ -266,7 +265,7 @@ func (s *testOnePCSuite) Test1PCLinearizability() {
 
 func (s *testOnePCSuite) Test1PCWithMultiDC() {
 	// It requires setting placement rules to run with TiKV
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 

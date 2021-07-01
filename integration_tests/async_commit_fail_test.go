@@ -44,7 +44,6 @@ import (
 	"github.com/pingcap/parser/terror"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/util"
 )
@@ -69,7 +68,7 @@ func (s *testAsyncCommitFailSuite) TearDownTest() {
 // committing primary region task.
 func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 	// This test doesn't support tikv mode because it needs setting failpoint in unistore.
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 
@@ -101,7 +100,7 @@ func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 
 func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled() {
 	// This test doesn't support tikv mode because it needs setting failpoint in unistore.
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 
@@ -161,7 +160,7 @@ func (s *testAsyncCommitFailSuite) TestPointGetWithAsyncCommit() {
 
 func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 	// This test doesn't support tikv mode.
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 
