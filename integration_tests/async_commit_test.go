@@ -46,7 +46,6 @@ import (
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/mockstore/cluster"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -67,7 +66,7 @@ type testAsyncCommitCommon struct {
 }
 
 func (s *testAsyncCommitCommon) setUpTest() {
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		s.store = NewTestStore(s.T())
 		return
 	}
@@ -228,7 +227,7 @@ func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(keys, values [][]byte, pr
 
 func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	// This test doesn't support tikv mode.
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 
@@ -435,7 +434,7 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLinearizability() {
 // TestAsyncCommitWithMultiDC tests that async commit can only be enabled in global transactions
 func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC() {
 	// It requires setting placement rules to run with TiKV
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 

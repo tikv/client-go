@@ -42,7 +42,6 @@ import (
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -84,7 +83,7 @@ func (s *testSnapshotFailSuite) TearDownTest() {
 
 func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 	// Meaningless to test with tikv because it has a mock key error
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 
@@ -112,7 +111,7 @@ func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 
 func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
 	// Meaningless to test with tikv because it has a mock key error
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		return
 	}
 

@@ -42,7 +42,6 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/stretchr/testify/suite"
 	tikvstore "github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/mockstore"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -153,7 +152,7 @@ func (s *testTiclientSuite) TestLargeRequest() {
 }
 
 func (s *testTiclientSuite) TestSplitRegionIn2PC() {
-	if *mockstore.WithTiKV {
+	if *withTiKV {
 		s.T().Skip("scatter will timeout with single node TiKV")
 	}
 	if israce.Race {
