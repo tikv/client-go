@@ -289,8 +289,13 @@ func (s *testCommitterSuite) TestContextCancel2() {
 	err = txn.Commit(ctx)
 	s.Nil(err)
 	cancel()
-	// Secondary keys should not be canceled.
-	time.Sleep(time.Millisecond * 20)
+	// Secondary keys should not be canceled. Check in loop in case of slow environment.
+	for i := 0; i < 100; i++ {
+		time.Sleep(time.Millisecond * 20)
+		if !s.isKeyLocked([]byte("b")) {
+			return
+		}
+	}
 	s.False(s.isKeyLocked([]byte("b")))
 }
 
