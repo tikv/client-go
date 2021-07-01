@@ -66,36 +66,43 @@ func (c *Client) ClusterID() uint64 {
 }
 
 // Get queries value with the key. When the key does not exist, it returns `nil, nil`.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	return c.client.Get(key)
 }
 
 // BatchGet queries values with the keys.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) {
 	return c.client.BatchGet(keys)
 }
 
 // Put stores a key-value pair to TiKV.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) Put(ctx context.Context, key, value []byte) error {
 	return c.client.Put(key, value)
 }
 
 // BatchPut stores key-value pairs to TiKV.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
 	return c.client.BatchPut(keys, values)
 }
 
 // Delete deletes a key-value pair from TiKV.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) Delete(ctx context.Context, key []byte) error {
 	return c.client.Delete(key)
 }
 
-// BatchDelete deletes key-value pairs from TiKV
+// BatchDelete deletes key-value pairs from TiKV.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) BatchDelete(ctx context.Context, keys [][]byte) error {
 	return c.client.BatchDelete(keys)
 }
 
-// DeleteRange deletes all key-value pairs in a range from TiKV
+// DeleteRange deletes all key-value pairs in a range from TiKV.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte) error {
 	return c.client.DeleteRange(startKey, endKey)
 }
@@ -105,6 +112,7 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 // If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
 // `Scan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	return c.client.Scan(startKey, endKey, limit)
 }
@@ -116,6 +124,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 // (endKey, startKey], you can write:
 // `ReverseScan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
 // It doesn't support Scanning from "", because locating the last Region is not yet implemented.
+// TODO: use ctx after moving all rawkv code out.
 func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
 	return c.client.ReverseScan(startKey, endKey, limit)
 }
