@@ -33,17 +33,14 @@
 package tikv_test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/util"
-	"go.uber.org/zap"
 )
 
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()
@@ -107,16 +104,7 @@ func (s *testScanSuite) TestScan() {
 		for i := 0; i < rowNum; i++ {
 			k := scan.Key()
 			expectedKey := s.makeKey(i)
-			if ok := bytes.Equal(k, expectedKey); !ok {
-				logutil.BgLogger().Error("bytes equal check fail",
-					zap.Int("i", i),
-					zap.Int("rowNum", rowNum),
-					zap.String("obtained key", kv.StrKey(k)),
-					zap.String("obtained val", kv.StrKey(scan.Value())),
-					zap.String("expected", kv.StrKey(expectedKey)),
-					zap.Bool("keyOnly", keyOnly))
-			}
-			s.Equal(k, expectedKey)
+			s.Equal(k, expectedKey, "i=%v,rowNum=%v,key=%v,val=%v,expected=%v,keyOnly=%v", i, rowNum, kv.StrKey(k), kv.StrKey(scan.Value()), kv.StrKey(expectedKey), keyOnly)
 			if !keyOnly {
 				v := scan.Value()
 				s.Equal(v, s.makeValue(i))
