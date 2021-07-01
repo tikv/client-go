@@ -631,7 +631,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 
 	actionCommit, actionIsCommit := action.(actionCommit)
 	_, actionIsCleanup := action.(actionCleanup)
-	_, actionIsPessimiticLock := action.(actionPessimisticLock)
+	_, actionIsPessimisticLock := action.(actionPessimisticLock)
 
 	c.checkOnePCFallBack(action, len(batchBuilder.allBatches()))
 
@@ -639,7 +639,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 	if val, err := util.EvalFailpoint("skipKeyReturnOK"); err == nil {
 		valStr, ok := val.(string)
 		if ok && c.sessionID > 0 {
-			if firstIsPrimary && actionIsPessimiticLock {
+			if firstIsPrimary && actionIsPessimisticLock {
 				logutil.Logger(bo.GetCtx()).Warn("pessimisticLock failpoint", zap.String("valStr", valStr))
 				switch valStr {
 				case "pessimisticLockSkipPrimary":
@@ -661,7 +661,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 	}
 
 	if firstIsPrimary &&
-		((actionIsCommit && !c.isAsyncCommit()) || actionIsCleanup || actionIsPessimiticLock) {
+		((actionIsCommit && !c.isAsyncCommit()) || actionIsCleanup || actionIsPessimisticLock) {
 		// primary should be committed(not async commit)/cleanup/pessimistically locked first
 		err = c.doActionOnBatches(bo, action, batchBuilder.primaryBatch())
 		if err != nil {
