@@ -16,7 +16,6 @@ package testutils
 import (
 	"github.com/tikv/client-go/v2/internal/mockstore/cluster"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -26,11 +25,23 @@ type Cluster = cluster.Cluster
 // CoprRPCHandler is the interface to handle coprocessor RPC commands.
 type CoprRPCHandler = mocktikv.CoprRPCHandler
 
+// MVCCStore is a mvcc key-value storage.
+type MVCCStore = mocktikv.MVCCStore
+
+// MVCCPair is a KV pair read from MvccStore or an error if any occurs.
+type MVCCPair = mocktikv.Pair
+
 // Cluster simulates a TiKV cluster.
 type MockCluster = mocktikv.Cluster
 
+// RPCClient sends kv RPC calls to mock cluster.
+type MockClient = mocktikv.RPCClient
+
+// RPCSession stores session scope rpc data.
+type RPCSession = mocktikv.Session
+
 // NewMockTiKV creates a TiKV client and PD client from options.
-func NewMockTiKV(path string, coprHandler CoprRPCHandler) (tikv.Client, *MockCluster, pd.Client, error) {
+func NewMockTiKV(path string, coprHandler CoprRPCHandler) (*MockClient, *MockCluster, pd.Client, error) {
 	return mocktikv.NewTiKVAndPDClient(path, coprHandler)
 }
 
@@ -43,3 +54,7 @@ var BootstrapWithMultiStores = mocktikv.BootstrapWithMultiStores
 // BootstrapWithMultiRegions initializes a Cluster with multiple Regions and 1
 // Store. The number of Regions will be len(splitKeys) + 1.
 var BootstrapWithMultiRegions = mocktikv.BootstrapWithMultiRegions
+
+// ErrLocked is returned when trying to Read/Write on a locked key. Client should
+// backoff or cleanup the lock then retry.
+type ErrLocked = mocktikv.ErrLocked
