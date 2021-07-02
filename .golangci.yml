@@ -7,6 +7,7 @@ linters:
     - exportloopref
     - gofmt
     - goimports
+    - golint
     - goprintffuncname
     - gosimple
     - govet
