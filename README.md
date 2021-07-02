@@ -72,7 +72,7 @@ go mod edit -replace=github.com/tikv/client-go/v2=/path/to/client-go
 If you want to push your TiDB code to GitHub for running CI or for code review, you need to change the client-go used by TiDB to your developing branch using the following steps:
 
 ```bash
-go get -d github.com/GITHUB_USERNAME/client-go@DEV_BRANCH
+go get -d github.com/GITHUB_USERNAME/client-go/v2@DEV_BRANCH
 # Output:
 # go get: github.com/GITHUB_USERNAME/client-go/v2@none updating to
 #         github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX: parsing go.mod:
