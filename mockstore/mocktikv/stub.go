@@ -24,6 +24,9 @@ type CoprRPCHandler = mocktikv.CoprRPCHandler
 // MVCCStore is a mvcc key-value storage.
 type MVCCStore = mocktikv.MVCCStore
 
+// MustNewMVCCStore creates a MVCCStore for testing.
+var MustNewMVCCStore = mocktikv.MustNewMVCCStore
+
 // Pair is a KV pair read from MvccStore or an error if any occurs.
 type Pair = mocktikv.Pair
 
