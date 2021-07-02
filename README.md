@@ -39,7 +39,7 @@ Note: All the following tests are included in the [CI](https://github.com/tikv/c
 To run unit tests, use following command
 
 ```bash
-go test -v ./...
+go test ./...
 ```
 
 To run code linter, make sure `golangci-lint` is [installed](https://golangci-lint.run/usage/install/#local-installation). Then use following command
@@ -56,7 +56,7 @@ sleep 5
 ./tikv-server &
 sleep 10
 cd integration_tests
-go test -v --with-tikv=true --pd-addrs=127.0.0.1:2379
+go test --with-tikv
 ```
 
 ### Test with TiDB
@@ -72,7 +72,7 @@ go mod edit -replace=github.com/tikv/client-go/v2=/path/to/client-go
 If you want to push your TiDB code to GitHub for running CI or for code review, you need to change the client-go used by TiDB to your developing branch using the following steps:
 
 ```bash
-go get -d github.com/GITHUB_USERNAME/client-go@DEV_BRANCH
+go get -d github.com/GITHUB_USERNAME/client-go/v2@DEV_BRANCH
 # Output:
 # go get: github.com/GITHUB_USERNAME/client-go/v2@none updating to
 #         github.com/GITHUB_USERNAME/client-go/v2@v2.0.0-XXXXXXXXXXXXXX-XXXXXXXXXXXX: parsing go.mod:
