@@ -31,10 +31,10 @@ type MVCCStore = mocktikv.MVCCStore
 // MVCCPair is a KV pair read from MvccStore or an error if any occurs.
 type MVCCPair = mocktikv.Pair
 
-// Cluster simulates a TiKV cluster.
+// MockCluster simulates a TiKV cluster.
 type MockCluster = mocktikv.Cluster
 
-// RPCClient sends kv RPC calls to mock cluster.
+// MockClient sends kv RPC calls to mock cluster.
 type MockClient = mocktikv.RPCClient
 
 // RPCSession stores session scope rpc data.
