@@ -46,8 +46,8 @@ import (
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/mockstore/cluster"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -61,7 +61,7 @@ func TestAsyncCommit(t *testing.T) {
 // testAsyncCommitSuite and testAsyncCommitFailSuite.
 type testAsyncCommitCommon struct {
 	suite.Suite
-	cluster cluster.Cluster
+	cluster testutils.Cluster
 	store   *tikv.KVStore
 }
 
