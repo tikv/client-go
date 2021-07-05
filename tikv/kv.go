@@ -52,9 +52,9 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
@@ -341,8 +341,8 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 		// Then mockGetTSErrorInRetry will return retryable error when first retry.
 		// Before PR #8743, we don't cleanup txn after meet error such as error like: PD server timeout
 		// This may cause duplicate data to be written.
-		if val, e := util.EvalFailpoint("mockGetTSErrorInRetry"); e == nil {
-			if val.(bool) && !IsMockCommitErrorEnable() {
+		if val, e := util.EvalFailpoint("mockGetTSErrorInRetry"); e == nil && val.(bool) {
+			if _, e := util.EvalFailpoint("mockCommitErrorOpt"); e != nil {
 				err = tikverr.NewErrPDServerTimeout("mock PD timeout")
 			}
 		}

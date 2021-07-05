@@ -41,9 +41,9 @@ import (
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"go.uber.org/zap"
 )
@@ -68,7 +68,7 @@ type Scanner struct {
 func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize int, reverse bool) (*Scanner, error) {
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
-		batchSize = scanBatchSize
+		batchSize = defaultScanBatchSize
 	}
 	scanner := &Scanner{
 		snapshot:     snapshot,

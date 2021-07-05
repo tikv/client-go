@@ -40,7 +40,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"

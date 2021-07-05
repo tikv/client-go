@@ -433,8 +433,7 @@ func (s SnapshotProbe) FormatStats() string {
 }
 
 // LockProbe exposes some lock utilities for testing purpose.
-type LockProbe struct {
-}
+type LockProbe struct{}
 
 // ExtractLockFromKeyErr makes a Lock based on a key error.
 func (l LockProbe) ExtractLockFromKeyErr(err *kvrpcpb.KeyError) (*Lock, error) {
@@ -534,7 +533,7 @@ func (c ConfigProbe) GetBigTxnThreshold() int {
 
 // GetScanBatchSize returns the batch size to scan ranges.
 func (c ConfigProbe) GetScanBatchSize() int {
-	return scanBatchSize
+	return defaultScanBatchSize
 }
 
 // GetDefaultLockTTL returns the default lock TTL.

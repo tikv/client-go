@@ -49,9 +49,9 @@ import (
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -59,9 +59,9 @@ import (
 )
 
 const (
-	scanBatchSize = 256
-	batchGetSize  = 5120
-	maxTimestamp  = math.MaxUint64
+	defaultScanBatchSize = 256
+	batchGetSize         = 5120
+	maxTimestamp         = math.MaxUint64
 )
 
 // Priority is the priority for tikv to execute a command.
@@ -105,6 +105,7 @@ type KVSnapshot struct {
 	vars            *kv.Variables
 	replicaReadSeed uint32
 	resolvedLocks   *util.TSSet
+	scanBatchSize   int
 
 	// Cache the result of BatchGet.
 	// The invariance is that calling BatchGet multiple times using the same start ts,
@@ -141,6 +142,7 @@ func newTiKVSnapshot(store *KVStore, ts uint64, replicaReadSeed uint32) *KVSnaps
 	return &KVSnapshot{
 		store:           store,
 		version:         ts,
+		scanBatchSize:   defaultScanBatchSize,
 		priority:        PriorityNormal,
 		vars:            kv.DefaultVars,
 		replicaReadSeed: replicaReadSeed,
@@ -361,7 +363,6 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *Backoffer, batch batchKeys, collec
 			ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
 		}
 		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, client.ReadTimeoutMedium, tikvrpc.TiKV, "", ops...)
-
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -452,7 +453,6 @@ const getMaxBackoff = 600000 // 10 minutes
 
 // Get gets the value for key k from snapshot.
 func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
-
 	defer func(start time.Time) {
 		metrics.TxnCmdHistogramWithGet.Observe(time.Since(start).Seconds())
 	}(time.Now())
@@ -616,13 +616,13 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 
 // Iter return a list of key-value pair after `k`.
 func (s *KVSnapshot) Iter(k []byte, upperBound []byte) (Iterator, error) {
-	scanner, err := newScanner(s, k, upperBound, scanBatchSize, false)
+	scanner, err := newScanner(s, k, upperBound, s.scanBatchSize, false)
 	return scanner, errors.Trace(err)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 func (s *KVSnapshot) IterReverse(k []byte) (Iterator, error) {
-	scanner, err := newScanner(s, nil, k, scanBatchSize, true)
+	scanner, err := newScanner(s, nil, k, s.scanBatchSize, true)
 	return scanner, errors.Trace(err)
 }
 
@@ -635,6 +635,11 @@ func (s *KVSnapshot) SetNotFillCache(b bool) {
 // SetKeyOnly indicates if tikv can return only keys.
 func (s *KVSnapshot) SetKeyOnly(b bool) {
 	s.keyOnly = b
+}
+
+// SetScanBatchSize sets the scan batchSize used to scan data from tikv.
+func (s *KVSnapshot) SetScanBatchSize(batchSize int) {
+	s.scanBatchSize = batchSize
 }
 
 // SetReplicaRead sets up the replica read type.

@@ -20,7 +20,7 @@ jobs:
           go-version: 1.16
 
       - name: Test
-        run: go test -v
+        run: go test
         working-directory: integration_tests
 
   integration-local-race:
@@ -35,7 +35,7 @@ jobs:
           go-version: 1.16
 
       - name: Test
-        run: go test -v -race
+        run: go test -race
         working-directory: integration_tests
 
   integration-tikv:
@@ -74,6 +74,6 @@ jobs:
         working-directory: integration_tests
 
       - name: Test
-        run: go test -v --with-tikv=true --pd-addrs=127.0.0.1:2379
+        run: go test --with-tikv
         working-directory: integration_tests
 
