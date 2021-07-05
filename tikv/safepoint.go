@@ -41,7 +41,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"go.etcd.io/etcd/clientv3"
 	"go.etcd.io/etcd/mvcc/mvccpb"
 	"go.uber.org/zap"

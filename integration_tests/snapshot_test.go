@@ -45,10 +45,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"go.uber.org/zap"
 )
 
 func TestSnapshot(t *testing.T) {
@@ -126,8 +124,7 @@ func (s *testSnapshotSuite) deleteKeys(keys [][]byte) {
 
 func (s *testSnapshotSuite) TestBatchGet() {
 	for _, rowNum := range s.rowNums {
-		logutil.BgLogger().Debug("test BatchGet",
-			zap.Int("length", rowNum))
+		s.T().Logf("test BatchGet, length=%v", rowNum)
 		txn := s.beginTxn()
 		for i := 0; i < rowNum; i++ {
 			k := encodeKey(s.prefix, s08d("key", i))
@@ -169,8 +166,7 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 
 func (s *testSnapshotSuite) TestBatchGetNotExist() {
 	for _, rowNum := range s.rowNums {
-		logutil.BgLogger().Debug("test BatchGetNotExist",
-			zap.Int("length", rowNum))
+		s.T().Logf("test BatchGetNotExist, length=%v", rowNum)
 		txn := s.beginTxn()
 		for i := 0; i < rowNum; i++ {
 			k := encodeKey(s.prefix, s08d("key", i))
