@@ -31,8 +31,8 @@ type BatchResult struct {
 	Error error
 }
 
-// AppendBatches divides the mutation to be requested into Batches, ensuring that the total key-value length
-// of each Batch is less than the given limit.
+// AppendBatches divides the mutation to be requested into Batches so that the size of each batch is
+// approximately the same as the given limit.
 func AppendBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]byte, keyToValue map[string][]byte, limit int) []Batch {
 	var start, size int
 	var keys, values [][]byte
@@ -57,7 +57,7 @@ func AppendBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]b
 }
 
 // AppendBatches divides the mutation to be requested into Batches, ensuring that the count of keys of each
-// Batch is less than the given limit.
+// Batch is not greater than the given limit.
 func AppendKeyBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]byte, limit int) []Batch {
 	var keys [][]byte
 	for start, count := 0, 0; start < len(groupKeys); start++ {
