@@ -33,11 +33,11 @@
 package tikv
 
 import (
-	"sync/atomic"
-
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -65,20 +65,18 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 	return tikvStore, errors.Trace(err)
 }
 
-// mockCommitErrorEnable uses to enable `mockCommitError` and only mock error once.
-var mockCommitErrorEnable = int64(0)
-
 // MockCommitErrorEnable exports for gofail testing.
 func MockCommitErrorEnable() {
-	atomic.StoreInt64(&mockCommitErrorEnable, 1)
+	failpoint.Enable(`tikvclient/mockCommitErrorOpt`, "return(true)")
 }
 
 // MockCommitErrorDisable exports for gofail testing.
 func MockCommitErrorDisable() {
-	atomic.StoreInt64(&mockCommitErrorEnable, 0)
+	failpoint.Disable(`tikvclient/mockCommitErrorOpt`)
 }
 
 // IsMockCommitErrorEnable exports for gofail testing.
 func IsMockCommitErrorEnable() bool {
-	return atomic.LoadInt64(&mockCommitErrorEnable) == 1
+	_, err := util.EvalFailpoint(`mockCommitErrorOpt`)
+	return err == nil
 }
