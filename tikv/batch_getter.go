@@ -62,6 +62,7 @@ func NewBufferBatchGetter(buffer BatchBufferGetter, snapshot BatchGetter) *Buffe
 	return &BufferBatchGetter{buffer: buffer, snapshot: snapshot}
 }
 
+// BatchGet gets a batch of values.
 func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 	if b.buffer.Len() == 0 {
 		return b.snapshot.BatchGet(ctx, keys)
