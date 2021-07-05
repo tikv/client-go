@@ -40,9 +40,9 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"go.uber.org/zap"
 )

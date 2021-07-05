@@ -46,7 +46,7 @@ import (
 	"github.com/pingcap/goleveldb/leveldb/util"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/parser/terror"
-	"github.com/tikv/client-go/v2/logutil"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/mockstore/deadlock"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util/codec"
