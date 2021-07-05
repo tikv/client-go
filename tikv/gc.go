@@ -28,19 +28,19 @@ import (
 	zap "go.uber.org/zap"
 )
 
-/// GC does garbage collection (GC) of the TiKV cluster.
-/// GC deletes MVCC records whose timestamp is lower than the given `safepoint`. We must guarantee
-///  that all transactions started before this timestamp had committed. We can keep an active
-/// transaction list in application to decide which is the minimal start timestamp of them.
-///
-/// For each key, the last mutation record (unless it's a deletion) before `safepoint` is retained.
-///
-/// GC is performed by:
-/// 1. resolving all locks with timestamp <= `safepoint`
-/// 2. updating PD's known safepoint
-///
-/// This is a simplified version of [GC in TiDB](https://docs.pingcap.com/tidb/stable/garbage-collection-overview).
-/// We skip the second step "delete ranges" which is an optimization for TiDB.
+// GC does garbage collection (GC) of the TiKV cluster.
+// GC deletes MVCC records whose timestamp is lower than the given `safepoint`. We must guarantee
+//  that all transactions started before this timestamp had committed. We can keep an active
+// transaction list in application to decide which is the minimal start timestamp of them.
+//
+// For each key, the last mutation record (unless it's a deletion) before `safepoint` is retained.
+//
+// GC is performed by:
+// 1. resolving all locks with timestamp <= `safepoint`
+// 2. updating PD's known safepoint
+//
+// GC is a simplified version of [GC in TiDB](https://docs.pingcap.com/tidb/stable/garbage-collection-overview).
+// We skip the second step "delete ranges" which is an optimization for TiDB.
 func (s *KVStore) GC(ctx context.Context, safepoint uint64) (newSafePoint uint64, err error) {
 	err = s.resolveLocks(ctx, safepoint, 8)
 	if err != nil {
