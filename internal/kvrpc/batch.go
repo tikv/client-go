@@ -56,7 +56,7 @@ func AppendBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]b
 	return batches
 }
 
-// AppendBatches divides the mutation to be requested into Batches, ensuring that the count of keys of each
+// AppendKeyBatches divides the mutation to be requested into Batches, ensuring that the count of keys of each
 // Batch is not greater than the given limit.
 func AppendKeyBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]byte, limit int) []Batch {
 	var keys [][]byte
