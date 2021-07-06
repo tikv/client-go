@@ -391,6 +391,11 @@ func (s *mockTikvGrpcServer) RawCoprocessor(context.Context, *kvrpcpb.RawCoproce
 func (s *mockTikvGrpcServer) DispatchMPPTask(context.Context, *mpp.DispatchTaskRequest) (*mpp.DispatchTaskResponse, error) {
 	return nil, errors.New("unreachable")
 }
+
+func (s *mockTikvGrpcServer) IsAlive(context.Context, *mpp.IsAliveRequest) (*mpp.IsAliveResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) EstablishMPPConnection(*mpp.EstablishMPPConnectionRequest, tikvpb.Tikv_EstablishMPPConnectionServer) error {
 	return errors.New("unreachable")
 }

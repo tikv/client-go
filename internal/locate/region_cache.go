@@ -1604,16 +1604,16 @@ func (c *RegionCache) PDClient() pd.Client {
 }
 
 // GetTiFlashStoreAddrs returns addresses of all tiflash nodes.
-func (c *RegionCache) GetTiFlashStoreAddrs() []string {
+func (c *RegionCache) GetTiFlashStores() []*Store {
 	c.storeMu.RLock()
 	defer c.storeMu.RUnlock()
-	var addrs []string
+	var stores []*Store
 	for _, s := range c.storeMu.stores {
 		if s.storeType == tikvrpc.TiFlash {
-			addrs = append(addrs, s.addr)
+			stores = append(stores, s)
 		}
 	}
-	return addrs
+	return stores
 }
 
 // btreeItem is BTree's Item that uses []byte to compare.
