@@ -131,7 +131,7 @@ type ErrWriteConflict struct {
 }
 
 func (k *ErrWriteConflict) Error() string {
-	return k.WriteConflict.String()
+	return fmt.Sprintf("write conflict { %s }", k.WriteConflict.String())
 }
 
 // IsErrWriteConflict returns true if it is ErrWriteConflict.

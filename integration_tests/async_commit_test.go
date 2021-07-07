@@ -46,6 +46,7 @@ import (
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
@@ -210,6 +211,7 @@ func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(keys, values [][]byte, pr
 	tpc, err := txnProbe.NewCommitter(0)
 	s.Nil(err)
 	tpc.SetPrimaryKey(primaryKey)
+	tpc.SetUseAsyncCommit()
 
 	ctx := context.Background()
 	err = tpc.PrewriteAllMutations(ctx)
@@ -570,4 +572,25 @@ func (m *mockResolveClient) SendRequest(ctx context.Context, addr string, req *t
 
 func (m *mockResolveClient) Close() error {
 	return m.inner.Close()
+}
+
+// TestPessimisticTxnResolveAsyncCommitLock tests that pessimistic transactions resolve non-expired async-commit locks during the prewrite phase.
+// Pessimistic transactions will resolve locks immediately during the prewrite phase because of the special logic for handling non-pessimistic lock conflict.
+// However, async-commit locks can't be resolved until they expire. This test covers it.
+func (s *testAsyncCommitSuite) TestPessimisticTxnResolveAsyncCommitLock() {
+	ctx := context.Background()
+	k := []byte("k")
+
+	txn, err := s.store.Begin()
+	s.Nil(err)
+	txn.SetPessimistic(true)
+	err = txn.LockKeys(ctx, &kv.LockCtx{ForUpdateTS: txn.StartTS()}, []byte("k1"))
+	s.Nil(err)
+
+	// Lock the key with a async-commit lock.
+	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, k, k, false)
+
+	txn.Set(k, k)
+	err = txn.Commit(context.Background())
+	s.Nil(err)
 }
