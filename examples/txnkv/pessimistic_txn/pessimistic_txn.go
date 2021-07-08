@@ -63,18 +63,21 @@ func exampleForPessimisticTXN() {
 	k2 := []byte("k2")
 
 	txn1 := begin_pessimistic_txn()
+
 	//txn1: lock the primary key
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
 	err := txn1.LockKeys(context.Background(), lockCtx, k1)
 	if err != nil {
 		panic(err)
 	}
-	// txn2:lock the secondary key
+	fmt.Println("txn1: lock k1 success.")
+	// txn1:lock the secondary key
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
 	err = txn1.LockKeys(context.Background(), lockCtx, k2)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("txn1: lock k2 success.")
 
 	// begin txn2
 	txn2 := begin_pessimistic_txn()
@@ -83,13 +86,13 @@ func exampleForPessimisticTXN() {
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn2.StartTS(), LockWaitTime: tikv.LockNoWait, WaitStartTime: time.Now()}
 	err = txn2.LockKeys(context.Background(), lockCtx, k2)
 	// cannot acquire lock immediately thus error:ErrLockAcquireFailAndNoWaitSet
-	fmt.Println("acquire lock for k2 in txn2(while txn1 has this lock) should be failed with error: ", err)
+	fmt.Println("txn2: acquire lock for k2 (while txn1 has this lock) should be failed with error: ", err)
 
 	// txn2:lock k2 for wait limited time (200ms),less than k2's lock TTL by txn1,should failed with timeout.
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn2.StartTS(), LockWaitTime: 200, WaitStartTime: time.Now()}
 	err = txn2.LockKeys(context.Background(), lockCtx, k2)
 	// txn2: cannot acquire lock k2 in time should failed with timeout.
-	fmt.Println("acquire lock for k1 in txn2(while txn1 has this lock) should be failed with error:  ", err)
+	fmt.Println("txn2: acquire lock for k1(while txn1 has this lock) should be failed with error:  ", err)
 
 	// commit txn1 should be success.
 	txn1.Set(k1, k1)
@@ -97,23 +100,23 @@ func exampleForPessimisticTXN() {
 	if err != nil {
 		panic(err)
 	} else {
-		fmt.Println("commit txn1 success!")
+		fmt.Println("tnx1: commit txn1 success!")
 	}
 
 	// txn2:try to lock k2 no wait & with the old ForUpdateTS should be failed.
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn2.StartTS(), LockWaitTime: tikv.LockNoWait, WaitStartTime: time.Now()}
 	err = txn2.LockKeys(context.Background(), lockCtx, k2)
 	// cannot acquire lock , should meet conflict.
-	fmt.Println("acquire lock for k2 should failed with error(confict): ", err)
+	fmt.Println("txn2: acquire lock for k2 should failed with error(confict): ", err)
 	lockCtx.ForUpdateTS, err = tikv.ExtractStartTS(client, tikv.DefaultStartTSOption())
-	fmt.Println("get current start ts as forupdate ts should success:", err)
+	fmt.Println("txn2: get current start ts as forupdate ts should success:", err)
 	// txn2: lock k2 in txn2 with new forUpdateTS should success.
 	err = txn2.LockKeys(context.Background(), lockCtx, k2)
 	if err != nil {
 		// cannot acquire lock , should success.
-		fmt.Println("acquire lock for k2 with new forUpdateTS should be success while meet err:", err)
+		fmt.Println("txn2: acquire lock for k2 with new forUpdateTS should be success while meet err:", err)
 	} else {
-		fmt.Println("acquire lock for k2 with new forUpdateTS success!")
+		fmt.Println("txn2: acquire lock for k2 with new forUpdateTS success!")
 	}
 
 	// txn2: do some write.
@@ -124,9 +127,9 @@ func exampleForPessimisticTXN() {
 	// commit txn2 should success.
 	err = txn2.Commit(context.Background())
 	if err != nil {
-		fmt.Println("commit txn2 should success while meet err ", err)
+		fmt.Println("txn2: commit should success while meet err ", err)
 	} else {
-		fmt.Println("Commit txn2 success.")
+		fmt.Println("txn2: commit success.")
 	}
 }
 
