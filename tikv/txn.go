@@ -49,6 +49,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -150,15 +151,18 @@ func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error
 		return nil, errors.Trace(err)
 	}
 	snapshot := newTiKVSnapshot(store, startTS, store.nextReplicaReadSeed())
+	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:  snapshot,
-		us:        unionstore.NewUnionStore(snapshot),
-		store:     store,
-		startTS:   startTS,
-		startTime: time.Now(),
-		valid:     true,
-		vars:      tikv.DefaultVars,
-		scope:     options.TxnScope,
+		snapshot:          snapshot,
+		us:                unionstore.NewUnionStore(snapshot),
+		store:             store,
+		startTS:           startTS,
+		startTime:         time.Now(),
+		valid:             true,
+		vars:              tikv.DefaultVars,
+		scope:             options.TxnScope,
+		enableAsyncCommit: cfg.EnableAsyncCommit,
+		enable1PC:         cfg.Enable1PC,
 	}
 	return newTiKVTxn, nil
 }
