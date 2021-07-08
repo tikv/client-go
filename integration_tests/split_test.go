@@ -42,8 +42,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/tidb/store/mockstore/mockcopr"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/mockstore/cluster"
-	"github.com/tikv/client-go/v2/mockstore/mocktikv"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 )
@@ -54,27 +53,19 @@ func TestSplit(t *testing.T) {
 
 type testSplitSuite struct {
 	suite.Suite
-	cluster cluster.Cluster
+	cluster testutils.Cluster
 	store   tikv.StoreProbe
 	bo      *tikv.Backoffer
 }
 
 func (s *testSplitSuite) SetupTest() {
-	client, cluster, pdClient, err := mocktikv.NewTiKVAndPDClient("", mockcopr.NewCoprRPCHandler())
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
 	s.Require().Nil(err)
-	mocktikv.BootstrapWithSingleStore(cluster)
+	testutils.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
 	s.Require().Nil(err)
 
-	// TODO: make this possible
-	// store, err := mockstore.NewMockStore(
-	// 	mockstore.WithClusterInspector(func(c cluster.Cluster) {
-	// 		mockstore.BootstrapWithSingleStore(c)
-	// 		s.cluster = c
-	// 	}),
-	// )
-	// c.Assert(err, IsNil)
 	s.store = tikv.StoreProbe{KVStore: store}
 	s.bo = tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 }

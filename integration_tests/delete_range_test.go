@@ -41,8 +41,7 @@ import (
 
 	"github.com/pingcap/tidb/store/mockstore/mockcopr"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/mockstore/cluster"
-	"github.com/tikv/client-go/v2/mockstore/mocktikv"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -52,14 +51,14 @@ func TestDeleteRange(t *testing.T) {
 
 type testDeleteRangeSuite struct {
 	suite.Suite
-	cluster cluster.Cluster
+	cluster testutils.Cluster
 	store   *tikv.KVStore
 }
 
 func (s *testDeleteRangeSuite) SetupTest() {
-	client, cluster, pdClient, err := mocktikv.NewTiKVAndPDClient("", mockcopr.NewCoprRPCHandler())
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
 	s.Require().Nil(err)
-	mocktikv.BootstrapWithMultiRegions(cluster, []byte("b"), []byte("c"), []byte("d"))
+	testutils.BootstrapWithMultiRegions(cluster, []byte("b"), []byte("c"), []byte("d"))
 	s.cluster = cluster
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
 	s.Require().Nil(err)
