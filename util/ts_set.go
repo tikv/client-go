@@ -40,17 +40,18 @@ type TSSet struct {
 	m map[uint64]struct{}
 }
 
-// NewTSSet creates a set to store timestamps.
-func NewTSSet(capacity int) *TSSet {
-	return &TSSet{
-		m: make(map[uint64]struct{}, capacity),
-	}
-}
-
 // Put puts timestamps into the map.
 func (s *TSSet) Put(tss ...uint64) {
 	s.Lock()
 	defer s.Unlock()
+
+	// Lazy initialization..
+	// Most of the time, there is no transaction lock conflict.
+	// So allocate this in advance is unnecessary and bad for performance.
+	if s.m == nil {
+		s.m = make(map[uint64]struct{}, 5)
+	}
+
 	for _, ts := range tss {
 		s.m[ts] = struct{}{}
 	}
@@ -60,7 +61,7 @@ func (s *TSSet) Put(tss ...uint64) {
 func (s *TSSet) GetAll() []uint64 {
 	s.RLock()
 	defer s.RUnlock()
-	if len(s.m) == 0 {
+	if s.m == nil || len(s.m) == 0 {
 		return nil
 	}
 	ret := make([]uint64, 0, len(s.m))
