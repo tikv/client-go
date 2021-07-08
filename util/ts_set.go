@@ -61,7 +61,7 @@ func (s *TSSet) Put(tss ...uint64) {
 func (s *TSSet) GetAll() []uint64 {
 	s.RLock()
 	defer s.RUnlock()
-	if s.m == nil || len(s.m) == 0 {
+	if len(s.m) == 0 {
 		return nil
 	}
 	ret := make([]uint64, 0, len(s.m))
