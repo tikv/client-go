@@ -35,7 +35,7 @@ package config
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"os"
+	"io/ioutil"
 
 	"github.com/pingcap/errors"
 )
@@ -64,7 +64,7 @@ func (s *Security) ToTLSConfig() (tlsConfig *tls.Config, err error) {
 		certPool := x509.NewCertPool()
 		// Create a certificate pool from the certificate authority
 		var ca []byte
-		ca, err = os.ReadFile(s.ClusterSSLCA)
+		ca, err = ioutil.ReadFile(s.ClusterSSLCA)
 		if err != nil {
 			err = errors.Errorf("could not read ca certificate: %s", err)
 			return
