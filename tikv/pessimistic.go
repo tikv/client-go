@@ -89,6 +89,13 @@ func (actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observe
 }
 
 func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+	if c.sessionID > 0 {
+		if batch.isPrimary {
+			util.EvalFailpoint("pessimisticLockPrimary")
+		} else {
+			util.EvalFailpoint("pessimisticLockSecondary")
+		}
+	}
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	for i := 0; i < m.Len(); i++ {
