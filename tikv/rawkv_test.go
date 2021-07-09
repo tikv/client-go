@@ -38,9 +38,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/mockstore/mocktikv"
 )
 
 func TestRawKV(t *testing.T) {
