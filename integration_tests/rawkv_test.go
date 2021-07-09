@@ -40,7 +40,7 @@ import (
 
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/mockstore/cluster"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -50,7 +50,7 @@ func TestRawKV(t *testing.T) {
 
 type testRawKVSuite struct {
 	suite.Suite
-	cluster cluster.Cluster
+	cluster testutils.Cluster
 	client  tikv.RawKVClientProbe
 	bo      *tikv.Backoffer
 }
