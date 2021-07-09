@@ -36,12 +36,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"testing"
-
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/mockstore/cluster"
 	"github.com/tikv/client-go/v2/tikv"
+	"testing"
 )
 
 func TestRawKV(t *testing.T) {
@@ -105,7 +104,7 @@ func (s *testRawKVSuite) mustBatchGet(keys, values [][]byte) {
 }
 
 func (s *testRawKVSuite) mustPut(key, value []byte) {
-	err := s.client.Put(key, value)
+	err := s.client.Put(key, value, 0)
 	s.Nil(err)
 }
 
@@ -205,7 +204,7 @@ func (s *testRawKVSuite) TestSimple() {
 	s.mustGet([]byte("key"), []byte("value"))
 	s.mustDelete([]byte("key"))
 	s.mustNotExist([]byte("key"))
-	err := s.client.Put([]byte("key"), []byte(""))
+	err := s.client.Put([]byte("key"), []byte(""), 0)
 	s.NotNil(err)
 }
 

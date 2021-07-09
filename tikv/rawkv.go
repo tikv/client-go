@@ -166,7 +166,7 @@ func (c *RawKVClient) BatchGet(keys [][]byte) ([][]byte, error) {
 }
 
 // Put stores a key-value pair to TiKV.
-func (c *RawKVClient) Put(key, value []byte) error {
+func (c *RawKVClient) Put(key, value []byte, ttl uint64) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds()) }()
 	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
@@ -179,6 +179,7 @@ func (c *RawKVClient) Put(key, value []byte) error {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   key,
 		Value: value,
+		Ttl:   ttl,
 	})
 	resp, _, err := c.sendReq(key, req, false)
 	if err != nil {

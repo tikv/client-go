@@ -91,7 +91,7 @@ func (s *testRawkvSuite) TestReplaceAddrWithNewStore() {
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(testKey, testValue, 0)
 	s.Nil(err)
 
 	// make store2 using store1's addr and store1 offline
@@ -120,7 +120,7 @@ func (s *testRawkvSuite) TestUpdateStoreAddr() {
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(testKey, testValue,0)
 	s.Nil(err)
 	// tikv-server reports `StoreNotMatch` And retry
 	store1Addr := s.storeAddr(s.store1)
@@ -145,7 +145,7 @@ func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately() {
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(testKey, testValue,0)
 	s.Nil(err)
 
 	// pre-load store2's address into cache via follower-read.
@@ -181,7 +181,7 @@ func (s *testRawkvSuite) TestReplaceStore() {
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(testKey, testValue,0)
 	s.Nil(err)
 
 	s.cluster.MarkTombstone(s.store1)
@@ -192,6 +192,6 @@ func (s *testRawkvSuite) TestReplaceStore() {
 	s.cluster.RemovePeer(s.region1, s.peer1)
 	s.cluster.ChangeLeader(s.region1, peer3)
 
-	err = client.Put(testKey, testValue)
+	err = client.Put(testKey, testValue,0)
 	s.Nil(err)
 }

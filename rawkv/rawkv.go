@@ -80,7 +80,14 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) 
 // Put stores a key-value pair to TiKV.
 // TODO: use ctx after moving all rawkv code out.
 func (c *Client) Put(ctx context.Context, key, value []byte) error {
-	return c.client.Put(key, value)
+	return c.client.Put(key, value, 0)
+}
+
+// PutWithTTL stores a key-value pair to TiKV with a time-to-live duration.
+// Option `storage.enable-ttl` should be set to `true` in order to use this feature.
+// TODO: use ctx after moving all rawkv code out.
+func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64) error {
+	return c.client.Put(key, value, ttl)
 }
 
 // BatchPut stores key-value pairs to TiKV.
