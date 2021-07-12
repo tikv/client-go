@@ -40,6 +40,7 @@ import (
 
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/rawkv"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -51,7 +52,7 @@ func TestRawKV(t *testing.T) {
 type testRawKVSuite struct {
 	suite.Suite
 	cluster testutils.Cluster
-	client  tikv.RawKVClientProbe
+	client  rawkv.ClientProbe
 	bo      *tikv.Backoffer
 }
 
@@ -60,7 +61,7 @@ func (s *testRawKVSuite) SetupTest() {
 	s.Require().Nil(err)
 	unistore.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
-	s.client = tikv.RawKVClientProbe{RawKVClient: &tikv.RawKVClient{}}
+	s.client = rawkv.ClientProbe{Client: &rawkv.Client{}}
 	s.client.SetPDClient(pdClient)
 	s.client.SetRegionCache(tikv.NewRegionCache(pdClient))
 	s.client.SetRPCClient(client)
@@ -72,13 +73,13 @@ func (s *testRawKVSuite) TearDownTest() {
 }
 
 func (s *testRawKVSuite) mustNotExist(key []byte) {
-	v, err := s.client.Get(key)
+	v, err := s.client.Get(context.Background(), key)
 	s.Nil(err)
 	s.Nil(v)
 }
 
 func (s *testRawKVSuite) mustBatchNotExist(keys [][]byte) {
-	values, err := s.client.BatchGet(keys)
+	values, err := s.client.BatchGet(context.Background(), keys)
 	s.Nil(err)
 	s.NotNil(values)
 	s.Equal(len(keys), len(values))
@@ -88,14 +89,14 @@ func (s *testRawKVSuite) mustBatchNotExist(keys [][]byte) {
 }
 
 func (s *testRawKVSuite) mustGet(key, value []byte) {
-	v, err := s.client.Get(key)
+	v, err := s.client.Get(context.Background(), key)
 	s.Nil(err)
 	s.NotNil(v)
 	s.Equal(v, value)
 }
 
 func (s *testRawKVSuite) mustBatchGet(keys, values [][]byte) {
-	checkValues, err := s.client.BatchGet(keys)
+	checkValues, err := s.client.BatchGet(context.Background(), keys)
 	s.Nil(err)
 	s.NotNil(checkValues)
 	s.Equal(len(keys), len(checkValues))
@@ -105,27 +106,27 @@ func (s *testRawKVSuite) mustBatchGet(keys, values [][]byte) {
 }
 
 func (s *testRawKVSuite) mustPut(key, value []byte) {
-	err := s.client.Put(key, value)
+	err := s.client.Put(context.Background(), key, value)
 	s.Nil(err)
 }
 
 func (s *testRawKVSuite) mustBatchPut(keys, values [][]byte) {
-	err := s.client.BatchPut(keys, values)
+	err := s.client.BatchPut(context.Background(), keys, values)
 	s.Nil(err)
 }
 
 func (s *testRawKVSuite) mustDelete(key []byte) {
-	err := s.client.Delete(key)
+	err := s.client.Delete(context.Background(), key)
 	s.Nil(err)
 }
 
 func (s *testRawKVSuite) mustBatchDelete(keys [][]byte) {
-	err := s.client.BatchDelete(keys)
+	err := s.client.BatchDelete(context.Background(), keys)
 	s.Nil(err)
 }
 
 func (s *testRawKVSuite) mustScan(startKey string, limit int, expect ...string) {
-	keys, values, err := s.client.Scan([]byte(startKey), nil, limit)
+	keys, values, err := s.client.Scan(context.Background(), []byte(startKey), nil, limit)
 	s.Nil(err)
 	s.Equal(len(keys)*2, len(expect))
 	for i := range keys {
@@ -135,7 +136,7 @@ func (s *testRawKVSuite) mustScan(startKey string, limit int, expect ...string) 
 }
 
 func (s *testRawKVSuite) mustScanRange(startKey string, endKey string, limit int, expect ...string) {
-	keys, values, err := s.client.Scan([]byte(startKey), []byte(endKey), limit)
+	keys, values, err := s.client.Scan(context.Background(), []byte(startKey), []byte(endKey), limit)
 	s.Nil(err)
 	s.Equal(len(keys)*2, len(expect))
 	for i := range keys {
@@ -145,7 +146,7 @@ func (s *testRawKVSuite) mustScanRange(startKey string, endKey string, limit int
 }
 
 func (s *testRawKVSuite) mustReverseScan(startKey []byte, limit int, expect ...string) {
-	keys, values, err := s.client.ReverseScan(startKey, nil, limit)
+	keys, values, err := s.client.ReverseScan(context.Background(), startKey, nil, limit)
 	s.Nil(err)
 	s.Equal(len(keys)*2, len(expect))
 	for i := range keys {
@@ -155,7 +156,7 @@ func (s *testRawKVSuite) mustReverseScan(startKey []byte, limit int, expect ...s
 }
 
 func (s *testRawKVSuite) mustReverseScanRange(startKey, endKey []byte, limit int, expect ...string) {
-	keys, values, err := s.client.ReverseScan(startKey, endKey, limit)
+	keys, values, err := s.client.ReverseScan(context.Background(), startKey, endKey, limit)
 	s.Nil(err)
 	s.Equal(len(keys)*2, len(expect))
 	for i := range keys {
@@ -165,7 +166,7 @@ func (s *testRawKVSuite) mustReverseScanRange(startKey, endKey []byte, limit int
 }
 
 func (s *testRawKVSuite) mustDeleteRange(startKey, endKey []byte, expected map[string]string) {
-	err := s.client.DeleteRange(startKey, endKey)
+	err := s.client.DeleteRange(context.Background(), startKey, endKey)
 	s.Nil(err)
 
 	for keyStr := range expected {
@@ -179,7 +180,7 @@ func (s *testRawKVSuite) mustDeleteRange(startKey, endKey []byte, expected map[s
 }
 
 func (s *testRawKVSuite) checkData(expected map[string]string) {
-	keys, values, err := s.client.Scan([]byte(""), nil, len(expected)+1)
+	keys, values, err := s.client.Scan(context.Background(), []byte(""), nil, len(expected)+1)
 	s.Nil(err)
 
 	s.Equal(len(expected), len(keys))
@@ -205,7 +206,7 @@ func (s *testRawKVSuite) TestSimple() {
 	s.mustGet([]byte("key"), []byte("value"))
 	s.mustDelete([]byte("key"))
 	s.mustNotExist([]byte("key"))
-	err := s.client.Put([]byte("key"), []byte(""))
+	err := s.client.Put(context.Background(), []byte("key"), []byte(""))
 	s.NotNil(err)
 }
 
@@ -214,7 +215,7 @@ func (s *testRawKVSuite) TestRawBatch() {
 	size := 0
 	var testKeys [][]byte
 	var testValues [][]byte
-	for i := 0; size/(tikv.ConfigProbe{}.GetRawBatchPutSize()) < 4; i++ {
+	for i := 0; size/(rawkv.ConfigProbe{}.GetRawBatchPutSize()) < 4; i++ {
 		key := fmt.Sprint("key", i)
 		size += len(key)
 		testKeys = append(testKeys, []byte(key))
