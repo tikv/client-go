@@ -40,7 +40,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/util"
 )
 
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()
@@ -61,8 +60,6 @@ func (s *testScanSuite) SetupSuite() {
 	s.store = NewTestStore(s.T())
 	s.recordPrefix = []byte("prefix")
 	s.rowNums = append(s.rowNums, 1, scanBatchSize, scanBatchSize+1, scanBatchSize*3)
-	// Avoid using async commit logic.
-	s.ctx = context.WithValue(context.Background(), util.SessionID, uint64(0))
 }
 
 func (s *testScanSuite) TearDownSuite() {
