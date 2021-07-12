@@ -89,6 +89,11 @@ func (actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observe
 }
 
 func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+	logutil.BgLogger().Info("****** actionPessimisticLock.handleSingleBatch",
+		zap.Uint64("startTS", c.startTS),
+		zap.Int("keys", batch.mutations.Len()),
+		zap.String("key", hex.EncodeToString(batch.mutations.GetKey(0))),
+		zap.Bool("isPrimary", batch.isPrimary))
 	if c.sessionID > 0 {
 		if batch.isPrimary {
 			util.EvalFailpoint("pessimisticLockPrimary")
