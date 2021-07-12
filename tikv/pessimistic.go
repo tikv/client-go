@@ -101,6 +101,11 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			util.EvalFailpoint("pessimisticLockSecondary")
 		}
 	}
+	logutil.BgLogger().Info("****** actionPessimisticLock.handleSingleBatch start",
+		zap.Uint64("startTS", c.startTS),
+		zap.Int("keys", batch.mutations.Len()),
+		zap.String("key", hex.EncodeToString(batch.mutations.GetKey(0))),
+		zap.Bool("isPrimary", batch.isPrimary))
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	for i := 0; i < m.Len(); i++ {
