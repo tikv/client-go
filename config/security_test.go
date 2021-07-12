@@ -33,6 +33,7 @@
 package config
 
 import (
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,8 +48,8 @@ func TestTLSConfig(t *testing.T) {
 	keyFile := filepath.Join(filepath.Dir(localFile), "key.pem")
 	perm := os.FileMode(0666)
 
-	assert.Nil(t, os.WriteFile(certFile, []byte(cert), perm))
-	assert.Nil(t, os.WriteFile(keyFile, []byte(key), perm))
+	assert.Nil(t, ioutil.WriteFile(certFile, []byte(cert), perm))
+	assert.Nil(t, ioutil.WriteFile(keyFile, []byte(key), perm))
 
 	security := Security{
 		ClusterSSLCA:   certFile,
