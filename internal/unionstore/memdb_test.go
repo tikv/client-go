@@ -718,7 +718,6 @@ func TestNewIterator(t *testing.T) {
 // FnKeyCmp is the function for iterator the keys
 type FnKeyCmp func(key []byte) bool
 
-// TODO: remove it since it is duplicated with kv.NextUtil
 // NextUntil applies FnKeyCmp to each entry of the iterator until meets some condition.
 // It will stop when fn returns true, or iterator is invalid or an error occurs.
 func NextUntil(it Iterator, fn FnKeyCmp) error {

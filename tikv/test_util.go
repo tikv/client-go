@@ -35,9 +35,7 @@ package tikv
 import (
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/failpoint"
 	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -63,20 +61,4 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 
 	tikvStore.mock = true
 	return tikvStore, errors.Trace(err)
-}
-
-// MockCommitErrorEnable exports for gofail testing.
-func MockCommitErrorEnable() {
-	failpoint.Enable(`tikvclient/mockCommitErrorOpt`, "return(true)")
-}
-
-// MockCommitErrorDisable exports for gofail testing.
-func MockCommitErrorDisable() {
-	failpoint.Disable(`tikvclient/mockCommitErrorOpt`)
-}
-
-// IsMockCommitErrorEnable exports for gofail testing.
-func IsMockCommitErrorEnable() bool {
-	_, err := util.EvalFailpoint(`mockCommitErrorOpt`)
-	return err == nil
 }
