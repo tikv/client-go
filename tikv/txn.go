@@ -514,8 +514,27 @@ func (txn *KVTxn) onCommitted(err error) {
 	}
 }
 
-// LockKeys tries to lock the entries with the keys in KV store.
+// LockKeysWithWaitTime tries to lock the entries with the keys in KV store.
 // lockWaitTime in ms, except that kv.LockAlwaysWait(0) means always wait lock, kv.LockNowait(-1) means nowait lock
+func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, keysInput ...[]byte) (err error) {
+	forUpdateTs := txn.startTS
+	if txn.IsPessimistic() {
+		bo := NewBackofferWithVars(context.Background(), tsoMaxBackoff, nil)
+		forUpdateTs, err = txn.store.getTimestampWithRetry(bo, txn.scope)
+		if err != nil {
+			return err
+		}
+	}
+	lockCtx := tikv.LockCtx{
+		ForUpdateTS:   forUpdateTs,
+		LockWaitTime:  lockWaitTime,
+		WaitStartTime: time.Now(),
+	}
+	return txn.LockKeys(ctx, &lockCtx, keysInput...)
+}
+
+// LockKeys tries to lock the entries with the keys in KV store.
+// lockCtx is the context for lock, lockCtx.lockWaitTime in ms, except that kv.LockAlwaysWait(0) means always wait lock, kv.LockNowait(-1) means nowait lock
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
 	// Exclude keys that are already locked.
 	var err error
