@@ -284,7 +284,8 @@ func (txn *KVTxn) SetEnableAsyncCommit(b bool) {
 	txn.enableAsyncCommit = b
 }
 
-// SetEnable1PC indicates if the transaction will try to use 1 phase commit.
+// SetEnable1PC indicates that the transaction will try to use 1 phase commit(which should be faster).
+// 1PC does not work if the keys to update in the current txn are in multiple regions.
 func (txn *KVTxn) SetEnable1PC(b bool) {
 	txn.enable1PC = b
 }
