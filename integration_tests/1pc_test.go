@@ -75,7 +75,7 @@ func (s *testOnePCSuite) Test1PC() {
 	// ttlManager is not used for 1PC.
 	s.True(txn.GetCommitter().IsTTLUninitialized())
 
-	// 1PC doesn't work if system variable not set
+	// 1PC doesn't work if 1PC option is not set
 
 	k2 := []byte("k2")
 	v2 := []byte("v2")
