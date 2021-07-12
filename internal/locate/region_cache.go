@@ -1603,7 +1603,7 @@ func (c *RegionCache) PDClient() pd.Client {
 	return c.pdClient
 }
 
-// GetTiFlashStoreAddrs returns addresses of all tiflash nodes.
+// GetTiFlashStores returns the information of all tiflash nodes.
 func (c *RegionCache) GetTiFlashStores() []*Store {
 	c.storeMu.RLock()
 	defer c.storeMu.RUnlock()

@@ -396,6 +396,7 @@ func (req *Request) DispatchMPPTask() *mpp.DispatchTaskRequest {
 	return req.Req.(*mpp.DispatchTaskRequest)
 }
 
+// IsMPPAlive returns IsAlive request in request.
 func (req *Request) IsMPPAlive() *mpp.IsAliveRequest {
 	return req.Req.(*mpp.IsAliveRequest)
 }
