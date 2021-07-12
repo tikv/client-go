@@ -74,6 +74,6 @@ func main() {
 	util.SetSessionID(ctx, uint64(10001))
 	err = txn.Commit(ctx)
 	errMustBeNil(err)
-	fmt.Println("commit success!")
+	fmt.Println("Example for async commit: commit success!")
 
 }
