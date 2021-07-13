@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package rawkv
 
 import (
 	"context"
@@ -38,6 +38,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
@@ -83,15 +84,15 @@ func (s *testRawkvSuite) TestReplaceAddrWithNewStore() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
-	client := &RawKVClient{
+	client := &Client{
 		clusterID:   0,
-		regionCache: NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
 		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
 	}
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(context.Background(), testKey, testValue)
 	s.Nil(err)
 
 	// make store2 using store1's addr and store1 offline
@@ -102,7 +103,7 @@ func (s *testRawkvSuite) TestReplaceAddrWithNewStore() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
-	getVal, err := client.Get(testKey)
+	getVal, err := client.Get(context.Background(), testKey)
 
 	s.Nil(err)
 	s.Equal(getVal, testValue)
@@ -112,22 +113,22 @@ func (s *testRawkvSuite) TestUpdateStoreAddr() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
-	client := &RawKVClient{
+	client := &Client{
 		clusterID:   0,
-		regionCache: NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
 		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
 	}
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(context.Background(), testKey, testValue)
 	s.Nil(err)
 	// tikv-server reports `StoreNotMatch` And retry
 	store1Addr := s.storeAddr(s.store1)
 	s.cluster.UpdateStoreAddr(s.store1, s.storeAddr(s.store2))
 	s.cluster.UpdateStoreAddr(s.store2, store1Addr)
 
-	getVal, err := client.Get(testKey)
+	getVal, err := client.Get(context.Background(), testKey)
 
 	s.Nil(err)
 	s.Equal(getVal, testValue)
@@ -137,15 +138,15 @@ func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
-	client := &RawKVClient{
+	client := &Client{
 		clusterID:   0,
-		regionCache: NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
 		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
 	}
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(context.Background(), testKey, testValue)
 	s.Nil(err)
 
 	// pre-load store2's address into cache via follower-read.
@@ -164,7 +165,7 @@ func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
-	getVal, err := client.Get(testKey)
+	getVal, err := client.Get(context.Background(), testKey)
 	s.Nil(err)
 	s.Equal(getVal, testValue)
 }
@@ -173,15 +174,15 @@ func (s *testRawkvSuite) TestReplaceStore() {
 	mvccStore := mocktikv.MustNewMVCCStore()
 	defer mvccStore.Close()
 
-	client := &RawKVClient{
+	client := &Client{
 		clusterID:   0,
-		regionCache: NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
 		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
 	}
 	defer client.Close()
 	testKey := []byte("test_key")
 	testValue := []byte("test_value")
-	err := client.Put(testKey, testValue)
+	err := client.Put(context.Background(), testKey, testValue)
 	s.Nil(err)
 
 	s.cluster.MarkTombstone(s.store1)
@@ -192,6 +193,6 @@ func (s *testRawkvSuite) TestReplaceStore() {
 	s.cluster.RemovePeer(s.region1, s.peer1)
 	s.cluster.ChangeLeader(s.region1, peer3)
 
-	err = client.Put(testKey, testValue)
+	err = client.Put(context.Background(), testKey, testValue)
 	s.Nil(err)
 }
