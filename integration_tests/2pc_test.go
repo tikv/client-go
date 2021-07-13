@@ -1269,7 +1269,6 @@ func (s *testCommitterSuite) TestAsyncCommit() {
 
 	committer, err := txn1.NewCommitter(0)
 	s.Nil(err)
-	committer.SetSessionID(1)
 	committer.SetMinCommitTS(txn1.StartTS() + 10)
 	err = committer.Execute(ctx)
 	s.Nil(err)
