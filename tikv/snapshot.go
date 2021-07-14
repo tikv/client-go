@@ -163,6 +163,8 @@ func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
 	s.mu.Lock()
 	s.mu.cached = nil
 	s.mu.Unlock()
+	// And also remove the minCommitTS pushed information.
+	s.resolvedLocks = util.TSSet{}
 }
 
 // BatchGet gets all the keys' value from kv-server and returns a map contains key/value pairs.
