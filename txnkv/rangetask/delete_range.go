@@ -111,9 +111,9 @@ func (t *DeleteRangeTask) Execute(ctx context.Context) error {
 const deleteRangeOneRegionMaxBackoff = 100000
 
 // Execute performs the delete range operation.
-func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (RangeTaskStat, error) {
+func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (TaskStat, error) {
 	startKey, rangeEndKey := r.StartKey, r.EndKey
-	var stat RangeTaskStat
+	var stat TaskStat
 	for {
 		select {
 		case <-ctx.Done():

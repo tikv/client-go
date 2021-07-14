@@ -52,7 +52,7 @@ func (s *KVStore) GC(ctx context.Context, safepoint uint64) (newSafePoint uint64
 }
 
 func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrency int) error {
-	handler := func(ctx context.Context, r kv.KeyRange) (rangetask.RangeTaskStat, error) {
+	handler := func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		return s.resolveLocksForRange(ctx, safePoint, r.StartKey, r.EndKey)
 	}
 
@@ -68,12 +68,12 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 // We don't want gc to sweep out the cached info belong to other processes, like coprocessor.
 const gcScanLockLimit = ResolvedCacheSize / 2
 
-func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, startKey []byte, endKey []byte) (rangetask.RangeTaskStat, error) {
+func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, startKey []byte, endKey []byte) (rangetask.TaskStat, error) {
 	// for scan lock request, we must return all locks even if they are generated
 	// by the same transaction. because gc worker need to make sure all locks have been
 	// cleaned.
 
-	var stat rangetask.RangeTaskStat
+	var stat rangetask.TaskStat
 	key := startKey
 	bo := NewGcResolveLockMaxBackoffer(ctx)
 	for {

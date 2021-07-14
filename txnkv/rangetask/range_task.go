@@ -55,14 +55,14 @@ const (
 	lblFailedRegions    = "failed-regions"
 )
 
-// RangeTaskRunner splits a range into many ranges to process concurrently, and convenient to send requests to all
+// Runner splits a range into many ranges to process concurrently, and convenient to send requests to all
 // regions in the range. Because of merging and splitting, it's possible that multiple requests for disjoint ranges are
 // sent to the same region.
-type RangeTaskRunner struct {
+type Runner struct {
 	name            string
 	store           storage
 	concurrency     int
-	handler         RangeTaskHandler
+	handler         TaskHandler
 	statLogInterval time.Duration
 	regionsPerTask  int
 
@@ -70,16 +70,16 @@ type RangeTaskRunner struct {
 	failedRegions    int32
 }
 
-// RangeTaskStat is used to count Regions that completed or failed to do the task.
-type RangeTaskStat struct {
+// TaskStat is used to count Regions that completed or failed to do the task.
+type TaskStat struct {
 	CompletedRegions int
 	FailedRegions    int
 }
 
-// RangeTaskHandler is the type of functions that processes a task of a key range.
+// TaskHandler is the type of functions that processes a task of a key range.
 // The function should calculate Regions that succeeded or failed to the task.
 // Returning error from the handler means the error caused the whole task should be stopped.
-type RangeTaskHandler = func(ctx context.Context, r kv.KeyRange) (RangeTaskStat, error)
+type TaskHandler = func(ctx context.Context, r kv.KeyRange) (TaskStat, error)
 
 // NewRangeTaskRunner creates a RangeTaskRunner.
 //
@@ -90,9 +90,9 @@ func NewRangeTaskRunner(
 	name string,
 	store storage,
 	concurrency int,
-	handler RangeTaskHandler,
-) *RangeTaskRunner {
-	return &RangeTaskRunner{
+	handler TaskHandler,
+) *Runner {
+	return &Runner{
 		name:            name,
 		store:           store,
 		concurrency:     concurrency,
@@ -104,7 +104,7 @@ func NewRangeTaskRunner(
 
 // SetRegionsPerTask sets how many regions is in a divided task. Since regions may split and merge, it's possible that
 // a sub task contains not exactly specified number of regions.
-func (s *RangeTaskRunner) SetRegionsPerTask(regionsPerTask int) {
+func (s *Runner) SetRegionsPerTask(regionsPerTask int) {
 	if regionsPerTask < 1 {
 		panic("RangeTaskRunner: regionsPerTask should be at least 1")
 	}
@@ -120,7 +120,7 @@ func NewLocateRegionBackoffer(ctx context.Context) *retry.Backoffer {
 
 // RunOnRange runs the task on the given range.
 // Empty startKey or endKey means unbounded.
-func (s *RangeTaskRunner) RunOnRange(ctx context.Context, startKey, endKey []byte) error {
+func (s *Runner) RunOnRange(ctx context.Context, startKey, endKey []byte) error {
 	s.completedRegions = 0
 	metrics.TiKVRangeTaskStats.WithLabelValues(s.name, lblCompletedRegions).Set(0)
 
@@ -249,7 +249,7 @@ Loop:
 }
 
 // createWorker creates a worker that can process tasks from the given channel.
-func (s *RangeTaskRunner) createWorker(taskCh chan *kv.KeyRange, wg *sync.WaitGroup) *rangeTaskWorker {
+func (s *Runner) createWorker(taskCh chan *kv.KeyRange, wg *sync.WaitGroup) *rangeTaskWorker {
 	return &rangeTaskWorker{
 		name:    s.name,
 		store:   s.store,
@@ -263,12 +263,12 @@ func (s *RangeTaskRunner) createWorker(taskCh chan *kv.KeyRange, wg *sync.WaitGr
 }
 
 // CompletedRegions returns how many regions has been sent requests.
-func (s *RangeTaskRunner) CompletedRegions() int {
+func (s *Runner) CompletedRegions() int {
 	return int(atomic.LoadInt32(&s.completedRegions))
 }
 
 // FailedRegions returns how many regions has failed to do the task.
-func (s *RangeTaskRunner) FailedRegions() int {
+func (s *Runner) FailedRegions() int {
 	return int(atomic.LoadInt32(&s.failedRegions))
 }
 
@@ -276,7 +276,7 @@ func (s *RangeTaskRunner) FailedRegions() int {
 type rangeTaskWorker struct {
 	name    string
 	store   storage
-	handler RangeTaskHandler
+	handler TaskHandler
 	taskCh  chan *kv.KeyRange
 	wg      *sync.WaitGroup
 
