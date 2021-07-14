@@ -258,3 +258,47 @@ func (s *testSnapshotFailSuite) TestRetryPointGetResolveTS() {
 	s.Nil(err)
 	s.Equal(v, []byte("v2"))
 }
+
+func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
+	x := []byte("x_key_TestResetSnapshotTS")
+	y := []byte("y_key_TestResetSnapshotTS")
+	ctx := context.Background()
+
+	txn, err := s.store.Begin()
+	s.Nil(err)
+	s.Nil(txn.Set(x, []byte("x0")))
+	s.Nil(txn.Set(y, []byte("y0")))
+	err = txn.Commit(ctx)
+	s.Nil(err)
+
+	txn, err = s.store.Begin()
+	s.Nil(err)
+	s.Nil(txn.Set(x, []byte("x1")))
+	s.Nil(txn.Set(y, []byte("y1")))
+	committer, err := txn.NewCommitter(0)
+	s.Nil(err)
+	committer.SetLockTTL(3000)
+	s.Nil(committer.PrewriteAllMutations(ctx))
+
+	txn2, err := s.store.Begin()
+	val, err := txn2.Get(ctx, y)
+	s.Nil(err)
+	s.Equal(val, []byte("y0"))
+
+	// Only commit the primary key x
+	s.Nil(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", `return`))
+	s.Nil(failpoint.Enable("tikvclient/beforeCommitSecondaries", `return("skip")`))
+	committer.SetCommitTS(txn2.StartTS() + 1)
+	err = committer.CommitMutations(ctx)
+	s.Nil(err)
+	s.Nil(failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit"))
+	s.Nil(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
+
+	// After reset setting snapshotTS, the resolvedLocks should be reset.
+	// So when it encounters the locked y, it must check the primary key instead of
+	// just ignore the lock.
+	txn2.GetSnapshot().SetSnapshotTS(committer.GetCommitTS())
+	val, err = txn2.Get(ctx, y)
+	s.Nil(err)
+	s.Equal(val, []byte("y1"))
+}
