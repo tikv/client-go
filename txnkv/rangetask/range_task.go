@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package rangetask
 
 import (
 	"bytes"
@@ -60,7 +60,7 @@ const (
 // sent to the same region.
 type RangeTaskRunner struct {
 	name            string
-	store           Storage
+	store           storage
 	concurrency     int
 	handler         RangeTaskHandler
 	statLogInterval time.Duration
@@ -88,7 +88,7 @@ type RangeTaskHandler = func(ctx context.Context, r kv.KeyRange) (RangeTaskStat,
 // will be canceled.
 func NewRangeTaskRunner(
 	name string,
-	store Storage,
+	store storage,
 	concurrency int,
 	handler RangeTaskHandler,
 ) *RangeTaskRunner {
@@ -112,6 +112,11 @@ func (s *RangeTaskRunner) SetRegionsPerTask(regionsPerTask int) {
 }
 
 const locateRegionMaxBackoff = 20000
+
+// NewLocateRegionBackoffer creates the backoofer for LocateRegion request.
+func NewLocateRegionBackoffer(ctx context.Context) *retry.Backoffer {
+	return retry.NewBackofferWithVars(ctx, locateRegionMaxBackoff, nil)
+}
 
 // RunOnRange runs the task on the given range.
 // Empty startKey or endKey means unbounded.
@@ -179,7 +184,7 @@ Loop:
 		default:
 		}
 
-		bo := retry.NewBackofferWithVars(ctx, locateRegionMaxBackoff, nil)
+		bo := NewLocateRegionBackoffer(ctx)
 
 		rangeEndKey, err := s.store.GetRegionCache().BatchLoadRegionsFromKey(bo, key, s.regionsPerTask)
 		if err != nil {
@@ -270,7 +275,7 @@ func (s *RangeTaskRunner) FailedRegions() int {
 // rangeTaskWorker is used by RangeTaskRunner to process tasks concurrently.
 type rangeTaskWorker struct {
 	name    string
-	store   Storage
+	store   storage
 	handler RangeTaskHandler
 	taskCh  chan *kv.KeyRange
 	wg      *sync.WaitGroup

@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -352,7 +353,7 @@ func (s *KVStore) WaitScatterRegionFinish(ctx context.Context, regionID uint64, 
 
 // CheckRegionInScattering uses to check whether scatter region finished.
 func (s *KVStore) CheckRegionInScattering(regionID uint64) (bool, error) {
-	bo := retry.NewBackofferWithVars(context.Background(), locateRegionMaxBackoff, nil)
+	bo := rangetask.NewLocateRegionBackoffer(context.Background())
 	for {
 		resp, err := s.pdClient.GetOperator(context.Background(), regionID)
 		if err == nil && resp != nil {
