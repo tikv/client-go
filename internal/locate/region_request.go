@@ -33,10 +33,10 @@
 package locate
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,14 +127,20 @@ type RPCRuntimeStats struct {
 
 // String implements fmt.Stringer interface.
 func (r *RegionRequestRuntimeStats) String() string {
-	var buf bytes.Buffer
+	var builder strings.Builder
 	for k, v := range r.Stats {
-		if buf.Len() > 0 {
-			buf.WriteByte(',')
+		if builder.Len() > 0 {
+			builder.WriteByte(',')
 		}
-		buf.WriteString(fmt.Sprintf("%s:{num_rpc:%d, total_time:%s}", k.String(), v.Count, util.FormatDuration(time.Duration(v.Consume))))
+		// append string: fmt.Sprintf("%s:{num_rpc:%v, total_time:%s}", k.String(), v.Count, util.FormatDuration(time.Duration(v.Consume))")
+		builder.WriteString(k.String())
+		builder.WriteString(":{num_rpc:")
+		builder.WriteString(strconv.FormatInt(v.Count, 10))
+		builder.WriteString(", total_time:")
+		builder.WriteString(util.FormatDuration(time.Duration(v.Consume)))
+		builder.WriteString("}")
 	}
-	return buf.String()
+	return builder.String()
 }
 
 // Clone returns a copy of itself.
