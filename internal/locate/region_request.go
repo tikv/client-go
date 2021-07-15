@@ -134,7 +134,7 @@ func (r *RegionRequestRuntimeStats) String() string {
 		}
 		builder.WriteString(k.String())
 		builder.WriteString(":{num_rpc:")
-		builder.WriteString(strconv.FormatInt(v.Count,10))
+		builder.WriteString(strconv.FormatInt(v.Count, 10))
 		builder.WriteString(", total_time:")
 		builder.WriteString(util.FormatDuration(time.Duration(v.Consume)))
 		builder.WriteString("}")
