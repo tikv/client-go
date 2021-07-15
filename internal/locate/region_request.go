@@ -132,6 +132,7 @@ func (r *RegionRequestRuntimeStats) String() string {
 		if builder.Len() > 0 {
 			builder.WriteByte(',')
 		}
+		// append string: fmt.Sprintf("%s:{num_rpc:%v, total_time:%s}", k.String(), v.Count, util.FormatDuration(time.Duration(v.Consume))")
 		builder.WriteString(k.String())
 		builder.WriteString(":{num_rpc:")
 		builder.WriteString(strconv.FormatInt(v.Count, 10))
