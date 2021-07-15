@@ -85,19 +85,16 @@ func main() {
 	// delete range
 	// Be careful while using this API. This API doesn't keep recent MVCC versions, but will delete all versions of all keys
 	// in the range immediately. Also notice that frequent invocation to this API may cause performance problems to TiKV.
-	task := tikv.NewDeleteRangeTask(client, []byte("b"), []byte("c0"), 1)
-	err = task.Execute(ctx)
+	completedRegions, err := client.DeleteRange(ctx, []byte("b"), []byte("c0"), 1)
 	panicWhenErrNotNil(err)
-	fmt.Println("Delete Range [b,c0) success, the number of affacted regions: ", task.CompletedRegions())
+	fmt.Println("Delete Range [b,c0) success, the number of affacted regions: ", completedRegions)
 
-	task = tikv.NewDeleteRangeTask(client, []byte("d0"), []byte("d0"), 1)
-	task.Execute(ctx)
+	completedRegions, err = client.DeleteRange(ctx, []byte("d0"), []byte("d0"), 1)
 	panicWhenErrNotNil(err)
-	fmt.Println("Delete Range [d0,d0) success, the number of affacted regions: ", task.CompletedRegions())
+	fmt.Println("Delete Range [d0,d0) success, the number of affacted regions: ", completedRegions)
 
-	task = tikv.NewDeleteRangeTask(client, []byte("a"), []byte("e"), 1)
-	task.Execute(ctx)
+	completedRegions, err = client.DeleteRange(ctx, []byte("a"), []byte("e"), 1)
 	panicWhenErrNotNil(err)
-	fmt.Println("Delete Range [a,e) success, the number of affacted regions: ", task.CompletedRegions())
+	fmt.Println("Delete Range [a,e) success, the number of affacted regions: ", completedRegions)
 
 }

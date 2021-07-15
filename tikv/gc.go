@@ -25,6 +25,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	zap "go.uber.org/zap"
 )
 
@@ -51,11 +52,11 @@ func (s *KVStore) GC(ctx context.Context, safepoint uint64) (newSafePoint uint64
 }
 
 func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrency int) error {
-	handler := func(ctx context.Context, r kv.KeyRange) (RangeTaskStat, error) {
+	handler := func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		return s.resolveLocksForRange(ctx, safePoint, r.StartKey, r.EndKey)
 	}
 
-	runner := NewRangeTaskRunner("resolve-locks-runner", s, concurrency, handler)
+	runner := rangetask.NewRangeTaskRunner("resolve-locks-runner", s, concurrency, handler)
 	// Run resolve lock on the whole TiKV cluster. Empty keys means the range is unbounded.
 	err := runner.RunOnRange(ctx, []byte(""), []byte(""))
 	if err != nil {
@@ -67,12 +68,12 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 // We don't want gc to sweep out the cached info belong to other processes, like coprocessor.
 const gcScanLockLimit = ResolvedCacheSize / 2
 
-func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, startKey []byte, endKey []byte) (RangeTaskStat, error) {
+func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, startKey []byte, endKey []byte) (rangetask.TaskStat, error) {
 	// for scan lock request, we must return all locks even if they are generated
 	// by the same transaction. because gc worker need to make sure all locks have been
 	// cleaned.
 
-	var stat RangeTaskStat
+	var stat rangetask.TaskStat
 	key := startKey
 	bo := NewGcResolveLockMaxBackoffer(ctx)
 	for {

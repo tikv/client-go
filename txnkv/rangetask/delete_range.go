@@ -30,27 +30,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package rangetask
 
 import (
 	"bytes"
 	"context"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
+
+type storage interface {
+	// GetRegionCache gets the RegionCache.
+	GetRegionCache() *locate.RegionCache
+	// SendReq sends a request to TiKV.
+	SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error)
+}
 
 // DeleteRangeTask is used to delete all keys in a range. After
 // performing DeleteRange, it keeps how many ranges it affects and
 // if the task was canceled or not.
 type DeleteRangeTask struct {
 	completedRegions int
-	store            Storage
+	store            storage
 	startKey         []byte
 	endKey           []byte
 	notifyOnly       bool
@@ -60,7 +69,7 @@ type DeleteRangeTask struct {
 // NewDeleteRangeTask creates a DeleteRangeTask. Deleting will be performed when `Execute` method is invoked.
 // Be careful while using this API. This API doesn't keep recent MVCC versions, but will delete all versions of all keys
 // in the range immediately. Also notice that frequent invocation to this API may cause performance problems to TiKV.
-func NewDeleteRangeTask(store Storage, startKey []byte, endKey []byte, concurrency int) *DeleteRangeTask {
+func NewDeleteRangeTask(store storage, startKey []byte, endKey []byte, concurrency int) *DeleteRangeTask {
 	return &DeleteRangeTask{
 		completedRegions: 0,
 		store:            store,
@@ -74,7 +83,7 @@ func NewDeleteRangeTask(store Storage, startKey []byte, endKey []byte, concurren
 // NewNotifyDeleteRangeTask creates a task that sends delete range requests to all regions in the range, but with the
 // flag `notifyOnly` set. TiKV will not actually delete the range after receiving request, but it will be replicated via
 // raft. This is used to notify the involved regions before sending UnsafeDestroyRange requests.
-func NewNotifyDeleteRangeTask(store Storage, startKey []byte, endKey []byte, concurrency int) *DeleteRangeTask {
+func NewNotifyDeleteRangeTask(store storage, startKey []byte, endKey []byte, concurrency int) *DeleteRangeTask {
 	task := NewDeleteRangeTask(store, startKey, endKey, concurrency)
 	task.notifyOnly = true
 	return task
@@ -102,9 +111,9 @@ func (t *DeleteRangeTask) Execute(ctx context.Context) error {
 const deleteRangeOneRegionMaxBackoff = 100000
 
 // Execute performs the delete range operation.
-func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (RangeTaskStat, error) {
+func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (TaskStat, error) {
 	startKey, rangeEndKey := r.StartKey, r.EndKey
-	var stat RangeTaskStat
+	var stat TaskStat
 	for {
 		select {
 		case <-ctx.Done():
