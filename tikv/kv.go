@@ -59,6 +59,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
@@ -281,6 +282,18 @@ func (s *KVStore) Begin() (*KVTxn, error) {
 // BeginWithOption begins a transaction with the given StartTSOption
 func (s *KVStore) BeginWithOption(options StartTSOption) (*KVTxn, error) {
 	return newTiKVTxnWithOptions(s, options)
+}
+
+// DeleteRange delete all versions of all keys in the range[startKey,endKey) immediately.
+// Be careful while using this API. This API doesn't keep recent MVCC versions, but will delete all versions of all keys
+// in the range immediately. Also notice that frequent invocation to this API may cause performance problems to TiKV.
+func (s *KVStore) DeleteRange(ctx context.Context, startKey []byte, endKey []byte, concurrency int) (completedRegions int, err error) {
+	task := rangetask.NewDeleteRangeTask(s, startKey, endKey, concurrency)
+	err = task.Execute(ctx)
+	if err == nil {
+		completedRegions = task.CompletedRegions()
+	}
+	return completedRegions, err
 }
 
 // GetSnapshot gets a snapshot that is able to read any data which data is <= ver.

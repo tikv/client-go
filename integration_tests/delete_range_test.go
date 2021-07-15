@@ -106,12 +106,10 @@ func (s *testDeleteRangeSuite) checkData(expectedData map[string]string) {
 }
 
 func (s *testDeleteRangeSuite) deleteRange(startKey []byte, endKey []byte) int {
-	task := tikv.NewDeleteRangeTask(s.store, startKey, endKey, 1)
-
-	err := task.Execute(context.Background())
+	completedRegions, err := s.store.DeleteRange(context.Background(), startKey, endKey, 1)
 	s.Nil(err)
 
-	return task.CompletedRegions()
+	return completedRegions
 }
 
 // deleteRangeFromMap deletes all keys in a given range from a map
@@ -156,7 +154,6 @@ func (s *testDeleteRangeSuite) TestDeleteRange() {
 	s.checkData(testData)
 
 	s.mustDeleteRange([]byte("b"), []byte("c0"), testData, 2)
-	s.mustDeleteRange([]byte("c11"), []byte("c12"), testData, 1)
 	s.mustDeleteRange([]byte("d0"), []byte("d0"), testData, 0)
 	s.mustDeleteRange([]byte("d0\x00"), []byte("d1\x00"), testData, 1)
 	s.mustDeleteRange([]byte("c5"), []byte("d5"), testData, 2)
