@@ -27,6 +27,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	zap "go.uber.org/zap"
@@ -199,14 +200,14 @@ const unsafeDestroyRangeTimeout = 5 * time.Minute
 
 // UnsafeDestroyRange Cleans up all keys in a range[startKey,endKey) and quickly free the disk space.
 // The range might span over multiple regions, and the `ctx` doesn't indicate region. The request will be done directly
-// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
-// the range will never be accessed any more. However, `destroy_range` is allowed to be called
+// on RocksDB, bypassing the Raft layer. User must promise that, after calling `UnsafeDestroyRange`,
+// the range will never be accessed any more. However, `UnsafeDestroyRange` is allowed to be called
 // multiple times on an single range.
 func (s *KVStore) UnsafeDestroyRange(ctx context.Context, startKey []byte, endKey []byte) error {
 	// Get all stores every time deleting a region. So the store list is less probably to be stale.
 	stores, err := s.listStoresForUnsafeDestory(ctx)
 	if err != nil {
-		//metrics.GCUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("get_stores").Inc()
+		metrics.TiKVUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("get_stores").Inc()
 		return errors.Trace(err)
 	}
 
@@ -237,9 +238,9 @@ func (s *KVStore) UnsafeDestroyRange(ctx context.Context, startKey []byte, endKe
 				}
 			}
 
-			// if err1 != nil {
-			// 	metrics.GCUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("send").Inc()
-			// }
+			if err1 != nil {
+				metrics.TiKVUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("send").Inc()
+			}
 			errChan <- err1
 		}()
 	}
