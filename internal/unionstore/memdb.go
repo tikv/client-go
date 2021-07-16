@@ -162,6 +162,9 @@ func (db *MemDB) Reset() {
 	db.vlog.reset()
 	db.allocator.reset()
 }
+func (db *MemDB) SetAllowed() {
+	//TODO nothing.
+}
 
 // DiscardValues releases the memory used by all values.
 // NOTE: any operation need value will panic after this function.

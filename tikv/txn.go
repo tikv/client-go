@@ -131,6 +131,7 @@ type KVTxn struct {
 	scope              string
 	kvFilter           KVFilter
 	resourceGroupTag   []byte
+	allowedOnDiskFull  bool
 }
 
 // ExtractStartTS use `option` to get the proper startTS for a transaction.
@@ -163,6 +164,7 @@ func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error
 		scope:             options.TxnScope,
 		enableAsyncCommit: cfg.EnableAsyncCommit,
 		enable1PC:         cfg.Enable1PC,
+		allowedOnDiskFull: false,
 	}
 	return newTiKVTxn, nil
 }
@@ -307,6 +309,18 @@ func (txn *KVTxn) SetKVFilter(filter KVFilter) {
 	txn.kvFilter = filter
 }
 
+func (txn *KVTxn) SetAllowed() {
+	txn.allowedOnDiskFull = true
+}
+
+func (txn *KVTxn) GetAllowed() bool {
+	return txn.allowedOnDiskFull
+}
+
+func (txn *KVTxn) ClearAllowed() {
+	txn.allowedOnDiskFull = false
+}
+
 // IsPessimistic returns true if it is pessimistic.
 func (txn *KVTxn) IsPessimistic() bool {
 	return txn.isPessimistic
@@ -364,6 +378,11 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		}
 		txn.committer = committer
 	}
+
+	if txn.allowedOnDiskFull {
+		txn.committer.SetAllowed()
+	}
+
 	defer committer.ttlManager.close()
 
 	initRegion := trace.StartRegion(ctx, "InitKeys")
@@ -430,6 +449,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 
 func (txn *KVTxn) close() {
 	txn.valid = false
+	txn.ClearAllowed()
 }
 
 // Rollback undoes the transaction operations to KV store.

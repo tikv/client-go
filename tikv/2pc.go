@@ -135,6 +135,9 @@ type twoPhaseCommitter struct {
 
 	storeWg  *sync.WaitGroup
 	storeCtx context.Context
+
+	// allowed when tikv disk full happened.
+	allowedOnDiskFull bool
 }
 
 type memBufferMutations struct {
@@ -330,10 +333,11 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		ttlManager: ttlManager{
 			ch: make(chan struct{}),
 		},
-		isPessimistic: txn.IsPessimistic(),
-		binlog:        txn.binlog,
-		storeWg:       &txn.store.wg,
-		storeCtx:      txn.store.ctx,
+		isPessimistic:     txn.IsPessimistic(),
+		binlog:            txn.binlog,
+		storeWg:           &txn.store.wg,
+		storeCtx:          txn.store.ctx,
+		allowedOnDiskFull: false,
 	}, nil
 }
 
@@ -753,6 +757,10 @@ func (c *twoPhaseCommitter) keyValueSize(key, value []byte) int {
 
 func (c *twoPhaseCommitter) keySize(key, value []byte) int {
 	return len(key)
+}
+
+func (c *twoPhaseCommitter) SetAllowed() {
+	c.allowedOnDiskFull = true
 }
 
 type ttlManagerState uint32
