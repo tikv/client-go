@@ -39,6 +39,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
@@ -161,6 +162,9 @@ func (db *MemDB) Reset() {
 	db.count = 0
 	db.vlog.reset()
 	db.allocator.reset()
+}
+func (db *MemDB) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
+	//TODO nothing.
 }
 
 // DiscardValues releases the memory used by all values.

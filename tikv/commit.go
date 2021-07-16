@@ -68,7 +68,8 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 		StartVersion:  c.startTS,
 		Keys:          keys,
 		CommitVersion: c.commitTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag})
+	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
+		ResourceGroupTag: c.resourceGroupTag, DiskFullOpt: c.diskFullOpt})
 
 	tBegin := time.Now()
 	attempts := 0

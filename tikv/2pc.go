@@ -135,6 +135,9 @@ type twoPhaseCommitter struct {
 
 	storeWg  *sync.WaitGroup
 	storeCtx context.Context
+
+	// allowed when tikv disk full happened.
+	diskFullOpt kvrpcpb.DiskFullOpt
 }
 
 type memBufferMutations struct {
@@ -334,6 +337,7 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		binlog:        txn.binlog,
 		storeWg:       &txn.store.wg,
 		storeCtx:      txn.store.ctx,
+		diskFullOpt:   kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 	}, nil
 }
 
@@ -527,6 +531,20 @@ func (c *twoPhaseCommitter) doActionOnMutations(bo *Backoffer, action twoPhaseCo
 	// This is redundant since `doActionOnGroupMutations` will still split groups into batches and
 	// check the number of batches. However we don't want the check fail after any code changes.
 	c.checkOnePCFallBack(action, len(groups))
+
+	//set delete only operations allowed when tikv disk almost full.
+	idx := mutations.Len()
+	delete_only := true
+	for i := 0; i < idx; i++ {
+		opType := mutations.GetOp(i)
+		if opType != kvrpcpb.Op_Del {
+			delete_only = false
+			break
+		}
+	}
+	if delete_only {
+		c.SetDiskFullOpt(kvrpcpb.DiskFullOpt_AllowedOnAlmostFull)
+	}
 
 	return c.doActionOnGroupMutations(bo, action, groups)
 }
@@ -753,6 +771,10 @@ func (c *twoPhaseCommitter) keyValueSize(key, value []byte) int {
 
 func (c *twoPhaseCommitter) keySize(key, value []byte) int {
 	return len(key)
+}
+
+func (c *twoPhaseCommitter) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
+	c.diskFullOpt = level
 }
 
 type ttlManagerState uint32

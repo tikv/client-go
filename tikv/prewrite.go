@@ -137,7 +137,8 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		req.TryOnePc = true
 	}
 
-	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag})
+	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req,
+		kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag, DiskFullOpt: c.diskFullOpt})
 }
 
 func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) (err error) {
@@ -218,6 +219,13 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *Backoff
 				if err != nil {
 					return errors.Trace(err)
 				}
+			}
+			if regionErr.GetDiskFull() != nil {
+				logutil.Logger(bo.GetCtx()).Error("Request Failed cause of TiKV Disk full",
+					zap.Uint64("store_id", regionErr.GetDiskFull().GetStoreId()),
+					zap.String("reason", regionErr.GetDiskFull().GetReason()))
+
+				return errors.Trace(errors.New(regionErr.String()))
 			}
 			same, err := batch.relocate(bo, c.store.regionCache)
 			if err != nil {

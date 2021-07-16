@@ -947,6 +947,15 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		}
 	}
 
+	// Not Retry when tikv disk full happens.
+	if diskFull := regionErr.GetDiskFull(); diskFull != nil {
+		// Retry if error is `NotLeader`.
+		logutil.BgLogger().Error("tikv reports `DiskFull` not retry",
+			zap.String("diskFull", diskFull.String()),
+			zap.String("ctx", ctx.String()))
+		return false, nil
+	}
+
 	// This peer is removed from the region. Invalidate the region since it's too stale.
 	if regionErr.GetRegionNotFound() != nil {
 		if seed != nil {
