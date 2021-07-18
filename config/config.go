@@ -76,6 +76,8 @@ type Config struct {
 	Path                  string
 	EnableForwarding      bool
 	TxnScope              string
+	EnableAsyncCommit     bool
+	Enable1PC             bool
 }
 
 // DefaultConfig returns the default configuration.
@@ -91,6 +93,8 @@ func DefaultConfig() Config {
 		Path:                  "",
 		EnableForwarding:      false,
 		TxnScope:              "",
+		EnableAsyncCommit:     false,
+		Enable1PC:             false,
 	}
 }
 

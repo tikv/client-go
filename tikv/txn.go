@@ -49,6 +49,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -150,15 +151,18 @@ func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error
 		return nil, errors.Trace(err)
 	}
 	snapshot := newTiKVSnapshot(store, startTS, store.nextReplicaReadSeed())
+	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:  snapshot,
-		us:        unionstore.NewUnionStore(snapshot),
-		store:     store,
-		startTS:   startTS,
-		startTime: time.Now(),
-		valid:     true,
-		vars:      tikv.DefaultVars,
-		scope:     options.TxnScope,
+		snapshot:          snapshot,
+		us:                unionstore.NewUnionStore(snapshot),
+		store:             store,
+		startTS:           startTS,
+		startTime:         time.Now(),
+		valid:             true,
+		vars:              tikv.DefaultVars,
+		scope:             options.TxnScope,
+		enableAsyncCommit: cfg.EnableAsyncCommit,
+		enable1PC:         cfg.Enable1PC,
 	}
 	return newTiKVTxn, nil
 }
@@ -280,7 +284,8 @@ func (txn *KVTxn) SetEnableAsyncCommit(b bool) {
 	txn.enableAsyncCommit = b
 }
 
-// SetEnable1PC indicates if the transaction will try to use 1 phase commit.
+// SetEnable1PC indicates that the transaction will try to use 1 phase commit(which should be faster).
+// 1PC does not work if the keys to update in the current txn are in multiple regions.
 func (txn *KVTxn) SetEnable1PC(b bool) {
 	txn.enable1PC = b
 }

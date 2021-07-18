@@ -104,7 +104,7 @@ type KVSnapshot struct {
 	keyOnly         bool
 	vars            *kv.Variables
 	replicaReadSeed uint32
-	resolvedLocks   *util.TSSet
+	resolvedLocks   util.TSSet
 	scanBatchSize   int
 
 	// Cache the result of BatchGet.
@@ -146,7 +146,6 @@ func newTiKVSnapshot(store *KVStore, ts uint64, replicaReadSeed uint32) *KVSnaps
 		priority:        PriorityNormal,
 		vars:            kv.DefaultVars,
 		replicaReadSeed: replicaReadSeed,
-		resolvedLocks:   util.NewTSSet(5),
 	}
 }
 
@@ -164,8 +163,8 @@ func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
 	s.mu.Lock()
 	s.mu.cached = nil
 	s.mu.Unlock()
-	// And also the minCommitTS pushed information.
-	s.resolvedLocks = util.NewTSSet(5)
+	// And also remove the minCommitTS pushed information.
+	s.resolvedLocks = util.TSSet{}
 }
 
 // BatchGet gets all the keys' value from kv-server and returns a map contains key/value pairs.
@@ -328,7 +327,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *Backoffer, keys [][]byte, collect
 }
 
 func (s *KVSnapshot) batchGetSingleRegion(bo *Backoffer, batch batchKeys, collectF func(k, v []byte)) error {
-	cli := NewClientHelper(s.store, s.resolvedLocks)
+	cli := NewClientHelper(s.store, &s.resolvedLocks)
 	s.mu.RLock()
 	if s.mu.stats != nil {
 		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
@@ -497,7 +496,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *Backoffer, k []byte) ([]byte, 
 		}
 	})
 
-	cli := NewClientHelper(s.store, s.resolvedLocks)
+	cli := NewClientHelper(s.store, &s.resolvedLocks)
 
 	s.mu.RLock()
 	if s.mu.stats != nil {

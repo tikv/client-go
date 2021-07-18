@@ -42,9 +42,9 @@ import (
 	"github.com/pingcap/tidb/store/mockstore/mockcopr"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/mockstore/cluster"
-	"github.com/tikv/client-go/v2/mockstore/mocktikv"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv/rangetask"
 )
 
 func TestRangeTask(t *testing.T) {
@@ -53,7 +53,7 @@ func TestRangeTask(t *testing.T) {
 
 type testRangeTaskSuite struct {
 	suite.Suite
-	cluster cluster.Cluster
+	cluster testutils.Cluster
 	store   *tikv.KVStore
 
 	testRanges     []kv.KeyRange
@@ -84,23 +84,14 @@ func (s *testRangeTaskSuite) SetupTest() {
 	}
 	allRegionRanges = append(allRegionRanges, makeRange("z", ""))
 
-	client, cluster, pdClient, err := mocktikv.NewTiKVAndPDClient("", mockcopr.NewCoprRPCHandler())
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
 	s.Require().Nil(err)
-	mocktikv.BootstrapWithMultiRegions(cluster, splitKeys...)
+	testutils.BootstrapWithMultiRegions(cluster, splitKeys...)
 	s.cluster = cluster
 
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
 	s.Require().Nil(err)
 
-	// TODO: make this possible
-	// store, err := mockstore.NewMockStore(
-	// 	mockstore.WithStoreType(mockstore.MockTiKV),
-	// 	mockstore.WithClusterInspector(func(c cluster.Cluster) {
-	// 		mockstore.BootstrapWithMultiRegions(splitKeys...)
-	// 		s.cluster = c
-	// 	}),
-	// )
-	// s.Nil(err)
 	s.store = store
 
 	s.testRanges = []kv.KeyRange{
@@ -196,15 +187,15 @@ func (s *testRangeTaskSuite) testRangeTaskImpl(concurrency int) {
 
 	ranges := make(chan *kv.KeyRange, 100)
 
-	handler := func(ctx context.Context, r kv.KeyRange) (tikv.RangeTaskStat, error) {
+	handler := func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		ranges <- &r
-		stat := tikv.RangeTaskStat{
+		stat := rangetask.TaskStat{
 			CompletedRegions: 1,
 		}
 		return stat, nil
 	}
 
-	runner := tikv.NewRangeTaskRunner("test-runner", s.store, concurrency, handler)
+	runner := rangetask.NewRangeTaskRunner("test-runner", s.store, concurrency, handler)
 
 	for regionsPerTask := 1; regionsPerTask <= 5; regionsPerTask++ {
 		for i, r := range s.testRanges {
@@ -235,18 +226,17 @@ func (s *testRangeTaskSuite) testRangeTaskErrorImpl(concurrency int) {
 			errKey := subRange.StartKey
 			s.T().Logf("Test RangeTask Error concurrency: %v, range: [%+q, %+q), errKey: %+q", concurrency, r.StartKey, r.EndKey, errKey)
 
-			handler := func(ctx context.Context, r kv.KeyRange) (tikv.RangeTaskStat, error) {
-				stat := tikv.RangeTaskStat{CompletedRegions: 0, FailedRegions: 0}
+			handler := func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
+				stat := rangetask.TaskStat{CompletedRegions: 0, FailedRegions: 0}
 				if bytes.Equal(r.StartKey, errKey) {
 					stat.FailedRegions++
 					return stat, errors.New("test error")
-
 				}
 				stat.CompletedRegions++
 				return stat, nil
 			}
 
-			runner := tikv.NewRangeTaskRunner("test-error-runner", s.store, concurrency, handler)
+			runner := rangetask.NewRangeTaskRunner("test-error-runner", s.store, concurrency, handler)
 			runner.SetRegionsPerTask(1)
 			err := runner.RunOnRange(context.Background(), r.StartKey, r.EndKey)
 			// RunOnRange returns no error only when all sub tasks are done successfully.

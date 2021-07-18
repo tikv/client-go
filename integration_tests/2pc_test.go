@@ -55,9 +55,8 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/mockstore/cluster"
-	"github.com/tikv/client-go/v2/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -73,7 +72,7 @@ func TestCommitter(t *testing.T) {
 
 type testCommitterSuite struct {
 	suite.Suite
-	cluster cluster.Cluster
+	cluster testutils.Cluster
 	store   tikv.StoreProbe
 }
 
@@ -89,13 +88,11 @@ func (s *testCommitterSuite) TearDownSuite() {
 }
 
 func (s *testCommitterSuite) SetupTest() {
-	mvccStore, err := mocktikv.NewMVCCLevelDB("")
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
-	cluster := mocktikv.NewCluster(mvccStore)
-	mocktikv.BootstrapWithMultiRegions(cluster, []byte("a"), []byte("b"), []byte("c"))
+	testutils.BootstrapWithMultiRegions(cluster, []byte("a"), []byte("b"), []byte("c"))
 	s.cluster = cluster
-	client := mocktikv.NewRPCClient(cluster, mvccStore, nil)
-	pdCli := &tikv.CodecPDClient{Client: mocktikv.NewPDClient(cluster)}
+	pdCli := &tikv.CodecPDClient{Client: pdClient}
 	spkv := tikv.NewMockSafePointKV()
 	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client)
 	store.EnableTxnLocalLatches(8096)
@@ -1272,7 +1269,6 @@ func (s *testCommitterSuite) TestAsyncCommit() {
 
 	committer, err := txn1.NewCommitter(0)
 	s.Nil(err)
-	committer.SetSessionID(1)
 	committer.SetMinCommitTS(txn1.StartTS() + 10)
 	err = committer.Execute(ctx)
 	s.Nil(err)
