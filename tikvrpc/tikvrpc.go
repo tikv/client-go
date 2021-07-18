@@ -79,6 +79,7 @@ const (
 	CmdRawBatchDelete
 	CmdRawDeleteRange
 	CmdRawScan
+	CmdGetKeyTTL
 
 	CmdUnsafeDestroyRange
 
@@ -359,6 +360,11 @@ func (req *Request) RawScan() *kvrpcpb.RawScanRequest {
 // UnsafeDestroyRange returns UnsafeDestroyRangeRequest in request.
 func (req *Request) UnsafeDestroyRange() *kvrpcpb.UnsafeDestroyRangeRequest {
 	return req.Req.(*kvrpcpb.UnsafeDestroyRangeRequest)
+}
+
+// RawGetKeyTTL returns RawGetKeyTTLRequest in request.
+func (req *Request) RawGetKeyTTL() *kvrpcpb.RawGetKeyTTLRequest {
+	return req.Req.(*kvrpcpb.RawGetKeyTTLRequest)
 }
 
 // RegisterLockObserver returns RegisterLockObserverRequest in request.
@@ -677,6 +683,8 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.RawScan().Context = ctx
 	case CmdUnsafeDestroyRange:
 		req.UnsafeDestroyRange().Context = ctx
+	case CmdGetKeyTTL:
+		req.RawGetKeyTTL().Context = ctx
 	case CmdRegisterLockObserver:
 		req.RegisterLockObserver().Context = ctx
 	case CmdCheckLockObserver:
@@ -919,6 +927,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.RawScan(ctx, req.RawScan())
 	case CmdUnsafeDestroyRange:
 		resp.Resp, err = client.UnsafeDestroyRange(ctx, req.UnsafeDestroyRange())
+	case CmdGetKeyTTL:
+		resp.Resp, err = client.RawGetKeyTTL(ctx, req.RawGetKeyTTL())
 	case CmdRegisterLockObserver:
 		resp.Resp, err = client.RegisterLockObserver(ctx, req.RegisterLockObserver())
 	case CmdCheckLockObserver:

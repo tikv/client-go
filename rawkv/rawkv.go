@@ -165,7 +165,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte) ([][]byte, error) 
 	return values, nil
 }
 
-// Put stores a key-value pair to TiKV.
+// PutWithTTL stores a key-value pair to TiKV with a time-to-live duration.
 func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds()) }()
@@ -193,6 +193,35 @@ func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64) 
 		return errors.New(cmdResp.GetError())
 	}
 	return nil
+}
+
+// GetKeyTTL get the TTL of a raw key from TiKV if key exists
+func (c *Client) GetKeyTTL(ctx context.Context, key []byte) (*uint64, error) {
+	var ttl uint64
+	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
+	req := tikvrpc.NewRequest(tikvrpc.CmdGetKeyTTL, &kvrpcpb.RawGetKeyTTLRequest{
+		Key: key,
+	})
+	resp, _, err := c.sendReq(ctx, key, req, false)
+
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if resp.Resp == nil {
+		return nil, errors.Trace(tikverr.ErrBodyMissing)
+	}
+
+	cmdResp := resp.Resp.(*kvrpcpb.RawGetKeyTTLResponse)
+	if cmdResp.GetError() != "" {
+		return nil, errors.New(cmdResp.GetError())
+	}
+
+	if cmdResp.GetNotFound() {
+		return nil, nil
+	}
+
+	ttl = cmdResp.GetTtl()
+	return &ttl, nil
 }
 
 // Put stores a key-value pair to TiKV.
