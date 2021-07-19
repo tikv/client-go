@@ -79,6 +79,7 @@ const (
 	CmdRawBatchDelete
 	CmdRawDeleteRange
 	CmdRawScan
+	CmdRawCAS
 
 	CmdUnsafeDestroyRange
 

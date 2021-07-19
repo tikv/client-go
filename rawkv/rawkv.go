@@ -71,6 +71,12 @@ type Client struct {
 	regionCache *locate.RegionCache
 	pdClient    pd.Client
 	rpcClient   client.Client
+	atomic      bool
+}
+
+func (c *Client) WithAtomicForCAS() *Client {
+	c.atomic = true
+	return c
 }
 
 // NewClient creates a client with PD cluster addrs.
@@ -177,8 +183,9 @@ func (c *Client) Put(ctx context.Context, key, value []byte) error {
 	}
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
-		Key:   key,
-		Value: value,
+		Key:    key,
+		Value:  value,
+		ForCas: c.atomic,
 	})
 	resp, _, err := c.sendReq(ctx, key, req, false)
 	if err != nil {
@@ -220,7 +227,8 @@ func (c *Client) Delete(ctx context.Context, key []byte) error {
 	defer func() { metrics.RawkvCmdHistogramWithDelete.Observe(time.Since(start).Seconds()) }()
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawDelete, &kvrpcpb.RawDeleteRequest{
-		Key: key,
+		Key:    key,
+		ForCas: c.atomic,
 	})
 	resp, _, err := c.sendReq(ctx, key, req, false)
 	if err != nil {
@@ -374,6 +382,50 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 	return
 }
 
+// CompareAndSwap results in an atomic compare-and-set operation for the given key.
+// If the value retrieved is equal to previousValue, newValue is written.
+// It returns the previous value and whether the value is swapped
+func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValue []byte) ([]byte, bool, error) {
+	if !c.atomic {
+		return nil, false, errors.Trace(errors.New("using CompareAndSwap without enable atomic mode"))
+	}
+
+	if len(newValue) == 0 {
+		return nil, false, errors.New("empty value is not supported")
+	}
+
+	reqArgs := &kvrpcpb.RawCASRequest{
+		Key:   key,
+		Value: newValue,
+	}
+	if previousValue == nil {
+		reqArgs.PreviousNotExist = true
+	} else {
+		reqArgs.PreviousValue = previousValue
+	}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawCAS, &reqArgs)
+
+	resp, _, err := c.sendReq(ctx, key, req, false)
+	if err != nil {
+		return nil, false, errors.Trace(err)
+	}
+	if resp.Resp == nil {
+		return nil, false, errors.Trace(tikverr.ErrBodyMissing)
+	}
+
+	cmdResp := resp.Resp.(*kvrpcpb.RawCASResponse)
+	if cmdResp.GetError() != "" {
+		return nil, false, errors.New(cmdResp.GetError())
+	}
+
+	if cmdResp.PreviousNotExist {
+		return nil, cmdResp.Succeed, nil
+	} else {
+		return cmdResp.PreviousValue, cmdResp.Succeed, nil
+	}
+}
+
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
@@ -463,7 +515,8 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, cmdType tikv
 		})
 	case tikvrpc.CmdRawBatchDelete:
 		req = tikvrpc.NewRequest(cmdType, &kvrpcpb.RawBatchDeleteRequest{
-			Keys: batch.Keys,
+			Keys:   batch.Keys,
+			ForCas: c.atomic,
 		})
 	}
 
@@ -595,7 +648,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch) error {
 		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.Values[i]})
 	}
 
-	req := tikvrpc.NewRequest(tikvrpc.CmdRawBatchPut, &kvrpcpb.RawBatchPutRequest{Pairs: kvPair})
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawBatchPut, &kvrpcpb.RawBatchPutRequest{Pairs: kvPair, ForCas: c.atomic})
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
