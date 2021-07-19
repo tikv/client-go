@@ -74,6 +74,7 @@ type Client struct {
 	atomic      bool
 }
 
+// WithAtomicForCAS enable atomic mode for CompareAndSwap
 func (c *Client) WithAtomicForCAS() *Client {
 	c.atomic = true
 	return c
