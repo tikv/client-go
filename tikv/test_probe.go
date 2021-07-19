@@ -45,6 +45,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -55,7 +56,8 @@ type StoreProbe struct {
 
 // NewLockResolver creates a new LockResolver instance.
 func (s StoreProbe) NewLockResolver() LockResolverProbe {
-	return LockResolverProbe{LockResolver: newLockResolver(s.KVStore)}
+	txnLockResolver := txnlock.LockResolverProbe{txnlock.NewLockResolver(s.KVStore)}
+	return LockResolverProbe{&txnLockResolver}
 }
 
 // GetTimestampWithRetry returns latest timestamp.
@@ -432,90 +434,35 @@ func (s SnapshotProbe) FormatStats() string {
 	return s.mu.stats.String()
 }
 
-// LockProbe exposes some lock utilities for testing purpose.
-type LockProbe struct{}
-
-// ExtractLockFromKeyErr makes a Lock based on a key error.
-func (l LockProbe) ExtractLockFromKeyErr(err *kvrpcpb.KeyError) (*Lock, error) {
-	return extractLockFromKeyErr(err)
-}
-
-// NewLockStatus returns a txn state that has been locked.
-func (l LockProbe) NewLockStatus(keys [][]byte, useAsyncCommit bool, minCommitTS uint64) TxnStatus {
-	return TxnStatus{
-		primaryLock: &kvrpcpb.LockInfo{
-			Secondaries:    keys,
-			UseAsyncCommit: useAsyncCommit,
-			MinCommitTs:    minCommitTS,
-		},
-	}
-}
-
-// GetPrimaryKeyFromTxnStatus returns the primary key of the transaction.
-func (l LockProbe) GetPrimaryKeyFromTxnStatus(s TxnStatus) []byte {
-	return s.primaryLock.Key
+type LockProbe struct {
+	*txnlock.LockProbe
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
 type LockResolverProbe struct {
-	*LockResolver
+	*txnlock.LockResolverProbe
 }
 
-// ResolveLockAsync tries to resolve a lock using the txn states.
-func (l LockResolverProbe) ResolveLockAsync(bo *Backoffer, lock *Lock, status TxnStatus) error {
-	return l.resolveLockAsync(bo, lock, status)
+func NewLockResolverProb(store *KVStore) *LockResolverProbe {
+	resolver := txnlock.LockResolverProbe{LockResolver: store.GetLockResolver()}
+	return &LockResolverProbe{&resolver}
 }
 
 // ResolveLock resolves single lock.
-func (l LockResolverProbe) ResolveLock(ctx context.Context, lock *Lock) error {
+func (l LockResolverProbe) ResolveLock(ctx context.Context, lock *txnlock.Lock) error {
 	bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, nil)
-	return l.resolveLock(bo, lock, TxnStatus{}, false, make(map[locate.RegionVerID]struct{}))
+	return l.LockResolverProbe.ResolveLock(bo, lock)
 }
 
 // ResolvePessimisticLock resolves single pessimistic lock.
-func (l LockResolverProbe) ResolvePessimisticLock(ctx context.Context, lock *Lock) error {
+func (l LockResolverProbe) ResolvePessimisticLock(ctx context.Context, lock *txnlock.Lock) error {
 	bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, nil)
-	return l.resolvePessimisticLock(bo, lock, make(map[locate.RegionVerID]struct{}))
+	return l.LockResolverProbe.ResolvePessimisticLock(bo, lock)
 }
 
-// GetTxnStatus sends the CheckTxnStatus request to the TiKV server.
-func (l LockResolverProbe) GetTxnStatus(bo *Backoffer, txnID uint64, primary []byte,
-	callerStartTS, currentTS uint64, rollbackIfNotExist bool, forceSyncCommit bool, lockInfo *Lock) (TxnStatus, error) {
-	return l.getTxnStatus(bo, txnID, primary, callerStartTS, currentTS, rollbackIfNotExist, forceSyncCommit, lockInfo)
-}
-
-// GetTxnStatusFromLock queries tikv for a txn's status.
-func (l LockResolverProbe) GetTxnStatusFromLock(bo *Backoffer, lock *Lock, callerStartTS uint64, forceSyncCommit bool) (TxnStatus, error) {
-	return l.getTxnStatusFromLock(bo, lock, callerStartTS, forceSyncCommit)
-}
-
-// GetSecondariesFromTxnStatus returns the secondary locks from txn status.
-func (l LockResolverProbe) GetSecondariesFromTxnStatus(status TxnStatus) [][]byte {
-	return status.primaryLock.GetSecondaries()
-}
-
-// SetMeetLockCallback is called whenever it meets locks.
-func (l LockResolverProbe) SetMeetLockCallback(f func([]*Lock)) {
-	l.testingKnobs.meetLock = f
-}
-
-// CheckAllSecondaries checks the secondary locks of an async commit transaction to find out the final
-// status of the transaction.
-func (l LockResolverProbe) CheckAllSecondaries(bo *Backoffer, lock *Lock, status *TxnStatus) error {
-	_, err := l.checkAllSecondaries(bo, lock, status)
-	return err
-}
-
-// IsErrorNotFound checks if an error is caused by txnNotFoundErr.
-func (l LockResolverProbe) IsErrorNotFound(err error) bool {
-	_, ok := errors.Cause(err).(txnNotFoundErr)
-	return ok
-}
-
-// IsNonAsyncCommitLock checks if an error is nonAsyncCommitLock error.
-func (l LockResolverProbe) IsNonAsyncCommitLock(err error) bool {
-	_, ok := errors.Cause(err).(*nonAsyncCommitLock)
-	return ok
+// ExtractLockFromKeyErr makes a Lock based on a key error.
+func (l LockProbe) ExtractLockFromKeyErr(err *kvrpcpb.KeyError) (*txnlock.Lock, error) {
+	return extractLockFromKeyErr(err)
 }
 
 // ConfigProbe exposes configurations and global variables for testing purpose.
@@ -528,6 +475,8 @@ func (c ConfigProbe) GetTxnCommitBatchSize() uint64 {
 
 // GetBigTxnThreshold returns the txn size to be considered as big txn.
 func (c ConfigProbe) GetBigTxnThreshold() int {
+	// bigTxnThreshold : transaction involves keys exceed this threshold can be treated as `big transaction`.
+	const bigTxnThreshold = 16
 	return bigTxnThreshold
 }
 
