@@ -63,6 +63,7 @@ type LockResolver struct {
 	}
 }
 
+// NewLockResolver creates a new LockResolver instance.
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
 		store: store,

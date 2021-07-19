@@ -56,7 +56,7 @@ type StoreProbe struct {
 
 // NewLockResolver creates a new LockResolver instance.
 func (s StoreProbe) NewLockResolver() LockResolverProbe {
-	txnLockResolver := txnlock.LockResolverProbe{txnlock.NewLockResolver(s.KVStore)}
+	txnLockResolver := txnlock.LockResolverProbe{LockResolver: txnlock.NewLockResolver(s.KVStore)}
 	return LockResolverProbe{&txnLockResolver}
 }
 
@@ -434,6 +434,7 @@ func (s SnapshotProbe) FormatStats() string {
 	return s.mu.stats.String()
 }
 
+// LockProbe exposes some lock utilities for testing purpose.
 type LockProbe struct {
 	*txnlock.LockProbe
 }
@@ -443,6 +444,7 @@ type LockResolverProbe struct {
 	*txnlock.LockResolverProbe
 }
 
+// NewLockResolverProb create a LockResolverProbe from KVStore.
 func NewLockResolverProb(store *KVStore) *LockResolverProbe {
 	resolver := txnlock.LockResolverProbe{LockResolver: store.GetLockResolver()}
 	return &LockResolverProbe{&resolver}
