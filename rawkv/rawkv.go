@@ -394,7 +394,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 		return nil, false, errors.New("empty value is not supported")
 	}
 
-	reqArgs := &kvrpcpb.RawCASRequest{
+	reqArgs := kvrpcpb.RawCASRequest{
 		Key:   key,
 		Value: newValue,
 	}
@@ -404,7 +404,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 		reqArgs.PreviousValue = previousValue
 	}
 
-	req := tikvrpc.NewRequest(tikvrpc.CmdRawCAS, &reqArgs)
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawCompareAndSwap, &reqArgs)
 
 	resp, _, err := c.sendReq(ctx, key, req, false)
 	if err != nil {
