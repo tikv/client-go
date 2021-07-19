@@ -815,6 +815,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.UnsafeDestroyRangeResponse{
 			RegionError: e,
 		}
+	case CmdGetKeyTTL:
+		p = &kvrpcpb.RawGetKeyTTLResponse{
+			RegionError: e,
+		}
 	case CmdCop:
 		p = &coprocessor.Response{
 			RegionError: e,
