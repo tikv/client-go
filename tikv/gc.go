@@ -16,15 +16,20 @@ package tikv
 import (
 	"bytes"
 	"context"
+	"sync"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	zap "go.uber.org/zap"
 )
 
@@ -51,11 +56,11 @@ func (s *KVStore) GC(ctx context.Context, safepoint uint64) (newSafePoint uint64
 }
 
 func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrency int) error {
-	handler := func(ctx context.Context, r kv.KeyRange) (RangeTaskStat, error) {
+	handler := func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		return s.resolveLocksForRange(ctx, safePoint, r.StartKey, r.EndKey)
 	}
 
-	runner := NewRangeTaskRunner("resolve-locks-runner", s, concurrency, handler)
+	runner := rangetask.NewRangeTaskRunner("resolve-locks-runner", s, concurrency, handler)
 	// Run resolve lock on the whole TiKV cluster. Empty keys means the range is unbounded.
 	err := runner.RunOnRange(ctx, []byte(""), []byte(""))
 	if err != nil {
@@ -67,12 +72,12 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 // We don't want gc to sweep out the cached info belong to other processes, like coprocessor.
 const gcScanLockLimit = ResolvedCacheSize / 2
 
-func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, startKey []byte, endKey []byte) (RangeTaskStat, error) {
+func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, startKey []byte, endKey []byte) (rangetask.TaskStat, error) {
 	// for scan lock request, we must return all locks even if they are generated
 	// by the same transaction. because gc worker need to make sure all locks have been
 	// cleaned.
 
-	var stat RangeTaskStat
+	var stat rangetask.TaskStat
 	key := startKey
 	bo := NewGcResolveLockMaxBackoffer(ctx)
 	for {
@@ -189,4 +194,89 @@ func (s *KVStore) batchResolveLocksInARegion(bo *Backoffer, locks []*Lock, expec
 		}
 		resolvedLocation = region
 	}
+}
+
+const unsafeDestroyRangeTimeout = 5 * time.Minute
+
+// UnsafeDestroyRange Cleans up all keys in a range[startKey,endKey) and quickly free the disk space.
+// The range might span over multiple regions, and the `ctx` doesn't indicate region. The request will be done directly
+// on RocksDB, bypassing the Raft layer. User must promise that, after calling `UnsafeDestroyRange`,
+// the range will never be accessed any more. However, `UnsafeDestroyRange` is allowed to be called
+// multiple times on an single range.
+func (s *KVStore) UnsafeDestroyRange(ctx context.Context, startKey []byte, endKey []byte) error {
+	// Get all stores every time deleting a region. So the store list is less probably to be stale.
+	stores, err := s.listStoresForUnsafeDestory(ctx)
+	if err != nil {
+		metrics.TiKVUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("get_stores").Inc()
+		return errors.Trace(err)
+	}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdUnsafeDestroyRange, &kvrpcpb.UnsafeDestroyRangeRequest{
+		StartKey: startKey,
+		EndKey:   endKey,
+	})
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(stores))
+
+	for _, store := range stores {
+		address := store.Address
+		storeID := store.Id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			resp, err1 := s.GetTiKVClient().SendRequest(ctx, address, req, unsafeDestroyRangeTimeout)
+			if err1 == nil {
+				if resp == nil || resp.Resp == nil {
+					err1 = errors.Errorf("[unsafe destroy range] returns nil response from store %v", storeID)
+				} else {
+					errStr := (resp.Resp.(*kvrpcpb.UnsafeDestroyRangeResponse)).Error
+					if len(errStr) > 0 {
+						err1 = errors.Errorf("[unsafe destroy range] range failed on store %v: %s", storeID, errStr)
+					}
+				}
+			}
+
+			if err1 != nil {
+				metrics.TiKVUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("send").Inc()
+			}
+			errChan <- err1
+		}()
+	}
+
+	var errs []string
+	for range stores {
+		err1 := <-errChan
+		if err1 != nil {
+			errs = append(errs, err1.Error())
+		}
+	}
+
+	wg.Wait()
+
+	if len(errs) > 0 {
+		return errors.Errorf("[unsafe destroy range] destroy range finished with errors: %v", errs)
+	}
+
+	return nil
+}
+
+func (s *KVStore) listStoresForUnsafeDestory(ctx context.Context) ([]*metapb.Store, error) {
+	stores, err := s.pdClient.GetAllStores(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	upStores := make([]*metapb.Store, 0, len(stores))
+	for _, store := range stores {
+		if store.State == metapb.StoreState_Tombstone {
+			continue
+		}
+		if tikvrpc.GetStoreTypeByMeta(store) == tikvrpc.TiFlash {
+			continue
+		}
+		upStores = append(upStores, store)
+	}
+	return upStores, nil
 }
