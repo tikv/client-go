@@ -422,9 +422,8 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 
 	if cmdResp.PreviousNotExist {
 		return nil, cmdResp.Succeed, nil
-	} else {
-		return cmdResp.PreviousValue, cmdResp.Succeed, nil
 	}
+	return cmdResp.PreviousValue, cmdResp.Succeed, nil
 }
 
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
