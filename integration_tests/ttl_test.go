@@ -26,6 +26,9 @@ import (
 )
 
 func TestTTL(t *testing.T) {
+	if !*withTiKV {
+		t.Skip("skipping TestTTL because with-tikv is not enabled")
+	}
 	suite.Run(t, new(ttlTestSuite))
 }
 
@@ -35,10 +38,6 @@ type ttlTestSuite struct {
 }
 
 func (s *ttlTestSuite) SetupTest() {
-	t := s.T()
-	if !*withTiKV {
-		t.Skip("skipping TestTTL because with-tikv is not enabled")
-	}
 	addrs := strings.Split(*pdAddrs, ",")
 	client, err := rawkv.NewClient(context.TODO(), addrs, config.DefaultConfig().Security)
 	require.Nil(s.T(), err)
@@ -62,7 +61,7 @@ func (s *ttlTestSuite) mustGetKeyTTL(key []byte) *uint64 {
 	return ttl
 }
 
-// TODO: It's an unstable test, we may mock this feature in unistore.
+// TODO: we may mock this feature in unistore.
 func (s *ttlTestSuite) TestPutWithTTL() {
 	key := []byte("test-put-with-ttl")
 	value := []byte("value")
