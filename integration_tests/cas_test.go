@@ -25,6 +25,9 @@ import (
 )
 
 func TestCAS(t *testing.T) {
+	if !*withTiKV {
+		t.Skip("skipping TestCAS because with-tikv is not enabled")
+	}
 	suite.Run(t, new(casTestSuite))
 }
 
@@ -34,10 +37,6 @@ type casTestSuite struct {
 }
 
 func (s *casTestSuite) SetupTest() {
-	t := s.T()
-	if !*withTiKV {
-		t.Skip("skipping TestCAS because with-tikv is not enabled")
-	}
 	addrs := strings.Split(*pdAddrs, ",")
 	client, err := rawkv.NewClient(context.TODO(), addrs, config.DefaultConfig().Security)
 	require.Nil(s.T(), err)
