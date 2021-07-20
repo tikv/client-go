@@ -74,9 +74,9 @@ type Client struct {
 	atomic      bool
 }
 
-// WithAtomicForCAS enable atomic mode for CompareAndSwap
-func (c *Client) WithAtomicForCAS() *Client {
-	c.atomic = true
+// SetAtomicForCAS sets atomic mode for CompareAndSwap
+func (c *Client) SetAtomicForCAS(b bool) *Client {
+	c.atomic = b
 	return c
 }
 
@@ -383,9 +383,16 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 	return
 }
 
-// CompareAndSwap results in an atomic compare-and-set operation for the given key.
+// CompareAndSwap results in an atomic compare-and-set operation for the given key while SetAtomicForCAS(true)
 // If the value retrieved is equal to previousValue, newValue is written.
-// It returns the previous value and whether the value is swapped
+// It returns the previous value and whether the value is successfully swapped.
+//
+// If SetAtomicForCAS(false), it will returns an error because
+// CAS operations enforce the client should operate in atomic mode.
+//
+// NOTE: This feature is experimental. It depends on the single-row transaction mechanism of TiKV which is conflict
+// with the normal write operation in rawkv mode. If multiple clients exist, it's up to the clients the sync the atomic mode flag.
+// If some clients write in atomic mode but the other don't, the linearizability of TiKV will be violated.
 func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValue []byte) ([]byte, bool, error) {
 	if !c.atomic {
 		return nil, false, errors.Trace(errors.New("using CompareAndSwap without enable atomic mode"))
