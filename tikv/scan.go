@@ -45,6 +45,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"go.uber.org/zap"
 )
 
@@ -277,7 +278,7 @@ func (s *Scanner) getData(bo *Backoffer) error {
 			if err != nil {
 				return errors.Trace(err)
 			}
-			msBeforeExpired, _, err := newLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*Lock{lock})
+			msBeforeExpired, _, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
 			if err != nil {
 				return errors.Trace(err)
 			}

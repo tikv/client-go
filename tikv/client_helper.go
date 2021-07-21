@@ -37,6 +37,7 @@ import (
 
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -48,7 +49,7 @@ import (
 // the request. If there is no context information about the resolved locks, we'll
 // meet the secondary lock again and run into a deadloop.
 type ClientHelper struct {
-	lockResolver  *LockResolver
+	lockResolver  *txnlock.LockResolver
 	regionCache   *locate.RegionCache
 	resolvedLocks *util.TSSet
 	client        Client
@@ -67,7 +68,7 @@ func NewClientHelper(store *KVStore, resolvedLocks *util.TSSet) *ClientHelper {
 }
 
 // ResolveLocks wraps the ResolveLocks function and store the resolved result.
-func (ch *ClientHelper) ResolveLocks(bo *Backoffer, callerStartTS uint64, locks []*Lock) (int64, error) {
+func (ch *ClientHelper) ResolveLocks(bo *Backoffer, callerStartTS uint64, locks []*txnlock.Lock) (int64, error) {
 	var err error
 	var resolvedLocks []uint64
 	var msBeforeTxnExpired int64

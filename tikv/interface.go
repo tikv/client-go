@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
 
 // Storage represent the kv.Storage runs on TiKV.
@@ -49,7 +50,7 @@ type Storage interface {
 	SendReq(bo *Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error)
 
 	// GetLockResolver gets the LockResolver.
-	GetLockResolver() *LockResolver
+	GetLockResolver() *txnlock.LockResolver
 
 	// GetSafePointKV gets the SafePointKV.
 	GetSafePointKV() SafePointKV

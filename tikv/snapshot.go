@@ -54,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -395,7 +396,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *Backoffer, batch batchKeys, collec
 		batchGetResp := resp.Resp.(*kvrpcpb.BatchGetResponse)
 		var (
 			lockedKeys [][]byte
-			locks      []*Lock
+			locks      []*txnlock.Lock
 		)
 		if keyErr := batchGetResp.GetError(); keyErr != nil {
 			// If a response-level error happens, skip reading pairs.
@@ -528,7 +529,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *Backoffer, k []byte) ([]byte, 
 		ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
 	}
 
-	var firstLock *Lock
+	var firstLock *txnlock.Lock
 	for {
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.regionCache.LocateKey(bo, k)
@@ -581,7 +582,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *Backoffer, k []byte) ([]byte, 
 				continue
 			}
 
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, []*Lock{lock})
+			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, []*txnlock.Lock{lock})
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -717,9 +718,9 @@ func (s *KVSnapshot) SnapCacheSize() int {
 	return len(s.mu.cached)
 }
 
-func extractLockFromKeyErr(keyErr *kvrpcpb.KeyError) (*Lock, error) {
+func extractLockFromKeyErr(keyErr *kvrpcpb.KeyError) (*txnlock.Lock, error) {
 	if locked := keyErr.GetLocked(); locked != nil {
-		return NewLock(locked), nil
+		return txnlock.NewLock(locked), nil
 	}
 	return nil, extractKeyErr(keyErr)
 }

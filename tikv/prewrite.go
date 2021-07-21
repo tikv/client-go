@@ -50,6 +50,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -294,7 +295,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *Backoff
 			}
 			return nil
 		}
-		var locks []*Lock
+		var locks []*txnlock.Lock
 		for _, keyErr := range keyErrs {
 			// Check already exists error
 			if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
@@ -313,7 +314,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *Backoff
 			locks = append(locks, lock)
 		}
 		start := time.Now()
-		msBeforeExpired, err := c.store.lockResolver.resolveLocksForWrite(bo, c.startTS, c.forUpdateTS, locks)
+		msBeforeExpired, err := c.store.lockResolver.ResolveLocksForWrite(bo, c.startTS, c.forUpdateTS, locks)
 		if err != nil {
 			return errors.Trace(err)
 		}
