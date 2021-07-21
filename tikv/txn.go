@@ -515,7 +515,7 @@ func (txn *KVTxn) onCommitted(err error) {
 }
 
 // LockKeysWithWaitTime tries to lock the entries with the keys in KV store.
-// lockWaitTime in ms, except that kv.LockAlwaysWait(0) means always wait lock, kv.LockNowait(-1) means nowait lock
+// lockWaitTime in ms, 0 means nowait lock.
 func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, keysInput ...[]byte) (err error) {
 	forUpdateTs := txn.startTS
 	if txn.IsPessimistic() {
@@ -524,6 +524,11 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 		if err != nil {
 			return err
 		}
+	}
+
+	// 0 means nowait lock
+	if lockWaitTime == 0 {
+		lockWaitTime = LockNoWait
 	}
 	lockCtx := tikv.LockCtx{
 		ForUpdateTS:   forUpdateTs,
