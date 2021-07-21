@@ -59,6 +59,8 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
 
 var (
@@ -842,9 +844,9 @@ func (s *testCommitterSuite) TestDeleteAllYourWritesWithSFU() {
 	s.store.ClearTxnLatches()
 	err = txn2.Set(k3, []byte{33})
 	s.Nil(err)
-	var meetLocks []*tikv.Lock
-	resolver := tikv.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
-	resolver.SetMeetLockCallback(func(locks []*tikv.Lock) {
+	var meetLocks []*txnkv.Lock
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
+	resolver.SetMeetLockCallback(func(locks []*txnkv.Lock) {
 		meetLocks = append(meetLocks, locks...)
 	})
 	err = txn2.Commit(context.Background())
@@ -940,9 +942,9 @@ func (s *testCommitterSuite) TestPkNotFound() {
 	// while the secondary lock operation succeeded.
 	txn1.GetCommitter().CloseTTLManager()
 
-	var status tikv.TxnStatus
+	var status txnkv.TxnStatus
 	bo := tikv.NewBackofferWithVars(ctx, 5000, nil)
-	lockKey2 := &tikv.Lock{
+	lockKey2 := &txnkv.Lock{
 		Key:             k2,
 		Primary:         k1,
 		TxnID:           txn1.StartTS(),
@@ -951,7 +953,8 @@ func (s *testCommitterSuite) TestPkNotFound() {
 		LockType:        kvrpcpb.Op_PessimisticLock,
 		LockForUpdateTS: txn1.StartTS(),
 	}
-	resolver := tikv.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
+
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	status, err = resolver.GetTxnStatusFromLock(bo, lockKey2, oracle.GoTimeToTS(time.Now().Add(200*time.Millisecond)), false)
 	s.Nil(err)
 	s.Equal(status.Action(), kvrpcpb.Action_TTLExpirePessimisticRollback)
@@ -969,7 +972,7 @@ func (s *testCommitterSuite) TestPkNotFound() {
 	s.Nil(err)
 
 	// Pessimistic rollback using smaller forUpdateTS does not take effect.
-	lockKey3 := &tikv.Lock{
+	lockKey3 := &txnkv.Lock{
 		Key:             k3,
 		Primary:         k1,
 		TxnID:           txn1.StartTS(),
@@ -1201,8 +1204,8 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	// try to resolve the left optimistic locks, use clean whole region
 	time.Sleep(time.Duration(atomic.LoadUint64(&tikv.ManagedLockTTL)) * time.Millisecond)
 	optimisticLockInfo := s.getLockInfo(optimisticLockKey)
-	lock := tikv.NewLock(optimisticLockInfo)
-	resolver := tikv.LockResolverProbe{LockResolver: s.store.GetLockResolver()}
+	lock := txnlock.NewLock(optimisticLockInfo)
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	err = resolver.ResolveLock(ctx, lock)
 	s.Nil(err)
 

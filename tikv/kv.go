@@ -60,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
@@ -101,7 +102,7 @@ type KVStore struct {
 	}
 	pdClient     pd.Client
 	regionCache  *locate.RegionCache
-	lockResolver *LockResolver
+	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
 
 	mock bool
@@ -176,7 +177,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		cancel:          cancel,
 	}
 	store.clientMu.client = client.NewReqCollapse(tikvclient)
-	store.lockResolver = newLockResolver(store)
+	store.lockResolver = txnlock.NewLockResolver(store)
 
 	store.wg.Add(2)
 	go store.runSafePointChecker()
@@ -401,7 +402,7 @@ func (s *KVStore) GetRegionCache() *locate.RegionCache {
 }
 
 // GetLockResolver returns the lock resolver instance.
-func (s *KVStore) GetLockResolver() *LockResolver {
+func (s *KVStore) GetLockResolver() *txnlock.LockResolver {
 	return s.lockResolver
 }
 
@@ -535,3 +536,38 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 
 // Variables defines the variables used by TiKV storage.
 type Variables = kv.Variables
+
+// NewLockResolver is exported for other pkg to use, suppress unused warning.
+var _ = NewLockResolver
+
+// NewLockResolver creates a LockResolver.
+// It is exported for other pkg to use. For instance, binlog service needs
+// to determine a transaction's commit state.
+func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.ClientOption) (*txnlock.LockResolver, error) {
+	pdCli, err := pd.NewClient(etcdAddrs, pd.SecurityOption{
+		CAPath:   security.ClusterSSLCA,
+		CertPath: security.ClusterSSLCert,
+		KeyPath:  security.ClusterSSLKey,
+	}, opts...)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	pdCli = util.InterceptedPDClient{Client: pdCli}
+	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID(context.TODO()))
+
+	tlsConfig, err := security.ToTLSConfig()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	spkv, err := NewEtcdSafePointKV(etcdAddrs, tlsConfig)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(security))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return s.lockResolver, nil
+}
