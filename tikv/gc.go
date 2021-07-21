@@ -30,6 +30,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	zap "go.uber.org/zap"
 )
 
@@ -70,7 +71,7 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 }
 
 // We don't want gc to sweep out the cached info belong to other processes, like coprocessor.
-const gcScanLockLimit = ResolvedCacheSize / 2
+const gcScanLockLimit = txnlock.ResolvedCacheSize / 2
 
 func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, startKey []byte, endKey []byte) (rangetask.TaskStat, error) {
 	// for scan lock request, we must return all locks even if they are generated
@@ -122,7 +123,7 @@ func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, st
 	return stat, nil
 }
 
-func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []byte, maxVersion uint64, limit uint32) (locks []*Lock, loc *locate.KeyLocation, err error) {
+func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []byte, maxVersion uint64, limit uint32) (locks []*txnlock.Lock, loc *locate.KeyLocation, err error) {
 	for {
 		loc, err := s.GetRegionCache().LocateKey(bo, startKey)
 		if err != nil {
@@ -157,9 +158,9 @@ func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []
 			return nil, loc, errors.Errorf("unexpected scanlock error: %s", locksResp)
 		}
 		locksInfo := locksResp.GetLocks()
-		locks = make([]*Lock, len(locksInfo))
+		locks = make([]*txnlock.Lock, len(locksInfo))
 		for i := range locksInfo {
-			locks[i] = NewLock(locksInfo[i])
+			locks[i] = txnlock.NewLock(locksInfo[i])
 		}
 		return locks, loc, nil
 	}
@@ -170,7 +171,7 @@ func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []
 // It returns error when meet an unretryable error.
 // When the locks are not in one region, resolve locks should be failed, it returns with nil resolveLocation and nil err.
 // Used it in gcworker only!
-func (s *KVStore) batchResolveLocksInARegion(bo *Backoffer, locks []*Lock, expectedLoc *locate.KeyLocation) (resolvedLocation *locate.KeyLocation, err error) {
+func (s *KVStore) batchResolveLocksInARegion(bo *Backoffer, locks []*txnlock.Lock, expectedLoc *locate.KeyLocation) (resolvedLocation *locate.KeyLocation, err error) {
 	resolvedLocation = expectedLoc
 	for {
 		ok, err := s.GetLockResolver().BatchResolveLocks(bo, locks, resolvedLocation.Region)
