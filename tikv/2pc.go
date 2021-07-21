@@ -489,6 +489,14 @@ func (c *twoPhaseCommitter) asyncSecondaries() [][]byte {
 
 const bytesPerMiB = 1024 * 1024
 
+// ttl = ttlFactor * sqrt(writeSizeInMiB)
+var ttlFactor = 6000
+
+// By default, locks after 3000ms is considered unusual (the client created the
+// lock might be dead). Other client may cleanup this kind of lock.
+// For locks created recently, we will do backoff and retry.
+var defaultLockTTL uint64 = 3000
+
 func txnLockTTL(startTime time.Time, txnSize int) uint64 {
 	// Increase lockTTL for large transactions.
 	// The formula is `ttl = ttlFactor * sqrt(sizeInMiB)`.
