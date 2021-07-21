@@ -727,7 +727,7 @@ func (s *testRegionCacheSuite) TestSendFailEnableForwarding() {
 	s.Nil(err)
 	s.Equal(loc1.Region.id, s.region1)
 
-	// Invoke OnSendFail so that the store will be marked as needForwarding
+	// Invoke OnSendFail so that the store will be marked as unreachable
 	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
 	s.Nil(err)
 	s.NotNil(ctx)

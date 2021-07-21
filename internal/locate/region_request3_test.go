@@ -220,7 +220,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	atomic.StoreUint32(&storeState, uint32(reachable))
 	start := time.Now()
 	for {
-		if atomic.LoadInt32(&leaderStore.needForwarding) == 0 {
+		if atomic.LoadInt32(&leaderStore.unreachable) == 0 {
 			break
 		}
 		if time.Since(start) > 3*time.Second {

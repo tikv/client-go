@@ -245,8 +245,19 @@ type replicaSelector struct {
 	// replicas contains all TiKV replicas for now and the leader is at the
 	// head of the slice.
 	replicas []*replica
+	state selectorState
 	// nextReplicaIdx points to the candidate for the next attempt.
 	nextReplicaIdx int
+}
+
+type selectorState interface {}
+
+type accessKnownLeader struct {
+	attempt int
+}
+
+type accessByProxy struct {
+
 }
 
 func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID) (*replicaSelector, error) {
@@ -270,6 +281,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID) (*replic
 		regionCache,
 		cachedRegion,
 		replicas,
+		accessKnownLeader{0},
 		0,
 	}, nil
 }
@@ -338,6 +350,8 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	if replica.store.requestLiveness(bo, s.regionCache) == reachable {
 		s.rewind()
 		return
+	} else {
+		replica.store.startHealthCheckLoopIfNeeded(s.regionCache)
 	}
 
 	store := replica.store
@@ -422,7 +436,7 @@ func (s *RegionRequestSender) getRPCContext(
 		// Now only requests sent to the replica leader will use the replica selector to get
 		// the RPC context.
 		// TODO(youjiali1995): make all requests use the replica selector.
-		if !s.regionCache.enableForwarding && req.ReplicaReadType == kv.ReplicaReadLeader {
+		if /* !s.regionCache.enableForwarding && */ req.ReplicaReadType == kv.ReplicaReadLeader {
 			if s.leaderReplicaSelector == nil {
 				selector, err := newReplicaSelector(s.regionCache, regionID)
 				if selector == nil || err != nil {
