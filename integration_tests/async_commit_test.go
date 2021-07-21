@@ -251,7 +251,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	var lockutil tikv.LockProbe
 	status := lockutil.NewLockStatus(nil, true, ts)
 
-	resolver := tikv.NewLockResolverProb(s.store)
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	err = resolver.ResolveLockAsync(s.bo, lock, status)
 	s.Nil(err)
 	currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})

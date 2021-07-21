@@ -445,8 +445,8 @@ type LockResolverProbe struct {
 }
 
 // NewLockResolverProb create a LockResolverProbe from KVStore.
-func NewLockResolverProb(store *KVStore) *LockResolverProbe {
-	resolver := txnlock.LockResolverProbe{LockResolver: store.GetLockResolver()}
+func NewLockResolverProb(r *txnlock.LockResolver) *LockResolverProbe {
+	resolver := txnlock.LockResolverProbe{LockResolver: r}
 	return &LockResolverProbe{&resolver}
 }
 

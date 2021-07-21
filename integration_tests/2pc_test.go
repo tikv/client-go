@@ -845,7 +845,7 @@ func (s *testCommitterSuite) TestDeleteAllYourWritesWithSFU() {
 	err = txn2.Set(k3, []byte{33})
 	s.Nil(err)
 	var meetLocks []*txnkv.Lock
-	resolver := tikv.NewLockResolverProb(s.store.KVStore)
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	resolver.SetMeetLockCallback(func(locks []*txnkv.Lock) {
 		meetLocks = append(meetLocks, locks...)
 	})
@@ -954,7 +954,7 @@ func (s *testCommitterSuite) TestPkNotFound() {
 		LockForUpdateTS: txn1.StartTS(),
 	}
 
-	resolver := tikv.NewLockResolverProb(s.store.KVStore)
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	status, err = resolver.GetTxnStatusFromLock(bo, lockKey2, oracle.GoTimeToTS(time.Now().Add(200*time.Millisecond)), false)
 	s.Nil(err)
 	s.Equal(status.Action(), kvrpcpb.Action_TTLExpirePessimisticRollback)
@@ -1205,7 +1205,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	time.Sleep(time.Duration(atomic.LoadUint64(&tikv.ManagedLockTTL)) * time.Millisecond)
 	optimisticLockInfo := s.getLockInfo(optimisticLockKey)
 	lock := txnlock.NewLock(optimisticLockInfo)
-	resolver := tikv.NewLockResolverProb(s.store.KVStore)
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
 	err = resolver.ResolveLock(ctx, lock)
 	s.Nil(err)
 
