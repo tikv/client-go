@@ -52,6 +52,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -124,8 +125,7 @@ func (s *testAsyncCommitCommon) mustGetLock(key []byte) *txnkv.Lock {
 	s.NotNil(resp.Resp)
 	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
 	s.NotNil(keyErr)
-	var lockutil tikv.LockProbe
-	lock, err := lockutil.ExtractLockFromKeyErr(keyErr)
+	lock, err := tikv.ExtractLockFromKeyErr(keyErr)
 	s.Nil(err)
 	return lock
 }
@@ -248,7 +248,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	lock.UseAsyncCommit = true
 	ts, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
-	var lockutil tikv.LockProbe
+	var lockutil txnlock.LockProbe
 	status := lockutil.NewLockStatus(nil, true, ts)
 
 	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())

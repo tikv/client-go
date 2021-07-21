@@ -434,11 +434,6 @@ func (s SnapshotProbe) FormatStats() string {
 	return s.mu.stats.String()
 }
 
-// LockProbe exposes some lock utilities for testing purpose.
-type LockProbe struct {
-	*txnlock.LockProbe
-}
-
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
 type LockResolverProbe struct {
 	*txnlock.LockResolverProbe
@@ -463,7 +458,7 @@ func (l LockResolverProbe) ResolvePessimisticLock(ctx context.Context, lock *txn
 }
 
 // ExtractLockFromKeyErr makes a Lock based on a key error.
-func (l LockProbe) ExtractLockFromKeyErr(err *kvrpcpb.KeyError) (*txnlock.Lock, error) {
+func ExtractLockFromKeyErr(err *kvrpcpb.KeyError) (*txnlock.Lock, error) {
 	return extractLockFromKeyErr(err)
 }
 

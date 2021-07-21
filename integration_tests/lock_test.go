@@ -436,7 +436,7 @@ func (s *testLockSuite) mustGetLock(key []byte) *txnkv.Lock {
 	s.NotNil(resp.Resp)
 	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
 	s.NotNil(keyErr)
-	lock, err := tikv.LockProbe{}.ExtractLockFromKeyErr(keyErr)
+	lock, err := tikv.ExtractLockFromKeyErr(keyErr)
 	s.Nil(err)
 	return lock
 }
