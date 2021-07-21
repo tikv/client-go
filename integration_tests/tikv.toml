@@ -2,6 +2,7 @@
 addr = "127.0.0.1:20160"
 [storage]
 reserve-space = "1MB"
+enable-ttl = true
 [pd]
 endpoints = ["127.0.0.1:2379"]
 [rocksdb]
