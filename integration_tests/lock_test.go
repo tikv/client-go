@@ -445,7 +445,9 @@ func (s *testLockSuite) ttlEquals(x, y uint64) {
 	if runtime.GOARCH == "ppc64le" {
 		s.LessOrEqual(int(-math.Abs(float64(x-y))), 2)
 	} else {
-		s.LessOrEqual(int(math.Abs(float64(x-y))), 2)
+		if x > y {
+			s.LessOrEqual(int(x-y), 2)
+		}
 	}
 
 }
