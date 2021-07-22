@@ -441,8 +441,6 @@ func (s *testLockSuite) mustGetLock(key []byte) *txnkv.Lock {
 }
 
 func (s *testLockSuite) ttlEquals(x, y uint64) {
-	// NOTE: On ppc64le, all integers are by default unsigned integers,
-	// hence we have to separately cast the value returned by "math.Abs()" function for ppc64le.
 	if x < y {
 		x, y = y, x
 	}
