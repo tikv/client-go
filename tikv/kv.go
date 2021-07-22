@@ -575,6 +575,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 }
 
 // TODO: remove it when tidb/br is ready.
+
 // Scanner support tikv scan
 type Scanner = txnsnapshot.Scanner
 
