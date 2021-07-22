@@ -37,7 +37,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -444,16 +443,10 @@ func (s *testLockSuite) mustGetLock(key []byte) *txnkv.Lock {
 func (s *testLockSuite) ttlEquals(x, y uint64) {
 	// NOTE: On ppc64le, all integers are by default unsigned integers,
 	// hence we have to separately cast the value returned by "math.Abs()" function for ppc64le.
-	if runtime.GOARCH == "ppc64le" {
-		// TODO: fix the value compare
-		s.LessOrEqual(int(-math.Abs(float64(x-y))), 2)
-	} else {
-		if x < y {
-			x, y = y, x
-		}
-		s.LessOrEqual(int(x-y), 5)
+	if x < y {
+		x, y = y, x
 	}
-
+	s.LessOrEqual(int(x-y), 5)
 }
 
 func (s *testLockSuite) TestLockTTL() {
