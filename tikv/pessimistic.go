@@ -34,6 +34,7 @@ package tikv
 
 import (
 	"encoding/hex"
+	"math"
 	"math/rand"
 	"strings"
 	"sync/atomic"
@@ -57,10 +58,10 @@ import (
 
 // Used for pessimistic lock wait time
 // these two constants are special for lock protocol with tikv
-// 0 means always wait, -1 means nowait, others meaning lock wait in milliseconds
+// math.MaxInt64 means always wait, 0 means nowait, others meaning lock wait in milliseconds
 var (
-	LockAlwaysWait = int64(0)
-	LockNoWait     = int64(-1)
+	LockAlwaysWait = int64(math.MaxInt64)
+	LockNoWait     = int64(0)
 )
 
 type actionPessimisticLock struct {
