@@ -34,7 +34,6 @@ package tikv
 
 import (
 	"encoding/hex"
-	"math"
 	"math/rand"
 	"strings"
 	"sync/atomic"
@@ -54,14 +53,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
-)
-
-// Used for pessimistic lock wait time
-// these two constants are special for lock protocol with tikv
-// math.MaxInt64 means always wait, 0 means nowait, others meaning lock wait in milliseconds
-var (
-	LockAlwaysWait = int64(math.MaxInt64)
-	LockNoWait     = int64(0)
 )
 
 type actionPessimisticLock struct {
@@ -121,17 +112,17 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		ForUpdateTs:  c.forUpdateTS,
 		LockTtl:      ttl,
 		IsFirstLock:  c.isFirstLock,
-		WaitTimeout:  action.LockWaitTime,
+		WaitTimeout:  action.LockWaitTime(),
 		ReturnValues: action.ReturnValues,
 		MinCommitTs:  c.forUpdateTS + 1,
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: action.LockCtx.ResourceGroupTag})
 	lockWaitStartTime := action.WaitStartTime
 	for {
 		// if lockWaitTime set, refine the request `WaitTimeout` field based on timeout limit
-		if action.LockWaitTime > 0 {
-			timeLeft := action.LockWaitTime - (time.Since(lockWaitStartTime)).Milliseconds()
+		if action.LockWaitTime() > 0 && action.LockWaitTime() != kv.LockAlwaysWait {
+			timeLeft := action.LockWaitTime() - (time.Since(lockWaitStartTime)).Milliseconds()
 			if timeLeft <= 0 {
-				req.PessimisticLock().WaitTimeout = LockNoWait
+				req.PessimisticLock().WaitTimeout = kv.LockNoWait
 			} else {
 				req.PessimisticLock().WaitTimeout = timeLeft
 			}
@@ -220,13 +211,13 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 		// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
 		if msBeforeTxnExpired > 0 {
-			if action.LockWaitTime == LockNoWait {
+			if action.LockWaitTime() == kv.LockNoWait {
 				return tikverr.ErrLockAcquireFailAndNoWaitSet
-			} else if action.LockWaitTime == LockAlwaysWait {
+			} else if action.LockWaitTime() == kv.LockAlwaysWait {
 				// do nothing but keep wait
 			} else {
 				// the lockWaitTime is set, we should return wait timeout if we are still blocked by a lock
-				if time.Since(lockWaitStartTime).Milliseconds() >= action.LockWaitTime {
+				if time.Since(lockWaitStartTime).Milliseconds() >= action.LockWaitTime() {
 					return errors.Trace(tikverr.ErrLockWaitTimeout)
 				}
 			}

@@ -525,13 +525,9 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 			return err
 		}
 	}
+	lockCtx := tikv.NewLockCtx(forUpdateTs, lockWaitTime, time.Now())
 
-	lockCtx := tikv.LockCtx{
-		ForUpdateTS:   forUpdateTs,
-		LockWaitTime:  lockWaitTime,
-		WaitStartTime: time.Now(),
-	}
-	return txn.LockKeys(ctx, &lockCtx, keysInput...)
+	return txn.LockKeys(ctx, lockCtx, keysInput...)
 }
 
 // LockKeys tries to lock the entries with the keys in KV store.

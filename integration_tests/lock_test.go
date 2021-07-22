@@ -677,12 +677,9 @@ func (s *testLockSuite) TestDeadlockReportWaitChain() {
 	}
 
 	makeLockCtx := func(txn *txnWrapper, resourceGroupTag string) *kv.LockCtx {
-		return &kv.LockCtx{
-			ForUpdateTS:      txn.StartTS(),
-			WaitStartTime:    time.Now(),
-			LockWaitTime:     1000,
-			ResourceGroupTag: []byte(resourceGroupTag),
-		}
+		lockctx := kv.NewLockCtx(txn.StartTS(), 1000, time.Now())
+		lockctx.ResourceGroupTag = []byte(resourceGroupTag)
+		return lockctx
 	}
 
 	// Prepares several transactions and each locks a key.

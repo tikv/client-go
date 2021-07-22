@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -65,13 +66,13 @@ func exampleForPessimisticTXN() {
 	//txn1: lock the primary key
 	//lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
 	//err := txn1.LockKeys(context.Background(), lockCtx, k1)
-	err := txn1.LockKeysWithWaitTime(context.Background(), tikv.LockAlwaysWait, k1)
+	err := txn1.LockKeysWithWaitTime(context.Background(), kv.LockAlwaysWait, k1)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("txn1: lock k1 success.")
 	// txn1:lock the secondary key
-	err = txn1.LockKeysWithWaitTime(context.Background(), tikv.LockAlwaysWait, k2)
+	err = txn1.LockKeysWithWaitTime(context.Background(), kv.LockAlwaysWait, k2)
 	if err != nil {
 		panic(err)
 	}
@@ -81,7 +82,7 @@ func exampleForPessimisticTXN() {
 	txn2 := begin_pessimistic_txn()
 
 	// txn2: lock k2 no wait
-	err = txn2.LockKeysWithWaitTime(context.Background(), tikv.LockNoWait, k2)
+	err = txn2.LockKeysWithWaitTime(context.Background(), kv.LockNoWait, k2)
 	// cannot acquire lock immediately thus error:ErrLockAcquireFailAndNoWaitSet
 	fmt.Println("txn2: acquire lock for k2 (while txn1 has this lock) should be failed with error: ", err)
 
@@ -100,7 +101,7 @@ func exampleForPessimisticTXN() {
 	}
 
 	// txn2: lock k2 in txn2 with new forUpdateTS should success.
-	err = txn2.LockKeysWithWaitTime(context.Background(), tikv.LockNoWait, k2)
+	err = txn2.LockKeysWithWaitTime(context.Background(), kv.LockNoWait, k2)
 	if err != nil {
 		// cannot acquire lock , should success.
 		fmt.Println("txn2: acquire lock for k2 should be success while meet err:", err)
