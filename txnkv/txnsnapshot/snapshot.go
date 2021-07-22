@@ -83,7 +83,7 @@ func (l IsoLevel) ToPB() kvrpcpb.IsolationLevel {
 	return kvrpcpb.IsolationLevel(l)
 }
 
-type KVStore interface {
+type kvstore interface {
 	CheckVisibility(startTime uint64) error
 	// GetRegionCache gets the RegionCache.
 	GetRegionCache() *locate.RegionCache
@@ -98,7 +98,7 @@ type KVStore interface {
 
 // KVSnapshot implements the tidbkv.Snapshot interface.
 type KVSnapshot struct {
-	store           KVStore
+	store           kvstore
 	version         uint64
 	isolationLevel  IsoLevel
 	priority        txnutil.Priority
@@ -135,7 +135,7 @@ type KVSnapshot struct {
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
-func NewTiKVSnapshot(store KVStore, ts uint64, replicaReadSeed uint32) *KVSnapshot {
+func NewTiKVSnapshot(store kvstore, ts uint64, replicaReadSeed uint32) *KVSnapshot {
 	// Sanity check for snapshot version.
 	if ts >= math.MaxInt64 && ts != math.MaxUint64 {
 		err := errors.Errorf("try to get snapshot with a large ts %d", ts)
