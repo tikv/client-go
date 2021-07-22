@@ -40,7 +40,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/util"
 )
 
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()
@@ -54,15 +53,12 @@ type testScanSuite struct {
 	store        *tikv.KVStore
 	recordPrefix []byte
 	rowNums      []int
-	ctx          context.Context
 }
 
 func (s *testScanSuite) SetupSuite() {
 	s.store = NewTestStore(s.T())
 	s.recordPrefix = []byte("prefix")
 	s.rowNums = append(s.rowNums, 1, scanBatchSize, scanBatchSize+1, scanBatchSize*3)
-	// Avoid using async commit logic.
-	s.ctx = context.WithValue(context.Background(), util.SessionID, uint64(0))
 }
 
 func (s *testScanSuite) TearDownSuite() {
@@ -76,7 +72,7 @@ func (s *testScanSuite) TearDownSuite() {
 		s.Require().Nil(err)
 		scanner.Next()
 	}
-	err = txn.Commit(s.ctx)
+	err = txn.Commit(context.Background())
 	s.Require().Nil(err)
 	err = s.store.Close()
 	s.Require().Nil(err)
@@ -125,16 +121,16 @@ func (s *testScanSuite) TestScan() {
 			err := txn.Set(s.makeKey(i), s.makeValue(i))
 			s.Nil(err)
 		}
-		err := txn.Commit(s.ctx)
+		err := txn.Commit(context.Background())
 		s.Nil(err)
 		mockTableID := int64(999)
 		if rowNum > 123 {
-			_, err = s.store.SplitRegions(s.ctx, [][]byte{s.makeKey(123)}, false, &mockTableID)
+			_, err = s.store.SplitRegions(context.Background(), [][]byte{s.makeKey(123)}, false, &mockTableID)
 			s.Nil(err)
 		}
 
 		if rowNum > 456 {
-			_, err = s.store.SplitRegions(s.ctx, [][]byte{s.makeKey(456)}, false, &mockTableID)
+			_, err = s.store.SplitRegions(context.Background(), [][]byte{s.makeKey(456)}, false, &mockTableID)
 			s.Nil(err)
 		}
 

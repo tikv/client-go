@@ -79,6 +79,8 @@ const (
 	CmdRawBatchDelete
 	CmdRawDeleteRange
 	CmdRawScan
+	CmdGetKeyTTL
+	CmdRawCompareAndSwap
 
 	CmdUnsafeDestroyRange
 
@@ -96,6 +98,7 @@ const (
 	CmdMPPTask
 	CmdMPPConn
 	CmdMPPCancel
+	CmdMPPAlive
 
 	CmdMvccGetByKey CmdType = 1024 + iota
 	CmdMvccGetByStartTs
@@ -172,6 +175,8 @@ func (t CmdType) String() string {
 		return "EstablishMPPConnection"
 	case CmdMPPCancel:
 		return "CancelMPPTask"
+	case CmdMPPAlive:
+		return "MPPAlive"
 	case CmdMvccGetByKey:
 		return "MvccGetByKey"
 	case CmdMvccGetByStartTs:
@@ -358,6 +363,16 @@ func (req *Request) UnsafeDestroyRange() *kvrpcpb.UnsafeDestroyRangeRequest {
 	return req.Req.(*kvrpcpb.UnsafeDestroyRangeRequest)
 }
 
+// RawGetKeyTTL returns RawGetKeyTTLRequest in request.
+func (req *Request) RawGetKeyTTL() *kvrpcpb.RawGetKeyTTLRequest {
+	return req.Req.(*kvrpcpb.RawGetKeyTTLRequest)
+}
+
+// RawCompareAndSwap returns RawCASRequest in request.
+func (req *Request) RawCompareAndSwap() *kvrpcpb.RawCASRequest {
+	return req.Req.(*kvrpcpb.RawCASRequest)
+}
+
 // RegisterLockObserver returns RegisterLockObserverRequest in request.
 func (req *Request) RegisterLockObserver() *kvrpcpb.RegisterLockObserverRequest {
 	return req.Req.(*kvrpcpb.RegisterLockObserverRequest)
@@ -391,6 +406,11 @@ func (req *Request) BatchCop() *coprocessor.BatchRequest {
 // DispatchMPPTask returns dispatch task request in request.
 func (req *Request) DispatchMPPTask() *mpp.DispatchTaskRequest {
 	return req.Req.(*mpp.DispatchTaskRequest)
+}
+
+// IsMPPAlive returns IsAlive request in request.
+func (req *Request) IsMPPAlive() *mpp.IsAliveRequest {
+	return req.Req.(*mpp.IsAliveRequest)
 }
 
 // EstablishMPPConn returns EstablishMPPConnectionRequest in request.
@@ -669,6 +689,10 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.RawScan().Context = ctx
 	case CmdUnsafeDestroyRange:
 		req.UnsafeDestroyRange().Context = ctx
+	case CmdGetKeyTTL:
+		req.RawGetKeyTTL().Context = ctx
+	case CmdRawCompareAndSwap:
+		req.RawCompareAndSwap().Context = ctx
 	case CmdRegisterLockObserver:
 		req.RegisterLockObserver().Context = ctx
 	case CmdCheckLockObserver:
@@ -799,6 +823,14 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.UnsafeDestroyRangeResponse{
 			RegionError: e,
 		}
+	case CmdGetKeyTTL:
+		p = &kvrpcpb.RawGetKeyTTLResponse{
+			RegionError: e,
+		}
+	case CmdRawCompareAndSwap:
+		p = &kvrpcpb.RawCASResponse{
+			RegionError: e,
+		}
 	case CmdCop:
 		p = &coprocessor.Response{
 			RegionError: e,
@@ -911,6 +943,10 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.RawScan(ctx, req.RawScan())
 	case CmdUnsafeDestroyRange:
 		resp.Resp, err = client.UnsafeDestroyRange(ctx, req.UnsafeDestroyRange())
+	case CmdGetKeyTTL:
+		resp.Resp, err = client.RawGetKeyTTL(ctx, req.RawGetKeyTTL())
+	case CmdRawCompareAndSwap:
+		resp.Resp, err = client.RawCompareAndSwap(ctx, req.RawCompareAndSwap())
 	case CmdRegisterLockObserver:
 		resp.Resp, err = client.RegisterLockObserver(ctx, req.RegisterLockObserver())
 	case CmdCheckLockObserver:
@@ -923,6 +959,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.Coprocessor(ctx, req.Cop())
 	case CmdMPPTask:
 		resp.Resp, err = client.DispatchMPPTask(ctx, req.DispatchMPPTask())
+	case CmdMPPAlive:
+		resp.Resp, err = client.IsAlive(ctx, req.IsMPPAlive())
 	case CmdMPPConn:
 		var streamClient tikvpb.Tikv_EstablishMPPConnectionClient
 		streamClient, err = client.EstablishMPPConnection(ctx, req.EstablishMPPConn())

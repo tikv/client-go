@@ -11,12 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cluster
+package txnkv
 
-import "github.com/tikv/client-go/v2/internal/mockstore/cluster"
+import "github.com/tikv/client-go/v2/txnkv/txnlock"
 
-// For backward campatibility.
-// TODO: remove it.
+// Lock represents a lock from tikv server.
+type Lock = txnlock.Lock
 
-// Cluster simulates a TiKV cluster.
-type Cluster = cluster.Cluster
+// LockResolver resolves locks and also caches resolved txn status.
+type LockResolver = txnlock.LockResolver
+
+// TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
+type TxnStatus = txnlock.TxnStatus
