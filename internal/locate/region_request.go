@@ -521,7 +521,7 @@ func (s *RegionRequestSender) SendReqCtx(
 	}()
 	for {
 		if tryTimes > 0 {
-			req.RetryRequest = true
+			req.IsRetryRequest = true
 			if tryTimes%100 == 0 {
 				logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", tryTimes))
 			}

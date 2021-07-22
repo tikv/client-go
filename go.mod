@@ -18,7 +18,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3
 	github.com/pingcap/failpoint v0.0.0-20210316064728-7acb0f0a3dfd
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20210712050333-b66fdbd6bfd5
+	github.com/pingcap/kvproto v0.0.0-20210722091755-91a52cd9e8db
 	github.com/pingcap/log v0.0.0-20210317133921-96f4fcab92a4
 	github.com/pingcap/parser v0.0.0-20210525032559-c37778aff307
 	github.com/prometheus/client_golang v1.5.1
@@ -44,5 +44,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	honnef.co/go/tools v0.2.0 // indirect
 )
-
-replace github.com/pingcap/kvproto v0.0.0-20210712050333-b66fdbd6bfd5 => github.com/sticnarf/kvproto v0.0.0-20210721090807-8d2b59e1523b
