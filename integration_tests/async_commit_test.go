@@ -125,7 +125,7 @@ func (s *testAsyncCommitCommon) mustGetLock(key []byte) *txnkv.Lock {
 	s.NotNil(resp.Resp)
 	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
 	s.NotNil(keyErr)
-	lock, err := tikv.ExtractLockFromKeyErr(keyErr)
+	lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 	s.Nil(err)
 	return lock
 }

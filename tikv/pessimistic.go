@@ -199,7 +199,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			}
 
 			// Extract lock from key error
-			lock, err1 := extractLockFromKeyErr(keyErr)
+			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err1 != nil {
 				return errors.Trace(err1)
 			}

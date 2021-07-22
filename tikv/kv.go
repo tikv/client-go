@@ -61,6 +61,8 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
@@ -299,8 +301,8 @@ func (s *KVStore) DeleteRange(ctx context.Context, startKey []byte, endKey []byt
 
 // GetSnapshot gets a snapshot that is able to read any data which data is <= ver.
 // if ts is MaxVersion or > current max committed version, we will use current version for this snapshot.
-func (s *KVStore) GetSnapshot(ts uint64) *KVSnapshot {
-	snapshot := newTiKVSnapshot(s, ts, s.nextReplicaReadSeed())
+func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
+	snapshot := txnsnapshot.NewTiKVSnapshot(s, ts, s.nextReplicaReadSeed())
 	return snapshot
 }
 
@@ -571,3 +573,32 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 	}
 	return s.lockResolver, nil
 }
+
+// TODO: remove it when tidb/br is ready.
+// Scanner support tikv scan
+type Scanner = txnsnapshot.Scanner
+
+// KVSnapshot implements the tidbkv.Snapshot interface.
+type KVSnapshot = txnsnapshot.KVSnapshot
+
+// SnapshotRuntimeStats records the runtime stats of snapshot.
+type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
+
+// IsoLevel is the transaction's isolation level.
+type IsoLevel = txnsnapshot.IsoLevel
+
+// IsoLevel value for transaction priority.
+const (
+	SI = txnsnapshot.SI
+	RC = txnsnapshot.RC
+)
+
+// Priority is the priority for tikv to execute a command.
+type Priority = txnutil.Priority
+
+// Priority value for transaction priority.
+const (
+	PriorityHigh   = txnutil.PriorityHigh
+	PriorityNormal = txnutil.PriorityNormal
+	PriorityLow    = txnutil.PriorityLow
+)
