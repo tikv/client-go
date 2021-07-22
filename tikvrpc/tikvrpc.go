@@ -79,6 +79,7 @@ const (
 	CmdRawBatchDelete
 	CmdRawDeleteRange
 	CmdRawScan
+	CmdGetKeyTTL
 	CmdRawCompareAndSwap
 
 	CmdUnsafeDestroyRange
@@ -360,6 +361,11 @@ func (req *Request) RawScan() *kvrpcpb.RawScanRequest {
 // UnsafeDestroyRange returns UnsafeDestroyRangeRequest in request.
 func (req *Request) UnsafeDestroyRange() *kvrpcpb.UnsafeDestroyRangeRequest {
 	return req.Req.(*kvrpcpb.UnsafeDestroyRangeRequest)
+}
+
+// RawGetKeyTTL returns RawGetKeyTTLRequest in request.
+func (req *Request) RawGetKeyTTL() *kvrpcpb.RawGetKeyTTLRequest {
+	return req.Req.(*kvrpcpb.RawGetKeyTTLRequest)
 }
 
 // RawCompareAndSwap returns RawCASRequest in request.
@@ -683,6 +689,8 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.RawScan().Context = ctx
 	case CmdUnsafeDestroyRange:
 		req.UnsafeDestroyRange().Context = ctx
+	case CmdGetKeyTTL:
+		req.RawGetKeyTTL().Context = ctx
 	case CmdRawCompareAndSwap:
 		req.RawCompareAndSwap().Context = ctx
 	case CmdRegisterLockObserver:
@@ -815,6 +823,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.UnsafeDestroyRangeResponse{
 			RegionError: e,
 		}
+	case CmdGetKeyTTL:
+		p = &kvrpcpb.RawGetKeyTTLResponse{
+			RegionError: e,
+		}
 	case CmdRawCompareAndSwap:
 		p = &kvrpcpb.RawCASResponse{
 			RegionError: e,
@@ -931,6 +943,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.RawScan(ctx, req.RawScan())
 	case CmdUnsafeDestroyRange:
 		resp.Resp, err = client.UnsafeDestroyRange(ctx, req.UnsafeDestroyRange())
+	case CmdGetKeyTTL:
+		resp.Resp, err = client.RawGetKeyTTL(ctx, req.RawGetKeyTTL())
 	case CmdRawCompareAndSwap:
 		resp.Resp, err = client.RawCompareAndSwap(ctx, req.RawCompareAndSwap())
 	case CmdRegisterLockObserver:
