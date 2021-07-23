@@ -64,8 +64,6 @@ func exampleForPessimisticTXN() {
 	txn1 := begin_pessimistic_txn()
 
 	//txn1: lock the primary key
-	//lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	//err := txn1.LockKeys(context.Background(), lockCtx, k1)
 	err := txn1.LockKeysWithWaitTime(context.Background(), kv.LockAlwaysWait, k1)
 	if err != nil {
 		panic(err)
