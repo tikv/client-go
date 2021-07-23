@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -448,6 +449,10 @@ func (s *testLockSuite) ttlEquals(x, y uint64) {
 }
 
 func (s *testLockSuite) TestLockTTL() {
+	managedLockTTL := atomic.LoadUint64(&tikv.ManagedLockTTL)
+	atomic.StoreUint64(&tikv.ManagedLockTTL, 20000)                // set to 20s
+	defer atomic.StoreUint64(&tikv.ManagedLockTTL, managedLockTTL) // restore value
+
 	defaultLockTTL := tikv.ConfigProbe{}.GetDefaultLockTTL()
 	ttlFactor := tikv.ConfigProbe{}.GetTTLFactor()
 
