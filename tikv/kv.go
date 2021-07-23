@@ -582,3 +582,8 @@ type LockResolver = txnlock.LockResolver
 
 // TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
 type TxnStatus = txnlock.TxnStatus
+
+// NewLock creates a new *Lock.
+func NewLock(l *kvrpcpb.LockInfo) *Lock {
+	return txnlock.NewLock(l)
+}
