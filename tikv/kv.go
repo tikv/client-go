@@ -571,3 +571,14 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 	}
 	return s.lockResolver, nil
 }
+
+// TODO: remove Lock&LockResolver&TxnStatus once tidb and br are ready.
+
+// Lock represents a lock from tikv server.
+type Lock = txnlock.Lock
+
+// LockResolver resolves locks and also caches resolved txn status.
+type LockResolver = txnlock.LockResolver
+
+// TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
+type TxnStatus = txnlock.TxnStatus
