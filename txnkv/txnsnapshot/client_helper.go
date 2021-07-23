@@ -60,12 +60,13 @@ type ClientHelper struct {
 }
 
 // NewClientHelper creates a helper instance.
-func NewClientHelper(store kvstore, resolvedLocks *util.TSSet) *ClientHelper {
+func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, resolveLite bool) *ClientHelper {
 	return &ClientHelper{
 		lockResolver:  store.GetLockResolver(),
 		regionCache:   store.GetRegionCache(),
 		resolvedLocks: resolvedLocks,
 		client:        store.GetTiKVClient(),
+		resolveLite:   resolveLite,
 	}
 }
 
