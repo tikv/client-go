@@ -243,20 +243,35 @@ type replicaSelector struct {
 	// replicas contains all TiKV replicas for now and the leader is at the
 	// head of the slice.
 	replicas []*replica
-	state selectorState
-	// nextReplicaIdx points to the candidate for the next attempt.
-	nextReplicaIdx int
+	state    selectorState
+	// currentReplica points to the replica we try in this time
+	currentReplica *replica
 }
 
-type selectorState interface {}
+type selectorState interface{}
 
-type accessKnownLeader struct {
-	attempt int
-}
+// accessKnownLeader is the state where we are sending requests
+// to the leader we suppose to be.
+//
+// After attempting maxReplicaAttempt times without success
+// and without receiving new leader from the responses error,
+// we should switch to tryFollower state.
+type accessKnownLeader struct{}
 
-type accessByProxy struct {
+// tryFollower is the state where we cannot access the known leader
+// but still try other replicas in case they have become the leader.
+//
+// In this state, a follower that is not tried will be used. If all
+// followers are tried, we think we have exhausted the replicas.
+// On sending failure in this state, if leader info is returned,
+// the leader will be updated to replicas[0] and give it another chance.
+type tryFollower struct{}
 
-}
+// accessByProxy is the state where we are sending requests through
+// proxy nodes.
+//
+//
+type accessByProxy struct{}
 
 func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
@@ -279,21 +294,9 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID) (*replic
 		regionCache,
 		cachedRegion,
 		replicas,
-		accessKnownLeader{0},
-		0,
+		accessKnownLeader{},
+		nil,
 	}, nil
-}
-
-// isExhausted returns true if runs out of all replicas.
-func (s *replicaSelector) isExhausted() bool {
-	return s.nextReplicaIdx >= len(s.replicas)
-}
-
-func (s *replicaSelector) nextReplica() *replica {
-	if s.isExhausted() {
-		return nil
-	}
-	return s.replicas[s.nextReplicaIdx]
 }
 
 const maxReplicaAttempt = 10
@@ -301,68 +304,113 @@ const maxReplicaAttempt = 10
 // next creates the RPCContext of the current candidate replica.
 // It returns a SendError if runs out of all replicas or the cached region is invalidated.
 func (s *replicaSelector) next(bo *retry.Backoffer) (*RPCContext, error) {
-	for {
-		if !s.region.isValid() {
-			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
-			return nil, nil
+	if !s.region.isValid() {
+		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
+		return nil, nil
+	}
+	leader := s.replicas[0]
+
+	s.currentReplica = nil
+	switch s.state.(type) {
+	case accessKnownLeader:
+		s.currentReplica = leader
+
+	case tryFollower:
+		for _, r := range s.replicas[1:] {
+			if r.attempts == 0 {
+				s.currentReplica = r
+				break
+			}
 		}
-		if s.isExhausted() {
+		if s.currentReplica == nil {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			s.invalidateRegion()
 			return nil, nil
 		}
-		replica := s.replicas[s.nextReplicaIdx]
-		s.nextReplicaIdx++
 
-		// Limit the max attempts of each replica to prevent endless retry.
-		if replica.attempts >= maxReplicaAttempt {
-			continue
-		}
-		replica.attempts++
-
-		storeFailEpoch := atomic.LoadUint32(&replica.store.epoch)
-		if storeFailEpoch != replica.epoch {
-			// TODO(youjiali1995): Is it necessary to invalidate the region?
-			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("stale_store").Inc()
-			s.invalidateRegion()
-			return nil, nil
-		}
-		addr, err := s.regionCache.getStoreAddr(bo, s.region, replica.store)
-		if err == nil && len(addr) != 0 {
-			return &RPCContext{
-				Region:     s.region.VerID(),
-				Meta:       s.region.meta,
-				Peer:       replica.peer,
-				Store:      replica.store,
-				Addr:       addr,
-				AccessMode: tiKVOnly,
-				TiKVNum:    len(s.replicas),
-			}, nil
+	case accessByProxy:
+		regionStore := s.region.getStore()
+		if atomic.LoadInt32(&leader.store.unreachable) == 0 {
+			regionStore.unsetProxyStoreIfNeeded(s.region)
+			s.state = accessKnownLeader{}
+			s.currentReplica = leader
+		} else if regionStore.proxyTiKVIdx >= 0 {
+			proxyStore := regionStore.stores[regionStore.proxyTiKVIdx]
+			for _, r := range s.replicas {
+				if r.store.storeID == proxyStore.storeID {
+					s.currentReplica = r
+				}
+			}
+			if s.currentReplica == nil {
+				s.region.invalidate(StoreNotFound)
+				return nil, nil
+			}
+		} else {
+			for _, r := range s.replicas[1:] {
+				if atomic.LoadInt32(&r.store.unreachable) == 0 && r.attempts < maxReplicaAttempt {
+					s.currentReplica = r
+					break
+				}
+			}
+			if s.currentReplica == nil {
+				metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+				s.invalidateRegion()
+				return nil, nil
+			}
 		}
 	}
+
+	s.currentReplica.attempts++
+
+	storeFailEpoch := atomic.LoadUint32(&s.currentReplica.store.epoch)
+	if storeFailEpoch != s.currentReplica.epoch {
+		// TODO(youjiali1995): Is it necessary to invalidate the region?
+		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("stale_store").Inc()
+		s.invalidateRegion()
+		return nil, nil
+	}
+
+	addr, err := s.regionCache.getStoreAddr(bo, s.region, s.currentReplica.store)
+	if err != nil {
+		return nil, err
+	}
+	if len(addr) == 0 {
+		return nil, nil
+	}
+	return &RPCContext{
+		Region:     s.region.VerID(),
+		Meta:       s.region.meta,
+		Peer:       s.currentReplica.peer,
+		Store:      s.currentReplica.store,
+		Addr:       addr,
+		AccessMode: tiKVOnly,
+		TiKVNum:    len(s.replicas),
+	}, nil
 }
 
 func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	metrics.RegionCacheCounterWithSendFail.Inc()
-	replica := s.replicas[s.nextReplicaIdx-1]
-	if replica.store.requestLiveness(bo, s.regionCache) == reachable {
-		s.rewind()
-		return
-	} else {
-		replica.store.startHealthCheckLoopIfNeeded(s.regionCache)
+	store := s.currentReplica.store
+	liveness := store.requestLiveness(bo, s.regionCache)
+	if liveness != reachable {
+		store.startHealthCheckLoopIfNeeded(s.regionCache)
 	}
 
-	store := replica.store
+	switch s.state.(type) {
+	case accessKnownLeader:
+		if liveness != reachable && s.regionCache.enableForwarding {
+			s.state = accessByProxy{}
+		} else if liveness != reachable || s.currentReplica.attempts >= maxReplicaAttempt {
+			s.state = tryFollower{}
+		}
+	}
+
 	// invalidate regions in store.
-	if atomic.CompareAndSwapUint32(&store.epoch, replica.epoch, replica.epoch+1) {
+	if atomic.CompareAndSwapUint32(&store.epoch, s.currentReplica.epoch, s.currentReplica.epoch+1) {
 		logutil.BgLogger().Info("mark store's regions need be refill", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
 		store.markNeedCheck(s.regionCache.notifyCheckCh)
-	}
-	// TODO(youjiali1995): It's not necessary, but some tests depend on it and it's not easy to fix.
-	if s.isExhausted() {
-		s.region.scheduleReload()
 	}
 }
 
@@ -372,16 +420,12 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 func (s *replicaSelector) OnSendSuccess() {
 	// The successful replica is not at the head of replicas which means it's not the
 	// leader in the cached region, so update leader.
-	if s.nextReplicaIdx-1 != 0 {
-		leader := s.replicas[s.nextReplicaIdx-1].peer
-		if !s.regionCache.switchWorkLeaderToPeer(s.region, leader) {
+	switch s.state.(type) {
+	case accessKnownLeader:
+		if !s.regionCache.switchWorkLeaderToPeer(s.region, s.currentReplica.peer) {
 			panic("the store must exist")
 		}
 	}
-}
-
-func (s *replicaSelector) rewind() {
-	s.nextReplicaIdx--
 }
 
 // updateLeader updates the leader of the cached region.
@@ -392,15 +436,12 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 	}
 	for i, replica := range s.replicas {
 		if isSamePeer(replica.peer, leader) {
-			if i < s.nextReplicaIdx {
-				s.nextReplicaIdx--
-			}
-			// Move the leader replica to the front of candidates.
-			s.replicas[i], s.replicas[s.nextReplicaIdx] = s.replicas[s.nextReplicaIdx], s.replicas[i]
-			if s.replicas[s.nextReplicaIdx].attempts == maxReplicaAttempt {
+			// Move the leader replica to the front.
+			s.replicas[i], s.replicas[0] = s.replicas[0], s.replicas[i]
+			if s.replicas[0].attempts == maxReplicaAttempt {
 				// Give the replica one more chance and because the current replica is skipped, it
 				// won't result in infinite retry.
-				s.replicas[s.nextReplicaIdx].attempts = maxReplicaAttempt - 1
+				s.replicas[0].attempts = maxReplicaAttempt - 1
 			}
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
 			if !s.regionCache.switchWorkLeaderToPeer(s.region, leader) {
@@ -1007,9 +1048,6 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		if err != nil {
 			return false, errors.Trace(err)
 		}
-		if s.leaderReplicaSelector != nil {
-			s.leaderReplicaSelector.rewind()
-		}
 		return true, nil
 	}
 
@@ -1051,9 +1089,6 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		if err != nil {
 			return false, errors.Trace(err)
 		}
-		if s.leaderReplicaSelector != nil {
-			s.leaderReplicaSelector.rewind()
-		}
 		return true, nil
 	}
 
@@ -1087,9 +1122,6 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		if err != nil {
 			return false, errors.Trace(err)
 		}
-		if s.leaderReplicaSelector != nil {
-			s.leaderReplicaSelector.rewind()
-		}
 		return true, nil
 	}
 
@@ -1099,9 +1131,6 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("region is merging, ctx: %v", ctx))
 		if err != nil {
 			return false, errors.Trace(err)
-		}
-		if s.leaderReplicaSelector != nil {
-			s.leaderReplicaSelector.rewind()
 		}
 		return true, nil
 	}
