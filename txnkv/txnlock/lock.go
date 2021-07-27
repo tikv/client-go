@@ -18,7 +18,7 @@ import (
 	tikverr "github.com/tikv/client-go/v2/error"
 )
 
-// ExtractLockFromKeyErr extracts ;pcl frp, the KeyError.
+// ExtractLockFromKeyErr extracts the KeyError.
 func ExtractLockFromKeyErr(keyErr *kvrpcpb.KeyError) (*Lock, error) {
 	if locked := keyErr.GetLocked(); locked != nil {
 		return NewLock(locked), nil
