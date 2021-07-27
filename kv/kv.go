@@ -20,6 +20,7 @@
 package kv
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -33,11 +34,27 @@ type ReturnedValue struct {
 	AlreadyLocked bool
 }
 
+// Used for pessimistic lock wait time
+// these two constants are special for lock protocol with tikv
+// math.MaxInt64 means always wait, 0 means nowait, others meaning lock wait in milliseconds
+const (
+	LockAlwaysWait = int64(math.MaxInt64)
+	LockNoWait     = int64(0)
+)
+
+type lockWaitTimeInMs struct {
+	value int64
+}
+
+func defaultLockWaitTime() *lockWaitTimeInMs {
+	return &lockWaitTimeInMs{value: LockAlwaysWait}
+}
+
 // LockCtx contains information for LockKeys method.
 type LockCtx struct {
 	Killed                *uint32
 	ForUpdateTS           uint64
-	LockWaitTime          int64
+	lockWaitTime          *lockWaitTimeInMs
 	WaitStartTime         time.Time
 	PessimisticLockWaited *int32
 	LockKeysDuration      *int64
@@ -49,6 +66,23 @@ type LockCtx struct {
 	Stats                 *util.LockKeysDetails
 	ResourceGroupTag      []byte
 	OnDeadlock            func(*tikverr.ErrDeadlock)
+}
+
+// LockWaitTime returns lockWaitTimeInMs
+func (ctx *LockCtx) LockWaitTime() int64 {
+	if ctx.lockWaitTime == nil {
+		ctx.lockWaitTime = defaultLockWaitTime()
+	}
+	return ctx.lockWaitTime.value
+}
+
+// NewLockCtx creates a LockCtx.
+func NewLockCtx(forUpdateTS uint64, lockWaitTime int64, waitStartTime time.Time) *LockCtx {
+	return &LockCtx{
+		ForUpdateTS:   forUpdateTS,
+		lockWaitTime:  &lockWaitTimeInMs{value: lockWaitTime},
+		WaitStartTime: waitStartTime,
+	}
 }
 
 // InitReturnValues creates the map to store returned value.

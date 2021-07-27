@@ -39,13 +39,13 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -72,9 +72,9 @@ func (s StoreProbe) Begin() (TxnProbe, error) {
 }
 
 // GetSnapshot returns a snapshot.
-func (s StoreProbe) GetSnapshot(ts uint64) SnapshotProbe {
+func (s StoreProbe) GetSnapshot(ts uint64) txnsnapshot.SnapshotProbe {
 	snap := s.KVStore.GetSnapshot(ts)
-	return SnapshotProbe{KVSnapshot: snap}
+	return txnsnapshot.SnapshotProbe{KVSnapshot: snap}
 }
 
 // SetRegionCachePDClient replaces pd client inside region cache.
@@ -165,13 +165,15 @@ func (txn TxnProbe) CollectLockedKeys() [][]byte {
 
 // BatchGetSingleRegion gets a batch of keys from a region.
 func (txn TxnProbe) BatchGetSingleRegion(bo *Backoffer, region locate.RegionVerID, keys [][]byte, collect func([]byte, []byte)) error {
-	snapshot := txn.GetSnapshot()
-	return snapshot.batchGetSingleRegion(bo, batchKeys{region: region, keys: keys}, collect)
+	snapshot := txnsnapshot.SnapshotProbe{KVSnapshot: txn.GetSnapshot()}
+
+	return snapshot.BatchGetSingleRegion(bo, region, keys, collect)
 }
 
 // NewScanner returns a scanner to iterate given key range.
-func (txn TxnProbe) NewScanner(start, end []byte, batchSize int, reverse bool) (*Scanner, error) {
-	return newScanner(txn.GetSnapshot(), start, end, batchSize, reverse)
+func (txn TxnProbe) NewScanner(start, end []byte, batchSize int, reverse bool) (*txnsnapshot.Scanner, error) {
+	snapshot := txnsnapshot.SnapshotProbe{KVSnapshot: txn.GetSnapshot()}
+	return snapshot.NewScanner(start, end, batchSize, reverse)
 }
 
 // GetStartTime returns the time when txn starts.
@@ -407,33 +409,6 @@ func (c CommitterProbe) CleanupMutations(ctx context.Context) error {
 	return c.cleanupMutations(bo, c.mutations)
 }
 
-// SnapshotProbe exposes some snapshot utilities for testing purpose.
-type SnapshotProbe struct {
-	*KVSnapshot
-}
-
-// MergeRegionRequestStats merges RPC runtime stats into snapshot's stats.
-func (s SnapshotProbe) MergeRegionRequestStats(stats map[tikvrpc.CmdType]*locate.RPCRuntimeStats) {
-	s.mergeRegionRequestStats(stats)
-}
-
-// RecordBackoffInfo records backoff stats into snapshot's stats.
-func (s SnapshotProbe) RecordBackoffInfo(bo *Backoffer) {
-	s.recordBackoffInfo(bo)
-}
-
-// MergeExecDetail merges exec stats into snapshot's stats.
-func (s SnapshotProbe) MergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
-	s.mergeExecDetail(detail)
-}
-
-// FormatStats dumps information of stats.
-func (s SnapshotProbe) FormatStats() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.mu.stats.String()
-}
-
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
 type LockResolverProbe struct {
 	*txnlock.LockResolverProbe
@@ -457,11 +432,6 @@ func (l LockResolverProbe) ResolvePessimisticLock(ctx context.Context, lock *txn
 	return l.LockResolverProbe.ResolvePessimisticLock(bo, lock)
 }
 
-// ExtractLockFromKeyErr makes a Lock based on a key error.
-func ExtractLockFromKeyErr(err *kvrpcpb.KeyError) (*txnlock.Lock, error) {
-	return extractLockFromKeyErr(err)
-}
-
 // ConfigProbe exposes configurations and global variables for testing purpose.
 type ConfigProbe struct{}
 
@@ -479,7 +449,7 @@ func (c ConfigProbe) GetBigTxnThreshold() int {
 
 // GetScanBatchSize returns the batch size to scan ranges.
 func (c ConfigProbe) GetScanBatchSize() int {
-	return defaultScanBatchSize
+	return txnsnapshot.ConfigProbe{}.GetScanBatchSize()
 }
 
 // GetDefaultLockTTL returns the default lock TTL.
@@ -494,7 +464,7 @@ func (c ConfigProbe) GetTTLFactor() int {
 
 // GetGetMaxBackoff returns the max sleep for get command.
 func (c ConfigProbe) GetGetMaxBackoff() int {
-	return getMaxBackoff
+	return txnsnapshot.ConfigProbe{}.GetGetMaxBackoff()
 }
 
 // LoadPreSplitDetectThreshold returns presplit detect threshold config.
