@@ -353,15 +353,6 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	start := time.Now()
-	defer func() {
-		stmtExec := ctx.Value(util.ExecDetailsKey)
-		if stmtExec != nil {
-			detail := stmtExec.(*util.ExecDetails)
-			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
-		}
-		c.updateTiKVSendReqHistogram(req, start)
-	}()
-
 	if atomic.CompareAndSwapUint32(&c.idleNotify, 1, 0) {
 		c.recycleMu.Lock()
 		c.recycleIdleConnArray()
@@ -376,6 +367,17 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
+
+	start = time.Now()
+	defer func() {
+		stmtExec := ctx.Value(util.ExecDetailsKey)
+		if stmtExec != nil {
+			detail := stmtExec.(*util.ExecDetails)
+			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
+		}
+		c.updateTiKVSendReqHistogram(req, start)
+	}()
 
 	// TiDB RPC server supports batch RPC, but batch connection will send heart beat, It's not necessary since
 	// request to TiDB is not high frequency.
