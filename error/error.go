@@ -39,6 +39,9 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/util"
+	"go.uber.org/zap"
 )
 
 var (
@@ -219,4 +222,38 @@ type ErrTokenLimit struct {
 
 func (e *ErrTokenLimit) Error() string {
 	return fmt.Sprintf("Store token is up to the limit, store id = %d.", e.StoreID)
+}
+
+// ExtractKeyErr extracts a KeyError.
+func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
+	if val, err := util.EvalFailpoint("mockRetryableErrorResp"); err == nil {
+		if val.(bool) {
+			keyErr.Conflict = nil
+			keyErr.Retryable = "mock retryable error"
+		}
+	}
+
+	if keyErr.Conflict != nil {
+		return &ErrWriteConflict{WriteConflict: keyErr.GetConflict()}
+	}
+
+	if keyErr.Retryable != "" {
+		return &ErrRetryable{Retryable: keyErr.Retryable}
+	}
+
+	if keyErr.Abort != "" {
+		err := errors.Errorf("tikv aborts txn: %s", keyErr.GetAbort())
+		logutil.BgLogger().Warn("2PC failed", zap.Error(err))
+		return errors.Trace(err)
+	}
+	if keyErr.CommitTsTooLarge != nil {
+		err := errors.Errorf("commit TS %v is too large", keyErr.CommitTsTooLarge.CommitTs)
+		logutil.BgLogger().Warn("2PC failed", zap.Error(err))
+		return errors.Trace(err)
+	}
+	if keyErr.TxnNotFound != nil {
+		err := errors.Errorf("txn %d not found", keyErr.TxnNotFound.StartTs)
+		return errors.Trace(err)
+	}
+	return errors.Errorf("unexpected KeyError: %s", keyErr.String())
 }
