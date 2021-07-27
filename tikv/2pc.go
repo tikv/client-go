@@ -905,7 +905,7 @@ func sendTxnHeartBeat(bo *Backoffer, store *KVStore, primary []byte, startTS, tt
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.TxnHeartBeatResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
-			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, hex.EncodeToString(primary), extractKeyErr(keyErr))
+			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, hex.EncodeToString(primary), tikverr.ExtractKeyErr(keyErr))
 		}
 		return cmdResp.GetLockTtl(), false, nil
 	}
@@ -1392,12 +1392,8 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 	c.doingAmend = true
 	defer func() { c.doingAmend = false }()
 	if keysNeedToLock.Len() > 0 {
-		lCtx := &kv.LockCtx{
-			Killed:        c.lockCtx.Killed,
-			ForUpdateTS:   c.forUpdateTS,
-			LockWaitTime:  c.lockCtx.LockWaitTime,
-			WaitStartTime: time.Now(),
-		}
+		lCtx := kv.NewLockCtx(c.forUpdateTS, c.lockCtx.LockWaitTime(), time.Now())
+		lCtx.Killed = c.lockCtx.Killed
 		tryTimes := uint(0)
 		retryLimit := config.GetGlobalConfig().PessimisticTxn.MaxRetryCount
 		var err error

@@ -57,6 +57,8 @@ import (
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -99,7 +101,7 @@ func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
 
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn struct {
-	snapshot  *KVSnapshot
+	snapshot  *txnsnapshot.KVSnapshot
 	us        *unionstore.KVUnionStore
 	store     *KVStore // for connection to region.
 	startTS   uint64
@@ -123,7 +125,7 @@ type KVTxn struct {
 	binlog             BinlogExecutor
 	schemaLeaseChecker SchemaLeaseChecker
 	syncLog            bool
-	priority           Priority
+	priority           txnutil.Priority
 	isPessimistic      bool
 	enableAsyncCommit  bool
 	enable1PC          bool
@@ -150,7 +152,7 @@ func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	snapshot := newTiKVSnapshot(store, startTS, store.nextReplicaReadSeed())
+	snapshot := txnsnapshot.NewTiKVSnapshot(store, startTS, store.nextReplicaReadSeed())
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
@@ -173,7 +175,7 @@ var SetSuccess = false
 // SetVars sets variables to the transaction.
 func (txn *KVTxn) SetVars(vars *tikv.Variables) {
 	txn.vars = vars
-	txn.snapshot.vars = vars
+	txn.snapshot.SetVars(vars)
 	if val, err := util.EvalFailpoint("probeSetVars"); err == nil {
 		if val.(bool) {
 			SetSuccess = true
@@ -257,7 +259,7 @@ func (txn *KVTxn) SetSchemaVer(schemaVer SchemaVer) {
 }
 
 // SetPriority sets the priority for both write and read.
-func (txn *KVTxn) SetPriority(pri Priority) {
+func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 	txn.priority = pri
 	txn.GetSnapshot().SetPriority(pri)
 }
@@ -514,8 +516,24 @@ func (txn *KVTxn) onCommitted(err error) {
 	}
 }
 
+// LockKeysWithWaitTime tries to lock the entries with the keys in KV store.
+// lockWaitTime in ms, 0 means nowait lock.
+func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, keysInput ...[]byte) (err error) {
+	forUpdateTs := txn.startTS
+	if txn.IsPessimistic() {
+		bo := NewBackofferWithVars(context.Background(), tsoMaxBackoff, nil)
+		forUpdateTs, err = txn.store.getTimestampWithRetry(bo, txn.scope)
+		if err != nil {
+			return err
+		}
+	}
+	lockCtx := tikv.NewLockCtx(forUpdateTs, lockWaitTime, time.Now())
+
+	return txn.LockKeys(ctx, lockCtx, keysInput...)
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
-// lockWaitTime in ms, except that kv.LockAlwaysWait(0) means always wait lock, kv.LockNowait(-1) means nowait lock
+// lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
 	// Exclude keys that are already locked.
 	var err error
@@ -774,7 +792,7 @@ func (txn *KVTxn) GetMemBuffer() *MemDB {
 }
 
 // GetSnapshot returns the Snapshot binding to this transaction.
-func (txn *KVTxn) GetSnapshot() *KVSnapshot {
+func (txn *KVTxn) GetSnapshot() *txnsnapshot.KVSnapshot {
 	return txn.snapshot
 }
 

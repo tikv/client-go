@@ -163,7 +163,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 
 			c.mu.RLock()
 			defer c.mu.RUnlock()
-			err = extractKeyErr(keyErr)
+			err = tikverr.ExtractKeyErr(keyErr)
 			if c.mu.committed {
 				// No secondary key could be rolled back after it's primary key is committed.
 				// There must be a serious bug somewhere.
