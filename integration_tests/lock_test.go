@@ -37,8 +37,8 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -436,23 +436,23 @@ func (s *testLockSuite) mustGetLock(key []byte) *txnkv.Lock {
 	s.NotNil(resp.Resp)
 	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
 	s.NotNil(keyErr)
-	lock, err := tikv.ExtractLockFromKeyErr(keyErr)
+	lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 	s.Nil(err)
 	return lock
 }
 
 func (s *testLockSuite) ttlEquals(x, y uint64) {
-	// NOTE: On ppc64le, all integers are by default unsigned integers,
-	// hence we have to separately cast the value returned by "math.Abs()" function for ppc64le.
-	if runtime.GOARCH == "ppc64le" {
-		s.LessOrEqual(int(-math.Abs(float64(x-y))), 2)
-	} else {
-		s.LessOrEqual(int(math.Abs(float64(x-y))), 2)
+	if x < y {
+		x, y = y, x
 	}
-
+	s.LessOrEqual(x-y, uint64(5))
 }
 
 func (s *testLockSuite) TestLockTTL() {
+	managedLockTTL := atomic.LoadUint64(&tikv.ManagedLockTTL)
+	atomic.StoreUint64(&tikv.ManagedLockTTL, 20000)                // set to 20s
+	defer atomic.StoreUint64(&tikv.ManagedLockTTL, managedLockTTL) // restore value
+
 	defaultLockTTL := tikv.ConfigProbe{}.GetDefaultLockTTL()
 	ttlFactor := tikv.ConfigProbe{}.GetTTLFactor()
 
@@ -473,9 +473,10 @@ func (s *testLockSuite) TestLockTTL() {
 		k, v := randKV(1024, 1024)
 		txn.Set([]byte(k), []byte(v))
 	}
+	elapsed := time.Since(start) / time.Millisecond
 	s.prewriteTxn(txn)
 	l = s.mustGetLock([]byte("key"))
-	s.ttlEquals(l.TTL, uint64(ttlFactor*2)+uint64(time.Since(start)/time.Millisecond))
+	s.ttlEquals(l.TTL, uint64(ttlFactor*2)+uint64(elapsed))
 
 	// Txn with long read time.
 	start = time.Now()
@@ -483,9 +484,10 @@ func (s *testLockSuite) TestLockTTL() {
 	s.Nil(err)
 	time.Sleep(time.Millisecond * 50)
 	txn.Set([]byte("key"), []byte("value"))
+	elapsed = time.Since(start) / time.Millisecond
 	s.prewriteTxn(txn)
 	l = s.mustGetLock([]byte("key"))
-	s.ttlEquals(l.TTL, defaultLockTTL+uint64(time.Since(start)/time.Millisecond))
+	s.ttlEquals(l.TTL, defaultLockTTL+uint64(elapsed))
 }
 
 func (s *testLockSuite) TestBatchResolveLocks() {
