@@ -63,6 +63,7 @@ var (
 	TiKVBatchRequests                        *prometheus.HistogramVec
 	TiKVBatchClientUnavailable               prometheus.Histogram
 	TiKVBatchClientWaitEstablish             prometheus.Histogram
+	TiKVBatchClientRecycle                   prometheus.Histogram
 	TiKVRangeTaskStats                       *prometheus.GaugeVec
 	TiKVRangeTaskPushDuration                *prometheus.HistogramVec
 	TiKVTokenWaitDuration                    prometheus.Histogram
@@ -316,6 +317,15 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "batch client wait new connection establish",
 		})
 
+	TiKVBatchClientRecycle = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "batch_client_reset",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 28), // 1ms ~ 1.5days
+			Help:      "batch client recycle connection and reconnect duration",
+		})
+
 	TiKVRangeTaskStats = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -547,6 +557,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchRequests)
 	prometheus.MustRegister(TiKVBatchClientUnavailable)
 	prometheus.MustRegister(TiKVBatchClientWaitEstablish)
+	prometheus.MustRegister(TiKVBatchClientRecycle)
 	prometheus.MustRegister(TiKVRangeTaskStats)
 	prometheus.MustRegister(TiKVRangeTaskPushDuration)
 	prometheus.MustRegister(TiKVTokenWaitDuration)
