@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv"
 )
 
 func TestSnapshot(t *testing.T) {
@@ -285,7 +286,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Second)
 	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Millisecond)
 	snapshot := s.store.GetSnapshot(0)
-	snapshot.SetRuntimeStats(&tikv.SnapshotRuntimeStats{})
+	snapshot.SetRuntimeStats(&txnkv.SnapshotRuntimeStats{})
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	bo := tikv.NewBackofferWithVars(context.Background(), 2000, nil)
