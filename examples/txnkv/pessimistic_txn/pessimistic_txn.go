@@ -21,7 +21,7 @@ import (
 
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv"
 )
 
 // KV represents a Key-Value pair.
@@ -47,7 +47,7 @@ func initStore() {
 	}
 }
 
-func begin_pessimistic_txn() (txn *transaction.KVTxn) {
+func begin_pessimistic_txn() (txn *txnkv.KVTxn) {
 	txn, err := client.Begin()
 	if err != nil {
 		panic(err)

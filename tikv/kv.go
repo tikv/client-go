@@ -288,7 +288,14 @@ func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, er
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
-	startTS, err := ExtractStartTS(s, options)
+
+	if options.StartTS != nil {
+		snapshot := txnsnapshot.NewTiKVSnapshot(s, *options.StartTS, s.nextReplicaReadSeed())
+		return transaction.NewTiKVTxn(s, snapshot, *options.StartTS, options.TxnScope)
+	}
+
+	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
+	startTS, err := s.getTimestampWithRetry(bo, options.TxnScope)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -633,15 +640,6 @@ func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
 	return to
 }
 
-// ExtractStartTS use `option` to get the proper startTS for a transaction.
-func ExtractStartTS(store *KVStore, option StartTSOption) (uint64, error) {
-	if option.StartTS != nil {
-		return *option.StartTS, nil
-	}
-	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-	return store.GetTimestampWithRetry(bo, option.TxnScope)
-}
-
 // TODO: remove it when tidb/br is ready.
 
 // Scanner support tikv scan
@@ -707,3 +705,7 @@ type SchemaVer = transaction.SchemaVer
 
 // SchemaAmender is used by pessimistic transactions to amend commit mutations for schema change during 2pc.
 type SchemaAmender = transaction.SchemaAmender
+
+// MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
+// We use it to abort the transaction to guarantee GC worker will not influence it.
+const MaxTxnTimeUse = transaction.MaxTxnTimeUse
