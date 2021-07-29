@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
 
 func TestSnapshot(t *testing.T) {
@@ -83,7 +84,7 @@ func (s *testSnapshotSuite) TearDownSuite() {
 	s.Nil(err)
 }
 
-func (s *testSnapshotSuite) beginTxn() tikv.TxnProbe {
+func (s *testSnapshotSuite) beginTxn() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	return txn

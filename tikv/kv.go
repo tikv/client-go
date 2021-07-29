@@ -60,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
@@ -278,13 +279,21 @@ func (s *KVStore) runSafePointChecker() {
 }
 
 // Begin a global transaction.
-func (s *KVStore) Begin() (*KVTxn, error) {
+func (s *KVStore) Begin() (*transaction.KVTxn, error) {
 	return s.BeginWithOption(DefaultStartTSOption())
 }
 
 // BeginWithOption begins a transaction with the given StartTSOption
-func (s *KVStore) BeginWithOption(options StartTSOption) (*KVTxn, error) {
-	return newTiKVTxnWithOptions(s, options)
+func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, error) {
+	if options.TxnScope == "" {
+		options.TxnScope = oracle.GlobalTxnScope
+	}
+	startTS, err := ExtractStartTS(s, options)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
+	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
 }
 
 // DeleteRange delete all versions of all keys in the range[startKey,endKey) immediately.
@@ -336,12 +345,17 @@ func (s *KVStore) UUID() string {
 
 // CurrentTimestamp returns current timestamp with the given txnScope (local or global).
 func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
-	bo := retry.NewBackofferWithVars(context.Background(), tsoMaxBackoff, nil)
+	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
 	startTS, err := s.getTimestampWithRetry(bo, txnScope)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
 	return startTS, nil
+}
+
+// GetTimestampWithRetry returns latest timestamp.
+func (s *KVStore) GetTimestampWithRetry(bo *Backoffer, scope string) (uint64, error) {
+	return s.getTimestampWithRetry(bo, scope)
 }
 
 func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64, error) {
@@ -456,6 +470,26 @@ func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
 		stores = allStores
 	}
 	return s.getMinSafeTSByStores(stores)
+}
+
+// Ctx returns ctx.
+func (s *KVStore) Ctx() context.Context {
+	return s.ctx
+}
+
+// WaitGroup returns wg
+func (s *KVStore) WaitGroup() *sync.WaitGroup {
+	return &s.wg
+}
+
+// TxnLatches returns txnLatches.
+func (s *KVStore) TxnLatches() *latch.LatchesScheduler {
+	return s.txnLatches
+}
+
+// GetClusterID returns store's cluster id.
+func (s *KVStore) GetClusterID() uint64 {
+	return s.clusterID
 }
 
 func (s *KVStore) getSafeTS(storeID uint64) uint64 {
@@ -574,6 +608,40 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 	return s.lockResolver, nil
 }
 
+// StartTSOption indicates the option when beginning a transaction
+// `TxnScope` must be set for each object
+// Every other fields are optional, but currently at most one of them can be set
+type StartTSOption struct {
+	TxnScope string
+	StartTS  *uint64
+}
+
+// DefaultStartTSOption creates a default StartTSOption, ie. Work in GlobalTxnScope and get start ts when got used
+func DefaultStartTSOption() StartTSOption {
+	return StartTSOption{TxnScope: oracle.GlobalTxnScope}
+}
+
+// SetStartTS returns a new StartTSOption with StartTS set to the given startTS
+func (to StartTSOption) SetStartTS(startTS uint64) StartTSOption {
+	to.StartTS = &startTS
+	return to
+}
+
+// SetTxnScope returns a new StartTSOption with TxnScope set to txnScope
+func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
+	to.TxnScope = txnScope
+	return to
+}
+
+// ExtractStartTS use `option` to get the proper startTS for a transaction.
+func ExtractStartTS(store *KVStore, option StartTSOption) (uint64, error) {
+	if option.StartTS != nil {
+		return *option.StartTS, nil
+	}
+	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
+	return store.GetTimestampWithRetry(bo, option.TxnScope)
+}
+
 // TODO: remove it when tidb/br is ready.
 
 // Scanner support tikv scan
@@ -619,3 +687,23 @@ type TxnStatus = txnlock.TxnStatus
 func NewLock(l *kvrpcpb.LockInfo) *Lock {
 	return txnlock.NewLock(l)
 }
+
+// TODO: remove once tidb and br are ready
+
+// KVTxn contains methods to interact with a TiKV transaction.
+type KVTxn = transaction.KVTxn
+
+// BinlogWriteResult defines the result of prewrite binlog.
+type BinlogWriteResult = transaction.BinlogWriteResult
+
+// KVFilter is a filter that filters out unnecessary KV pairs.
+type KVFilter = transaction.KVFilter
+
+// SchemaLeaseChecker is used to validate schema version is not changed during transaction execution.
+type SchemaLeaseChecker = transaction.SchemaLeaseChecker
+
+// SchemaVer is the infoSchema which will return the schema version.
+type SchemaVer = transaction.SchemaVer
+
+// SchemaAmender is used by pessimistic transactions to amend commit mutations for schema change during 2pc.
+type SchemaAmender = transaction.SchemaAmender

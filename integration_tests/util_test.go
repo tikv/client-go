@@ -47,6 +47,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
 )
@@ -117,7 +118,7 @@ func s08d(prefix string, n int) string {
 	return fmt.Sprintf("%s%08d", prefix, n)
 }
 
-func toTiDBTxn(txn *tikv.TxnProbe) kv.Transaction {
+func toTiDBTxn(txn *transaction.TxnProbe) kv.Transaction {
 	return txndriver.NewTiKVTxn(txn.KVTxn)
 }
 

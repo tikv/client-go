@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package transaction
 
 import (
 	"github.com/pingcap/errors"
@@ -56,7 +56,7 @@ func (actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 	return metrics.TxnRegionsNumHistogramCleanup
 }
 
-func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
 		Keys:         batch.mutations.GetKeys(),
 		StartVersion: c.startTS,
@@ -87,6 +87,6 @@ func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batc
 	return nil
 }
 
-func (c *twoPhaseCommitter) cleanupMutations(bo *Backoffer, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) cleanupMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
 	return c.doActionOnMutations(bo, actionCleanup{}, mutations)
 }
