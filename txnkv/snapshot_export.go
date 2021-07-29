@@ -13,13 +13,24 @@
 
 package txnkv
 
-import "github.com/tikv/client-go/v2/txnkv/txnlock"
+import (
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+)
 
-// Lock represents a lock from tikv server.
-type Lock = txnlock.Lock
+// Scanner support tikv scan
+type Scanner = txnsnapshot.Scanner
 
-// LockResolver resolves locks and also caches resolved txn status.
-type LockResolver = txnlock.LockResolver
+// KVSnapshot implements the tidbkv.Snapshot interface.
+type KVSnapshot = txnsnapshot.KVSnapshot
 
-// TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
-type TxnStatus = txnlock.TxnStatus
+// SnapshotRuntimeStats records the runtime stats of snapshot.
+type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
+
+// IsoLevel is the transaction's isolation level.
+type IsoLevel = txnsnapshot.IsoLevel
+
+// IsoLevel value for transaction priority.
+const (
+	SI = txnsnapshot.SI
+	RC = txnsnapshot.RC
+)

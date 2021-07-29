@@ -62,7 +62,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
-	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
@@ -572,50 +571,4 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, errors.Trace(err)
 	}
 	return s.lockResolver, nil
-}
-
-// TODO: remove it when tidb/br is ready.
-
-// Scanner support tikv scan
-type Scanner = txnsnapshot.Scanner
-
-// KVSnapshot implements the tidbkv.Snapshot interface.
-type KVSnapshot = txnsnapshot.KVSnapshot
-
-// SnapshotRuntimeStats records the runtime stats of snapshot.
-type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
-
-// IsoLevel is the transaction's isolation level.
-type IsoLevel = txnsnapshot.IsoLevel
-
-// IsoLevel value for transaction priority.
-const (
-	SI = txnsnapshot.SI
-	RC = txnsnapshot.RC
-)
-
-// Priority is the priority for tikv to execute a command.
-type Priority = txnutil.Priority
-
-// Priority value for transaction priority.
-const (
-	PriorityHigh   = txnutil.PriorityHigh
-	PriorityNormal = txnutil.PriorityNormal
-	PriorityLow    = txnutil.PriorityLow
-)
-
-// TODO: remove Lock&LockResolver&TxnStatus once tidb and br are ready.
-
-// Lock represents a lock from tikv server.
-type Lock = txnlock.Lock
-
-// LockResolver resolves locks and also caches resolved txn status.
-type LockResolver = txnlock.LockResolver
-
-// TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
-type TxnStatus = txnlock.TxnStatus
-
-// NewLock creates a new *Lock.
-func NewLock(l *kvrpcpb.LockInfo) *Lock {
-	return txnlock.NewLock(l)
 }
