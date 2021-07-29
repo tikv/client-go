@@ -77,7 +77,7 @@ type SchemaAmender interface {
 type KVTxn struct {
 	snapshot  *txnsnapshot.KVSnapshot
 	us        *unionstore.KVUnionStore
-	store     KVStore // for connection to region.
+	store     kvstore // for connection to region.
 	startTS   uint64
 	startTime time.Time // Monotonic timestamp for recording txn time consuming.
 	commitTS  uint64
@@ -109,8 +109,8 @@ type KVTxn struct {
 	resourceGroupTag   []byte
 }
 
-// NewTiKVTxnWithOptions creates a new KVTxn.
-func NewTiKVTxn(store KVStore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, scope string) (*KVTxn, error) {
+// NewTiKVTxn creates a new KVTxn.
+func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, scope string) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
