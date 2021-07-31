@@ -52,6 +52,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 )
@@ -104,7 +105,7 @@ func (s *testAsyncCommitCommon) putKV(key, value []byte, enableAsyncCommit bool)
 	return txn.StartTS(), txn.GetCommitTS()
 }
 
-func (s *testAsyncCommitCommon) mustGetFromTxn(txn tikv.TxnProbe, key, expectedValue []byte) {
+func (s *testAsyncCommitCommon) mustGetFromTxn(txn transaction.TxnProbe, key, expectedValue []byte) {
 	v, err := txn.Get(context.Background(), key)
 	s.Nil(err)
 	s.Equal(v, expectedValue)
@@ -150,30 +151,30 @@ func (s *testAsyncCommitCommon) mustGetNoneFromSnapshot(version uint64, key []by
 	s.Equal(errors.Cause(err), tikverr.ErrNotExist)
 }
 
-func (s *testAsyncCommitCommon) beginAsyncCommitWithLinearizability() tikv.TxnProbe {
+func (s *testAsyncCommitCommon) beginAsyncCommitWithLinearizability() transaction.TxnProbe {
 	txn := s.beginAsyncCommit()
 	txn.SetCausalConsistency(false)
 	return txn
 }
 
-func (s *testAsyncCommitCommon) beginAsyncCommit() tikv.TxnProbe {
+func (s *testAsyncCommitCommon) beginAsyncCommit() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.SetEnableAsyncCommit(true)
-	return tikv.TxnProbe{KVTxn: txn}
+	return transaction.TxnProbe{KVTxn: txn}
 }
 
-func (s *testAsyncCommitCommon) begin() tikv.TxnProbe {
+func (s *testAsyncCommitCommon) begin() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Nil(err)
-	return tikv.TxnProbe{KVTxn: txn}
+	return transaction.TxnProbe{KVTxn: txn}
 }
 
-func (s *testAsyncCommitCommon) begin1PC() tikv.TxnProbe {
+func (s *testAsyncCommitCommon) begin1PC() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.SetEnable1PC(true)
-	return tikv.TxnProbe{KVTxn: txn}
+	return transaction.TxnProbe{KVTxn: txn}
 }
 
 type testAsyncCommitSuite struct {
@@ -208,7 +209,7 @@ func (s *testAsyncCommitSuite) lockKeysWithAsyncCommit(keys, values [][]byte, pr
 		err = txn.Delete(primaryKey)
 	}
 	s.Nil(err)
-	txnProbe := tikv.TxnProbe{KVTxn: txn}
+	txnProbe := transaction.TxnProbe{KVTxn: txn}
 	tpc, err := txnProbe.NewCommitter(0)
 	s.Nil(err)
 	tpc.SetPrimaryKey(primaryKey)
@@ -462,7 +463,7 @@ func (s *testAsyncCommitSuite) TestAsyncCommitWithMultiDC() {
 func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 	keys := [][]byte{[]byte("k0"), []byte("k1")}
 	values := [][]byte{[]byte("v00"), []byte("v10")}
-	initTest := func() tikv.CommitterProbe {
+	initTest := func() transaction.CommitterProbe {
 		t0 := s.begin()
 		err := t0.Set(keys[0], values[0])
 		s.Nil(err)
@@ -483,7 +484,7 @@ func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 		committer.SetUseAsyncCommit()
 		return committer
 	}
-	prewriteKey := func(committer tikv.CommitterProbe, idx int, fallback bool) {
+	prewriteKey := func(committer transaction.CommitterProbe, idx int, fallback bool) {
 		bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
 		loc, err := s.store.GetRegionCache().LocateKey(bo, keys[idx])
 		s.Nil(err)

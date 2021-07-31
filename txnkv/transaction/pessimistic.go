@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package transaction
 
 import (
 	"encoding/hex"
@@ -81,7 +81,7 @@ func (actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observe
 	return metrics.TxnRegionsNumHistogramPessimisticRollback
 }
 
-func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	for i := 0; i < m.Len(); i++ {
@@ -154,7 +154,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 					return errors.Trace(err)
 				}
 			}
-			same, err := batch.relocate(bo, c.store.regionCache)
+			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -200,7 +200,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		// Because we already waited on tikv, no need to Backoff here.
 		// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 		startTime = time.Now()
-		msBeforeTxnExpired, _, err := c.store.lockResolver.ResolveLocks(bo, 0, locks)
+		msBeforeTxnExpired, _, err := c.store.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -240,7 +240,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 	}
 }
 
-func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
 		StartVersion: c.startTS,
 		ForUpdateTs:  c.forUpdateTS,
@@ -265,7 +265,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *Bac
 	return nil
 }
 
-func (c *twoPhaseCommitter) pessimisticLockMutations(bo *Backoffer, lockCtx *kv.LockCtx, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, mutations CommitterMutations) error {
 	if c.sessionID > 0 {
 		if val, err := util.EvalFailpoint("beforePessimisticLock"); err == nil {
 			// Pass multiple instructions in one string, delimited by commas, to trigger multiple behaviors, like
@@ -289,6 +289,6 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(bo *Backoffer, lockCtx *kv.
 	return c.doActionOnMutations(bo, actionPessimisticLock{lockCtx}, mutations)
 }
 
-func (c *twoPhaseCommitter) pessimisticRollbackMutations(bo *Backoffer, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) pessimisticRollbackMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
 	return c.doActionOnMutations(bo, actionPessimisticRollback{}, mutations)
 }
