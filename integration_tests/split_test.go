@@ -44,6 +44,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -74,7 +75,7 @@ func (s *testSplitSuite) TearDownTest() {
 	s.store.Close()
 }
 
-func (s *testSplitSuite) begin() tikv.TxnProbe {
+func (s *testSplitSuite) begin() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	return txn
