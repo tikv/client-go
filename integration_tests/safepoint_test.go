@@ -43,6 +43,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
 
 func TestSafepoint(t *testing.T) {
@@ -65,7 +66,7 @@ func (s *testSafePointSuite) TearDownSuite() {
 	s.Require().Nil(err)
 }
 
-func (s *testSafePointSuite) beginTxn() tikv.TxnProbe {
+func (s *testSafePointSuite) beginTxn() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	return txn

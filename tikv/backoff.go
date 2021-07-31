@@ -48,15 +48,6 @@ type BackoffConfig = retry.Config
 // Maximum total sleep time(in ms) for kv/cop commands.
 const (
 	gcResolveLockMaxBackoff = 100000
-	// CommitSecondaryMaxBackoff is max sleep time of the 'commit' command
-	CommitSecondaryMaxBackoff = 41000
-)
-
-var (
-	// CommitMaxBackoff is max sleep time of the 'commit' command
-	CommitMaxBackoff = uint64(41000)
-	// PrewriteMaxBackoff is max sleep time of the `pre-write` command.
-	PrewriteMaxBackoff = 20000
 )
 
 // NewBackofferWithVars creates a Backoffer with maximum sleep time(in ms) and kv.Variables.

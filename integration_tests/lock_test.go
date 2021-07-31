@@ -53,6 +53,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
 
@@ -240,7 +241,7 @@ func (s *testLockSuite) TestCheckTxnStatusTTL() {
 	txn.Set([]byte("key"), []byte("value"))
 	s.prewriteTxnWithTTL(txn, 1000)
 
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 	lr := s.store.NewLockResolver()
 	callerStartTS, err := s.store.GetOracle().GetTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
@@ -307,7 +308,7 @@ func (s *testLockSuite) TestCheckTxnStatus() {
 	s.Nil(err)
 	s.Greater(currentTS, txn.StartTS())
 
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 	resolver := s.store.NewLockResolver()
 	// Call getTxnStatus to check the lock status.
 	status, err := resolver.GetTxnStatus(bo, txn.StartTS(), []byte("key"), currentTS, currentTS, true, false, nil)
@@ -364,7 +365,7 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	o := s.store.GetOracle()
 	currentTS, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 	resolver := s.store.NewLockResolver()
 
 	// Call getTxnStatus for the TxnNotFound case.
@@ -406,11 +407,11 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	s.Equal(status.Action(), kvrpcpb.Action_LockNotExistRollback)
 }
 
-func (s *testLockSuite) prewriteTxn(txn tikv.TxnProbe) {
+func (s *testLockSuite) prewriteTxn(txn transaction.TxnProbe) {
 	s.prewriteTxnWithTTL(txn, 0)
 }
 
-func (s *testLockSuite) prewriteTxnWithTTL(txn tikv.TxnProbe, ttl uint64) {
+func (s *testLockSuite) prewriteTxnWithTTL(txn transaction.TxnProbe, ttl uint64) {
 	committer, err := txn.NewCommitter(0)
 	s.Nil(err)
 	if ttl > 0 {
@@ -449,9 +450,9 @@ func (s *testLockSuite) ttlEquals(x, y uint64) {
 }
 
 func (s *testLockSuite) TestLockTTL() {
-	managedLockTTL := atomic.LoadUint64(&tikv.ManagedLockTTL)
-	atomic.StoreUint64(&tikv.ManagedLockTTL, 20000)                // set to 20s
-	defer atomic.StoreUint64(&tikv.ManagedLockTTL, managedLockTTL) // restore value
+	managedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)                // set to 20s
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, managedLockTTL) // restore value
 
 	defaultLockTTL := tikv.ConfigProbe{}.GetDefaultLockTTL()
 	ttlFactor := tikv.ConfigProbe{}.GetTTLFactor()
@@ -561,7 +562,7 @@ func (s *testLockSuite) TestZeroMinCommitTS() {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.Set([]byte("key"), []byte("value"))
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 
 	mockValue := fmt.Sprintf(`return(%d)`, txn.StartTS())
 	s.Nil(failpoint.Enable("tikvclient/mockZeroCommitTS", mockValue))
@@ -674,7 +675,7 @@ func (s *testLockSuite) TestBatchResolveTxnFallenBackFromAsyncCommit() {
 func (s *testLockSuite) TestDeadlockReportWaitChain() {
 	// Utilities to make the test logic clear and simple.
 	type txnWrapper struct {
-		tikv.TxnProbe
+		transaction.TxnProbe
 		wg sync.WaitGroup
 	}
 

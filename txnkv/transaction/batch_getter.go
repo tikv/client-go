@@ -30,19 +30,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package transaction
 
 import (
 	"context"
 
 	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 )
 
 // BatchBufferGetter is the interface for BatchGet.
 type BatchBufferGetter interface {
 	Len() int
-	Getter
+	unionstore.Getter
 }
 
 // BatchGetter is the interface for BatchGet.

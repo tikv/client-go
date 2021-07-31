@@ -60,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
 
@@ -79,14 +80,14 @@ type testCommitterSuite struct {
 }
 
 func (s *testCommitterSuite) SetupSuite() {
-	atomic.StoreUint64(&tikv.ManagedLockTTL, 3000) // 3s
-	atomic.StoreUint64(&tikv.CommitMaxBackoff, 1000)
-	atomic.StoreUint64(&tikv.VeryLongMaxBackoff, 1000)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // 3s
+	atomic.StoreUint64(&transaction.CommitMaxBackoff, 1000)
+	atomic.StoreUint64(&transaction.VeryLongMaxBackoff, 1000)
 }
 
 func (s *testCommitterSuite) TearDownSuite() {
-	atomic.StoreUint64(&tikv.CommitMaxBackoff, 20000)
-	atomic.StoreUint64(&tikv.VeryLongMaxBackoff, 600000)
+	atomic.StoreUint64(&transaction.CommitMaxBackoff, 20000)
+	atomic.StoreUint64(&transaction.VeryLongMaxBackoff, 600000)
 }
 
 func (s *testCommitterSuite) SetupTest() {
@@ -107,13 +108,13 @@ func (s *testCommitterSuite) TearDownTest() {
 	s.store.Close()
 }
 
-func (s *testCommitterSuite) begin() tikv.TxnProbe {
+func (s *testCommitterSuite) begin() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	return txn
 }
 
-func (s *testCommitterSuite) beginAsyncCommit() tikv.TxnProbe {
+func (s *testCommitterSuite) beginAsyncCommit() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	txn.SetEnableAsyncCommit(true)
@@ -703,7 +704,7 @@ func (s *testCommitterSuite) TestPessimisticTTL() {
 			expire := oracle.ExtractPhysical(txn.StartTS()) + int64(lockInfoNew.LockTtl)
 			now := oracle.ExtractPhysical(currentTS)
 			s.True(expire > now)
-			s.True(uint64(expire-now) <= atomic.LoadUint64(&tikv.ManagedLockTTL))
+			s.True(uint64(expire-now) <= atomic.LoadUint64(&transaction.ManagedLockTTL))
 			return true
 		}
 		return false
@@ -742,8 +743,8 @@ func (s *testCommitterSuite) TestElapsedTTL() {
 	err := txn.LockKeys(context.Background(), lockCtx, key)
 	s.Nil(err)
 	lockInfo := s.getLockInfo(key)
-	s.GreaterOrEqual(lockInfo.LockTtl-atomic.LoadUint64(&tikv.ManagedLockTTL), uint64(100))
-	s.Less(lockInfo.LockTtl-atomic.LoadUint64(&tikv.ManagedLockTTL), uint64(150))
+	s.GreaterOrEqual(lockInfo.LockTtl-atomic.LoadUint64(&transaction.ManagedLockTTL), uint64(100))
+	s.Less(lockInfo.LockTtl-atomic.LoadUint64(&transaction.ManagedLockTTL), uint64(150))
 }
 
 func (s *testCommitterSuite) TestDeleteYourWriteCauseGhostPrimary() {
@@ -859,8 +860,8 @@ func (s *testCommitterSuite) TestDeleteAllYourWritesWithSFU() {
 // TestAcquireFalseTimeoutLock tests acquiring a key which is a secondary key of another transaction.
 // The lock's own TTL is expired but the primary key is still alive due to heartbeats.
 func (s *testCommitterSuite) TestAcquireFalseTimeoutLock() {
-	atomic.StoreUint64(&tikv.ManagedLockTTL, 1000)       // 1s
-	defer atomic.StoreUint64(&tikv.ManagedLockTTL, 3000) // restore default test value
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 1000)       // 1s
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // restore default test value
 
 	// k1 is the primary lock of txn1
 	k1 := []byte("k1")
@@ -881,7 +882,7 @@ func (s *testCommitterSuite) TestAcquireFalseTimeoutLock() {
 	// Heartbeats will increase the TTL of the primary key
 
 	// wait until secondary key exceeds its own TTL
-	time.Sleep(time.Duration(atomic.LoadUint64(&tikv.ManagedLockTTL)) * time.Millisecond)
+	time.Sleep(time.Duration(atomic.LoadUint64(&transaction.ManagedLockTTL)) * time.Millisecond)
 	txn2 := s.begin()
 	txn2.SetPessimistic(true)
 
@@ -919,8 +920,8 @@ func (s *testCommitterSuite) getLockInfo(key []byte) *kvrpcpb.LockInfo {
 }
 
 func (s *testCommitterSuite) TestPkNotFound() {
-	atomic.StoreUint64(&tikv.ManagedLockTTL, 100)        // 100ms
-	defer atomic.StoreUint64(&tikv.ManagedLockTTL, 3000) // restore default value
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 100)        // 100ms
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // restore default value
 	ctx := context.Background()
 	// k1 is the primary lock of txn1.
 	k1 := []byte("k1")
@@ -976,7 +977,7 @@ func (s *testCommitterSuite) TestPkNotFound() {
 		Key:             k3,
 		Primary:         k1,
 		TxnID:           txn1.StartTS(),
-		TTL:             tikv.ManagedLockTTL,
+		TTL:             transaction.ManagedLockTTL,
 		TxnSize:         txnCommitBatchSize,
 		LockType:        kvrpcpb.Op_PessimisticLock,
 		LockForUpdateTS: txn1.StartTS() - 1,
@@ -1154,8 +1155,8 @@ func (s *testCommitterSuite) TestPushPessimisticLock() {
 // TestResolveMixed tests mixed resolve with left behind optimistic locks and pessimistic locks,
 // using clean whole region resolve path
 func (s *testCommitterSuite) TestResolveMixed() {
-	atomic.StoreUint64(&tikv.ManagedLockTTL, 100)        // 100ms
-	defer atomic.StoreUint64(&tikv.ManagedLockTTL, 3000) // restore default value
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 100)        // 100ms
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // restore default value
 	ctx := context.Background()
 
 	// pk is the primary lock of txn1
@@ -1196,13 +1197,13 @@ func (s *testCommitterSuite) TestResolveMixed() {
 
 	// stop txn ttl manager and remove primary key, make the other keys left behind
 	committer.CloseTTLManager()
-	muts := tikv.NewPlainMutations(1)
+	muts := transaction.NewPlainMutations(1)
 	muts.Push(kvrpcpb.Op_Lock, pk, nil, true)
 	err = committer.PessimisticRollbackMutations(context.Background(), &muts)
 	s.Nil(err)
 
 	// try to resolve the left optimistic locks, use clean whole region
-	time.Sleep(time.Duration(atomic.LoadUint64(&tikv.ManagedLockTTL)) * time.Millisecond)
+	time.Sleep(time.Duration(atomic.LoadUint64(&transaction.ManagedLockTTL)) * time.Millisecond)
 	optimisticLockInfo := s.getLockInfo(optimisticLockKey)
 	lock := txnlock.NewLock(optimisticLockInfo)
 	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())

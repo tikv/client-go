@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package transaction
 
 import (
 	"encoding/hex"
@@ -62,7 +62,7 @@ func (actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 	return metrics.TxnRegionsNumHistogramCommit
 }
 
-func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	keys := batch.mutations.GetKeys()
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		StartVersion:  c.startTS,
@@ -73,7 +73,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 	tBegin := time.Now()
 	attempts := 0
 
-	sender := NewRegionRequestSender(c.store.regionCache, c.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 	for {
 		attempts++
 		if time.Since(tBegin) > slowRequestThreshold {
@@ -110,7 +110,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 					return errors.Trace(err)
 				}
 			}
-			same, err := batch.relocate(bo, c.store.regionCache)
+			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -145,7 +145,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 				}
 
 				// Update commit ts and retry.
-				commitTS, err := c.store.getTimestampWithRetry(bo, c.txn.GetScope())
+				commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 				if err != nil {
 					logutil.Logger(bo.GetCtx()).Warn("2PC get commitTS failed",
 						zap.Error(err),
@@ -198,7 +198,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 	return nil
 }
 
-func (c *twoPhaseCommitter) commitMutations(bo *Backoffer, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) commitMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("twoPhaseCommitter.commitMutations", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
