@@ -458,17 +458,17 @@ func (c *RegionCache) SetPDClient(client pd.Client) {
 
 // RPCContext contains data that is needed to send RPC to a region.
 type RPCContext struct {
-	Region         RegionVerID
-	Meta           *metapb.Region
-	Peer           *metapb.Peer
-	AccessIdx      AccessIndex
-	Store          *Store
-	Addr           string
-	AccessMode     accessMode
-	ProxyStore     *Store      // nil means proxy is not used
-	ProxyAccessIdx AccessIndex // valid when ProxyStore is not nil
-	ProxyAddr      string      // valid when ProxyStore is not nil
-	TiKVNum        int         // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	Region     RegionVerID
+	Meta       *metapb.Region
+	Peer       *metapb.Peer
+	AccessIdx  AccessIndex
+	Store      *Store
+	Addr       string
+	AccessMode accessMode
+	ProxyStore *Store // nil means proxy is not used
+	//ProxyAccessIdx AccessIndex // valid when ProxyStore is not nil
+	ProxyAddr string // valid when ProxyStore is not nil
+	TiKVNum   int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
 
 	tryTimes int
 }
@@ -481,7 +481,7 @@ func (c *RPCContext) String() string {
 	res := fmt.Sprintf("region ID: %d, meta: %s, peer: %s, addr: %s, idx: %d, reqStoreType: %s, runStoreType: %s",
 		c.Region.GetID(), c.Meta, c.Peer, c.Addr, c.AccessIdx, c.AccessMode, runStoreType)
 	if c.ProxyStore != nil {
-		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s, proxy idx: %d", c.ProxyStore.storeID, c.ProxyAddr, c.ProxyAccessIdx)
+		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.addr)
 	}
 	return res
 }
@@ -573,15 +573,15 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	}
 
 	var (
-		proxyStore     *Store
-		proxyAddr      string
-		proxyAccessIdx AccessIndex
+		proxyStore *Store
+		proxyAddr  string
+		//proxyAccessIdx AccessIndex
 	)
 	if c.enableForwarding && isLeaderReq {
 		if atomic.LoadInt32(&store.unreachable) == 0 {
 			regionStore.unsetProxyStoreIfNeeded(cachedRegion)
 		} else {
-			proxyStore, proxyAccessIdx, _ = c.getProxyStore(cachedRegion, store, regionStore, accessIdx)
+			proxyStore, _, _ = c.getProxyStore(cachedRegion, store, regionStore, accessIdx)
 			if proxyStore != nil {
 				proxyAddr, err = c.getStoreAddr(bo, cachedRegion, proxyStore)
 				if err != nil {
@@ -592,17 +592,16 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	}
 
 	return &RPCContext{
-		Region:         id,
-		Meta:           cachedRegion.meta,
-		Peer:           peer,
-		AccessIdx:      accessIdx,
-		Store:          store,
-		Addr:           addr,
-		AccessMode:     tiKVOnly,
-		ProxyStore:     proxyStore,
-		ProxyAccessIdx: proxyAccessIdx,
-		ProxyAddr:      proxyAddr,
-		TiKVNum:        regionStore.accessStoreNum(tiKVOnly),
+		Region:     id,
+		Meta:       cachedRegion.meta,
+		Peer:       peer,
+		AccessIdx:  accessIdx,
+		Store:      store,
+		Addr:       addr,
+		AccessMode: tiKVOnly,
+		ProxyStore: proxyStore,
+		ProxyAddr:  proxyAddr,
+		TiKVNum:    regionStore.accessStoreNum(tiKVOnly),
 	}, nil
 }
 

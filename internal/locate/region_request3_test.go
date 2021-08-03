@@ -212,7 +212,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	s.Equal(ctx.Addr, leaderAddr)
 	s.NotNil(ctx.ProxyStore)
 	s.NotEqual(ctx.ProxyAddr, leaderAddr)
-	s.NotEqual(ctx.ProxyAccessIdx, ctx.AccessIdx)
 	s.Nil(err)
 
 	// Simulate recovering to normal
@@ -333,8 +332,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Should only contains TiKV stores.
 	s.Equal(len(replicaSelector.replicas), regionStore.accessStoreNum(tiKVOnly))
 	s.Equal(len(replicaSelector.replicas), len(regionStore.stores)-1)
-	s.True(replicaSelector.nextReplicaIdx == 0)
-	s.False(replicaSelector.isExhausted())
+	s.IsType(accessKnownLeader{}, replicaSelector.state)
 
 	// Verify that the store matches the peer and epoch.
 	for _, replica := range replicaSelector.replicas {
@@ -354,6 +352,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Equal(leaderReplica.store, leaderStore)
 	s.Equal(leaderReplica.peer, leaderPeer)
 
+	/*
 	assertRPCCtxEqual := func(rpcCtx *RPCContext, replica *replica) {
 		s.Equal(rpcCtx.Store, replicaSelector.replicas[replicaSelector.nextReplicaIdx-1].store)
 		s.Equal(rpcCtx.Peer, replicaSelector.replicas[replicaSelector.nextReplicaIdx-1].peer)
@@ -470,236 +469,237 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	leaderStore, leaderPeer, _, _ = region.WorkStorePeer(region.getStore())
 	s.Equal(leaderStore, rpcCtx.Store)
 	s.Equal(leaderPeer, rpcCtx.Peer)
+	*/
 }
 
-// TODO(youjiali1995): Remove duplicated tests. This test may be duplicated with other
-// tests but it's a dedicated one to test sending requests with the replica selector.
-func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
-	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
-		Key:   []byte("key"),
-		Value: []byte("value"),
-	})
-	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
-	s.Nil(err)
-	s.NotNil(region)
-
-	reloadRegion := func() {
-		s.regionRequestSender.leaderReplicaSelector.region.invalidate(Other)
-		region, _ = s.cache.LocateRegionByID(s.bo, s.regionID)
-	}
-
-	hasFakeRegionError := func(resp *tikvrpc.Response) bool {
-		if resp == nil {
-			return false
-		}
-		regionErr, err := resp.GetRegionError()
-		if err != nil {
-			return false
-		}
-		return IsFakeRegionError(regionErr)
-	}
-
-	// Normal
-	bo := retry.NewBackoffer(context.Background(), -1)
-	sender := s.regionRequestSender
-	resp, err := sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.NotNil(resp)
-	s.True(bo.GetTotalBackoffTimes() == 0)
-
-	// Switch to the next Peer due to store failure and the leader is on the next peer.
-	bo = retry.NewBackoffer(context.Background(), -1)
-	s.cluster.ChangeLeader(s.regionID, s.peerIDs[1])
-	s.cluster.StopStore(s.storeIDs[0])
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.NotNil(resp)
-	s.Equal(sender.leaderReplicaSelector.nextReplicaIdx, 2)
-	s.True(bo.GetTotalBackoffTimes() == 1)
-	s.cluster.StartStore(s.storeIDs[0])
-
-	// Leader is updated because of send success, so no backoff.
-	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.NotNil(resp)
-	s.Equal(sender.leaderReplicaSelector.nextReplicaIdx, 1)
-	s.True(bo.GetTotalBackoffTimes() == 0)
-
-	// Switch to the next peer due to leader failure but the new leader is not elected.
-	// Region will be invalidated due to store epoch changed.
-	reloadRegion()
-	s.cluster.StopStore(s.storeIDs[1])
-	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.True(hasFakeRegionError(resp))
-	s.False(sender.leaderReplicaSelector.isExhausted())
-	s.Equal(bo.GetTotalBackoffTimes(), 1)
-	s.cluster.StartStore(s.storeIDs[1])
-
-	// Leader is changed. No backoff.
-	reloadRegion()
-	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
-	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.NotNil(resp)
-	s.Equal(bo.GetTotalBackoffTimes(), 0)
-
-	// No leader. Backoff for each replica and runs out all replicas.
-	s.cluster.GiveUpLeader(s.regionID)
-	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.True(hasFakeRegionError(resp))
-	s.Equal(bo.GetTotalBackoffTimes(), 3)
-	s.True(sender.leaderReplicaSelector.isExhausted())
-	s.False(sender.leaderReplicaSelector.region.isValid())
-	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
-
-	// The leader store is alive but can't provide service.
-	// Region will be invalidated due to running out of all replicas.
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
-		return reachable
-	}
-	reloadRegion()
-	s.cluster.StopStore(s.storeIDs[0])
-	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.True(hasFakeRegionError(resp))
-	s.True(sender.leaderReplicaSelector.isExhausted())
-	s.False(sender.leaderReplicaSelector.region.isValid())
-	s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
-	s.cluster.StartStore(s.storeIDs[0])
-
-	// Verify that retry the same replica when meets ServerIsBusy/MaxTimestampNotSynced/ReadIndexNotReady/ProposalInMergingMode.
-	for _, regionErr := range []*errorpb.Error{
-		// ServerIsBusy takes too much time to test.
-		// {ServerIsBusy: &errorpb.ServerIsBusy{}},
-		{MaxTimestampNotSynced: &errorpb.MaxTimestampNotSynced{}},
-		{ReadIndexNotReady: &errorpb.ReadIndexNotReady{}},
-		{ProposalInMergingMode: &errorpb.ProposalInMergingMode{}},
-	} {
-		func() {
-			oc := sender.client
-			defer func() {
-				sender.client = oc
-			}()
-			s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-				// Return the specific region error when accesses the leader.
-				if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
-					return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: regionErr}}, nil
-				}
-				// Return the not leader error when accesses followers.
-				return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: &errorpb.Error{
-					NotLeader: &errorpb.NotLeader{
-						RegionId: region.Region.id, Leader: &metapb.Peer{Id: s.peerIDs[0], StoreId: s.storeIDs[0]},
-					}}}}, nil
-
-			}}
-			reloadRegion()
-			bo = retry.NewBackoffer(context.Background(), -1)
-			resp, err := sender.SendReq(bo, req, region.Region, time.Second)
-			s.Nil(err)
-			s.True(hasFakeRegionError(resp))
-			s.True(sender.leaderReplicaSelector.isExhausted())
-			s.False(sender.leaderReplicaSelector.region.isValid())
-			s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
-		}()
-	}
-
-	// Verify switch to the next peer immediately when meets StaleCommand.
-	reloadRegion()
-	func() {
-		oc := sender.client
-		defer func() {
-			sender.client = oc
-		}()
-		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: &errorpb.Error{StaleCommand: &errorpb.StaleCommand{}}}}, nil
-		}}
-		reloadRegion()
-		bo = retry.NewBackoffer(context.Background(), -1)
-		resp, err := sender.SendReq(bo, req, region.Region, time.Second)
-		s.Nil(err)
-		s.True(hasFakeRegionError(resp))
-		s.True(sender.leaderReplicaSelector.isExhausted())
-		s.False(sender.leaderReplicaSelector.region.isValid())
-		s.Equal(bo.GetTotalBackoffTimes(), 0)
-	}()
-
-	// Verify don't invalidate region when meets unknown region errors.
-	reloadRegion()
-	func() {
-		oc := sender.client
-		defer func() {
-			sender.client = oc
-		}()
-		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: &errorpb.Error{Message: ""}}}, nil
-		}}
-		reloadRegion()
-		bo = retry.NewBackoffer(context.Background(), -1)
-		resp, err := sender.SendReq(bo, req, region.Region, time.Second)
-		s.Nil(err)
-		s.True(hasFakeRegionError(resp))
-		s.True(sender.leaderReplicaSelector.isExhausted())
-		s.False(sender.leaderReplicaSelector.region.isValid())
-		s.Equal(bo.GetTotalBackoffTimes(), 0)
-	}()
-
-	// Verify invalidate region when meets StoreNotMatch/RegionNotFound/EpochNotMatch/NotLeader and can't find the leader in region.
-	for i, regionErr := range []*errorpb.Error{
-		{StoreNotMatch: &errorpb.StoreNotMatch{}},
-		{RegionNotFound: &errorpb.RegionNotFound{}},
-		{EpochNotMatch: &errorpb.EpochNotMatch{}},
-		{NotLeader: &errorpb.NotLeader{Leader: &metapb.Peer{}}}} {
-		func() {
-			oc := sender.client
-			defer func() {
-				sender.client = oc
-			}()
-			s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-				return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: regionErr}}, nil
-
-			}}
-			reloadRegion()
-			bo = retry.NewBackoffer(context.Background(), -1)
-			resp, err := sender.SendReq(bo, req, region.Region, time.Second)
-
-			// Return a sendError when meets NotLeader and can't find the leader in the region.
-			if i == 3 {
-				s.Nil(err)
-				s.True(hasFakeRegionError(resp))
-			} else {
-				s.Nil(err)
-				s.NotNil(resp)
-				regionErr, _ := resp.GetRegionError()
-				s.NotNil(regionErr)
-			}
-			s.False(sender.leaderReplicaSelector.isExhausted())
-			s.False(sender.leaderReplicaSelector.region.isValid())
-			s.Equal(bo.GetTotalBackoffTimes(), 0)
-		}()
-	}
-
-	// Runs out of all replicas and then returns a send error.
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
-		return unreachable
-	}
-	reloadRegion()
-	for _, store := range s.storeIDs {
-		s.cluster.StopStore(store)
-	}
-	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.True(hasFakeRegionError(resp))
-	s.True(bo.GetTotalBackoffTimes() == 3)
-	s.False(sender.leaderReplicaSelector.region.isValid())
-	for _, store := range s.storeIDs {
-		s.cluster.StartStore(store)
-	}
-}
+//// TODO(youjiali1995): Remove duplicated tests. This test may be duplicated with other
+//// tests but it's a dedicated one to test sending requests with the replica selector.
+//func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
+//	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+//		Key:   []byte("key"),
+//		Value: []byte("value"),
+//	})
+//	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+//	s.Nil(err)
+//	s.NotNil(region)
+//
+//	reloadRegion := func() {
+//		s.regionRequestSender.leaderReplicaSelector.region.invalidate(Other)
+//		region, _ = s.cache.LocateRegionByID(s.bo, s.regionID)
+//	}
+//
+//	hasFakeRegionError := func(resp *tikvrpc.Response) bool {
+//		if resp == nil {
+//			return false
+//		}
+//		regionErr, err := resp.GetRegionError()
+//		if err != nil {
+//			return false
+//		}
+//		return IsFakeRegionError(regionErr)
+//	}
+//
+//	// Normal
+//	bo := retry.NewBackoffer(context.Background(), -1)
+//	sender := s.regionRequestSender
+//	resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.NotNil(resp)
+//	s.True(bo.GetTotalBackoffTimes() == 0)
+//
+//	// Switch to the next Peer due to store failure and the leader is on the next peer.
+//	bo = retry.NewBackoffer(context.Background(), -1)
+//	s.cluster.ChangeLeader(s.regionID, s.peerIDs[1])
+//	s.cluster.StopStore(s.storeIDs[0])
+//	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.NotNil(resp)
+//	s.Equal(sender.leaderReplicaSelector.nextReplicaIdx, 2)
+//	s.True(bo.GetTotalBackoffTimes() == 1)
+//	s.cluster.StartStore(s.storeIDs[0])
+//
+//	// Leader is updated because of send success, so no backoff.
+//	bo = retry.NewBackoffer(context.Background(), -1)
+//	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.NotNil(resp)
+//	s.Equal(sender.leaderReplicaSelector.nextReplicaIdx, 1)
+//	s.True(bo.GetTotalBackoffTimes() == 0)
+//
+//	// Switch to the next peer due to leader failure but the new leader is not elected.
+//	// Region will be invalidated due to store epoch changed.
+//	reloadRegion()
+//	s.cluster.StopStore(s.storeIDs[1])
+//	bo = retry.NewBackoffer(context.Background(), -1)
+//	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.True(hasFakeRegionError(resp))
+//	s.False(sender.leaderReplicaSelector.isExhausted())
+//	s.Equal(bo.GetTotalBackoffTimes(), 1)
+//	s.cluster.StartStore(s.storeIDs[1])
+//
+//	// Leader is changed. No backoff.
+//	reloadRegion()
+//	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
+//	bo = retry.NewBackoffer(context.Background(), -1)
+//	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.NotNil(resp)
+//	s.Equal(bo.GetTotalBackoffTimes(), 0)
+//
+//	// No leader. Backoff for each replica and runs out all replicas.
+//	s.cluster.GiveUpLeader(s.regionID)
+//	bo = retry.NewBackoffer(context.Background(), -1)
+//	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.True(hasFakeRegionError(resp))
+//	s.Equal(bo.GetTotalBackoffTimes(), 3)
+//	s.True(sender.leaderReplicaSelector.isExhausted())
+//	s.False(sender.leaderReplicaSelector.region.isValid())
+//	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
+//
+//	// The leader store is alive but can't provide service.
+//	// Region will be invalidated due to running out of all replicas.
+//	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+//		return reachable
+//	}
+//	reloadRegion()
+//	s.cluster.StopStore(s.storeIDs[0])
+//	bo = retry.NewBackoffer(context.Background(), -1)
+//	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.True(hasFakeRegionError(resp))
+//	s.True(sender.leaderReplicaSelector.isExhausted())
+//	s.False(sender.leaderReplicaSelector.region.isValid())
+//	s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
+//	s.cluster.StartStore(s.storeIDs[0])
+//
+//	// Verify that retry the same replica when meets ServerIsBusy/MaxTimestampNotSynced/ReadIndexNotReady/ProposalInMergingMode.
+//	for _, regionErr := range []*errorpb.Error{
+//		// ServerIsBusy takes too much time to test.
+//		// {ServerIsBusy: &errorpb.ServerIsBusy{}},
+//		{MaxTimestampNotSynced: &errorpb.MaxTimestampNotSynced{}},
+//		{ReadIndexNotReady: &errorpb.ReadIndexNotReady{}},
+//		{ProposalInMergingMode: &errorpb.ProposalInMergingMode{}},
+//	} {
+//		func() {
+//			oc := sender.client
+//			defer func() {
+//				sender.client = oc
+//			}()
+//			s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+//				// Return the specific region error when accesses the leader.
+//				if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
+//					return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: regionErr}}, nil
+//				}
+//				// Return the not leader error when accesses followers.
+//				return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: &errorpb.Error{
+//					NotLeader: &errorpb.NotLeader{
+//						RegionId: region.Region.id, Leader: &metapb.Peer{Id: s.peerIDs[0], StoreId: s.storeIDs[0]},
+//					}}}}, nil
+//
+//			}}
+//			reloadRegion()
+//			bo = retry.NewBackoffer(context.Background(), -1)
+//			resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+//			s.Nil(err)
+//			s.True(hasFakeRegionError(resp))
+//			s.True(sender.leaderReplicaSelector.isExhausted())
+//			s.False(sender.leaderReplicaSelector.region.isValid())
+//			s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
+//		}()
+//	}
+//
+//	// Verify switch to the next peer immediately when meets StaleCommand.
+//	reloadRegion()
+//	func() {
+//		oc := sender.client
+//		defer func() {
+//			sender.client = oc
+//		}()
+//		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+//			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: &errorpb.Error{StaleCommand: &errorpb.StaleCommand{}}}}, nil
+//		}}
+//		reloadRegion()
+//		bo = retry.NewBackoffer(context.Background(), -1)
+//		resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+//		s.Nil(err)
+//		s.True(hasFakeRegionError(resp))
+//		s.True(sender.leaderReplicaSelector.isExhausted())
+//		s.False(sender.leaderReplicaSelector.region.isValid())
+//		s.Equal(bo.GetTotalBackoffTimes(), 0)
+//	}()
+//
+//	// Verify don't invalidate region when meets unknown region errors.
+//	reloadRegion()
+//	func() {
+//		oc := sender.client
+//		defer func() {
+//			sender.client = oc
+//		}()
+//		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+//			return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: &errorpb.Error{Message: ""}}}, nil
+//		}}
+//		reloadRegion()
+//		bo = retry.NewBackoffer(context.Background(), -1)
+//		resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+//		s.Nil(err)
+//		s.True(hasFakeRegionError(resp))
+//		s.True(sender.leaderReplicaSelector.isExhausted())
+//		s.False(sender.leaderReplicaSelector.region.isValid())
+//		s.Equal(bo.GetTotalBackoffTimes(), 0)
+//	}()
+//
+//	// Verify invalidate region when meets StoreNotMatch/RegionNotFound/EpochNotMatch/NotLeader and can't find the leader in region.
+//	for i, regionErr := range []*errorpb.Error{
+//		{StoreNotMatch: &errorpb.StoreNotMatch{}},
+//		{RegionNotFound: &errorpb.RegionNotFound{}},
+//		{EpochNotMatch: &errorpb.EpochNotMatch{}},
+//		{NotLeader: &errorpb.NotLeader{Leader: &metapb.Peer{}}}} {
+//		func() {
+//			oc := sender.client
+//			defer func() {
+//				sender.client = oc
+//			}()
+//			s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+//				return &tikvrpc.Response{Resp: &kvrpcpb.RawPutResponse{RegionError: regionErr}}, nil
+//
+//			}}
+//			reloadRegion()
+//			bo = retry.NewBackoffer(context.Background(), -1)
+//			resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+//
+//			// Return a sendError when meets NotLeader and can't find the leader in the region.
+//			if i == 3 {
+//				s.Nil(err)
+//				s.True(hasFakeRegionError(resp))
+//			} else {
+//				s.Nil(err)
+//				s.NotNil(resp)
+//				regionErr, _ := resp.GetRegionError()
+//				s.NotNil(regionErr)
+//			}
+//			s.False(sender.leaderReplicaSelector.isExhausted())
+//			s.False(sender.leaderReplicaSelector.region.isValid())
+//			s.Equal(bo.GetTotalBackoffTimes(), 0)
+//		}()
+//	}
+//
+//	// Runs out of all replicas and then returns a send error.
+//	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+//		return unreachable
+//	}
+//	reloadRegion()
+//	for _, store := range s.storeIDs {
+//		s.cluster.StopStore(store)
+//	}
+//	bo = retry.NewBackoffer(context.Background(), -1)
+//	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+//	s.Nil(err)
+//	s.True(hasFakeRegionError(resp))
+//	s.True(bo.GetTotalBackoffTimes() == 3)
+//	s.False(sender.leaderReplicaSelector.region.isValid())
+//	for _, store := range s.storeIDs {
+//		s.cluster.StartStore(store)
+//	}
+//}

@@ -37,6 +37,7 @@ package locate
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -246,8 +247,10 @@ type replicaSelector struct {
 	// head of the slice.
 	replicas []*replica
 	state    selectorState
-	// currentReplica points to the replica we try in this time
-	currentReplica *replica
+	// targetReplica points to the replica handling the request this time
+	targetReplica *replica
+	// replicas[proxyIdx] is the store used to redirect requests this time
+	proxyIdx int
 }
 
 type selectorState interface{}
@@ -298,6 +301,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID) (*replic
 		replicas,
 		accessKnownLeader{},
 		nil,
+		-1,
 	}, nil
 }
 
@@ -311,88 +315,139 @@ func (s *replicaSelector) next(bo *retry.Backoffer) (*RPCContext, error) {
 		return nil, nil
 	}
 	leader := s.replicas[0]
+	regionStore := s.region.getStore()
+	if leader == nil || regionStore == nil {
+		return nil, nil
+	}
 
-	s.currentReplica = nil
-	switch s.state.(type) {
-	case accessKnownLeader:
-		s.currentReplica = leader
+	s.targetReplica = nil
+	var proxyReplica *replica
+	for s.targetReplica == nil {
+		switch s.state.(type) {
+		case accessKnownLeader:
+			if leader.attempts >= maxReplicaAttempt {
+				s.state = tryFollower{}
+				continue
+			}
+			s.targetReplica = leader
+			s.targetReplica.attempts++
 
-	case tryFollower:
-		for _, r := range s.replicas[1:] {
-			if r.attempts == 0 {
-				s.currentReplica = r
-				break
-			}
-		}
-		if s.currentReplica == nil {
-			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
-			s.invalidateRegion()
-			return nil, nil
-		}
-
-	case accessByProxy:
-		regionStore := s.region.getStore()
-		if atomic.LoadInt32(&leader.store.unreachable) == 0 {
-			regionStore.unsetProxyStoreIfNeeded(s.region)
-			s.state = accessKnownLeader{}
-			s.currentReplica = leader
-		} else if regionStore.proxyTiKVIdx >= 0 {
-			proxyStore := regionStore.stores[regionStore.proxyTiKVIdx]
-			for _, r := range s.replicas {
-				if r.store.storeID == proxyStore.storeID {
-					s.currentReplica = r
-				}
-			}
-			if s.currentReplica == nil {
-				s.region.invalidate(StoreNotFound)
-				return nil, nil
-			}
-		} else {
+		case tryFollower:
 			for _, r := range s.replicas[1:] {
-				if atomic.LoadInt32(&r.store.unreachable) == 0 && r.attempts < maxReplicaAttempt {
-					s.currentReplica = r
+				if r.attempts == 0 {
+					s.targetReplica = r
 					break
 				}
 			}
-			if s.currentReplica == nil {
+			if s.targetReplica == nil {
 				metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 				s.invalidateRegion()
 				return nil, nil
 			}
+			s.targetReplica.attempts++
+
+		case accessByProxy:
+			if atomic.LoadInt32(&leader.store.unreachable) == 0 {
+				regionStore.unsetProxyStoreIfNeeded(s.region)
+				s.state = accessKnownLeader{}
+			} else {
+				// A working proxy is known
+				if regionStore.proxyTiKVIdx >= 0 {
+					proxyStore := regionStore.stores[regionStore.proxyTiKVIdx]
+					for _, r := range s.replicas {
+						if r.store.storeID == proxyStore.storeID {
+							proxyReplica = r
+							break
+						}
+					}
+					if proxyReplica == nil {
+						s.region.invalidate(StoreNotFound)
+						return nil, nil
+					}
+				}
+				// If there is no known proxy store or the previous proxy is now a leader,
+				// select a random proxy from non-leaders.
+				if proxyReplica == nil || proxyReplica == leader {
+					candidates := s.replicas[1:]
+					if s.proxyIdx < 0 {
+						s.proxyIdx = rand.Intn(len(s.replicas))
+					}
+					for i := 0; i < len(candidates); i++ {
+						s.proxyIdx++
+						if s.proxyIdx >= len(candidates) {
+							s.proxyIdx -= len(candidates)
+						}
+						r := candidates[s.proxyIdx]
+						if atomic.LoadInt32(&r.store.unreachable) == 0 && r.attempts < maxReplicaAttempt {
+							proxyReplica = r
+							break
+						}
+					}
+				}
+				if proxyReplica == nil {
+					metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+					s.invalidateRegion()
+					return nil, nil
+				}
+				s.targetReplica = leader
+				proxyReplica.attempts++
+			}
 		}
 	}
 
-	s.currentReplica.attempts++
-
-	storeFailEpoch := atomic.LoadUint32(&s.currentReplica.store.epoch)
-	if storeFailEpoch != s.currentReplica.epoch {
-		// TODO(youjiali1995): Is it necessary to invalidate the region?
-		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("stale_store").Inc()
-		s.invalidateRegion()
+	if s.isReplicaStoreEpochStale(s.targetReplica) ||
+		(proxyReplica != nil && s.isReplicaStoreEpochStale(proxyReplica)) {
 		return nil, nil
 	}
 
-	addr, err := s.regionCache.getStoreAddr(bo, s.region, s.currentReplica.store)
+	rpcCtx := &RPCContext{
+		Region:     s.region.VerID(),
+		Meta:       s.region.meta,
+		Peer:       s.targetReplica.peer,
+		Store:      s.targetReplica.store,
+		AccessMode: tiKVOnly,
+		TiKVNum:    len(s.replicas),
+	}
+	// Set leader addr
+	addr, err := s.regionCache.getStoreAddr(bo, s.region, s.targetReplica.store)
 	if err != nil {
 		return nil, err
 	}
 	if len(addr) == 0 {
 		return nil, nil
 	}
-	return &RPCContext{
-		Region:     s.region.VerID(),
-		Meta:       s.region.meta,
-		Peer:       s.currentReplica.peer,
-		Store:      s.currentReplica.store,
-		Addr:       addr,
-		AccessMode: tiKVOnly,
-		TiKVNum:    len(s.replicas),
-	}, nil
+	rpcCtx.Addr = addr
+
+	// Set proxy addr
+	if proxyReplica!= nil {
+		addr, err = s.regionCache.getStoreAddr(bo, s.region, proxyReplica.store)
+		if err != nil {
+			return nil, err
+		}
+		if len(addr) == 0 {
+			return nil, nil
+		}
+		rpcCtx.ProxyStore = proxyReplica.store
+		rpcCtx.ProxyAddr = addr
+	}
+
+	return rpcCtx, nil
+}
+
+func (s *replicaSelector) isReplicaStoreEpochStale(replica *replica) bool {
+	storeFailEpoch := atomic.LoadUint32(&replica.store.epoch)
+	if storeFailEpoch != replica.epoch {
+		// TODO(youjiali1995): Is it necessary to invalidate the region?
+		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("stale_store").Inc()
+		s.invalidateRegion()
+		return true
+	}
+	return false
 }
 
 func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	metrics.RegionCacheCounterWithSendFail.Inc()
-	store := s.currentReplica.store
+	store := s.targetReplica.store
 	liveness := store.requestLiveness(bo, s.regionCache)
 	if liveness != reachable {
 		store.startHealthCheckLoopIfNeeded(s.regionCache)
@@ -400,15 +455,15 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 
 	switch s.state.(type) {
 	case accessKnownLeader:
-		if liveness != reachable && s.regionCache.enableForwarding {
+		if liveness != reachable && len(s.replicas) > 1 && s.regionCache.enableForwarding {
 			s.state = accessByProxy{}
-		} else if liveness != reachable || s.currentReplica.attempts >= maxReplicaAttempt {
+		} else if liveness != reachable || s.targetReplica.attempts >= maxReplicaAttempt {
 			s.state = tryFollower{}
 		}
 	}
 
 	// invalidate regions in store.
-	if atomic.CompareAndSwapUint32(&store.epoch, s.currentReplica.epoch, s.currentReplica.epoch+1) {
+	if atomic.CompareAndSwapUint32(&store.epoch, s.targetReplica.epoch, s.targetReplica.epoch+1) {
 		logutil.BgLogger().Info("mark store's regions need be refill", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
@@ -424,9 +479,12 @@ func (s *replicaSelector) OnSendSuccess() {
 	// leader in the cached region, so update leader.
 	switch s.state.(type) {
 	case accessKnownLeader:
-		if !s.regionCache.switchWorkLeaderToPeer(s.region, s.currentReplica.peer) {
+		if !s.regionCache.switchWorkLeaderToPeer(s.region, s.targetReplica.peer) {
 			panic("the store must exist")
 		}
+
+	case accessByProxy:
+
 	}
 }
 
