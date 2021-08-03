@@ -752,6 +752,8 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 		}
 		batchBuilder.forgetPrimary()
 	}
+	util.EvalFailpoint("afterPrimaryBatch")
+
 	// Already spawned a goroutine for async commit transaction.
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)

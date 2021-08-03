@@ -796,3 +796,36 @@ func (s *testLockSuite) TestDeadlockReportWaitChain() {
 	waitAndRollback(txns, 0)
 	waitAndRollback(txns, 2)
 }
+
+func (s *testLockSuite) TestStartHeartBeatAfterLockingPrimary() {
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 500)
+	s.Nil(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", `return`))
+	s.Nil(failpoint.Enable("tikvclient/afterPrimaryBatch", `pause`))
+	defer func() {
+		atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)
+		s.Nil(failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit"))
+	}()
+
+	txn, err := s.store.Begin()
+	s.Nil(err)
+	txn.SetPessimistic(true)
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockResCh := make(chan error)
+	go func() {
+		err = txn.LockKeys(context.Background(), lockCtx, []byte("a"), []byte("b"))
+		lockResCh <- err
+	}()
+	
+	time.Sleep(1 * time.Second)
+
+	lr := s.store.NewLockResolver()
+	status, err := lr.LockResolver.GetTxnStatus(txn.StartTS(), 0, []byte("a"))
+	s.Nil(err)
+	s.False(status.IsCommitted())
+	s.Greater(status.TTL(), uint64(1000))
+	s.Equal(status.CommitTS(), uint64(0))
+
+	s.Nil(failpoint.Disable("tikvclient/afterPrimaryBatch"))
+	s.Nil(<-lockResCh)
+	s.Nil(txn.Rollback())
+}
