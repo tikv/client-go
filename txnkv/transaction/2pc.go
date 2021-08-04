@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package transaction
 
 import (
 	"bytes"
@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -59,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	zap "go.uber.org/zap"
 )
@@ -67,7 +69,7 @@ import (
 const slowRequestThreshold = time.Minute
 
 type twoPhaseCommitAction interface {
-	handleSingleBatch(*twoPhaseCommitter, *Backoffer, batchMutations) error
+	handleSingleBatch(*twoPhaseCommitter, *retry.Backoffer, batchMutations) error
 	tiKVTxnRegionsNumHistogram() prometheus.Observer
 	String() string
 }
@@ -77,9 +79,43 @@ var (
 	ManagedLockTTL uint64 = 20000 // 20s
 )
 
+var (
+	// CommitMaxBackoff is max sleep time of the 'commit' command
+	CommitMaxBackoff = uint64(41000)
+	// PrewriteMaxBackoff is max sleep time of the `pre-write` command.
+	PrewriteMaxBackoff = 20000
+)
+
+type kvstore interface {
+	// GetRegionCache gets the RegionCache.
+	GetRegionCache() *locate.RegionCache
+	// SplitRegions splits regions by splitKeys.
+	SplitRegions(ctx context.Context, splitKeys [][]byte, scatter bool, tableID *int64) (regionIDs []uint64, err error)
+	// WaitScatterRegionFinish implements SplittableStore interface.
+	// backOff is the back off time of the wait scatter region.(Milliseconds)
+	// if backOff <= 0, the default wait scatter back off time will be used.
+	WaitScatterRegionFinish(ctx context.Context, regionID uint64, backOff int) error
+
+	// GetTimestampWithRetry returns latest timestamp.
+	GetTimestampWithRetry(bo *retry.Backoffer, scope string) (uint64, error)
+	// GetOracle gets a timestamp oracle client.
+	GetOracle() oracle.Oracle
+	CurrentTimestamp(txnScope string) (uint64, error)
+	// SendReq sends a request to TiKV.
+	SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error)
+	// GetTiKVClient gets the client instance.
+	GetTiKVClient() (client client.Client)
+	GetLockResolver() *txnlock.LockResolver
+	Ctx() context.Context
+	WaitGroup() *sync.WaitGroup
+	// TxnLatches returns txnLatches.
+	TxnLatches() *latch.LatchesScheduler
+	GetClusterID() uint64
+}
+
 // twoPhaseCommitter executes a two-phase commit protocol.
 type twoPhaseCommitter struct {
-	store               *KVStore
+	store               kvstore
 	txn                 *KVTxn
 	startTS             uint64
 	mutations           *memBufferMutations
@@ -133,19 +169,16 @@ type twoPhaseCommitter struct {
 
 	resourceGroupTag []byte
 
-	storeWg  *sync.WaitGroup
-	storeCtx context.Context
-
 	// allowed when tikv disk full happened.
 	diskFullOpt kvrpcpb.DiskFullOpt
 }
 
 type memBufferMutations struct {
-	storage *MemDB
+	storage *unionstore.MemDB
 	handles []unionstore.MemKeyHandle
 }
 
-func newMemBufferMutations(sizeHint int, storage *MemDB) *memBufferMutations {
+func newMemBufferMutations(sizeHint int, storage *unionstore.MemDB) *memBufferMutations {
 	return &memBufferMutations{
 		handles: make([]unionstore.MemKeyHandle, 0, sizeHint),
 		storage: storage,
@@ -335,8 +368,6 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		},
 		isPessimistic: txn.IsPessimistic(),
 		binlog:        txn.binlog,
-		storeWg:       &txn.store.wg,
-		storeCtx:      txn.store.ctx,
 		diskFullOpt:   kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 	}, nil
 }
@@ -489,6 +520,14 @@ func (c *twoPhaseCommitter) asyncSecondaries() [][]byte {
 
 const bytesPerMiB = 1024 * 1024
 
+// ttl = ttlFactor * sqrt(writeSizeInMiB)
+var ttlFactor = 6000
+
+// By default, locks after 3000ms is considered unusual (the client created the
+// lock might be dead). Other client may cleanup this kind of lock.
+// For locks created recently, we will do backoff and retry.
+var defaultLockTTL uint64 = 3000
+
 func txnLockTTL(startTime time.Time, txnSize int) uint64 {
 	// Increase lockTTL for large transactions.
 	// The formula is `ttl = ttlFactor * sqrt(sizeInMiB)`.
@@ -519,7 +558,7 @@ var preSplitSizeThreshold uint32 = 32 << 20
 // doActionOnMutations groups keys into primary batch and secondary batches, if primary batch exists in the key,
 // it does action on primary batch first, then on secondary batches. If action is commit, secondary batches
 // is done in background goroutine.
-func (c *twoPhaseCommitter) doActionOnMutations(bo *Backoffer, action twoPhaseCommitAction, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) doActionOnMutations(bo *retry.Backoffer, action twoPhaseCommitAction, mutations CommitterMutations) error {
 	if mutations.Len() == 0 {
 		return nil
 	}
@@ -550,15 +589,15 @@ func (c *twoPhaseCommitter) doActionOnMutations(bo *Backoffer, action twoPhaseCo
 }
 
 type groupedMutations struct {
-	region    RegionVerID
+	region    locate.RegionVerID
 	mutations CommitterMutations
 }
 
 // groupSortedMutationsByRegion separates keys into groups by their belonging Regions.
-func groupSortedMutationsByRegion(c *RegionCache, bo *retry.Backoffer, m CommitterMutations) ([]groupedMutations, error) {
+func groupSortedMutationsByRegion(c *locate.RegionCache, bo *retry.Backoffer, m CommitterMutations) ([]groupedMutations, error) {
 	var (
 		groups  []groupedMutations
-		lastLoc *KeyLocation
+		lastLoc *locate.KeyLocation
 	)
 	lastUpperBound := 0
 	for i := 0; i < m.Len(); i++ {
@@ -587,8 +626,8 @@ func groupSortedMutationsByRegion(c *RegionCache, bo *retry.Backoffer, m Committ
 }
 
 // groupMutations groups mutations by region, then checks for any large groups and in that case pre-splits the region.
-func (c *twoPhaseCommitter) groupMutations(bo *Backoffer, mutations CommitterMutations) ([]groupedMutations, error) {
-	groups, err := groupSortedMutationsByRegion(c.store.regionCache, bo, mutations)
+func (c *twoPhaseCommitter) groupMutations(bo *retry.Backoffer, mutations CommitterMutations) ([]groupedMutations, error) {
+	groups, err := groupSortedMutationsByRegion(c.store.GetRegionCache(), bo, mutations)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -602,14 +641,14 @@ func (c *twoPhaseCommitter) groupMutations(bo *Backoffer, mutations CommitterMut
 			logutil.BgLogger().Info("2PC detect large amount of mutations on a single region",
 				zap.Uint64("region", group.region.GetID()),
 				zap.Int("mutations count", group.mutations.Len()))
-			if c.store.preSplitRegion(bo.GetCtx(), group) {
+			if c.preSplitRegion(bo.GetCtx(), group) {
 				didPreSplit = true
 			}
 		}
 	}
 	// Reload region cache again.
 	if didPreSplit {
-		groups, err = groupSortedMutationsByRegion(c.store.regionCache, bo, mutations)
+		groups, err = groupSortedMutationsByRegion(c.store.GetRegionCache(), bo, mutations)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -618,9 +657,49 @@ func (c *twoPhaseCommitter) groupMutations(bo *Backoffer, mutations CommitterMut
 	return groups, nil
 }
 
+func (c *twoPhaseCommitter) preSplitRegion(ctx context.Context, group groupedMutations) bool {
+	splitKeys := make([][]byte, 0, 4)
+
+	preSplitSizeThresholdVal := atomic.LoadUint32(&preSplitSizeThreshold)
+	regionSize := 0
+	keysLength := group.mutations.Len()
+	// The value length maybe zero for pessimistic lock keys
+	for i := 0; i < keysLength; i++ {
+		regionSize = regionSize + len(group.mutations.GetKey(i)) + len(group.mutations.GetValue(i))
+		// The second condition is used for testing.
+		if regionSize >= int(preSplitSizeThresholdVal) {
+			regionSize = 0
+			splitKeys = append(splitKeys, group.mutations.GetKey(i))
+		}
+	}
+	if len(splitKeys) == 0 {
+		return false
+	}
+
+	regionIDs, err := c.store.SplitRegions(ctx, splitKeys, true, nil)
+	if err != nil {
+		logutil.BgLogger().Warn("2PC split regions failed", zap.Uint64("regionID", group.region.GetID()),
+			zap.Int("keys count", keysLength), zap.Error(err))
+		return false
+	}
+
+	for _, regionID := range regionIDs {
+		err := c.store.WaitScatterRegionFinish(ctx, regionID, 0)
+		if err != nil {
+			logutil.BgLogger().Warn("2PC wait scatter region failed", zap.Uint64("regionID", regionID), zap.Error(err))
+		}
+	}
+	// Invalidate the old region cache information.
+	c.store.GetRegionCache().InvalidateCachedRegion(group.region)
+	return true
+}
+
+// CommitSecondaryMaxBackoff is max sleep time of the 'commit' command
+const CommitSecondaryMaxBackoff = 41000
+
 // doActionOnGroupedMutations splits groups into batches (there is one group per region, and potentially many batches per group, but all mutations
 // in a batch will belong to the same region).
-func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPhaseCommitAction, groups []groupedMutations) error {
+func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action twoPhaseCommitAction, groups []groupedMutations) error {
 	action.tiKVTxnRegionsNumHistogram().Observe(float64(len(groups)))
 
 	var sizeFunc = c.keySize
@@ -693,10 +772,10 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 	}
 	// Already spawned a goroutine for async commit transaction.
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
-		secondaryBo := retry.NewBackofferWithVars(c.storeCtx, CommitSecondaryMaxBackoff, c.txn.vars)
-		c.storeWg.Add(1)
+		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
+		c.store.WaitGroup().Add(1)
 		go func() {
-			defer c.storeWg.Done()
+			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
 					if s, ok := v.(string); !ok {
@@ -727,7 +806,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 }
 
 // doActionOnBatches does action to batches in parallel.
-func (c *twoPhaseCommitter) doActionOnBatches(bo *Backoffer, action twoPhaseCommitAction, batches []batchMutations) error {
+func (c *twoPhaseCommitter) doActionOnBatches(bo *retry.Backoffer, action twoPhaseCommitAction, batches []batchMutations) error {
 	if len(batches) == 0 {
 		return nil
 	}
@@ -833,7 +912,7 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter) {
 				return
 			}
 			bo := retry.NewBackofferWithVars(context.Background(), keepAliveMaxBackoff, c.txn.vars)
-			now, err := c.store.getTimestampWithRetry(bo, c.txn.GetScope())
+			now, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Warn("keepAlive get tso fail",
 					zap.Error(err))
@@ -883,7 +962,7 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter) {
 	}
 }
 
-func sendTxnHeartBeat(bo *Backoffer, store *KVStore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
+func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdTxnHeartBeat, &kvrpcpb.TxnHeartBeatRequest{
 		PrimaryLock:   primary,
 		StartVersion:  startTS,
@@ -919,7 +998,7 @@ func sendTxnHeartBeat(bo *Backoffer, store *KVStore, primary []byte, startTS, tt
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.TxnHeartBeatResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
-			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, hex.EncodeToString(primary), extractKeyErr(keyErr))
+			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, hex.EncodeToString(primary), tikverr.ExtractKeyErr(keyErr))
 		}
 		return cmdResp.GetLockTtl(), false, nil
 	}
@@ -998,7 +1077,8 @@ func (c *twoPhaseCommitter) checkOnePCFallBack(action twoPhaseCommitAction, batc
 
 const (
 	cleanupMaxBackoff = 20000
-	tsoMaxBackoff     = 15000
+	// TsoMaxBackoff is the max sleep time to get tso.
+	TsoMaxBackoff = 15000
 )
 
 // VeryLongMaxBackoff is the max sleep time of transaction commit.
@@ -1006,9 +1086,9 @@ var VeryLongMaxBackoff = uint64(600000) // 10mins
 
 func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 	c.cleanWg.Add(1)
-	c.storeWg.Add(1)
+	c.store.WaitGroup().Add(1)
 	go func() {
-		defer c.storeWg.Done()
+		defer c.store.WaitGroup().Done()
 		if _, err := util.EvalFailpoint("commitFailedSkipCleanup"); err == nil {
 			logutil.Logger(ctx).Info("[failpoint] injected skip cleanup secondaries on failure",
 				zap.Uint64("txnStartTS", c.startTS))
@@ -1016,7 +1096,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 			return
 		}
 
-		cleanupKeysCtx := context.WithValue(c.storeCtx, retry.TxnStartKey, ctx.Value(retry.TxnStartKey))
+		cleanupKeysCtx := context.WithValue(c.store.Ctx(), retry.TxnStartKey, ctx.Value(retry.TxnStartKey))
 		var err error
 		if !c.isOnePC() {
 			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
@@ -1117,7 +1197,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// from PD and plus one as our MinCommitTS.
 	if commitTSMayBeCalculated && c.needLinearizability() {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
-		latestTS, err := c.store.getTimestampWithRetry(bo, c.txn.GetScope())
+		latestTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 		// If we fail to get a timestamp from PD, we just propagate the failure
 		// instead of falling back to the normal 2PC because a normal 2PC will
 		// also be likely to fail due to the same timestamp issue.
@@ -1223,7 +1303,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
-		commitTS, err = c.store.getTimestampWithRetry(retry.NewBackofferWithVars(ctx, tsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+		commitTS, err = c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
 		if err != nil {
 			logutil.Logger(ctx).Warn("2PC get commitTS failed",
 				zap.Error(err),
@@ -1269,7 +1349,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
 
-	if c.store.oracle.IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
+	if c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
 			c.sessionID, c.startTS, c.commitTS)
 		return err
@@ -1302,13 +1382,13 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Debug("2PC will use async commit protocol to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
-		c.storeWg.Add(1)
+		c.store.WaitGroup().Add(1)
 		go func() {
-			defer c.storeWg.Done()
+			defer c.store.WaitGroup().Done()
 			if _, err := util.EvalFailpoint("asyncCommitDoNothing"); err == nil {
 				return
 			}
-			commitBo := retry.NewBackofferWithVars(c.storeCtx, CommitSecondaryMaxBackoff, c.txn.vars)
+			commitBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
 			err := c.commitMutations(commitBo, c.mutations)
 			if err != nil {
 				logutil.Logger(ctx).Warn("2PC async commit failed", zap.Uint64("sessionID", c.sessionID),
@@ -1406,12 +1486,8 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 	c.doingAmend = true
 	defer func() { c.doingAmend = false }()
 	if keysNeedToLock.Len() > 0 {
-		lCtx := &kv.LockCtx{
-			Killed:        c.lockCtx.Killed,
-			ForUpdateTS:   c.forUpdateTS,
-			LockWaitTime:  c.lockCtx.LockWaitTime,
-			WaitStartTime: time.Now(),
-		}
+		lCtx := kv.NewLockCtx(c.forUpdateTS, c.lockCtx.LockWaitTime(), time.Now())
+		lCtx.Killed = c.lockCtx.Killed
 		tryTimes := uint(0)
 		retryLimit := config.GetGlobalConfig().PessimisticTxn.MaxRetryCount
 		var err error
@@ -1495,7 +1571,7 @@ func (c *twoPhaseCommitter) tryAmendTxn(ctx context.Context, startInfoSchema Sch
 func (c *twoPhaseCommitter) getCommitTS(ctx context.Context, commitDetail *util.CommitDetails) (uint64, error) {
 	start := time.Now()
 	logutil.Event(ctx, "start get commit ts")
-	commitTS, err := c.store.getTimestampWithRetry(retry.NewBackofferWithVars(ctx, tsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+	commitTS, err := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
 	if err != nil {
 		logutil.Logger(ctx).Warn("2PC get commitTS failed",
 			zap.Error(err),
@@ -1592,7 +1668,7 @@ type batchMutations struct {
 	isPrimary bool
 }
 
-func (b *batchMutations) relocate(bo *Backoffer, c *RegionCache) (bool, error) {
+func (b *batchMutations) relocate(bo *retry.Backoffer, c *locate.RegionCache) (bool, error) {
 	begin, end := b.mutations.GetKey(0), b.mutations.GetKey(b.mutations.Len()-1)
 	loc, err := c.LocateKey(bo, begin)
 	if err != nil {
@@ -1681,13 +1757,13 @@ type batchExecutor struct {
 	rateLimiter       *util.RateLimit      // rate limiter for concurrency control, maybe more strategies
 	committer         *twoPhaseCommitter   // here maybe more different type committer in the future
 	action            twoPhaseCommitAction // the work action type
-	backoffer         *Backoffer           // Backoffer
+	backoffer         *retry.Backoffer     // Backoffer
 	tokenWaitDuration time.Duration        // get token wait time
 }
 
 // newBatchExecutor create processor to handle concurrent batch works(prewrite/commit etc)
 func newBatchExecutor(rateLimit int, committer *twoPhaseCommitter,
-	action twoPhaseCommitAction, backoffer *Backoffer) *batchExecutor {
+	action twoPhaseCommitAction, backoffer *retry.Backoffer) *batchExecutor {
 	return &batchExecutor{rateLimit, nil, committer,
 		action, backoffer, 0}
 }
@@ -1708,7 +1784,7 @@ func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, 
 			batch := batch1
 			go func() {
 				defer batchExe.rateLimiter.PutToken()
-				var singleBatchBackoffer *Backoffer
+				var singleBatchBackoffer *retry.Backoffer
 				if _, ok := batchExe.action.(actionCommit); ok {
 					// Because the secondary batches of the commit actions are implemented to be
 					// committed asynchronously in background goroutines, we should not

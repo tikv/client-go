@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package transaction
 
 import (
 	"bytes"
@@ -56,7 +56,8 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -72,36 +73,11 @@ type SchemaAmender interface {
 	AmendTxn(ctx context.Context, startInfoSchema SchemaVer, change *RelatedSchemaChange, mutations CommitterMutations) (CommitterMutations, error)
 }
 
-// StartTSOption indicates the option when beginning a transaction
-// `TxnScope` must be set for each object
-// Every other fields are optional, but currently at most one of them can be set
-type StartTSOption struct {
-	TxnScope string
-	StartTS  *uint64
-}
-
-// DefaultStartTSOption creates a default StartTSOption, ie. Work in GlobalTxnScope and get start ts when got used
-func DefaultStartTSOption() StartTSOption {
-	return StartTSOption{TxnScope: oracle.GlobalTxnScope}
-}
-
-// SetStartTS returns a new StartTSOption with StartTS set to the given startTS
-func (to StartTSOption) SetStartTS(startTS uint64) StartTSOption {
-	to.StartTS = &startTS
-	return to
-}
-
-// SetTxnScope returns a new StartTSOption with TxnScope set to txnScope
-func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
-	to.TxnScope = txnScope
-	return to
-}
-
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn struct {
-	snapshot  *KVSnapshot
+	snapshot  *txnsnapshot.KVSnapshot
 	us        *unionstore.KVUnionStore
-	store     *KVStore // for connection to region.
+	store     kvstore // for connection to region.
 	startTS   uint64
 	startTime time.Time // Monotonic timestamp for recording txn time consuming.
 	commitTS  uint64
@@ -123,7 +99,7 @@ type KVTxn struct {
 	binlog             BinlogExecutor
 	schemaLeaseChecker SchemaLeaseChecker
 	syncLog            bool
-	priority           Priority
+	priority           txnutil.Priority
 	isPessimistic      bool
 	enableAsyncCommit  bool
 	enable1PC          bool
@@ -134,24 +110,8 @@ type KVTxn struct {
 	diskFullOpt        kvrpcpb.DiskFullOpt
 }
 
-// ExtractStartTS use `option` to get the proper startTS for a transaction.
-func ExtractStartTS(store *KVStore, option StartTSOption) (uint64, error) {
-	if option.StartTS != nil {
-		return *option.StartTS, nil
-	}
-	bo := NewBackofferWithVars(context.Background(), tsoMaxBackoff, nil)
-	return store.getTimestampWithRetry(bo, option.TxnScope)
-}
-
-func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error) {
-	if options.TxnScope == "" {
-		options.TxnScope = oracle.GlobalTxnScope
-	}
-	startTS, err := ExtractStartTS(store, options)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	snapshot := newTiKVSnapshot(store, startTS, store.nextReplicaReadSeed())
+// NewTiKVTxn creates a new KVTxn.
+func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, scope string) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
@@ -161,7 +121,7 @@ func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error
 		startTime:         time.Now(),
 		valid:             true,
 		vars:              tikv.DefaultVars,
-		scope:             options.TxnScope,
+		scope:             scope,
 		enableAsyncCommit: cfg.EnableAsyncCommit,
 		enable1PC:         cfg.Enable1PC,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
@@ -175,7 +135,7 @@ var SetSuccess = false
 // SetVars sets variables to the transaction.
 func (txn *KVTxn) SetVars(vars *tikv.Variables) {
 	txn.vars = vars
-	txn.snapshot.vars = vars
+	txn.snapshot.SetVars(vars)
 	if val, err := util.EvalFailpoint("probeSetVars"); err == nil {
 		if val.(bool) {
 			SetSuccess = true
@@ -224,12 +184,12 @@ func (txn *KVTxn) String() string {
 // If such entry is not found, it returns an invalid Iterator with no error.
 // It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 // The Iterator must be Closed after use.
-func (txn *KVTxn) Iter(k []byte, upperBound []byte) (Iterator, error) {
+func (txn *KVTxn) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error) {
 	return txn.us.Iter(k, upperBound)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (txn *KVTxn) IterReverse(k []byte) (Iterator, error) {
+func (txn *KVTxn) IterReverse(k []byte) (unionstore.Iterator, error) {
 	return txn.us.IterReverse(k)
 }
 
@@ -259,7 +219,7 @@ func (txn *KVTxn) SetSchemaVer(schemaVer SchemaVer) {
 }
 
 // SetPriority sets the priority for both write and read.
-func (txn *KVTxn) SetPriority(pri Priority) {
+func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 	txn.priority = pri
 	txn.GetSnapshot().SetPriority(pri)
 }
@@ -412,7 +372,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}()
 	// latches disabled
 	// pessimistic transaction should also bypass latch.
-	if txn.store.txnLatches == nil || txn.IsPessimistic() {
+	if txn.store.TxnLatches() == nil || txn.IsPessimistic() {
 		err = committer.execute(ctx)
 		if val == nil || sessionID > 0 {
 			txn.onCommitted(err)
@@ -424,13 +384,13 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	// latches enabled
 	// for transactions which need to acquire latches
 	start = time.Now()
-	lock := txn.store.txnLatches.Lock(committer.startTS, committer.mutations.GetKeys())
+	lock := txn.store.TxnLatches().Lock(committer.startTS, committer.mutations.GetKeys())
 	commitDetail := committer.getDetail()
 	commitDetail.LocalLatchTime = time.Since(start)
 	if commitDetail.LocalLatchTime > 0 {
 		metrics.TiKVLocalLatchWaitTimeHistogram.Observe(commitDetail.LocalLatchTime.Seconds())
 	}
-	defer txn.store.txnLatches.UnLock(lock)
+	defer txn.store.TxnLatches().UnLock(lock)
 	if lock.IsStale() {
 		return &tikverr.ErrWriteConflictInLatch{StartTS: txn.startTS}
 	}
@@ -532,8 +492,24 @@ func (txn *KVTxn) onCommitted(err error) {
 	}
 }
 
+// LockKeysWithWaitTime tries to lock the entries with the keys in KV store.
+// lockWaitTime in ms, 0 means nowait lock.
+func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, keysInput ...[]byte) (err error) {
+	forUpdateTs := txn.startTS
+	if txn.IsPessimistic() {
+		bo := retry.NewBackofferWithVars(context.Background(), TsoMaxBackoff, nil)
+		forUpdateTs, err = txn.store.GetTimestampWithRetry(bo, txn.scope)
+		if err != nil {
+			return err
+		}
+	}
+	lockCtx := tikv.NewLockCtx(forUpdateTs, lockWaitTime, time.Now())
+
+	return txn.LockKeys(ctx, lockCtx, keysInput...)
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
-// lockWaitTime in ms, except that kv.LockAlwaysWait(0) means always wait lock, kv.LockNowait(-1) means nowait lock
+// lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
 	// Exclude keys that are already locked.
 	var err error
@@ -787,12 +763,12 @@ func (txn *KVTxn) GetUnionStore() *unionstore.KVUnionStore {
 }
 
 // GetMemBuffer return the MemBuffer binding to this transaction.
-func (txn *KVTxn) GetMemBuffer() *MemDB {
+func (txn *KVTxn) GetMemBuffer() *unionstore.MemDB {
 	return txn.us.GetMemBuffer()
 }
 
 // GetSnapshot returns the Snapshot binding to this transaction.
-func (txn *KVTxn) GetSnapshot() *KVSnapshot {
+func (txn *KVTxn) GetSnapshot() *txnsnapshot.KVSnapshot {
 	return txn.snapshot
 }
 
@@ -806,5 +782,5 @@ func (txn *KVTxn) SetBinlogExecutor(binlog BinlogExecutor) {
 
 // GetClusterID returns store's cluster id.
 func (txn *KVTxn) GetClusterID() uint64 {
-	return txn.store.clusterID
+	return txn.store.GetClusterID()
 }

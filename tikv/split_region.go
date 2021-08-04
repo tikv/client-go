@@ -37,7 +37,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sync/atomic"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -57,7 +56,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const splitBatchRegionLimit = 16
+const splitBatchRegionLimit = 2048
 
 func equalRegionStartKey(key, regionStartKey []byte) bool {
 	return bytes.Equal(key, regionStartKey)
@@ -263,43 +262,6 @@ func (s *KVStore) scatterRegion(bo *Backoffer, regionID uint64, tableID *int64) 
 	logutil.BgLogger().Debug("scatter region complete",
 		zap.Uint64("regionID", regionID))
 	return nil
-}
-
-func (s *KVStore) preSplitRegion(ctx context.Context, group groupedMutations) bool {
-	splitKeys := make([][]byte, 0, 4)
-
-	preSplitSizeThresholdVal := atomic.LoadUint32(&preSplitSizeThreshold)
-	regionSize := 0
-	keysLength := group.mutations.Len()
-	// The value length maybe zero for pessimistic lock keys
-	for i := 0; i < keysLength; i++ {
-		regionSize = regionSize + len(group.mutations.GetKey(i)) + len(group.mutations.GetValue(i))
-		// The second condition is used for testing.
-		if regionSize >= int(preSplitSizeThresholdVal) {
-			regionSize = 0
-			splitKeys = append(splitKeys, group.mutations.GetKey(i))
-		}
-	}
-	if len(splitKeys) == 0 {
-		return false
-	}
-
-	regionIDs, err := s.SplitRegions(ctx, splitKeys, true, nil)
-	if err != nil {
-		logutil.BgLogger().Warn("2PC split regions failed", zap.Uint64("regionID", group.region.GetID()),
-			zap.Int("keys count", keysLength), zap.Error(err))
-		return false
-	}
-
-	for _, regionID := range regionIDs {
-		err := s.WaitScatterRegionFinish(ctx, regionID, 0)
-		if err != nil {
-			logutil.BgLogger().Warn("2PC wait scatter region failed", zap.Uint64("regionID", regionID), zap.Error(err))
-		}
-	}
-	// Invalidate the old region cache information.
-	s.regionCache.InvalidateCachedRegion(group.region)
-	return true
 }
 
 const waitScatterRegionFinishBackoff = 120000

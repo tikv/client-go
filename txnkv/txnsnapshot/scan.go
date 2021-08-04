@@ -30,7 +30,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package txnsnapshot
 
 import (
 	"bytes"
@@ -45,6 +45,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"go.uber.org/zap"
 )
 
@@ -168,7 +169,7 @@ func (s *Scanner) startTS() uint64 {
 	return s.snapshot.version
 }
 
-func (s *Scanner) resolveCurrentLock(bo *Backoffer, current *kvrpcpb.KvPair) error {
+func (s *Scanner) resolveCurrentLock(bo *retry.Backoffer, current *kvrpcpb.KvPair) error {
 	ctx := context.Background()
 	val, err := s.snapshot.get(ctx, bo, current.Key)
 	if err != nil {
@@ -179,21 +180,21 @@ func (s *Scanner) resolveCurrentLock(bo *Backoffer, current *kvrpcpb.KvPair) err
 	return nil
 }
 
-func (s *Scanner) getData(bo *Backoffer) error {
+func (s *Scanner) getData(bo *retry.Backoffer) error {
 	logutil.BgLogger().Debug("txn getData",
 		zap.String("nextStartKey", kv.StrKey(s.nextStartKey)),
 		zap.String("nextEndKey", kv.StrKey(s.nextEndKey)),
 		zap.Bool("reverse", s.reverse),
 		zap.Uint64("txnStartTS", s.startTS()))
-	sender := locate.NewRegionRequestSender(s.snapshot.store.regionCache, s.snapshot.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient())
 	var reqEndKey, reqStartKey []byte
 	var loc *locate.KeyLocation
 	var err error
 	for {
 		if !s.reverse {
-			loc, err = s.snapshot.store.regionCache.LocateKey(bo, s.nextStartKey)
+			loc, err = s.snapshot.store.GetRegionCache().LocateKey(bo, s.nextStartKey)
 		} else {
-			loc, err = s.snapshot.store.regionCache.LocateEndKey(bo, s.nextEndKey)
+			loc, err = s.snapshot.store.GetRegionCache().LocateEndKey(bo, s.nextEndKey)
 		}
 		if err != nil {
 			return errors.Trace(err)
@@ -273,11 +274,11 @@ func (s *Scanner) getData(bo *Backoffer) error {
 		// When there is a response-level key error, the returned pairs are incomplete.
 		// We should resolve the lock first and then retry the same request.
 		if keyErr := cmdScanResp.GetError(); keyErr != nil {
-			lock, err := extractLockFromKeyErr(keyErr)
+			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err != nil {
 				return errors.Trace(err)
 			}
-			msBeforeExpired, _, err := newLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*Lock{lock})
+			msBeforeExpired, _, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -294,7 +295,7 @@ func (s *Scanner) getData(bo *Backoffer) error {
 		// Check if kvPair contains error, it should be a Lock.
 		for _, pair := range kvPairs {
 			if keyErr := pair.GetError(); keyErr != nil && len(pair.Key) == 0 {
-				lock, err := extractLockFromKeyErr(keyErr)
+				lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 				if err != nil {
 					return errors.Trace(err)
 				}

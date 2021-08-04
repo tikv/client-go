@@ -45,6 +45,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv"
 )
 
 func TestStore(t *testing.T) {
@@ -137,7 +138,7 @@ func (s *testStoreSuite) TestRequestPriority() {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	client.priority = kvrpcpb.CommandPri_High
-	txn.SetPriority(tikv.PriorityHigh)
+	txn.SetPriority(txnkv.PriorityHigh)
 	err = txn.Set([]byte("key"), []byte("value"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
@@ -147,20 +148,20 @@ func (s *testStoreSuite) TestRequestPriority() {
 	txn, err = s.store.Begin()
 	s.Require().Nil(err)
 	client.priority = kvrpcpb.CommandPri_Low
-	txn.SetPriority(tikv.PriorityLow)
+	txn.SetPriority(txnkv.PriorityLow)
 	_, err = txn.Get(context.TODO(), []byte("key"))
 	s.Nil(err)
 
 	// A counter example.
 	client.priority = kvrpcpb.CommandPri_Low
-	txn.SetPriority(tikv.PriorityNormal)
+	txn.SetPriority(txnkv.PriorityNormal)
 	_, err = txn.Get(context.TODO(), []byte("key"))
 	// err is translated to "try again later" by backoffer, so doesn't check error value here.
 	s.NotNil(err)
 
 	// Cover Seek request.
 	client.priority = kvrpcpb.CommandPri_High
-	txn.SetPriority(tikv.PriorityHigh)
+	txn.SetPriority(txnkv.PriorityHigh)
 	iter, err := txn.Iter([]byte("key"), nil)
 	s.Nil(err)
 	for iter.Valid() {

@@ -45,6 +45,7 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
 
 func TestIsolation(t *testing.T) {
@@ -82,7 +83,7 @@ func (s *testIsolationSuite) SetWithRetry(k, v []byte) writeRecord {
 		txnRaw, err := s.store.Begin()
 		s.Nil(err)
 
-		txn := tikv.TxnProbe{KVTxn: txnRaw}
+		txn := transaction.TxnProbe{KVTxn: txnRaw}
 
 		err = txn.Set(k, v)
 		s.Nil(err)

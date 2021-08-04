@@ -37,8 +37,8 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +52,9 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 )
 
 var getMaxBackoff = tikv.ConfigProbe{}.GetGetMaxBackoff()
@@ -238,7 +241,7 @@ func (s *testLockSuite) TestCheckTxnStatusTTL() {
 	txn.Set([]byte("key"), []byte("value"))
 	s.prewriteTxnWithTTL(txn, 1000)
 
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 	lr := s.store.NewLockResolver()
 	callerStartTS, err := s.store.GetOracle().GetTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
@@ -305,7 +308,7 @@ func (s *testLockSuite) TestCheckTxnStatus() {
 	s.Nil(err)
 	s.Greater(currentTS, txn.StartTS())
 
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 	resolver := s.store.NewLockResolver()
 	// Call getTxnStatus to check the lock status.
 	status, err := resolver.GetTxnStatus(bo, txn.StartTS(), []byte("key"), currentTS, currentTS, true, false, nil)
@@ -317,13 +320,13 @@ func (s *testLockSuite) TestCheckTxnStatus() {
 
 	// Test the ResolveLocks API
 	lock := s.mustGetLock([]byte("second"))
-	timeBeforeExpire, _, err := resolver.ResolveLocks(bo, currentTS, []*tikv.Lock{lock})
+	timeBeforeExpire, _, err := resolver.ResolveLocks(bo, currentTS, []*txnkv.Lock{lock})
 	s.Nil(err)
 	s.True(timeBeforeExpire > int64(0))
 
 	// Force rollback the lock using lock.TTL = 0.
 	lock.TTL = uint64(0)
-	timeBeforeExpire, _, err = resolver.ResolveLocks(bo, currentTS, []*tikv.Lock{lock})
+	timeBeforeExpire, _, err = resolver.ResolveLocks(bo, currentTS, []*txnkv.Lock{lock})
 	s.Nil(err)
 	s.Equal(timeBeforeExpire, int64(0))
 
@@ -362,7 +365,7 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	o := s.store.GetOracle()
 	currentTS, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 	resolver := s.store.NewLockResolver()
 
 	// Call getTxnStatus for the TxnNotFound case.
@@ -375,7 +378,7 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 		errCh <- committer.PrewriteMutations(context.Background(), committer.MutationsOfKeys([][]byte{[]byte("key")}))
 	}()
 
-	lock := &tikv.Lock{
+	lock := &txnkv.Lock{
 		Key:     []byte("second"),
 		Primary: []byte("key"),
 		TxnID:   txn.StartTS(),
@@ -391,7 +394,7 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	// Call getTxnStatusFromLock to cover TxnNotFound and retry timeout.
 	startTS, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
-	lock = &tikv.Lock{
+	lock = &txnkv.Lock{
 		Key:     []byte("second"),
 		Primary: []byte("key_not_exist"),
 		TxnID:   startTS,
@@ -404,11 +407,11 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	s.Equal(status.Action(), kvrpcpb.Action_LockNotExistRollback)
 }
 
-func (s *testLockSuite) prewriteTxn(txn tikv.TxnProbe) {
+func (s *testLockSuite) prewriteTxn(txn transaction.TxnProbe) {
 	s.prewriteTxnWithTTL(txn, 0)
 }
 
-func (s *testLockSuite) prewriteTxnWithTTL(txn tikv.TxnProbe, ttl uint64) {
+func (s *testLockSuite) prewriteTxnWithTTL(txn transaction.TxnProbe, ttl uint64) {
 	committer, err := txn.NewCommitter(0)
 	s.Nil(err)
 	if ttl > 0 {
@@ -419,7 +422,7 @@ func (s *testLockSuite) prewriteTxnWithTTL(txn tikv.TxnProbe, ttl uint64) {
 	s.Nil(err)
 }
 
-func (s *testLockSuite) mustGetLock(key []byte) *tikv.Lock {
+func (s *testLockSuite) mustGetLock(key []byte) *txnkv.Lock {
 	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
@@ -434,23 +437,23 @@ func (s *testLockSuite) mustGetLock(key []byte) *tikv.Lock {
 	s.NotNil(resp.Resp)
 	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
 	s.NotNil(keyErr)
-	lock, err := tikv.LockProbe{}.ExtractLockFromKeyErr(keyErr)
+	lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 	s.Nil(err)
 	return lock
 }
 
 func (s *testLockSuite) ttlEquals(x, y uint64) {
-	// NOTE: On ppc64le, all integers are by default unsigned integers,
-	// hence we have to separately cast the value returned by "math.Abs()" function for ppc64le.
-	if runtime.GOARCH == "ppc64le" {
-		s.LessOrEqual(int(-math.Abs(float64(x-y))), 2)
-	} else {
-		s.LessOrEqual(int(math.Abs(float64(x-y))), 2)
+	if x < y {
+		x, y = y, x
 	}
-
+	s.LessOrEqual(x-y, uint64(5))
 }
 
 func (s *testLockSuite) TestLockTTL() {
+	managedLockTTL := atomic.LoadUint64(&transaction.ManagedLockTTL)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)                // set to 20s
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, managedLockTTL) // restore value
+
 	defaultLockTTL := tikv.ConfigProbe{}.GetDefaultLockTTL()
 	ttlFactor := tikv.ConfigProbe{}.GetTTLFactor()
 
@@ -471,9 +474,10 @@ func (s *testLockSuite) TestLockTTL() {
 		k, v := randKV(1024, 1024)
 		txn.Set([]byte(k), []byte(v))
 	}
+	elapsed := time.Since(start) / time.Millisecond
 	s.prewriteTxn(txn)
 	l = s.mustGetLock([]byte("key"))
-	s.ttlEquals(l.TTL, uint64(ttlFactor*2)+uint64(time.Since(start)/time.Millisecond))
+	s.ttlEquals(l.TTL, uint64(ttlFactor*2)+uint64(elapsed))
 
 	// Txn with long read time.
 	start = time.Now()
@@ -481,9 +485,10 @@ func (s *testLockSuite) TestLockTTL() {
 	s.Nil(err)
 	time.Sleep(time.Millisecond * 50)
 	txn.Set([]byte("key"), []byte("value"))
+	elapsed = time.Since(start) / time.Millisecond
 	s.prewriteTxn(txn)
 	l = s.mustGetLock([]byte("key"))
-	s.ttlEquals(l.TTL, defaultLockTTL+uint64(time.Since(start)/time.Millisecond))
+	s.ttlEquals(l.TTL, defaultLockTTL+uint64(elapsed))
 }
 
 func (s *testLockSuite) TestBatchResolveLocks() {
@@ -506,7 +511,7 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 	committer.PrewriteAllMutations(context.Background())
 	s.Nil(err)
 
-	var locks []*tikv.Lock
+	var locks []*txnkv.Lock
 	for _, key := range []string{"k1", "k2", "k3", "k4"} {
 		l := s.mustGetLock([]byte(key))
 		locks = append(locks, l)
@@ -544,7 +549,7 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 }
 
 func (s *testLockSuite) TestNewLockZeroTTL() {
-	l := tikv.NewLock(&kvrpcpb.LockInfo{})
+	l := txnlock.NewLock(&kvrpcpb.LockInfo{})
 	s.Equal(l.TTL, uint64(0))
 }
 
@@ -557,7 +562,7 @@ func (s *testLockSuite) TestZeroMinCommitTS() {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.Set([]byte("key"), []byte("value"))
-	bo := tikv.NewBackofferWithVars(context.Background(), tikv.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
 
 	mockValue := fmt.Sprintf(`return(%d)`, txn.StartTS())
 	s.Nil(failpoint.Enable("tikvclient/mockZeroCommitTS", mockValue))
@@ -565,19 +570,19 @@ func (s *testLockSuite) TestZeroMinCommitTS() {
 	s.Nil(failpoint.Disable("tikvclient/mockZeroCommitTS"))
 
 	lock := s.mustGetLock([]byte("key"))
-	expire, pushed, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*tikv.Lock{lock})
+	expire, pushed, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
 	s.Nil(err)
 	s.Len(pushed, 0)
 	s.Greater(expire, int64(0))
 
-	expire, pushed, err = s.store.NewLockResolver().ResolveLocks(bo, math.MaxUint64, []*tikv.Lock{lock})
+	expire, pushed, err = s.store.NewLockResolver().ResolveLocks(bo, math.MaxUint64, []*txnkv.Lock{lock})
 	s.Nil(err)
 	s.Len(pushed, 1)
 	s.Greater(expire, int64(0))
 
 	// Clean up this test.
 	lock.TTL = uint64(0)
-	expire, _, err = s.store.NewLockResolver().ResolveLocks(bo, 0, []*tikv.Lock{lock})
+	expire, _, err = s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
 	s.Nil(err)
 	s.Equal(expire, int64(0))
 }
@@ -617,7 +622,7 @@ func (s *testLockSuite) TestCheckLocksFallenBackFromAsyncCommit() {
 	lr := s.store.NewLockResolver()
 	status, err := lr.GetTxnStatusFromLock(bo, lock, 0, false)
 	s.Nil(err)
-	s.Equal(tikv.LockProbe{}.GetPrimaryKeyFromTxnStatus(status), []byte("fb1"))
+	s.Equal(txnlock.LockProbe{}.GetPrimaryKeyFromTxnStatus(status), []byte("fb1"))
 
 	err = lr.CheckAllSecondaries(bo, lock, &status)
 	s.True(lr.IsNonAsyncCommitLock(err))
@@ -634,7 +639,7 @@ func (s *testLockSuite) TestResolveTxnFallenBackFromAsyncCommit() {
 	lock := s.mustGetLock([]byte("fb1"))
 	s.True(lock.UseAsyncCommit)
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
-	expire, pushed, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*tikv.Lock{lock})
+	expire, pushed, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
 	s.Nil(err)
 	s.Equal(expire, int64(0))
 	s.Equal(len(pushed), 0)
@@ -655,7 +660,7 @@ func (s *testLockSuite) TestBatchResolveTxnFallenBackFromAsyncCommit() {
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
 	loc, err := s.store.GetRegionCache().LocateKey(bo, []byte("fb1"))
 	s.Nil(err)
-	ok, err := s.store.NewLockResolver().BatchResolveLocks(bo, []*tikv.Lock{lock}, loc.Region)
+	ok, err := s.store.NewLockResolver().BatchResolveLocks(bo, []*txnkv.Lock{lock}, loc.Region)
 	s.Nil(err)
 	s.True(ok)
 
@@ -670,17 +675,14 @@ func (s *testLockSuite) TestBatchResolveTxnFallenBackFromAsyncCommit() {
 func (s *testLockSuite) TestDeadlockReportWaitChain() {
 	// Utilities to make the test logic clear and simple.
 	type txnWrapper struct {
-		tikv.TxnProbe
+		transaction.TxnProbe
 		wg sync.WaitGroup
 	}
 
 	makeLockCtx := func(txn *txnWrapper, resourceGroupTag string) *kv.LockCtx {
-		return &kv.LockCtx{
-			ForUpdateTS:      txn.StartTS(),
-			WaitStartTime:    time.Now(),
-			LockWaitTime:     1000,
-			ResourceGroupTag: []byte(resourceGroupTag),
-		}
+		lockctx := kv.NewLockCtx(txn.StartTS(), 1000, time.Now())
+		lockctx.ResourceGroupTag = []byte(resourceGroupTag)
+		return lockctx
 	}
 
 	// Prepares several transactions and each locks a key.

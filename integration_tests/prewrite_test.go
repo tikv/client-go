@@ -40,6 +40,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
 
 func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
@@ -54,7 +55,7 @@ func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 
 	tx, err := store.Begin()
 	require.Nil(err)
-	txn := tikv.TxnProbe{KVTxn: tx}
+	txn := transaction.TxnProbe{KVTxn: tx}
 	err = txn.Set([]byte("k"), []byte("v"))
 	assert.Nil(err)
 	committer, err := txn.NewCommitter(1)

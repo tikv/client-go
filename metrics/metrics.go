@@ -39,52 +39,54 @@ import (
 
 // Client metrics.
 var (
-	TiKVTxnCmdHistogram                    *prometheus.HistogramVec
-	TiKVBackoffHistogram                   *prometheus.HistogramVec
-	TiKVSendReqHistogram                   *prometheus.HistogramVec
-	TiKVCoprocessorHistogram               prometheus.Histogram
-	TiKVLockResolverCounter                *prometheus.CounterVec
-	TiKVRegionErrorCounter                 *prometheus.CounterVec
-	TiKVTxnWriteKVCountHistogram           prometheus.Histogram
-	TiKVTxnWriteSizeHistogram              prometheus.Histogram
-	TiKVRawkvCmdHistogram                  *prometheus.HistogramVec
-	TiKVRawkvSizeHistogram                 *prometheus.HistogramVec
-	TiKVTxnRegionsNumHistogram             *prometheus.HistogramVec
-	TiKVLoadSafepointCounter               *prometheus.CounterVec
-	TiKVSecondaryLockCleanupFailureCounter *prometheus.CounterVec
-	TiKVRegionCacheCounter                 *prometheus.CounterVec
-	TiKVLocalLatchWaitTimeHistogram        prometheus.Histogram
-	TiKVStatusDuration                     *prometheus.HistogramVec
-	TiKVStatusCounter                      *prometheus.CounterVec
-	TiKVBatchWaitDuration                  prometheus.Histogram
-	TiKVBatchSendLatency                   prometheus.Histogram
-	TiKVBatchWaitOverLoad                  prometheus.Counter
-	TiKVBatchPendingRequests               *prometheus.HistogramVec
-	TiKVBatchRequests                      *prometheus.HistogramVec
-	TiKVBatchClientUnavailable             prometheus.Histogram
-	TiKVBatchClientWaitEstablish           prometheus.Histogram
-	TiKVRangeTaskStats                     *prometheus.GaugeVec
-	TiKVRangeTaskPushDuration              *prometheus.HistogramVec
-	TiKVTokenWaitDuration                  prometheus.Histogram
-	TiKVTxnHeartBeatHistogram              *prometheus.HistogramVec
-	TiKVPessimisticLockKeysDuration        prometheus.Histogram
-	TiKVTTLLifeTimeReachCounter            prometheus.Counter
-	TiKVNoAvailableConnectionCounter       prometheus.Counter
-	TiKVTwoPCTxnCounter                    *prometheus.CounterVec
-	TiKVAsyncCommitTxnCounter              *prometheus.CounterVec
-	TiKVOnePCTxnCounter                    *prometheus.CounterVec
-	TiKVStoreLimitErrorCounter             *prometheus.CounterVec
-	TiKVGRPCConnTransientFailureCounter    *prometheus.CounterVec
-	TiKVPanicCounter                       *prometheus.CounterVec
-	TiKVForwardRequestCounter              *prometheus.CounterVec
-	TiKVTSFutureWaitDuration               prometheus.Histogram
-	TiKVSafeTSUpdateCounter                *prometheus.CounterVec
-	TiKVMinSafeTSGapSeconds                *prometheus.GaugeVec
-	TiKVReplicaSelectorFailureCounter      *prometheus.CounterVec
-	TiKVRequestRetryTimesHistogram         prometheus.Histogram
-	TiKVTxnCommitBackoffSeconds            prometheus.Histogram
-	TiKVTxnCommitBackoffCount              prometheus.Histogram
-	TiKVSmallReadDuration                  prometheus.Histogram
+	TiKVTxnCmdHistogram                      *prometheus.HistogramVec
+	TiKVBackoffHistogram                     *prometheus.HistogramVec
+	TiKVSendReqHistogram                     *prometheus.HistogramVec
+	TiKVCoprocessorHistogram                 prometheus.Histogram
+	TiKVLockResolverCounter                  *prometheus.CounterVec
+	TiKVRegionErrorCounter                   *prometheus.CounterVec
+	TiKVTxnWriteKVCountHistogram             prometheus.Histogram
+	TiKVTxnWriteSizeHistogram                prometheus.Histogram
+	TiKVRawkvCmdHistogram                    *prometheus.HistogramVec
+	TiKVRawkvSizeHistogram                   *prometheus.HistogramVec
+	TiKVTxnRegionsNumHistogram               *prometheus.HistogramVec
+	TiKVLoadSafepointCounter                 *prometheus.CounterVec
+	TiKVSecondaryLockCleanupFailureCounter   *prometheus.CounterVec
+	TiKVRegionCacheCounter                   *prometheus.CounterVec
+	TiKVLocalLatchWaitTimeHistogram          prometheus.Histogram
+	TiKVStatusDuration                       *prometheus.HistogramVec
+	TiKVStatusCounter                        *prometheus.CounterVec
+	TiKVBatchWaitDuration                    prometheus.Histogram
+	TiKVBatchSendLatency                     prometheus.Histogram
+	TiKVBatchWaitOverLoad                    prometheus.Counter
+	TiKVBatchPendingRequests                 *prometheus.HistogramVec
+	TiKVBatchRequests                        *prometheus.HistogramVec
+	TiKVBatchClientUnavailable               prometheus.Histogram
+	TiKVBatchClientWaitEstablish             prometheus.Histogram
+	TiKVBatchClientRecycle                   prometheus.Histogram
+	TiKVRangeTaskStats                       *prometheus.GaugeVec
+	TiKVRangeTaskPushDuration                *prometheus.HistogramVec
+	TiKVTokenWaitDuration                    prometheus.Histogram
+	TiKVTxnHeartBeatHistogram                *prometheus.HistogramVec
+	TiKVPessimisticLockKeysDuration          prometheus.Histogram
+	TiKVTTLLifeTimeReachCounter              prometheus.Counter
+	TiKVNoAvailableConnectionCounter         prometheus.Counter
+	TiKVTwoPCTxnCounter                      *prometheus.CounterVec
+	TiKVAsyncCommitTxnCounter                *prometheus.CounterVec
+	TiKVOnePCTxnCounter                      *prometheus.CounterVec
+	TiKVStoreLimitErrorCounter               *prometheus.CounterVec
+	TiKVGRPCConnTransientFailureCounter      *prometheus.CounterVec
+	TiKVPanicCounter                         *prometheus.CounterVec
+	TiKVForwardRequestCounter                *prometheus.CounterVec
+	TiKVTSFutureWaitDuration                 prometheus.Histogram
+	TiKVSafeTSUpdateCounter                  *prometheus.CounterVec
+	TiKVMinSafeTSGapSeconds                  *prometheus.GaugeVec
+	TiKVReplicaSelectorFailureCounter        *prometheus.CounterVec
+	TiKVRequestRetryTimesHistogram           prometheus.Histogram
+	TiKVTxnCommitBackoffSeconds              prometheus.Histogram
+	TiKVTxnCommitBackoffCount                prometheus.Histogram
+	TiKVSmallReadDuration                    prometheus.Histogram
+	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 )
 
 // Label constants.
@@ -315,6 +317,15 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "batch client wait new connection establish",
 		})
 
+	TiKVBatchClientRecycle = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "batch_client_reset",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 28), // 1ms ~ 1.5days
+			Help:      "batch client recycle connection and reconnect duration",
+		})
+
 	TiKVRangeTaskStats = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -499,6 +510,14 @@ func initMetrics(namespace, subsystem string) {
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 74h
 		})
 
+	TiKVUnsafeDestroyRangeFailuresCounterVec = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "gc_unsafe_destroy_range_failures",
+			Help:      "Counter of unsafe destroyrange failures",
+		}, []string{LblType})
+
 	initShortcuts()
 }
 
@@ -538,6 +557,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchRequests)
 	prometheus.MustRegister(TiKVBatchClientUnavailable)
 	prometheus.MustRegister(TiKVBatchClientWaitEstablish)
+	prometheus.MustRegister(TiKVBatchClientRecycle)
 	prometheus.MustRegister(TiKVRangeTaskStats)
 	prometheus.MustRegister(TiKVRangeTaskPushDuration)
 	prometheus.MustRegister(TiKVTokenWaitDuration)

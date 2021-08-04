@@ -94,6 +94,7 @@ go mod download github.com/tikv/client-go/v2
 - [BR](https://github.com/pingcap/br): A command-line tool for distributed backup and restoration of the TiDB cluster data
 - [TiCDC](https://github.com/pingcap/ticdc): Change data capture for TiDB
 - [go-ycsb](https://github.com/pingcap/go-ycsb): A Go port of Yahoo! Cloud Serving Benchmark (YCSB)
+- [JuiceFS](https://github.com/juicedata/juicefs): JuiceFS is a distributed POSIX file system built on top of Redis and S3
 
 ## License
 

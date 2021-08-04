@@ -30,13 +30,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv
+package txnsnapshot
 
 import (
 	"time"
 
+	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -48,26 +51,27 @@ import (
 // the request. If there is no context information about the resolved locks, we'll
 // meet the secondary lock again and run into a deadloop.
 type ClientHelper struct {
-	lockResolver  *LockResolver
+	lockResolver  *txnlock.LockResolver
 	regionCache   *locate.RegionCache
 	resolvedLocks *util.TSSet
-	client        Client
+	client        client.Client
 	resolveLite   bool
 	locate.RegionRequestRuntimeStats
 }
 
 // NewClientHelper creates a helper instance.
-func NewClientHelper(store *KVStore, resolvedLocks *util.TSSet) *ClientHelper {
+func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, resolveLite bool) *ClientHelper {
 	return &ClientHelper{
 		lockResolver:  store.GetLockResolver(),
 		regionCache:   store.GetRegionCache(),
 		resolvedLocks: resolvedLocks,
 		client:        store.GetTiKVClient(),
+		resolveLite:   resolveLite,
 	}
 }
 
 // ResolveLocks wraps the ResolveLocks function and store the resolved result.
-func (ch *ClientHelper) ResolveLocks(bo *Backoffer, callerStartTS uint64, locks []*Lock) (int64, error) {
+func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*txnlock.Lock) (int64, error) {
 	var err error
 	var resolvedLocks []uint64
 	var msBeforeTxnExpired int64
@@ -92,7 +96,7 @@ func (ch *ClientHelper) ResolveLocks(bo *Backoffer, callerStartTS uint64, locks 
 }
 
 // SendReqCtx wraps the SendReqCtx function and use the resolved lock result in the kvrpcpb.Context.
-func (ch *ClientHelper) SendReqCtx(bo *Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration, et tikvrpc.EndpointType, directStoreAddr string, opts ...locate.StoreSelectorOption) (*tikvrpc.Response, *locate.RPCContext, string, error) {
+func (ch *ClientHelper) SendReqCtx(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration, et tikvrpc.EndpointType, directStoreAddr string, opts ...locate.StoreSelectorOption) (*tikvrpc.Response, *locate.RPCContext, string, error) {
 	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client)
 	if len(directStoreAddr) > 0 {
 		sender.SetStoreAddr(directStoreAddr)
