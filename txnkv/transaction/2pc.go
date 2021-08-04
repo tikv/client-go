@@ -859,7 +859,7 @@ func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx) {
 	tm.ch = make(chan struct{})
 	tm.lockCtx = lockCtx
 
-	go tm.keepAlive(c, tm.ch)
+	go keepAlive(c, tm.ch, c.primary(), lockCtx)
 }
 
 func (tm *ttlManager) close() {
@@ -880,7 +880,7 @@ const keepAliveMaxBackoff = 20000        // 20 seconds
 const pessimisticLockMaxBackoff = 600000 // 10 minutes
 const maxConsecutiveFailure = 10
 
-func (tm *ttlManager) keepAlive(c *twoPhaseCommitter, closeCh chan struct{}) {
+func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, lockCtx *kv.LockCtx) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
@@ -891,7 +891,7 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter, closeCh chan struct{}) {
 			return
 		case <-ticker.C:
 			// If kill signal is received, the ttlManager should exit.
-			if tm.lockCtx != nil && tm.lockCtx.Killed != nil && atomic.LoadUint32(tm.lockCtx.Killed) != 0 {
+			if lockCtx != nil && lockCtx.Killed != nil && atomic.LoadUint32(lockCtx.Killed) != 0 {
 				return
 			}
 			bo := retry.NewBackofferWithVars(context.Background(), keepAliveMaxBackoff, c.txn.vars)
@@ -913,8 +913,8 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter, closeCh chan struct{}) {
 				metrics.TiKVTTLLifeTimeReachCounter.Inc()
 				// the pessimistic locks may expire if the ttl manager has timed out, set `LockExpired` flag
 				// so that this transaction could only commit or rollback with no more statement executions
-				if c.isPessimistic && tm.lockCtx != nil && tm.lockCtx.LockExpired != nil {
-					atomic.StoreUint32(tm.lockCtx.LockExpired, 1)
+				if c.isPessimistic && lockCtx != nil && lockCtx.LockExpired != nil {
+					atomic.StoreUint32(lockCtx.LockExpired, 1)
 				}
 				return
 			}
@@ -923,7 +923,7 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter, closeCh chan struct{}) {
 			logutil.Logger(bo.GetCtx()).Info("send TxnHeartBeat",
 				zap.Uint64("startTS", c.startTS), zap.Uint64("newTTL", newTTL))
 			startTime := time.Now()
-			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, c.primary(), c.startTS, newTTL)
+			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL)
 			if err != nil {
 				keepFail++
 				metrics.TxnHeartBeatHistogramError.Observe(time.Since(startTime).Seconds())
@@ -1471,6 +1471,7 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 	if keysNeedToLock.Len() > 0 {
 		lCtx := kv.NewLockCtx(c.forUpdateTS, c.lockCtx.LockWaitTime(), time.Now())
 		lCtx.Killed = c.lockCtx.Killed
+		lCtx.LockExpired = c.lockCtx.LockExpired
 		tryTimes := uint(0)
 		retryLimit := config.GetGlobalConfig().PessimisticTxn.MaxRetryCount
 		var err error
