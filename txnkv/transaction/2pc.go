@@ -360,9 +360,6 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		startTS:       txn.StartTS(),
 		sessionID:     sessionID,
 		regionTxnSize: map[uint64]int{},
-		ttlManager: ttlManager{
-			ch: make(chan struct{}),
-		},
 		isPessimistic: txn.IsPessimistic(),
 		binlog:        txn.binlog,
 	}, nil
@@ -851,19 +848,18 @@ type ttlManager struct {
 }
 
 func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx) {
+	if _, err := util.EvalFailpoint("doNotKeepAlive"); err == nil {
+		return
+	}
+
 	// Run only once.
 	if !atomic.CompareAndSwapUint32((*uint32)(&tm.state), uint32(stateUninitialized), uint32(stateRunning)) {
 		return
 	}
+	tm.ch = make(chan struct{})
 	tm.lockCtx = lockCtx
-	noKeepAlive := false
-	if _, err := util.EvalFailpoint("doNotKeepAlive"); err == nil {
-		noKeepAlive = true
-	}
 
-	if !noKeepAlive {
-		go tm.keepAlive(c)
-	}
+	go tm.keepAlive(c, tm.ch)
 }
 
 func (tm *ttlManager) close() {
@@ -878,14 +874,13 @@ func (tm *ttlManager) reset() {
 		return
 	}
 	close(tm.ch)
-	tm.ch = make(chan struct{})
 }
 
 const keepAliveMaxBackoff = 20000        // 20 seconds
 const pessimisticLockMaxBackoff = 600000 // 10 minutes
 const maxConsecutiveFailure = 10
 
-func (tm *ttlManager) keepAlive(c *twoPhaseCommitter) {
+func (tm *ttlManager) keepAlive(c *twoPhaseCommitter, closeCh chan struct{}) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
@@ -896,7 +891,7 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter) {
 	keepFail := 0
 	for {
 		select {
-		case <-tm.ch:
+		case <-closeCh:
 			return
 		case <-ticker.C:
 			// If kill signal is received, the ttlManager should exit.
