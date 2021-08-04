@@ -884,10 +884,6 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter, closeCh chan struct{}) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
-	logutil.BgLogger().Warn("start TxnHeartBeat")
-	defer func() {
-		logutil.BgLogger().Warn("stop TxnHeartBeat")
-	}()
 	keepFail := 0
 	for {
 		select {
