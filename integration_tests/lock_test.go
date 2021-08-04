@@ -815,17 +815,42 @@ func (s *testLockSuite) TestStartHeartBeatAfterLockingPrimary() {
 		err = txn.LockKeys(context.Background(), lockCtx, []byte("a"), []byte("b"))
 		lockResCh <- err
 	}()
-	
-	time.Sleep(1 * time.Second)
 
+	time.Sleep(500 * time.Millisecond)
+
+	// Check the TTL should have been updated
 	lr := s.store.NewLockResolver()
 	status, err := lr.LockResolver.GetTxnStatus(txn.StartTS(), 0, []byte("a"))
 	s.Nil(err)
 	s.False(status.IsCommitted())
-	s.Greater(status.TTL(), uint64(1000))
+	s.Greater(status.TTL(), uint64(600))
 	s.Equal(status.CommitTS(), uint64(0))
 
+	// Let locking the secondary key fail
+	s.Nil(failpoint.Enable("tikvclient/PessimisticLockErrWriteConflict", "return"))
 	s.Nil(failpoint.Disable("tikvclient/afterPrimaryBatch"))
-	s.Nil(<-lockResCh)
+	s.Error(<-lockResCh)
+	s.Nil(failpoint.Disable("tikvclient/PessimisticLockErrWriteConflict"))
+
+	err = txn.LockKeys(context.Background(), lockCtx, []byte("c"), []byte("d"))
+	s.Nil(err)
+
+	time.Sleep(500 * time.Millisecond)
+
+	// The original primary key "a" should be rolled back because its TTL is not updated
+	lr = s.store.NewLockResolver()
+	status, err = lr.LockResolver.GetTxnStatus(txn.StartTS(), 0, []byte("a"))
+	s.Nil(err)
+	s.False(status.IsCommitted())
+	s.Equal(status.TTL(), uint64(0))
+
+	// The TTL of the new primary lock should be updated.
+	lr = s.store.NewLockResolver()
+	status, err = lr.LockResolver.GetTxnStatus(txn.StartTS(), 0, []byte("c"))
+	s.Nil(err)
+	s.False(status.IsCommitted())
+	s.Greater(status.TTL(), uint64(1200))
+	s.Equal(status.CommitTS(), uint64(0))
+
 	s.Nil(txn.Rollback())
 }

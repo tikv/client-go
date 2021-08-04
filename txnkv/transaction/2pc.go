@@ -873,6 +873,14 @@ func (tm *ttlManager) close() {
 	close(tm.ch)
 }
 
+func (tm *ttlManager) reset() {
+	if !atomic.CompareAndSwapUint32((*uint32)(&tm.state), uint32(stateRunning), uint32(stateUninitialized)) {
+		return
+	}
+	close(tm.ch)
+	tm.ch = make(chan struct{})
+}
+
 const keepAliveMaxBackoff = 20000        // 20 seconds
 const pessimisticLockMaxBackoff = 600000 // 10 minutes
 const maxConsecutiveFailure = 10
@@ -881,6 +889,10 @@ func (tm *ttlManager) keepAlive(c *twoPhaseCommitter) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
+	logutil.BgLogger().Warn("start TxnHeartBeat")
+	defer func() {
+		logutil.BgLogger().Warn("stop TxnHeartBeat")
+	}()
 	keepFail := 0
 	for {
 		select {
