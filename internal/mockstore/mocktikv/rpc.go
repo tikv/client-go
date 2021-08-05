@@ -674,6 +674,36 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		resp.Resp = kvHandler{session}.handleKvScan(r)
 
 	case tikvrpc.CmdPrewrite:
+		if val, err := util.EvalFailpoint("rpcAllowedOnAlreadyFull"); err == nil {
+			switch val.(string) {
+			case "true":
+				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlreadyFull {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.PrewriteResponse {
+							RegionError: &errorpb.Error {
+								DiskFull: &errorpb.DiskFull {StoreId: 1, Reason: "disk already full"},
+							},
+						},
+					}, nil
+				}
+			}
+		}
+
+		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
+			switch val.(string) {
+			case "true":
+				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.PrewriteResponse {
+							RegionError: &errorpb.Error {
+								DiskFull: &errorpb.DiskFull {StoreId: 1, Reason: "disk almost full"},
+							},
+						},
+					}, nil
+				}
+			}
+		}
+
 		if val, err := util.EvalFailpoint("rpcPrewriteResult"); err == nil {
 			switch val.(string) {
 			case "notLeader":
@@ -704,6 +734,36 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		}
 		resp.Resp = kvHandler{session}.handleKvPessimisticRollback(r)
 	case tikvrpc.CmdCommit:
+		if val, err := util.EvalFailpoint("rpcAllowedOnAlreadyFull"); err == nil {
+			switch val.(string) {
+			case "true":
+				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlreadyFull {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.CommitResponse {
+							RegionError: &errorpb.Error {
+								DiskFull: &errorpb.DiskFull {StoreId: 1, Reason: "disk already full"},
+							},
+						},
+					}, nil
+				}
+			}
+		}
+
+		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
+			switch val.(string) {
+			case "true":
+				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.CommitResponse {
+							RegionError: &errorpb.Error {
+								DiskFull: &errorpb.DiskFull {StoreId: 1, Reason: "disk almost full"},
+							},
+						},
+					}, nil
+				}
+			}
+		}
+
 		if val, err := util.EvalFailpoint("rpcCommitResult"); err == nil {
 			switch val.(string) {
 			case "timeout":

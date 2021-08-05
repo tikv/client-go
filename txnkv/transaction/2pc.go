@@ -396,6 +396,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 	filter := txn.kvFilter
 
 	var err error
+	delete_only := true
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
@@ -450,11 +451,18 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 			isPessimistic = c.isPessimistic
 		}
 		c.mutations.Push(op, isPessimistic, it.Handle())
+		if op != kvrpcpb.Op_Del {
+			delete_only = false
+		}
 		size += len(key) + len(value)
 
 		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
 			c.primaryKey = key
 		}
+	}
+
+	if delete_only {
+		c.SetDiskFullOpt(kvrpcpb.DiskFullOpt_AllowedOnAlmostFull)
 	}
 
 	if c.mutations.Len() == 0 {
@@ -570,20 +578,6 @@ func (c *twoPhaseCommitter) doActionOnMutations(bo *retry.Backoffer, action twoP
 	// This is redundant since `doActionOnGroupMutations` will still split groups into batches and
 	// check the number of batches. However we don't want the check fail after any code changes.
 	c.checkOnePCFallBack(action, len(groups))
-
-	//set delete only operations allowed when tikv disk almost full.
-	idx := mutations.Len()
-	delete_only := true
-	for i := 0; i < idx; i++ {
-		opType := mutations.GetOp(i)
-		if opType != kvrpcpb.Op_Del {
-			delete_only = false
-			break
-		}
-	}
-	if delete_only {
-		c.SetDiskFullOpt(kvrpcpb.DiskFullOpt_AllowedOnAlmostFull)
-	}
 
 	return c.doActionOnGroupMutations(bo, action, groups)
 }

@@ -269,14 +269,17 @@ func (txn *KVTxn) SetKVFilter(filter KVFilter) {
 	txn.kvFilter = filter
 }
 
+// SetDiskFullOpt sets whether current operation is allowed in each TiKV disk usage level.
 func (txn *KVTxn) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	txn.diskFullOpt = level
 }
 
+// GetDiskFullOpt gets the options of current operation in each TiKV disk usage level.
 func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
 	return txn.diskFullOpt
 }
 
+// ClearDiskFullOpt clears the options of current operation in each tikv disk usage level.
 func (txn *KVTxn) ClearDiskFullOpt() {
 	txn.diskFullOpt = kvrpcpb.DiskFullOpt_NotAllowedOnFull
 }

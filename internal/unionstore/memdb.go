@@ -163,8 +163,10 @@ func (db *MemDB) Reset() {
 	db.vlog.reset()
 	db.allocator.reset()
 }
+
+// Used by TiDB test case
 func (db *MemDB) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
-	//TODO nothing.
+	// Nothing to do.
 }
 
 // DiscardValues releases the memory used by all values.
