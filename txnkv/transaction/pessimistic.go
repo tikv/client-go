@@ -170,6 +170,12 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		lockResp := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
 		keyErrs := lockResp.GetErrors()
 		if len(keyErrs) == 0 {
+			if batch.isPrimary {
+				// After locking the primary key, we should protect the primary lock from expiring
+				// now in case locking the remaining keys take a long time.
+				c.run(c, action.LockCtx)
+			}
+
 			if action.ReturnValues {
 				action.ValuesLock.Lock()
 				for i, mutation := range mutations {

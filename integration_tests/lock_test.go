@@ -796,3 +796,61 @@ func (s *testLockSuite) TestDeadlockReportWaitChain() {
 	waitAndRollback(txns, 0)
 	waitAndRollback(txns, 2)
 }
+
+func (s *testLockSuite) TestStartHeartBeatAfterLockingPrimary() {
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 500)
+	s.Nil(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", `return`))
+	s.Nil(failpoint.Enable("tikvclient/afterPrimaryBatch", `pause`))
+	defer func() {
+		atomic.StoreUint64(&transaction.ManagedLockTTL, 20000)
+		s.Nil(failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit"))
+	}()
+
+	txn, err := s.store.Begin()
+	s.Nil(err)
+	txn.SetPessimistic(true)
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockResCh := make(chan error)
+	go func() {
+		err = txn.LockKeys(context.Background(), lockCtx, []byte("a"), []byte("b"))
+		lockResCh <- err
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Check the TTL should have been updated
+	lr := s.store.NewLockResolver()
+	status, err := lr.LockResolver.GetTxnStatus(txn.StartTS(), 0, []byte("a"))
+	s.Nil(err)
+	s.False(status.IsCommitted())
+	s.Greater(status.TTL(), uint64(600))
+	s.Equal(status.CommitTS(), uint64(0))
+
+	// Let locking the secondary key fail
+	s.Nil(failpoint.Enable("tikvclient/PessimisticLockErrWriteConflict", "return"))
+	s.Nil(failpoint.Disable("tikvclient/afterPrimaryBatch"))
+	s.Error(<-lockResCh)
+	s.Nil(failpoint.Disable("tikvclient/PessimisticLockErrWriteConflict"))
+
+	err = txn.LockKeys(context.Background(), lockCtx, []byte("c"), []byte("d"))
+	s.Nil(err)
+
+	time.Sleep(500 * time.Millisecond)
+
+	// The original primary key "a" should be rolled back because its TTL is not updated
+	lr = s.store.NewLockResolver()
+	status, err = lr.LockResolver.GetTxnStatus(txn.StartTS(), 0, []byte("a"))
+	s.Nil(err)
+	s.False(status.IsCommitted())
+	s.Equal(status.TTL(), uint64(0))
+
+	// The TTL of the new primary lock should be updated.
+	lr = s.store.NewLockResolver()
+	status, err = lr.LockResolver.GetTxnStatus(txn.StartTS(), 0, []byte("c"))
+	s.Nil(err)
+	s.False(status.IsCommitted())
+	s.Greater(status.TTL(), uint64(1200))
+	s.Equal(status.CommitTS(), uint64(0))
+
+	s.Nil(txn.Rollback())
+}
