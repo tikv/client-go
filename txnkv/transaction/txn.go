@@ -642,13 +642,11 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				}
 			}
 			if assignedPrimaryKey {
-				// unset the primary key if we assigned primary key when failed to lock it.
+				// unset the primary key and stop heartbeat if we assigned primary key when failed to lock it.
 				txn.committer.primaryKey = nil
+				txn.committer.ttlManager.reset()
 			}
 			return err
-		}
-		if assignedPrimaryKey {
-			txn.committer.ttlManager.run(txn.committer, lockCtx)
 		}
 	}
 	for _, key := range keys {
