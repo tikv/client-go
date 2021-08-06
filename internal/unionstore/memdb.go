@@ -164,7 +164,7 @@ func (db *MemDB) Reset() {
 	db.allocator.reset()
 }
 
-// Used by TiDB test case
+// SetDiskFullOpt is used by TiDB test case.
 func (db *MemDB) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	// Nothing to do.
 }

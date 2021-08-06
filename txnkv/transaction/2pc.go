@@ -393,7 +393,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 	filter := txn.kvFilter
 
 	var err error
-	delete_only := true
+	deleteOnly := true
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
@@ -449,7 +449,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 		}
 		c.mutations.Push(op, isPessimistic, it.Handle())
 		if op != kvrpcpb.Op_Del {
-			delete_only = false
+			deleteOnly = false
 		}
 		size += len(key) + len(value)
 
@@ -458,7 +458,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 		}
 	}
 
-	if delete_only {
+	if deleteOnly {
 		c.SetDiskFullOpt(kvrpcpb.DiskFullOpt_AllowedOnAlmostFull)
 	}
 
