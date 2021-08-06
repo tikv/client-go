@@ -35,6 +35,7 @@ package transaction
 import (
 	"encoding/hex"
 	"math"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -138,7 +139,8 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		req.TryOnePc = true
 	}
 
-	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag})
+	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req,
+		kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag, DiskFullOpt: c.diskFullOpt})
 }
 
 func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) (err error) {
@@ -219,6 +221,19 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 				if err != nil {
 					return errors.Trace(err)
 				}
+			}
+			if regionErr.GetDiskFull() != nil {
+				storeIds := regionErr.GetDiskFull().GetStoreId()
+				desc := " "
+				for _, i := range storeIds {
+					desc += strconv.FormatUint(i, 10) + " "
+				}
+
+				logutil.Logger(bo.GetCtx()).Error("Request failed cause of TiKV disk full",
+					zap.String("store_id", desc),
+					zap.String("reason", regionErr.GetDiskFull().GetReason()))
+
+				return errors.Trace(errors.New(regionErr.String()))
 			}
 			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {

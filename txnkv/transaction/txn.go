@@ -107,6 +107,7 @@ type KVTxn struct {
 	scope              string
 	kvFilter           KVFilter
 	resourceGroupTag   []byte
+	diskFullOpt        kvrpcpb.DiskFullOpt
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -123,6 +124,7 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		scope:             scope,
 		enableAsyncCommit: cfg.EnableAsyncCommit,
 		enable1PC:         cfg.Enable1PC,
+		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 	}
 	return newTiKVTxn, nil
 }
@@ -267,6 +269,21 @@ func (txn *KVTxn) SetKVFilter(filter KVFilter) {
 	txn.kvFilter = filter
 }
 
+// SetDiskFullOpt sets whether current operation is allowed in each TiKV disk usage level.
+func (txn *KVTxn) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
+	txn.diskFullOpt = level
+}
+
+// GetDiskFullOpt gets the options of current operation in each TiKV disk usage level.
+func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
+	return txn.diskFullOpt
+}
+
+// ClearDiskFullOpt clears the options of current operation in each tikv disk usage level.
+func (txn *KVTxn) ClearDiskFullOpt() {
+	txn.diskFullOpt = kvrpcpb.DiskFullOpt_NotAllowedOnFull
+}
+
 // IsPessimistic returns true if it is pessimistic.
 func (txn *KVTxn) IsPessimistic() bool {
 	return txn.isPessimistic
@@ -324,6 +341,9 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		}
 		txn.committer = committer
 	}
+
+	txn.committer.SetDiskFullOpt(txn.diskFullOpt)
+
 	defer committer.ttlManager.close()
 
 	initRegion := trace.StartRegion(ctx, "InitKeys")
@@ -390,6 +410,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 
 func (txn *KVTxn) close() {
 	txn.valid = false
+	txn.ClearDiskFullOpt()
 }
 
 // Rollback undoes the transaction operations to KV store.

@@ -218,6 +218,24 @@ func (s *testCommitterSuite) TestCommitRollback() {
 	})
 }
 
+func (s *testCommitterSuite) TestCommitOnTiKVDiskFullOpt() {
+	s.Nil(failpoint.Enable("tikvclient/rpcAllowedOnAlmostFull", `return("true")`))
+	txn := s.begin()
+	txn.SetDiskFullOpt(kvrpcpb.DiskFullOpt_AllowedOnAlmostFull)
+	txn.Set([]byte("a"), []byte("a1"))
+	err := txn.Commit(context.Background())
+	s.Nil(err)
+	s.checkValues(map[string]string{"a": "a1"})
+	s.Nil(failpoint.Disable("tikvclient/rpcAllowedOnAlmostFull"))
+
+	s.Nil(failpoint.Enable("tikvclient/rpcAllowedOnAlmostFull", `return("true")`))
+	txn = s.begin()
+	txn.Set([]byte("c"), []byte("c1"))
+	err = txn.Commit(context.Background())
+	s.NotNil(err)
+	s.Nil(failpoint.Disable("tikvclient/rpcAllowedOnAlmostFull"))
+}
+
 func (s *testCommitterSuite) TestPrewriteRollback() {
 	s.mustCommit(map[string]string{
 		"a": "a0",
