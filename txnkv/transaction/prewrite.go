@@ -35,6 +35,7 @@ package transaction
 import (
 	"encoding/hex"
 	"math"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -222,8 +223,14 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 				}
 			}
 			if regionErr.GetDiskFull() != nil {
+				storeIds := regionErr.GetDiskFull().GetStoreId()
+				desc := " "
+				for _, i := range storeIds {
+					desc += strconv.FormatUint(i, 10) + " "
+				}
+
 				logutil.Logger(bo.GetCtx()).Error("Request failed cause of TiKV disk full",
-					zap.Uint64("store_id", regionErr.GetDiskFull().GetStoreId()),
+					zap.String("store_id", desc),
 					zap.String("reason", regionErr.GetDiskFull().GetReason()))
 
 				return errors.Trace(errors.New(regionErr.String()))

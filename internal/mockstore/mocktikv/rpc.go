@@ -679,9 +679,9 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			case "true":
 				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
-						Resp: &kvrpcpb.PrewriteResponse {
-							RegionError: &errorpb.Error {
-								DiskFull: &errorpb.DiskFull {StoreId: 1, Reason: "disk almost full"},
+						Resp: &kvrpcpb.PrewriteResponse{
+							RegionError: &errorpb.Error{
+								DiskFull: &errorpb.DiskFull{StoreId: []uint64{1, 10}, Reason: "disk almost full"},
 							},
 						},
 					}, nil
@@ -724,9 +724,9 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			case "true":
 				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
-						Resp: &kvrpcpb.CommitResponse {
-							RegionError: &errorpb.Error {
-								DiskFull: &errorpb.DiskFull {StoreId: 1, Reason: "disk almost full"},
+						Resp: &kvrpcpb.CommitResponse{
+							RegionError: &errorpb.Error{
+								DiskFull: &errorpb.DiskFull{StoreId: []uint64{1, 10}, Reason: "disk almost full"},
 							},
 						},
 					}, nil
