@@ -1471,7 +1471,6 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 	if keysNeedToLock.Len() > 0 {
 		lCtx := kv.NewLockCtx(c.forUpdateTS, c.lockCtx.LockWaitTime(), time.Now())
 		lCtx.Killed = c.lockCtx.Killed
-		lCtx.LockExpired = c.lockCtx.LockExpired
 		tryTimes := uint(0)
 		retryLimit := config.GetGlobalConfig().PessimisticTxn.MaxRetryCount
 		var err error
