@@ -168,6 +168,9 @@ type twoPhaseCommitter struct {
 	binlog BinlogExecutor
 
 	resourceGroupTag []byte
+
+	// allowed when tikv disk full happened.
+	diskFullOpt kvrpcpb.DiskFullOpt
 }
 
 type memBufferMutations struct {
@@ -362,6 +365,7 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		regionTxnSize: map[uint64]int{},
 		isPessimistic: txn.IsPessimistic(),
 		binlog:        txn.binlog,
+		diskFullOpt:   kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 	}, nil
 }
 
@@ -831,6 +835,10 @@ func (c *twoPhaseCommitter) keyValueSize(key, value []byte) int {
 
 func (c *twoPhaseCommitter) keySize(key, value []byte) int {
 	return len(key)
+}
+
+func (c *twoPhaseCommitter) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
+	c.diskFullOpt = level
 }
 
 type ttlManagerState uint32

@@ -39,6 +39,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
@@ -161,6 +162,11 @@ func (db *MemDB) Reset() {
 	db.count = 0
 	db.vlog.reset()
 	db.allocator.reset()
+}
+
+// SetDiskFullOpt is used by TiDB test case.
+func (db *MemDB) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
+	// Nothing to do.
 }
 
 // DiscardValues releases the memory used by all values.
