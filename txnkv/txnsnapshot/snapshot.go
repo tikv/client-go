@@ -831,7 +831,7 @@ func (s *KVSnapshot) Iter(k []byte, upperBound []byte) (unionstore.Iterator, err
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 func (s *KVSnapshot) IterReverse(k []byte) (unionstore.Iterator, error) {
-	iter, err := s.tryCreateMultiRangeIter(nil, k, false)
+	iter, err := s.tryCreateMultiRangeIter(nil, k, true)
 	if err != nil {
 		return nil, err
 	}
