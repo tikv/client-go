@@ -421,10 +421,10 @@ func newOneByOneIter(iters []unionstore.Iterator) *oneByOneIter {
 
 func (o *oneByOneIter) updateCur() {
 	for o.cur >= 0 && o.cur < len(o.iters) {
-		cur := o.iters[o.cur]
-		if !cur.Valid() {
-			o.cur++
+		if o.iters[o.cur].Valid() {
+			break
 		}
+		o.cur++
 	}
 }
 
