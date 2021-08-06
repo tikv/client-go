@@ -222,7 +222,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 				}
 			}
 			if regionErr.GetDiskFull() != nil {
-				logutil.Logger(bo.GetCtx()).Error("Request Failed cause of TiKV Disk full",
+				logutil.Logger(bo.GetCtx()).Error("Request failed cause of TiKV disk full",
 					zap.Uint64("store_id", regionErr.GetDiskFull().GetStoreId()),
 					zap.String("reason", regionErr.GetDiskFull().GetReason()))
 
