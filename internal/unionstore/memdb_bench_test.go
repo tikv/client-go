@@ -48,7 +48,7 @@ func BenchmarkLargeIndex(b *testing.B) {
 	for i := range buf {
 		binary.LittleEndian.PutUint32(buf[i][:], uint32(i))
 	}
-	db := newMemDB()
+	db := NewMemDB()
 	b.ResetTimer()
 
 	for i := range buf {
@@ -62,7 +62,7 @@ func BenchmarkPut(b *testing.B) {
 		binary.BigEndian.PutUint32(buf[i][:], uint32(i))
 	}
 
-	p := newMemDB()
+	p := NewMemDB()
 	b.ResetTimer()
 
 	for i := range buf {
@@ -76,7 +76,7 @@ func BenchmarkPutRandom(b *testing.B) {
 		binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
 	}
 
-	p := newMemDB()
+	p := NewMemDB()
 	b.ResetTimer()
 
 	for i := range buf {
@@ -90,7 +90,7 @@ func BenchmarkGet(b *testing.B) {
 		binary.BigEndian.PutUint32(buf[i][:], uint32(i))
 	}
 
-	p := newMemDB()
+	p := NewMemDB()
 	for i := range buf {
 		p.Set(buf[i][:keySize], buf[i][:])
 	}
@@ -107,7 +107,7 @@ func BenchmarkGetRandom(b *testing.B) {
 		binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
 	}
 
-	p := newMemDB()
+	p := NewMemDB()
 	for i := range buf {
 		p.Set(buf[i][:keySize], buf[i][:])
 	}
@@ -125,7 +125,7 @@ func BenchmarkMemDbBufferSequential(b *testing.B) {
 	for i := 0; i < opCnt; i++ {
 		data[i] = encodeInt(i)
 	}
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
@@ -136,20 +136,20 @@ func BenchmarkMemDbBufferRandom(b *testing.B) {
 		data[i] = encodeInt(i)
 	}
 	shuffle(data)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
 
 func BenchmarkMemDbIter(b *testing.B) {
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	benchIterator(b, buffer)
 	b.ReportAllocs()
 }
 
 func BenchmarkMemDbCreation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		newMemDB()
+		NewMemDB()
 	}
 	b.ReportAllocs()
 }

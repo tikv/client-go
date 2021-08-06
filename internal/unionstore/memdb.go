@@ -86,7 +86,7 @@ type MemDB struct {
 	stages      []memdbCheckpoint
 }
 
-func newMemDB() *MemDB {
+func NewMemDB() *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr

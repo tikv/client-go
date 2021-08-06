@@ -49,3 +49,6 @@ type Iterator = unionstore.Iterator
 // When discarding a newly added KV in `Cleanup`, the non-persistent flags will be cleared.
 // If there are persistent flags associated with key, we will keep this key in node without value.
 type MemDB = unionstore.MemDB
+
+// NewMemDB creates a new MemDB
+var NewMemDB = unionstore.NewMemDB

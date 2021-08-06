@@ -84,7 +84,7 @@ type KVUnionStore struct {
 func NewUnionStore(snapshot uSnapshot) *KVUnionStore {
 	return &KVUnionStore{
 		snapshot:  snapshot,
-		memBuffer: newMemDB(),
+		memBuffer: NewMemDB(),
 	}
 }
 

@@ -78,7 +78,7 @@ func TestGetSet(t *testing.T) {
 
 func TestBigKV(t *testing.T) {
 	assert := assert.New(t)
-	db := newMemDB()
+	db := NewMemDB()
 	db.Set([]byte{1}, make([]byte, 80<<20))
 	assert.Equal(db.vlog.blockSize, maxBlockSize)
 	assert.Equal(len(db.vlog.blocks), 1)
@@ -120,7 +120,7 @@ func TestDiscard(t *testing.T) {
 	assert := assert.New(t)
 
 	const cnt = 10000
-	db := newMemDB()
+	db := NewMemDB()
 	base := deriveAndFill(0, cnt, 0, db)
 	sz := db.Size()
 
@@ -175,7 +175,7 @@ func TestFlushOverwrite(t *testing.T) {
 	assert := assert.New(t)
 
 	const cnt = 10000
-	db := newMemDB()
+	db := NewMemDB()
 	db.Release(deriveAndFill(0, cnt, 0, db))
 	sz := db.Size()
 
@@ -224,7 +224,7 @@ func TestComplexUpdate(t *testing.T) {
 		insert    = 9000
 	)
 
-	db := newMemDB()
+	db := NewMemDB()
 	db.Release(deriveAndFill(0, overwrite, 0, db))
 	assert.Equal(db.Len(), overwrite)
 	db.Release(deriveAndFill(keep, insert, 1, db))
@@ -246,7 +246,7 @@ func TestComplexUpdate(t *testing.T) {
 
 func TestNestedSandbox(t *testing.T) {
 	assert := assert.New(t)
-	db := newMemDB()
+	db := NewMemDB()
 	h0 := deriveAndFill(0, 200, 0, db)
 	h1 := deriveAndFill(0, 100, 1, db)
 	h2 := deriveAndFill(50, 150, 2, db)
@@ -360,7 +360,7 @@ func TestOverwrite(t *testing.T) {
 
 func TestKVLargeThanBlock(t *testing.T) {
 	assert := assert.New(t)
-	db := newMemDB()
+	db := NewMemDB()
 	db.Set([]byte{1}, make([]byte, 1))
 	db.Set([]byte{2}, make([]byte, 4096))
 	assert.Equal(len(db.vlog.blocks), 2)
@@ -373,7 +373,7 @@ func TestKVLargeThanBlock(t *testing.T) {
 
 func TestEmptyDB(t *testing.T) {
 	assert := assert.New(t)
-	db := newMemDB()
+	db := NewMemDB()
 	_, err := db.Get([]byte{0})
 	assert.NotNil(err)
 	it1, _ := db.Iter(nil, nil)
@@ -405,7 +405,7 @@ func TestReset(t *testing.T) {
 func TestInspectStage(t *testing.T) {
 	assert := assert.New(t)
 
-	db := newMemDB()
+	db := NewMemDB()
 	h1 := deriveAndFill(0, 1000, 0, db)
 	h2 := deriveAndFill(500, 1000, 1, db)
 	for i := 500; i < 1500; i++ {
@@ -459,11 +459,11 @@ func TestInspectStage(t *testing.T) {
 func TestDirty(t *testing.T) {
 	assert := assert.New(t)
 
-	db := newMemDB()
+	db := NewMemDB()
 	db.Set([]byte{1}, []byte{1})
 	assert.True(db.Dirty())
 
-	db = newMemDB()
+	db = NewMemDB()
 	h := db.Staging()
 	db.Set([]byte{1}, []byte{1})
 	db.Cleanup(h)
@@ -475,14 +475,14 @@ func TestDirty(t *testing.T) {
 	assert.True(db.Dirty())
 
 	// persistent flags will make memdb dirty.
-	db = newMemDB()
+	db = NewMemDB()
 	h = db.Staging()
 	db.SetWithFlags([]byte{1}, []byte{1}, kv.SetKeyLocked)
 	db.Cleanup(h)
 	assert.True(db.Dirty())
 
 	// non-persistent flags will not make memdb dirty.
-	db = newMemDB()
+	db = NewMemDB()
 	h = db.Staging()
 	db.SetWithFlags([]byte{1}, []byte{1}, kv.SetPresumeKeyNotExists)
 	db.Cleanup(h)
@@ -493,7 +493,7 @@ func TestFlags(t *testing.T) {
 	assert := assert.New(t)
 
 	const cnt = 10000
-	db := newMemDB()
+	db := NewMemDB()
 	h := db.Staging()
 	for i := uint32(0); i < cnt; i++ {
 		var buf [4]byte
@@ -596,7 +596,7 @@ func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
 }
 
 func fillDB(cnt int) *MemDB {
-	db := newMemDB()
+	db := NewMemDB()
 	h := deriveAndFill(0, cnt, 0, db)
 	db.Release(h)
 	return db
@@ -698,14 +698,14 @@ func mustGet(t *testing.T, buffer *MemDB) {
 }
 
 func TestKVGetSet(t *testing.T) {
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	insertData(t, buffer)
 	mustGet(t, buffer)
 }
 
 func TestNewIterator(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	// should be invalid
 	iter, err := buffer.Iter(nil, nil)
 	assert.Nil(err)
@@ -733,7 +733,7 @@ func NextUntil(it Iterator, fn FnKeyCmp) error {
 
 func TestIterNextUntil(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	insertData(t, buffer)
 
 	iter, err := buffer.Iter(nil, nil)
@@ -748,7 +748,7 @@ func TestIterNextUntil(t *testing.T) {
 
 func TestBasicNewIterator(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	it, err := buffer.Iter([]byte("2"), nil)
 	assert.Nil(err)
 	assert.False(it.Valid())
@@ -767,7 +767,7 @@ func TestNewIteratorMin(t *testing.T) {
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0002", "2"},
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0003", "hello"},
 	}
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	for _, kv := range kvs {
 		err := buffer.Set([]byte(kv.key), []byte(kv.value))
 		assert.Nil(err)
@@ -790,7 +790,7 @@ func TestNewIteratorMin(t *testing.T) {
 
 func TestMemDBStaging(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	err := buffer.Set([]byte("x"), make([]byte, 2))
 	assert.Nil(err)
 
@@ -818,7 +818,7 @@ func TestMemDBStaging(t *testing.T) {
 
 func TestBufferLimit(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	buffer.bufferSizeLimit = 1000
 	buffer.entrySizeLimit = 500
 

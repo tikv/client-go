@@ -43,6 +43,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -331,4 +332,138 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		}
 		return nil
 	}
+}
+
+type upperBoundLimitIter struct {
+	iter       unionstore.Iterator
+	upperBound []byte
+	reverse    bool
+	valid      bool
+}
+
+func newUpperBoundLimitIter(iter unionstore.Iterator, upperBound []byte, reverse bool) *upperBoundLimitIter {
+	newIter := &upperBoundLimitIter{
+		iter:       iter,
+		upperBound: upperBound,
+		reverse:    reverse,
+		valid:      iter.Valid(),
+	}
+
+	newIter.checkValid()
+	return newIter
+}
+
+func (u *upperBoundLimitIter) checkValid() {
+	valid := u.iter.Valid()
+	if len(u.upperBound) != 0 && u.iter.Valid() {
+		if u.reverse {
+			valid = bytes.Compare(u.upperBound, u.iter.Key()) <= 0
+		} else {
+			valid = bytes.Compare(u.iter.Key(), u.upperBound) < 0
+		}
+	}
+
+	u.valid = valid
+}
+
+func (u *upperBoundLimitIter) Valid() bool {
+	return u.valid
+}
+
+func (u *upperBoundLimitIter) Next() error {
+	if !u.valid {
+		return errors.New("iterator is invalid")
+	}
+
+	err := u.iter.Next()
+	if err != nil {
+		u.Close()
+		return err
+	}
+
+	u.checkValid()
+	return nil
+}
+
+func (u *upperBoundLimitIter) Key() []byte {
+	if !u.valid {
+		return nil
+	}
+	return u.iter.Key()
+}
+
+func (u *upperBoundLimitIter) Value() []byte {
+	if !u.valid {
+		return nil
+	}
+	return u.iter.Value()
+}
+
+func (u *upperBoundLimitIter) Close() {
+	u.iter.Close()
+	u.valid = false
+}
+
+type oneByOneIter struct {
+	iters []unionstore.Iterator
+	cur   int
+}
+
+func newOneByOneIter(iters []unionstore.Iterator) *oneByOneIter {
+	iter := &oneByOneIter{
+		iters: iters,
+		cur:   0,
+	}
+
+	iter.updateCur()
+	return iter
+}
+
+func (o *oneByOneIter) updateCur() {
+	for o.cur >= 0 && o.cur < len(o.iters) {
+		cur := o.iters[o.cur]
+		if !cur.Valid() {
+			o.cur++
+		}
+	}
+}
+
+func (o *oneByOneIter) Valid() bool {
+	return o.cur >= 0 && o.cur < len(o.iters)
+}
+
+func (o *oneByOneIter) Next() error {
+	if !o.Valid() {
+		return errors.New("iterator is invalid")
+	}
+
+	err := o.iters[o.cur].Next()
+	if err != nil {
+		o.Close()
+		return err
+	}
+
+	o.updateCur()
+	return nil
+}
+
+func (o *oneByOneIter) Key() []byte {
+	if !o.Valid() {
+		return nil
+	}
+	return o.iters[o.cur].Key()
+}
+
+func (o *oneByOneIter) Value() []byte {
+	if !o.Valid() {
+		return nil
+	}
+	return o.iters[o.cur].Value()
+}
+
+func (o *oneByOneIter) Close() {
+	for _, iter := range o.iters {
+		iter.Close()
+	}
+	o.cur = -1
 }
