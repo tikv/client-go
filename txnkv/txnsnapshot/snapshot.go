@@ -279,6 +279,7 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 			if fromCustom, val, err := s.tryGetCustomSnapshotKey(key); fromCustom {
 				if err == nil {
 					m[string(key)] = val
+					continue
 				}
 
 				if !tikverr.IsErrNotFound(err) {
