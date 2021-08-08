@@ -334,76 +334,6 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 	}
 }
 
-type upperBoundLimitIter struct {
-	iter       unionstore.Iterator
-	upperBound []byte
-	reverse    bool
-	valid      bool
-}
-
-func newUpperBoundLimitIter(iter unionstore.Iterator, upperBound []byte, reverse bool) *upperBoundLimitIter {
-	newIter := &upperBoundLimitIter{
-		iter:       iter,
-		upperBound: upperBound,
-		reverse:    reverse,
-		valid:      iter.Valid(),
-	}
-
-	newIter.checkValid()
-	return newIter
-}
-
-func (u *upperBoundLimitIter) checkValid() {
-	valid := u.iter.Valid()
-	if len(u.upperBound) != 0 && u.iter.Valid() {
-		if u.reverse {
-			valid = bytes.Compare(u.upperBound, u.iter.Key()) <= 0
-		} else {
-			valid = bytes.Compare(u.iter.Key(), u.upperBound) < 0
-		}
-	}
-
-	u.valid = valid
-}
-
-func (u *upperBoundLimitIter) Valid() bool {
-	return u.valid
-}
-
-func (u *upperBoundLimitIter) Next() error {
-	if !u.valid {
-		return errors.New("iterator is invalid")
-	}
-
-	err := u.iter.Next()
-	if err != nil {
-		u.Close()
-		return err
-	}
-
-	u.checkValid()
-	return nil
-}
-
-func (u *upperBoundLimitIter) Key() []byte {
-	if !u.valid {
-		return nil
-	}
-	return u.iter.Key()
-}
-
-func (u *upperBoundLimitIter) Value() []byte {
-	if !u.valid {
-		return nil
-	}
-	return u.iter.Value()
-}
-
-func (u *upperBoundLimitIter) Close() {
-	u.iter.Close()
-	u.valid = false
-}
-
 type oneByOneIter struct {
 	iters []unionstore.Iterator
 	cur   int
@@ -466,4 +396,92 @@ func (o *oneByOneIter) Close() {
 		iter.Close()
 	}
 	o.cur = -1
+}
+
+type emptyIter struct{}
+
+func (e *emptyIter) Valid() bool   { return false }
+func (e *emptyIter) Next() error   { return errors.New("iter is invalid") }
+func (e *emptyIter) Key() []byte   { return nil }
+func (e *emptyIter) Value() []byte { return nil }
+func (e *emptyIter) Close()        {}
+
+// EmptyRetriever implements unionstore.Retriever
+type EmptyRetriever struct{}
+
+func (e *EmptyRetriever) Get(_ []byte) ([]byte, error) { return nil, tikverr.ErrNotExist }
+func (e *EmptyRetriever) Scan(_ []byte, _ []byte, _ bool) (unionstore.Iterator, error) {
+	return &emptyIter{}, nil
+}
+
+// MemDBRetriever implements unionstore.Retriever
+type MemDBRetriever struct {
+	MemDB *unionstore.MemDB
+}
+
+func (m *MemDBRetriever) Get(k []byte) ([]byte, error) {
+	if m.MemDB == nil {
+		return nil, tikverr.ErrNotExist
+	}
+
+	return m.MemDB.Get(k)
+}
+
+func (m *MemDBRetriever) Scan(k []byte, upperBound []byte, reverse bool) (unionstore.Iterator, error) {
+	if m.MemDB == nil {
+		return &emptyIter{}, nil
+	}
+
+	if !reverse {
+		return m.MemDB.Iter(k, upperBound)
+	}
+
+	iter, err := m.MemDB.Iter(k, upperBound)
+	if err != nil {
+		return nil, err
+	}
+
+	return newReverseLimitIter(iter, k), nil
+}
+
+type reverseLimitIter struct {
+	iter  unionstore.Iterator
+	limit []byte
+}
+
+func newReverseLimitIter(iter unionstore.Iterator, limit []byte) *reverseLimitIter {
+	return &reverseLimitIter{
+		iter:  iter,
+		limit: limit,
+	}
+}
+
+func (u *reverseLimitIter) Valid() bool {
+	return u.iter.Valid() && bytes.Compare(u.iter.Key(), u.limit) >= 0
+}
+
+func (u *reverseLimitIter) Next() error {
+	if !u.Valid() {
+		return errors.New("iterator is invalid")
+	}
+
+	return u.iter.Next()
+}
+
+func (u *reverseLimitIter) Key() []byte {
+	if !u.Valid() {
+		return nil
+	}
+	return u.iter.Key()
+}
+
+func (u *reverseLimitIter) Value() []byte {
+	if !u.Valid() {
+		return nil
+	}
+	return u.iter.Value()
+}
+
+func (u *reverseLimitIter) Close() {
+	u.iter.Close()
 }

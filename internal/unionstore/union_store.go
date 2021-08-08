@@ -55,6 +55,13 @@ type Getter interface {
 	Get(k []byte) ([]byte, error)
 }
 
+// Retriever is the interface for Getter and Scan method
+type Retriever interface {
+	Getter
+	// Scan creates an Iterator
+	Scan(k []byte, upperBound []byte, reverse bool) (Iterator, error)
+}
+
 // uSnapshot defines the interface for the snapshot fetched from KV store.
 type uSnapshot interface {
 	// Get gets the value for key k from kv store.

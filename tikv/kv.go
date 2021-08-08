@@ -582,6 +582,16 @@ type Scanner = txnsnapshot.Scanner
 // KVSnapshot implements the tidbkv.Snapshot interface.
 type KVSnapshot = txnsnapshot.KVSnapshot
 
+// MemDBRetriever implements unionstore.Retriever
+type MemDBRetriever = txnsnapshot.MemDBRetriever
+
+// EmptyRetriever implements unionstore.Retriever
+type EmptyRetriever = txnsnapshot.EmptyRetriever
+
+type RangeRetriever = txnsnapshot.RangeRetriever
+
+var NewRangeRetriever = txnsnapshot.NewRangeRetriever
+
 // SnapshotRuntimeStats records the runtime stats of snapshot.
 type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
 

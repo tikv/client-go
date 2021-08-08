@@ -40,6 +40,9 @@ type Getter = unionstore.Getter
 // Iterator is the interface for a iterator on KV store.
 type Iterator = unionstore.Iterator
 
+// Retriever is the interface for Getter and Scan method
+type Retriever = unionstore.Retriever
+
 // MemDB is rollbackable Red-Black Tree optimized for transaction states buffer use scenario.
 // You can think MemDB is a combination of two separate tree map, one for key => value and another for key => keyFlags.
 //

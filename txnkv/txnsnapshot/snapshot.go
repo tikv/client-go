@@ -97,23 +97,23 @@ type kvstore interface {
 	GetOracle() oracle.Oracle
 }
 
-type scanKeyRange struct {
+type RangeRetriever struct {
 	kv.KeyRange
-	isMemSnapshot bool
+	unionstore.Retriever
 }
 
-func NewScanKeyRange(start, end []byte, isMemSnapshot bool) *scanKeyRange {
-	return &scanKeyRange{
-		kv.KeyRange{StartKey: start, EndKey: end},
-		isMemSnapshot,
+func NewRangeRetriever(start, end []byte, retriver unionstore.Retriever) *RangeRetriever {
+	return &RangeRetriever{
+		KeyRange:  kv.KeyRange{StartKey: start, EndKey: end},
+		Retriever: retriver,
 	}
 }
 
-func (s *scanKeyRange) Contains(k []byte) bool {
+func (s *RangeRetriever) Contains(k []byte) bool {
 	return bytes.Compare(k, s.StartKey) >= 0 && (len(s.EndKey) == 0 || bytes.Compare(k, s.EndKey) < 0)
 }
 
-func (s *scanKeyRange) Intersect(start, end []byte) *scanKeyRange {
+func (s *RangeRetriever) Intersect(start, end []byte) *RangeRetriever {
 	//                      start        end
 	// ---------------------|============|---
 	// ---|============|---------------------
@@ -146,7 +146,7 @@ func (s *scanKeyRange) Intersect(start, end []byte) *scanKeyRange {
 		// --------|==========|------
 		// -----|================|---
 		//      s.StartKey       s.EndKey
-		return NewScanKeyRange(start, end, s.isMemSnapshot)
+		return NewRangeRetriever(start, end, s.Retriever)
 	}
 
 	if cmpStart <= 0 && cmpEnd >= 0 {
@@ -162,7 +162,7 @@ func (s *scanKeyRange) Intersect(start, end []byte) *scanKeyRange {
 		// -------|============|---
 		// ---|============|-------
 		//    s.StartKey   s.EndKey
-		return NewScanKeyRange(start, s.EndKey, s.isMemSnapshot)
+		return NewRangeRetriever(start, s.EndKey, s.Retriever)
 	}
 
 	// cmpStart <= 0 && cmpEnd <= 0
@@ -170,7 +170,7 @@ func (s *scanKeyRange) Intersect(start, end []byte) *scanKeyRange {
 	// ---|============|-------
 	// -------|============|---
 	//        s.StartKey   s.EndKey
-	return NewScanKeyRange(s.StartKey, end, s.isMemSnapshot)
+	return NewRangeRetriever(s.StartKey, end, s.Retriever)
 }
 
 // KVSnapshot implements the tidbkv.Snapshot interface.
@@ -210,12 +210,10 @@ type KVSnapshot struct {
 	// resourceGroupTag is use to set the kv request resource group tag.
 	resourceGroupTag []byte
 
-	// scanRangeSegments is the ranges for memory scan
-	sortedMemScanRanges []*scanKeyRange
-	// scanRangeSegments is the scan ranges split by sortedMemScanRanges
-	sortedAllScanRanges []*scanKeyRange
-	// memSnapshotDB stores data for keys that use memory snapshot
-	memSnapshotDB *unionstore.MemDB
+	// sortedCustomKeyRetrievers is the retrievers for custom settings
+	sortedCustomKeyRetrievers []*RangeRetriever
+	// scanRangeSegments is the scan ranges split by sortedCustomKeyRetrievers
+	sortedAllScanRanges []*RangeRetriever
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -275,25 +273,21 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 		keys = tmp
 	}
 
-	if s.sortedMemScanRanges != nil {
+	if len(s.sortedCustomKeyRetrievers) > 0 {
 		tmp := make([][]byte, 0, len(keys))
 		for _, key := range keys {
-			fromMem, val, err := s.tryGetMemSnapshotKey(key)
-			if !fromMem {
+			if fromCustom, val, err := s.tryGetCustomSnapshotKey(key); fromCustom {
+				if err == nil {
+					m[string(key)] = val
+				}
+
+				if !tikverr.IsErrNotFound(err) {
+					s.mu.RUnlock()
+					return nil, errors.Trace(err)
+				}
+			} else {
 				tmp = append(tmp, key)
-				continue
 			}
-
-			if tikverr.IsErrNotFound(err) {
-				continue
-			}
-
-			if err != nil {
-				s.mu.RUnlock()
-				return nil, err
-			}
-
-			m[string(key)] = val
 		}
 		keys = tmp
 	}
@@ -567,9 +561,17 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	}(time.Now())
 
 	s.mu.RLock()
-	if fromMem, val, err := s.tryGetMemSnapshotKey(k); fromMem {
+	if fromCustom, val, err := s.tryGetCustomSnapshotKey(k); fromCustom {
 		s.mu.RUnlock()
-		return val, err
+		if err == nil {
+			return val, nil
+		}
+
+		if tikverr.IsErrNotFound(err) {
+			return nil, tikverr.ErrNotExist
+		}
+
+		return nil, errors.Trace(err)
 	}
 	s.mu.RUnlock()
 
@@ -591,21 +593,17 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	return val, nil
 }
 
-func (s *KVSnapshot) tryGetMemSnapshotKey(k []byte) (bool, []byte, error) {
-	if len(s.sortedMemScanRanges) == 0 {
+func (s *KVSnapshot) tryGetCustomSnapshotKey(k []byte) (bool, []byte, error) {
+	if len(s.sortedCustomKeyRetrievers) == 0 {
 		return false, nil, nil
 	}
 
-	if idx, keyRange := findFirstRangeEndAfterKey(s.sortedMemScanRanges, k); idx < 0 || !keyRange.Contains(k) {
+	idx, keyRange := findFirstRangeEndAfterKey(s.sortedCustomKeyRetrievers, k)
+	if idx < 0 || !keyRange.Contains(k) {
 		return false, nil, nil
 	}
 
-	memDB := s.memSnapshotDB
-	if memDB == nil {
-		return true, nil, tikverr.ErrNotExist
-	}
-
-	val, err := memDB.Get(k)
+	val, err := keyRange.Get(k)
 	if len(val) == 0 {
 		return true, nil, tikverr.ErrNotExist
 	}
@@ -613,57 +611,44 @@ func (s *KVSnapshot) tryGetMemSnapshotKey(k []byte) (bool, []byte, error) {
 	return true, val, err
 }
 
-func (s *KVSnapshot) tryCreateMultiRangeIter(k, upperBound []byte, reverse bool) (iter unionstore.Iterator, err error) {
-	if len(s.sortedMemScanRanges) == 0 {
-		return nil, nil
-	}
-
-	ranges, memDB, err := s.getRangesForIter(k, upperBound, reverse)
-	if err != nil {
-		return nil, err
-	}
-
-	iters := make([]unionstore.Iterator, 0, len(ranges))
+func (s *KVSnapshot) getIters(k, upperBound []byte, reverse bool) (iters []unionstore.Iterator, err error) {
+	ranges := s.getRangesForIter(k, upperBound, reverse)
 	defer func() {
 		if err != nil {
 			for _, item := range iters {
 				item.Close()
 			}
+			iters = nil
 		}
 	}()
 
 	for _, keyRange := range ranges {
 		var item unionstore.Iterator
-		if !keyRange.isMemSnapshot {
+		if keyRange.Retriever == nil {
 			item, err = newScanner(s, keyRange.StartKey, keyRange.EndKey, s.scanBatchSize, reverse)
-		} else if memDB != nil {
-			if reverse {
-				item, err = memDB.IterReverse(keyRange.EndKey)
-				item = newUpperBoundLimitIter(item, keyRange.StartKey, true)
-			} else {
-				item, err = memDB.Iter(keyRange.StartKey, keyRange.EndKey)
-			}
+		} else {
+			item, err = keyRange.Retriever.Scan(keyRange.StartKey, keyRange.EndKey, reverse)
 		}
 
 		if err != nil {
-			return nil, err
+			return
 		}
 
 		iters = append(iters, item)
 	}
 
-	return newOneByOneIter(iters), nil
+	return
 }
 
-func (s *KVSnapshot) getRangesForIter(k, upperBound []byte, reverse bool) ([]*scanKeyRange, *unionstore.MemDB, error) {
+func (s *KVSnapshot) getRangesForIter(k, upperBound []byte, reverse bool) []*RangeRetriever {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	idx, _ := findFirstRangeEndAfterKey(s.sortedAllScanRanges, k)
-	if idx < 0 {
-		return nil, nil, nil
+	if len(s.sortedAllScanRanges) == 0 {
+		return []*RangeRetriever{NewRangeRetriever(k, upperBound, nil)}
 	}
 
+	idx, _ := findFirstRangeEndAfterKey(s.sortedAllScanRanges, k)
 	ranges := getIntersectedScanRanges(s.sortedAllScanRanges[idx:], k, upperBound)
 	if reverse {
 		for i := 0; i < len(ranges)/2; i++ {
@@ -672,7 +657,7 @@ func (s *KVSnapshot) getRangesForIter(k, upperBound []byte, reverse bool) ([]*sc
 		}
 	}
 
-	return ranges, s.memSnapshotDB, nil
+	return ranges
 }
 
 func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]byte, error) {
@@ -816,32 +801,30 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 
 // Iter return a list of key-value pair after `k`.
 func (s *KVSnapshot) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error) {
-	iter, err := s.tryCreateMultiRangeIter(k, upperBound, false)
+	iters, err := s.getIters(k, upperBound, false)
 	if err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
-	if iter != nil {
-		return iter, nil
+	if len(iters) == 1 {
+		return iters[0], nil
 	}
 
-	scanner, err := newScanner(s, k, upperBound, s.scanBatchSize, false)
-	return scanner, errors.Trace(err)
+	return newOneByOneIter(iters), nil
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 func (s *KVSnapshot) IterReverse(k []byte) (unionstore.Iterator, error) {
-	iter, err := s.tryCreateMultiRangeIter(nil, k, true)
+	iters, err := s.getIters(nil, k, true)
 	if err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
-	if iter != nil {
-		return iter, nil
+	if len(iters) == 1 {
+		return iters[0], nil
 	}
 
-	scanner, err := newScanner(s, nil, k, s.scanBatchSize, true)
-	return scanner, errors.Trace(err)
+	return newOneByOneIter(iters), nil
 }
 
 // SetNotFillCache indicates whether tikv should skip filling cache when
@@ -941,42 +924,32 @@ func (s *KVSnapshot) SetVars(vars *kv.Variables) {
 	s.vars = vars
 }
 
-func (s *KVSnapshot) SetSortedMemScanRanges(ranges []*kv.KeyRange) {
+func (s *KVSnapshot) SetSortedCustomKeyRetrievers(retrievers []*RangeRetriever) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(ranges) == 0 {
-		s.sortedMemScanRanges = nil
+	if len(retrievers) == 0 {
+		s.sortedCustomKeyRetrievers = nil
 		s.sortedAllScanRanges = nil
 		return
 	}
 
-	memRanges := make([]*scanKeyRange, 0, len(ranges))
-	allRanges := make([]*scanKeyRange, 0, len(ranges)*2+1)
-	for i, keyRange := range ranges {
+	allRanges := make([]*RangeRetriever, 0, len(retrievers)*2+1)
+	for i, retriever := range retrievers {
 		if i == 0 {
-			allRanges = append(allRanges, NewScanKeyRange(nil, keyRange.StartKey, false))
+			allRanges = append(allRanges, NewRangeRetriever(nil, retriever.StartKey, nil))
 		} else {
-			allRanges = append(allRanges, NewScanKeyRange(ranges[i-1].EndKey, keyRange.StartKey, false))
+			allRanges = append(allRanges, NewRangeRetriever(retrievers[i-1].EndKey, retriever.StartKey, nil))
 		}
 
-		memRange := NewScanKeyRange(keyRange.StartKey, keyRange.EndKey, true)
-		memRanges = append(memRanges, memRange)
-		allRanges = append(allRanges, memRange)
+		allRanges = append(allRanges, retriever)
 
-		if i == len(ranges)-1 {
-			allRanges = append(allRanges, NewScanKeyRange(keyRange.EndKey, nil, false))
+		if i == len(retrievers)-1 {
+			allRanges = append(allRanges, NewRangeRetriever(retriever.EndKey, nil, nil))
 		}
 	}
-	s.sortedMemScanRanges = memRanges
+	s.sortedCustomKeyRetrievers = retrievers
 	s.sortedAllScanRanges = allRanges
-}
-
-func (s *KVSnapshot) SetMemSnapshotDB(memDB *unionstore.MemDB) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.memSnapshotDB = memDB
 }
 
 func (s *KVSnapshot) recordBackoffInfo(bo *retry.Backoffer) {
@@ -1105,7 +1078,7 @@ func (rs *SnapshotRuntimeStats) String() string {
 }
 
 // findFirstRangeEndAfterKey find the first item in ranges whose KeyEnd > key
-func findFirstRangeEndAfterKey(ranges []*scanKeyRange, key []byte) (int, *scanKeyRange) {
+func findFirstRangeEndAfterKey(ranges []*RangeRetriever, key []byte) (int, *RangeRetriever) {
 	n := len(ranges)
 	i := sort.Search(n, func(i int) bool {
 		scanRange := ranges[i]
@@ -1119,8 +1092,8 @@ func findFirstRangeEndAfterKey(ranges []*scanKeyRange, key []byte) (int, *scanKe
 	return i, ranges[i]
 }
 
-func getIntersectedScanRanges(ranges []*scanKeyRange, start []byte, end []byte) []*scanKeyRange {
-	intersected := make([]*scanKeyRange, 0, 1)
+func getIntersectedScanRanges(ranges []*RangeRetriever, start []byte, end []byte) []*RangeRetriever {
+	intersected := make([]*RangeRetriever, 0, 1)
 	found := false
 	for _, keyRange := range ranges {
 		newSeg := keyRange.Intersect(start, end)
