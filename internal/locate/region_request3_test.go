@@ -464,7 +464,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector.next(s.bo)
 	rpcCtx, err = replicaSelector.next(s.bo)
 	s.Nil(err)
-	replicaSelector.OnSendSuccess()
+	replicaSelector.onSendSuccess()
 	// Verify the regionStore is updated and the workTiKVIdx points to the leader.
 	leaderStore, leaderPeer, _, _ = region.WorkStorePeer(region.getStore())
 	s.Equal(leaderStore, rpcCtx.Store)
