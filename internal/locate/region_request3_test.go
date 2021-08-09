@@ -346,13 +346,14 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 			}
 		}
 	}
+	/*
 	// Verify that the leader replica is at the head of replicas.
 	leaderStore, leaderPeer, _, _ := region.WorkStorePeer(regionStore)
 	leaderReplica := replicaSelector.replicas[0]
 	s.Equal(leaderReplica.store, leaderStore)
 	s.Equal(leaderReplica.peer, leaderPeer)
 
-	/*
+
 	assertRPCCtxEqual := func(rpcCtx *RPCContext, replica *replica) {
 		s.Equal(rpcCtx.Store, replicaSelector.replicas[replicaSelector.nextReplicaIdx-1].store)
 		s.Equal(rpcCtx.Peer, replicaSelector.replicas[replicaSelector.nextReplicaIdx-1].peer)

@@ -257,7 +257,7 @@ type replicaSelector struct {
 type selectorState interface {
 	next(*retry.Backoffer, *replicaSelector) (*RPCContext, error)
 	onSendSuccess(*replicaSelector)
-	onSendFailure(*replicaSelector, livenessState)
+	onSendFailure(*replicaSelector, livenessState) (invalidateStore bool)
 	onNoLeader(*replicaSelector)
 }
 
@@ -276,7 +276,8 @@ func (s stateBase) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCCon
 func (s stateBase) onSendSuccess(selector *replicaSelector) {
 }
 
-func (s stateBase) onSendFailure(selector *replicaSelector, state livenessState) {
+func (s stateBase) onSendFailure(selector *replicaSelector, liveness livenessState) (invalidateStore bool) {
+	return liveness != reachable
 }
 
 func (s stateBase) onNoLeader(selector *replicaSelector) {
@@ -303,12 +304,17 @@ func (state accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelect
 	return selector.buildRPCContext(bo)
 }
 
-func (state accessKnownLeader) onSendFailure(selector *replicaSelector, liveness livenessState) {
+func (state accessKnownLeader) onSendFailure(selector *replicaSelector, liveness livenessState) (invalidateStore bool) {
 	if liveness != reachable && len(selector.replicas) > 1 && selector.regionCache.enableForwarding {
 		selector.state = accessByKnownProxy{leaderIdx: state.leaderIdx}
-	} else if liveness != reachable || selector.targetReplica().attempts >= maxReplicaAttempt {
+		invalidateStore = false
+		return
+	}
+	invalidateStore = liveness != reachable
+	if liveness != reachable || selector.targetReplica().attempts >= maxReplicaAttempt {
 		selector.state = tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
 	}
+	return
 }
 
 func (state accessKnownLeader) onNoLeader(selector *replicaSelector) {
@@ -422,7 +428,7 @@ func (state tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*
 	// If all followers are tried as a proxy and fail, backoff and retry.
 	if selector.proxyIdx < 0 {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
-		selector.invalidateRegion()
+		selector.region.scheduleReload()
 		return nil, nil
 	}
 	return selector.buildRPCContext(bo)
@@ -612,41 +618,27 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 		store.startHealthCheckLoopIfNeeded(s.regionCache)
 	}
 
-	switch state := s.state.(type) {
-	case accessKnownLeader:
-		state.onSendFailure(s, liveness)
-	}
-
-	// invalidate regions in store.
-	if atomic.CompareAndSwapUint32(&store.epoch, targetReplica.epoch, targetReplica.epoch+1) {
-		logutil.BgLogger().Info("mark store's regions need be refill", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
-		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
-		// schedule a store addr resolve.
-		store.markNeedCheck(s.regionCache.notifyCheckCh)
+	invalidateStore := s.state.onSendFailure(s, liveness)
+	if invalidateStore {
+		// invalidate regions in store.
+		if atomic.CompareAndSwapUint32(&store.epoch, targetReplica.epoch, targetReplica.epoch+1) {
+			logutil.BgLogger().Info("mark store's regions need be refill", zap.Uint64("id", store.storeID), zap.String("addr", store.addr), zap.Error(err))
+			metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
+			// schedule a store addr resolve.
+			store.markNeedCheck(s.regionCache.notifyCheckCh)
+		}
 	}
 }
 
 func (s *replicaSelector) onSendSuccess() {
-	switch state := s.state.(type) {
-	case tryFollower:
-		state.onSendSuccess(s)
-	case tryNewProxy:
-		state.onSendSuccess(s)
-	}
+	s.state.onSendSuccess(s)
 }
 
 func (s *replicaSelector) onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error) {
 	leader := notLeader.GetLeader()
 	if leader == nil {
 		// The region may be during transferring leader.
-		switch state := s.state.(type) {
-		case accessKnownLeader:
-			state.onNoLeader(s)
-		case accessByKnownProxy:
-			state.onNoLeader(s)
-		case tryNewProxy:
-			state.onNoLeader(s)
-		}
+		s.state.onNoLeader(s)
 		if err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx)); err != nil {
 			return false, errors.Trace(err)
 		}
