@@ -1528,3 +1528,20 @@ func BenchmarkOnRequestFail(b *testing.B) {
 		b.Fatal(len(cache.mu.regions))
 	}
 }
+
+func (s *testRegionCacheSuite) TestNoBackoffWhenFailToDecodeRegion() {
+	region2 := s.cluster.AllocID()
+	newPeers := s.cluster.AllocIDs(2)
+	k := []byte("k")
+	// Use SplitRaw to split a region with non-memcomparable range keys.
+	s.cluster.SplitRaw(s.region1, region2, k, newPeers, newPeers[0])
+	_, err := s.cache.LocateKey(s.bo, k)
+	s.NotNil(err)
+	s.Equal(0, s.bo.GetTotalBackoffTimes())
+	_, err = s.cache.LocateRegionByID(s.bo, region2)
+	s.NotNil(err)
+	s.Equal(0, s.bo.GetTotalBackoffTimes())
+	_, err = s.cache.scanRegions(s.bo, []byte{}, []byte{}, 10)
+	s.NotNil(err)
+	s.Equal(0, s.bo.GetTotalBackoffTimes())
+}
