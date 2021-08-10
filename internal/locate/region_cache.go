@@ -1284,6 +1284,9 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 			metrics.RegionCacheCounterWithGetRegionOK.Inc()
 		}
 		if err != nil {
+			if isDecodeError(err) {
+				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v", key, err)
+			}
 			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", key, err)
 			continue
 		}
@@ -1334,6 +1337,9 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			metrics.RegionCacheCounterWithGetRegionByIDOK.Inc()
 		}
 		if err != nil {
+			if isDecodeError(err) {
+				return nil, errors.Errorf("failed to decode region range key, regionID: %q, err: %v", regionID, err)
+			}
 			backoffErr = errors.Errorf("loadRegion from PD failed, regionID: %v, err: %v", regionID, err)
 			continue
 		}
@@ -1379,6 +1385,9 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		}
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
 		if err != nil {
+			if isDecodeError(err) {
+				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", startKey, limit, err)
+			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
 				"scanRegion from PD failed, startKey: %q, limit: %q, err: %v",
