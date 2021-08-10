@@ -275,7 +275,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	s.Equal(len(s.regionRequestSender.failProxyStoreIDs), 0)
 	region := s.regionRequestSender.regionCache.GetCachedRegionWithRLock(loc.Region)
 	s.NotNil(region)
-	s.True(region.checkNeedReload())
+	s.False(region.isValid())
 
 	loc, err = s.regionRequestSender.regionCache.LocateKey(bo, []byte("k"))
 	s.Nil(err)

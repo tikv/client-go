@@ -390,6 +390,11 @@ func (state accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSelec
 	}
 }
 
+func (state accessByKnownProxy) onSendFailure(selector *replicaSelector, liveness livenessState) (invalidateStore bool) {
+	selector.state = tryNewProxy{leaderIdx: state.leaderIdx, lastIdx: AccessIndex(rand.Intn(len(selector.replicas)))}
+	return liveness != reachable
+}
+
 func (state accessByKnownProxy) onNoLeader(selector *replicaSelector) {
 	selector.state = invalidLeader{}
 }
