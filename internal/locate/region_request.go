@@ -378,7 +378,7 @@ func (state *accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSele
 	leader := selector.replicas[state.leaderIdx]
 	if atomic.LoadInt32(&leader.store.unreachable) == 0 {
 		selector.regionStore.unsetProxyStoreIfNeeded(selector.region)
-		selector.state = &accessKnownLeader{ leaderIdx: state.leaderIdx }
+		selector.state = &accessKnownLeader{leaderIdx: state.leaderIdx}
 		return nil, stateChanged{}
 	}
 
@@ -394,7 +394,7 @@ func (state *accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSele
 
 func (state *accessByKnownProxy) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
 	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx, lastIdx: AccessIndex(rand.Intn(len(selector.replicas)))}
-	if 	selector.checkLiveness(bo, selector.proxyReplica()) != reachable {
+	if selector.checkLiveness(bo, selector.proxyReplica()) != reachable {
 		selector.invalidateReplicaStore(selector.proxyReplica(), cause)
 	}
 }

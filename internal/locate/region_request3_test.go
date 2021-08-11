@@ -404,7 +404,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.NotNil(rpcCtx)
 	s.Nil(err)
 	s.IsType(&tryFollower{}, replicaSelector.state)
-	s.NotEqual(replicaSelector.targetIdx,regionStore.workTiKVIdx)
+	s.NotEqual(replicaSelector.targetIdx, regionStore.workTiKVIdx)
 	assertRPCCtxEqual(rpcCtx, replicaSelector.targetReplica(), nil)
 	s.Equal(replicaSelector.targetReplica().attempts, 1)
 

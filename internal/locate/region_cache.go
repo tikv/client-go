@@ -466,8 +466,8 @@ type RPCContext struct {
 	Addr       string
 	AccessMode accessMode
 	ProxyStore *Store // nil means proxy is not used
-	ProxyAddr string // valid when ProxyStore is not nil
-	TiKVNum   int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	ProxyAddr  string // valid when ProxyStore is not nil
+	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
 
 	tryTimes int
 }
