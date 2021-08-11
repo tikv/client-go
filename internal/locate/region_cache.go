@@ -466,7 +466,6 @@ type RPCContext struct {
 	Addr       string
 	AccessMode accessMode
 	ProxyStore *Store // nil means proxy is not used
-	//ProxyAccessIdx AccessIndex // valid when ProxyStore is not nil
 	ProxyAddr string // valid when ProxyStore is not nil
 	TiKVNum   int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
 
@@ -575,7 +574,6 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	var (
 		proxyStore *Store
 		proxyAddr  string
-		//proxyAccessIdx AccessIndex
 	)
 	if c.enableForwarding && isLeaderReq {
 		if atomic.LoadInt32(&store.unreachable) == 0 {
@@ -868,21 +866,6 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 
 	// try next peer to found new leader.
 	if ctx.AccessMode == tiKVOnly {
-		/*
-			if startForwarding || ctx.ProxyStore != nil {
-				var currentProxyIdx AccessIndex = -1
-				if ctx.ProxyStore != nil {
-					currentProxyIdx = ctx.ProxyAccessIdx
-				}
-				// In case the epoch of the store is increased, try to avoid reloading the current region by also
-				// increasing the epoch stored in `rs`.
-				rs.switchNextProxyStore(r, currentProxyIdx, incEpochStoreIdx)
-				logutil.Logger(bo.GetCtx()).Info("switch region proxy peer to next due to send request fail",
-					zap.Stringer("current", ctx),
-					zap.Bool("needReload", scheduleReload),
-					zap.Error(err))
-			} else {
-		*/
 		rs.switchNextTiKVPeer(r, ctx.AccessIdx)
 		logutil.Logger(bo.GetCtx()).Info("switch region peer to next due to send request fail",
 			zap.Stringer("current", ctx),

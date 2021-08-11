@@ -712,7 +712,7 @@ func (s *RegionRequestSender) getRPCContext(
 		// Now only requests sent to the replica leader will use the replica selector to get
 		// the RPC context.
 		// TODO(youjiali1995): make all requests use the replica selector.
-		if /* !s.regionCache.enableForwarding && */ req.ReplicaReadType == kv.ReplicaReadLeader {
+		if req.ReplicaReadType == kv.ReplicaReadLeader {
 			if s.leaderReplicaSelector == nil {
 				selector, err := newReplicaSelector(s.regionCache, regionID)
 				if selector == nil || err != nil {
