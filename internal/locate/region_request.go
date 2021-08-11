@@ -277,7 +277,6 @@ func (s stateBase) onSendSuccess(selector *replicaSelector) {
 }
 
 func (s stateBase) onSendFailure(backoffer *retry.Backoffer, selector *replicaSelector, err error) {
-	return
 }
 
 func (s stateBase) onNoLeader(selector *replicaSelector) {
@@ -316,7 +315,6 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 	if liveness != reachable {
 		selector.invalidateReplicaStore(selector.targetReplica(), cause)
 	}
-	return
 }
 
 func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
@@ -386,10 +384,9 @@ func (state *accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSele
 		selector.targetIdx = state.leaderIdx
 		selector.proxyIdx = selector.regionStore.proxyTiKVIdx
 		return selector.buildRPCContext(bo)
-	} else {
-		selector.state = &tryNewProxy{leaderIdx: state.leaderIdx, lastIdx: AccessIndex(rand.Intn(len(selector.replicas)))}
-		return nil, stateChanged{}
 	}
+	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx, lastIdx: AccessIndex(rand.Intn(len(selector.replicas)))}
+	return nil, stateChanged{}
 }
 
 func (state *accessByKnownProxy) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {

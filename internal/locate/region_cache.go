@@ -1767,41 +1767,6 @@ func (r *regionStore) switchNextTiKVPeer(rr *Region, currentPeerIdx AccessIndex)
 	rr.compareAndSwapStore(r, newRegionStore)
 }
 
-// switchNextProxyStore switches the index of the peer that will forward requests to the leader to the next peer.
-// If proxy is currently not used on this region, the value of `currentProxyIdx` should be -1, and a random peer will
-// be select in this case.
-func (r *regionStore) switchNextProxyStore(rr *Region, currentProxyIdx AccessIndex, incEpochStoreIdx int) {
-	if r.proxyTiKVIdx != currentProxyIdx {
-		return
-	}
-
-	tikvNum := r.accessStoreNum(tiKVOnly)
-	var nextIdx AccessIndex
-
-	// If the region is not using proxy before, randomly select a non-leader peer for the first try.
-	if currentProxyIdx == -1 {
-		// Randomly select an non-leader peer
-		// TODO: Skip unreachable peers here.
-		nextIdx = AccessIndex(rand.Intn(tikvNum - 1))
-		if nextIdx >= r.workTiKVIdx {
-			nextIdx++
-		}
-	} else {
-		nextIdx = (currentProxyIdx + 1) % AccessIndex(tikvNum)
-		// skips the current workTiKVIdx
-		if nextIdx == r.workTiKVIdx {
-			nextIdx = (nextIdx + 1) % AccessIndex(tikvNum)
-		}
-	}
-
-	newRegionStore := r.clone()
-	newRegionStore.proxyTiKVIdx = nextIdx
-	if incEpochStoreIdx >= 0 {
-		newRegionStore.storeEpochs[incEpochStoreIdx]++
-	}
-	rr.compareAndSwapStore(r, newRegionStore)
-}
-
 func (r *regionStore) setProxyStoreIdx(rr *Region, idx AccessIndex) {
 	if r.proxyTiKVIdx == idx {
 		return

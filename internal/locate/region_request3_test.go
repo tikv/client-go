@@ -466,9 +466,10 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 
 	// Switch to tryNewProxy if the current proxy is not available
 	replicaSelector.onSendFailure(s.bo, nil)
-	state, ok = replicaSelector.state.(*tryNewProxy)
-	s.True(ok)
+	s.IsType(&tryNewProxy{}, replicaSelector.state)
 	rpcCtx, err = replicaSelector.next(s.bo)
+	s.Nil(err)
+	assertRPCCtxEqual(rpcCtx, replicaSelector.targetReplica(), replicaSelector.proxyReplica())
 	s.Equal(regionStore.workTiKVIdx, state2.leaderIdx)
 	s.Equal(AccessIndex(2), replicaSelector.targetIdx)
 	s.NotEqual(regionStore.proxyTiKVIdx, replicaSelector.proxyIdx)
