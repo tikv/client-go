@@ -365,6 +365,12 @@ func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
 	}
 }
 
+func (state *tryFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
+	if selector.checkLiveness(bo, selector.targetReplica()) != reachable {
+		selector.invalidateReplicaStore(selector.targetReplica(), cause)
+	}
+}
+
 // accessByKnownProxy is the state where we are sending requests through
 // regionStore.proxyTiKVIdx as a proxy.
 type accessByKnownProxy struct {
@@ -442,6 +448,12 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 func (state *tryNewProxy) onSendSuccess(selector *replicaSelector) {
 	selector.regionStore.setProxyStoreIdx(selector.region, selector.proxyIdx)
+}
+
+func (state *tryNewProxy) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
+	if selector.checkLiveness(bo, selector.proxyReplica()) != reachable {
+		selector.invalidateReplicaStore(selector.proxyReplica(), cause)
+	}
 }
 
 func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
