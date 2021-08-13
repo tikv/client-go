@@ -296,7 +296,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 
 func refreshEpochs(regionStore *regionStore) {
 	for i, store := range regionStore.stores {
-		 regionStore.storeEpochs[i] = atomic.LoadUint32(&store.epoch)
+		regionStore.storeEpochs[i] = atomic.LoadUint32(&store.epoch)
 	}
 }
 
