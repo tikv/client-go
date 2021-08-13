@@ -294,6 +294,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	s.Nil(ctx.ProxyStore)
 }
 
+func refreshEpochs(regionStore *regionStore) {
+	for i, store := range regionStore.stores {
+		 regionStore.storeEpochs[i] = atomic.LoadUint32(&store.epoch)
+	}
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
@@ -409,7 +415,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Equal(replicaSelector.targetReplica().attempts, 1)
 
 	// Test switching to tryNewProxy if leader is unreachable and forwarding is enabled
-	regionStore.storeEpochs[2]++
+	refreshEpochs(regionStore)
 	cache.enableForwarding = true
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region)
 	s.Nil(err)
@@ -453,6 +459,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Equal(replicaSelector.proxyIdx, regionStore.proxyTiKVIdx)
 
 	// Test initial state is accessByKnownProxy when proxyTiKVIdx is valid
+	refreshEpochs(regionStore)
 	cache.enableForwarding = true
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region)
 	s.Nil(err)
