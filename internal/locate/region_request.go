@@ -254,6 +254,28 @@ type replicaSelector struct {
 	proxyIdx AccessIndex
 }
 
+// selectorState is the interface of states of the replicaSelector.
+// Here is the main state transition diagram:
+//
+//                                    exceeding maxReplicaAttempt
+//           +-------------------+   || RPC failure && unreachable && no forwarding
+// +-------->+ accessKnownLeader +----------------+
+// |         +------+------------+                |
+// |                |                             |
+// |                | RPC failure                 v
+// |                | && unreachable        +-----+-----+
+// |                | && enable forwarding  |tryFollower+------+
+// |                |                       +-----------+      |
+// | leader becomes v                                          | all followers
+// | reachable +----+-------------+                            | are tried
+// +-----------+accessByKnownProxy|                            |
+// ^           +------+-----------+                            |
+// |                  |                           +-------+    |
+// |                  | RPC failure               |backoff+<---+
+// | leader becomes   v                           +---+---+
+// | reachable  +-----+-----+ all proxies are tried   ^
+// +------------+tryNewProxy+-------------------------+
+//              +-----------+
 type selectorState interface {
 	next(*retry.Backoffer, *replicaSelector) (*RPCContext, error)
 	onSendSuccess(*replicaSelector)
