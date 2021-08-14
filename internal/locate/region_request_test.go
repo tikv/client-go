@@ -51,7 +51,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -469,7 +468,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 		wg.Done()
 	}()
 
-	cli := client.NewRPCClient(config.Security{})
+	cli := client.NewRPCClient()
 	sender := NewRegionRequestSender(s.cache, cli)
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
@@ -486,7 +485,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 
 	// Just for covering error code = codes.Canceled.
 	client1 := &cancelContextClient{
-		Client:       client.NewRPCClient(config.Security{}),
+		Client:       client.NewRPCClient(),
 		redirectAddr: addr,
 	}
 	sender = NewRegionRequestSender(s.cache, client1)
