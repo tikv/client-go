@@ -113,18 +113,33 @@ func processRegionResult(region *pd.Region, err error) (*pd.Region, error) {
 	return region, nil
 }
 
+// decodeError happens if the region range key is not well-formed.
+// It indicates TiKV has bugs and the client can't handle such a case,
+// so it should report the error to users soon.
+type decodeError struct {
+	error
+}
+
+func isDecodeError(err error) bool {
+	_, ok := errors.Cause(err).(*decodeError)
+	if !ok {
+		_, ok = errors.Cause(err).(decodeError)
+	}
+	return ok
+}
+
 func decodeRegionMetaKeyInPlace(r *metapb.Region) error {
 	if len(r.StartKey) != 0 {
 		_, decoded, err := codec.DecodeBytes(r.StartKey, nil)
 		if err != nil {
-			return errors.Trace(err)
+			return &decodeError{err}
 		}
 		r.StartKey = decoded
 	}
 	if len(r.EndKey) != 0 {
 		_, decoded, err := codec.DecodeBytes(r.EndKey, nil)
 		if err != nil {
-			return errors.Trace(err)
+			return &decodeError{err}
 		}
 		r.EndKey = decoded
 	}
