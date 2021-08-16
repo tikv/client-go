@@ -59,9 +59,8 @@ func TestPanicInRecvLoop(t *testing.T) {
 	defer server.Stop()
 
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
-	rpcClient := NewRPCClient(config.Security{}, func(c *RPCClient) {
-		c.dialTimeout = time.Second / 3
-	})
+	rpcClient := NewRPCClient()
+	rpcClient.dialTimeout = time.Second / 3
 
 	// Start batchRecvLoop, and it should panic in `failPendingRequests`.
 	_, err := rpcClient.getConnArray(addr, true, func(cfg *config.TiKVClient) { cfg.GrpcConnectionCount = 1 })
@@ -94,7 +93,7 @@ func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
 		conf.TiKVClient.MaxBatchSize = 128
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
-	rpcClient := NewRPCClient(config.Security{})
+	rpcClient := NewRPCClient()
 	defer rpcClient.closeConns()
 
 	// Create 4 BatchCommands streams.

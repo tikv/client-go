@@ -96,7 +96,7 @@ func NewClient(ctx context.Context, pdAddrs []string, security config.Security, 
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
 		pdClient:    pdCli,
-		rpcClient:   client.NewRPCClient(security),
+		rpcClient:   client.NewRPCClient(client.WithSecurity(security)),
 	}, nil
 }
 
