@@ -663,7 +663,10 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
 	store := accessReplica.store
 	liveness := store.requestLiveness(bo, s.regionCache)
-	if liveness != reachable {
+	// We only check health in loop if forwarding is enabled now.
+	// The restriction might be relaxed if necessary, but the implementation
+	// may be checked carefully again.
+	if liveness != reachable && s.regionCache.enableForwarding {
 		store.startHealthCheckLoopIfNeeded(s.regionCache)
 	}
 	return liveness
