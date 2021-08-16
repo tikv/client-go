@@ -383,7 +383,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
 	if !selector.regionCache.switchWorkLeaderToPeer(selector.region, selector.targetReplica().peer) {
-		logutil.BgLogger().Error("no store matches the peer", zap.Stringer("peer", selector.targetReplica().peer))
+		panic("the store must exist")
 	}
 }
 
@@ -413,12 +413,13 @@ func (state *accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSele
 		selector.proxyIdx = selector.regionStore.proxyTiKVIdx
 		return selector.buildRPCContext(bo)
 	}
-	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx, lastIdx: AccessIndex(rand.Intn(len(selector.replicas)))}
+
+	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
 	return nil, stateChanged{}
 }
 
 func (state *accessByKnownProxy) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
-	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx, lastIdx: AccessIndex(rand.Intn(len(selector.replicas)))}
+	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
 	if selector.checkLiveness(bo, selector.proxyReplica()) != reachable {
 		selector.invalidateReplicaStore(selector.proxyReplica(), cause)
 	}
@@ -433,7 +434,6 @@ func (state *accessByKnownProxy) onNoLeader(selector *replicaSelector) {
 type tryNewProxy struct {
 	stateBase
 	leaderIdx AccessIndex
-	lastIdx   AccessIndex
 }
 
 func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -444,28 +444,40 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 		return nil, stateChanged{}
 	}
 
-	var proxyReplica *replica
-	for i := 0; i < len(selector.replicas); i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
-		if idx == state.leaderIdx {
-			continue
-		}
-		proxyReplica = selector.replicas[idx]
-		// Each follower is only tried once
-		if proxyReplica.attempts == 0 {
-			state.lastIdx = idx
-			selector.targetIdx = state.leaderIdx
-			selector.proxyIdx = idx
-			break
+	candidateNum := 0
+	for idx, replica := range selector.replicas {
+		if state.isCandidate(AccessIndex(idx), replica) {
+			candidateNum++
 		}
 	}
-	// If all followers are tried as a proxy and fail, backoff and retry.
-	if selector.proxyIdx < 0 {
+
+	// If all followers are tried as a proxy and fail, mark the leader store invalid, then backoff and retry.
+	if candidateNum == 0 {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+		selector.invalidateReplicaStore(leader, errors.Errorf("all followers are tried as proxy but fail"))
 		selector.region.scheduleReload()
 		return nil, nil
 	}
+
+	// Skip advanceCnt valid candidates to find a proxy peer randomly
+	advanceCnt := rand.Intn(candidateNum)
+	for idx, replica := range selector.replicas {
+		if !state.isCandidate(AccessIndex(idx), replica) {
+			continue
+		}
+		if advanceCnt == 0 {
+			selector.targetIdx = state.leaderIdx
+			selector.proxyIdx = AccessIndex(idx)
+			break
+		}
+		advanceCnt--
+	}
 	return selector.buildRPCContext(bo)
+}
+
+func (state *tryNewProxy) isCandidate(idx AccessIndex, replica *replica) bool {
+	// Try each peer only once
+	return idx != state.leaderIdx && replica.attempts == 0
 }
 
 func (state *tryNewProxy) onSendSuccess(selector *replicaSelector) {
@@ -709,8 +721,8 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 	for i, replica := range s.replicas {
 		if isSamePeer(replica.peer, leader) {
 			if replica.attempts == maxReplicaAttempt {
-				// Give the replica one more chance and because the current replica is skipped, it
-				// won't result in infinite retry.
+				// Give the replica one more chance and because each follower is tried only once,
+				// it won't result in infinite retry.
 				replica.attempts = maxReplicaAttempt - 1
 			}
 			s.state = &accessKnownLeader{leaderIdx: AccessIndex(i)}
