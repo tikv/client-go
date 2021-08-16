@@ -211,7 +211,7 @@ func NewTxnClient(pdAddrs []string) (*KVStore, error) {
 		return nil, errors.Trace(err)
 	}
 
-	s, err := NewKVStore(uuid, pdClient, spkv, NewRPCClient(cfg.Security))
+	s, err := NewKVStore(uuid, pdClient, spkv, NewRPCClient(WithSecurity(cfg.Security)))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -609,7 +609,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, errors.Trace(err)
 	}
 
-	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(security))
+	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

@@ -59,7 +59,7 @@ func TestConn(t *testing.T) {
 		conf.TiKVClient.MaxBatchSize = 0
 	})()
 
-	client := NewRPCClient(config.Security{})
+	client := NewRPCClient()
 
 	addr := "127.0.0.1:6379"
 	conn1, err := client.getConnArray(addr, true)
@@ -92,7 +92,7 @@ func TestSendWhenReconnect(t *testing.T) {
 	server, port := startMockTikvService()
 	require.True(t, port > 0)
 
-	rpcClient := NewRPCClient(config.Security{})
+	rpcClient := NewRPCClient()
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
 	conn, err := rpcClient.getConnArray(addr, true)
 	assert.Nil(t, err)
@@ -219,7 +219,7 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 		conf.TiKVClient.MaxBatchSize = 0
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
-	rpcClient := NewRPCClient(config.Security{})
+	rpcClient := NewRPCClient()
 	defer rpcClient.closeConns()
 
 	var checkCnt uint64
@@ -288,7 +288,7 @@ func TestForwardMetadataByBatchCommands(t *testing.T) {
 		conf.TiKVClient.MaxBatchSize = 128
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
-	rpcClient := NewRPCClient(config.Security{})
+	rpcClient := NewRPCClient()
 	defer rpcClient.closeConns()
 
 	var checkCnt uint64

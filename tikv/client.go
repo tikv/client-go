@@ -43,6 +43,14 @@ import (
 // It should not be used after calling Close().
 type Client = client.Client
 
+// ClientOpt defines the option to create RPC client.
+type ClientOpt = client.Opt
+
+// WithSecurity is used to set security config.
+func WithSecurity(security config.Security) ClientOpt {
+	return client.WithSecurity(security)
+}
+
 // Timeout durations.
 const (
 	ReadTimeoutMedium = client.ReadTimeoutMedium
@@ -50,6 +58,6 @@ const (
 )
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
-func NewRPCClient(security config.Security, opts ...func(c *client.RPCClient)) *client.RPCClient {
-	return client.NewRPCClient(security, opts...)
+func NewRPCClient(opts ...ClientOpt) *client.RPCClient {
+	return client.NewRPCClient(opts...)
 }

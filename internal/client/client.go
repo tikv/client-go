@@ -240,6 +240,16 @@ func (a *connArray) Close() {
 	close(a.done)
 }
 
+// Opt is the option for the client.
+type Opt func(*RPCClient)
+
+// WithSecurity is used to set the security config.
+func WithSecurity(security config.Security) Opt {
+	return func(c *RPCClient) {
+		c.security = security
+	}
+}
+
 // RPCClient is RPC client struct.
 // TODO: Add flow control between RPC clients in TiDB ond RPC servers in TiKV.
 // Since we use shared client connection to communicate to the same TiKV, it's possible
@@ -261,10 +271,9 @@ type RPCClient struct {
 }
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
-func NewRPCClient(security config.Security, opts ...func(c *RPCClient)) *RPCClient {
+func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
 		conns:       make(map[string]*connArray),
-		security:    security,
 		dialTimeout: dialTimeout,
 	}
 	for _, opt := range opts {
