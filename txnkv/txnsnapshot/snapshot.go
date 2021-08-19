@@ -98,6 +98,85 @@ type kvstore interface {
 	GetOracle() oracle.Oracle
 }
 
+// RangedKVRetriever contains a kv.KeyRange to indicate the kv range of this retriever
+type RangedKVRetriever struct {
+	kv.KeyRange
+	unionstore.Retriever
+}
+
+// NewRangeRetriever creates a new RangedKVRetriever
+func NewRangeRetriever(retriever unionstore.Retriever, startKey, endKey []byte) *RangedKVRetriever {
+	return &RangedKVRetriever{
+		KeyRange:  kv.KeyRange{StartKey: startKey, EndKey: endKey},
+		Retriever: retriever,
+	}
+}
+
+// Contains returns whether the key located in the range
+func (s *RangedKVRetriever) Contains(k []byte) bool {
+	return bytes.Compare(k, s.StartKey) >= 0 && (len(s.EndKey) == 0 || bytes.Compare(k, s.EndKey) < 0)
+}
+
+// Intersect returns a new RangedKVRetriever with an intersected range
+func (s *RangedKVRetriever) Intersect(startKey, endKey []byte) *RangedKVRetriever {
+	//                      startKey     endKey
+	// ---------------------|============|---
+	// ---|============|---------------------
+	//    s.StartKey   s.EndKey
+	if len(s.EndKey) != 0 && bytes.Compare(s.EndKey, startKey) <= 0 {
+		return nil
+	}
+
+	//    startKey     endKey
+	// ---|============|---------------------
+	// ---------------------|============|---
+	//                      s.StartKey   s.EndKey
+	if len(endKey) != 0 && bytes.Compare(endKey, s.StartKey) <= 0 {
+		return nil
+	}
+
+	cmpStart := bytes.Compare(startKey, s.StartKey)
+	cmpEnd := 0
+	switch {
+	case len(endKey) == 0 && len(s.EndKey) != 0:
+		cmpEnd = 1
+	case len(endKey) != 0 && len(s.EndKey) == 0:
+		cmpEnd = -1
+	default:
+		cmpEnd = bytes.Compare(endKey, s.EndKey)
+	}
+
+	if cmpStart >= 0 && cmpEnd <= 0 {
+		//         startKey   endKey
+		// --------|==========|------
+		// -----|================|---
+		//      s.StartKey       s.EndKey
+		return NewRangeRetriever(s.Retriever, startKey, endKey)
+	}
+
+	if cmpStart <= 0 && cmpEnd >= 0 {
+		//      startKey           endKey
+		// -----|==================|---
+		// --------|============|------
+		//         s.StartKey   s.EndKey
+		return s
+	}
+
+	if cmpStart >= 0 && cmpEnd >= 0 {
+		//        startKey     endKey
+		// -------|============|---
+		// ---|============|-------
+		//    s.StartKey   s.EndKey
+		return NewRangeRetriever(s.Retriever, startKey, s.EndKey)
+	}
+
+	//    startKey     endKey
+	// ---|============|-------
+	// -------|============|---
+	//        s.StartKey   s.EndKey
+	return NewRangeRetriever(s.Retriever, s.StartKey, endKey)
+}
+
 // KVSnapshot implements the tidbkv.Snapshot interface.
 type KVSnapshot struct {
 	store           kvstore

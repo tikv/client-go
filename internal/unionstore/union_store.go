@@ -37,6 +37,7 @@ package unionstore
 import (
 	"context"
 
+	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
@@ -57,6 +58,17 @@ type Getter interface {
 	Get(k []byte) ([]byte, error)
 }
 
+// Retriever is the interface to get or scan key/values
+type Retriever interface {
+	Getter
+	// Scan creates an Iterator positioned on the first entry that startKey <= entry's key.
+	// If such entry is not found, it returns an invalid Iterator with no error.
+	// It yields only keys that < endKey. If upperBound is nil, it means the upperBound is unbounded.
+	// If reverse is specified, the returned iterator will iterate from greater key to smaller key
+	// The Iterator must be Closed after use.
+	Scan(startKey []byte, endKey []byte, reverse bool) (Iterator, error)
+}
+
 // uSnapshot defines the interface for the snapshot fetched from KV store.
 type uSnapshot interface {
 	// Get gets the value for key k from kv store.
@@ -73,6 +85,23 @@ type uSnapshot interface {
 	// If k is nil, the returned iterator will be positioned at the last key.
 	// TODO: Add lower bound limit
 	IterReverse(k []byte) (Iterator, error)
+}
+
+// EmptyIterator is an iterator without any entry
+type EmptyIterator struct{}
+
+func (i *EmptyIterator) Valid() bool   { return false }
+func (i *EmptyIterator) Key() []byte   { return nil }
+func (i *EmptyIterator) Value() []byte { return nil }
+func (i *EmptyIterator) Next() error   { return errors.New("scanner iterator is invalid") }
+func (i *EmptyIterator) Close()        {}
+
+// EmptyRetriever is a retriever without any entry
+type EmptyRetriever struct{}
+
+func (r *EmptyRetriever) Get(_ []byte) ([]byte, error) { return nil, tikverr.ErrNotExist }
+func (r *EmptyRetriever) Scan(_ []byte, _ []byte, _ bool) (Iterator, error) {
+	return &EmptyIterator{}, nil
 }
 
 // KVUnionStore is an in-memory Store which contains a buffer for write and a
