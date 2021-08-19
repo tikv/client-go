@@ -82,10 +82,10 @@ var (
 )
 
 var (
-	// CommitMaxBackoff is max sleep time of the 'commit' command
-	CommitMaxBackoff = uint64(41000)
 	// PrewriteMaxBackoff is max sleep time of the `pre-write` command.
-	PrewriteMaxBackoff = 20000
+	PrewriteMaxBackoff = 40000
+	// CommitMaxBackoff is max sleep time of the 'commit' command
+	CommitMaxBackoff = uint64(40000)
 )
 
 type kvstore interface {
@@ -966,6 +966,7 @@ func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startT
 		if err != nil {
 			return 0, false, errors.Trace(err)
 		}
+		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return 0, false, errors.Trace(err)
@@ -1074,9 +1075,6 @@ const (
 	TsoMaxBackoff = 15000
 )
 
-// VeryLongMaxBackoff is the max sleep time of transaction commit.
-var VeryLongMaxBackoff = uint64(600000) // 10mins
-
 func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 	c.cleanWg.Add(1)
 	c.store.WaitGroup().Add(1)
@@ -1182,7 +1180,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	//     The maxSleep should't be very long in this case.
 	//   - If the region isn't found in PD, it's possible the reason is write-stall.
 	//     The maxSleep can be long in this case.
-	bo := retry.NewBackofferWithVars(ctx, int(atomic.LoadUint64(&VeryLongMaxBackoff)), c.txn.vars)
+	bo := retry.NewBackofferWithVars(ctx, PrewriteMaxBackoff, c.txn.vars)
 
 	// If we want to use async commit or 1PC and also want linearizability across
 	// all nodes, we have to make sure the commit TS of this transaction is greater
@@ -1398,7 +1396,7 @@ func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.Co
 	start := time.Now()
 
 	// Use the VeryLongMaxBackoff to commit the primary key.
-	commitBo := retry.NewBackofferWithVars(ctx, int(atomic.LoadUint64(&VeryLongMaxBackoff)), c.txn.vars)
+	commitBo := retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars)
 	err := c.commitMutations(commitBo, c.mutations)
 	commitDetail.CommitTime = time.Since(start)
 	if commitBo.GetTotalSleep() > 0 {
