@@ -35,7 +35,7 @@
 package kv
 
 // KeyFlags are metadata associated with key
-type KeyFlags uint8
+type KeyFlags uint16
 
 const (
 	flagPresumeKNE KeyFlags = 1 << iota
@@ -45,9 +45,26 @@ const (
 	flagNeedCheckExists
 	flagPrewriteOnly
 	flagIgnoredIn2PC
+	flagAssertExist
+	flagAssertNotExist
 
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist
 )
+
+// HasAssertExist returns whether the key need ensure exists in 2pc.
+func (f KeyFlags) HasAssertExist() bool {
+	return f&flagAssertExist != 0 && f&flagAssertNotExist == 0
+}
+
+// HasAssertNotExist returns whether the key need ensure non-exists in 2pc.
+func (f KeyFlags) HasAssertNotExist() bool {
+	return f&flagAssertNotExist != 0 && f&flagAssertExist == 0
+}
+
+// HasAssertion returns whether the key has assertion.
+func (f KeyFlags) HasAssertion() bool {
+	return f&flagAssertExist != 0 || f&flagAssertNotExist != 0
+}
 
 // HasPresumeKeyNotExists returns whether the associated key use lazy check.
 func (f KeyFlags) HasPresumeKeyNotExists() bool {
@@ -115,6 +132,18 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin |= flagPrewriteOnly
 		case SetIgnoredIn2PC:
 			origin |= flagIgnoredIn2PC
+		case SetAssertExist:
+			origin &= ^flagAssertNotExist
+			origin |= flagAssertExist
+		case SetAssertNotExist:
+			origin &= ^flagAssertExist
+			origin |= flagAssertNotExist
+		case SetAssertUnknown:
+			origin |= flagAssertNotExist
+			origin |= flagAssertExist
+		case SetAssertNone:
+			origin &= ^flagAssertExist
+			origin &= ^flagAssertNotExist
 		}
 	}
 	return origin
@@ -147,4 +176,12 @@ const (
 	SetPrewriteOnly
 	// SetIgnoredIn2PC marks the key will be ignored in 2pc.
 	SetIgnoredIn2PC
+	// SetAssertExist marks the key must exist.
+	SetAssertExist
+	// SetAssertNotExist marks the key must not exist.
+	SetAssertNotExist
+	// SetAssertUnknown mark the key maybe exists or not exists.
+	SetAssertUnknown
+	// SetAssertNone cleans up the key's assert.
+	SetAssertNone
 )

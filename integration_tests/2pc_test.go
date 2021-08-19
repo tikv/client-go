@@ -1216,7 +1216,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	// stop txn ttl manager and remove primary key, make the other keys left behind
 	committer.CloseTTLManager()
 	muts := transaction.NewPlainMutations(1)
-	muts.Push(kvrpcpb.Op_Lock, pk, nil, true)
+	muts.Push(kvrpcpb.Op_Lock, pk, nil, true, false, false)
 	err = committer.PessimisticRollbackMutations(context.Background(), &muts)
 	s.Nil(err)
 
