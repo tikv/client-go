@@ -795,6 +795,9 @@ func sendBatchRequest(
 }
 
 func (c *RPCClient) recycleIdleConnArray() {
+	c.recycleMu.Lock()
+	defer c.recycleMu.Unlock()
+
 	var addrs []string
 	c.RLock()
 	for _, conn := range c.conns {
