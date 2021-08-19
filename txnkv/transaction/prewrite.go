@@ -75,10 +75,18 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	isPessimisticLock := make([]bool, m.Len())
 	for i := 0; i < m.Len(); i++ {
+		assertion := kvrpcpb.Assertion_None
+		if m.IsAssertExists(i) {
+			assertion = kvrpcpb.Assertion_Exist
+		}
+		if m.IsAssertNotExist(i) {
+			assertion = kvrpcpb.Assertion_NotExist
+		}
 		mutations[i] = &kvrpcpb.Mutation{
-			Op:    m.GetOp(i),
-			Key:   m.GetKey(i),
-			Value: m.GetValue(i),
+			Op:        m.GetOp(i),
+			Key:       m.GetKey(i),
+			Value:     m.GetValue(i),
+			Assertion: assertion,
 		}
 		isPessimisticLock[i] = m.IsPessimisticLock(i)
 	}
