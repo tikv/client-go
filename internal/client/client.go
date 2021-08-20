@@ -365,9 +365,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 	start := time.Now()
 	if atomic.CompareAndSwapUint32(&c.idleNotify, 1, 0) {
-		c.recycleMu.Lock()
-		c.recycleIdleConnArray()
-		c.recycleMu.Unlock()
+		go c.recycleIdleConnArray()
 	}
 
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
