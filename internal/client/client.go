@@ -288,7 +288,9 @@ func (c *RPCClient) getConnArray(addr string, enableBatch bool, opt ...func(cfg 
 	}
 	array, ok := c.conns[addr]
 	c.RUnlock()
-	if !ok {
+	// An idle connArray will not change to active again, this avoid the race condition
+	// that recycling idle connection close an active connection unexpectedly (idle -> active).
+	if !ok || array.isIdle() {
 		var err error
 		array, err = c.createConnArray(addr, enableBatch, opt...)
 		if err != nil {

@@ -816,8 +816,6 @@ func (c *RPCClient) recycleIdleConnArray() {
 		}
 		c.Unlock()
 
-		// NOTE, There is a risk that an idle connection become active again, and here is
-		// a race condition someone is using the connection and it's closed here.
 		if conn != nil {
 			conn.Close()
 		}
