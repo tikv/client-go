@@ -795,8 +795,7 @@ func sendBatchRequest(
 }
 
 func (c *RPCClient) recycleIdleConnArray() {
-	c.recycleMu.Lock()
-	defer c.recycleMu.Unlock()
+	start := time.Now()
 
 	var addrs []string
 	c.RLock()
@@ -816,8 +815,13 @@ func (c *RPCClient) recycleIdleConnArray() {
 				zap.String("target", addr))
 		}
 		c.Unlock()
+
+		// NOTE, There is a risk that an idle connection become active again, and here is
+		// a race condition someone is using the connection and it's closed here.
 		if conn != nil {
 			conn.Close()
 		}
 	}
+
+	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
 }
