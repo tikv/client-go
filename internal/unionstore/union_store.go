@@ -61,12 +61,17 @@ type Getter interface {
 // Retriever is the interface to get or scan key/values
 type Retriever interface {
 	Getter
-	// Scan creates an Iterator positioned on the first entry that startKey <= entry's key.
+	// Iter creates an Iterator positioned on the first entry that k <= entry's key.
 	// If such entry is not found, it returns an invalid Iterator with no error.
-	// It yields only keys that < endKey. If upperBound is nil, it means the upperBound is unbounded.
-	// If reverse is specified, the returned iterator will iterate from greater key to smaller key
+	// It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 	// The Iterator must be Closed after use.
-	Scan(startKey []byte, endKey []byte, reverse bool) (Iterator, error)
+	Iter(k []byte, upperBound []byte) (Iterator, error)
+
+	// IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
+	// The returned iterator will iterate from greater key to smaller key.
+	// It yields only keys that >= lowerBound. If lowerBound is nil, it means the lowerBound is unbounded.
+	// The Iterator must be Closed after use.
+	IterReverse(k []byte, lowerBound []byte) (Iterator, error)
 }
 
 // uSnapshot defines the interface for the snapshot fetched from KV store.
@@ -111,8 +116,11 @@ type EmptyRetriever struct{}
 // Get gets the value for key k from kv store. Always return nil for this retriever
 func (r *EmptyRetriever) Get(_ []byte) ([]byte, error) { return nil, tikverr.ErrNotExist }
 
-// Scan creates an Iterator positioned on the first entry that startKey <= entry's key. Always return EmptyIterator for this retriever
-func (r *EmptyRetriever) Scan(_ []byte, _ []byte, _ bool) (Iterator, error) {
+// Iter creates an Iterator. Always return EmptyIterator for this retriever
+func (r *EmptyRetriever) Iter(_ []byte, _ []byte) (Iterator, error) { return &EmptyIterator{}, nil }
+
+// IterReverse creates a reversed Iterator. Always return EmptyIterator for this retriever
+func (r *EmptyRetriever) IterReverse(_ []byte, _ []byte) (Iterator, error) {
 	return &EmptyIterator{}, nil
 }
 
