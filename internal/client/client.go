@@ -298,7 +298,7 @@ func (c *RPCClient) getConnArray(addr string, enableBatch bool, opt ...func(cfg 
 
 	// An idle connArray will not change to active again, this avoid the race condition
 	// that recycling idle connection close an active connection unexpectedly (idle -> active).
-	if array.isIdle() {
+	if array.batchConn != nil && array.isIdle() {
 		return nil, errors.Errorf("rpcClient is idle")
 	}
 
