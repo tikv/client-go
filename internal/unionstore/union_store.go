@@ -108,7 +108,10 @@ func (i *EmptyIterator) Close() {}
 // EmptyRetriever is a retriever without any entry
 type EmptyRetriever struct{}
 
+// Get gets the value for key k from kv store. Always return nil for this retriever
 func (r *EmptyRetriever) Get(_ []byte) ([]byte, error) { return nil, tikverr.ErrNotExist }
+
+// Scan creates an Iterator positioned on the first entry that startKey <= entry's key. Always return EmptyIterator for this retriever
 func (r *EmptyRetriever) Scan(_ []byte, _ []byte, _ bool) (Iterator, error) {
 	return &EmptyIterator{}, nil
 }
