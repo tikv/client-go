@@ -90,11 +90,20 @@ type uSnapshot interface {
 // EmptyIterator is an iterator without any entry
 type EmptyIterator struct{}
 
-func (i *EmptyIterator) Valid() bool   { return false }
-func (i *EmptyIterator) Key() []byte   { return nil }
+// Valid returns true if the current iterator is valid.
+func (i *EmptyIterator) Valid() bool { return false }
+
+// Key returns the current key. Always return nil for this iterator
+func (i *EmptyIterator) Key() []byte { return nil }
+
+// Value returns the current value. Always return nil for this iterator
 func (i *EmptyIterator) Value() []byte { return nil }
-func (i *EmptyIterator) Next() error   { return errors.New("scanner iterator is invalid") }
-func (i *EmptyIterator) Close()        {}
+
+// Next goes the next position. Always return error for this iterator
+func (i *EmptyIterator) Next() error { return errors.New("scanner iterator is invalid") }
+
+// Close closes the iterator.
+func (i *EmptyIterator) Close() {}
 
 // EmptyRetriever is a retriever without any entry
 type EmptyRetriever struct{}
