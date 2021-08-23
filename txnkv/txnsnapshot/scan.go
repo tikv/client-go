@@ -45,6 +45,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -333,4 +334,68 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		}
 		return nil
 	}
+}
+
+type oneByOneIter struct {
+	iters []unionstore.Iterator
+	cur   int
+}
+
+func newOneByOneIter(iters []unionstore.Iterator) *oneByOneIter {
+	iter := &oneByOneIter{
+		iters: iters,
+		cur:   0,
+	}
+
+	iter.updateCur()
+	return iter
+}
+
+func (o *oneByOneIter) updateCur() {
+	for o.cur >= 0 && o.cur < len(o.iters) {
+		if o.iters[o.cur].Valid() {
+			break
+		}
+		o.cur++
+	}
+}
+
+func (o *oneByOneIter) Valid() bool {
+	return o.cur >= 0 && o.cur < len(o.iters)
+}
+
+func (o *oneByOneIter) Next() error {
+	if !o.Valid() {
+		return errors.New("iterator is invalid")
+	}
+
+	err := o.iters[o.cur].Next()
+	if err != nil {
+		o.Close()
+		return err
+	}
+
+	o.updateCur()
+	return nil
+}
+
+func (o *oneByOneIter) Key() []byte {
+	if !o.Valid() {
+		return nil
+	}
+	return o.iters[o.cur].Key()
+}
+
+func (o *oneByOneIter) Value() []byte {
+	if !o.Valid() {
+		return nil
+	}
+	return o.iters[o.cur].Value()
+}
+
+func (o *oneByOneIter) Close() {
+	for _, iter := range o.iters {
+		iter.Close()
+	}
+	o.cur = -1
 }
