@@ -464,8 +464,8 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 			lockCnt++
 		} else {
 			value = it.Value()
+			isUnnecessaryKV := filter != nil && filter.IsUnnecessaryKeyValue(key, value, flags)
 			if len(value) > 0 {
-				isUnnecessaryKV := filter != nil && filter.IsUnnecessaryKeyValue(key, value, flags)
 				if isUnnecessaryKV {
 					if !flags.HasLocked() {
 						continue
@@ -483,6 +483,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 					putCnt++
 				}
 			} else {
+				if isUnnecessaryKV {
+					continue
+				}
 				if !txn.IsPessimistic() && flags.HasPresumeKeyNotExists() {
 					// delete-your-writes keys in optimistic txn need check not exists in prewrite-phase
 					// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
