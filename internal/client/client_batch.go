@@ -793,6 +793,7 @@ func sendBatchRequest(
 }
 
 func (c *RPCClient) recycleIdleConnArray() {
+	start := time.Now()
 	var addrs []string
 	c.RLock()
 	for _, conn := range c.conns {
@@ -811,8 +812,11 @@ func (c *RPCClient) recycleIdleConnArray() {
 				zap.String("target", addr))
 		}
 		c.Unlock()
+
 		if conn != nil {
 			conn.Close()
 		}
 	}
+
+	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
 }
