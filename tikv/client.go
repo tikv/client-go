@@ -53,8 +53,9 @@ func WithSecurity(security config.Security) ClientOpt {
 
 // Timeout durations.
 const (
-	ReadTimeoutMedium = client.ReadTimeoutMedium
-	ReadTimeoutShort  = client.ReadTimeoutShort
+	ReadTimeoutMedium     = client.ReadTimeoutMedium
+	ReadTimeoutShort      = client.ReadTimeoutShort
+	MaxWriteExecutionTime = client.MaxWriteExecutionTime
 )
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
