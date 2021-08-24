@@ -245,6 +245,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	}
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{TxnInfos: listTxnInfos})
+	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	startTime = time.Now()
 	resp, err := lr.store.SendReq(bo, req, loc, client.ReadTimeoutShort)
 	if err != nil {
@@ -555,6 +556,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		if err != nil {
 			return status, errors.Trace(err)
 		}
+		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := lr.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return status, errors.Trace(err)
@@ -691,6 +693,7 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckSecondaryLocks, checkReq)
 	metrics.LockResolverCountWithQueryCheckSecondaryLocks.Inc()
+	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := lr.store.SendReq(bo, req, curRegionID, client.ReadTimeoutShort)
 	if err != nil {
 		return errors.Trace(err)
@@ -823,7 +826,7 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	}
 	lreq.Keys = keys
 	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq)
-
+	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := lr.store.SendReq(bo, req, region, client.ReadTimeoutShort)
 	if err != nil {
 		return errors.Trace(err)
@@ -896,6 +899,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			lreq.Keys = [][]byte{l.Key}
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq)
+		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := lr.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return errors.Trace(err)
@@ -947,6 +951,7 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, cle
 			Keys:         [][]byte{l.Key},
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, pessimisticRollbackReq)
+		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := lr.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return errors.Trace(err)
