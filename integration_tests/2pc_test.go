@@ -82,12 +82,10 @@ type testCommitterSuite struct {
 func (s *testCommitterSuite) SetupSuite() {
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // 3s
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 1000)
-	atomic.StoreUint64(&transaction.VeryLongMaxBackoff, 1000)
 }
 
 func (s *testCommitterSuite) TearDownSuite() {
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 20000)
-	atomic.StoreUint64(&transaction.VeryLongMaxBackoff, 600000)
 }
 
 func (s *testCommitterSuite) SetupTest() {
