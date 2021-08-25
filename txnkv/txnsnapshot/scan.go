@@ -436,7 +436,7 @@ func (m *MemDBRetriever) Scan(k []byte, upperBound []byte, reverse bool) (unions
 		return m.MemDB.Iter(k, upperBound)
 	}
 
-	iter, err := m.MemDB.Iter(k, upperBound)
+	iter, err := m.MemDB.IterReverse(upperBound)
 	if err != nil {
 		return nil, err
 	}
