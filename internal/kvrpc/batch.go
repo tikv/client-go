@@ -24,7 +24,7 @@ type Batch struct {
 	RegionID locate.RegionVerID
 	Keys     [][]byte
 	Values   [][]byte
-    Ttls     []uint64
+	Ttls     []uint64
 }
 
 // BatchResult wraps a Batch request's server response or an error.
@@ -38,24 +38,24 @@ type BatchResult struct {
 func AppendBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]byte, keyToValue map[string][]byte, keyToTtl map[string]uint64, limit int) []Batch {
 	var start, size int
 	var keys, values [][]byte
-    var ttls []uint64
+	var ttls []uint64
 	for start = 0; start < len(groupKeys); start++ {
 		if size >= limit {
 			batches = append(batches, Batch{RegionID: regionID, Keys: keys, Values: values, Ttls: ttls})
 			keys = make([][]byte, 0)
 			values = make([][]byte, 0)
-            ttls = make([]uint64, 0)
+			ttls = make([]uint64, 0)
 			size = 0
 		}
 		key := groupKeys[start]
 		value := keyToValue[string(key)]
-        ttl := keyToTtl[string(key)]
+		ttl := keyToTtl[string(key)]
 		keys = append(keys, key)
 		values = append(values, value)
-        ttls = append(ttls, ttl)
+		ttls = append(ttls, ttl)
 		size += len(key)
 		size += len(value)
-        size += 8
+		size += 8
 	}
 	if len(keys) != 0 {
 		batches = append(batches, Batch{RegionID: regionID, Keys: keys, Values: values, Ttls: ttls})
