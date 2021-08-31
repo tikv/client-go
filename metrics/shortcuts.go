@@ -117,6 +117,9 @@ var (
 	OnePCTxnCounterOk       prometheus.Counter
 	OnePCTxnCounterError    prometheus.Counter
 	OnePCTxnCounterFallback prometheus.Counter
+
+	BatchRecvHistogramOK    prometheus.Observer
+	BatchRecvHistogramError prometheus.Observer
 )
 
 func initShortcuts() {
@@ -201,4 +204,7 @@ func initShortcuts() {
 	OnePCTxnCounterOk = TiKVOnePCTxnCounter.WithLabelValues("ok")
 	OnePCTxnCounterError = TiKVOnePCTxnCounter.WithLabelValues("err")
 	OnePCTxnCounterFallback = TiKVOnePCTxnCounter.WithLabelValues("fallback")
+
+	BatchRecvHistogramOK = TiKVBatchRecvLatency.WithLabelValues("ok")
+	BatchRecvHistogramError = TiKVBatchRecvLatency.WithLabelValues("err")
 }

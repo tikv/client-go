@@ -423,6 +423,7 @@ type batchCommandsStream struct {
 }
 
 func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err error) {
+	now := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
@@ -430,6 +431,11 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 				zap.Reflect("r", r),
 				zap.Stack("stack"))
 			err = errors.SuspendStack(errors.New("batch conn recv paniced"))
+		}
+		if err == nil {
+			metrics.BatchRecvHistogramOK.Observe(float64(time.Since(now)))
+		} else {
+			metrics.BatchRecvHistogramError.Observe(float64(time.Since(now)))
 		}
 	}()
 	if _, err := util.EvalFailpoint("gotErrorInRecvLoop"); err == nil {
@@ -793,6 +799,7 @@ func sendBatchRequest(
 }
 
 func (c *RPCClient) recycleIdleConnArray() {
+	start := time.Now()
 	var addrs []string
 	c.RLock()
 	for _, conn := range c.conns {
@@ -811,8 +818,11 @@ func (c *RPCClient) recycleIdleConnArray() {
 				zap.String("target", addr))
 		}
 		c.Unlock()
+
 		if conn != nil {
 			conn.Close()
 		}
 	}
+
+	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
 }
