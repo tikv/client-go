@@ -252,10 +252,8 @@ type replicaSelector struct {
 	regionCache *RegionCache
 	region      *Region
 	regionStore *regionStore
-	// replicas contains all TiKV replicas for now and the leader is at the
-	// head of the slice.
-	replicas []*replica
-	state    selectorState
+	replicas    []*replica
+	state       selectorState
 	// replicas[targetIdx] is the replica handling the request this time
 	targetIdx AccessIndex
 	// replicas[proxyIdx] is the store used to redirect requests this time
@@ -520,7 +518,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			if len(selector.replicas) <= 1 {
 				state.lastIdx = state.leaderIdx
 			} else {
-				// Randomly select an non-leader peer
+				// Randomly select a non-leader peer
 				state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas) - 1))
 				if state.lastIdx >= state.leaderIdx {
 					state.lastIdx++
@@ -587,6 +585,8 @@ func (state *invalidLeader) next(_ *retry.Backoffer, _ *replicaSelector) (*RPCCo
 	return nil, nil
 }
 
+// newReplicaSelector creates a replicaSelector which selects replicas according to reqType and opts.
+// opts is currently only effective for follower read.
 func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, reqType kv.ReplicaReadType, opts ...StoreSelectorOption) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion == nil || !cachedRegion.isValid() {
@@ -680,16 +680,21 @@ func (s *replicaSelector) refreshRegionStore() {
 		return
 	}
 
-	// If leader has changed, it means a recent request succeeds an RPC on the new
-	// leader. Give the leader an addition chance if the request is not a leader request.
-	_, accessFollower := s.state.(*accessFollower)
-	if !accessFollower && oldRegionStore.workTiKVIdx != newRegionStore.workTiKVIdx {
-		newLeaderIdx := newRegionStore.workTiKVIdx
-		s.state = &accessKnownLeader{leaderIdx: newLeaderIdx}
-		if s.replicas[newLeaderIdx].attempts == maxReplicaAttempt {
-			s.replicas[newLeaderIdx].attempts--
+	// If leader has changed, it means a recent request succeeds an RPC
+	// on the new leader.
+	if oldRegionStore.workTiKVIdx != newRegionStore.workTiKVIdx {
+		switch state := s.state.(type) {
+		case *accessFollower:
+			state.leaderIdx = newRegionStore.workTiKVIdx
+		default:
+			// Try the new leader and give it an addition chance if the
+			// request is sent to the leader.
+			newLeaderIdx := newRegionStore.workTiKVIdx
+			s.state = &accessKnownLeader{leaderIdx: newLeaderIdx}
+			if s.replicas[newLeaderIdx].attempts == maxReplicaAttempt {
+				s.replicas[newLeaderIdx].attempts--
+			}
 		}
-		return
 	}
 }
 
@@ -831,7 +836,7 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
-			selector, err := newReplicaSelector(s.regionCache, regionID, req.ReplicaReadType)
+			selector, err := newReplicaSelector(s.regionCache, regionID, req.ReplicaReadType, opts...)
 			if selector == nil || err != nil {
 				return nil, err
 			}
