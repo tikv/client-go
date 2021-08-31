@@ -278,6 +278,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.NotNil(regionLoc)
 	region := s.cache.GetCachedRegionWithRLock(regionLoc.Region)
 	regionStore := region.getStore()
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{})
 
 	// Create a fake region and change its leader to the last peer.
 	regionStore = regionStore.clone()
@@ -303,7 +304,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	cache.insertRegionToCache(region)
 
 	// Verify creating the replicaSelector.
-	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadLeader)
+	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
 	s.Equal(replicaSelector.region, region)
@@ -368,7 +369,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 
 	// Test switching to tryFollower if leader is unreachable
 	region.lastAccess = time.Now().Unix()
-	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadLeader)
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
 	cache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
@@ -389,7 +390,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Test switching to tryNewProxy if leader is unreachable and forwarding is enabled
 	refreshEpochs(regionStore)
 	cache.enableForwarding = true
-	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadLeader)
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
 	cache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
@@ -433,7 +434,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Test initial state is accessByKnownProxy when proxyTiKVIdx is valid
 	refreshEpochs(regionStore)
 	cache.enableForwarding = true
-	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadLeader)
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
 	state2, ok := replicaSelector.state.(*accessByKnownProxy)
@@ -456,8 +457,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Equal(replicaSelector.proxyReplica().attempts, 1)
 
 	// Test accessFollower state with kv.ReplicaReadFollower request type.
+	req = tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadFollower, nil)
 	refreshEpochs(regionStore)
-	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadFollower)
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
 	state3, ok := replicaSelector.state.(*accessFollower)
@@ -497,7 +499,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	for i := 1; i < tiKVNum; i++ {
 		regionStore.storeEpochs[(regionStore.workTiKVIdx+AccessIndex(i))%AccessIndex(tiKVNum)]++
 	}
-	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadFollower)
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
 	state3 = replicaSelector.state.(*accessFollower)
@@ -511,7 +513,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Test accessFollower state filtering label-not-match stores.
 	region.lastAccess = time.Now().Unix()
 	refreshEpochs(regionStore)
-	state3 = replicaSelector.state.(*accessFollower)
 	labels := []*metapb.StoreLabel{
 		{
 			Key:   "a",
@@ -523,7 +524,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	_, store := regionStore.accessStore(tiKVOnly, accessIdx)
 	store.labels = labels
 	for i := 0; i < 5; i++ {
-		replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadFollower, WithMatchLabels(labels))
+		replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req, WithMatchLabels(labels))
 		s.NotNil(replicaSelector)
 		s.Nil(err)
 		rpcCtx, err = replicaSelector.next(s.bo)
@@ -535,7 +536,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	region.lastAccess = time.Now().Unix()
 	refreshEpochs(regionStore)
 	for i := 0; i < 5; i++ {
-		replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadFollower, WithLeaderOnly())
+		replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req, WithLeaderOnly())
 		s.NotNil(replicaSelector)
 		s.Nil(err)
 		rpcCtx, err = replicaSelector.next(s.bo)
@@ -547,7 +548,10 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Test accessFollower state with kv.ReplicaReadMixed request type.
 	region.lastAccess = time.Now().Unix()
 	refreshEpochs(regionStore)
-	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, kv.ReplicaReadMixed)
+	req.ReplicaReadType = kv.ReplicaReadMixed
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
+	s.NotNil(replicaSelector)
+	s.Nil(err)
 
 	// Invalidate the region if the leader is not in the region.
 	region.lastAccess = time.Now().Unix()
@@ -799,7 +803,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 			}
 			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
 		}}
-		_, err = sender.SendReq(bo, req, region.Region, time.Second)
+		sender.SendReq(bo, req, region.Region, time.Second)
 		state, ok := sender.replicaSelector.state.(*accessFollower)
 		s.True(ok)
 		s.True(!failureOnFollower || state.option.leaderOnly)

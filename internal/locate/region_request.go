@@ -60,7 +60,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 )
@@ -504,10 +503,11 @@ func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
 type accessFollower struct {
 	stateBase
 	// If tryLeader is true, the request can also be sent to the leader.
-	tryLeader bool
-	option    storeSelectorOp
-	leaderIdx AccessIndex
-	lastIdx   AccessIndex
+	tryLeader         bool
+	isGlobalStaleRead bool
+	option            storeSelectorOp
+	leaderIdx         AccessIndex
+	lastIdx           AccessIndex
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -526,10 +526,16 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			}
 		}
 	} else {
+		// Stale Read request will retry the leader or next peer on error,
+		// if txnScope is global, we will only retry the leader by using the WithLeaderOnly option,
+		// if txnScope is local, we will retry both other peers and the leader by the strategy of replicaSelector.
+		if state.isGlobalStaleRead {
+			WithLeaderOnly()(&state.option)
+		}
 		state.lastIdx++
 	}
 
-	for i := 0; i < len(selector.replicas); i++ {
+	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
 		if state.isCandidate(idx, selector.replicas[idx]) {
 			state.lastIdx = idx
@@ -587,7 +593,7 @@ func (state *invalidLeader) next(_ *retry.Backoffer, _ *replicaSelector) (*RPCCo
 
 // newReplicaSelector creates a replicaSelector which selects replicas according to reqType and opts.
 // opts is currently only effective for follower read.
-func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, reqType kv.ReplicaReadType, opts ...StoreSelectorOption) (*replicaSelector, error) {
+func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion == nil || !cachedRegion.isValid() {
 		return nil, nil
@@ -603,7 +609,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, reqType 
 		})
 	}
 	var state selectorState
-	if !reqType.IsFollowerRead() {
+	if !req.ReplicaReadType.IsFollowerRead() {
 		if regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0 {
 			state = &accessByKnownProxy{leaderIdx: regionStore.workTiKVIdx}
 		} else {
@@ -614,7 +620,13 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, reqType 
 		for _, op := range opts {
 			op(&option)
 		}
-		state = &accessFollower{tryLeader: reqType == kv.ReplicaReadMixed, option: option, leaderIdx: regionStore.workTiKVIdx, lastIdx: -1}
+		state = &accessFollower{
+			tryLeader:         req.ReplicaReadType == kv.ReplicaReadMixed,
+			isGlobalStaleRead: req.IsGlobalStaleRead(),
+			option:            option,
+			leaderIdx:         regionStore.workTiKVIdx,
+			lastIdx:           -1,
+		}
 	}
 
 	return &replicaSelector{
@@ -836,7 +848,7 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
-			selector, err := newReplicaSelector(s.regionCache, regionID, req.ReplicaReadType, opts...)
+			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if selector == nil || err != nil {
 				return nil, err
 			}
@@ -988,16 +1000,6 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, errors.Trace(err)
 		}
 		if regionErr != nil {
-			// Stale Read request will retry the leader or next peer on error,
-			// if txnScope is global, we will only retry the leader by using the WithLeaderOnly option,
-			// if txnScope is local, we will retry both other peers and the leader by the strategy of replicaSelector.
-			if tryTimes < 1 && req != nil && req.TxnScope == oracle.GlobalTxnScope && req.GetStaleRead() {
-				accessFollowerState, ok := s.replicaSelector.state.(*accessFollower)
-				if ok {
-					WithLeaderOnly()(&accessFollowerState.option)
-				}
-			}
-
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
 				return nil, nil, errors.Trace(err)
