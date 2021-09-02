@@ -49,6 +49,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.
@@ -254,6 +255,11 @@ func (req *Request) EnableStaleRead() {
 	req.StaleRead = true
 	req.ReplicaReadType = kv.ReplicaReadMixed
 	req.ReplicaRead = false
+}
+
+// IsGlobalStaleRead checks if the request is a global stale read request.
+func (req *Request) IsGlobalStaleRead() bool {
+	return req.TxnScope == oracle.GlobalTxnScope && req.GetStaleRead()
 }
 
 // IsDebugReq check whether the req is debug req.
