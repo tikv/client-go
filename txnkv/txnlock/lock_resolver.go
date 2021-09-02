@@ -26,6 +26,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
@@ -52,8 +53,9 @@ type storage interface {
 
 // LockResolver resolves locks and also caches resolved txn status.
 type LockResolver struct {
-	store storage
-	mu    struct {
+	store                    storage
+	resolveLockLiteThreshold uint64
+	mu                       struct {
 		sync.RWMutex
 		// resolved caches resolved txns (FIFO, txn id -> txnStatus).
 		resolved       map[uint64]TxnStatus
@@ -67,7 +69,8 @@ type LockResolver struct {
 // NewLockResolver creates a new LockResolver instance.
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
-		store: store,
+		store:                    store,
+		resolveLockLiteThreshold: config.GetGlobalConfig().ResolveLockLiteThreshold,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
 	r.mu.recentResolved = list.New()
@@ -137,8 +140,8 @@ func (l *Lock) String() string {
 	buf.WriteString(hex.EncodeToString(l.Key))
 	buf.WriteString(", primary: ")
 	buf.WriteString(hex.EncodeToString(l.Primary))
-	return fmt.Sprintf("%s, txnStartTS: %d, lockForUpdateTS:%d, minCommitTs:%d, ttl: %d, type: %s, UseAsyncCommit: %t",
-		buf.String(), l.TxnID, l.LockForUpdateTS, l.MinCommitTS, l.TTL, l.LockType, l.UseAsyncCommit)
+	return fmt.Sprintf("%s, txnStartTS: %d, lockForUpdateTS:%d, minCommitTs:%d, ttl: %d, type: %s, UseAsyncCommit: %t, txnSize: %d",
+		buf.String(), l.TxnID, l.LockForUpdateTS, l.MinCommitTS, l.TTL, l.LockType, l.UseAsyncCommit, l.TxnSize)
 }
 
 // NewLock creates a new *Lock.
@@ -869,12 +872,9 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	return nil
 }
 
-// bigTxnThreshold : transaction involves keys exceed this threshold can be treated as `big transaction`.
-const bigTxnThreshold = 16
-
 func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
 	metrics.LockResolverCountWithResolveLocks.Inc()
-	resolveLite := lite || l.TxnSize < bigTxnThreshold
+	resolveLite := lite || l.TxnSize < lr.resolveLockLiteThreshold
 	for {
 		loc, err := lr.store.GetRegionCache().LocateKey(bo, l.Key)
 		if err != nil {
