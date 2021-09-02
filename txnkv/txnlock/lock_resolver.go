@@ -70,7 +70,7 @@ type LockResolver struct {
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
 		store:                    store,
-		resolveLockLiteThreshold: config.GetGlobalConfig().ResolveLockLiteThreshold,
+		resolveLockLiteThreshold: config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
 	r.mu.recentResolved = list.New()
