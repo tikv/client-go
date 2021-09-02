@@ -278,7 +278,7 @@ func (a *batchConn) fetchMorePendingRequests(
 	}
 	after.Stop()
 
-	// Do an additional non-block try. Here we test the lengh with `maxBatchSize` instead
+	// Do an additional non-block try. Here we test the length with `maxBatchSize` instead
 	// of `batchWaitSize` because trying best to fetch more requests is necessary so that
 	// we can adjust the `batchWaitSize` dynamically.
 	for a.reqBuilder.len() < maxBatchSize {
@@ -316,7 +316,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.pendingRequests.Observe(float64(len(a.batchCommandsCh)))
 		a.batchSize.Observe(float64(a.reqBuilder.len()))
 
-		// curl -XPUT -d 'return(true)' http://0.0.0.0:10080/fail/github.com/tikv/client-go/v2/mockBlockOnBatchClient
+		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/github.com/tikv/client-go/v2/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
 			if val.(bool) {
 				time.Sleep(1 * time.Hour)
@@ -355,7 +355,7 @@ func (a *batchConn) getClientAndSend() {
 	for i := 0; i < len(a.batchCommandsClients); i++ {
 		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
 		target = a.batchCommandsClients[a.index].target
-		// The lock protects the batchCommandsClient from been closed while it's inuse.
+		// The lock protects the batchCommandsClient from been closed while it's in use.
 		if a.batchCommandsClients[a.index].tryLockForSend() {
 			cli = a.batchCommandsClients[a.index]
 			break
@@ -644,7 +644,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
-		if transportLayerLoad > 0.0 && cfg.MaxBatchWaitTime > 0 {
+		if transportLayerLoad > 0 && cfg.MaxBatchWaitTime > 0 {
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(tikvTransportLayerLoad, transportLayerLoad)
 		}
