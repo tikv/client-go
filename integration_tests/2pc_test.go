@@ -51,7 +51,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/parser/terror"
 	drivertxn "github.com/pingcap/tidb/store/driver/txn"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
@@ -1433,7 +1432,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRpcErrors() {
 	s.Nil(err)
 	err = t1.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorEqual(err, terror.ErrResultUndetermined), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.ErrorStack(err))
 
 	// We don't need to call "Rollback" after "Commit" fails.
 	err = t1.Rollback()
@@ -1454,7 +1453,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRegionError() {
 	s.Nil(err)
 	err = t2.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorNotEqual(err, terror.ErrResultUndetermined))
+	s.False(tikverr.IsErrorUndetermined(err), errors.ErrorStack(err))
 }
 
 // TestFailCommitPrimaryRPCErrorThenRegionError tests the case when commit first
@@ -1470,7 +1469,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenRegionError() {
 	s.Nil(err)
 	err = t1.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorEqual(err, terror.ErrResultUndetermined), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.ErrorStack(err))
 }
 
 // TestFailCommitPrimaryKeyError tests KeyError is handled properly when
@@ -1487,7 +1486,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryKeyError() {
 	s.Nil(err)
 	err = t3.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorNotEqual(err, terror.ErrResultUndetermined))
+	s.False(tikverr.IsErrorUndetermined(err))
 }
 
 // TestFailCommitPrimaryRPCErrorThenKeyError tests KeyError overwrites the undeterminedErr.
@@ -1503,7 +1502,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenKeyError() {
 	s.Nil(err)
 	err = t3.Commit(context.Background())
 	s.NotNil(err)
-	s.False(terror.ErrorEqual(err, terror.ErrResultUndetermined))
+	s.False(tikverr.IsErrorUndetermined(err))
 }
 
 func (s *testCommitterSuite) TestFailCommitTimeout() {

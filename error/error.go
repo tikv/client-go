@@ -41,6 +41,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/parser/terror"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
@@ -258,4 +259,9 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 		return errors.Trace(err)
 	}
 	return errors.Errorf("unexpected KeyError: %s", keyErr.String())
+}
+
+// IsErrorUndetermined checks if the error is undetermined error.
+func IsErrorUndetermined(err error) bool {
+	return terror.ErrorEqual(err, terror.ErrResultUndetermined)
 }
