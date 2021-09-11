@@ -817,7 +817,7 @@ func (c *RPCClient) recycleIdleConnArray() {
 		conn, ok := c.conns[addr]
 		if ok {
 			delete(c.conns, addr)
-			logutil.BgLogger().Info("recycle idle connection",
+			logutil.BgLogger().Debug("recycle idle connection",
 				zap.String("target", addr))
 		}
 		c.Unlock()
