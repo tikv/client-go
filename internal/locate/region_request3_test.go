@@ -792,6 +792,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	reloadRegion()
 	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
 	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
 	req.EnableStaleRead()
 	for i := 0; i < 5; i++ {
 		// The request may be sent to the leader directly. We have to distinguish it.
