@@ -1108,7 +1108,7 @@ func (s *testRegionCacheSuite) TestRegionDataNotReady(c *C) {
 		var opts []StoreSelectorOption
 		seed := uint32(0)
 		s.bo.Reset()
-		req := &tikvrpc.Request{TxnScope: testcase.scope, Context: kvrpcpb.Context{StaleRead: true}, ReplicaReadSeed: &seed}
+		req := &tikvrpc.Request{ReadReplicaScope: testcase.scope, Context: kvrpcpb.Context{StaleRead: true}, ReplicaReadSeed: &seed}
 		retry, err := reqSend.onRegionError(s.bo, fctx, req, regionErr, &opts)
 		c.Assert(err, IsNil)
 		c.Assert(retry, IsTrue)

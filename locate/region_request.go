@@ -895,9 +895,9 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 	// Stale Read request will retry the leader or next peer on error,
-	// if txnScope is global, we will only retry the leader by using the WithLeaderOnly option,
-	// if txnScope is local, we will retry both other peers and the leader by the incresing seed.
-	if ctx.tryTimes < 1 && req != nil && req.TxnScope == oracle.GlobalTxnScope && req.GetStaleRead() {
+	// if ReadReplicaScope is global, we will only retry the leader by using the WithLeaderOnly option,
+	// if ReadReplicaScope isn't global, we will retry both other peers and the leader by the increasing seed.
+	if ctx.tryTimes < 1 && req != nil && req.ReadReplicaScope == oracle.GlobalTxnScope && req.GetStaleRead() {
 		*opts = append(*opts, WithLeaderOnly())
 	}
 	seed := req.GetReplicaReadSeed()

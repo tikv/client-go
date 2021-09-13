@@ -199,10 +199,10 @@ type Request struct {
 	Type CmdType
 	Req  interface{}
 	kvrpcpb.Context
-	TxnScope        string
-	ReplicaReadType kv.ReplicaReadType // different from `kvrpcpb.Context.ReplicaRead`
-	ReplicaReadSeed *uint32            // pointer to follower read seed in snapshot/coprocessor
-	StoreTp         EndpointType
+	ReadReplicaScope string
+	ReplicaReadType  kv.ReplicaReadType // different from `kvrpcpb.Context.ReplicaRead`
+	ReplicaReadSeed  *uint32            // pointer to follower read seed in snapshot/coprocessor
+	StoreTp          EndpointType
 	// ForwardedHost is the address of a store which will handle the request. It's different from
 	// the address the request sent to.
 	// If it's not empty, the store which receive the request will forward it to

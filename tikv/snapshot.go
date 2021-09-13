@@ -116,14 +116,14 @@ type KVSnapshot struct {
 	// It's OK as long as there are no zero-byte values in the protocol.
 	mu struct {
 		sync.RWMutex
-		hitCnt      int64
-		cached      map[string][]byte
-		cachedSize  int
-		stats       *SnapshotRuntimeStats
-		replicaRead kv.ReplicaReadType
-		taskID      uint64
-		isStaleness bool
-		txnScope    string
+		hitCnt           int64
+		cached           map[string][]byte
+		cachedSize       int
+		stats            *SnapshotRuntimeStats
+		replicaRead      kv.ReplicaReadType
+		taskID           uint64
+		isStaleness      bool
+		readReplicaScope string
 		// MatchStoreLabels indicates the labels the store should be matched
 		matchStoreLabels []*metapb.StoreLabel
 	}
@@ -349,11 +349,11 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *Backoffer, batch batchKeys, collec
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.resourceGroupTag,
 		})
-		txnScope := s.mu.txnScope
+		readReplicaScope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
 		matchStoreLabels := s.mu.matchStoreLabels
 		s.mu.RUnlock()
-		req.TxnScope = txnScope
+		req.ReadReplicaScope = readReplicaScope
 		if isStaleness {
 			req.EnableStaleRead()
 		}
@@ -519,9 +519,9 @@ func (s *KVSnapshot) get(ctx context.Context, bo *Backoffer, k []byte) ([]byte, 
 		})
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
-	txnScope := s.mu.txnScope
+	readReplicaScope := s.mu.readReplicaScope
 	s.mu.RUnlock()
-	req.TxnScope = txnScope
+	req.ReadReplicaScope = readReplicaScope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
 		req.EnableStaleRead()
@@ -676,11 +676,11 @@ func (s *KVSnapshot) SetRuntimeStats(stats *SnapshotRuntimeStats) {
 	s.mu.stats = stats
 }
 
-// SetTxnScope sets up the txn scope.
-func (s *KVSnapshot) SetTxnScope(txnScope string) {
+// SetReadReplicaScope sets up the readReplicaScope.
+func (s *KVSnapshot) SetReadReplicaScope(scope string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mu.txnScope = txnScope
+	s.mu.readReplicaScope = scope
 }
 
 // SetIsStatenessReadOnly indicates whether the transaction is staleness read only transaction
