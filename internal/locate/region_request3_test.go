@@ -791,6 +791,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.cluster.ChangeLeader(region.Region.id, s.peerIDs[0])
 	reloadRegion()
 	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
 	req.EnableStaleRead()
 	for i := 0; i < 5; i++ {
