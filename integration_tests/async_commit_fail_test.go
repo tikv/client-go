@@ -43,7 +43,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/parser/terror"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
@@ -87,7 +86,7 @@ func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = t1.Commit(ctx)
 	s.NotNil(err)
-	s.True(terror.ErrorEqual(err, terror.ErrResultUndetermined), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.ErrorStack(err))
 
 	// We don't need to call "Rollback" after "Commit" fails.
 	err = t1.Rollback()

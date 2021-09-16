@@ -44,14 +44,11 @@ import (
 
 	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/errorpb"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -1016,57 +1013,12 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	r := ctxTiFlash.Meta
 	reqSend := NewRegionRequestSender(s.cache, nil)
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{CurrentRegions: []*metapb.Region{r}}}
-	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr, nil)
+	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr)
 
 	// check leader read should not go to tiflash
 	lctx, err = s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
 	s.Nil(err)
 	s.NotEqual(lctx.Peer.Id, s.peer1)
-}
-
-func (s *testRegionCacheSuite) TestRegionDataNotReady() {
-	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	s.Nil(err)
-	s.Equal(loc1.Region.id, s.region1)
-	testcases := []struct {
-		scope         string
-		readType      kv.ReplicaReadType
-		expectPeerID  uint64
-		expectOptsLen int
-		expectSeed    uint32
-	}{
-		{
-			scope:         oracle.GlobalTxnScope,
-			readType:      kv.ReplicaReadFollower,
-			expectPeerID:  s.peer2,
-			expectOptsLen: 1,
-			expectSeed:    1,
-		},
-		{
-			scope:         "local",
-			readType:      kv.ReplicaReadFollower,
-			expectPeerID:  s.peer2,
-			expectOptsLen: 0,
-			expectSeed:    1,
-		},
-	}
-
-	for _, testcase := range testcases {
-		fctx, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, testcase.readType, 0)
-		s.Nil(err)
-		s.Equal(fctx.Peer.Id, testcase.expectPeerID)
-		reqSend := NewRegionRequestSender(s.cache, nil)
-		regionErr := &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}
-		var opts []StoreSelectorOption
-		seed := uint32(0)
-		s.bo.Reset()
-		req := &tikvrpc.Request{TxnScope: testcase.scope, Context: kvrpcpb.Context{StaleRead: true}, ReplicaReadSeed: &seed}
-		retry, err := reqSend.onRegionError(s.bo, fctx, req, regionErr, &opts)
-		s.Nil(err)
-		s.True(retry)
-		s.Equal(len(opts), testcase.expectOptsLen)
-		s.Equal(*req.GetReplicaReadSeed(), testcase.expectSeed)
-	}
 }
 
 const regionSplitKeyFormat = "t%08d"
@@ -1282,64 +1234,6 @@ func (s *testRegionCacheSuite) TestMixedReadFallback() {
 	ctx, err = s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadMixed, 0)
 	s.Nil(err)
 	s.Equal(ctx.Peer.Id, s.peer2)
-}
-
-func (s *testRegionCacheSuite) TestFollowerMeetEpochNotMatch() {
-	// 3 nodes and no.1 is region1 leader.
-	store3 := s.cluster.AllocID()
-	peer3 := s.cluster.AllocID()
-	s.cluster.AddStore(store3, s.storeAddr(store3))
-	s.cluster.AddPeer(s.region1, store3, peer3)
-	s.cluster.ChangeLeader(s.region1, s.peer1)
-
-	// Check the two regions.
-	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	s.Nil(err)
-	s.Equal(loc1.Region.id, s.region1)
-
-	reqSend := NewRegionRequestSender(s.cache, nil)
-
-	// follower read failed on store2
-	followReqSeed := uint32(0)
-	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadFollower, followReqSeed)
-	s.Nil(err)
-	s.Equal(ctxFollower1.Peer.Id, s.peer2)
-	s.Equal(ctxFollower1.Store.storeID, s.store2)
-
-	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
-	reqSend.onRegionError(s.bo, ctxFollower1, &tikvrpc.Request{ReplicaReadSeed: &followReqSeed}, regionErr, nil)
-	s.Equal(followReqSeed, uint32(1))
-
-	regionErr = &errorpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}
-	reqSend.onRegionError(s.bo, ctxFollower1, &tikvrpc.Request{ReplicaReadSeed: &followReqSeed}, regionErr, nil)
-	s.Equal(followReqSeed, uint32(2))
-}
-
-func (s *testRegionCacheSuite) TestMixedMeetEpochNotMatch() {
-	// 3 nodes and no.1 is region1 leader.
-	store3 := s.cluster.AllocID()
-	peer3 := s.cluster.AllocID()
-	s.cluster.AddStore(store3, s.storeAddr(store3))
-	s.cluster.AddPeer(s.region1, store3, peer3)
-	s.cluster.ChangeLeader(s.region1, s.peer1)
-
-	// Check the two regions.
-	loc1, err := s.cache.LocateKey(s.bo, []byte("a"))
-	s.Nil(err)
-	s.Equal(loc1.Region.id, s.region1)
-
-	reqSend := NewRegionRequestSender(s.cache, nil)
-
-	// follower read failed on store1
-	followReqSeed := uint32(0)
-	ctxFollower1, err := s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadMixed, followReqSeed)
-	s.Nil(err)
-	s.Equal(ctxFollower1.Peer.Id, s.peer1)
-	s.Equal(ctxFollower1.Store.storeID, s.store1)
-
-	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
-	reqSend.onRegionError(s.bo, ctxFollower1, &tikvrpc.Request{ReplicaReadSeed: &followReqSeed}, regionErr, nil)
-	s.Equal(followReqSeed, uint32(1))
 }
 
 func (s *testRegionCacheSuite) TestPeersLenChange() {
