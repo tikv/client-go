@@ -685,6 +685,13 @@ func (s *KVSnapshot) SetRuntimeStats(stats *SnapshotRuntimeStats) {
 	s.mu.stats = stats
 }
 
+// SetTxnScope is same as SetReadReplicaScope, keep it in order to keep compatible for now.
+func (s *KVSnapshot) SetTxnScope(scope string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.readReplicaScope = scope
+}
+
 // SetReadReplicaScope set read replica scope
 func (s *KVSnapshot) SetReadReplicaScope(scope string) {
 	s.mu.Lock()
