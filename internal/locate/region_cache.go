@@ -468,6 +468,7 @@ type RPCContext struct {
 	ProxyStore *Store // nil means proxy is not used
 	ProxyAddr  string // valid when ProxyStore is not nil
 	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	Warnings   []error
 }
 
 func (c *RPCContext) String() string {
@@ -481,6 +482,14 @@ func (c *RPCContext) String() string {
 		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.addr)
 	}
 	return res
+}
+
+// AppendWarnings add warnings
+func (c *RPCContext) AppendWarnings(warnings ...error) {
+	if c.Warnings == nil {
+		c.Warnings = make([]error, 0)
+	}
+	c.Warnings = append(c.Warnings, warnings...)
 }
 
 type storeSelectorOp struct {

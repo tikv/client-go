@@ -257,6 +257,7 @@ type replicaSelector struct {
 	targetIdx AccessIndex
 	// replicas[proxyIdx] is the store used to redirect requests this time
 	proxyIdx AccessIndex
+	warnings []error
 }
 
 // selectorState is the interface of states of the replicaSelector.
@@ -545,6 +546,9 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
+		if len(state.option.labels) > 0 {
+			selector.appendWarnings(fmt.Errorf("unable to find stores with given labels"))
+		}
 		leader := selector.replicas[state.leaderIdx]
 		if leader.isEpochStale() || leader.isExhausted(1) {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
@@ -637,6 +641,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		state,
 		-1,
 		-1,
+		[]error{},
 	}, nil
 }
 
@@ -756,6 +761,10 @@ func (s *replicaSelector) buildRPCContext(bo *retry.Backoffer) (*RPCContext, err
 		proxyReplica.attempts++
 	}
 
+	if len(s.warnings) > 0 {
+		rpcCtx.AppendWarnings(s.warnings...)
+	}
+
 	return rpcCtx, nil
 }
 
@@ -836,6 +845,13 @@ func (s *replicaSelector) invalidateRegion() {
 	if s.region != nil {
 		s.region.invalidate(Other)
 	}
+}
+
+func (s *replicaSelector) appendWarnings(warnings ...error) {
+	if s.warnings == nil {
+		s.warnings = make([]error, 0)
+	}
+	s.warnings = append(s.warnings, warnings...)
 }
 
 func (s *RegionRequestSender) getRPCContext(

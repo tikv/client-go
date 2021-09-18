@@ -683,11 +683,11 @@ func (s *KVSnapshot) SetRuntimeStats(stats *SnapshotRuntimeStats) {
 	s.mu.stats = stats
 }
 
-// SetTxnScope sets up the txn scope.
-func (s *KVSnapshot) SetTxnScope(txnScope string) {
+// SetReadReplicaScope set read replica scope
+func (s *KVSnapshot) SetReadReplicaScope(scope string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mu.txnScope = txnScope
+	s.mu.readReplicaScope = scope
 }
 
 // SetIsStatenessReadOnly indicates whether the transaction is staleness read only transaction
