@@ -547,7 +547,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
 		if len(state.option.labels) > 0 {
-			selector.appendWarnings(fmt.Errorf("unable to find stores with given labels"))
+			selector.appendWarnings(errors.New("unable to find stores with given labels"))
 		}
 		leader := selector.replicas[state.leaderIdx]
 		if leader.isEpochStale() || leader.isExhausted(1) {
@@ -848,9 +848,6 @@ func (s *replicaSelector) invalidateRegion() {
 }
 
 func (s *replicaSelector) appendWarnings(warnings ...error) {
-	if s.warnings == nil {
-		s.warnings = make([]error, 0)
-	}
 	s.warnings = append(s.warnings, warnings...)
 }
 

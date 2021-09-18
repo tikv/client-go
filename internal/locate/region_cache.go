@@ -486,9 +486,6 @@ func (c *RPCContext) String() string {
 
 // AppendWarnings add warnings
 func (c *RPCContext) AppendWarnings(warnings ...error) {
-	if c.Warnings == nil {
-		c.Warnings = make([]error, 0)
-	}
 	c.Warnings = append(c.Warnings, warnings...)
 }
 
