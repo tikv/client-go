@@ -207,6 +207,8 @@ type Request struct {
 	Type CmdType
 	Req  interface{}
 	kvrpcpb.Context
+	ReadReplicaScope string
+	// remove txnScope after tidb removed txnScope
 	TxnScope        string
 	ReplicaReadType kv.ReplicaReadType // different from `kvrpcpb.Context.ReplicaRead`
 	ReplicaReadSeed *uint32            // pointer to follower read seed in snapshot/coprocessor
@@ -259,7 +261,10 @@ func (req *Request) EnableStaleRead() {
 
 // IsGlobalStaleRead checks if the request is a global stale read request.
 func (req *Request) IsGlobalStaleRead() bool {
-	return req.TxnScope == oracle.GlobalTxnScope && req.GetStaleRead()
+	return req.ReadReplicaScope == oracle.GlobalTxnScope &&
+		// remove txnScope after tidb remove it
+		req.TxnScope == oracle.GlobalTxnScope &&
+		req.GetStaleRead()
 }
 
 // IsDebugReq check whether the req is debug req.

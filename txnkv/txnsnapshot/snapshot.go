@@ -120,14 +120,14 @@ type KVSnapshot struct {
 	// It's OK as long as there are no zero-byte values in the protocol.
 	mu struct {
 		sync.RWMutex
-		hitCnt      int64
-		cached      map[string][]byte
-		cachedSize  int
-		stats       *SnapshotRuntimeStats
-		replicaRead kv.ReplicaReadType
-		taskID      uint64
-		isStaleness bool
-		txnScope    string
+		hitCnt           int64
+		cached           map[string][]byte
+		cachedSize       int
+		stats            *SnapshotRuntimeStats
+		replicaRead      kv.ReplicaReadType
+		taskID           uint64
+		isStaleness      bool
+		readReplicaScope string
 		// MatchStoreLabels indicates the labels the store should be matched
 		matchStoreLabels []*metapb.StoreLabel
 	}
@@ -353,11 +353,12 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.resourceGroupTag,
 		})
-		txnScope := s.mu.txnScope
+		scope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
 		matchStoreLabels := s.mu.matchStoreLabels
 		s.mu.RUnlock()
-		req.TxnScope = txnScope
+		req.TxnScope = scope
+		req.ReadReplicaScope = scope
 		if isStaleness {
 			req.EnableStaleRead()
 		}
@@ -521,9 +522,10 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		})
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
-	txnScope := s.mu.txnScope
+	scope := s.mu.readReplicaScope
 	s.mu.RUnlock()
-	req.TxnScope = txnScope
+	req.TxnScope = scope
+	req.ReadReplicaScope = scope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
 		req.EnableStaleRead()

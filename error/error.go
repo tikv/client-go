@@ -84,6 +84,8 @@ var (
 	ErrRegionDataNotReady = errors.New("region data not ready")
 	// ErrRegionNotInitialized is error when region is not initialized
 	ErrRegionNotInitialized = errors.New("region not Initialized")
+	// ErrTiKVDiskFull is the error when tikv server disk usage is full.
+	ErrTiKVDiskFull = errors.New("tikv disk full")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
 )
