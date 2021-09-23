@@ -778,7 +778,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 }
 
 // OnSendFailForTiFlash handles send request fail logic for tiflash.
-func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, region RegionVerID, prev *metapb.Region, scheduleReload bool, err error) {
+func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, region RegionVerID, prev *metapb.Region, scheduleReload bool, err error, skipSwitchPeerLog bool) {
 
 	r := c.GetCachedRegionWithRLock(region)
 	if r == nil {
@@ -810,10 +810,15 @@ func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, re
 
 	// try next peer
 	rs.switchNextFlashPeer(r, accessIdx)
-	logutil.Logger(bo.GetCtx()).Info("switch region tiflash peer to next due to send request fail",
-		zap.Stringer("region", &region),
-		zap.Bool("needReload", scheduleReload),
-		zap.Error(err))
+	// In most scenarios, TiFlash will batch all the regions in one TiFlash store into one request, so when meet send failure,
+	// this function is called repeatedly for all the regions, since one TiFlash store might contain thousands of regions, we
+	// need a way to avoid generating too much useless log
+	if !skipSwitchPeerLog {
+		logutil.Logger(bo.GetCtx()).Info("switch region tiflash peer to next due to send request fail",
+			zap.Stringer("region", &region),
+			zap.Bool("needReload", scheduleReload),
+			zap.Error(err))
+	}
 
 	// force reload region when retry all known peers in region.
 	if scheduleReload {
