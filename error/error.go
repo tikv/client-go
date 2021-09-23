@@ -226,6 +226,15 @@ func (e *ErrTokenLimit) Error() string {
 	return fmt.Sprintf("Store token is up to the limit, store id = %d.", e.StoreID)
 }
 
+// ErrAssertionFailed is the error that assertion on data failed.
+type ErrAssertionFailed struct {
+	*kvrpcpb.AssertionFailed
+}
+
+func (e *ErrAssertionFailed) Error() string {
+	return fmt.Sprintf("assertion failed { %s }", e.AssertionFailed.String())
+}
+
 // ExtractKeyErr extracts a KeyError.
 func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 	if val, err := util.EvalFailpoint("mockRetryableErrorResp"); err == nil {
@@ -241,6 +250,10 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 
 	if keyErr.Retryable != "" {
 		return &ErrRetryable{Retryable: keyErr.Retryable}
+	}
+
+	if keyErr.AssertionFailed != nil {
+		return &ErrAssertionFailed{AssertionFailed: keyErr.AssertionFailed}
 	}
 
 	if keyErr.Abort != "" {
