@@ -72,6 +72,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 	}
 
 	var batches []kvrpc.Batch
+
 	for regionID, groupKeys := range groups {
 		batches = kvrpc.AppendKeyBatches(batches, regionID, groupKeys, splitBatchRegionLimit)
 	}
@@ -79,7 +80,6 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 	if len(batches) == 0 {
 		return nil, nil
 	}
-
 	// The first time it enters this function.
 	if bo.GetTotalSleep() == 0 {
 		logutil.BgLogger().Info("split batch regions request",
@@ -115,7 +115,6 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 	}
 
 	regionsId := make([]uint64, len(keys)*2)
-
 	for i := 0; i < len(batches); i++ {
 		resp := <-ch
 		if resp.Error != nil {
@@ -143,8 +142,13 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 		}
 	}
 
+	opts := make([]pd.RegionsOption, 0, 1)
+	if tableID != nil {
+		opts = append(opts, pd.WithGroup(fmt.Sprintf("%v", *tableID)))
+	}
+
 	// Split regions by pd
-	spResp, err := s.pdClient.SplitRegions(bo.GetCtx(), batch.Keys)
+	spResp, err := s.pdClient.SplitRegions(bo.GetCtx(), batch.Keys, opts...)
 
 	resp := SplitResponse{splitResp: spResp}
 	if err != nil {
