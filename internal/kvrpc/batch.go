@@ -35,7 +35,7 @@ type BatchResult struct {
 
 // AppendBatches divides the mutation to be requested into Batches so that the size of each batch is
 // approximately the same as the given limit.
-func AppendBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]byte, keyToValue map[string][]byte, keyToTtl map[string]uint64, limit int) []Batch {
+func AppendBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]byte, keyToValue map[string][]byte, keyToTTL map[string]uint64, limit int) []Batch {
 	var start, size int
 	var keys, values [][]byte
 	var ttls []uint64
@@ -49,7 +49,7 @@ func AppendBatches(batches []Batch, regionID locate.RegionVerID, groupKeys [][]b
 		}
 		key := groupKeys[start]
 		value := keyToValue[string(key)]
-		ttl := keyToTtl[string(key)]
+		ttl := keyToTTL[string(key)]
 		keys = append(keys, key)
 		values = append(values, value)
 		ttls = append(ttls, ttl)
