@@ -82,6 +82,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		if m.IsAssertNotExist(i) {
 			assertion = kvrpcpb.Assertion_NotExist
 		}
+		logutil.BgLogger().Info("buildPrewriteRequest", zap.Uint64("startTS", c.startTS), zap.Stringer("assertion", assertion))
 		mutations[i] = &kvrpcpb.Mutation{
 			Op:        m.GetOp(i),
 			Key:       m.GetKey(i),
