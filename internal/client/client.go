@@ -358,7 +358,8 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.
 	if !ok {
 		reqType := req.Type.String()
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID)
+		staleRead := strconv.FormatBool(req.StaleRead)
+		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, staleRead)
 		sendReqHistCache.Store(key, v)
 	}
 
