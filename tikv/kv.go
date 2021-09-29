@@ -316,8 +316,10 @@ func (s *KVStore) DeleteRange(ctx context.Context, startKey []byte, endKey []byt
 	return completedRegions, err
 }
 
-// GetSnapshot gets a snapshot that is able to read any data which data is <= ver.
-// if ts is MaxVersion or > current max committed version, we will use current version for this snapshot.
+// GetSnapshot gets a snapshot that is able to read any data which data is <= the given ts.
+// If the given ts is greater than the current TSO timestamp, the snapshot is not guaranteed
+// to be consistent.
+// Specially, it is useful to set ts to math.MaxUint64 to point get the latest committed data.
 func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
 	snapshot := txnsnapshot.NewTiKVSnapshot(s, ts, s.nextReplicaReadSeed())
 	return snapshot
