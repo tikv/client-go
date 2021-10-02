@@ -115,7 +115,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 		}(batch1)
 	}
 
-	regionsID := make([]uint64, len(keys)*2)
+	regionsID := make([]uint64, 0, len(keys)*2)
 	for i := 0; i < len(batches); i++ {
 		resp := <-ch
 		if resp.Error != nil {
@@ -185,7 +185,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 		if err = s.scatterRegion(bo, regionID, tableID); err == nil {
 			logutil.BgLogger().Info("batch split regions, scatter region complete",
 				zap.Uint64("batch region ID", batch.RegionID.GetID()),
-				zap.String("at", kv.StrKey(batch.Keys[i])),
+				zap.String("at", "arr"),
 				zap.Uint64("new region Id", regionID))
 			continue
 		}
