@@ -1314,6 +1314,20 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "stale_command"
 	} else if e.GetStoreNotMatch() != nil {
 		return "store_not_match"
+	} else if e.GetRaftEntryTooLarge() != nil {
+		return "raft_entry_too_large"
+	} else if e.GetMaxTimestampNotSynced() != nil {
+		return "max_timestamp_not_synced"
+	} else if e.GetReadIndexNotReady() != nil {
+		return "read_index_not_ready"
+	} else if e.GetProposalInMergingMode() != nil {
+		return "proposal_in_merging_mode"
+	} else if e.GetDataIsNotReady() != nil {
+		return "data_is_not_ready"
+	} else if e.GetRegionNotInitialized() != nil {
+		return "region_not_initialized"
+	} else if e.GetDiskFull() != nil {
+		return "disk_full"
 	}
 	return "unknown"
 }
