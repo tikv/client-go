@@ -41,6 +41,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/parser/terror"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
@@ -83,6 +84,8 @@ var (
 	ErrRegionDataNotReady = errors.New("region data not ready")
 	// ErrRegionNotInitialized is error when region is not initialized
 	ErrRegionNotInitialized = errors.New("region not Initialized")
+	// ErrTiKVDiskFull is the error when tikv server disk usage is full.
+	ErrTiKVDiskFull = errors.New("tikv disk full")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
 )
@@ -258,4 +261,9 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 		return errors.Trace(err)
 	}
 	return errors.Errorf("unexpected KeyError: %s", keyErr.String())
+}
+
+// IsErrorUndetermined checks if the error is undetermined error.
+func IsErrorUndetermined(err error) bool {
+	return terror.ErrorEqual(err, terror.ErrResultUndetermined)
 }

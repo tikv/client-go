@@ -240,7 +240,7 @@ func (c *Client) Put(ctx context.Context, key, value []byte) error {
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
+func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte, ttls []uint64) error {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds())
@@ -249,13 +249,16 @@ func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
 	if len(keys) != len(values) {
 		return errors.New("the len of keys is not equal to the len of values")
 	}
+	if len(ttls) > 0 && len(keys) != len(ttls) {
+		return errors.New("the len of ttls is not equal to the len of values")
+	}
 	for _, value := range values {
 		if len(value) == 0 {
 			return errors.New("empty value is not supported")
 		}
 	}
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
-	err := c.sendBatchPut(bo, keys, values)
+	err := c.sendBatchPut(bo, keys, values, ttls)
 	return errors.Trace(err)
 }
 
@@ -652,10 +655,14 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 	}
 }
 
-func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error {
+func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls []uint64) error {
 	keyToValue := make(map[string][]byte, len(keys))
+	keyTottl := make(map[string]uint64, len(keys))
 	for i, key := range keys {
 		keyToValue[string(key)] = values[i]
+		if len(ttls) > 0 {
+			keyTottl[string(key)] = ttls[i]
+		}
 	}
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
@@ -664,7 +671,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte) error 
 	var batches []kvrpc.Batch
 	// split the keys by size and RegionVerID
 	for regionID, groupKeys := range groups {
-		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, rawBatchPutSize)
+		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyTottl, rawBatchPutSize)
 	}
 	bo, cancel := bo.Fork()
 	ch := make(chan error, len(batches))
@@ -695,7 +702,8 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch) error {
 		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.Values[i]})
 	}
 
-	req := tikvrpc.NewRequest(tikvrpc.CmdRawBatchPut, &kvrpcpb.RawBatchPutRequest{Pairs: kvPair, ForCas: c.atomic})
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawBatchPut,
+		&kvrpcpb.RawBatchPutRequest{Pairs: kvPair, ForCas: c.atomic, Ttls: batch.TTLs})
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -713,7 +721,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch) error {
 			return errors.Trace(err)
 		}
 		// recursive call
-		return c.sendBatchPut(bo, batch.Keys, batch.Values)
+		return c.sendBatchPut(bo, batch.Keys, batch.Values, batch.TTLs)
 	}
 
 	if resp.Resp == nil {

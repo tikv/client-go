@@ -32,7 +32,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv_test
+package raw_tikv_test
 
 import (
 	"bytes"
@@ -113,7 +113,7 @@ func (s *testRawKVSuite) mustPut(key, value []byte) {
 }
 
 func (s *testRawKVSuite) mustBatchPut(keys, values [][]byte) {
-	err := s.client.BatchPut(context.Background(), keys, values)
+	err := s.client.BatchPut(context.Background(), keys, values, nil)
 	s.Nil(err)
 }
 
