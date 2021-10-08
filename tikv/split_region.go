@@ -49,6 +49,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -146,6 +147,11 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	opts := make([]pd.RegionsOption, 0, 1)
 	if tableID != nil {
 		opts = append(opts, pd.WithGroup(fmt.Sprintf("%v", *tableID)))
+	}
+
+	keys := batch.Keys
+	for i, key := range keys {
+		keys[i] = codec.EncodeBytes([]byte(nil), key)
 	}
 
 	// Split regions by pd
