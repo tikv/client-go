@@ -34,10 +34,12 @@
 
 package kv
 
-// KeyFlags are metadata associated with key
-type KeyFlags uint8
+// KeyFlags are metadata associated with key.
+// Notice that the highest bit is used by red black tree, do not set flags on it.
+type KeyFlags uint16
 
 const (
+	FlagBytes               = 2
 	flagPresumeKNE KeyFlags = 1 << iota
 	flagKeyLocked
 	flagNeedLocked
@@ -45,6 +47,7 @@ const (
 	flagNeedCheckExists
 	flagPrewriteOnly
 	flagIgnoredIn2PC
+	flagReadable
 
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist
 )
@@ -84,6 +87,11 @@ func (f KeyFlags) HasIgnoredIn2PC() bool {
 	return f&flagIgnoredIn2PC != 0
 }
 
+// HasReadable returns whether the in-transaction operations is able to read the key.
+func (f KeyFlags) HasReadable() bool {
+	return f&flagReadable != 0
+}
+
 // AndPersistent returns the value of current flags&persistentFlags
 func (f KeyFlags) AndPersistent() KeyFlags {
 	return f & persistentFlags
@@ -115,6 +123,8 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin |= flagPrewriteOnly
 		case SetIgnoredIn2PC:
 			origin |= flagIgnoredIn2PC
+		case SetReadable:
+			origin |= flagReadable
 		}
 	}
 	return origin
@@ -147,4 +157,6 @@ const (
 	SetPrewriteOnly
 	// SetIgnoredIn2PC marks the key will be ignored in 2pc.
 	SetIgnoredIn2PC
+	// SetReadable marks the key is readable by in-transaction read.
+	SetReadable
 )
