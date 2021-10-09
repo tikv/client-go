@@ -39,6 +39,7 @@ package kv
 type KeyFlags uint16
 
 const (
+	// FlagBytes is the byte size of type KeyFlags
 	FlagBytes               = 2
 	flagPresumeKNE KeyFlags = 1 << iota
 	flagKeyLocked
