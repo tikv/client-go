@@ -89,6 +89,7 @@ var (
 	TiKVTxnCommitBackoffSeconds              prometheus.Histogram
 	TiKVTxnCommitBackoffCount                prometheus.Histogram
 	TiKVSmallReadDuration                    prometheus.Histogram
+	TiKVReadThroughput                       prometheus.Histogram
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 )
 
@@ -523,6 +524,15 @@ func initMetrics(namespace, subsystem string) {
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 74h
 		})
 
+	TiKVReadThroughput = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: "sli",
+			Name:      "tikv_read_throughput",
+			Help:      "Read throughput of TiKV read in MB/s.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28),
+		})
+
 	TiKVUnsafeDestroyRangeFailuresCounterVec = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -635,11 +645,18 @@ func GetTxnCommitCounter() TxnCommitCounter {
 	}
 }
 
-const smallTxnAffectRow = 20
+const (
+	smallTxnReadRow  = 20
+	smallTxnReadSize = 1 * 1024 * 1024 //1MB
+)
 
 // ObserveReadSLI observes the read SLI metric.
-func ObserveReadSLI(readKeys uint64, readTime float64) {
-	if readKeys <= smallTxnAffectRow && readKeys != 0 && readTime != 0 {
-		TiKVSmallReadDuration.Observe(readTime)
+func ObserveReadSLI(readKeys uint64, readTime float64, readSize float64) {
+	if readKeys != 0 && readTime != 0 {
+		if readKeys <= smallTxnReadRow && readSize < smallTxnReadSize {
+			TiKVSmallReadDuration.Observe(readTime)
+		} else {
+			TiKVReadThroughput.Observe(readSize / readTime)
+		}
 	}
 }

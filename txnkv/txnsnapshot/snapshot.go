@@ -428,7 +428,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		if batchGetResp.ExecDetailsV2 != nil {
 			readKeys := len(batchGetResp.Pairs)
 			readTime := float64(batchGetResp.ExecDetailsV2.GetTimeDetail().GetKvReadWallTimeMs() / 1000)
-			metrics.ObserveReadSLI(uint64(readKeys), readTime)
+			readSize := float64(batchGetResp.ExecDetailsV2.ScanDetailV2.ProcessedVersionsSize)
+			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
 			s.mergeExecDetail(batchGetResp.ExecDetailsV2)
 		}
 		if len(lockedKeys) > 0 {
