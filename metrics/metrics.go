@@ -529,8 +529,8 @@ func initMetrics(namespace, subsystem string) {
 			Namespace: namespace,
 			Subsystem: "sli",
 			Name:      "tikv_read_throughput",
-			Help:      "Read throughput of TiKV read in MB/s.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28),
+			Help:      "Read throughput of TiKV read in Bytes/s.",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2, 13), // 1MB/s ~ 4GB/s
 		})
 
 	TiKVUnsafeDestroyRangeFailuresCounterVec = prometheus.NewCounterVec(
@@ -604,6 +604,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCommitBackoffSeconds)
 	prometheus.MustRegister(TiKVTxnCommitBackoffCount)
 	prometheus.MustRegister(TiKVSmallReadDuration)
+	prometheus.MustRegister(TiKVReadThroughput)
 }
 
 // readCounter reads the value of a prometheus.Counter.
