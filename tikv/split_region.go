@@ -186,29 +186,11 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 		return resp
 	}
 
-	for i, regionID := range spResp.RegionsId {
-		// scatter region
-		if err = s.scatterRegion(bo, regionID, tableID); err == nil {
-			logutil.BgLogger().Info("batch split regions, scatter region complete",
-				zap.Uint64("batch region ID", batch.RegionID.GetID()),
-				zap.String("at", "arr"),
-				zap.Uint64("new region Id", regionID))
-			continue
-		}
+	err = s.scatterRegion(bo, spResp.RegionsId, tableID)
 
-		logutil.BgLogger().Info("batch split regions, scatter region failed",
-			zap.Uint64("batch region ID", batch.RegionID.GetID()),
-			zap.String("at", kv.StrKey(batch.Keys[i])),
-			zap.Uint64("new region Id", regionID),
-			zap.Error(err))
-
-		if resp.Error == nil {
-			resp.Error = err
-		}
-
-		if _, ok := err.(*tikverr.ErrPDServerTimeout); ok {
-			break
-		}
+	if err != nil {
+		resp.Error = err
+		return resp
 	}
 
 	return resp
@@ -226,32 +208,28 @@ func (s *KVStore) SplitRegions(ctx context.Context, splitKeys [][]byte, scatter 
 	return regionsID, errors.Trace(err)
 }
 
-func (s *KVStore) scatterRegion(bo *Backoffer, regionID uint64, tableID *int64) error {
-	logutil.BgLogger().Info("start scatter region",
-		zap.Uint64("regionID", regionID))
-	for {
-		opts := make([]pd.RegionsOption, 0, 1)
-		if tableID != nil {
-			opts = append(opts, pd.WithGroup(fmt.Sprintf("%v", *tableID)))
-		}
-		_, err := s.pdClient.ScatterRegions(bo.GetCtx(), []uint64{regionID}, opts...)
+func (s *KVStore) scatterRegion(bo *Backoffer, regionsId []uint64, tableID *int64) error {
+	logutil.BgLogger().Info("start scatter regions batch",
+		zap.Int64p("table id", tableID),
+		zap.Int("batch scatter regions count", len(regionsId)))
 
-		if val, err2 := util.EvalFailpoint("mockScatterRegionTimeout"); err2 == nil {
-			if val.(bool) {
-				err = tikverr.NewErrPDServerTimeout("")
-			}
-		}
-
-		if err == nil {
-			break
-		}
-		err = bo.Backoff(retry.BoPDRPC, errors.New(err.Error()))
-		if err != nil {
-			return errors.Trace(err)
-		}
+	opts := make([]pd.RegionsOption, 0, 1)
+	if tableID != nil {
+		opts = append(opts, pd.WithGroup(fmt.Sprintf("%v", *tableID)))
 	}
-	logutil.BgLogger().Debug("scatter region complete",
-		zap.Uint64("regionID", regionID))
+
+	resp, err := s.pdClient.ScatterRegions(bo.GetCtx(), regionsId, opts...)
+
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	percentage := resp.FinishedPercentage
+	logutil.BgLogger().Debug("scatter regions batch complete",
+		zap.Int64p("table id", tableID),
+		zap.Int("batch scatter regions count", len(regionsId)),
+		zap.Uint64("finished percentage", percentage))
+
 	return nil
 }
 
