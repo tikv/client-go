@@ -214,7 +214,7 @@ func (a *nodeAllocator) getNode(addr memdbArenaAddr) *memdbNode {
 }
 
 func (a *nodeAllocator) allocNode(key []byte) (memdbArenaAddr, *memdbNode) {
-	nodeSize := 8*4 + 2 + 1 + len(key)
+	nodeSize := 8*4 + 2 + kv.FlagBytes + len(key)
 	addr, mem := a.alloc(nodeSize, true)
 	n := (*memdbNode)(unsafe.Pointer(&mem[0]))
 	n.vptr = nullAddr
