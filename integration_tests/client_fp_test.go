@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/parser/terror"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -90,7 +90,7 @@ func (c fpClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Req
 	case tikvrpc.CmdPrewrite:
 		if val, err := util.EvalFailpoint("rpcPrewriteTimeout"); err == nil {
 			if val.(bool) {
-				return nil, terror.ErrResultUndetermined
+				return nil, tikverr.ErrResultUndetermined
 			}
 		}
 	}
