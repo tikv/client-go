@@ -48,7 +48,6 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/parser/terror"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -1230,7 +1229,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))
-			return errors.Trace(terror.ErrResultUndetermined)
+			return errors.Trace(tikverr.ErrResultUndetermined)
 		}
 	}
 
@@ -1414,7 +1413,7 @@ func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.Co
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))
-			err = errors.Trace(terror.ErrResultUndetermined)
+			err = errors.Trace(tikverr.ErrResultUndetermined)
 		}
 		if !c.mu.committed {
 			logutil.Logger(ctx).Debug("2PC failed on commit",
