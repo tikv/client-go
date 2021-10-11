@@ -45,9 +45,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
-	"github.com/pingcap/parser/terror"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
@@ -702,7 +702,7 @@ func (c *batchCommandsClient) recreateStreamingClient(err error, streamClient *b
 		err2 := b.Backoff(retry.BoTiKVRPC, err1)
 		// As timeout is set to math.MaxUint32, err2 should always be nil.
 		// This line is added to make the 'make errcheck' pass.
-		terror.Log(err2)
+		tikverr.Log(err2)
 	}
 	return false
 }

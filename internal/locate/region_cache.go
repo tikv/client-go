@@ -50,8 +50,8 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/parser/terror"
 	"github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -435,7 +435,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 	for _, store := range needCheckStores {
 		_, err := store.reResolve(c)
-		terror.Log(err)
+		tikverr.Log(err)
 	}
 }
 
@@ -671,7 +671,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		}
 		if store.getResolveState() == needCheck {
 			_, err := store.reResolve(c)
-			terror.Log(err)
+			tikverr.Log(err)
 		}
 		atomic.StoreInt32(&regionStore.workTiFlashIdx, int32(accessIdx))
 		peer := cachedRegion.meta.Peers[storeIdx]
