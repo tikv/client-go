@@ -253,7 +253,7 @@ func (sd *ScanDetail) String() string {
 	buf.WriteString("scan_detail: {")
 	buf.WriteString("total_process_keys: ")
 	buf.WriteString(strconv.FormatInt(sd.ProcessedKeys, 10))
-	buf.WriteString(", total_process_keys_size:")
+	buf.WriteString(", total_process_keys_size: ")
 	buf.WriteString(strconv.FormatInt(sd.ProcessedKeysSize, 10))
 	buf.WriteString(", total_keys: ")
 	buf.WriteString(strconv.FormatInt(sd.TotalKeys, 10))

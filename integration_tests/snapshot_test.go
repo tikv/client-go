@@ -319,7 +319,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
 		"total_process_time: 100ms, total_wait_time: 100ms, " +
 		"scan_detail: {total_process_keys: 10, " +
-		"total_process_keys_size:10, " +
+		"total_process_keys_size: 10, " +
 		"total_keys: 15, " +
 		"rocksdb: {delete_skipped_count: 5, " +
 		"key_skipped_count: 1, " +
@@ -329,7 +329,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
 		"total_process_time: 200ms, total_wait_time: 200ms, " +
 		"scan_detail: {total_process_keys: 20, " +
-		"total_process_keys_size:20, " +
+		"total_process_keys_size: 20, " +
 		"total_keys: 30, " +
 		"rocksdb: {delete_skipped_count: 10, " +
 		"key_skipped_count: 2, " +
