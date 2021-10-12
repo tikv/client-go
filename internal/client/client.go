@@ -138,7 +138,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 	if len(security.ClusterSSLCA) != 0 {
 		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
@@ -196,7 +196,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 		if err != nil {
 			// Cleanup if the initialization fails.
 			a.Close()
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		a.v[i] = conn
 
@@ -237,7 +237,7 @@ func (a *connArray) Close() {
 	for i, c := range a.v {
 		if c != nil {
 			err := c.Close()
-			tikverr.Log(errors.Trace(err))
+			tikverr.Log(err)
 			a.v[i] = nil
 		}
 	}
@@ -382,7 +382,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	enableBatch := req.StoreTp != tikvrpc.TiDB && req.StoreTp != tikvrpc.TiFlash
 	connArray, err := c.getConnArray(addr, enableBatch)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	start := time.Now()
@@ -447,7 +447,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	resp, err := tikvrpc.CallRPC(ctx1, client, req)
 	if err != nil {
 		cancel()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -463,7 +463,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("copstream returns nothing for the request.")
 	}
@@ -482,7 +482,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	resp, err := tikvrpc.CallRPC(ctx1, client, req)
 	if err != nil {
 		cancel()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -498,7 +498,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("batch copstream returns nothing for the request.")
 	}
@@ -516,7 +516,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	resp, err := tikvrpc.CallRPC(ctx1, client, req)
 	if err != nil {
 		cancel()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -532,7 +532,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 	}
 	copStream.MPPDataPacket = first
