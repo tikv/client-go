@@ -105,14 +105,14 @@ func (r reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		err = errors.Trace(ctx.Err())
+		err = errors.WithStack(ctx.Err())
 		return
 	case <-timer.C:
-		err = errors.Trace(context.DeadlineExceeded)
+		err = errors.WithStack(context.DeadlineExceeded)
 		return
 	case rs := <-rsC:
 		if rs.Err != nil {
-			err = errors.Trace(rs.Err)
+			err = errors.WithStack(rs.Err)
 			return
 		}
 		resp = rs.Val.(*tikvrpc.Response)
