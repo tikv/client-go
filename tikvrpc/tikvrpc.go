@@ -36,7 +36,6 @@ package tikvrpc
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -880,7 +879,7 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 			RegionError: e,
 		}
 	default:
-		return nil, fmt.Errorf("invalid request type %v", req.Type)
+		return nil, errors.Errorf("invalid request type %v", req.Type)
 	}
 	resp.Resp = p
 	return resp, nil
