@@ -505,12 +505,23 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 		if flags.HasLocked() {
 			isPessimistic = c.isPessimistic
 		}
-		mustExist, mustNotExist := flags.HasAssertExist(), flags.HasAssertNotExist()
+		mustExist, mustNotExist, hasAssertion := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertion()
 		if c.txn.schemaAmender != nil {
-			mustExist, mustNotExist = false, false
+			mustExist, mustNotExist, hasAssertion = false, false, false
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle())
 		size += len(key) + len(value)
+
+		// Update metrics
+		if mustExist {
+			metrics.PrewriteAssertionUsageCounterExist.Inc()
+		} else if mustNotExist {
+			metrics.PrewriteAssertionUsageCounterNotExist.Inc()
+		} else if hasAssertion {
+			metrics.PrewriteAssertionUsageCounterUnknown.Inc()
+		} else {
+			metrics.PrewriteAssertionUsageCounterNone.Inc()
+		}
 
 		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
 			c.primaryKey = key
