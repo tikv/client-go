@@ -911,7 +911,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		}
 		batchResp, err := c.coprHandler.HandleBatchCop(ctx, reqCtx, session, req.BatchCop(), timeout)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		resp.Resp = batchResp
 	case tikvrpc.CmdCopStream:
@@ -922,7 +922,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		session.rawEndKey = MvccKey(session.endKey).Raw()
 		streamResp, err := c.coprHandler.HandleCopStream(ctx, reqCtx, session, req.Cop(), timeout)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		resp.Resp = streamResp
 	case tikvrpc.CmdMvccGetByKey:
