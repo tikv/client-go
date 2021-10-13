@@ -919,11 +919,11 @@ func (s *RegionRequestSender) SendReqCtx(
 			}, nil, nil
 		case "requestTiDBStoreError":
 			if et == tikvrpc.TiDB {
-				return nil, nil, tikverr.ErrTiKVServerTimeout
+				return nil, nil, errors.WithStack(tikverr.ErrTiKVServerTimeout)
 			}
 		case "requestTiFlashError":
 			if et == tikvrpc.TiFlash {
-				return nil, nil, tikverr.ErrTiFlashServerTimeout
+				return nil, nil, errors.WithStack(tikverr.ErrTiFlashServerTimeout)
 			}
 		}
 	}
@@ -985,7 +985,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		// recheck whether the session/query is killed during the Next()
 		boVars := bo.GetVars()
 		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
-			return nil, nil, tikverr.ErrQueryInterrupted
+			return nil, nil, errors.WithStack(tikverr.ErrQueryInterrupted)
 		}
 		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
 			if val.(bool) {
