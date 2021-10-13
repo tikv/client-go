@@ -246,6 +246,34 @@ func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock bool, assertE
 	m.handles = append(m.handles, handle)
 }
 
+// CommitterMutationFlags represents various bit flags of mutations.
+type CommitterMutationFlags uint8
+
+const (
+	// MutationFlagIsPessimisticLock is the flag that marks a mutation needs to be pessimistic-locked.
+	MutationFlagIsPessimisticLock CommitterMutationFlags = 1 << iota
+
+	// MutationFlagIsAssertExists is the flag that marks a mutation needs to be asserted to be existed when prewriting.
+	MutationFlagIsAssertExists
+
+	// MutationFlagIsAssertNotExists is the flag that marks a mutation needs to be asserted to be not-existed when prewriting.
+	MutationFlagIsAssertNotExists
+)
+
+func makeMutationFlags(isPessimisticLock, assertExist, assertNotExist bool) CommitterMutationFlags {
+	var flags CommitterMutationFlags = 0
+	if isPessimisticLock {
+		flags |= MutationFlagIsPessimisticLock
+	}
+	if assertExist {
+		flags |= MutationFlagIsAssertExists
+	}
+	if assertNotExist {
+		flags |= MutationFlagIsAssertNotExists
+	}
+	return flags
+}
+
 // CommitterMutations contains the mutations to be submitted.
 type CommitterMutations interface {
 	Len() int
@@ -261,23 +289,19 @@ type CommitterMutations interface {
 
 // PlainMutations contains transaction operations.
 type PlainMutations struct {
-	ops               []kvrpcpb.Op
-	keys              [][]byte
-	values            [][]byte
-	isPessimisticLock []bool
-	isAssertExist     []bool
-	isAssertNotExist  []bool
+	ops    []kvrpcpb.Op
+	keys   [][]byte
+	values [][]byte
+	flags  []CommitterMutationFlags
 }
 
 // NewPlainMutations creates a PlainMutations object with sizeHint reserved.
 func NewPlainMutations(sizeHint int) PlainMutations {
 	return PlainMutations{
-		ops:               make([]kvrpcpb.Op, 0, sizeHint),
-		keys:              make([][]byte, 0, sizeHint),
-		values:            make([][]byte, 0, sizeHint),
-		isPessimisticLock: make([]bool, 0, sizeHint),
-		isAssertExist:     make([]bool, 0, sizeHint),
-		isAssertNotExist:  make([]bool, 0, sizeHint),
+		ops:    make([]kvrpcpb.Op, 0, sizeHint),
+		keys:   make([][]byte, 0, sizeHint),
+		values: make([][]byte, 0, sizeHint),
+		flags:  make([]CommitterMutationFlags, 0, sizeHint),
 	}
 }
 
@@ -291,14 +315,8 @@ func (c *PlainMutations) Slice(from, to int) CommitterMutations {
 	if c.values != nil {
 		res.values = c.values[from:to]
 	}
-	if c.isPessimisticLock != nil {
-		res.isPessimisticLock = c.isPessimisticLock[from:to]
-	}
-	if c.isAssertExist != nil {
-		res.isAssertExist = c.isAssertExist[from:to]
-	}
-	if c.isAssertNotExist != nil {
-		res.isAssertNotExist = c.isAssertNotExist[from:to]
+	if c.flags != nil {
+		res.flags = c.flags[from:to]
 	}
 	return &res
 }
@@ -308,9 +326,7 @@ func (c *PlainMutations) Push(op kvrpcpb.Op, key []byte, value []byte, isPessimi
 	c.ops = append(c.ops, op)
 	c.keys = append(c.keys, key)
 	c.values = append(c.values, value)
-	c.isPessimisticLock = append(c.isPessimisticLock, isPessimisticLock)
-	c.isAssertExist = append(c.isAssertExist, assertExist)
-	c.isAssertNotExist = append(c.isAssertNotExist, assertNotExist)
+	c.flags = append(c.flags, makeMutationFlags(isPessimisticLock, assertExist, assertNotExist))
 }
 
 // Len returns the count of mutations.
@@ -338,29 +354,19 @@ func (c *PlainMutations) GetValues() [][]byte {
 	return c.values
 }
 
-// GetPessimisticFlags returns the key pessimistic flags.
-func (c *PlainMutations) GetPessimisticFlags() []bool {
-	return c.isPessimisticLock
-}
-
-// GetAssertExistFlags returns the key assertExist flags.
-func (c *PlainMutations) GetAssertExistFlags() []bool {
-	return c.isAssertExist
-}
-
-// GetAssertNotExitFlags returns the key assertNotExist flags.
-func (c *PlainMutations) GetAssertNotExitFlags() []bool {
-	return c.isAssertNotExist
+// GetFlags returns the flags on the mutations.
+func (c *PlainMutations) GetFlags() []CommitterMutationFlags {
+	return c.flags
 }
 
 // IsAssertExists returns the key assertExist flag at index.
 func (c *PlainMutations) IsAssertExists(i int) bool {
-	return c.isAssertExist[i]
+	return c.flags[i]&MutationFlagIsAssertExists != 0
 }
 
 // IsAssertNotExist returns the key assertNotExist flag at index.
 func (c *PlainMutations) IsAssertNotExist(i int) bool {
-	return c.isAssertNotExist[i]
+	return c.flags[i]&MutationFlagIsAssertNotExists != 0
 }
 
 // GetOp returns the key op at index.
@@ -378,17 +384,15 @@ func (c *PlainMutations) GetValue(i int) []byte {
 
 // IsPessimisticLock returns the key pessimistic flag at index.
 func (c *PlainMutations) IsPessimisticLock(i int) bool {
-	return c.isPessimisticLock[i]
+	return c.flags[i]&MutationFlagIsPessimisticLock != 0
 }
 
 // PlainMutation represents a single transaction operation.
 type PlainMutation struct {
-	KeyOp             kvrpcpb.Op
-	Key               []byte
-	Value             []byte
-	IsPessimisticLock bool
-	IsAssertExist     bool
-	IsAssertNotExist  bool
+	KeyOp kvrpcpb.Op
+	Key   []byte
+	Value []byte
+	Flags CommitterMutationFlags
 }
 
 // MergeMutations append input mutations into current mutations.
@@ -396,9 +400,7 @@ func (c *PlainMutations) MergeMutations(mutations PlainMutations) {
 	c.ops = append(c.ops, mutations.ops...)
 	c.keys = append(c.keys, mutations.keys...)
 	c.values = append(c.values, mutations.values...)
-	c.isPessimisticLock = append(c.isPessimisticLock, mutations.isPessimisticLock...)
-	c.isAssertExist = append(c.isAssertExist, mutations.isAssertExist...)
-	c.isAssertNotExist = append(c.isAssertNotExist, mutations.isAssertNotExist...)
+	c.flags = append(c.flags, mutations.flags...)
 }
 
 // AppendMutation merges a single Mutation into the current mutations.
@@ -406,9 +408,7 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 	c.ops = append(c.ops, mutation.KeyOp)
 	c.keys = append(c.keys, mutation.Key)
 	c.values = append(c.values, mutation.Value)
-	c.isPessimisticLock = append(c.isPessimisticLock, mutation.IsPessimisticLock)
-	c.isAssertExist = append(c.isAssertExist, mutation.IsAssertExist)
-	c.isAssertNotExist = append(c.isAssertNotExist, mutation.IsAssertNotExist)
+	c.flags = append(c.flags, mutation.Flags)
 }
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
