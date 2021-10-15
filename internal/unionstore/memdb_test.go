@@ -41,9 +41,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/pingcap/errors"
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
 
@@ -55,7 +57,7 @@ func init() {
 
 // DeleteKey is used in test to verify the `deleteNode` used in `vlog.revertToCheckpoint`.
 func (db *MemDB) DeleteKey(key []byte) {
-	x := db.traverse(key, false)
+	x, _ := db.traverse(key, false)
 	if x.isNull() {
 		return
 	}
@@ -837,4 +839,96 @@ func TestBufferLimit(t *testing.T) {
 
 	err = buffer.Delete(make([]byte, 500))
 	assert.NotNil(err)
+}
+
+func mustPut(t *testing.T, db *MemDB, key []byte, value []byte) {
+	assertions := assert.New(t)
+	err := db.set(key, value)
+	assertions.Nil(err)
+
+	retV1, err := db.Get(key)
+	assertions.Nil(err)
+	assertions.Equal(value, retV1)
+}
+
+func mustDelete(t *testing.T, db *MemDB, key []byte) {
+	assertions := assert.New(t)
+	err := db.Delete(key)
+	assertions.Nil(err)
+
+	retV1, err := db.Get(key)
+	assertions.Nil(err)
+	assertions.Equal(tombstone, retV1)
+}
+
+func mustGetNone(t *testing.T, db *MemDB, key []byte) {
+	assertions := assert.New(t)
+	_, err := db.Get(key)
+	assertions.Equal(errors.Cause(err), tikverr.ErrNotExist)
+}
+
+func mustGetVal(t *testing.T, db *MemDB, key []byte, value []byte) {
+	assertions := assert.New(t)
+	val, err := db.Get(key)
+	assertions.Nil(err)
+	assertions.Equal(value, val)
+}
+
+func mustNewlyInsertedFlag(t *testing.T, db *MemDB, key []byte, exist bool) {
+	assertions := assert.New(t)
+	flags, err := db.GetFlags(key)
+	assertions.Nil(err)
+	if exist {
+		assertions.True(flags.HasNewlyInserted())
+	} else {
+		assertions.False(flags.HasNewlyInserted())
+	}
+}
+
+func TestNewlyInsertedFlag(t *testing.T) {
+	db := newMemDB()
+	h := db.Staging()
+
+	// Delete the key after put, the NewlyInserted Flag should be kept.
+	k1 := []byte("x")
+	k2 := []byte("y")
+	k3 := []byte("z")
+	v1 := make([]byte, 2)
+	v2 := make([]byte, 3)
+	v3 := make([]byte, 4)
+	mustPut(t, db, k1, v1)
+	mustNewlyInsertedFlag(t, db, k1, true)
+	mustDelete(t, db, k1)
+	mustNewlyInsertedFlag(t, db, k1, true)
+	db.Cleanup(h)
+
+	// Put after delete, there should be no newly inserted flag.
+	h1 := db.Staging()
+	mustGetNone(t, db, k1)
+	mustDelete(t, db, k1)
+	mustGetVal(t, db, k1, tombstone)
+	mustPut(t, db, k1, v1)
+	mustNewlyInsertedFlag(t, db, k1, false)
+	mustPut(t, db, k1, v2)
+	mustNewlyInsertedFlag(t, db, k1, false)
+	db.Release(h1)
+
+	h2 := db.Staging()
+	mustGetVal(t, db, k1, v2)
+	mustDelete(t, db, k1)
+	mustNewlyInsertedFlag(t, db, k1, false)
+	mustDelete(t, db, k2)
+	mustNewlyInsertedFlag(t, db, k2, false)
+	mustPut(t, db, k2, v2)
+	mustNewlyInsertedFlag(t, db, k2, false)
+	mustPut(t, db, k3, v3)
+	mustNewlyInsertedFlag(t, db, k3, true)
+	mustPut(t, db, k3, v2)
+	mustNewlyInsertedFlag(t, db, k3, true)
+	mustDelete(t, db, k3)
+	mustNewlyInsertedFlag(t, db, k3, true)
+	db.Release(h2)
+
+	mustNewlyInsertedFlag(t, db, k3, true)
+	mustNewlyInsertedFlag(t, db, k2, false)
 }

@@ -73,7 +73,7 @@ type memdbSnapGetter struct {
 }
 
 func (snap *memdbSnapGetter) Get(key []byte) ([]byte, error) {
-	x := snap.db.traverse(key, false)
+	x, _ := snap.db.traverse(key, false)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
 	}
