@@ -438,10 +438,21 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 					checkCnt++
 					memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
 				} else {
-					// normal delete keys in optimistic txn can be delete without not exists checking
-					// delete-your-writes keys in pessimistic txn can ensure must be no exists so can directly delete them
-					op = kvrpcpb.Op_Del
-					delCnt++
+					if flags.HasNewlyInserted() {
+						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
+						// other deletes for example the secondary index delete.
+						// Here if `tidb_constraint_check_in_place` is enabled and the transaction is in optimistic mode,
+						// the logic is same as the pessimistic mode.
+						if flags.HasLocked() {
+							op = kvrpcpb.Op_Lock
+							lockCnt++
+						} else {
+							continue
+						}
+					} else {
+						op = kvrpcpb.Op_Del
+						delCnt++
+					}
 				}
 			}
 		}

@@ -188,7 +188,7 @@ func (db *MemDB) Get(key []byte) ([]byte, error) {
 		panic("vlog is resetted")
 	}
 
-	x := db.traverse(key, false)
+	x, _ := db.traverse(key, false)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
 	}
@@ -201,7 +201,7 @@ func (db *MemDB) Get(key []byte) ([]byte, error) {
 
 // SelectValueHistory select the latest value which makes `predicate` returns true from the modification history.
 func (db *MemDB) SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error) {
-	x := db.traverse(key, false)
+	x, _ := db.traverse(key, false)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
 	}
@@ -220,7 +220,7 @@ func (db *MemDB) SelectValueHistory(key []byte, predicate func(value []byte) boo
 
 // GetFlags returns the latest flags associated with key.
 func (db *MemDB) GetFlags(key []byte) (kv.KeyFlags, error) {
-	x := db.traverse(key, false)
+	x, _ := db.traverse(key, false)
 	if x.isNull() {
 		return 0, tikverr.ErrNotExist
 	}
@@ -314,7 +314,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	if len(db.stages) == 0 {
 		db.dirty = true
 	}
-	x := db.traverse(key, true)
+	x, isNewNode := db.traverse(key, true)
 
 	if len(ops) != 0 {
 		flags := kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
@@ -326,6 +326,18 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 
 	if value == nil {
 		return nil
+	}
+
+	// Mark the node for these two situations:
+	// 1. The node is created by an insert operation and there's no old value in the memdb and storage before.
+	// 2. The node is locked and then inserted.
+	// The node marked with `SetNewlyInserted` flag could be turned into an `Op_Lock` operation or discarded
+	// in the commit mutation generation phase, it's used to optimize the "delete-your-write" case so no dangling
+	// delete record, check https://github.com/pingcap/tidb/issues/27564 for details.
+	if len(value) > 0 {
+		if isNewNode || (x.vptr.isNull() && x.getKeyFlags().HasLocked()) {
+			x.setKeyFlags(kv.ApplyFlagsOps(x.getKeyFlags(), kv.SetNewlyInserted))
+		}
 	}
 
 	db.setValue(x, value)
@@ -360,7 +372,7 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
-func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
+func (db *MemDB) traverse(key []byte, insert bool) (memdbNodeAddr, bool) {
 	x := db.getRoot()
 	y := memdbNodeAddr{nil, nullAddr}
 	found := false
@@ -379,7 +391,7 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	}
 
 	if found || !insert {
-		return x
+		return x, false
 	}
 
 	z := db.allocNode(key)
@@ -471,7 +483,7 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	// Set the root node black
 	db.getRoot().setBlack()
 
-	return z
+	return z, true
 }
 
 //
