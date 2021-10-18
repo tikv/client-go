@@ -87,7 +87,7 @@ func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, erro
 		DialKeepAliveTimeout: time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout),
 	})
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return cli, nil
 }
@@ -164,7 +164,7 @@ func (s *KVStore) CheckVisibility(startTime uint64) error {
 func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client) (*KVStore, error) {
 	o, err := oracles.NewPdOracle(pdClient, time.Duration(oracleUpdateInterval)*time.Millisecond)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &KVStore{
@@ -196,24 +196,24 @@ func NewTxnClient(pdAddrs []string) (*KVStore, error) {
 	cfg := config.GetGlobalConfig()
 	pdClient, err := NewPDClient(pdAddrs)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	// init uuid
 	// FIXME: uuid will be a very long and ugly string, simplify it.
 	uuid := fmt.Sprintf("tikv-%v", pdClient.GetClusterID(context.TODO()))
 	tlsConfig, err := cfg.Security.ToTLSConfig()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	spkv, err := NewEtcdSafePointKV(pdAddrs, tlsConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	s, err := NewKVStore(uuid, pdClient, spkv, NewRPCClient(WithSecurity(cfg.Security)))
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	if cfg.TxnLocalLatches.Enabled {
 		s.EnableTxnLocalLatches(cfg.TxnLocalLatches.Capacity)
@@ -240,7 +240,7 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding))
 
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	pdClient := &CodecPDClient{Client: util.InterceptedPDClient{Client: pdCli}}
 	return pdClient, nil
@@ -298,7 +298,7 @@ func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, er
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
 	startTS, err := s.getTimestampWithRetry(bo, options.TxnScope)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
 	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
@@ -334,7 +334,7 @@ func (s *KVStore) Close() error {
 	s.pdClient.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	if s.txnLatches != nil {
@@ -343,7 +343,7 @@ func (s *KVStore) Close() error {
 	s.regionCache.Close()
 
 	if err := s.kv.Close(); err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	return nil
 }
@@ -358,7 +358,7 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
 	startTS, err := s.getTimestampWithRetry(bo, txnScope)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	return startTS, nil
 }
@@ -392,7 +392,7 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 		}
 		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get timestamp failed: %v", err))
 		if err != nil {
-			return 0, errors.Trace(err)
+			return 0, err
 		}
 	}
 }
@@ -596,24 +596,24 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		KeyPath:  security.ClusterSSLKey,
 	}, opts...)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	pdCli = util.InterceptedPDClient{Client: pdCli}
 	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID(context.TODO()))
 
 	tlsConfig, err := security.ToTLSConfig()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	spkv, err := NewEtcdSafePointKV(etcdAddrs, tlsConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return s.lockResolver, nil
 }

@@ -126,7 +126,7 @@ type EtcdSafePointKV struct {
 func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config) (*EtcdSafePointKV, error) {
 	etcdCli, err := createEtcdKV(addrs, tlsConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return &EtcdSafePointKV{cli: etcdCli}, nil
 }
@@ -169,7 +169,7 @@ func (w *EtcdSafePointKV) GetWithPrefix(k string) ([]*mvccpb.KeyValue, error) {
 
 // Close implements the Close for SafePointKV
 func (w *EtcdSafePointKV) Close() error {
-	return errors.Trace(w.cli.Close())
+	return errors.WithStack(w.cli.Close())
 }
 
 func saveSafePoint(kv SafePointKV, t uint64) error {
