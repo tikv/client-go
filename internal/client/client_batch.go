@@ -45,9 +45,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
-	"github.com/pingcap/parser/terror"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
@@ -458,7 +458,7 @@ func (s *batchCommandsStream) recreate(conn *grpc.ClientConn) error {
 	}
 	streamClient, err := tikvClient.BatchCommands(ctx)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	}
 	s.Tikv_BatchCommandsClient = streamClient
 	return nil
@@ -702,7 +702,7 @@ func (c *batchCommandsClient) recreateStreamingClient(err error, streamClient *b
 		err2 := b.Backoff(retry.BoTiKVRPC, err1)
 		// As timeout is set to math.MaxUint32, err2 should always be nil.
 		// This line is added to make the 'make errcheck' pass.
-		terror.Log(err2)
+		tikverr.Log(err2)
 	}
 	return false
 }
@@ -710,7 +710,7 @@ func (c *batchCommandsClient) recreateStreamingClient(err error, streamClient *b
 func (c *batchCommandsClient) newBatchStream(forwardedHost string) (*batchCommandsStream, error) {
 	batchStream := &batchCommandsStream{forwardedHost: forwardedHost}
 	if err := batchStream.recreate(c.conn); err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return batchStream, nil
 }
@@ -729,7 +729,7 @@ func (c *batchCommandsClient) initBatchClient(forwardedHost string) error {
 
 	streamClient, err := c.newBatchStream(forwardedHost)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	if forwardedHost == "" {
 		c.client = streamClient
@@ -777,7 +777,7 @@ func sendBatchRequest(
 	case <-ctx.Done():
 		logutil.BgLogger().Warn("send request is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
-		return nil, errors.Trace(ctx.Err())
+		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		return nil, errors.SuspendStack(errors.Annotate(context.DeadlineExceeded, "wait sendLoop"))
 	}
@@ -786,14 +786,14 @@ func sendBatchRequest(
 	select {
 	case res, ok := <-entry.res:
 		if !ok {
-			return nil, errors.Trace(entry.err)
+			return nil, errors.WithStack(entry.err)
 		}
 		return tikvrpc.FromBatchCommandsResponse(res)
 	case <-ctx.Done():
 		atomic.StoreInt32(&entry.canceled, 1)
 		logutil.BgLogger().Warn("wait response is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
-		return nil, errors.Trace(ctx.Err())
+		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
 		return nil, errors.SuspendStack(errors.Annotate(context.DeadlineExceeded, "wait recvLoop"))

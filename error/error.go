@@ -41,7 +41,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/pingcap/parser/terror"
+	"github.com/pingcap/log"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
@@ -88,6 +88,8 @@ var (
 	ErrTiKVDiskFull = errors.New("tikv disk full")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
+	// ErrResultUndetermined is the error when execution result is unknown.
+	ErrResultUndetermined = errors.New("execution result undetermined")
 )
 
 // MismatchClusterID represents the message that the cluster ID of the PD client does not match the PD.
@@ -265,5 +267,12 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 
 // IsErrorUndetermined checks if the error is undetermined error.
 func IsErrorUndetermined(err error) bool {
-	return terror.ErrorEqual(err, terror.ErrResultUndetermined)
+	return errors.Cause(err) == ErrResultUndetermined
+}
+
+// Log logs the error if it is not nil.
+func Log(err error) {
+	if err != nil {
+		log.Error("encountered error", zap.Error(err), zap.Stack("stack"))
+	}
 }

@@ -36,7 +36,6 @@ package tikvrpc
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -737,7 +736,7 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	case CmdCheckSecondaryLocks:
 		req.CheckSecondaryLocks().Context = ctx
 	default:
-		return fmt.Errorf("invalid request type %v", req.Type)
+		return errors.Errorf("invalid request type %v", req.Type)
 	}
 	return nil
 }
@@ -880,7 +879,7 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 			RegionError: e,
 		}
 	default:
-		return nil, fmt.Errorf("invalid request type %v", req.Type)
+		return nil, errors.Errorf("invalid request type %v", req.Type)
 	}
 	resp.Resp = p
 	return resp, nil
@@ -900,7 +899,7 @@ func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 		if _, isEmpty := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); isEmpty {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("invalid response type %v", resp)
+		return nil, errors.Errorf("invalid response type %v", resp)
 	}
 	return err.GetRegionError(), nil
 }
@@ -1017,7 +1016,7 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return resp, nil
 }

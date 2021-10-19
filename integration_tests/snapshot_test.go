@@ -211,7 +211,7 @@ func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
 	txn1 := s.beginTxn()
 	// txn1 is not blocked by txn in the large txn protocol.
 	_, err = txn1.Get(ctx, x)
-	s.True(error.IsErrNotFound(errors.Trace(err)))
+	s.True(error.IsErrNotFound(err))
 
 	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys([][]byte{x, y, []byte("z")}))
 	s.Nil(err)
@@ -243,7 +243,7 @@ func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
 	s.Equal(committer.GetPrimaryKey(), x)
 	// Point get secondary key. Shouldn't be blocked by the lock and read old data.
 	_, err = snapshot.Get(ctx, y)
-	s.True(error.IsErrNotFound(errors.Trace(err)))
+	s.True(error.IsErrNotFound(err))
 	s.Less(time.Since(start), 500*time.Millisecond)
 
 	// Commit the primary key

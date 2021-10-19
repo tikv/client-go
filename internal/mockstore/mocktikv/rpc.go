@@ -48,13 +48,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/parser/terror"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 )
-
-// For gofail injection.
-var undeterminedErr = terror.ErrResultUndetermined
 
 const requestMaxSize = 8 * 1024 * 1024
 
@@ -759,7 +756,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		resp.Resp = kvHandler{session}.handleKvCommit(r)
 		if val, err := util.EvalFailpoint("rpcCommitTimeout"); err == nil {
 			if val.(bool) {
-				return nil, undeterminedErr
+				return nil, tikverr.ErrResultUndetermined
 			}
 		}
 	case tikvrpc.CmdCleanup:
@@ -914,7 +911,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		}
 		batchResp, err := c.coprHandler.HandleBatchCop(ctx, reqCtx, session, req.BatchCop(), timeout)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		resp.Resp = batchResp
 	case tikvrpc.CmdCopStream:
@@ -925,7 +922,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		session.rawEndKey = MvccKey(session.endKey).Raw()
 		streamResp, err := c.coprHandler.HandleCopStream(ctx, reqCtx, session, req.Cop(), timeout)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		resp.Resp = streamResp
 	case tikvrpc.CmdMvccGetByKey:
