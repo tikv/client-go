@@ -32,6 +32,7 @@ import (
 // ReturnedValue pairs the Value and AlreadyLocked flag for PessimisticLock return values result.
 type ReturnedValue struct {
 	Value         []byte
+	Exists        bool
 	AlreadyLocked bool
 }
 
@@ -61,6 +62,7 @@ type LockCtx struct {
 	LockKeysDuration      *int64
 	LockKeysCount         *int32
 	ReturnValues          bool
+	CheckExistence        bool
 	Values                map[string]ReturnedValue
 	ValuesLock            sync.Mutex
 	LockExpired           *uint32

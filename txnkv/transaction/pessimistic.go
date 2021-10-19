@@ -108,15 +108,16 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys))
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
-		Mutations:    mutations,
-		PrimaryLock:  c.primary(),
-		StartVersion: c.startTS,
-		ForUpdateTs:  c.forUpdateTS,
-		LockTtl:      ttl,
-		IsFirstLock:  c.isFirstLock,
-		WaitTimeout:  action.LockWaitTime(),
-		ReturnValues: action.ReturnValues,
-		MinCommitTs:  c.forUpdateTS + 1,
+		Mutations:      mutations,
+		PrimaryLock:    c.primary(),
+		StartVersion:   c.startTS,
+		ForUpdateTs:    c.forUpdateTS,
+		LockTtl:        ttl,
+		IsFirstLock:    c.isFirstLock,
+		WaitTimeout:    action.LockWaitTime(),
+		ReturnValues:   action.ReturnValues,
+		CheckExistence: action.CheckExistence,
+		MinCommitTs:    c.forUpdateTS + 1,
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: action.LockCtx.ResourceGroupTag,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
 	lockWaitStartTime := action.WaitStartTime
@@ -179,10 +180,18 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				c.run(c, action.LockCtx)
 			}
 
-			if action.ReturnValues {
+			if action.ReturnValues || action.CheckExistence {
 				action.ValuesLock.Lock()
 				for i, mutation := range mutations {
-					action.Values[string(mutation.Key)] = kv.ReturnedValue{Value: lockResp.Values[i]}
+					var value []byte
+					if action.ReturnValues {
+						value = lockResp.Values[i]
+					}
+					var exists = !lockResp.NotFounds[i]
+					action.Values[string(mutation.Key)] = kv.ReturnedValue{
+						Value:  value,
+						Exists: exists,
+					}
 				}
 				action.ValuesLock.Unlock()
 			}

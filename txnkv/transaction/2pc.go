@@ -438,6 +438,32 @@ type KVFilter interface {
 	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) bool
 }
 
+func (c *twoPhaseCommitter) checkPessimisticMutationAssertion(key []byte, flags kv.KeyFlags, mustExist, mustNotExist bool) error {
+	if flags.HasLockedValueExists() && mustNotExist {
+		return &tikverr.ErrAssertionFailed{
+			AssertionFailed: &kvrpcpb.AssertionFailed{
+				StartTs:          c.startTS,
+				Key:              key,
+				Assertion:        kvrpcpb.Assertion_NotExist,
+				ExistingStartTs:  0,
+				ExistingCommitTs: 0,
+			},
+		}
+	} else if !flags.HasLockedValueExists() && mustExist {
+		return &tikverr.ErrAssertionFailed{
+			AssertionFailed: &kvrpcpb.AssertionFailed{
+				StartTs:          c.startTS,
+				Key:              key,
+				Assertion:        kvrpcpb.Assertion_Exist,
+				ExistingStartTs:  0,
+				ExistingCommitTs: 0,
+			},
+		}
+	}
+
+	return nil
+}
+
 func (c *twoPhaseCommitter) initKeysAndMutations() error {
 	var size, putCnt, delCnt, lockCnt, checkCnt int
 
@@ -511,6 +537,14 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle())
 		size += len(key) + len(value)
+
+		// Check mutations for pessimistic-locked keys with the read results of pessimistic lock requests.
+		if isPessimistic {
+			err = c.checkPessimisticMutationAssertion(key, flags, mustExist, mustNotExist)
+			if err != nil {
+				return errors.Trace(err)
+			}
+		}
 
 		// Update metrics
 		if mustExist {
