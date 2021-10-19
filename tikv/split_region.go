@@ -327,9 +327,11 @@ func (s *KVStore) CheckRegionInScattering(regionID uint64) (bool, error) {
 		}
 		if err != nil {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(err.Error()))
-			return true, err
 		} else {
 			return true, nil
+		}
+		if err != nil {
+			return true, err
 		}
 	}
 }

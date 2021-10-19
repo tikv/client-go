@@ -136,10 +136,7 @@ func (w *EtcdSafePointKV) Put(k string, v string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	_, err := w.cli.Put(ctx, k, v)
 	cancel()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
+	return errors.WithStack(err)
 }
 
 // Get implements the Get method for SafePointKV
