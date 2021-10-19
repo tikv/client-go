@@ -802,7 +802,6 @@ func sendBatchRequest(
 
 func (c *RPCClient) recycleIdleConnArray() {
 	start := time.Now()
-
 	var addrs []string
 	c.RLock()
 	for _, conn := range c.conns {
