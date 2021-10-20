@@ -573,6 +573,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		return nil
 	}
 	keys = deduplicateKeys(keys)
+	checkedExistence := false
 	if txn.IsPessimistic() && lockCtx.ForUpdateTS > 0 {
 		if txn.committer == nil {
 			// sessionID is used for log.
@@ -661,7 +662,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		valExists := tikv.SetKeyLockedValueExists
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
 		// For other lock modes, the locked key values always exist.
-		if lockCtx.ReturnValues || lockCtx.CheckExistence {
+		if lockCtx.ReturnValues || checkedExistence {
 			val := lockCtx.Values[string(key)]
 			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value is impossible.
 			if !val.Exists {
