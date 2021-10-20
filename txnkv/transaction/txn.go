@@ -657,6 +657,10 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			}
 			return err
 		}
+
+		if lockCtx.CheckExistence {
+			checkedExistence = true
+		}
 	}
 	for _, key := range keys {
 		valExists := tikv.SetKeyLockedValueExists
