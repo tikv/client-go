@@ -44,3 +44,5 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	honnef.co/go/tools v0.2.0 // indirect
 )
+replace github.com/tikv/pd => github.com/hzh0425/pd v1.1.0-beta.0.20211019151828-5e68a8296006
+replace github.com/pingcap/kvproto => github.com/hzh0425/kvproto v0.0.0-20211015031806-c23f6e25ff6d
