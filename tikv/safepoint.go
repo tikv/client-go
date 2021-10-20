@@ -126,7 +126,7 @@ type EtcdSafePointKV struct {
 func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config) (*EtcdSafePointKV, error) {
 	etcdCli, err := createEtcdKV(addrs, tlsConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return &EtcdSafePointKV{cli: etcdCli}, nil
 }
@@ -136,10 +136,7 @@ func (w *EtcdSafePointKV) Put(k string, v string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	_, err := w.cli.Put(ctx, k, v)
 	cancel()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	return nil
+	return errors.WithStack(err)
 }
 
 // Get implements the Get method for SafePointKV
@@ -148,7 +145,7 @@ func (w *EtcdSafePointKV) Get(k string) (string, error) {
 	resp, err := w.cli.Get(ctx, k)
 	cancel()
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", errors.WithStack(err)
 	}
 	if len(resp.Kvs) > 0 {
 		return string(resp.Kvs[0].Value), nil
@@ -162,14 +159,14 @@ func (w *EtcdSafePointKV) GetWithPrefix(k string) ([]*mvccpb.KeyValue, error) {
 	resp, err := w.cli.Get(ctx, k, clientv3.WithPrefix())
 	cancel()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return resp.Kvs, nil
 }
 
 // Close implements the Close for SafePointKV
 func (w *EtcdSafePointKV) Close() error {
-	return errors.Trace(w.cli.Close())
+	return errors.WithStack(w.cli.Close())
 }
 
 func saveSafePoint(kv SafePointKV, t uint64) error {
@@ -177,7 +174,7 @@ func saveSafePoint(kv SafePointKV, t uint64) error {
 	err := kv.Put(GcSavedSafePoint, s)
 	if err != nil {
 		logutil.BgLogger().Error("save safepoint failed", zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 	return nil
 }
@@ -186,7 +183,7 @@ func loadSafePoint(kv SafePointKV) (uint64, error) {
 	str, err := kv.Get(GcSavedSafePoint)
 
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 
 	if str == "" {
@@ -195,7 +192,7 @@ func loadSafePoint(kv SafePointKV) (uint64, error) {
 
 	t, err := strconv.ParseUint(str, 10, 64)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, errors.WithStack(err)
 	}
 	return t, nil
 }

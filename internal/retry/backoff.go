@@ -135,7 +135,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	}
 	select {
 	case <-b.ctx.Done():
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	default:
 	}
 
@@ -151,7 +151,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		}
 		logutil.BgLogger().Warn(errMsg)
 		// Use the first backoff type to generate a MySQL error.
-		return b.configs[0].err
+		return errors.WithStack(b.configs[0].err)
 	}
 
 	// Lazy initialize.
@@ -190,7 +190,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 
 	if b.vars != nil && b.vars.Killed != nil {
 		if atomic.LoadUint32(b.vars.Killed) == 1 {
-			return tikverr.ErrQueryInterrupted
+			return errors.WithStack(tikverr.ErrQueryInterrupted)
 		}
 	}
 

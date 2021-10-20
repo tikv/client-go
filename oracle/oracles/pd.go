@@ -79,7 +79,7 @@ func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracl
 	_, err := o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	if err != nil {
 		o.Close()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return o, nil
 }
@@ -98,7 +98,7 @@ func (o *pdOracle) IsExpired(lockTS, TTL uint64, opt *oracle.Option) bool {
 func (o *pdOracle) GetTimestamp(ctx context.Context, opt *oracle.Option) (uint64, error) {
 	ts, err := o.getTimestamp(ctx, opt.TxnScope)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	o.setLastTS(ts, opt.TxnScope)
 	return ts, nil
@@ -145,7 +145,7 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 		physical, logical, err = o.c.GetLocalTS(ctx, txnScope)
 	}
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, errors.WithStack(err)
 	}
 	dist := time.Since(now)
 	if dist > slowDist {
