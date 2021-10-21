@@ -196,7 +196,7 @@ Loop:
 				zap.String("endKey", kv.StrKey(endKey)),
 				zap.Duration("cost time", time.Since(startTime)),
 				zap.Error(err))
-			return errors.Trace(err)
+			return err
 		}
 		task := &kv.KeyRange{
 			StartKey: key,
@@ -236,7 +236,7 @@ Loop:
 				zap.String("endKey", kv.StrKey(endKey)),
 				zap.Duration("cost time", time.Since(startTime)),
 				zap.Error(w.err))
-			return errors.Trace(w.err)
+			return errors.WithStack(w.err)
 		}
 	}
 

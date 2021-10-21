@@ -119,7 +119,7 @@ func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (Ta
 	for {
 		select {
 		case <-ctx.Done():
-			return stat, errors.Trace(ctx.Err())
+			return stat, errors.WithStack(ctx.Err())
 		default:
 		}
 
@@ -130,7 +130,7 @@ func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (Ta
 		bo := retry.NewBackofferWithVars(ctx, deleteRangeOneRegionMaxBackoff, nil)
 		loc, err := t.store.GetRegionCache().LocateKey(bo, startKey)
 		if err != nil {
-			return stat, errors.Trace(err)
+			return stat, err
 		}
 
 		// Delete to the end of the region, except if it's the last region overlapping the range
@@ -148,21 +148,21 @@ func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (Ta
 
 		resp, err := t.store.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
 		if err != nil {
-			return stat, errors.Trace(err)
+			return stat, err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return stat, errors.Trace(err)
+			return stat, err
 		}
 		if regionErr != nil {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return stat, errors.Trace(err)
+				return stat, err
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return stat, errors.Trace(tikverr.ErrBodyMissing)
+			return stat, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		deleteRangeResp := resp.Resp.(*kvrpcpb.DeleteRangeResponse)
 		if err := deleteRangeResp.GetError(); err != "" {
