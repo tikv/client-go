@@ -40,8 +40,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/tikv/client-go/v2/util/codec"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -56,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
