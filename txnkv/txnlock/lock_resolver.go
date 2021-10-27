@@ -252,24 +252,24 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	startTime = time.Now()
 	resp, err := lr.store.SendReq(bo, req, loc, client.ReadTimeoutShort)
 	if err != nil {
-		return false, errors.Trace(err)
+		return false, err
 	}
 
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
-		return false, errors.Trace(err)
+		return false, err
 	}
 
 	if regionErr != nil {
 		err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 		if err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 		return false, nil
 	}
 
 	if resp.Resp == nil {
-		return false, errors.Trace(tikverr.ErrBodyMissing)
+		return false, errors.WithStack(tikverr.ErrBodyMissing)
 	}
 	cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 	if keyErr := cmdResp.GetError(); keyErr != nil {
@@ -384,7 +384,6 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 		err := resolve(l, false)
 		if err != nil {
 			msBeforeTxnExpired.update(0)
-			err = errors.Trace(err)
 			return msBeforeTxnExpired.value(), nil, err
 		}
 	}
@@ -557,26 +556,26 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 	for {
 		loc, err := lr.store.GetRegionCache().LocateKey(bo, primary)
 		if err != nil {
-			return status, errors.Trace(err)
+			return status, err
 		}
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := lr.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
-			return status, errors.Trace(err)
+			return status, err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return status, errors.Trace(err)
+			return status, err
 		}
 		if regionErr != nil {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return status, errors.Trace(err)
+				return status, err
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return status, errors.Trace(tikverr.ErrBodyMissing)
+			return status, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.CheckTxnStatusResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
@@ -699,16 +698,16 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := lr.store.SendReq(bo, req, curRegionID, client.ReadTimeoutShort)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	if regionErr != nil {
 		err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		logutil.BgLogger().Debug("checkSecondaries: region error, regrouping", zap.Uint64("txn id", txnID), zap.Uint64("region", curRegionID.GetID()))
@@ -717,7 +716,7 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 		// of simplicity, we will resolve regions sequentially.
 		regions, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, curKeys, nil)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		for regionID, keys := range regions {
 			// Recursion will terminate because the resolve request succeeds or the Backoffer reaches its limit.
@@ -728,7 +727,7 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 		return nil
 	}
 	if resp.Resp == nil {
-		return errors.Trace(tikverr.ErrBodyMissing)
+		return errors.WithStack(tikverr.ErrBodyMissing)
 	}
 
 	checkResp := resp.Resp.(*kvrpcpb.CheckSecondaryLocksResponse)
@@ -749,7 +748,7 @@ func (lr *LockResolver) resolveLockAsync(bo *retry.Backoffer, l *Lock, status Tx
 	resolveData.keys = append(resolveData.keys, l.Primary)
 	keysByRegion, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, resolveData.keys, nil)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	logutil.BgLogger().Info("resolve async commit", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS))
@@ -787,7 +786,7 @@ func (lr *LockResolver) resolveLockAsync(bo *retry.Backoffer, l *Lock, status Tx
 func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status *TxnStatus) (*asyncResolveData, error) {
 	regions, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, status.primaryLock.Secondaries, nil)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	shared := asyncResolveData{
@@ -832,17 +831,17 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := lr.store.SendReq(bo, req, region, client.ReadTimeoutShort)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	if regionErr != nil {
 		err := bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		logutil.BgLogger().Info("resolveRegionLocks region error, regrouping", zap.String("lock", l.String()), zap.Uint64("region", region.GetID()))
@@ -850,7 +849,7 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 		// Regroup locks.
 		regions, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, keys, nil)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		for regionID, keys := range regions {
 			// Recursion will terminate because the resolve request succeeds or the Backoffer reaches its limit.
@@ -861,7 +860,7 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 		return nil
 	}
 	if resp.Resp == nil {
-		return errors.Trace(tikverr.ErrBodyMissing)
+		return errors.WithStack(tikverr.ErrBodyMissing)
 	}
 	cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 	if keyErr := cmdResp.GetError(); keyErr != nil {
@@ -878,7 +877,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 	for {
 		loc, err := lr.store.GetRegionCache().LocateKey(bo, l.Key)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if _, ok := cleanRegions[loc.Region]; ok {
 			return nil
@@ -902,21 +901,21 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := lr.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return errors.Trace(tikverr.ErrBodyMissing)
+			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
@@ -936,7 +935,7 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, cle
 	for {
 		loc, err := lr.store.GetRegionCache().LocateKey(bo, l.Key)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if _, ok := cleanRegions[loc.Region]; ok {
 			return nil
@@ -954,21 +953,21 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, cle
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := lr.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return errors.Trace(tikverr.ErrBodyMissing)
+			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.PessimisticRollbackResponse)
 		if keyErr := cmdResp.GetErrors(); len(keyErr) > 0 {

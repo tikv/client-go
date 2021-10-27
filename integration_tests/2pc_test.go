@@ -1051,7 +1051,7 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	s.Nil(failpoint.Disable("tikvclient/txnNotFoundRetTTL"))
 	s.Nil(err)
 	waitErr := <-doneCh
-	s.Equal(tikverr.ErrLockWaitTimeout, waitErr)
+	s.Equal(tikverr.ErrLockWaitTimeout, errors.Unwrap(waitErr))
 }
 
 func (s *testCommitterSuite) TestResolvePessimisticLock() {

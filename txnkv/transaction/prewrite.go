@@ -194,7 +194,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			// If prewrite has been cancelled, all ongoing prewrite RPCs will become errors, we needn't set undetermined
 			// errors.
 			if (c.isAsyncCommit() || c.isOnePC()) && sender.GetRPCError() != nil && atomic.LoadUint32(&c.prewriteCancelled) == 0 {
-				c.setUndeterminedErr(errors.Trace(sender.GetRPCError()))
+				c.setUndeterminedErr(sender.GetRPCError())
 			}
 		}
 	}()
@@ -208,12 +208,12 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		// Unexpected error occurs, return it
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			// For other region error and the fake region error, backoff because
@@ -222,7 +222,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
 				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 			}
 			if regionErr.GetDiskFull() != nil {
@@ -236,21 +236,21 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					zap.String("store_id", desc),
 					zap.String("reason", regionErr.GetDiskFull().GetReason()))
 
-				return errors.Trace(errors.New(regionErr.String()))
+				return errors.New(regionErr.String())
 			}
 			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			if same {
 				continue
 			}
 			err = c.doActionOnMutations(bo, actionPrewrite{true}, batch.mutations)
-			return errors.Trace(err)
+			return err
 		}
 
 		if resp.Resp == nil {
-			return errors.Trace(tikverr.ErrBodyMissing)
+			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		prewriteResp := resp.Resp.(*kvrpcpb.PrewriteResponse)
 		keyErrs := prewriteResp.GetErrors()
@@ -271,7 +271,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if c.isOnePC() {
 				if prewriteResp.OnePcCommitTs == 0 {
 					if prewriteResp.MinCommitTs != 0 {
-						return errors.Trace(errors.New("MinCommitTs must be 0 when 1pc falls back to 2pc"))
+						return errors.New("MinCommitTs must be 0 when 1pc falls back to 2pc")
 					}
 					logutil.Logger(bo.GetCtx()).Warn("1pc failed and fallbacks to normal commit procedure",
 						zap.Uint64("startTS", c.startTS))
@@ -324,7 +324,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			// Extract lock from key error
 			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err1 != nil {
-				return errors.Trace(err1)
+				return err1
 			}
 			logutil.BgLogger().Info("prewrite encounters lock",
 				zap.Uint64("session", c.sessionID),
@@ -334,13 +334,13 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 		start := time.Now()
 		msBeforeExpired, err := c.store.GetLockResolver().ResolveLocksForWrite(bo, c.startTS, c.forUpdateTS, locks)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		atomic.AddInt64(&c.getDetail().ResolveLockTime, int64(time.Since(start)))
 		if msBeforeExpired > 0 {
 			err = bo.BackoffWithCfgAndMaxSleep(retry.BoTxnLock, int(msBeforeExpired), errors.Errorf("2PC prewrite lockedKeys: %d", len(locks)))
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 		}
 	}
