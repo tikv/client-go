@@ -157,7 +157,7 @@ func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
 		return nil, err
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	return ret, nil
@@ -339,7 +339,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	if committer == nil {
 		committer, err = newTwoPhaseCommitter(txn, sessionID)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		txn.committer = committer
 	}
@@ -352,7 +352,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	err = committer.initKeysAndMutations()
 	initRegion.End()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	if committer.mutations.Len() == 0 {
 		return nil
@@ -383,7 +383,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 			txn.onCommitted(err)
 		}
 		logutil.Logger(ctx).Debug("[kv] txnLatches disabled, 2pc directly", zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 
 	// latches enabled
@@ -407,7 +407,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		lock.SetCommitTS(committer.commitTS)
 	}
 	logutil.Logger(ctx).Debug("[kv] txnLatches enabled while txn retryable", zap.Error(err))
-	return errors.Trace(err)
+	return err
 }
 
 func (txn *KVTxn) close() {
