@@ -532,29 +532,31 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 			isPessimistic = c.isPessimistic
 		}
 		mustExist, mustNotExist, hasAssertion := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertion()
-		if c.txn.schemaAmender != nil {
+		if c.txn.schemaAmender != nil || c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
 			mustExist, mustNotExist, hasAssertion = false, false, false
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle())
 		size += len(key) + len(value)
 
-		// Check mutations for pessimistic-locked keys with the read results of pessimistic lock requests.
-		if isPessimistic {
-			err = c.checkPessimisticMutationAssertion(key, flags, mustExist, mustNotExist)
-			if err != nil {
-				return errors.Trace(err)
+		if c.txn.assertionLevel != kvrpcpb.AssertionLevel_Off {
+			// Check mutations for pessimistic-locked keys with the read results of pessimistic lock requests.
+			if isPessimistic {
+				err = c.checkPessimisticMutationAssertion(key, flags, mustExist, mustNotExist)
+				if err != nil {
+					return errors.Trace(err)
+				}
 			}
-		}
 
-		// Update metrics
-		if mustExist {
-			metrics.PrewriteAssertionUsageCounterExist.Inc()
-		} else if mustNotExist {
-			metrics.PrewriteAssertionUsageCounterNotExist.Inc()
-		} else if hasAssertion {
-			metrics.PrewriteAssertionUsageCounterUnknown.Inc()
-		} else {
-			metrics.PrewriteAssertionUsageCounterNone.Inc()
+			// Update metrics
+			if mustExist {
+				metrics.PrewriteAssertionUsageCounterExist.Inc()
+			} else if mustNotExist {
+				metrics.PrewriteAssertionUsageCounterNotExist.Inc()
+			} else if hasAssertion {
+				metrics.PrewriteAssertionUsageCounterUnknown.Inc()
+			} else {
+				metrics.PrewriteAssertionUsageCounterNone.Inc()
+			}
 		}
 
 		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
