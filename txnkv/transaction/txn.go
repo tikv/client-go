@@ -110,6 +110,7 @@ type KVTxn struct {
 	kvFilter           KVFilter
 	resourceGroupTag   []byte
 	diskFullOpt        kvrpcpb.DiskFullOpt
+	assertionLevel     kvrpcpb.AssertionLevel
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -284,6 +285,11 @@ func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
 // ClearDiskFullOpt clears the options of current operation in each tikv disk usage level.
 func (txn *KVTxn) ClearDiskFullOpt() {
 	txn.diskFullOpt = kvrpcpb.DiskFullOpt_NotAllowedOnFull
+}
+
+// SetAssertionLevel sets how strict the assertions in the transaction should be.
+func (txn *KVTxn) SetAssertionLevel(assertionLevel kvrpcpb.AssertionLevel) {
+	txn.assertionLevel = assertionLevel
 }
 
 // IsPessimistic returns true if it is pessimistic.
@@ -668,7 +674,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// For other lock modes, the locked key values always exist.
 		if lockCtx.ReturnValues || checkedExistence {
 			val := lockCtx.Values[string(key)]
-			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value is impossible.
+			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
 			if !val.Exists {
 				valExists = tikv.SetKeyLockedValueNotExists
 			}

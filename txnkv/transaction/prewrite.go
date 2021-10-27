@@ -130,6 +130,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		TxnSize:           txnSize,
 		MinCommitTs:       minCommitTS,
 		MaxCommitTs:       c.maxCommitTS,
+		AssertionLevel:    c.txn.assertionLevel,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {
