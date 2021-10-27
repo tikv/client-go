@@ -44,6 +44,7 @@ jobs:
       run: |
         go mod edit -replace=github.com/tikv/client-go/v2=../client-go
         go mod edit -replace=github.com/pingcap/tidb=../tidb
+        go mod edit -replace=github.com/pingcap/tidb/parser=../tidb/parser
         go mod tidy
         make
       working-directory: ticdc
