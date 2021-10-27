@@ -74,8 +74,13 @@ var MaxRecvMsgSize = math.MaxInt64 - 1
 // Timeout durations.
 const (
 	dialTimeout       = 5 * time.Second
-	ReadTimeoutShort  = 20 * time.Second // For requests that read/write several key-values.
+	ReadTimeoutShort  = 30 * time.Second // For requests that read/write several key-values.
 	ReadTimeoutMedium = 60 * time.Second // For requests that may need scan region.
+
+	// MaxWriteExecutionTime is the MaxExecutionDurationMs field for write requests.
+	// Because the last deadline check is before proposing, let us give it 10 more seconds
+	// after proposing.
+	MaxWriteExecutionTime = ReadTimeoutShort - 10*time.Second
 )
 
 // Grpc window size

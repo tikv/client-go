@@ -115,7 +115,8 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		WaitTimeout:  action.LockWaitTime(),
 		ReturnValues: action.ReturnValues,
 		MinCommitTs:  c.forUpdateTS + 1,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: action.LockCtx.ResourceGroupTag})
+	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: action.LockCtx.ResourceGroupTag,
+		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
 	lockWaitStartTime := action.WaitStartTime
 	for {
 		// if lockWaitTime set, refine the request `WaitTimeout` field based on timeout limit
@@ -252,6 +253,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 		ForUpdateTs:  c.forUpdateTS,
 		Keys:         batch.mutations.GetKeys(),
 	})
+	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {
 		return errors.Trace(err)

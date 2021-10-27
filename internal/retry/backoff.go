@@ -55,9 +55,10 @@ import (
 type Backoffer struct {
 	ctx context.Context
 
-	fn         map[string]backoffFn
-	maxSleep   int
-	totalSleep int
+	fn            map[string]backoffFn
+	maxSleep      int
+	totalSleep    int
+	excludedSleep int
 
 	vars *kv.Variables
 	noop bool
@@ -138,7 +139,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 
 	b.errors = append(b.errors, errors.Errorf("%s at %s", err.Error(), time.Now().Format(time.RFC3339Nano)))
 	b.configs = append(b.configs, cfg)
-	if b.noop || (b.maxSleep > 0 && b.totalSleep >= b.maxSleep) {
+	if b.noop || (b.maxSleep > 0 && (b.totalSleep-b.excludedSleep) >= b.maxSleep) {
 		errMsg := fmt.Sprintf("%s backoffer.maxSleep %dms is exceeded, errors:", cfg.String(), b.maxSleep)
 		for i, err := range b.errors {
 			// Print only last 3 errors for non-DEBUG log levels.
@@ -164,7 +165,11 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	if cfg.metric != nil {
 		(*cfg.metric).Observe(float64(realSleep) / 1000)
 	}
+
 	b.totalSleep += realSleep
+	if _, ok := isSleepExcluded[cfg]; ok {
+		b.excludedSleep += realSleep
+	}
 	if b.backoffSleepMS == nil {
 		b.backoffSleepMS = make(map[string]int)
 	}
@@ -194,6 +199,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	logutil.Logger(b.ctx).Debug("retry later",
 		zap.Error(err),
 		zap.Int("totalSleep", b.totalSleep),
+		zap.Int("excludedSleep", b.excludedSleep),
 		zap.Int("maxSleep", b.maxSleep),
 		zap.Stringer("type", cfg),
 		zap.Reflect("txnStartTS", startTs))
@@ -211,12 +217,13 @@ func (b *Backoffer) String() string {
 // current Backoffer's context.
 func (b *Backoffer) Clone() *Backoffer {
 	return &Backoffer{
-		ctx:        b.ctx,
-		maxSleep:   b.maxSleep,
-		totalSleep: b.totalSleep,
-		errors:     b.errors,
-		vars:       b.vars,
-		parent:     b.parent,
+		ctx:           b.ctx,
+		maxSleep:      b.maxSleep,
+		totalSleep:    b.totalSleep,
+		excludedSleep: b.excludedSleep,
+		errors:        b.errors,
+		vars:          b.vars,
+		parent:        b.parent,
 	}
 }
 
@@ -225,12 +232,13 @@ func (b *Backoffer) Clone() *Backoffer {
 func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(b.ctx)
 	return &Backoffer{
-		ctx:        ctx,
-		maxSleep:   b.maxSleep,
-		totalSleep: b.totalSleep,
-		errors:     b.errors,
-		vars:       b.vars,
-		parent:     b,
+		ctx:           ctx,
+		maxSleep:      b.maxSleep,
+		totalSleep:    b.totalSleep,
+		excludedSleep: b.excludedSleep,
+		errors:        b.errors,
+		vars:          b.vars,
+		parent:        b,
 	}, cancel
 }
 
@@ -297,6 +305,7 @@ func (b *Backoffer) ErrorsNum() int {
 func (b *Backoffer) Reset() {
 	b.fn = nil
 	b.totalSleep = 0
+	b.excludedSleep = 0
 }
 
 // ResetMaxSleep resets the sleep state and max sleep limit of the backoffer.

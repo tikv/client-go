@@ -120,6 +120,11 @@ var (
 	BoTxnLockFast = NewConfig(txnLockFastName, &metrics.BackoffHistogramLockFast, NewBackoffFnCfg(2, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
 )
 
+var isSleepExcluded = map[*Config]struct{}{
+	BoTiKVServerBusy: {},
+	// add BoTiFlashServerBusy if appropriate
+}
+
 const (
 	// NoJitter makes the backoff sequence strict exponential.
 	NoJitter = 1 + iota
