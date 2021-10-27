@@ -241,26 +241,26 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 	}
 
 	if keyErr.Conflict != nil {
-		return &ErrWriteConflict{WriteConflict: keyErr.GetConflict()}
+		return errors.WithStack(&ErrWriteConflict{WriteConflict: keyErr.GetConflict()})
 	}
 
 	if keyErr.Retryable != "" {
-		return &ErrRetryable{Retryable: keyErr.Retryable}
+		return errors.WithStack(&ErrRetryable{Retryable: keyErr.Retryable})
 	}
 
 	if keyErr.Abort != "" {
 		err := errors.Errorf("tikv aborts txn: %s", keyErr.GetAbort())
 		logutil.BgLogger().Warn("2PC failed", zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 	if keyErr.CommitTsTooLarge != nil {
 		err := errors.Errorf("commit TS %v is too large", keyErr.CommitTsTooLarge.CommitTs)
 		logutil.BgLogger().Warn("2PC failed", zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 	if keyErr.TxnNotFound != nil {
 		err := errors.Errorf("txn %d not found", keyErr.TxnNotFound.StartTs)
-		return errors.Trace(err)
+		return err
 	}
 	return errors.Errorf("unexpected KeyError: %s", keyErr.String())
 }
