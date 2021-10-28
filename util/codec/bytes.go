@@ -38,7 +38,7 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 )
 
 const (

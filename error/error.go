@@ -38,10 +38,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
@@ -97,7 +97,7 @@ const MismatchClusterID = "mismatch cluster id"
 
 // IsErrNotFound checks if err is a kind of NotFound error.
 func IsErrNotFound(err error) bool {
-	return errors.ErrorEqual(err, ErrNotExist)
+	return errors.Is(err, ErrNotExist)
 }
 
 // ErrDeadlock wraps *kvrpcpb.Deadlock to implement the error interface.
@@ -267,7 +267,7 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 
 // IsErrorUndetermined checks if the error is undetermined error.
 func IsErrorUndetermined(err error) bool {
-	return errors.Cause(err) == ErrResultUndetermined
+	return errors.Is(err, ErrResultUndetermined)
 }
 
 // Log logs the error if it is not nil.

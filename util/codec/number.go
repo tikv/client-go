@@ -38,7 +38,7 @@ import (
 	"encoding/binary"
 	"math"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 )
 
 const signMask uint64 = 0x8000000000000000
