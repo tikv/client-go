@@ -1048,7 +1048,7 @@ func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 	ret, err := resp.Tikv_CoprocessorStreamClient.Recv()
 
 	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
-	return ret, errors.Trace(err)
+	return ret, errors.WithStack(err)
 }
 
 // Close closes the CopStreamResponse object.
@@ -1069,7 +1069,7 @@ func (resp *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
 	ret, err := resp.Tikv_BatchCoprocessorClient.Recv()
 
 	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
-	return ret, errors.Trace(err)
+	return ret, errors.WithStack(err)
 }
 
 // Close closes the BatchCopStreamResponse object.
@@ -1090,7 +1090,7 @@ func (resp *MPPStreamResponse) Recv() (*mpp.MPPDataPacket, error) {
 	ret, err := resp.Tikv_EstablishMPPConnectionClient.Recv()
 
 	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
-	return ret, errors.Trace(err)
+	return ret, errors.WithStack(err)
 }
 
 // Close closes the MPPStreamResponse object.

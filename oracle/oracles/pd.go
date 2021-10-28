@@ -116,7 +116,7 @@ func (f *tsFuture) Wait() (uint64, error) {
 	physical, logical, err := f.TSFuture.Wait()
 	metrics.TiKVTSFutureWaitDuration.Observe(time.Since(now).Seconds())
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, errors.WithStack(err)
 	}
 	ts := oracle.ComposeTS(physical, logical)
 	f.o.setLastTS(ts, f.txnScope)
@@ -320,10 +320,10 @@ func (o *pdOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevS
 			// If any error happened, we will try to fetch tso and set it as last ts.
 			_, tErr := o.GetTimestamp(ctx, &oracle.Option{TxnScope: txnScope})
 			if tErr != nil {
-				return 0, errors.Trace(tErr)
+				return 0, tErr
 			}
 		}
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	return ts, nil
 }

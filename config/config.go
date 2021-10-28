@@ -184,7 +184,7 @@ func ParsePath(path string) (etcdAddrs []string, disableGC bool, err error) {
 	var u *url.URL
 	u, err = url.Parse(path)
 	if err != nil {
-		err = errors.Trace(err)
+		err = errors.WithStack(err)
 		return
 	}
 	if strings.ToLower(u.Scheme) != "tikv" {
