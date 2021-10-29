@@ -225,3 +225,7 @@ func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
 }
 
 func (c *pdClient) GetLeaderAddr() string { return "mockpd" }
+
+func (c *pdClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
+	return nil
+}
