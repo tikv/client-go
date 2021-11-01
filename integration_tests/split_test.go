@@ -268,3 +268,7 @@ func (c *mockPDClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.
 }
 
 func (c *mockPDClient) GetLeaderAddr() string { return "mockpd" }
+
+func (c *mockPDClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
+	return nil
+}
