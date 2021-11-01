@@ -131,8 +131,8 @@ func (k *ErrKeyExist) Error() string {
 
 // IsErrKeyExist returns true if it is ErrKeyExist.
 func IsErrKeyExist(err error) bool {
-	_, ok := errors.Cause(err).(*ErrKeyExist)
-	return ok
+	var e *ErrKeyExist
+	return errors.As(err, &e)
 }
 
 // ErrWriteConflict wraps *kvrpcpb.ErrWriteConflict to implement the error interface.
@@ -146,8 +146,8 @@ func (k *ErrWriteConflict) Error() string {
 
 // IsErrWriteConflict returns true if it is ErrWriteConflict.
 func IsErrWriteConflict(err error) bool {
-	_, ok := errors.Cause(err).(*ErrWriteConflict)
-	return ok
+	var e *ErrWriteConflict
+	return errors.As(err, &e)
 }
 
 //NewErrWriteConfictWithArgs generates an ErrWriteConflict with args.
