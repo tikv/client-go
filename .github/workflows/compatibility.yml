@@ -24,8 +24,7 @@ jobs:
     - name: Checkout TiDB
       uses: actions/checkout@v2
       with:
-        repository: JmPotato/tidb
-        ref: tso_follower_proxy_switch
+        repository: pingcap/tidb
         path: tidb
 
     - name: Check build
