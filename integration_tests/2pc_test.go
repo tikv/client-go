@@ -48,10 +48,10 @@ import (
 	"time"
 
 	"github.com/ninedraft/israce"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	drivertxn "github.com/pingcap/tidb/store/driver/txn"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -1432,7 +1432,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRpcErrors() {
 	s.Nil(err)
 	err = t1.Commit(context.Background())
 	s.NotNil(err)
-	s.True(tikverr.IsErrorUndetermined(err), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.WithStack(err))
 
 	// We don't need to call "Rollback" after "Commit" fails.
 	err = t1.Rollback()
@@ -1453,7 +1453,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRegionError() {
 	s.Nil(err)
 	err = t2.Commit(context.Background())
 	s.NotNil(err)
-	s.False(tikverr.IsErrorUndetermined(err), errors.ErrorStack(err))
+	s.False(tikverr.IsErrorUndetermined(err), errors.WithStack(err))
 }
 
 // TestFailCommitPrimaryRPCErrorThenRegionError tests the case when commit first
@@ -1469,7 +1469,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenRegionError() {
 	s.Nil(err)
 	err = t1.Commit(context.Background())
 	s.NotNil(err)
-	s.True(tikverr.IsErrorUndetermined(err), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.WithStack(err))
 }
 
 // TestFailCommitPrimaryKeyError tests KeyError is handled properly when

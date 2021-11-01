@@ -40,7 +40,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"golang.org/x/sync/singleflight"
 )
