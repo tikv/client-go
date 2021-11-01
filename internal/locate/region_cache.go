@@ -329,6 +329,8 @@ func (r *Region) isValid() bool {
 }
 
 // RegionCache caches Regions loaded from PD.
+// All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
+// purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
 	enableForwarding bool
