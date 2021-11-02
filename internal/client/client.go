@@ -344,22 +344,23 @@ func (c *RPCClient) closeConns() {
 var sendReqHistCache sync.Map
 
 type sendReqHistCacheKey struct {
-	tp tikvrpc.CmdType
-	id uint64
+	tp       tikvrpc.CmdType
+	id       uint64
+	staleRad bool
 }
 
-func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time) {
+func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time, staleRead bool) {
 	key := sendReqHistCacheKey{
 		req.Type,
 		req.Context.GetPeer().GetStoreId(),
+		staleRead,
 	}
 
 	v, ok := sendReqHistCache.Load(key)
 	if !ok {
 		reqType := req.Type.String()
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		staleRead := strconv.FormatBool(req.StaleRead)
-		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, staleRead)
+		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead))
 		sendReqHistCache.Store(key, v)
 	}
 
@@ -386,13 +387,14 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	start := time.Now()
+	staleRead := req.GetStaleRead()
 	defer func() {
 		stmtExec := ctx.Value(util.ExecDetailsKey)
 		if stmtExec != nil {
 			detail := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
-		c.updateTiKVSendReqHistogram(req, start)
+		c.updateTiKVSendReqHistogram(req, start, staleRead)
 	}()
 
 	// TiDB RPC server supports batch RPC, but batch connection will send heart beat, It's not necessary since
