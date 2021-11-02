@@ -33,21 +33,6 @@ jobs:
         go mod tidy
         make server
       working-directory: tidb
-    
-    - name: Checkout TiCDC
-      uses: actions/checkout@v2
-      with:
-        repository: pingcap/ticdc
-        path: ticdc
-
-    - name: Check build
-      run: |
-        go mod edit -replace=github.com/tikv/client-go/v2=../client-go
-        go mod edit -replace=github.com/pingcap/tidb=../tidb
-        go mod edit -replace=github.com/pingcap/tidb/parser=../tidb/parser
-        go mod tidy
-        make
-      working-directory: ticdc
 
     - name: Checkout go-ycsb
       uses: actions/checkout@v2
