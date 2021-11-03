@@ -66,17 +66,15 @@ func (actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 
 func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	keys := batch.mutations.GetKeys()
-	var firstKey []byte
-	if len(keys) > 0 {
-		firstKey = keys[0]
-	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		StartVersion:  c.startTS,
 		Keys:          keys,
 		CommitVersion: c.commitTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
-		ResourceGroupTag: c.resourceGroupTagFactory(firstKey), DiskFullOpt: c.diskFullOpt,
+	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, DiskFullOpt: c.diskFullOpt,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	if c.resourceGroupTagFactory != nil && len(keys) > 0 {
+		req.ResourceGroupTag = c.resourceGroupTagFactory(keys[0])
+	}
 
 	tBegin := time.Now()
 	attempts := 0

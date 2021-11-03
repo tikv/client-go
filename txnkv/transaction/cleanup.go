@@ -60,15 +60,14 @@ func (actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 
 func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	keys := batch.mutations.GetKeys()
-	var firstKey []byte
-	if len(keys) > 0 {
-		firstKey = keys[0]
-	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
 		Keys:         keys,
 		StartVersion: c.startTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTagFactory(firstKey),
+	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	if c.resourceGroupTagFactory != nil && len(keys) > 0 {
+		req.ResourceGroupTag = c.resourceGroupTagFactory(keys[0])
+	}
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {
 		return err

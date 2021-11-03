@@ -141,14 +141,14 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		req.TryOnePc = true
 	}
 
-	var firstKey []byte
-	if len(mutations) > 0 {
+	var resourceGroupTag []byte
+	if c.resourceGroupTagFactory != nil && len(mutations) > 0 {
 		if mutation := mutations[0]; mutation != nil {
-			firstKey = mutation.Key
+			resourceGroupTag = c.resourceGroupTagFactory(mutation.Key)
 		}
 	}
 	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req,
-		kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTagFactory(firstKey),
+		kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: resourceGroupTag,
 			DiskFullOpt: c.diskFullOpt, MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
 }
 

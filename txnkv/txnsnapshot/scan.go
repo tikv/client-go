@@ -232,14 +232,18 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			sreq.EndKey = reqStartKey
 			sreq.Reverse = true
 		}
-		sreq.Context.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(sreq.StartKey)
+		if s.snapshot.resourceGroupTagFactory != nil {
+			sreq.Context.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(sreq.StartKey)
+		}
 		s.snapshot.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdScan, sreq, s.snapshot.mu.replicaRead, &s.snapshot.replicaReadSeed, kvrpcpb.Context{
-			Priority:         s.snapshot.priority.ToPB(),
-			NotFillCache:     s.snapshot.notFillCache,
-			TaskId:           s.snapshot.mu.taskID,
-			ResourceGroupTag: s.snapshot.resourceGroupTagFactory(sreq.StartKey),
+			Priority:     s.snapshot.priority.ToPB(),
+			NotFillCache: s.snapshot.notFillCache,
+			TaskId:       s.snapshot.mu.taskID,
 		})
+		if s.snapshot.resourceGroupTagFactory != nil {
+			req.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(sreq.StartKey)
+		}
 		s.snapshot.mu.RUnlock()
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
 		if err != nil {

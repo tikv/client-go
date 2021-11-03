@@ -342,21 +342,19 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	s.mu.RUnlock()
 
 	pending := batch.keys
-	var firstKey []byte
-	if len(pending) > 0 {
-		firstKey = pending[0]
-	}
 	for {
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
 			Keys:    pending,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
-			Priority:         s.priority.ToPB(),
-			NotFillCache:     s.notFillCache,
-			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTagFactory(firstKey),
+			Priority:     s.priority.ToPB(),
+			NotFillCache: s.notFillCache,
+			TaskId:       s.mu.taskID,
 		})
+		if s.resourceGroupTagFactory != nil && len(pending) > 0 {
+			req.ResourceGroupTag = s.resourceGroupTagFactory(pending[0])
+		}
 		scope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
 		matchStoreLabels := s.mu.matchStoreLabels
@@ -519,11 +517,13 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			Key:     k,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
-			Priority:         s.priority.ToPB(),
-			NotFillCache:     s.notFillCache,
-			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTagFactory(k),
+			Priority:     s.priority.ToPB(),
+			NotFillCache: s.notFillCache,
+			TaskId:       s.mu.taskID,
 		})
+	if s.resourceGroupTagFactory != nil {
+		req.ResourceGroupTag = s.resourceGroupTagFactory(k)
+	}
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
 	scope := s.mu.readReplicaScope
