@@ -144,7 +144,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	var resourceGroupTag []byte
 	if c.resourceGroupTagFactory != nil && len(mutations) > 0 {
 		if mutation := mutations[0]; mutation != nil {
-			resourceGroupTag = c.resourceGroupTagFactory(mutation.Key)
+			resourceGroupTag = c.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: mutation.Key})
 		}
 	}
 	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req,

@@ -43,6 +43,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -66,7 +67,7 @@ func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
 	if c.resourceGroupTagFactory != nil && len(keys) > 0 {
-		req.ResourceGroupTag = c.resourceGroupTagFactory(keys[0])
+		req.ResourceGroupTag = c.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: keys[0]})
 	}
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {

@@ -48,6 +48,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -233,7 +234,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			sreq.Reverse = true
 		}
 		if s.snapshot.resourceGroupTagFactory != nil {
-			sreq.Context.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(sreq.StartKey)
+			sreq.Context.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: sreq.StartKey})
 		}
 		s.snapshot.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdScan, sreq, s.snapshot.mu.replicaRead, &s.snapshot.replicaReadSeed, kvrpcpb.Context{
@@ -242,7 +243,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:       s.snapshot.mu.taskID,
 		})
 		if s.snapshot.resourceGroupTagFactory != nil {
-			req.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(sreq.StartKey)
+			req.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: sreq.StartKey})
 		}
 		s.snapshot.mu.RUnlock()
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)

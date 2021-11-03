@@ -168,7 +168,7 @@ type twoPhaseCommitter struct {
 
 	binlog BinlogExecutor
 
-	resourceGroupTagFactory func(firstKey []byte) []byte
+	resourceGroupTagFactory util.ResourceGroupTagFactory
 
 	// allowed when tikv disk full happened.
 	diskFullOpt kvrpcpb.DiskFullOpt

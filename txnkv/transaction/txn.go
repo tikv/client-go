@@ -108,7 +108,7 @@ type KVTxn struct {
 	causalConsistency       bool
 	scope                   string
 	kvFilter                KVFilter
-	resourceGroupTagFactory func(firstKey []byte) []byte
+	resourceGroupTagFactory util.ResourceGroupTagFactory
 	diskFullOpt             kvrpcpb.DiskFullOpt
 }
 
@@ -227,7 +227,7 @@ func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 }
 
 // SetResourceGroupTagFactory sets the resource tag factory for both write and read.
-func (txn *KVTxn) SetResourceGroupTagFactory(f func(firstKey []byte) []byte) {
+func (txn *KVTxn) SetResourceGroupTagFactory(f util.ResourceGroupTagFactory) {
 	txn.resourceGroupTagFactory = f
 	txn.GetSnapshot().SetResourceGroupTagFactory(f)
 }

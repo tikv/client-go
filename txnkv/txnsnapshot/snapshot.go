@@ -133,7 +133,7 @@ type KVSnapshot struct {
 	}
 	sampleStep uint32
 	// resourceGroupTagFactory is use to set the kv request resource group tag.
-	resourceGroupTagFactory func(firstKey []byte) []byte
+	resourceGroupTagFactory util.ResourceGroupTagFactory
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -353,7 +353,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			TaskId:       s.mu.taskID,
 		})
 		if s.resourceGroupTagFactory != nil && len(pending) > 0 {
-			req.ResourceGroupTag = s.resourceGroupTagFactory(pending[0])
+			req.ResourceGroupTag = s.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: pending[0]})
 		}
 		scope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
@@ -522,7 +522,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			TaskId:       s.mu.taskID,
 		})
 	if s.resourceGroupTagFactory != nil {
-		req.ResourceGroupTag = s.resourceGroupTagFactory(k)
+		req.ResourceGroupTag = s.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: k})
 	}
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
@@ -719,7 +719,7 @@ func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
 }
 
 // SetResourceGroupTagFactory sets resource group tag factory of the kv request.
-func (s *KVSnapshot) SetResourceGroupTagFactory(f func(firstKey []byte) []byte) {
+func (s *KVSnapshot) SetResourceGroupTagFactory(f util.ResourceGroupTagFactory) {
 	s.resourceGroupTagFactory = f
 }
 
