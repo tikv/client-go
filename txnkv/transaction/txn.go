@@ -98,18 +98,18 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
-	binlog             BinlogExecutor
-	schemaLeaseChecker SchemaLeaseChecker
-	syncLog            bool
-	priority           txnutil.Priority
-	isPessimistic      bool
-	enableAsyncCommit  bool
-	enable1PC          bool
-	causalConsistency  bool
-	scope              string
-	kvFilter           KVFilter
-	resourceGroupTag   []byte
-	diskFullOpt        kvrpcpb.DiskFullOpt
+	binlog                  BinlogExecutor
+	schemaLeaseChecker      SchemaLeaseChecker
+	syncLog                 bool
+	priority                txnutil.Priority
+	isPessimistic           bool
+	enableAsyncCommit       bool
+	enable1PC               bool
+	causalConsistency       bool
+	scope                   string
+	kvFilter                KVFilter
+	resourceGroupTagFactory func(firstKey []byte) []byte
+	diskFullOpt             kvrpcpb.DiskFullOpt
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -226,10 +226,10 @@ func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 	txn.GetSnapshot().SetPriority(pri)
 }
 
-// SetResourceGroupTag sets the resource tag for both write and read.
-func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
-	txn.resourceGroupTag = tag
-	txn.GetSnapshot().SetResourceGroupTag(tag)
+// SetResourceGroupTagFactory sets the resource tag factory for both write and read.
+func (txn *KVTxn) SetResourceGroupTagFactory(f func(firstKey []byte) []byte) {
+	txn.resourceGroupTagFactory = f
+	txn.GetSnapshot().SetResourceGroupTagFactory(f)
 }
 
 // SetSchemaAmender sets an amender to update mutations after schema change.

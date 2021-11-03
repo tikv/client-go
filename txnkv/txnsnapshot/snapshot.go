@@ -132,8 +132,8 @@ type KVSnapshot struct {
 		matchStoreLabels []*metapb.StoreLabel
 	}
 	sampleStep uint32
-	// resourceGroupTag is use to set the kv request resource group tag.
-	resourceGroupTag []byte
+	// resourceGroupTagFactory is use to set the kv request resource group tag.
+	resourceGroupTagFactory func(firstKey []byte) []byte
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -342,6 +342,10 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	s.mu.RUnlock()
 
 	pending := batch.keys
+	var firstKey []byte
+	if len(pending) > 0 {
+		firstKey = pending[0]
+	}
 	for {
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
@@ -351,7 +355,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTag,
+			ResourceGroupTag: s.resourceGroupTagFactory(firstKey),
 		})
 		scope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
@@ -518,7 +522,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTag,
+			ResourceGroupTag: s.resourceGroupTagFactory(k),
 		})
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
@@ -714,9 +718,9 @@ func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
 	s.mu.matchStoreLabels = labels
 }
 
-// SetResourceGroupTag sets resource group of the kv request.
-func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
-	s.resourceGroupTag = tag
+// SetResourceGroupTagFactory sets resource group tag factory of the kv request.
+func (s *KVSnapshot) SetResourceGroupTagFactory(f func(firstKey []byte) []byte) {
+	s.resourceGroupTagFactory = f
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.
