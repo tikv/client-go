@@ -39,7 +39,7 @@ import (
 	"crypto/x509"
 	"io/ioutil"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 )
 
 // Security is the security section of the config.

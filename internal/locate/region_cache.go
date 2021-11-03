@@ -48,8 +48,8 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -329,6 +329,8 @@ func (r *Region) isValid() bool {
 }
 
 // RegionCache caches Regions loaded from PD.
+// All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
+// purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
 	enableForwarding bool

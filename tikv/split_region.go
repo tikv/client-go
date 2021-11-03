@@ -40,10 +40,10 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/kvrpc"
@@ -289,7 +289,7 @@ func (s *KVStore) WaitScatterRegionFinish(ctx context.Context, regionID uint64, 
 				return nil
 			}
 			if resp.GetHeader().GetError() != nil {
-				err = errors.AddStack(&tikverr.PDError{
+				err = errors.WithStack(&tikverr.PDError{
 					Err: resp.Header.Error,
 				})
 				logutil.BgLogger().Warn("wait scatter region error",

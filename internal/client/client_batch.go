@@ -43,8 +43,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -432,7 +432,7 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 			logutil.BgLogger().Error("batchCommandsClient.recv panic",
 				zap.Reflect("r", r),
 				zap.Stack("stack"))
-			err = errors.SuspendStack(errors.New("batch conn recv paniced"))
+			err = errors.New("batch conn recv paniced")
 		}
 		if err == nil {
 			metrics.BatchRecvHistogramOK.Observe(float64(time.Since(now)))
@@ -779,7 +779,7 @@ func sendBatchRequest(
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
-		return nil, errors.SuspendStack(errors.Annotate(context.DeadlineExceeded, "wait sendLoop"))
+		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
 	metrics.TiKVBatchWaitDuration.Observe(float64(time.Since(start)))
 
@@ -796,7 +796,7 @@ func sendBatchRequest(
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
-		return nil, errors.SuspendStack(errors.Annotate(context.DeadlineExceeded, "wait recvLoop"))
+		return nil, errors.WithMessage(context.DeadlineExceeded, "wait recvLoop")
 	}
 }
 

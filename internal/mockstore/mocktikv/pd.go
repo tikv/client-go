@@ -41,9 +41,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pkg/errors"
 	pd "github.com/tikv/pd/client"
 )
 
