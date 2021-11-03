@@ -278,34 +278,49 @@ func (s *KVStore) runSafePointChecker() {
 }
 
 // Begin a global transaction.
-func (s *KVStore) Begin() (*transaction.KVTxn, error) {
-	return s.BeginWithOption()
-}
-
-// BeginWithOption begins a transaction with the given StartTSOption
-func (s *KVStore) BeginWithOption(options ...StartTSOption) (*transaction.KVTxn, error) {
-	opts := &startTSOptions{}
+func (s *KVStore) Begin(opts ...TxnOption) (*transaction.KVTxn, error) {
+	options := &txnOptions{}
 	// Inject the options
-	for _, opt := range options {
-		opt(opts)
+	for _, opt := range opts {
+		opt(options)
 	}
 
-	if opts.TxnScope == "" {
-		opts.TxnScope = oracle.GlobalTxnScope
+	if options.TxnScope == "" {
+		options.TxnScope = oracle.GlobalTxnScope
 	}
-
-	if opts.StartTS != nil {
-		snapshot := txnsnapshot.NewTiKVSnapshot(s, *opts.StartTS, s.nextReplicaReadSeed())
-		return transaction.NewTiKVTxn(s, snapshot, *opts.StartTS, opts.TxnScope)
+	if options.StartTS != nil {
+		snapshot := txnsnapshot.NewTiKVSnapshot(s, *options.StartTS, s.nextReplicaReadSeed())
+		return transaction.NewTiKVTxn(s, snapshot, *options.StartTS, options.TxnScope)
 	}
 
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-	startTS, err := s.getTimestampWithRetry(bo, opts.TxnScope)
+	startTS, err := s.getTimestampWithRetry(bo, options.TxnScope)
 	if err != nil {
 		return nil, err
 	}
 	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
-	return transaction.NewTiKVTxn(s, snapshot, startTS, opts.TxnScope)
+	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
+}
+
+// BeginWithOption begins a transaction with the given StartTSOption
+// TODO: remove this method once tidb and br are ready
+func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, error) {
+	if options.TxnScope == "" {
+		options.TxnScope = oracle.GlobalTxnScope
+	}
+
+	if options.StartTS != nil {
+		snapshot := txnsnapshot.NewTiKVSnapshot(s, *options.StartTS, s.nextReplicaReadSeed())
+		return transaction.NewTiKVTxn(s, snapshot, *options.StartTS, options.TxnScope)
+	}
+
+	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
+	startTS, err := s.getTimestampWithRetry(bo, options.TxnScope)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
+	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
 }
 
 // DeleteRange delete all versions of all keys in the range[startKey,endKey) immediately.
@@ -622,31 +637,56 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 	return s.lockResolver, nil
 }
 
-// startTSOptions indicates the option when beginning a transaction.
-// startTSOptions are set by the StartTSOption values passed to BeginWithOption
-type startTSOptions struct {
+// txnOptions indicates the option when beginning a transaction.
+// txnOptions are set by the TxnOption values passed to Begin
+type txnOptions struct {
 	TxnScope string
 	StartTS  *uint64
 }
 
-// StartTSOption configures Transaction
-type StartTSOption func(*startTSOptions)
+// TxnOption configures Transaction
+type TxnOption func(*txnOptions)
 
 // WithTxnScope sets the TxnScope to txnScope
-func WithTxnScope(txnScope string) StartTSOption {
-	return func(st *startTSOptions) {
+func WithTxnScope(txnScope string) TxnOption {
+	return func(st *txnOptions) {
 		st.TxnScope = txnScope
 	}
 }
 
 // WithStartTS sets the StartTS to startTS
-func WithStartTS(startTS uint64) StartTSOption {
-	return func(st *startTSOptions) {
+func WithStartTS(startTS uint64) TxnOption {
+	return func(st *txnOptions) {
 		st.StartTS = &startTS
 	}
 }
 
 // TODO: remove once tidb and br are ready
+
+// StartTSOption indicates the option when beginning a transaction
+// `TxnScope` must be set for each object
+// Every other fields are optional, but currently at most one of them can be set
+type StartTSOption struct {
+	TxnScope string
+	StartTS  *uint64
+}
+
+// DefaultStartTSOption creates a default StartTSOption, ie. Work in GlobalTxnScope and get start ts when got used
+func DefaultStartTSOption() StartTSOption {
+	return StartTSOption{TxnScope: oracle.GlobalTxnScope}
+}
+
+// SetStartTS returns a new StartTSOption with StartTS set to the given startTS
+func (to StartTSOption) SetStartTS(startTS uint64) StartTSOption {
+	to.StartTS = &startTS
+	return to
+}
+
+// SetTxnScope returns a new StartTSOption with TxnScope set to txnScope
+func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
+	to.TxnScope = txnScope
+	return to
+}
 
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn = transaction.KVTxn
