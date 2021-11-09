@@ -58,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
@@ -98,18 +99,19 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
-	binlog                  BinlogExecutor
-	schemaLeaseChecker      SchemaLeaseChecker
-	syncLog                 bool
-	priority                txnutil.Priority
-	isPessimistic           bool
-	enableAsyncCommit       bool
-	enable1PC               bool
-	causalConsistency       bool
-	scope                   string
-	kvFilter                KVFilter
-	resourceGroupTagFactory util.ResourceGroupTagFactory
-	diskFullOpt             kvrpcpb.DiskFullOpt
+	binlog              BinlogExecutor
+	schemaLeaseChecker  SchemaLeaseChecker
+	syncLog             bool
+	priority            txnutil.Priority
+	isPessimistic       bool
+	enableAsyncCommit   bool
+	enable1PC           bool
+	causalConsistency   bool
+	scope               string
+	kvFilter            KVFilter
+	resourceGroupTag    []byte
+	resourceGroupTagger tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
+	diskFullOpt         kvrpcpb.DiskFullOpt
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -226,10 +228,18 @@ func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 	txn.GetSnapshot().SetPriority(pri)
 }
 
-// SetResourceGroupTagFactory sets the resource tag factory for both write and read.
-func (txn *KVTxn) SetResourceGroupTagFactory(f util.ResourceGroupTagFactory) {
-	txn.resourceGroupTagFactory = f
-	txn.GetSnapshot().SetResourceGroupTagFactory(f)
+// SetResourceGroupTag sets the resource tag for both write and read.
+func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
+	txn.resourceGroupTag = tag
+	txn.GetSnapshot().SetResourceGroupTag(tag)
+}
+
+// SetResourceGroupTagger sets the resource tagger for both write and read.
+// Before sending the request, if resourceGroupTag is not nil, use
+// resourceGroupTag directly, otherwise use resourceGroupTagger.
+func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
+	txn.resourceGroupTagger = tagger
+	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
 // SetSchemaAmender sets an amender to update mutations after schema change.

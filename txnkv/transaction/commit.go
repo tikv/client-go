@@ -49,7 +49,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -71,10 +70,11 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		StartVersion:  c.startTS,
 		Keys:          keys,
 		CommitVersion: c.commitTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, DiskFullOpt: c.diskFullOpt,
+	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
+		ResourceGroupTag: c.resourceGroupTag, DiskFullOpt: c.diskFullOpt,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
-	if c.resourceGroupTagFactory != nil && len(keys) > 0 {
-		req.ResourceGroupTag = c.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: keys[0]})
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(req)
 	}
 
 	tBegin := time.Now()

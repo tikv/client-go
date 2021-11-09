@@ -48,7 +48,6 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
-	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -217,9 +216,10 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		}
 		sreq := &kvrpcpb.ScanRequest{
 			Context: &kvrpcpb.Context{
-				Priority:       s.snapshot.priority.ToPB(),
-				NotFillCache:   s.snapshot.notFillCache,
-				IsolationLevel: s.snapshot.isolationLevel.ToPB(),
+				Priority:         s.snapshot.priority.ToPB(),
+				NotFillCache:     s.snapshot.notFillCache,
+				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
+				ResourceGroupTag: s.snapshot.resourceGroupTag,
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
@@ -233,17 +233,15 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			sreq.EndKey = reqStartKey
 			sreq.Reverse = true
 		}
-		if s.snapshot.resourceGroupTagFactory != nil {
-			sreq.Context.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: sreq.StartKey})
-		}
 		s.snapshot.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdScan, sreq, s.snapshot.mu.replicaRead, &s.snapshot.replicaReadSeed, kvrpcpb.Context{
-			Priority:     s.snapshot.priority.ToPB(),
-			NotFillCache: s.snapshot.notFillCache,
-			TaskId:       s.snapshot.mu.taskID,
+			Priority:         s.snapshot.priority.ToPB(),
+			NotFillCache:     s.snapshot.notFillCache,
+			TaskId:           s.snapshot.mu.taskID,
+			ResourceGroupTag: s.snapshot.resourceGroupTag,
 		})
-		if s.snapshot.resourceGroupTagFactory != nil {
-			req.ResourceGroupTag = s.snapshot.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: sreq.StartKey})
+		if s.snapshot.resourceGroupTag == nil && s.snapshot.resourceGroupTagger != nil {
+			s.snapshot.resourceGroupTagger(req)
 		}
 		s.snapshot.mu.RUnlock()
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)

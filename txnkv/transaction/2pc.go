@@ -168,7 +168,8 @@ type twoPhaseCommitter struct {
 
 	binlog BinlogExecutor
 
-	resourceGroupTagFactory util.ResourceGroupTagFactory
+	resourceGroupTag    []byte
+	resourceGroupTagger tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 
 	// allowed when tikv disk full happened.
 	diskFullOpt kvrpcpb.DiskFullOpt
@@ -494,7 +495,8 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 	c.lockTTL = txnLockTTL(txn.startTime, size)
 	c.priority = txn.priority.ToPB()
 	c.syncLog = txn.syncLog
-	c.resourceGroupTagFactory = txn.resourceGroupTagFactory
+	c.resourceGroupTag = txn.resourceGroupTag
+	c.resourceGroupTagger = txn.resourceGroupTagger
 	c.setDetail(commitDetail)
 	return nil
 }

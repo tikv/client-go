@@ -43,7 +43,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -60,14 +59,13 @@ func (actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 }
 
 func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
-	keys := batch.mutations.GetKeys()
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
-		Keys:         keys,
+		Keys:         batch.mutations.GetKeys(),
 		StartVersion: c.startTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
+	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
-	if c.resourceGroupTagFactory != nil && len(keys) > 0 {
-		req.ResourceGroupTag = c.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: keys[0]})
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(req)
 	}
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {

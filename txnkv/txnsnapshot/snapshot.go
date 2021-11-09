@@ -132,8 +132,10 @@ type KVSnapshot struct {
 		matchStoreLabels []*metapb.StoreLabel
 	}
 	sampleStep uint32
-	// resourceGroupTagFactory is use to set the kv request resource group tag.
-	resourceGroupTagFactory util.ResourceGroupTagFactory
+	// resourceGroupTag is use to set the kv request resource group tag.
+	resourceGroupTag []byte
+	// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
+	resourceGroupTagger tikvrpc.ResourceGroupTagger
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -348,12 +350,13 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			Keys:    pending,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
-			Priority:     s.priority.ToPB(),
-			NotFillCache: s.notFillCache,
-			TaskId:       s.mu.taskID,
+			Priority:         s.priority.ToPB(),
+			NotFillCache:     s.notFillCache,
+			TaskId:           s.mu.taskID,
+			ResourceGroupTag: s.resourceGroupTag,
 		})
-		if s.resourceGroupTagFactory != nil && len(pending) > 0 {
-			req.ResourceGroupTag = s.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: pending[0]})
+		if s.resourceGroupTag == nil && s.resourceGroupTagger != nil {
+			s.resourceGroupTagger(req)
 		}
 		scope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
@@ -517,12 +520,13 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			Key:     k,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
-			Priority:     s.priority.ToPB(),
-			NotFillCache: s.notFillCache,
-			TaskId:       s.mu.taskID,
+			Priority:         s.priority.ToPB(),
+			NotFillCache:     s.notFillCache,
+			TaskId:           s.mu.taskID,
+			ResourceGroupTag: s.resourceGroupTag,
 		})
-	if s.resourceGroupTagFactory != nil {
-		req.ResourceGroupTag = s.resourceGroupTagFactory(util.ResourceGroupTagParams{FirstKey: k})
+	if s.resourceGroupTag == nil && s.resourceGroupTagger != nil {
+		s.resourceGroupTagger(req)
 	}
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
@@ -718,9 +722,16 @@ func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
 	s.mu.matchStoreLabels = labels
 }
 
-// SetResourceGroupTagFactory sets resource group tag factory of the kv request.
-func (s *KVSnapshot) SetResourceGroupTagFactory(f util.ResourceGroupTagFactory) {
-	s.resourceGroupTagFactory = f
+// SetResourceGroupTag sets resource group tag of the kv request.
+func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
+	s.resourceGroupTag = tag
+}
+
+// SetResourceGroupTagger sets resource group tagger of the kv request.
+// Before sending the request, if resourceGroupTag is not nil, use
+// resourceGroupTag directly, otherwise use resourceGroupTagger.
+func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
+	s.resourceGroupTagger = tagger
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.
