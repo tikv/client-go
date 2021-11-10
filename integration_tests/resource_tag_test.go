@@ -19,6 +19,9 @@ type resourceGroupTagMockClient struct {
 }
 
 func (c *resourceGroupTagMockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if len(req.ResourceGroupTag) == 0 {
+		return &tikvrpc.Response{}, nil
+	}
 	c.requestCount++
 	assert.Equal(c.t, c.expectedTag, req.ResourceGroupTag)
 	return &tikvrpc.Response{}, nil
@@ -46,6 +49,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTag(testTag1)
 	_, _ = txn.Get(context.Background(), []byte{})
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	// SetResourceGroupTagger
 	client = &resourceGroupTagMockClient{t: t, expectedTag: testTag2}
@@ -56,6 +60,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTagger(testTagger)
 	_, _ = txn.Get(context.Background(), []byte{})
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	// SetResourceGroupTag + SetResourceGroupTagger
 	client = &resourceGroupTagMockClient{t: t, expectedTag: testTag1}
@@ -67,6 +72,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTagger(testTagger)
 	_, _ = txn.Get(context.Background(), []byte{})
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	/* BatchGet */
 
@@ -79,6 +85,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTag(testTag1)
 	_, _ = txn.BatchGet(context.Background(), [][]byte{[]byte("k")})
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	// SetResourceGroupTagger
 	client = &resourceGroupTagMockClient{t: t, expectedTag: testTag2}
@@ -89,6 +96,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTagger(testTagger)
 	_, _ = txn.BatchGet(context.Background(), [][]byte{[]byte("k")})
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	// SetResourceGroupTag + SetResourceGroupTagger
 	client = &resourceGroupTagMockClient{t: t, expectedTag: testTag1}
@@ -100,6 +108,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTagger(testTagger)
 	_, _ = txn.BatchGet(context.Background(), [][]byte{[]byte("k")})
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	/* Scan */
 
@@ -112,6 +121,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTag(testTag1)
 	_, _ = txn.Iter([]byte("abc"), []byte("def"))
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	// SetResourceGroupTagger
 	client = &resourceGroupTagMockClient{t: t, expectedTag: testTag2}
@@ -122,6 +132,7 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTagger(testTagger)
 	_, _ = txn.Iter([]byte("abc"), []byte("def"))
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 
 	// SetResourceGroupTag + SetResourceGroupTagger
 	client = &resourceGroupTagMockClient{t: t, expectedTag: testTag1}
@@ -133,4 +144,5 @@ func TestResourceGroupTag(t *testing.T) {
 	txn.SetResourceGroupTagger(testTagger)
 	_, _ = txn.Iter([]byte("abc"), []byte("def"))
 	assert.Equal(t, 1, client.requestCount)
+	_ = store.Close()
 }
