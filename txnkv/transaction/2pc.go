@@ -543,7 +543,12 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 
 		if c.txn.assertionLevel != kvrpcpb.AssertionLevel_Off {
 			// Check mutations for pessimistic-locked keys with the read results of pessimistic lock requests.
-			if isPessimistic {
+			// This can be disabled by failpoint.
+			skipCheckFromLock := false
+			if _, err := util.EvalFailpoint("assertionSkipCheckFromLock"); err == nil {
+				skipCheckFromLock = true
+			}
+			if isPessimistic && !skipCheckFromLock {
 				err = c.checkPessimisticMutationAssertion(key, flags, mustExist, mustNotExist)
 				if err != nil {
 					return errors.Trace(err)
