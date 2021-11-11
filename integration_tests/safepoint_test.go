@@ -37,11 +37,11 @@ package tikv_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
-	"github.com/pingcap/parser/terror"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
@@ -116,7 +116,7 @@ func (s *testSafePointSuite) TestSafePoint() {
 	s.NotNil(geterr2)
 
 	_, isFallBehind := errors.Cause(geterr2).(*error.ErrGCTooEarly)
-	isMayFallBehind := terror.ErrorEqual(errors.Cause(geterr2), error.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
+	isMayFallBehind := strings.Contains(geterr2.Error(), "start timestamp may fall behind safe point")
 	isBehind := isFallBehind || isMayFallBehind
 	s.True(isBehind)
 
@@ -128,7 +128,7 @@ func (s *testSafePointSuite) TestSafePoint() {
 	_, seekerr := txn3.Iter(encodeKey(s.prefix, ""), nil)
 	s.NotNil(seekerr)
 	_, isFallBehind = errors.Cause(geterr2).(*error.ErrGCTooEarly)
-	isMayFallBehind = terror.ErrorEqual(errors.Cause(geterr2), error.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
+	isMayFallBehind = strings.Contains(geterr2.Error(), "start timestamp may fall behind safe point")
 	isBehind = isFallBehind || isMayFallBehind
 	s.True(isBehind)
 
@@ -141,7 +141,7 @@ func (s *testSafePointSuite) TestSafePoint() {
 	_, batchgeterr := toTiDBTxn(&txn4).BatchGet(context.Background(), toTiDBKeys(keys))
 	s.NotNil(batchgeterr)
 	_, isFallBehind = errors.Cause(geterr2).(*error.ErrGCTooEarly)
-	isMayFallBehind = terror.ErrorEqual(errors.Cause(geterr2), error.NewErrPDServerTimeout("start timestamp may fall behind safe point"))
+	isMayFallBehind = strings.Contains(geterr2.Error(), "start timestamp may fall behind safe point")
 	isBehind = isFallBehind || isMayFallBehind
 	s.True(isBehind)
 }

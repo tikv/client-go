@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -66,7 +66,7 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 	// Run resolve lock on the whole TiKV cluster. Empty keys means the range is unbounded.
 	err := runner.RunOnRange(ctx, []byte(""), []byte(""))
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	return nil
 }
@@ -96,7 +96,7 @@ func (s *KVStore) resolveLocksForRange(ctx context.Context, safePoint uint64, st
 
 		resolvedLocation, err1 := s.batchResolveLocksInARegion(bo, locks, loc)
 		if err1 != nil {
-			return stat, errors.Trace(err1)
+			return stat, err1
 		}
 		// resolve locks failed since the locks are not in one region anymore, need retry.
 		if resolvedLocation == nil {
@@ -128,7 +128,7 @@ func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []
 	for {
 		loc, err := s.GetRegionCache().LocateKey(bo, startKey)
 		if err != nil {
-			return nil, loc, errors.Trace(err)
+			return nil, loc, err
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
 			MaxVersion: maxVersion,
@@ -138,21 +138,21 @@ func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []
 		})
 		resp, err := s.SendReq(bo, req, loc.Region, ReadTimeoutMedium)
 		if err != nil {
-			return nil, loc, errors.Trace(err)
+			return nil, loc, err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return nil, loc, errors.Trace(err)
+			return nil, loc, err
 		}
 		if regionErr != nil {
 			err = bo.Backoff(BoRegionMiss(), errors.New(regionErr.String()))
 			if err != nil {
-				return nil, loc, errors.Trace(err)
+				return nil, loc, err
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return nil, loc, errors.Trace(tikverr.ErrBodyMissing)
+			return nil, loc, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		locksResp := resp.Resp.(*kvrpcpb.ScanLockResponse)
 		if locksResp.GetError() != nil {
@@ -184,11 +184,11 @@ func (s *KVStore) batchResolveLocksInARegion(bo *Backoffer, locks []*txnlock.Loc
 		}
 		err = bo.Backoff(retry.BoTxnLock, errors.Errorf("remain locks: %d", len(locks)))
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		region, err1 := s.GetRegionCache().LocateKey(bo, locks[0].Key)
 		if err1 != nil {
-			return nil, errors.Trace(err1)
+			return nil, err1
 		}
 		if !region.Contains(locks[len(locks)-1].Key) {
 			// retry scan since the locks are not in the same region anymore.
@@ -210,7 +210,7 @@ func (s *KVStore) UnsafeDestroyRange(ctx context.Context, startKey []byte, endKe
 	stores, err := s.listStoresForUnsafeDestory(ctx)
 	if err != nil {
 		metrics.TiKVUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("get_stores").Inc()
-		return errors.Trace(err)
+		return err
 	}
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdUnsafeDestroyRange, &kvrpcpb.UnsafeDestroyRangeRequest{
@@ -267,7 +267,7 @@ func (s *KVStore) UnsafeDestroyRange(ctx context.Context, startKey []byte, endKe
 func (s *KVStore) listStoresForUnsafeDestory(ctx context.Context) ([]*metapb.Store, error) {
 	stores, err := s.pdClient.GetAllStores(ctx)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 
 	upStores := make([]*metapb.Store, 0, len(stores))

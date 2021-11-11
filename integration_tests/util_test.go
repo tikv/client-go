@@ -42,7 +42,6 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/kv"
 	txndriver "github.com/pingcap/tidb/store/driver/txn"
 	"github.com/pingcap/tidb/store/mockstore/unistore"
@@ -91,16 +90,16 @@ func NewTestStore(t *testing.T) *tikv.KVStore {
 func clearStorage(store *tikv.KVStore) error {
 	txn, err := store.Begin()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	iter, err := txn.Iter(nil, nil)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	for iter.Valid() {
 		txn.Delete(iter.Key())
 		if err := iter.Next(); err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
 	return txn.Commit(context.Background())

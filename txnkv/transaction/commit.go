@@ -39,8 +39,8 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -92,17 +92,17 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		// an error (may lead to the duplicated key error when upper level restarts the transaction). Currently the best
 		// solution is to populate this error and let upper layer drop the connection to the corresponding mysql client.
 		if batch.isPrimary && sender.GetRPCError() != nil && !c.isAsyncCommit() {
-			c.setUndeterminedErr(errors.Trace(sender.GetRPCError()))
+			c.setUndeterminedErr(errors.WithStack(sender.GetRPCError()))
 		}
 
 		// Unexpected error occurs, return it.
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			// For other region error and the fake region error, backoff because
@@ -111,22 +111,21 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
 				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 			}
 			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			if same {
 				continue
 			}
-			err = c.doActionOnMutations(bo, actionCommit{true}, batch.mutations)
-			return errors.Trace(err)
+			return c.doActionOnMutations(bo, actionCommit{true}, batch.mutations)
 		}
 
 		if resp.Resp == nil {
-			return errors.Trace(tikverr.ErrBodyMissing)
+			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		commitResp := resp.Resp.(*kvrpcpb.CommitResponse)
 		// Here we can make sure tikv has processed the commit primary key request. So
@@ -143,9 +142,8 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 				// Do not retry for a txn which has a too large MinCommitTs
 				// 3600000 << 18 = 943718400000
 				if rejected.MinCommitTs-rejected.AttemptedCommitTs > 943718400000 {
-					err := errors.Errorf("2PC MinCommitTS is too large, we got MinCommitTS: %d, and AttemptedCommitTS: %d",
+					return errors.Errorf("2PC MinCommitTS is too large, we got MinCommitTS: %d, and AttemptedCommitTS: %d",
 						rejected.MinCommitTs, rejected.AttemptedCommitTs)
-					return errors.Trace(err)
 				}
 
 				// Update commit ts and retry.
@@ -154,7 +152,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 					logutil.Logger(bo.GetCtx()).Warn("2PC get commitTS failed",
 						zap.Error(err),
 						zap.Uint64("txnStartTS", c.startTS))
-					return errors.Trace(err)
+					return err
 				}
 
 				c.mu.Lock()
@@ -183,7 +181,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Uint64("commitTS", c.commitTS),
 					zap.Strings("keys", hexBatchKeys(keys)))
-				return errors.Trace(err)
+				return err
 			}
 			// The transaction maybe rolled back by concurrent transactions.
 			logutil.Logger(bo.GetCtx()).Debug("2PC failed commit primary key",

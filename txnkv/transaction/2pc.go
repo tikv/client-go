@@ -46,9 +46,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/parser/terror"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -375,7 +374,7 @@ func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error 
 	if !c.txn.us.HasPresumeKeyNotExists(err.GetKey()) {
 		return errors.Errorf("session %d, existErr for key:%s should not be nil", c.sessionID, err.GetKey())
 	}
-	return errors.Trace(err)
+	return errors.WithStack(err)
 }
 
 // KVFilter is a filter that filters out unnecessary KV pairs.
@@ -485,7 +484,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 		logutil.BgLogger().Error("commit failed",
 			zap.Uint64("session", c.sessionID),
 			zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 
 	commitDetail := &util.CommitDetails{WriteSize: size, WriteKeys: c.mutations.Len()}
@@ -566,7 +565,7 @@ func (c *twoPhaseCommitter) doActionOnMutations(bo *retry.Backoffer, action twoP
 	}
 	groups, err := c.groupMutations(bo, mutations)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	// This is redundant since `doActionOnGroupMutations` will still split groups into batches and
@@ -600,7 +599,7 @@ func groupSortedMutationsByRegion(c *locate.RegionCache, bo *retry.Backoffer, m 
 			var err error
 			lastLoc, err = c.LocateKey(bo, m.GetKey(i))
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, err
 			}
 		}
 	}
@@ -617,7 +616,7 @@ func groupSortedMutationsByRegion(c *locate.RegionCache, bo *retry.Backoffer, m 
 func (c *twoPhaseCommitter) groupMutations(bo *retry.Backoffer, mutations CommitterMutations) ([]groupedMutations, error) {
 	groups, err := groupSortedMutationsByRegion(c.store.GetRegionCache(), bo, mutations)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	// Pre-split regions to avoid too much write workload into a single region.
@@ -638,7 +637,7 @@ func (c *twoPhaseCommitter) groupMutations(bo *retry.Backoffer, mutations Commit
 	if didPreSplit {
 		groups, err = groupSortedMutationsByRegion(c.store.GetRegionCache(), bo, mutations)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 	}
 
@@ -750,7 +749,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 		// primary should be committed(not async commit)/cleanup/pessimistically locked first
 		err = c.doActionOnBatches(bo, action, batchBuilder.primaryBatch())
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if actionIsCommit && c.testingKnobs.bkAfterCommitPrimary != nil && c.testingKnobs.acAfterCommitPrimary != nil {
 			c.testingKnobs.acAfterCommitPrimary <- struct{}{}
@@ -792,7 +791,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}
-	return errors.Trace(err)
+	return err
 }
 
 // doActionOnBatches does action to batches in parallel.
@@ -816,7 +815,7 @@ func (c *twoPhaseCommitter) doActionOnBatches(bo *retry.Backoffer, action twoPha
 					zap.Stringer("action type", action),
 					zap.Error(e),
 					zap.Uint64("txnStartTS", c.startTS))
-				return errors.Trace(e)
+				return e
 			}
 		}
 		return nil
@@ -830,8 +829,7 @@ func (c *twoPhaseCommitter) doActionOnBatches(bo *retry.Backoffer, action twoPha
 		rateLim = config.GetGlobalConfig().CommitterConcurrency
 	}
 	batchExecutor := newBatchExecutor(rateLim, c, action, bo)
-	err := batchExecutor.process(batches)
-	return errors.Trace(err)
+	return batchExecutor.process(batches)
 }
 
 func (c *twoPhaseCommitter) keyValueSize(key, value []byte) int {
@@ -967,16 +965,16 @@ func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startT
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, primary)
 		if err != nil {
-			return 0, false, errors.Trace(err)
+			return 0, false, err
 		}
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 		resp, err := store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
-			return 0, false, errors.Trace(err)
+			return 0, false, err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return 0, false, errors.Trace(err)
+			return 0, false, err
 		}
 		if regionErr != nil {
 			// For other region error and the fake region error, backoff because
@@ -985,13 +983,13 @@ func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startT
 			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
 				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 				if err != nil {
-					return 0, false, errors.Trace(err)
+					return 0, false, err
 				}
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return 0, false, errors.Trace(tikverr.ErrBodyMissing)
+			return 0, false, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.TxnHeartBeatResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
@@ -1196,7 +1194,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		// instead of falling back to the normal 2PC because a normal 2PC will
 		// also be likely to fail due to the same timestamp issue.
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
 		c.minCommitTS = latestTS + 1
@@ -1204,7 +1202,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// Calculate maxCommitTS if necessary
 	if commitTSMayBeCalculated {
 		if err = c.calculateMaxCommitTS(ctx); err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
 
@@ -1230,7 +1228,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))
-			return errors.Trace(terror.ErrResultUndetermined)
+			return errors.WithStack(tikverr.ErrResultUndetermined)
 		}
 	}
 
@@ -1262,7 +1260,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Debug("2PC failed on prewrite",
 			zap.Error(err),
 			zap.Uint64("txnStartTS", c.startTS))
-		return errors.Trace(err)
+		return err
 	}
 
 	// strip check_not_exists keys that no need to commit.
@@ -1272,8 +1270,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	if c.isOnePC() {
 		if c.onePCCommitTS == 0 {
-			err = errors.Errorf("session %d invalid onePCCommitTS for 1PC protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
-			return errors.Trace(err)
+			return errors.Errorf("session %d invalid onePCCommitTS for 1PC protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
 		}
 		c.commitTS = c.onePCCommitTS
 		c.txn.commitTS = c.commitTS
@@ -1290,8 +1287,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	if c.isAsyncCommit() {
 		if c.minCommitTS == 0 {
-			err = errors.Errorf("session %d invalid minCommitTS for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
-			return errors.Trace(err)
+			return errors.Errorf("session %d invalid minCommitTS for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
 		}
 		commitTS = c.minCommitTS
 	} else {
@@ -1302,7 +1298,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			logutil.Logger(ctx).Warn("2PC get commitTS failed",
 				zap.Error(err),
 				zap.Uint64("txnStartTS", c.startTS))
-			return errors.Trace(err)
+			return err
 		}
 		commitDetail.GetCommitTsTime = time.Since(start)
 		logutil.Event(ctx, "finish get commit ts")
@@ -1314,18 +1310,18 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if !tryAmend {
 			_, _, err = c.checkSchemaValid(ctx, commitTS, c.txn.schemaVer, false)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 		} else {
 			relatedSchemaChange, memAmended, err := c.checkSchemaValid(ctx, commitTS, c.txn.schemaVer, true)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			if memAmended {
 				// Get new commitTS and check schema valid again.
 				newCommitTS, err := c.getCommitTS(ctx, commitDetail)
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 				// If schema check failed between commitTS and newCommitTs, report schema change error.
 				_, _, err = c.checkSchemaValid(ctx, newCommitTS, relatedSchemaChange.LatestInfoSchema, false)
@@ -1335,7 +1331,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 						zap.Uint64("amendTS", commitTS),
 						zap.Int64("amendedSchemaVersion", relatedSchemaChange.LatestInfoSchema.SchemaMetaVersion()),
 						zap.Uint64("newCommitTS", newCommitTS))
-					return errors.Trace(err)
+					return err
 				}
 				commitTS = newCommitTS
 			}
@@ -1414,13 +1410,13 @@ func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.Co
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))
-			err = errors.Trace(terror.ErrResultUndetermined)
+			err = errors.WithStack(tikverr.ErrResultUndetermined)
 		}
 		if !c.mu.committed {
 			logutil.Logger(ctx).Debug("2PC failed on commit",
 				zap.Error(err),
 				zap.Uint64("txnStartTS", c.startTS))
-			return errors.Trace(err)
+			return err
 		}
 		logutil.Logger(ctx).Debug("got some exceptions, but 2PC was still successful",
 			zap.Error(err),
@@ -1493,7 +1489,7 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 				if _, ok := errors.Cause(err).(*tikverr.ErrWriteConflict); ok {
 					newForUpdateTSVer, err := c.store.CurrentTimestamp(oracle.GlobalTxnScope)
 					if err != nil {
-						return errors.Trace(err)
+						return err
 					}
 					lCtx.ForUpdateTS = newForUpdateTSVer
 					c.forUpdateTS = newForUpdateTSVer
@@ -1570,7 +1566,7 @@ func (c *twoPhaseCommitter) getCommitTS(ctx context.Context, commitDetail *util.
 		logutil.Logger(ctx).Warn("2PC get commitTS failed",
 			zap.Error(err),
 			zap.Uint64("txnStartTS", c.startTS))
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	commitDetail.GetCommitTsTime = time.Since(start)
 	logutil.Event(ctx, "finish get commit ts")
@@ -1581,7 +1577,7 @@ func (c *twoPhaseCommitter) getCommitTS(ctx context.Context, commitDetail *util.
 		err = errors.Errorf("session %d invalid transaction tso with txnStartTS=%v while txnCommitTS=%v",
 			c.sessionID, c.startTS, commitTS)
 		logutil.BgLogger().Error("invalid transaction", zap.Error(err))
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	return commitTS, nil
 }
@@ -1593,8 +1589,7 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 	if _, err := util.EvalFailpoint("failCheckSchemaValid"); err == nil {
 		logutil.Logger(ctx).Info("[failpoint] injected fail schema check",
 			zap.Uint64("txnStartTS", c.startTS))
-		err := errors.Errorf("mock check schema valid failure")
-		return nil, false, err
+		return nil, false, errors.Errorf("mock check schema valid failure")
 	}
 	if c.txn.schemaLeaseChecker == nil {
 		if c.sessionID > 0 {
@@ -1612,7 +1607,7 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 			if amendErr != nil {
 				logutil.BgLogger().Info("txn amend has failed", zap.Uint64("sessionID", c.sessionID),
 					zap.Uint64("startTS", c.startTS), zap.Error(amendErr))
-				return nil, false, err
+				return nil, false, errors.WithStack(err)
 			}
 			logutil.Logger(ctx).Info("amend txn successfully",
 				zap.Uint64("sessionID", c.sessionID), zap.Uint64("txn startTS", c.startTS), zap.Bool("memAmended", memAmended),
@@ -1620,7 +1615,7 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 				zap.Int64s("table ids", relatedChanges.PhyTblIDS), zap.Uint64s("action types", relatedChanges.ActionTypes))
 			return relatedChanges, memAmended, nil
 		}
-		return nil, false, errors.Trace(err)
+		return nil, false, errors.WithStack(err)
 	}
 	return nil, false, nil
 }
@@ -1633,7 +1628,7 @@ func (c *twoPhaseCommitter) calculateMaxCommitTS(ctx context.Context) error {
 		logutil.Logger(ctx).Info("Schema changed for async commit txn",
 			zap.Error(err),
 			zap.Uint64("startTS", c.startTS))
-		return errors.Trace(err)
+		return err
 	}
 
 	safeWindow := config.GetGlobalConfig().TiKVClient.AsyncCommit.SafeWindow
@@ -1666,7 +1661,7 @@ func (b *batchMutations) relocate(bo *retry.Backoffer, c *locate.RegionCache) (b
 	begin, end := b.mutations.GetKey(0), b.mutations.GetKey(b.mutations.Len()-1)
 	loc, err := c.LocateKey(bo, begin)
 	if err != nil {
-		return false, errors.Trace(err)
+		return false, err
 	}
 	if !loc.Contains(end) {
 		return false, nil

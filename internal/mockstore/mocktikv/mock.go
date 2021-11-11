@@ -35,7 +35,6 @@
 package mocktikv
 
 import (
-	"github.com/pingcap/errors"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -43,7 +42,7 @@ import (
 func NewTiKVAndPDClient(path string, coprHandler CoprRPCHandler) (*RPCClient, *Cluster, pd.Client, error) {
 	mvccStore, err := NewMVCCLevelDB(path)
 	if err != nil {
-		return nil, nil, nil, errors.Trace(err)
+		return nil, nil, nil, err
 	}
 	cluster := NewCluster(mvccStore)
 

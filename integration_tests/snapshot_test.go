@@ -42,9 +42,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
@@ -211,7 +211,7 @@ func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
 	txn1 := s.beginTxn()
 	// txn1 is not blocked by txn in the large txn protocol.
 	_, err = txn1.Get(ctx, x)
-	s.True(error.IsErrNotFound(errors.Trace(err)))
+	s.True(error.IsErrNotFound(err))
 
 	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys([][]byte{x, y, []byte("z")}))
 	s.Nil(err)
@@ -243,7 +243,7 @@ func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
 	s.Equal(committer.GetPrimaryKey(), x)
 	// Point get secondary key. Shouldn't be blocked by the lock and read old data.
 	_, err = snapshot.Get(ctx, y)
-	s.True(error.IsErrNotFound(errors.Trace(err)))
+	s.True(error.IsErrNotFound(err))
 	s.Less(time.Since(start), 500*time.Millisecond)
 
 	// Commit the primary key
@@ -306,6 +306,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		},
 		ScanDetailV2: &kvrpcpb.ScanDetailV2{
 			ProcessedVersions:         10,
+			ProcessedVersionsSize:     10,
 			TotalVersions:             15,
 			RocksdbBlockReadCount:     20,
 			RocksdbBlockReadByte:      15,
@@ -318,6 +319,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
 		"total_process_time: 100ms, total_wait_time: 100ms, " +
 		"scan_detail: {total_process_keys: 10, " +
+		"total_process_keys_size: 10, " +
 		"total_keys: 15, " +
 		"rocksdb: {delete_skipped_count: 5, " +
 		"key_skipped_count: 1, " +
@@ -327,6 +329,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
 		"total_process_time: 200ms, total_wait_time: 200ms, " +
 		"scan_detail: {total_process_keys: 20, " +
+		"total_process_keys_size: 20, " +
 		"total_keys: 30, " +
 		"rocksdb: {delete_skipped_count: 10, " +
 		"key_skipped_count: 2, " +

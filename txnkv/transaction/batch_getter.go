@@ -37,7 +37,6 @@ package transaction
 import (
 	"context"
 
-	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore"
 )
@@ -79,13 +78,13 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 			continue
 		}
 		if !tikverr.IsErrNotFound(err) {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		shrinkKeys = append(shrinkKeys, key)
 	}
 	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	for i, key := range keys {
 		if len(bufferValues[i]) == 0 {

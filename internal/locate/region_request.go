@@ -49,11 +49,11 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -545,6 +545,9 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
+		if len(state.option.labels) > 0 {
+			logutil.BgLogger().Warn("unable to find stores with given labels")
+		}
 		leader := selector.replicas[state.leaderIdx]
 		if leader.isEpochStale() || leader.isExhausted(1) {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
@@ -796,7 +799,7 @@ func (s *replicaSelector) onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notL
 		// The region may be during transferring leader.
 		s.state.onNoLeader(s)
 		if err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx)); err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 	} else {
 		s.updateLeader(notLeader.GetLeader())
@@ -916,11 +919,11 @@ func (s *RegionRequestSender) SendReqCtx(
 			}, nil, nil
 		case "requestTiDBStoreError":
 			if et == tikvrpc.TiDB {
-				return nil, nil, tikverr.ErrTiKVServerTimeout
+				return nil, nil, errors.WithStack(tikverr.ErrTiKVServerTimeout)
 			}
 		case "requestTiFlashError":
 			if et == tikvrpc.TiFlash {
-				return nil, nil, tikverr.ErrTiFlashServerTimeout
+				return nil, nil, errors.WithStack(tikverr.ErrTiFlashServerTimeout)
 			}
 		}
 	}
@@ -976,13 +979,13 @@ func (s *RegionRequestSender) SendReqCtx(
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
-			return nil, nil, errors.Trace(err)
+			return nil, nil, err
 		}
 
 		// recheck whether the session/query is killed during the Next()
 		boVars := bo.GetVars()
 		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
-			return nil, nil, tikverr.ErrQueryInterrupted
+			return nil, nil, errors.WithStack(tikverr.ErrQueryInterrupted)
 		}
 		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
 			if val.(bool) {
@@ -997,12 +1000,12 @@ func (s *RegionRequestSender) SendReqCtx(
 		var regionErr *errorpb.Error
 		regionErr, err = resp.GetRegionError()
 		if err != nil {
-			return nil, nil, errors.Trace(err)
+			return nil, nil, err
 		}
 		if regionErr != nil {
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
-				return nil, nil, errors.Trace(err)
+				return nil, nil, err
 			}
 			if retry {
 				tryTimes++
@@ -1066,7 +1069,7 @@ func (h *RPCCanceller) CancelAll() {
 
 func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, retry bool, err error) {
 	if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
-		return nil, false, errors.Trace(e)
+		return nil, false, err
 	}
 	// judge the store limit switch.
 	if limit := kv.StoreLimit.Load(); limit > 0 {
@@ -1186,7 +1189,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
 		// we shouldn't retry the request, it will go to backoff and hang in retry logic.
 		if ctx.Err() != nil && errors.Cause(ctx.Err()) == context.Canceled {
-			return nil, false, errors.Trace(ctx.Err())
+			return nil, false, errors.WithStack(ctx.Err())
 		}
 
 		if val, e := util.EvalFailpoint("noRetryOnRpcError"); e == nil {
@@ -1195,7 +1198,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 			}
 		}
 		if e := s.onSendFail(bo, rpcCtx, err); e != nil {
-			return nil, false, errors.Trace(e)
+			return nil, false, err
 		}
 		return nil, true, nil
 	}
@@ -1211,7 +1214,7 @@ func (s *RegionRequestSender) getStoreToken(st *Store, limit int64) error {
 		return nil
 	}
 	metrics.TiKVStoreLimitErrorCounter.WithLabelValues(st.addr, strconv.FormatUint(st.storeID, 10)).Inc()
-	return &tikverr.ErrTokenLimit{StoreID: st.storeID}
+	return errors.WithStack(&tikverr.ErrTokenLimit{StoreID: st.storeID})
 }
 
 func (s *RegionRequestSender) releaseStoreToken(st *Store) {
@@ -1232,14 +1235,14 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 	}
 	// If it failed because the context is cancelled by ourself, don't retry.
 	if errors.Cause(err) == context.Canceled {
-		return errors.Trace(err)
+		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
-		return tikverr.ErrTiDBShuttingDown
+		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
 	}
 	if status.Code(errors.Cause(err)) == codes.Canceled {
 		select {
 		case <-bo.GetCtx().Done():
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		default:
 			// If we don't cancel, but the error code is Canceled, it must be from grpc remote.
 			// This may happen when tikv is killed and exiting.
@@ -1265,7 +1268,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 	} else {
 		err = bo.Backoff(retry.BoTiKVRPC, errors.Errorf("send tikv request error: %v, ctx: %v, try next peer later", err, ctx))
 	}
-	return errors.Trace(err)
+	return err
 }
 
 // NeedReloadRegion checks is all peers has sent failed, if so need reload.
@@ -1311,6 +1314,20 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "stale_command"
 	} else if e.GetStoreNotMatch() != nil {
 		return "store_not_match"
+	} else if e.GetRaftEntryTooLarge() != nil {
+		return "raft_entry_too_large"
+	} else if e.GetMaxTimestampNotSynced() != nil {
+		return "max_timestamp_not_synced"
+	} else if e.GetReadIndexNotReady() != nil {
+		return "read_index_not_ready"
+	} else if e.GetProposalInMergingMode() != nil {
+		return "proposal_in_merging_mode"
+	} else if e.GetDataIsNotReady() != nil {
+		return "data_is_not_ready"
+	} else if e.GetRegionNotInitialized() != nil {
+		return "region_not_initialized"
+	} else if e.GetDiskFull() != nil {
+		return "disk_full"
 	}
 	return "unknown"
 }
@@ -1340,7 +1357,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			// the region from PD.
 			s.regionCache.InvalidateCachedRegionWithReason(ctx.Region, NoLeader)
 			if err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("not leader: %v, ctx: %v", notLeader, ctx)); err != nil {
-				return false, errors.Trace(err)
+				return false, err
 			}
 			return false, nil
 		} else {
@@ -1350,12 +1367,13 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		}
 	}
 
-	// Not Retry when tikv disk full happens.
+	// Retry it when tikv disk full happens.
 	if diskFull := regionErr.GetDiskFull(); diskFull != nil {
-		logutil.BgLogger().Error("tikv reports `DiskFull` not retry",
-			zap.String("diskFull", diskFull.String()),
-			zap.String("ctx", ctx.String()))
-		return false, nil
+		if err = bo.Backoff(retry.BoTiKVDiskFull, errors.Errorf("tikv disk full: %v ctx: %v", diskFull.String(), ctx.String())); err != nil {
+			retry.BoTiKVDiskFull.SetErrors(errors.Errorf("tikv disk full: %v", diskFull.String()))
+			return false, nil
+		}
+		return true, nil
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.
@@ -1378,7 +1396,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		if !retry && s.replicaSelector != nil {
 			s.replicaSelector.invalidateRegion()
 		}
-		return retry, errors.Trace(err)
+		return retry, err
 	}
 
 	if regionErr.GetServerIsBusy() != nil {
@@ -1391,7 +1409,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 		}
 		if err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 		return true, nil
 	}
@@ -1407,7 +1425,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		} else {
 			err = bo.Backoff(retry.BoStaleCmd, errors.Errorf("stale command, ctx: %v", ctx))
 			if err != nil {
-				return false, errors.Trace(err)
+				return false, err
 			}
 		}
 		return true, nil
@@ -1432,7 +1450,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		logutil.BgLogger().Debug("tikv reports `MaxTimestampNotSynced`", zap.Stringer("ctx", ctx))
 		err = bo.Backoff(retry.BoMaxTsNotSynced, errors.Errorf("max timestamp not synced, ctx: %v", ctx))
 		if err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 		return true, nil
 	}
@@ -1445,7 +1463,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			zap.Stringer("ctx", ctx))
 		err = bo.Backoff(retry.BoMaxRegionNotInitialized, errors.Errorf("region not initialized"))
 		if err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 		return true, nil
 	}
@@ -1459,7 +1477,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		// The region can't provide service until split or merge finished, so backoff.
 		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("read index not ready, ctx: %v", ctx))
 		if err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 		return true, nil
 	}
@@ -1469,7 +1487,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		// The region is merging and it can't provide service until merge finished, so backoff.
 		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("region is merging, ctx: %v", ctx))
 		if err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 		return true, nil
 	}
@@ -1484,9 +1502,9 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			zap.Uint64("region-id", regionErr.GetDataIsNotReady().GetRegionId()),
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx))
-		err = bo.Backoff(retry.BoMaxDataNotReady, errors.Errorf("data is not ready"))
+		err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
 		if err != nil {
-			return false, errors.Trace(err)
+			return false, err
 		}
 		return true, nil
 	}

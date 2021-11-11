@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 
 	opts := []goleak.Option{
 		goleak.IgnoreTopFunction("github.com/pingcap/goleveldb/leveldb.(*DB).mpoolDrain"),
-		goleak.IgnoreTopFunction("github.com/tikv/client-go/v2/tikv.(*ttlManager).keepAlive"), // TODO: fix ttlManager goroutine leak
+		goleak.IgnoreTopFunction("github.com/tikv/client-go/v2/txnkv/transaction.keepAlive"), // TODO: fix ttlManager goroutine leak
 	}
 
 	goleak.VerifyTestMain(m, opts...)
