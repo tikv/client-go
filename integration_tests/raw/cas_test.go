@@ -47,7 +47,7 @@ func (s *casTestSuite) SetupTest() {
 func (s *casTestSuite) mustCompareAndSwap(key, previousValue, newValue []byte) ([]byte, bool) {
 	previousValue, succeed, err := s.client.
 		SetAtomicForCAS(true).
-		CompareAndSwap(context.TODO(), key, previousValue, newValue)
+		CompareAndSwap(context.TODO(), key, previousValue, newValue, 0)
 	s.Nil(err)
 	return previousValue, succeed
 }
