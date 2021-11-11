@@ -316,7 +316,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.pendingRequests.Observe(float64(len(a.batchCommandsCh)))
 		a.batchSize.Observe(float64(a.reqBuilder.len()))
 
-		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/github.com/tikv/client-go/v2/mockBlockOnBatchClient
+		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/tikvclient/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
 			if val.(bool) {
 				time.Sleep(1 * time.Hour)

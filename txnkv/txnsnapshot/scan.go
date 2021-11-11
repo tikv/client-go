@@ -283,7 +283,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			if err != nil {
 				return err
 			}
-			msBeforeExpired, _, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
+			msBeforeExpired, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
 			if err != nil {
 				return err
 			}
