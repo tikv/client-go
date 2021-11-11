@@ -629,12 +629,12 @@ func (s *testCommitterSuite) TestRejectCommitTS() {
 	// Use max.Uint64 to read the data and success.
 	// That means the final commitTS > startTS+2, it's not the one we provide.
 	// So we cover the rety commitTS logic.
-	txn1, err := s.store.BeginWithOption(tikv.DefaultStartTSOption().SetStartTS(committer.GetStartTS() + 2))
+	txn1, err := s.store.KVStore.Begin(tikv.WithStartTS(committer.GetStartTS() + 2))
 	s.Nil(err)
 	_, err = txn1.Get(bo.GetCtx(), []byte("x"))
 	s.True(tikverr.IsErrNotFound(err))
 
-	txn2, err := s.store.BeginWithOption(tikv.DefaultStartTSOption().SetStartTS(math.MaxUint64))
+	txn2, err := s.store.KVStore.Begin(tikv.WithStartTS(math.MaxUint64))
 	s.Nil(err)
 	val, err := txn2.Get(bo.GetCtx(), []byte("x"))
 	s.Nil(err)

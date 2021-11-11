@@ -302,27 +302,6 @@ func (s *KVStore) Begin(opts ...TxnOption) (*transaction.KVTxn, error) {
 	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
 }
 
-// BeginWithOption begins a transaction with the given StartTSOption
-// TODO: remove this method once tidb and br are ready
-func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, error) {
-	if options.TxnScope == "" {
-		options.TxnScope = oracle.GlobalTxnScope
-	}
-
-	if options.StartTS != nil {
-		snapshot := txnsnapshot.NewTiKVSnapshot(s, *options.StartTS, s.nextReplicaReadSeed())
-		return transaction.NewTiKVTxn(s, snapshot, *options.StartTS, options.TxnScope)
-	}
-
-	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-	startTS, err := s.getTimestampWithRetry(bo, options.TxnScope)
-	if err != nil {
-		return nil, err
-	}
-	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
-	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
-}
-
 // DeleteRange delete all versions of all keys in the range[startKey,endKey) immediately.
 // Be careful while using this API. This API doesn't keep recent MVCC versions, but will delete all versions of all keys
 // in the range immediately. Also notice that frequent invocation to this API may cause performance problems to TiKV.
@@ -662,31 +641,6 @@ func WithStartTS(startTS uint64) TxnOption {
 }
 
 // TODO: remove once tidb and br are ready
-
-// StartTSOption indicates the option when beginning a transaction
-// `TxnScope` must be set for each object
-// Every other fields are optional, but currently at most one of them can be set
-type StartTSOption struct {
-	TxnScope string
-	StartTS  *uint64
-}
-
-// DefaultStartTSOption creates a default StartTSOption, ie. Work in GlobalTxnScope and get start ts when got used
-func DefaultStartTSOption() StartTSOption {
-	return StartTSOption{TxnScope: oracle.GlobalTxnScope}
-}
-
-// SetStartTS returns a new StartTSOption with StartTS set to the given startTS
-func (to StartTSOption) SetStartTS(startTS uint64) StartTSOption {
-	to.StartTS = &startTS
-	return to
-}
-
-// SetTxnScope returns a new StartTSOption with TxnScope set to txnScope
-func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
-	to.TxnScope = txnScope
-	return to
-}
 
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn = transaction.KVTxn
