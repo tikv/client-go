@@ -15,4 +15,6 @@ require (
 	go.uber.org/goleak v1.1.10
 )
 
+replace github.com/pingcap/kvproto => github.com/MyonKeminta/kvproto v0.0.0-20211021102703-60266c23d5bd
+
 replace github.com/tikv/client-go/v2 => ../

@@ -231,7 +231,10 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 	}
 }
 
-func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock bool, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
+func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
+	// The format to put to the handle.UserData:
+	// MSB                                                                            LSB
+	// [13 bits: Op][1 bit: isPessimisticLock][1 bit: assertExist][1 bit: assertNotExist]
 	aux := uint16(op) << 3
 	if isPessimisticLock {
 		aux |= 1

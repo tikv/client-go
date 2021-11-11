@@ -367,3 +367,13 @@ func (c ConfigProbe) LoadPreSplitSizeThreshold() uint32 {
 func (c ConfigProbe) StorePreSplitSizeThreshold(v uint32) {
 	atomic.StoreUint32(&preSplitSizeThreshold, v)
 }
+
+// MemBufferMutationsProbe exports memBufferMutations for test purposes.
+type MemBufferMutationsProbe struct {
+	*memBufferMutations
+}
+
+// NewMemBufferMutationsProbe creates a new memBufferMutations instance for testing purpose.
+func NewMemBufferMutationsProbe(sizeHint int, storage *unionstore.MemDB) MemBufferMutationsProbe {
+	return MemBufferMutationsProbe{newMemBufferMutations(sizeHint, storage)}
+}

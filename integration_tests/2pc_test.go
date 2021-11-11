@@ -1551,3 +1551,56 @@ func (s *testCommitterSuite) TestCommitMultipleRegions() {
 	}
 	s.mustCommit(m)
 }
+
+func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
+	// Get a MemDB object from a transaction object.
+	db := s.begin().GetMemBuffer()
+
+	// A helper for iterating all cases.
+	forEachCase := func(f func(op kvrpcpb.Op, key []byte, value []byte, index int, isPessimisticLock, assertExist, assertNotExist bool)) {
+		keyIndex := 0
+		for _, op := range []kvrpcpb.Op{kvrpcpb.Op_Put, kvrpcpb.Op_Del, kvrpcpb.Op_CheckNotExists} {
+			for flags := 0; flags < (1 << 3); flags++ {
+				key := []byte(fmt.Sprintf("k%05d", keyIndex))
+				value := []byte(fmt.Sprintf("v%05d", keyIndex))
+
+				// `flag` Iterates all combinations of flags in binary.
+				isPessimisticLock := (flags & 0x4) != 0
+				assertExist := (flags & 0x2) != 0
+				assertNotExist := (flags & 0x1) != 0
+
+				f(op, key, value, keyIndex, isPessimisticLock, assertExist, assertNotExist)
+				keyIndex++
+			}
+		}
+	}
+
+	// Put some keys to the MemDB
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		if op == kvrpcpb.Op_Put {
+			err := db.Set(key, value)
+			s.Nil(err)
+		} else if op == kvrpcpb.Op_Del {
+			err := db.Delete(key)
+			s.Nil(err)
+		} else {
+			db.UpdateFlags(key, kv.SetPresumeKeyNotExists)
+		}
+	})
+
+	// Create memBufferMutations object and add keys with flags to it.
+	mutations := transaction.NewMemBufferMutationsProbe(db.Len(), db)
+
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		handle := db.IterWithFlags(key, nil).Handle()
+		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, handle)
+	})
+
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		s.Equal(key, mutations.GetKey(i))
+		s.Equal(op, mutations.GetOp(i))
+		s.Equal(isPessimisticLock, mutations.IsPessimisticLock(i))
+		s.Equal(assertExist, mutations.IsAssertExists(i))
+		s.Equal(assertNotExist, mutations.IsAssertNotExist(i))
+	})
+}
