@@ -192,7 +192,6 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 
 // NewTxnClient creates a txn client with pdAddrs.
 func NewTxnClient(pdAddrs []string) (*KVStore, error) {
-
 	cfg := config.GetGlobalConfig()
 	pdClient, err := NewPDClient(pdAddrs)
 	if err != nil {
@@ -238,7 +237,6 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 		),
 		pd.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
 		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding))
-
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -280,16 +278,16 @@ func (s *KVStore) runSafePointChecker() {
 }
 
 // Begin a global transaction.
-func (s *KVStore) Begin() (*transaction.KVTxn, error) {
-	return s.BeginWithOption(DefaultStartTSOption())
-}
+func (s *KVStore) Begin(opts ...TxnOption) (*transaction.KVTxn, error) {
+	options := &txnOptions{}
+	// Inject the options
+	for _, opt := range opts {
+		opt(options)
+	}
 
-// BeginWithOption begins a transaction with the given StartTSOption
-func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, error) {
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
-
 	if options.StartTS != nil {
 		snapshot := txnsnapshot.NewTiKVSnapshot(s, *options.StartTS, s.nextReplicaReadSeed())
 		return transaction.NewTiKVTxn(s, snapshot, *options.StartTS, options.TxnScope)
@@ -618,29 +616,28 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 	return s.lockResolver, nil
 }
 
-// StartTSOption indicates the option when beginning a transaction
-// `TxnScope` must be set for each object
-// Every other fields are optional, but currently at most one of them can be set
-type StartTSOption struct {
+// txnOptions indicates the option when beginning a transaction.
+// txnOptions are set by the TxnOption values passed to Begin
+type txnOptions struct {
 	TxnScope string
 	StartTS  *uint64
 }
 
-// DefaultStartTSOption creates a default StartTSOption, ie. Work in GlobalTxnScope and get start ts when got used
-func DefaultStartTSOption() StartTSOption {
-	return StartTSOption{TxnScope: oracle.GlobalTxnScope}
+// TxnOption configures Transaction
+type TxnOption func(*txnOptions)
+
+// WithTxnScope sets the TxnScope to txnScope
+func WithTxnScope(txnScope string) TxnOption {
+	return func(st *txnOptions) {
+		st.TxnScope = txnScope
+	}
 }
 
-// SetStartTS returns a new StartTSOption with StartTS set to the given startTS
-func (to StartTSOption) SetStartTS(startTS uint64) StartTSOption {
-	to.StartTS = &startTS
-	return to
-}
-
-// SetTxnScope returns a new StartTSOption with TxnScope set to txnScope
-func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
-	to.TxnScope = txnScope
-	return to
+// WithStartTS sets the StartTS to startTS
+func WithStartTS(startTS uint64) TxnOption {
+	return func(st *txnOptions) {
+		st.StartTS = &startTS
+	}
 }
 
 // TODO: remove once tidb and br are ready
