@@ -873,7 +873,7 @@ func (s *RegionRequestSender) reset() {
 	s.failProxyStoreIDs = nil
 }
 
-// IsFakeRegionError returns true if err is fack region error.
+// IsFakeRegionError returns true if err is fake region error.
 func IsFakeRegionError(err *errorpb.Error) bool {
 	return err != nil && err.GetEpochNotMatch() != nil && len(err.GetEpochNotMatch().CurrentRegions) == 0
 }
