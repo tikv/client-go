@@ -33,12 +33,6 @@ func (s *testAssertionSuite) TearDownTest() {
 }
 
 func (s *testAssertionSuite) TestPrewriteAssertion() {
-	// TODO: Enable testing with unistore after supporting assertion in unistore.
-	if !*withTiKV {
-		// Skip the test.
-		return
-	}
-
 	s.Nil(failpoint.Enable("tikvclient/assertionSkipCheckFromLock", "return"))
 	defer func() {
 		s.Nil(failpoint.Disable("tikvclient/assertionSkipCheckFromLock"))
