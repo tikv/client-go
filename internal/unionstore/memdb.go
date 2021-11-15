@@ -261,6 +261,15 @@ func (db *MemDB) Delete(key []byte) error {
 	return db.set(key, tombstone)
 }
 
+func (db *MemDB) DeleteKey(key []byte) {
+	x := db.traverse(key, false)
+	if x.isNull() {
+		return
+	}
+	db.size -= len(db.vlog.getValue(x.vptr))
+	db.deleteNode(x)
+}
+
 // DeleteWithFlags delete key with the given KeyFlags
 func (db *MemDB) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
 	return db.set(key, tombstone, ops...)
