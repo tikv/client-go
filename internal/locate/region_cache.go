@@ -767,7 +767,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		if err != nil {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
-				zap.ByteString("key", key), zap.Error(err))
+				zap.String("key", util.HexRegionKeyStr(key)), zap.Error(err))
 		} else {
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			r = lr
@@ -1257,13 +1257,13 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		}
 		if err != nil {
 			if isDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v", key, err)
+				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v", util.HexRegionKeyStr(key), err)
 			}
-			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", key, err)
+			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", util.HexRegionKeyStr(key), err)
 			continue
 		}
 		if reg == nil || reg.Meta == nil {
-			backoffErr = errors.Errorf("region not found for key %q", key)
+			backoffErr = errors.Errorf("region not found for key %q", util.HexRegionKeyStr(key))
 			continue
 		}
 		filterUnavailablePeers(reg)
@@ -1358,7 +1358,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
 		if err != nil {
 			if isDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", startKey, limit, err)
+				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", util.HexRegionKeyStr(startKey), limit, err)
 			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
