@@ -751,7 +751,8 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 	}
 
 	needGetVal := getVal
-	needCheckAssertion := m.Assertion == kvrpcpb.Assertion_NotExist && assertionLevel != kvrpcpb.AssertionLevel_Off
+	needCheckShouldNotExistForPessimisticLock := m.Assertion == kvrpcpb.Assertion_NotExist && m.Op == kvrpcpb.Op_PessimisticLock
+	needCheckAssertionForPrewerite := m.Assertion != kvrpcpb.Assertion_None && m.Op != kvrpcpb.Op_PessimisticLock && assertionLevel != kvrpcpb.AssertionLevel_Off
 	needCheckRollback := true
 	var retVal []byte
 	// do the check or get operations within one iteration to make CI faster
@@ -774,25 +775,29 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 				needCheckRollback = false
 			}
 		}
-		if needCheckAssertion {
-			if dec.value.valueType == typePut || dec.value.valueType == typeLock {
-				if m.Op == kvrpcpb.Op_PessimisticLock {
-					return nil, &ErrKeyAlreadyExist{
-						Key: m.Key,
-					}
+
+		if dec.value.valueType == typePut || dec.value.valueType == typeLock {
+			if needCheckShouldNotExistForPessimisticLock {
+				return nil, &ErrKeyAlreadyExist{
+					Key: m.Key,
 				}
-				logutil.BgLogger().Error("ASSERTION FAIL!!! exist for must non-exist key", zap.Stringer("mutation", m))
-			} else if dec.value.valueType == typeDelete {
-				needCheckAssertion = false
 			}
+			if needCheckAssertionForPrewerite && m.Assertion == kvrpcpb.Assertion_NotExist {
+				logutil.BgLogger().Error("assertion failed!!! exist for must non-exist key", zap.Stringer("mutation", m))
+				// TODO: Use specific error type
+				return nil, errors.Errorf("assertion failed!!! exist for must non-exist key, mutation: %v", m.String())
+			}
+		} else if dec.value.valueType == typeDelete {
+			needCheckShouldNotExistForPessimisticLock = false
 		}
+
 		if needGetVal {
 			if dec.value.valueType == typeDelete || dec.value.valueType == typePut {
 				retVal = dec.value.value
 				needGetVal = false
 			}
 		}
-		if !needCheckAssertion && !needGetVal && !needCheckRollback {
+		if !needCheckShouldNotExistForPessimisticLock && !needGetVal && !needCheckRollback {
 			break
 		}
 		ok, err = dec.Decode(iter)
@@ -801,6 +806,8 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 		}
 		if m.Assertion == kvrpcpb.Assertion_Exist && !ok && assertionLevel != kvrpcpb.AssertionLevel_Off {
 			logutil.BgLogger().Error("ASSERTION FAIL!!! non-exist for must exist key", zap.Stringer("mutation", m))
+			// TODO: Use specific error type
+			return nil, errors.Errorf("assertion failed!!! exist for must non-exist key, mutation: %v", m.String())
 		}
 	}
 	if getVal {
