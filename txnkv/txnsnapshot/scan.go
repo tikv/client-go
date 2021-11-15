@@ -240,6 +240,9 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.resourceGroupTag,
 		})
+		if s.snapshot.resourceGroupTag == nil && s.snapshot.resourceGroupTagger != nil {
+			s.snapshot.resourceGroupTagger(req)
+		}
 		s.snapshot.mu.RUnlock()
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
 		if err != nil {

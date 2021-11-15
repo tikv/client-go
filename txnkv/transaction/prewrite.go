@@ -141,9 +141,13 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		req.TryOnePc = true
 	}
 
-	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req,
+	r := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req,
 		kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag,
 			DiskFullOpt: c.diskFullOpt, MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(r)
+	}
+	return r
 }
 
 func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) (err error) {

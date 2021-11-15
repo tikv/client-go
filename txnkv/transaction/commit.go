@@ -73,6 +73,9 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
 		ResourceGroupTag: c.resourceGroupTag, DiskFullOpt: c.diskFullOpt,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(req)
+	}
 
 	tBegin := time.Now()
 	attempts := 0

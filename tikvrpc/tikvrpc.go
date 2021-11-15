@@ -1178,3 +1178,6 @@ func (req *Request) IsTxnWriteRequest() bool {
 	}
 	return false
 }
+
+// ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
+type ResourceGroupTagger func(req *Request)

@@ -64,6 +64,9 @@ func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer
 		StartVersion: c.startTS,
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(req)
+	}
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {
 		return err
