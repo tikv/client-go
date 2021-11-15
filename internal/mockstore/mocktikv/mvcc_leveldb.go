@@ -501,8 +501,10 @@ type lockCtx struct {
 	ttl         uint64
 	minCommitTs uint64
 
-	returnValues bool
-	values       [][]byte
+	returnValues   bool
+	checkExistence bool
+	values         [][]byte
+	keyNotFound    []bool
 }
 
 // PessimisticLock writes the pessimistic lock.
@@ -512,12 +514,13 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 	defer mvcc.mu.Unlock()
 	mutations := req.Mutations
 	lCtx := &lockCtx{
-		startTS:      req.StartVersion,
-		forUpdateTS:  req.ForUpdateTs,
-		primary:      req.PrimaryLock,
-		ttl:          req.LockTtl,
-		minCommitTs:  req.MinCommitTs,
-		returnValues: req.ReturnValues,
+		startTS:        req.StartVersion,
+		forUpdateTS:    req.ForUpdateTs,
+		primary:        req.PrimaryLock,
+		ttl:            req.LockTtl,
+		minCommitTs:    req.MinCommitTs,
+		returnValues:   req.ReturnValues,
+		checkExistence: req.CheckExistence,
 	}
 	lockWaitTime := req.WaitTimeout
 
@@ -550,6 +553,9 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 	}
 	if req.ReturnValues {
 		resp.Values = lCtx.values
+		resp.NotFounds = lCtx.keyNotFound
+	} else if req.CheckExistence {
+		resp.NotFounds = lCtx.keyNotFound
 	}
 	return resp
 }
@@ -593,6 +599,9 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 	}
 	if lctx.returnValues {
 		lctx.values = append(lctx.values, val)
+		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
+	} else if lctx.checkExistence {
+		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
 	}
 
 	lock := mvccLock{
