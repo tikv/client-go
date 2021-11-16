@@ -1550,3 +1550,51 @@ func (s *testCommitterSuite) TestCommitMultipleRegions() {
 	}
 	s.mustCommit(m)
 }
+
+func (s *testCommitterSuite) TestNewlyInsertedMemDBFlag() {
+	ctx := context.Background()
+	txn := s.begin()
+	memdb := txn.GetMemBuffer()
+	k0 := []byte("k0")
+	v0 := []byte("v0")
+	k1 := []byte("k1")
+	k2 := []byte("k2")
+	v1 := []byte("v1")
+	v2 := []byte("v2")
+
+	// Insert after delete, the newly inserted flag should not exist.
+	err := txn.Delete(k0)
+	s.Nil(err)
+	err = txn.Set(k0, v0)
+	s.Nil(err)
+	flags, err := memdb.GetFlags(k0)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+
+	// Lock then insert, the newly inserted flag should exist.
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	err = txn.LockKeys(context.Background(), lockCtx, k1)
+	s.Nil(err)
+	err = txn.GetMemBuffer().SetWithFlags(k1, v1, kv.SetNewlyInserted)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k1)
+	s.Nil(err)
+	s.True(flags.HasNewlyInserted())
+
+	// Lock then delete and insert, the newly inserted flag should not exist.
+	err = txn.LockKeys(ctx, lockCtx, k2)
+	s.Nil(err)
+	err = txn.Delete(k2)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k2)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+	err = txn.Set(k2, v2)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k2)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+
+	err = txn.Commit(ctx)
+	s.Nil(err)
+}
