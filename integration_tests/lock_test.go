@@ -854,3 +854,40 @@ func (s *testLockSuite) TestStartHeartBeatAfterLockingPrimary() {
 
 	s.Nil(txn.Rollback())
 }
+
+func (s *testLockSuite) TestPrewriteEncountersLargerTsLock() {
+	t1, err := s.store.Begin()
+	s.Nil(err)
+	s.Nil(t1.Set([]byte("k1"), []byte("v1")))
+	s.Nil(t1.Set([]byte("k2"), []byte("v2")))
+
+	// t2 has larger TS. Let t2 prewrite only the secondary lock.
+	t2, err := s.store.Begin()
+	s.Nil(err)
+	s.Nil(t2.Set([]byte("k1"), []byte("v1")))
+	s.Nil(t2.Set([]byte("k2"), []byte("v2")))
+	committer, err := t2.NewCommitter(1)
+	s.Nil(err)
+	committer.SetLockTTL(20000) // set TTL to 20s
+
+	s.Nil(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", "return"))
+	defer failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit")
+	s.Nil(failpoint.Enable("tikvclient/prewritePrimary", "pause"))
+	ch := make(chan struct{})
+	go func() {
+		err = committer.PrewriteAllMutations(context.Background())
+		s.Nil(err)
+		ch <- struct{}{}
+	}()
+	time.Sleep(200 * time.Millisecond) // make prewrite earlier than t1 commits
+
+	// Set 1 second timeout. If we still need to wait until t2 expires, we will get a timeout error
+	// instead of write conflict.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = t1.Commit(ctx)
+	s.True(tikverr.IsErrWriteConflict(err))
+
+	s.Nil(failpoint.Disable("tikvclient/prewritePrimary"))
+	<-ch
+}
