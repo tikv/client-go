@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -67,8 +67,12 @@ type LockCtx struct {
 	LockExpired           *uint32
 	Stats                 *util.LockKeysDetails
 	ResourceGroupTag      []byte
-	ResourceGroupTagger   tikvrpc.ResourceGroupTagger
-	OnDeadlock            func(*tikverr.ErrDeadlock)
+	// ResourceGroupTagger is a special tagger used only for PessimisticLockRequest.
+	// We did not use tikvrpc.ResourceGroupTagger here because the kv package is a
+	// more basic component, and we cannot rely on tikvrpc.Request here, so we treat
+	// LockCtx specially.
+	ResourceGroupTagger func(*kvrpcpb.PessimisticLockRequest) []byte
+	OnDeadlock          func(*tikverr.ErrDeadlock)
 }
 
 // LockWaitTime returns lockWaitTimeInMs
