@@ -26,6 +26,7 @@ import (
 	"time"
 
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 )
 
@@ -66,6 +67,7 @@ type LockCtx struct {
 	LockExpired           *uint32
 	Stats                 *util.LockKeysDetails
 	ResourceGroupTag      []byte
+	ResourceGroupTagger   tikvrpc.ResourceGroupTagger
 	OnDeadlock            func(*tikverr.ErrDeadlock)
 }
 
