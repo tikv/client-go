@@ -1,6 +1,6 @@
 module async_commit
 
-go 1.15
+go 1.16
 
 require github.com/tikv/client-go/v2 v2.0.0
 
