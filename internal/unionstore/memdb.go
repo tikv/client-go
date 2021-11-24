@@ -261,15 +261,6 @@ func (db *MemDB) Delete(key []byte) error {
 	return db.set(key, tombstone)
 }
 
-func (db *MemDB) DeleteKey(key []byte) {
-	x := db.traverse(key, false)
-	if x.isNull() {
-		return
-	}
-	db.size -= len(db.vlog.getValue(x.vptr))
-	db.deleteNode(x)
-}
-
 // DeleteWithFlags delete key with the given KeyFlags
 func (db *MemDB) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
 	return db.set(key, tombstone, ops...)
@@ -291,6 +282,17 @@ func (db *MemDB) GetValueByHandle(handle MemKeyHandle) ([]byte, bool) {
 		return nil, false
 	}
 	return db.vlog.getValue(x.vptr), true
+}
+
+// UnsafeRemoveKey removes a key from the MemDB (instead of putting a delete operation like the Delete method).
+// This function is exported only for test purposes.
+func (db *MemDB) UnsafeRemoveKey(key []byte) {
+	x := db.traverse(key, false)
+	if x.isNull() {
+		return
+	}
+	db.size -= len(db.vlog.getValue(x.vptr))
+	db.deleteNode(x)
 }
 
 // Len returns the number of entries in the DB.

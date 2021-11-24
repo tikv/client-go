@@ -72,7 +72,7 @@ func TestRandom(t *testing.T) {
 	for _, k := range keys {
 		op := rand.Float64()
 		if op < 0.35 {
-			p1.DeleteKey(k)
+			p1.UnsafeRemoveKey(k)
 			p2.Delete(k)
 		} else {
 			newValue := make([]byte, rand.Intn(19)+1)
