@@ -48,10 +48,10 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/parser/terror"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -329,6 +329,8 @@ func (r *Region) isValid() bool {
 }
 
 // RegionCache caches Regions loaded from PD.
+// All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
+// purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
 	enableForwarding bool
@@ -435,7 +437,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 	for _, store := range needCheckStores {
 		_, err := store.reResolve(c)
-		terror.Log(err)
+		tikverr.Log(err)
 	}
 }
 
@@ -671,7 +673,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		}
 		if store.getResolveState() == needCheck {
 			_, err := store.reResolve(c)
-			terror.Log(err)
+			tikverr.Log(err)
 		}
 		atomic.StoreInt32(&regionStore.workTiFlashIdx, int32(accessIdx))
 		peer := cachedRegion.meta.Peers[storeIdx]
@@ -765,7 +767,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		if err != nil {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
-				zap.ByteString("key", key), zap.Error(err))
+				zap.String("key", util.HexRegionKeyStr(key)), zap.Error(err))
 		} else {
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			r = lr
@@ -778,7 +780,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 }
 
 // OnSendFailForTiFlash handles send request fail logic for tiflash.
-func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, region RegionVerID, prev *metapb.Region, scheduleReload bool, err error) {
+func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, region RegionVerID, prev *metapb.Region, scheduleReload bool, err error, skipSwitchPeerLog bool) {
 
 	r := c.GetCachedRegionWithRLock(region)
 	if r == nil {
@@ -810,10 +812,15 @@ func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, re
 
 	// try next peer
 	rs.switchNextFlashPeer(r, accessIdx)
-	logutil.Logger(bo.GetCtx()).Info("switch region tiflash peer to next due to send request fail",
-		zap.Stringer("region", &region),
-		zap.Bool("needReload", scheduleReload),
-		zap.Error(err))
+	// In most scenarios, TiFlash will batch all the regions in one TiFlash store into one request, so when meet send failure,
+	// this function is called repeatedly for all the regions, since one TiFlash store might contain thousands of regions, we
+	// need a way to avoid generating too much useless log
+	if !skipSwitchPeerLog {
+		logutil.Logger(bo.GetCtx()).Info("switch region tiflash peer to next due to send request fail",
+			zap.Stringer("region", &region),
+			zap.Bool("needReload", scheduleReload),
+			zap.Error(err))
+	}
 
 	// force reload region when retry all known peers in region.
 	if scheduleReload {
@@ -913,7 +920,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 
 	r, err := c.loadRegionByID(bo, regionID)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	c.mu.Lock()
@@ -939,7 +946,7 @@ func (c *RegionCache) GroupKeysByRegion(bo *retry.Backoffer, keys [][]byte, filt
 			var err error
 			lastLoc, err = c.LocateKey(bo, k)
 			if err != nil {
-				return nil, first, errors.Trace(err)
+				return nil, first, err
 			}
 			if filter != nil && filter(k, lastLoc.StartKey) {
 				continue
@@ -959,7 +966,7 @@ func (c *RegionCache) ListRegionIDsInKeyRange(bo *retry.Backoffer, startKey, end
 	for {
 		curRegion, err := c.LocateKey(bo, startKey)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		regionIDs = append(regionIDs, curRegion.Region.id)
 		if curRegion.Contains(endKey) {
@@ -976,7 +983,7 @@ func (c *RegionCache) LoadRegionsInKeyRange(bo *retry.Backoffer, startKey, endKe
 	for {
 		batchRegions, err = c.BatchLoadRegionsWithKeyRange(bo, startKey, endKey, defaultRegionsPerBatch)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		if len(batchRegions) == 0 {
 			// should never happen
@@ -1020,7 +1027,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 func (c *RegionCache) BatchLoadRegionsFromKey(bo *retry.Backoffer, startKey []byte, count int) ([]byte, error) {
 	regions, err := c.BatchLoadRegionsWithKeyRange(bo, startKey, nil, count)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return regions[len(regions)-1].EndKey(), nil
 }
@@ -1233,7 +1240,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WithStack(err)
 			}
 		}
 		var reg *pd.Region
@@ -1250,13 +1257,13 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		}
 		if err != nil {
 			if isDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v", key, err)
+				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v", util.HexRegionKeyStr(key), err)
 			}
-			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", key, err)
+			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", util.HexRegionKeyStr(key), err)
 			continue
 		}
 		if reg == nil || reg.Meta == nil {
-			backoffErr = errors.Errorf("region not found for key %q", key)
+			backoffErr = errors.Errorf("region not found for key %q", util.HexRegionKeyStr(key))
 			continue
 		}
 		filterUnavailablePeers(reg)
@@ -1292,7 +1299,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WithStack(err)
 			}
 		}
 		reg, err := c.pdClient.GetRegionByID(ctx, regionID)
@@ -1345,13 +1352,13 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
 			if err != nil {
-				return nil, errors.Trace(err)
+				return nil, errors.WithStack(err)
 			}
 		}
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
 		if err != nil {
 			if isDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", startKey, limit, err)
+				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", util.HexRegionKeyStr(startKey), limit, err)
 			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
@@ -1900,8 +1907,8 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 		} else {
 			metrics.RegionCacheCounterWithGetStoreOK.Inc()
 		}
-		if bo.GetCtx().Err() != nil && errors.Cause(bo.GetCtx().Err()) == context.Canceled {
-			return
+		if err := bo.GetCtx().Err(); err != nil && errors.Cause(err) == context.Canceled {
+			return "", errors.WithStack(err)
 		}
 		if err != nil && !isStoreNotFoundError(err) {
 			// TODO: more refine PD error status handle.
@@ -2223,7 +2230,7 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 	if len(cfg.Security.ClusterSSLCA) != 0 {
 		tlsConfig, err := cfg.Security.ToTLSConfig()
 		if err != nil {
-			return nil, nil, errors.Trace(err)
+			return nil, nil, errors.WithStack(err)
 		}
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
@@ -2251,7 +2258,7 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 		}),
 	)
 	if err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	cli := healthpb.NewHealthClient(conn)
 	return conn, cli, nil

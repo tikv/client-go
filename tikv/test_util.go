@@ -36,7 +36,6 @@ package tikv
 
 import (
 	"github.com/google/uuid"
-	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/v2/internal/locate"
 	pd "github.com/tikv/pd/client"
 )
@@ -62,5 +61,5 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 	}
 
 	tikvStore.mock = true
-	return tikvStore, errors.Trace(err)
+	return tikvStore, err
 }

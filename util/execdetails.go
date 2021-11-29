@@ -214,6 +214,9 @@ type ScanDetail struct {
 	// It does not include deleted version or RocksDB tombstone keys.
 	// For Coprocessor requests, it includes keys that has been filtered out by Selection.
 	ProcessedKeys int64
+	// Number of bytes of user key-value pairs scanned from the storage, i.e.
+	// total size of data returned from MVCC layer.
+	ProcessedKeysSize int64
 	// RocksdbDeleteSkippedCount is the total number of deletes and single deletes skipped over during
 	// iteration, i.e. how many RocksDB tombstones are skipped.
 	RocksdbDeleteSkippedCount uint64
@@ -231,6 +234,7 @@ type ScanDetail struct {
 func (sd *ScanDetail) Merge(scanDetail *ScanDetail) {
 	atomic.AddInt64(&sd.TotalKeys, scanDetail.TotalKeys)
 	atomic.AddInt64(&sd.ProcessedKeys, scanDetail.ProcessedKeys)
+	atomic.AddInt64(&sd.ProcessedKeysSize, scanDetail.ProcessedKeysSize)
 	atomic.AddUint64(&sd.RocksdbDeleteSkippedCount, scanDetail.RocksdbDeleteSkippedCount)
 	atomic.AddUint64(&sd.RocksdbKeySkippedCount, scanDetail.RocksdbKeySkippedCount)
 	atomic.AddUint64(&sd.RocksdbBlockCacheHitCount, scanDetail.RocksdbBlockCacheHitCount)
@@ -249,6 +253,8 @@ func (sd *ScanDetail) String() string {
 	buf.WriteString("scan_detail: {")
 	buf.WriteString("total_process_keys: ")
 	buf.WriteString(strconv.FormatInt(sd.ProcessedKeys, 10))
+	buf.WriteString(", total_process_keys_size: ")
+	buf.WriteString(strconv.FormatInt(sd.ProcessedKeysSize, 10))
 	buf.WriteString(", total_keys: ")
 	buf.WriteString(strconv.FormatInt(sd.TotalKeys, 10))
 	buf.WriteString(", rocksdb: {")
@@ -272,6 +278,7 @@ func (sd *ScanDetail) MergeFromScanDetailV2(scanDetail *kvrpcpb.ScanDetailV2) {
 	if scanDetail != nil {
 		sd.TotalKeys += int64(scanDetail.TotalVersions)
 		sd.ProcessedKeys += int64(scanDetail.ProcessedVersions)
+		sd.ProcessedKeysSize += int64(scanDetail.ProcessedVersionsSize)
 		sd.RocksdbDeleteSkippedCount += scanDetail.RocksdbDeleteSkippedCount
 		sd.RocksdbKeySkippedCount += scanDetail.RocksdbKeySkippedCount
 		sd.RocksdbBlockCacheHitCount += scanDetail.RocksdbBlockCacheHitCount

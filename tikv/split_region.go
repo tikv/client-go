@@ -40,10 +40,10 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/kvrpc"
@@ -69,7 +69,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 	// If the split key is equal to the start key of the region, then the key has been split, we need to skip the split key.
 	groups, _, err := s.regionCache.GroupKeysByRegion(bo, keys, equalRegionStartKey)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	var batches []kvrpc.Batch
@@ -90,7 +90,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 	}
 	if len(batches) == 1 {
 		resp := s.batchSendSingleRegion(bo, batches[0], scatter, tableID)
-		return resp.Response, errors.Trace(resp.Error)
+		return resp.Response, resp.Error
 	}
 	ch := make(chan kvrpc.BatchResult, len(batches))
 	for _, batch1 := range batches {
@@ -129,7 +129,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 			srResp.Regions = append(srResp.Regions, regions...)
 		}
 	}
-	return &tikvrpc.Response{Resp: srResp}, errors.Trace(err)
+	return &tikvrpc.Response{Resp: srResp}, err
 }
 
 func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatter bool, tableID *int64) kvrpc.BatchResult {
@@ -152,18 +152,18 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 
 	batchResp := kvrpc.BatchResult{Response: resp}
 	if err != nil {
-		batchResp.Error = errors.Trace(err)
+		batchResp.Error = err
 		return batchResp
 	}
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
-		batchResp.Error = errors.Trace(err)
+		batchResp.Error = err
 		return batchResp
 	}
 	if regionErr != nil {
 		err := bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 		if err != nil {
-			batchResp.Error = errors.Trace(err)
+			batchResp.Error = err
 			return batchResp
 		}
 		resp, err = s.splitBatchRegionsReq(bo, batch.Keys, scatter, tableID)
@@ -234,7 +234,7 @@ func (s *KVStore) SplitRegions(ctx context.Context, splitKeys [][]byte, scatter 
 		}
 		logutil.BgLogger().Info("split regions complete", zap.Int("region count", len(regionIDs)), zap.Uint64s("region IDs", regionIDs))
 	}
-	return regionIDs, errors.Trace(err)
+	return regionIDs, err
 }
 
 func (s *KVStore) scatterRegion(bo *Backoffer, regionID uint64, tableID *int64) error {
@@ -258,7 +258,7 @@ func (s *KVStore) scatterRegion(bo *Backoffer, regionID uint64, tableID *int64) 
 		}
 		err = bo.Backoff(retry.BoPDRPC, errors.New(err.Error()))
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
 	logutil.BgLogger().Debug("scatter region complete",
@@ -289,7 +289,7 @@ func (s *KVStore) WaitScatterRegionFinish(ctx context.Context, regionID uint64, 
 				return nil
 			}
 			if resp.GetHeader().GetError() != nil {
-				err = errors.AddStack(&tikverr.PDError{
+				err = errors.WithStack(&tikverr.PDError{
 					Err: resp.Header.Error,
 				})
 				logutil.BgLogger().Warn("wait scatter region error",
@@ -310,7 +310,7 @@ func (s *KVStore) WaitScatterRegionFinish(ctx context.Context, regionID uint64, 
 			err = bo.Backoff(retry.BoRegionMiss, errors.New("wait scatter region timeout"))
 		}
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
 }
@@ -331,7 +331,7 @@ func (s *KVStore) CheckRegionInScattering(regionID uint64) (bool, error) {
 			return true, nil
 		}
 		if err != nil {
-			return true, errors.Trace(err)
+			return true, err
 		}
 	}
 }
