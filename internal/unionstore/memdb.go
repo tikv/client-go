@@ -261,15 +261,6 @@ func (db *MemDB) Delete(key []byte) error {
 	return db.set(key, tombstone)
 }
 
-func (db *MemDB) DeleteKey(key []byte) {
-	x := db.traverse(key, false)
-	if x.isNull() {
-		return
-	}
-	db.size -= len(db.vlog.getValue(x.vptr))
-	db.deleteNode(x)
-}
-
 // DeleteWithFlags delete key with the given KeyFlags
 func (db *MemDB) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
 	return db.set(key, tombstone, ops...)
@@ -847,4 +838,14 @@ func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 
 func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
 	n.flags = (^nodeFlagsMask & n.flags) | uint8(f)
+}
+
+// UnsafeRemoveRecord removes a record from the mem buffer. It should be only used for test.
+func (db *MemDB) UnsafeRemoveRecord(key []byte) {
+	x := db.traverse(key, false)
+	if x.isNull() {
+		return
+	}
+	db.size -= len(db.vlog.getValue(x.vptr))
+	db.deleteNode(x)
 }
