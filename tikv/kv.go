@@ -330,6 +330,7 @@ func (s *KVStore) Close() error {
 
 	s.oracle.Close()
 	s.pdClient.Close()
+	s.lockResolver.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
 		return err

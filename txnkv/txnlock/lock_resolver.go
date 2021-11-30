@@ -69,6 +69,11 @@ type LockResolver struct {
 	testingKnobs struct {
 		meetLock func(locks []*Lock)
 	}
+
+	// LockResolver may have some goroutines resolving locks in the background.
+	// The Cancel function is to cancel these goroutines for passing goleak test.
+	asyncResolveCtx    context.Context
+	asyncResolveCancel func()
 }
 
 // NewLockResolver creates a new LockResolver instance.
@@ -79,7 +84,13 @@ func NewLockResolver(store storage) *LockResolver {
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
 	r.mu.recentResolved = list.New()
+	r.asyncResolveCtx, r.asyncResolveCancel = context.WithCancel(context.Background())
 	return r
+}
+
+// Close cancels all background goroutines.
+func (lr *LockResolver) Close() {
+	lr.asyncResolveCancel()
 }
 
 // TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
@@ -359,7 +370,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 			err = lr.resolvePessimisticLock(bo, l)
 		} else {
 			if forRead {
-				asyncBo := retry.NewBackoffer(context.Background(), asyncResolveLockMaxBackoff)
+				asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
 				go func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
@@ -745,6 +756,8 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 
 // resolveAsyncResolveData resolves all locks in an async-commit transaction according to the status.
 func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, status TxnStatus, data *asyncResolveData) error {
+	util.EvalFailpoint("resolveAsyncResolveData")
+
 	keysByRegion, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, data.keys, nil)
 	if err != nil {
 		return err
@@ -794,7 +807,7 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 
 	logutil.BgLogger().Info("resolve async commit", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS))
 	if asyncResolveAll {
-		asyncBo := retry.NewBackoffer(context.Background(), asyncResolveLockMaxBackoff)
+		asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
 		go func() {
 			err := lr.resolveAsyncResolveData(asyncBo, l, status, resolveData)
 			if err != nil {

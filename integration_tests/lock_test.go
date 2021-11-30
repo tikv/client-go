@@ -78,7 +78,7 @@ func (s *testLockSuite) TearDownTest() {
 	s.store.Close()
 }
 
-func (s *testLockSuite) lockKey(key, value, primaryKey, primaryValue []byte, commitPrimary bool, asyncCommit bool) (uint64, uint64) {
+func (s *testLockSuite) lockKey(key, value, primaryKey, primaryValue []byte, ttl uint64, commitPrimary bool, asyncCommit bool) (uint64, uint64) {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	if len(value) > 0 {
@@ -97,6 +97,7 @@ func (s *testLockSuite) lockKey(key, value, primaryKey, primaryValue []byte, com
 	tpc, err := txn.NewCommitter(0)
 	s.Nil(err)
 	tpc.SetPrimaryKey(primaryKey)
+	tpc.SetLockTTL(ttl)
 	if asyncCommit {
 		tpc.SetUseAsyncCommit()
 	}
@@ -133,11 +134,11 @@ func (s *testLockSuite) putKV(key, value []byte) (uint64, uint64) {
 
 func (s *testLockSuite) prepareAlphabetLocks() {
 	s.putKV([]byte("c"), []byte("cc"))
-	s.lockKey([]byte("c"), []byte("c"), []byte("z1"), []byte("z1"), true, false)
-	s.lockKey([]byte("d"), []byte("dd"), []byte("z2"), []byte("z2"), false, false)
-	s.lockKey([]byte("foo"), []byte("foo"), []byte("z3"), []byte("z3"), false, false)
+	s.lockKey([]byte("c"), []byte("c"), []byte("z1"), []byte("z1"), 3000, true, false)
+	s.lockKey([]byte("d"), []byte("dd"), []byte("z2"), []byte("z2"), 3000, false, false)
+	s.lockKey([]byte("foo"), []byte("foo"), []byte("z3"), []byte("z3"), 3000, false, false)
 	s.putKV([]byte("bar"), []byte("bar"))
-	s.lockKey([]byte("bar"), nil, []byte("z4"), []byte("z4"), true, false)
+	s.lockKey([]byte("bar"), nil, []byte("z4"), []byte("z4"), 3000, true, false)
 }
 
 func (s *testLockSuite) TestScanLockResolveWithGet() {
@@ -208,7 +209,7 @@ func (s *testLockSuite) TestScanLockResolveWithBatchGet() {
 func (s *testLockSuite) TestCleanLock() {
 	for ch := byte('a'); ch <= byte('z'); ch++ {
 		k := []byte{ch}
-		s.lockKey(k, k, k, k, false, false)
+		s.lockKey(k, k, k, k, 3000, false, false)
 	}
 	txn, err := s.store.Begin()
 	s.Nil(err)
@@ -227,13 +228,13 @@ func (s *testLockSuite) TestGetTxnStatus() {
 	s.True(status.IsCommitted())
 	s.Equal(status.CommitTS(), commitTS)
 
-	startTS, commitTS = s.lockKey([]byte("a"), []byte("a"), []byte("a"), []byte("a"), true, false)
+	startTS, commitTS = s.lockKey([]byte("a"), []byte("a"), []byte("a"), []byte("a"), 3000, true, false)
 	status, err = s.store.GetLockResolver().GetTxnStatus(startTS, startTS, []byte("a"))
 	s.Nil(err)
 	s.True(status.IsCommitted())
 	s.Equal(status.CommitTS(), commitTS)
 
-	startTS, _ = s.lockKey([]byte("a"), []byte("a"), []byte("a"), []byte("a"), false, false)
+	startTS, _ = s.lockKey([]byte("a"), []byte("a"), []byte("a"), []byte("a"), 3000, false, false)
 	status, err = s.store.GetLockResolver().GetTxnStatus(startTS, startTS, []byte("a"))
 	s.Nil(err)
 	s.False(status.IsCommitted())
@@ -903,13 +904,13 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 	var locks []*txnlock.Lock
 
 	// commitTS < readStartTS
-	startTS, _ := s.lockKey([]byte("k1"), []byte("v1"), []byte("k11"), []byte("v11"), true, false)
+	startTS, _ := s.lockKey([]byte("k1"), []byte("v1"), []byte("k11"), []byte("v11"), 3000, true, false)
 	committedLocks = append(committedLocks, startTS)
 	lock := s.mustGetLock([]byte("k1"))
 	locks = append(locks, lock)
 
 	// rolled back
-	startTS, _ = s.lockKey([]byte("k2"), []byte("v2"), []byte("k22"), []byte("v22"), false, false)
+	startTS, _ = s.lockKey([]byte("k2"), []byte("v2"), []byte("k22"), []byte("v22"), 3000, false, false)
 	lock = s.mustGetLock([]byte("k22"))
 	err := s.store.NewLockResolver().ForceResolveLock(ctx, lock)
 	s.Nil(err)
@@ -918,14 +919,20 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 	locks = append(locks, lock)
 
 	// pushed
-	startTS, _ = s.lockKey([]byte("k3"), []byte("v3"), []byte("k33"), []byte("v33"), false, false)
+	startTS, _ = s.lockKey([]byte("k3"), []byte("v3"), []byte("k33"), []byte("v33"), 3000, false, false)
 	resolvedLocks = append(resolvedLocks, startTS)
 	lock = s.mustGetLock([]byte("k3"))
 	locks = append(locks, lock)
 
 	// can't be pushed and isn't expired
-	_, _ = s.lockKey([]byte("k4"), []byte("v4"), []byte("k44"), []byte("v44"), false, true)
+	_, _ = s.lockKey([]byte("k4"), []byte("v4"), []byte("k44"), []byte("v44"), 3000, false, true)
 	lock = s.mustGetLock([]byte("k4"))
+	locks = append(locks, lock)
+
+	// can't be pushed but is expired
+	startTS, _ = s.lockKey([]byte("k5"), []byte("v5"), []byte("k55"), []byte("v55"), 0, false, true)
+	committedLocks = append(committedLocks, startTS)
+	lock = s.mustGetLock([]byte("k5"))
 	locks = append(locks, lock)
 
 	// commitTS > readStartTS
@@ -934,12 +941,12 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 		t, err := s.store.Begin()
 		s.Nil(err)
 		resolvedLocks = append(resolvedLocks, t.StartTS())
-		s.Nil(t.Set([]byte("k5"), []byte("v5")))
-		s.Nil(t.Set([]byte("k55"), []byte("v55")))
+		s.Nil(t.Set([]byte("k6"), []byte("v6")))
+		s.Nil(t.Set([]byte("k66"), []byte("v66")))
 		committer, err := t.NewCommitter(1)
 		s.Nil(err)
 		s.Nil(committer.PrewriteAllMutations(ctx))
-		committer.SetPrimaryKey([]byte("k55"))
+		committer.SetPrimaryKey([]byte("k66"))
 
 		readStartTS, err = s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 		s.Nil(err)
@@ -950,12 +957,14 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 		committer.SetCommitTS(commitTS)
 		err = committer.CommitMutations(ctx)
 		s.Nil(err)
-		lock = s.mustGetLock([]byte("k5"))
+		lock = s.mustGetLock([]byte("k6"))
 		locks = append(locks, lock)
 	}
 
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
-	msBeforeExpired, resolved, committed, err := s.store.NewLockResolver().ResolveLocksForRead(bo, readStartTS, locks, false)
+	lr := s.store.NewLockResolver()
+	defer lr.Close()
+	msBeforeExpired, resolved, committed, err := lr.ResolveLocksForRead(bo, readStartTS, locks, false)
 	s.Nil(err)
 	s.Greater(msBeforeExpired, int64(0))
 	s.Equal(resolvedLocks, resolved)

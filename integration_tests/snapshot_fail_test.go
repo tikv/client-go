@@ -310,7 +310,7 @@ func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
 	s.Equal(val, []byte("y1"))
 }
 
-func (s *testSnapshotFailSuite) mustGetLock(key []byte) *txnkv.Lock {
+func (s *testSnapshotFailSuite) getLock(key []byte) *txnkv.Lock {
 	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
@@ -324,45 +324,70 @@ func (s *testSnapshotFailSuite) mustGetLock(key []byte) *txnkv.Lock {
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
-	s.NotNil(keyErr)
+	if keyErr == nil {
+		return nil
+	}
 	lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
-	s.Nil(err)
+	if err != nil {
+		return nil
+	}
 	return lock
 }
 
 func (s *testSnapshotFailSuite) TestSnapshotUseResolveForRead() {
-	x := []byte("x_key_TestSnapshotUseResolveForRead")
-	y := []byte("y_key_TestSnapshotUseResolveForRead")
-	txn, err := s.store.Begin()
-	s.Nil(err)
-	s.Nil(txn.Set(x, []byte("x")))
-	s.Nil(txn.Set(y, []byte("y")))
-	ctx := context.Background()
-	committer, err := txn.NewCommitter(1)
-	s.Nil(err)
-	committer.SetLockTTL(3000)
-	s.Nil(committer.PrewriteAllMutations(ctx))
-	committer.SetCommitTS(committer.GetStartTS() + 1)
-	committer.CommitMutations(ctx)
-	s.Equal(committer.GetPrimaryKey(), x)
-	s.NotNil(s.mustGetLock(y))
+	s.Nil(failpoint.Enable("tikvclient/resolveLock", "sleep(500)"))
+	s.Nil(failpoint.Enable("tikvclient/resolveAsyncResolveData", "sleep(500)"))
+	defer func() {
+		s.Nil(failpoint.Disable("tikvclient/resolveAsyncResolveData"))
+		s.Nil(failpoint.Disable("tikvclient/resolveLock"))
+	}()
 
-	s.Nil(failpoint.Enable("tikvclient/resolveLock", `sleep(1000)`))
-	defer s.Nil(failpoint.Disable("tikvclient/resolveLock"))
+	for _, asyncCommit := range []bool{false, true} {
+		x := []byte("x_key_TestSnapshotUseResolveForRead")
+		y := []byte("y_key_TestSnapshotUseResolveForRead")
+		txn, err := s.store.Begin()
+		s.Nil(err)
+		s.Nil(txn.Set(x, []byte("x")))
+		s.Nil(txn.Set(y, []byte("y")))
+		txn.SetEnableAsyncCommit(asyncCommit)
+		ctx := context.Background()
+		committer, err := txn.NewCommitter(1)
+		s.Nil(err)
+		committer.SetLockTTL(3000)
+		s.Nil(committer.PrewriteAllMutations(ctx))
+		committer.SetCommitTS(committer.GetStartTS() + 1)
+		committer.CommitMutations(ctx)
+		s.Equal(committer.GetPrimaryKey(), x)
+		s.NotNil(s.getLock(y))
 
-	txn, err = s.store.Begin()
-	s.Nil(err)
-	snapshot := txn.GetSnapshot()
+		txn, err = s.store.Begin()
+		s.Nil(err)
+		snapshot := txn.GetSnapshot()
+		start := time.Now()
+		val, err := snapshot.Get(ctx, y)
+		s.Nil(err)
+		s.Equal([]byte("y"), val)
+		s.Less(time.Since(start), 200*time.Millisecond)
+		s.NotNil(s.getLock(y))
 
-	start := time.Now()
-	val, err := snapshot.Get(ctx, y)
-	s.Nil(err)
-	s.Equal([]byte("y"), val)
-	s.Less(time.Since(start), 500*time.Millisecond)
+		txn, err = s.store.Begin()
+		s.Nil(err)
+		snapshot = txn.GetSnapshot()
+		start = time.Now()
+		res, err := snapshot.BatchGet(ctx, [][]byte{y})
+		s.Nil(err)
+		s.Equal([]byte("y"), res[string(y)])
+		s.Less(time.Since(start), 200*time.Millisecond)
+		s.NotNil(s.getLock(y))
 
-	start = time.Now()
-	res, err := snapshot.BatchGet(ctx, [][]byte{y})
-	s.Nil(err)
-	s.Equal([]byte("y"), res[string(y)])
-	s.Less(time.Since(start), 500*time.Millisecond)
+		var lock *txnkv.Lock
+		for i := 0; i < 10; i++ {
+			time.Sleep(100 * time.Millisecond)
+			lock = s.getLock(y)
+			if lock == nil {
+				break
+			}
+		}
+		s.Nil(lock, "failed to resolve lock timely")
+	}
 }
