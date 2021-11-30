@@ -42,6 +42,11 @@ import (
 // ResolvedCacheSize is max number of cached txn status.
 const ResolvedCacheSize = 2048
 
+const (
+	getTxnStatusMaxBackoff     = 20000
+	asyncResolveLockMaxBackoff = 40000
+)
+
 type storage interface {
 	// GetRegionCache gets the RegionCache.
 	GetRegionCache() *locate.RegionCache
@@ -88,7 +93,7 @@ type TxnStatus struct {
 // IsCommitted returns true if the txn's final status is Commit.
 func (s TxnStatus) IsCommitted() bool { return s.ttl == 0 && s.commitTS > 0 }
 
-// IsRolledBack returns true if the txn's final status is Commit.
+// IsRolledBack returns true if the txn's final status is rolled back.
 func (s TxnStatus) IsRolledBack() bool { return s.ttl == 0 && s.commitTS == 0 }
 
 // CommitTS returns the txn's commitTS. It is valid iff `IsCommitted` is true.
@@ -354,10 +359,18 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 			err = lr.resolvePessimisticLock(bo, l)
 		} else {
 			if forRead {
-				go lr.resolveLock(bo, l, status, lite, cleanRegions)
+				asyncBo := retry.NewBackoffer(context.Background(), asyncResolveLockMaxBackoff)
+				go func() {
+					// Pass an empty cleanRegions here to avoid data race and
+					// let `reqCollapse` deduplicate identical resolve requests.
+					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{})
+					if err != nil {
+						logutil.BgLogger().Info("failed to resolve lock asynchronously",
+							zap.String("lock", l.String()), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
+					}
+				}()
 			} else {
 				err = lr.resolveLock(bo, l, status, lite, cleanRegions)
-
 			}
 		}
 		return status, err
@@ -426,8 +439,6 @@ func (t *txnExpireTime) value() int64 {
 	}
 	return t.txnExpire
 }
-
-const getTxnStatusMaxBackoff = 20000
 
 // GetTxnStatus queries tikv-server for a txn's status (commit/rollback).
 // If the primary key is still locked, it will launch a Rollback to abort it.
@@ -783,7 +794,14 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 
 	logutil.BgLogger().Info("resolve async commit", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS))
 	if asyncResolveAll {
-		go lr.resolveAsyncResolveData(bo, l, status, resolveData)
+		asyncBo := retry.NewBackoffer(context.Background(), asyncResolveLockMaxBackoff)
+		go func() {
+			err := lr.resolveAsyncResolveData(asyncBo, l, status, resolveData)
+			if err != nil {
+				logutil.BgLogger().Info("failed to resolve async-commit locks asynchronously",
+					zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
+			}
+		}()
 	} else {
 		err = lr.resolveAsyncResolveData(bo, l, status, resolveData)
 	}

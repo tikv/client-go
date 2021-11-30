@@ -348,6 +348,7 @@ func (s *testSnapshotFailSuite) TestSnapshotUseResolveForRead() {
 	s.NotNil(s.mustGetLock(y))
 
 	s.Nil(failpoint.Enable("tikvclient/resolveLock", `sleep(1000)`))
+	defer s.Nil(failpoint.Disable("tikvclient/resolveLock"))
 
 	txn, err = s.store.Begin()
 	s.Nil(err)
