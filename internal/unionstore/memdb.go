@@ -834,8 +834,8 @@ func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
 	n.flags = (^nodeFlagsMask & n.flags) | uint16(f)
 }
 
-// UnsafeRemoveRecord removes a record from the mem buffer. It should be only used for test.
-func (db *MemDB) UnsafeRemoveRecord(key []byte) {
+// RemoveFromBuffer removes a record from the mem buffer. It should be only used for test.
+func (db *MemDB) RemoveFromBuffer(key []byte) {
 	x := db.traverse(key, false)
 	if x.isNull() {
 		return
