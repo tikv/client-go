@@ -44,7 +44,6 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
@@ -109,6 +108,7 @@ type KVSnapshot struct {
 	vars            *kv.Variables
 	replicaReadSeed uint32
 	resolvedLocks   util.TSSet
+	committedLocks  util.TSSet
 	scanBatchSize   int
 
 	// Cache the result of BatchGet.
@@ -333,7 +333,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 }
 
 func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, collectF func(k, v []byte)) error {
-	cli := NewClientHelper(s.store, &s.resolvedLocks, false)
+	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
 		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
@@ -500,13 +500,13 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		defer span1.Finish()
 		opentracing.ContextWithSpan(ctx, span1)
 	}
-	failpoint.Inject("snapshot-get-cache-fail", func(_ failpoint.Value) {
+	if _, err := util.EvalFailpoint("snapshot-get-cache-fail"); err == nil {
 		if bo.GetCtx().Value("TestSnapshotCache") != nil {
 			panic("cache miss")
 		}
-	})
+	}
 
-	cli := NewClientHelper(s.store, &s.resolvedLocks, true)
+	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, true)
 
 	s.mu.RLock()
 	if s.mu.stats != nil {
