@@ -206,7 +206,7 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	bo := retry.NewBackofferWithVars(ctx, batchGetMaxBackoff, s.vars)
 
 	if s.interceptor != nil {
-		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// User has called snapshot.SetInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
 		ctx = tikvrpc.SetInterceptorIntoCtx(ctx, s.interceptor)
@@ -479,7 +479,7 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
 
 	if s.interceptor != nil {
-		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// User has called snapshot.SetInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
 		bo.SetCtx(tikvrpc.SetInterceptorIntoCtx(bo.GetCtx(), s.interceptor))
