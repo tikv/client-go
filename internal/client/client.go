@@ -368,7 +368,18 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.
 }
 
 // SendRequest sends a Request to server and receives Response.
+// If tikvrpc.Interceptor has been set in ctx, it will be used to wrap RPC action.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if interceptor := tikvrpc.GetInterceptorFromCtx(ctx); interceptor != nil {
+		return interceptor(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			return c.sendRequest(ctx, target, req, timeout)
+		})(addr, req)
+	}
+	return c.sendRequest(ctx, addr, req, timeout)
+}
+
+// sendRequest sends a Request to server and receives Response.
+func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
 		defer span1.Finish()

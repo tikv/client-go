@@ -118,6 +118,12 @@ func (s *Scanner) Next() error {
 	if !s.valid {
 		return errors.New("scanner iterator is invalid")
 	}
+	if s.snapshot.interceptor != nil {
+		// User has called snapshot.SetInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(tikvrpc.SetInterceptorIntoCtx(bo.GetCtx(), s.snapshot.interceptor))
+	}
 	var err error
 	for {
 		s.idx++

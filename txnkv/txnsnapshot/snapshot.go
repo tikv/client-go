@@ -136,6 +136,8 @@ type KVSnapshot struct {
 	resourceGroupTag []byte
 	// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
 	resourceGroupTagger tikvrpc.ResourceGroupTagger
+	// interceptor is used to decorate the RPC request logic related to the snapshot.
+	interceptor tikvrpc.Interceptor
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -202,6 +204,13 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, batchGetMaxBackoff, s.vars)
+
+	if s.interceptor != nil {
+		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		ctx = tikvrpc.SetInterceptorIntoCtx(ctx, s.interceptor)
+	}
 
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
@@ -468,6 +477,14 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
+
+	if s.interceptor != nil {
+		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(tikvrpc.SetInterceptorIntoCtx(bo.GetCtx(), s.interceptor))
+	}
+
 	val, err := s.get(ctx, bo, k)
 	s.recordBackoffInfo(bo)
 	if err != nil {
@@ -732,6 +749,12 @@ func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
 // resourceGroupTag directly, otherwise use resourceGroupTagger.
 func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	s.resourceGroupTagger = tagger
+}
+
+// SetInterceptor sets tikvrpc.Interceptor for the snapshot.
+// tikvrpc.Interceptor will be executed before each RPC request is initiated.
+func (s *KVSnapshot) SetInterceptor(interceptor tikvrpc.Interceptor) {
+	s.interceptor = interceptor
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.

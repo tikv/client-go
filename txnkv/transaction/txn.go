@@ -112,6 +112,8 @@ type KVTxn struct {
 	resourceGroupTag    []byte
 	resourceGroupTagger tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt         kvrpcpb.DiskFullOpt
+	// interceptor is used to decorate the RPC request logic related to the txn.
+	interceptor tikvrpc.Interceptor
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -242,6 +244,13 @@ func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
+// SetInterceptor sets tikvrpc.Interceptor for the transaction and its related snapshot.
+// tikvrpc.Interceptor will be executed before each RPC request is initiated.
+func (txn *KVTxn) SetInterceptor(interceptor tikvrpc.Interceptor) {
+	txn.interceptor = interceptor
+	txn.GetSnapshot().SetInterceptor(interceptor)
+}
+
 // SetSchemaAmender sets an amender to update mutations after schema change.
 func (txn *KVTxn) SetSchemaAmender(sa SchemaAmender) {
 	txn.schemaAmender = sa
@@ -341,6 +350,13 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	val := ctx.Value(util.SessionID)
 	if val != nil {
 		sessionID = val.(uint64)
+	}
+
+	if txn.interceptor != nil {
+		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		ctx = tikvrpc.SetInterceptorIntoCtx(ctx, txn.interceptor)
 	}
 
 	var err error
@@ -450,6 +466,12 @@ func (txn *KVTxn) rollbackPessimisticLocks() error {
 		return nil
 	}
 	bo := retry.NewBackofferWithVars(context.Background(), cleanupMaxBackoff, txn.vars)
+	if txn.interceptor != nil {
+		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(tikvrpc.SetInterceptorIntoCtx(bo.GetCtx(), txn.interceptor))
+	}
 	keys := txn.collectLockedKeys()
 	return txn.committer.pessimisticRollbackMutations(bo, &PlainMutations{keys: keys})
 }
@@ -526,6 +548,12 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
+	if txn.interceptor != nil {
+		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		ctx = tikvrpc.SetInterceptorIntoCtx(ctx, txn.interceptor)
+	}
 	// Exclude keys that are already locked.
 	var err error
 	keys := make([][]byte, 0, len(keysInput))
