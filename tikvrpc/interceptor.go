@@ -84,7 +84,8 @@ type InterceptorFunc func(target string, req *Request) (*Response, error)
 // }
 // txn.SetInterceptor(NewInterceptorChain().Link(Interceptor1).Link(Interceptor2).Build())
 // ```
-// Then every time an RPC request is initiated, it will be printed in the following order:
+//
+// Then every time an RPC request is initiated, the following text will be printed:
 // ```
 // begin-interceptor-1
 // begin-interceptor-2
@@ -122,7 +123,7 @@ type interceptorCtxKeyType struct{}
 
 var interceptorCtxKey = interceptorCtxKeyType{}
 
-// SetInterceptorIntoCtx is a helper function used to write Interceptor into ctx.
+// SetInterceptorIntoCtx is a helper function used to bind Interceptor into ctx.
 // Different from the behavior of calling context.WithValue() directly, calling
 // SetInterceptorIntoCtx multiple times will not bind multiple Interceptors, but
 // will replace the original value each time.
