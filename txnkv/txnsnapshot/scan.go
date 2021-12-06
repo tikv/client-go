@@ -110,7 +110,7 @@ func (s *Scanner) Value() []byte {
 	return nil
 }
 
-const scannerNextMaxBackoff = 600000 // 10 minutes
+const scannerNextMaxBackoff = 20000
 
 // Next return next element.
 func (s *Scanner) Next() error {
