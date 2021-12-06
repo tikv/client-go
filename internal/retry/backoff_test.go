@@ -44,8 +44,8 @@ import (
 
 func TestBackoffWithMax(t *testing.T) {
 	b := NewBackofferWithVars(context.TODO(), 2000, nil)
-	err := b.BackoffWithMaxSleepTxnLockFast(30, errors.New("test"))
+	err := b.BackoffWithMaxSleepTxnLockFast(5, errors.New("test"))
 
 	assert.Nil(t, err)
-	assert.Equal(t, 30, b.totalSleep)
+	assert.Equal(t, 5, b.totalSleep)
 }

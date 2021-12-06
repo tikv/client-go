@@ -515,6 +515,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 			// For pessimistic lock resolving, if the primary lock does not exist and rollbackIfNotExist is true,
 			// The Action_LockNotExistDoNothing will be returned as the status.
 			rollbackIfNotExist = true
+			continue
 		} else {
 			// For the Rollback statement from user, the pessimistic locks will be rollbacked and the primary key in store
 			// has no related information. There are possibilities that some other transactions do checkTxnStatus on these

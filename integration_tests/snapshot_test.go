@@ -293,12 +293,12 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	bo := tikv.NewBackofferWithVars(context.Background(), 2000, nil)
-	err := bo.BackoffWithMaxSleepTxnLockFast(30, errors.New("test"))
+	err := bo.BackoffWithMaxSleepTxnLockFast(5, errors.New("test"))
 	s.Nil(err)
 	snapshot.RecordBackoffInfo(bo)
 	snapshot.RecordBackoffInfo(bo)
-	expect := "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}"
-	s.Equal(snapshot.FormatStats(), expect)
+	expect := "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}"
+	s.Equal(expect, snapshot.FormatStats())
 	detail := &kvrpcpb.ExecDetailsV2{
 		TimeDetail: &kvrpcpb.TimeDetail{
 			WaitWallTimeMs:    100,
@@ -316,7 +316,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		},
 	}
 	snapshot.MergeExecDetail(detail)
-	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
+	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
 		"total_process_time: 100ms, total_wait_time: 100ms, " +
 		"scan_detail: {total_process_keys: 10, " +
 		"total_process_keys_size: 10, " +
@@ -324,9 +324,9 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"rocksdb: {delete_skipped_count: 5, " +
 		"key_skipped_count: 1, " +
 		"block: {cache_hit_count: 10, read_count: 20, read_byte: 15 Bytes}}}"
-	s.Equal(snapshot.FormatStats(), expect)
+	s.Equal(expect, snapshot.FormatStats())
 	snapshot.MergeExecDetail(detail)
-	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
+	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
 		"total_process_time: 200ms, total_wait_time: 200ms, " +
 		"scan_detail: {total_process_keys: 20, " +
 		"total_process_keys_size: 20, " +
@@ -334,5 +334,5 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"rocksdb: {delete_skipped_count: 10, " +
 		"key_skipped_count: 2, " +
 		"block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
-	s.Equal(snapshot.FormatStats(), expect)
+	s.Equal(expect, snapshot.FormatStats())
 }
