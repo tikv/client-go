@@ -898,32 +898,34 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 
 	if val, err := util.EvalFailpoint("tikvStoreSendReqResult"); err == nil {
-		switch val.(string) {
-		case "timeout":
-			return nil, nil, errors.New("timeout")
-		case "GCNotLeader":
-			if req.Type == tikvrpc.CmdGC {
-				return &tikvrpc.Response{
-					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
-				}, nil, nil
-			}
-		case "GCServerIsBusy":
-			if req.Type == tikvrpc.CmdGC {
+		if s, ok := val.(string); ok {
+			switch s {
+			case "timeout":
+				return nil, nil, errors.New("timeout")
+			case "GCNotLeader":
+				if req.Type == tikvrpc.CmdGC {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+					}, nil, nil
+				}
+			case "GCServerIsBusy":
+				if req.Type == tikvrpc.CmdGC {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+					}, nil, nil
+				}
+			case "busy":
 				return &tikvrpc.Response{
 					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
 				}, nil, nil
-			}
-		case "busy":
-			return &tikvrpc.Response{
-				Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-			}, nil, nil
-		case "requestTiDBStoreError":
-			if et == tikvrpc.TiDB {
-				return nil, nil, errors.WithStack(tikverr.ErrTiKVServerTimeout)
-			}
-		case "requestTiFlashError":
-			if et == tikvrpc.TiFlash {
-				return nil, nil, errors.WithStack(tikverr.ErrTiFlashServerTimeout)
+			case "requestTiDBStoreError":
+				if et == tikvrpc.TiDB {
+					return nil, nil, errors.WithStack(tikverr.ErrTiKVServerTimeout)
+				}
+			case "requestTiFlashError":
+				if et == tikvrpc.TiFlash {
+					return nil, nil, errors.WithStack(tikverr.ErrTiFlashServerTimeout)
+				}
 			}
 		}
 	}

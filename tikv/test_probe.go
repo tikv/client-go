@@ -120,6 +120,15 @@ func NewLockResolverProb(r *txnlock.LockResolver) *LockResolverProbe {
 	return &LockResolverProbe{&resolver}
 }
 
+// ForceResolveLock forces to resolve a single lock. It's a helper function only for writing test.
+func (l LockResolverProbe) ForceResolveLock(ctx context.Context, lock *txnlock.Lock) error {
+	bo := retry.NewBackofferWithVars(ctx, transaction.ConfigProbe{}.GetPessimisticLockMaxBackoff(), nil)
+	// make use of forcing resolving lock
+	lock.TTL = 0
+	_, err := l.LockResolverProbe.ResolveLocks(bo, 0, []*txnlock.Lock{lock})
+	return err
+}
+
 // ResolveLock resolves single lock.
 func (l LockResolverProbe) ResolveLock(ctx context.Context, lock *txnlock.Lock) error {
 	bo := retry.NewBackofferWithVars(ctx, transaction.ConfigProbe{}.GetPessimisticLockMaxBackoff(), nil)

@@ -900,8 +900,8 @@ func (tm *ttlManager) reset() {
 	close(tm.ch)
 }
 
-const keepAliveMaxBackoff = 20000        // 20 seconds
-const pessimisticLockMaxBackoff = 600000 // 10 minutes
+const keepAliveMaxBackoff = 20000
+const pessimisticLockMaxBackoff = 20000
 const maxConsecutiveFailure = 10
 
 func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, lockCtx *kv.LockCtx) {

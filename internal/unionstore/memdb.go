@@ -833,3 +833,13 @@ func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
 	n.flags = (^nodeFlagsMask & n.flags) | uint16(f)
 }
+
+// RemoveFromBuffer removes a record from the mem buffer. It should be only used for test.
+func (db *MemDB) RemoveFromBuffer(key []byte) {
+	x := db.traverse(key, false)
+	if x.isNull() {
+		return
+	}
+	db.size -= len(db.vlog.getValue(x.vptr))
+	db.deleteNode(x)
+}
