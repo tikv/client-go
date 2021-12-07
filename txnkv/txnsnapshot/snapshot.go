@@ -209,7 +209,7 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 		// User has called snapshot.SetInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
-		ctx = tikvrpc.SetInterceptorIntoCtx(ctx, s.interceptor)
+		bo.SetCtx(tikvrpc.SetInterceptorIntoCtx(bo.GetCtx(), s.interceptor))
 	}
 
 	// Create a map to collect key-values from region servers.
