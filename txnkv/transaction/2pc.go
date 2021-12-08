@@ -380,7 +380,7 @@ func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error 
 // KVFilter is a filter that filters out unnecessary KV pairs.
 type KVFilter interface {
 	// IsUnnecessaryKeyValue returns whether this KV pair should be committed.
-	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) bool
+	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (bool, error)
 }
 
 func (c *twoPhaseCommitter) initKeysAndMutations() error {
@@ -409,7 +409,13 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 			lockCnt++
 		} else {
 			value = it.Value()
-			isUnnecessaryKV := filter != nil && filter.IsUnnecessaryKeyValue(key, value, flags)
+			var isUnnecessaryKV bool
+			if filter != nil {
+				isUnnecessaryKV, err = filter.IsUnnecessaryKeyValue(key, value, flags)
+				if err != nil {
+					return err
+				}
+			}
 			if len(value) > 0 {
 				if isUnnecessaryKV {
 					if !flags.HasLocked() {
