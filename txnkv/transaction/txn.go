@@ -246,9 +246,20 @@ func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 
 // SetInterceptor sets tikvrpc.Interceptor for the transaction and its related snapshot.
 // tikvrpc.Interceptor will be executed before each RPC request is initiated.
+// Note that SetInterceptor will replace the previously set interceptor.
 func (txn *KVTxn) SetInterceptor(interceptor tikvrpc.Interceptor) {
 	txn.interceptor = interceptor
 	txn.GetSnapshot().SetInterceptor(interceptor)
+}
+
+// AddInterceptor adds an interceptor, the order of addition is the order of execution.
+func (txn *KVTxn) AddInterceptor(interceptor tikvrpc.Interceptor) {
+	if txn.interceptor == nil {
+		txn.SetInterceptor(interceptor)
+		return
+	}
+	txn.interceptor = tikvrpc.NewInterceptorChain().Link(txn.interceptor).Link(interceptor).Build()
+	txn.GetSnapshot().AddInterceptor(interceptor)
 }
 
 // SetSchemaAmender sets an amender to update mutations after schema change.

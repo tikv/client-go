@@ -753,8 +753,18 @@ func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) 
 
 // SetInterceptor sets tikvrpc.Interceptor for the snapshot.
 // tikvrpc.Interceptor will be executed before each RPC request is initiated.
+// Note that SetInterceptor will replace the previously set interceptor.
 func (s *KVSnapshot) SetInterceptor(interceptor tikvrpc.Interceptor) {
 	s.interceptor = interceptor
+}
+
+// AddInterceptor adds an interceptor, the order of addition is the order of execution.
+func (s *KVSnapshot) AddInterceptor(interceptor tikvrpc.Interceptor) {
+	if s.interceptor == nil {
+		s.SetInterceptor(interceptor)
+		return
+	}
+	s.interceptor = tikvrpc.NewInterceptorChain().Link(s.interceptor).Link(interceptor).Build()
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.
