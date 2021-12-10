@@ -22,13 +22,13 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 )
 
-// TxnKVClient is a txn client.
-type TxnKVClient struct {
+// Client is a txn client.
+type Client struct {
 	*tikv.KVStore
 }
 
 // NewClient creates a txn client with pdAddrs.
-func NewClient(pdAddrs []string) (*TxnKVClient, error) {
+func NewClient(pdAddrs []string) (*Client, error) {
 	cfg := config.GetGlobalConfig()
 	pdClient, err := tikv.NewPDClient(pdAddrs)
 	if err != nil {
@@ -53,5 +53,5 @@ func NewClient(pdAddrs []string) (*TxnKVClient, error) {
 	if cfg.TxnLocalLatches.Enabled {
 		s.EnableTxnLocalLatches(cfg.TxnLocalLatches.Capacity)
 	}
-	return &TxnKVClient{KVStore: s}, nil
+	return &Client{KVStore: s}, nil
 }

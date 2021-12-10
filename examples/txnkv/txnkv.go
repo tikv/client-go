@@ -33,7 +33,7 @@ func (kv KV) String() string {
 }
 
 var (
-	client *txnkv.TxnKVClient
+	client *txnkv.Client
 	pdAddr = flag.String("pd", "127.0.0.1:2379", "pd address")
 )
 
