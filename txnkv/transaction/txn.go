@@ -99,19 +99,20 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
-	binlog              BinlogExecutor
-	schemaLeaseChecker  SchemaLeaseChecker
-	syncLog             bool
-	priority            txnutil.Priority
-	isPessimistic       bool
-	enableAsyncCommit   bool
-	enable1PC           bool
-	causalConsistency   bool
-	scope               string
-	kvFilter            KVFilter
-	resourceGroupTag    []byte
-	resourceGroupTagger tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
-	diskFullOpt         kvrpcpb.DiskFullOpt
+	binlog                BinlogExecutor
+	schemaLeaseChecker    SchemaLeaseChecker
+	syncLog               bool
+	priority              txnutil.Priority
+	isPessimistic         bool
+	enableAsyncCommit     bool
+	enable1PC             bool
+	causalConsistency     bool
+	scope                 string
+	kvFilter              KVFilter
+	resourceGroupTag      []byte
+	resourceGroupTagger   tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
+	diskFullOpt           kvrpcpb.DiskFullOpt
+	cachedTableWriteLease *uint64
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -279,6 +280,13 @@ func (txn *KVTxn) SetScope(scope string) {
 // SetKVFilter sets the filter to ignore key-values in memory buffer.
 func (txn *KVTxn) SetKVFilter(filter KVFilter) {
 	txn.kvFilter = filter
+}
+
+// SetCachedTableWriteLease set the cached table write lease when the transaction used cached table.
+// If this value is set, the transaction must ensure the final commit ts is less than atomic.LoadUint64(leasePtr)
+// leasePtr point to a lease variable whose value is updated by a renew lease goroutine.
+func (txn *KVTxn) SetCachedTableWriteLease(leasePtr *uint64) {
+	txn.cachedTableWriteLease = leasePtr
 }
 
 // SetDiskFullOpt sets whether current operation is allowed in each TiKV disk usage level.
