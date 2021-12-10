@@ -190,36 +190,6 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	return store, nil
 }
 
-// NewTxnClient creates a txn client with pdAddrs.
-func NewTxnClient(pdAddrs []string) (*KVStore, error) {
-	cfg := config.GetGlobalConfig()
-	pdClient, err := NewPDClient(pdAddrs)
-	if err != nil {
-		return nil, err
-	}
-	// init uuid
-	// FIXME: uuid will be a very long and ugly string, simplify it.
-	uuid := fmt.Sprintf("tikv-%v", pdClient.GetClusterID(context.TODO()))
-	tlsConfig, err := cfg.Security.ToTLSConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	spkv, err := NewEtcdSafePointKV(pdAddrs, tlsConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	s, err := NewKVStore(uuid, pdClient, spkv, NewRPCClient(WithSecurity(cfg.Security)))
-	if err != nil {
-		return nil, err
-	}
-	if cfg.TxnLocalLatches.Enabled {
-		s.EnableTxnLocalLatches(cfg.TxnLocalLatches.Capacity)
-	}
-	return s, nil
-}
-
 // NewPDClient creates pd.Client with pdAddrs.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
