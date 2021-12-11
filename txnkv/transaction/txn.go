@@ -112,7 +112,7 @@ type KVTxn struct {
 	resourceGroupTag      []byte
 	resourceGroupTagger   tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt           kvrpcpb.DiskFullOpt
-	cachedTableWriteLease *uint64
+	cachedTableWriteLease []uint64
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -285,8 +285,8 @@ func (txn *KVTxn) SetKVFilter(filter KVFilter) {
 // SetCachedTableWriteLease set the cached table write lease when the transaction used cached table.
 // If this value is set, the transaction must ensure the final commit ts is less than atomic.LoadUint64(leasePtr)
 // leasePtr point to a lease variable whose value is updated by a renew lease goroutine.
-func (txn *KVTxn) SetCachedTableWriteLease(leasePtr *uint64) {
-	txn.cachedTableWriteLease = leasePtr
+func (txn *KVTxn) SetCachedTableWriteLease(leases []uint64) {
+	txn.cachedTableWriteLease = leases
 }
 
 // SetDiskFullOpt sets whether current operation is allowed in each TiKV disk usage level.
