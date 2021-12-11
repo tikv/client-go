@@ -1369,7 +1369,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		return err
 	}
 	if c.txn.cachedTableWriteLease != nil {
-		for i:=0; i<len(c.txn.cachedTableWriteLease); i++ {
+		for i := 0; i < len(c.txn.cachedTableWriteLease); i++ {
 			writeLease := atomic.LoadUint64(&c.txn.cachedTableWriteLease[i])
 			if commitTS >= writeLease {
 				err = errors.Errorf("session %d txn on cached table write lock lease %d gone, txnStartTS: %d, comm: %d",
