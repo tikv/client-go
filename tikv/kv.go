@@ -543,6 +543,8 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 			preSafeTS := s.getSafeTS(storeID)
 			if preSafeTS > safeTS {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()
+				preSafeTSTime := oracle.GetTimeFromTS(preSafeTS)
+				metrics.TiKVMinSafeTSGapSeconds.WithLabelValues(storeIDStr).Set(time.Since(preSafeTSTime).Seconds())
 				return
 			}
 			s.setSafeTS(storeID, safeTS)
