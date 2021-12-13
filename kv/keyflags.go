@@ -169,7 +169,7 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 }
 
 // FlagsOp describes KeyFlags modify operation.
-type FlagsOp uint16
+type FlagsOp uint32
 
 const (
 	// SetPresumeKeyNotExists marks the existence of the associated key is checked lazily.

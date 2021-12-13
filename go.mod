@@ -17,7 +17,7 @@ require (
 	github.com/opentracing/opentracing-go v1.1.0
 	github.com/pingcap/failpoint v0.0.0-20210316064728-7acb0f0a3dfd
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20211122024046-03abd340988f
+	github.com/pingcap/kvproto v0.0.0-20211202065422-a412f7a319c3
 	github.com/pingcap/log v0.0.0-20210625125904-98ed8e2eb1c7
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.5.1
@@ -43,5 +43,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	honnef.co/go/tools v0.2.0 // indirect
 )
-
-replace github.com/pingcap/kvproto => github.com/MyonKeminta/kvproto v0.0.0-20211021102703-60266c23d5bd

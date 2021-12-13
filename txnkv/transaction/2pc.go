@@ -562,7 +562,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 			if isPessimistic && !skipCheckFromLock {
 				err = c.checkPessimisticMutationAssertion(key, flags, mustExist, mustNotExist)
 				if err != nil {
-					return errors.Trace(err)
+					return errors.WithStack(err)
 				}
 			}
 
