@@ -61,6 +61,7 @@ var (
 	BackoffHistogramRegionMiss       prometheus.Observer
 	BackoffHistogramRegionScheduling prometheus.Observer
 	BackoffHistogramServerBusy       prometheus.Observer
+	BackoffHistogramTiKVDiskFull     prometheus.Observer
 	BackoffHistogramStaleCmd         prometheus.Observer
 	BackoffHistogramDataNotReady     prometheus.Observer
 	BackoffHistogramEmpty            prometheus.Observer
@@ -153,6 +154,7 @@ func initShortcuts() {
 	BackoffHistogramRegionMiss = TiKVBackoffHistogram.WithLabelValues("regionMiss")
 	BackoffHistogramRegionScheduling = TiKVBackoffHistogram.WithLabelValues("regionScheduling")
 	BackoffHistogramServerBusy = TiKVBackoffHistogram.WithLabelValues("serverBusy")
+	BackoffHistogramTiKVDiskFull = TiKVBackoffHistogram.WithLabelValues("tikvDiskFull")
 	BackoffHistogramStaleCmd = TiKVBackoffHistogram.WithLabelValues("staleCommand")
 	BackoffHistogramDataNotReady = TiKVBackoffHistogram.WithLabelValues("dataNotReady")
 	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")

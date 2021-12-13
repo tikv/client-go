@@ -38,9 +38,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pingcap/log"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
@@ -83,8 +84,12 @@ var (
 	ErrRegionDataNotReady = errors.New("region data not ready")
 	// ErrRegionNotInitialized is error when region is not initialized
 	ErrRegionNotInitialized = errors.New("region not Initialized")
+	// ErrTiKVDiskFull is the error when tikv server disk usage is full.
+	ErrTiKVDiskFull = errors.New("tikv disk full")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
+	// ErrResultUndetermined is the error when execution result is unknown.
+	ErrResultUndetermined = errors.New("execution result undetermined")
 )
 
 // MismatchClusterID represents the message that the cluster ID of the PD client does not match the PD.
@@ -92,7 +97,7 @@ const MismatchClusterID = "mismatch cluster id"
 
 // IsErrNotFound checks if err is a kind of NotFound error.
 func IsErrNotFound(err error) bool {
-	return errors.ErrorEqual(err, ErrNotExist)
+	return errors.Is(err, ErrNotExist)
 }
 
 // ErrDeadlock wraps *kvrpcpb.Deadlock to implement the error interface.
@@ -126,8 +131,8 @@ func (k *ErrKeyExist) Error() string {
 
 // IsErrKeyExist returns true if it is ErrKeyExist.
 func IsErrKeyExist(err error) bool {
-	_, ok := errors.Cause(err).(*ErrKeyExist)
-	return ok
+	var e *ErrKeyExist
+	return errors.As(err, &e)
 }
 
 // ErrWriteConflict wraps *kvrpcpb.ErrWriteConflict to implement the error interface.
@@ -141,8 +146,8 @@ func (k *ErrWriteConflict) Error() string {
 
 // IsErrWriteConflict returns true if it is ErrWriteConflict.
 func IsErrWriteConflict(err error) bool {
-	_, ok := errors.Cause(err).(*ErrWriteConflict)
-	return ok
+	var e *ErrWriteConflict
+	return errors.As(err, &e)
 }
 
 //NewErrWriteConfictWithArgs generates an ErrWriteConflict with args.
@@ -245,11 +250,11 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 	}
 
 	if keyErr.Conflict != nil {
-		return &ErrWriteConflict{WriteConflict: keyErr.GetConflict()}
+		return errors.WithStack(&ErrWriteConflict{WriteConflict: keyErr.GetConflict()})
 	}
 
 	if keyErr.Retryable != "" {
-		return &ErrRetryable{Retryable: keyErr.Retryable}
+		return errors.WithStack(&ErrRetryable{Retryable: keyErr.Retryable})
 	}
 
 	if keyErr.AssertionFailed != nil {
@@ -259,16 +264,28 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 	if keyErr.Abort != "" {
 		err := errors.Errorf("tikv aborts txn: %s", keyErr.GetAbort())
 		logutil.BgLogger().Warn("2PC failed", zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 	if keyErr.CommitTsTooLarge != nil {
 		err := errors.Errorf("commit TS %v is too large", keyErr.CommitTsTooLarge.CommitTs)
 		logutil.BgLogger().Warn("2PC failed", zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 	if keyErr.TxnNotFound != nil {
 		err := errors.Errorf("txn %d not found", keyErr.TxnNotFound.StartTs)
-		return errors.Trace(err)
+		return err
 	}
 	return errors.Errorf("unexpected KeyError: %s", keyErr.String())
+}
+
+// IsErrorUndetermined checks if the error is undetermined error.
+func IsErrorUndetermined(err error) bool {
+	return errors.Is(err, ErrResultUndetermined)
+}
+
+// Log logs the error if it is not nil.
+func Log(err error) {
+	if err != nil {
+		log.Error("encountered error", zap.Error(err), zap.Stack("stack"))
+	}
 }

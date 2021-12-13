@@ -41,7 +41,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
@@ -166,11 +165,6 @@ func (db *MemDB) Reset() {
 	db.allocator.reset()
 }
 
-// SetDiskFullOpt is used by TiDB test case.
-func (db *MemDB) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
-	// Nothing to do.
-}
-
 // DiscardValues releases the memory used by all values.
 // NOTE: any operation need value will panic after this function.
 func (db *MemDB) DiscardValues() {
@@ -282,17 +276,6 @@ func (db *MemDB) GetValueByHandle(handle MemKeyHandle) ([]byte, bool) {
 		return nil, false
 	}
 	return db.vlog.getValue(x.vptr), true
-}
-
-// UnsafeRemoveKey removes a key from the MemDB (instead of putting a delete operation like the Delete method).
-// This function is exported only for test purposes.
-func (db *MemDB) UnsafeRemoveKey(key []byte) {
-	x := db.traverse(key, false)
-	if x.isNull() {
-		return
-	}
-	db.size -= len(db.vlog.getValue(x.vptr))
-	db.deleteNode(x)
 }
 
 // Len returns the number of entries in the DB.
@@ -831,7 +814,7 @@ func (n *memdbNode) setBlack() {
 func (n *memdbNode) getKey() []byte {
 	var ret []byte
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
-	hdr.Data = uintptr(unsafe.Pointer(&n.flags)) + 2
+	hdr.Data = uintptr(unsafe.Pointer(&n.flags)) + kv.FlagBytes
 	hdr.Len = int(n.klen)
 	hdr.Cap = int(n.klen)
 	return ret
@@ -839,7 +822,7 @@ func (n *memdbNode) getKey() []byte {
 
 const (
 	// bit 1 => red, bit 0 => black
-	nodeColorBit  uint16 = 1 << 15
+	nodeColorBit  uint16 = 0x8000
 	nodeFlagsMask        = ^nodeColorBit
 )
 
@@ -849,4 +832,14 @@ func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 
 func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
 	n.flags = (^nodeFlagsMask & n.flags) | uint16(f)
+}
+
+// RemoveFromBuffer removes a record from the mem buffer. It should be only used for test.
+func (db *MemDB) RemoveFromBuffer(key []byte) {
+	x := db.traverse(key, false)
+	if x.isNull() {
+		return
+	}
+	db.size -= len(db.vlog.getValue(x.vptr))
+	db.deleteNode(x)
 }

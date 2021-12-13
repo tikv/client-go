@@ -48,9 +48,9 @@ import (
 
 	"github.com/dgryski/go-farm"
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -58,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
@@ -98,19 +99,20 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
-	binlog             BinlogExecutor
-	schemaLeaseChecker SchemaLeaseChecker
-	syncLog            bool
-	priority           txnutil.Priority
-	isPessimistic      bool
-	enableAsyncCommit  bool
-	enable1PC          bool
-	causalConsistency  bool
-	scope              string
-	kvFilter           KVFilter
-	resourceGroupTag   []byte
-	diskFullOpt        kvrpcpb.DiskFullOpt
-	assertionLevel     kvrpcpb.AssertionLevel
+	binlog              BinlogExecutor
+	schemaLeaseChecker  SchemaLeaseChecker
+	syncLog             bool
+	priority            txnutil.Priority
+	isPessimistic       bool
+	enableAsyncCommit   bool
+	enable1PC           bool
+	causalConsistency   bool
+	scope               string
+	kvFilter            KVFilter
+	resourceGroupTag    []byte
+	resourceGroupTagger tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
+	diskFullOpt         kvrpcpb.DiskFullOpt
+	assertionLevel      kvrpcpb.AssertionLevel
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -158,7 +160,7 @@ func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
 		return nil, err
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	return ret, nil
@@ -231,6 +233,14 @@ func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
 	txn.resourceGroupTag = tag
 	txn.GetSnapshot().SetResourceGroupTag(tag)
+}
+
+// SetResourceGroupTagger sets the resource tagger for both write and read.
+// Before sending the request, if resourceGroupTag is not nil, use
+// resourceGroupTag directly, otherwise use resourceGroupTagger.
+func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
+	txn.resourceGroupTagger = tagger
+	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
 // SetSchemaAmender sets an amender to update mutations after schema change.
@@ -345,7 +355,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	if committer == nil {
 		committer, err = newTwoPhaseCommitter(txn, sessionID)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		txn.committer = committer
 	}
@@ -358,7 +368,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	err = committer.initKeysAndMutations()
 	initRegion.End()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	if committer.mutations.Len() == 0 {
 		return nil
@@ -389,7 +399,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 			txn.onCommitted(err)
 		}
 		logutil.Logger(ctx).Debug("[kv] txnLatches disabled, 2pc directly", zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 
 	// latches enabled
@@ -413,7 +423,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		lock.SetCommitTS(committer.commitTS)
 	}
 	logutil.Logger(ctx).Debug("[kv] txnLatches enabled while txn retryable", zap.Error(err))
-	return errors.Trace(err)
+	return err
 }
 
 func (txn *KVTxn) close() {

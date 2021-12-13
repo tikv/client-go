@@ -39,11 +39,11 @@ import (
 	"context"
 	"sort"
 	"testing"
+	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/parser/terror"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
@@ -87,7 +87,7 @@ func (s *testAsyncCommitFailSuite) TestFailAsyncCommitPrewriteRpcErrors() {
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 	err = t1.Commit(ctx)
 	s.NotNil(err)
-	s.True(terror.ErrorEqual(err, terror.ErrResultUndetermined), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.WithStack(err))
 
 	// We don't need to call "Rollback" after "Commit" fails.
 	err = t1.Rollback()
@@ -130,7 +130,7 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitPrewriteCancelled() {
 	err = t1.Commit(ctx)
 	s.NotNil(err)
 	_, ok := errors.Cause(err).(*tikverr.ErrWriteConflict)
-	s.True(ok, errors.ErrorStack(err))
+	s.True(ok, errors.WithStack(err))
 }
 
 func (s *testAsyncCommitFailSuite) TestPointGetWithAsyncCommit() {
@@ -180,16 +180,20 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 	}
 
 	// Ensure the region has been split
-	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
-	loc, err := s.store.GetRegionCache().LocateKey(bo, []byte("i"))
-	s.Nil(err)
-	s.Equal(loc.StartKey, []byte("h"))
-	s.Equal(loc.EndKey, []byte("o"))
-
-	loc, err = s.store.GetRegionCache().LocateKey(bo, []byte("p"))
-	s.Nil(err)
-	s.Equal(loc.StartKey, []byte("o"))
-	s.Equal(loc.EndKey, []byte("u"))
+	s.Eventually(func() bool {
+		checkRegionBound := func(key, startKey, endKey []byte) bool {
+			bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
+			loc, err := s.store.GetRegionCache().LocateKey(bo, key)
+			s.Nil(err)
+			if bytes.Equal(loc.StartKey, startKey) && bytes.Equal(loc.EndKey, endKey) {
+				return true
+			}
+			s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
+			return false
+		}
+		return checkRegionBound([]byte("i"), []byte("h"), []byte("o")) &&
+			checkRegionBound([]byte("p"), []byte("o"), []byte("u"))
+	}, time.Second, 10*time.Millisecond, "region is not split successfully")
 
 	var sessionID uint64 = 0
 	test := func(keys []string, values []string) {
@@ -203,7 +207,7 @@ func (s *testAsyncCommitFailSuite) TestSecondaryListInPrimaryLock() {
 
 		s.Nil(failpoint.Enable("tikvclient/asyncCommitDoNothing", "return"))
 
-		err = txn.Commit(ctx)
+		err := txn.Commit(ctx)
 		s.Nil(err)
 
 		primary := txn.GetCommitter().GetPrimaryKey()

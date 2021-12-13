@@ -41,7 +41,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -79,7 +79,7 @@ func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracl
 	_, err := o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	if err != nil {
 		o.Close()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return o, nil
 }
@@ -98,7 +98,7 @@ func (o *pdOracle) IsExpired(lockTS, TTL uint64, opt *oracle.Option) bool {
 func (o *pdOracle) GetTimestamp(ctx context.Context, opt *oracle.Option) (uint64, error) {
 	ts, err := o.getTimestamp(ctx, opt.TxnScope)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	o.setLastTS(ts, opt.TxnScope)
 	return ts, nil
@@ -116,7 +116,7 @@ func (f *tsFuture) Wait() (uint64, error) {
 	physical, logical, err := f.TSFuture.Wait()
 	metrics.TiKVTSFutureWaitDuration.Observe(time.Since(now).Seconds())
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, errors.WithStack(err)
 	}
 	ts := oracle.ComposeTS(physical, logical)
 	f.o.setLastTS(ts, f.txnScope)
@@ -145,7 +145,7 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 		physical, logical, err = o.c.GetLocalTS(ctx, txnScope)
 	}
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, errors.WithStack(err)
 	}
 	dist := time.Since(now)
 	if dist > slowDist {
@@ -320,10 +320,10 @@ func (o *pdOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevS
 			// If any error happened, we will try to fetch tso and set it as last ts.
 			_, tErr := o.GetTimestamp(ctx, &oracle.Option{TxnScope: txnScope})
 			if tErr != nil {
-				return 0, errors.Trace(tErr)
+				return 0, tErr
 			}
 		}
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	return ts, nil
 }

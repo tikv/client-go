@@ -48,11 +48,10 @@ import (
 	"time"
 
 	"github.com/ninedraft/israce"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/parser/terror"
 	drivertxn "github.com/pingcap/tidb/store/driver/txn"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -630,12 +629,12 @@ func (s *testCommitterSuite) TestRejectCommitTS() {
 	// Use max.Uint64 to read the data and success.
 	// That means the final commitTS > startTS+2, it's not the one we provide.
 	// So we cover the rety commitTS logic.
-	txn1, err := s.store.BeginWithOption(tikv.DefaultStartTSOption().SetStartTS(committer.GetStartTS() + 2))
+	txn1, err := s.store.KVStore.Begin(tikv.WithStartTS(committer.GetStartTS() + 2))
 	s.Nil(err)
 	_, err = txn1.Get(bo.GetCtx(), []byte("x"))
 	s.True(tikverr.IsErrNotFound(err))
 
-	txn2, err := s.store.BeginWithOption(tikv.DefaultStartTSOption().SetStartTS(math.MaxUint64))
+	txn2, err := s.store.KVStore.Begin(tikv.WithStartTS(math.MaxUint64))
 	s.Nil(err)
 	val, err := txn2.Get(bo.GetCtx(), []byte("x"))
 	s.Nil(err)
@@ -1052,7 +1051,7 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	s.Nil(failpoint.Disable("tikvclient/txnNotFoundRetTTL"))
 	s.Nil(err)
 	waitErr := <-doneCh
-	s.Equal(tikverr.ErrLockWaitTimeout, waitErr)
+	s.Equal(tikverr.ErrLockWaitTimeout, errors.Unwrap(waitErr))
 }
 
 func (s *testCommitterSuite) TestResolvePessimisticLock() {
@@ -1433,7 +1432,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRpcErrors() {
 	s.Nil(err)
 	err = t1.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorEqual(err, terror.ErrResultUndetermined), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.WithStack(err))
 
 	// We don't need to call "Rollback" after "Commit" fails.
 	err = t1.Rollback()
@@ -1454,7 +1453,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRegionError() {
 	s.Nil(err)
 	err = t2.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorNotEqual(err, terror.ErrResultUndetermined))
+	s.False(tikverr.IsErrorUndetermined(err), errors.WithStack(err))
 }
 
 // TestFailCommitPrimaryRPCErrorThenRegionError tests the case when commit first
@@ -1470,7 +1469,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenRegionError() {
 	s.Nil(err)
 	err = t1.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorEqual(err, terror.ErrResultUndetermined), errors.ErrorStack(err))
+	s.True(tikverr.IsErrorUndetermined(err), errors.WithStack(err))
 }
 
 // TestFailCommitPrimaryKeyError tests KeyError is handled properly when
@@ -1487,7 +1486,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryKeyError() {
 	s.Nil(err)
 	err = t3.Commit(context.Background())
 	s.NotNil(err)
-	s.True(terror.ErrorNotEqual(err, terror.ErrResultUndetermined))
+	s.False(tikverr.IsErrorUndetermined(err))
 }
 
 // TestFailCommitPrimaryRPCErrorThenKeyError tests KeyError overwrites the undeterminedErr.
@@ -1503,7 +1502,7 @@ func (s *testCommitterSuite) TestFailCommitPrimaryRPCErrorThenKeyError() {
 	s.Nil(err)
 	err = t3.Commit(context.Background())
 	s.NotNil(err)
-	s.False(terror.ErrorEqual(err, terror.ErrResultUndetermined))
+	s.False(tikverr.IsErrorUndetermined(err))
 }
 
 func (s *testCommitterSuite) TestFailCommitTimeout() {
@@ -1550,6 +1549,54 @@ func (s *testCommitterSuite) TestCommitMultipleRegions() {
 		m[k] = v
 	}
 	s.mustCommit(m)
+}
+
+func (s *testCommitterSuite) TestNewlyInsertedMemDBFlag() {
+	ctx := context.Background()
+	txn := s.begin()
+	memdb := txn.GetMemBuffer()
+	k0 := []byte("k0")
+	v0 := []byte("v0")
+	k1 := []byte("k1")
+	k2 := []byte("k2")
+	v1 := []byte("v1")
+	v2 := []byte("v2")
+
+	// Insert after delete, the newly inserted flag should not exist.
+	err := txn.Delete(k0)
+	s.Nil(err)
+	err = txn.Set(k0, v0)
+	s.Nil(err)
+	flags, err := memdb.GetFlags(k0)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+
+	// Lock then insert, the newly inserted flag should exist.
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	err = txn.LockKeys(context.Background(), lockCtx, k1)
+	s.Nil(err)
+	err = txn.GetMemBuffer().SetWithFlags(k1, v1, kv.SetNewlyInserted)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k1)
+	s.Nil(err)
+	s.True(flags.HasNewlyInserted())
+
+	// Lock then delete and insert, the newly inserted flag should not exist.
+	err = txn.LockKeys(ctx, lockCtx, k2)
+	s.Nil(err)
+	err = txn.Delete(k2)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k2)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+	err = txn.Set(k2, v2)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k2)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+
+	err = txn.Commit(ctx)
+	s.Nil(err)
 }
 
 func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {

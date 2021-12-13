@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
@@ -95,10 +94,10 @@ func (txn TxnProbe) GetStartTime() time.Time {
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	c, err := newTwoPhaseCommitter(txn, sessionID)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	if err = c.initKeysAndMutations(); err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return c, nil
 }

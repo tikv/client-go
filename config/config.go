@@ -40,7 +40,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
@@ -184,7 +184,7 @@ func ParsePath(path string) (etcdAddrs []string, disableGC bool, err error) {
 	var u *url.URL
 	u, err = url.Parse(path)
 	if err != nil {
-		err = errors.Trace(err)
+		err = errors.WithStack(err)
 		return
 	}
 	if strings.ToLower(u.Scheme) != "tikv" {
