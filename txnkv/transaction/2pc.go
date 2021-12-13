@@ -234,7 +234,7 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
 	// The format to put to the handle.UserData:
 	// MSB                                                                            LSB
-	// [13 bits: Op][1 bit: isPessimisticLock][1 bit: assertExist][1 bit: assertNotExist]
+	// [13 bits: Op][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
 	aux := uint16(op) << 3
 	if isPessimisticLock {
 		aux |= 1
@@ -1346,7 +1346,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	err = c.prewriteMutations(bo, c.mutations)
 
 	if err != nil {
-		if strings.Contains(err.Error(), "assertion fail") {
+		if _, ok := errors.Cause(err).(*tikverr.ErrAssertionFailed); ok {
 			ts, err1 := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
 			if err1 == nil {
 				_, _, err2 := c.checkSchemaValid(ctx, ts, c.txn.schemaVer, false)
