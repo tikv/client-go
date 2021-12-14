@@ -1369,8 +1369,8 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 	if c.txn.commitTSUpperBoundCheck != nil {
 		if !c.txn.commitTSUpperBoundCheck(commitTS) {
-			err = errors.Errorf("session %d txn on cached table write lock lease %d gone, txnStartTS: %d, comm: %d",
-				c.sessionID, writeLease, c.startTS, c.commitTS)
+			err = errors.Errorf("session %d check commit ts upper bound fail, txnStartTS: %d, comm: %d",
+				c.sessionID, c.startTS, c.commitTS)
 		}
 	}
 
