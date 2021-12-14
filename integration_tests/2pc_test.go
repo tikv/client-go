@@ -746,6 +746,39 @@ func (s *testCommitterSuite) TestPessimisticLockReturnValues() {
 	s.Equal(lockCtx.Values[string(key2)].Value, key2)
 }
 
+func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {
+	key := []byte("key")
+	key2 := []byte("key2")
+	txn := s.begin()
+	s.Nil(txn.Set(key, key))
+	s.Nil(txn.Commit(context.Background()))
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitCheckExistence(2)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Len(lockCtx.Values, 2)
+	s.Empty(lockCtx.Values[string(key)].Value)
+	s.True(lockCtx.Values[string(key)].Exists)
+	s.Empty(lockCtx.Values[string(key2)].Value)
+	s.False(lockCtx.Values[string(key2)].Exists)
+	s.Nil(txn.Rollback())
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitCheckExistence(2)
+	lockCtx.InitReturnValues(2)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Len(lockCtx.Values, 2)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	s.True(lockCtx.Values[string(key)].Exists)
+	s.Empty(lockCtx.Values[string(key2)].Value)
+	s.False(lockCtx.Values[string(key2)].Exists)
+	s.Nil(txn.Rollback())
+}
+
 // TestElapsedTTL tests that elapsed time is correct even if ts physical time is greater than local time.
 func (s *testCommitterSuite) TestElapsedTTL() {
 	key := []byte("key")
