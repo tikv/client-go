@@ -12,48 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikvrpc
+package interceptor
 
 import (
-	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
-func TestInterceptorChain(t *testing.T) {
-	chain := NewInterceptorChain()
+func TestInterceptor(t *testing.T) {
+	chain := NewRPCInterceptorChain()
 	manager := MockInterceptorManager{}
 	it := chain.
 		Link(manager.CreateMockInterceptor()).
 		Link(manager.CreateMockInterceptor()).
 		Build()
-	_, _ = it(func(target string, req *Request) (*Response, error) {
+	_, _ = it(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 		return nil, nil
 	})("", nil)
 	assert.Equal(t, 2, manager.BeginCount())
 	assert.Equal(t, 2, manager.EndCount())
-}
-
-func TestGetAndSetInterceptorCtx(t *testing.T) {
-	ctx := context.Background()
-	assert.Nil(t, GetInterceptorFromCtx(ctx))
-	var it1 Interceptor = func(next InterceptorFunc) InterceptorFunc {
-		return next
-	}
-	ctx = SetInterceptorIntoCtx(ctx, it1)
-	it2 := GetInterceptorFromCtx(ctx)
-	assert.Equal(t, funcKey(it1), funcKey(it2))
-	var it3 Interceptor = func(next InterceptorFunc) InterceptorFunc {
-		return next
-	}
-	assert.NotEqual(t, funcKey(it1), funcKey(it3))
-	ctx = SetInterceptorIntoCtx(ctx, it3)
-	it4 := GetInterceptorFromCtx(ctx)
-	assert.Equal(t, funcKey(it3), funcKey(it4))
-}
-
-func funcKey(v interface{}) string {
-	return fmt.Sprintf("%v", v)
 }

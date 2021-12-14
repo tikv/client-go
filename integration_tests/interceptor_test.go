@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 )
 
 func TestInterceptor(t *testing.T) {
@@ -30,10 +31,10 @@ func TestInterceptor(t *testing.T) {
 		assert.NoError(t, store.Close())
 	}()
 	store.SetTiKVClient(&mockRPCClient{store.GetTiKVClient()})
-	manager := tikvrpc.MockInterceptorManager{}
+	manager := interceptor.MockInterceptorManager{}
 
 	txn, err := store.Begin()
-	txn.SetInterceptor(manager.CreateMockInterceptor())
+	txn.SetRPCInterceptor(manager.CreateMockInterceptor())
 	assert.NoError(t, err)
 	err = txn.Set([]byte("KEY-1"), []byte("VALUE-1"))
 	assert.NoError(t, err)
@@ -44,7 +45,7 @@ func TestInterceptor(t *testing.T) {
 	manager.Reset()
 
 	txn, err = store.Begin()
-	txn.SetInterceptor(manager.CreateMockInterceptor())
+	txn.SetRPCInterceptor(manager.CreateMockInterceptor())
 	assert.NoError(t, err)
 	value, err := txn.Get(context.Background(), []byte("KEY-1"))
 	assert.NoError(t, err)
@@ -59,8 +60,8 @@ type mockRPCClient struct {
 }
 
 func (c *mockRPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	if interceptor := tikvrpc.GetInterceptorFromCtx(ctx); interceptor != nil {
-		return interceptor(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
+		return it(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			return c.Client.SendRequest(ctx, addr, req, timeout)
 		})(addr, req)
 	}

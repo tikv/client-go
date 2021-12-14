@@ -59,6 +59,7 @@ import (
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
@@ -113,7 +114,7 @@ type KVTxn struct {
 	resourceGroupTagger tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt         kvrpcpb.DiskFullOpt
 	// interceptor is used to decorate the RPC request logic related to the txn.
-	interceptor tikvrpc.Interceptor
+	interceptor interceptor.RPCInterceptor
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -244,22 +245,22 @@ func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
-// SetInterceptor sets tikvrpc.Interceptor for the transaction and its related snapshot.
-// tikvrpc.Interceptor will be executed before each RPC request is initiated.
-// Note that SetInterceptor will replace the previously set interceptor.
-func (txn *KVTxn) SetInterceptor(interceptor tikvrpc.Interceptor) {
-	txn.interceptor = interceptor
-	txn.GetSnapshot().SetInterceptor(interceptor)
+// SetRPCInterceptor sets interceptor.RPCInterceptor for the transaction and its related snapshot.
+// interceptor.RPCInterceptor will be executed before each RPC request is initiated.
+// Note that SetRPCInterceptor will replace the previously set interceptor.
+func (txn *KVTxn) SetRPCInterceptor(it interceptor.RPCInterceptor) {
+	txn.interceptor = it
+	txn.GetSnapshot().SetRPCInterceptor(it)
 }
 
-// AddInterceptor adds an interceptor, the order of addition is the order of execution.
-func (txn *KVTxn) AddInterceptor(interceptor tikvrpc.Interceptor) {
+// AddRPCInterceptor adds an interceptor, the order of addition is the order of execution.
+func (txn *KVTxn) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 	if txn.interceptor == nil {
-		txn.SetInterceptor(interceptor)
+		txn.SetRPCInterceptor(it)
 		return
 	}
-	txn.interceptor = tikvrpc.NewInterceptorChain().Link(txn.interceptor).Link(interceptor).Build()
-	txn.GetSnapshot().AddInterceptor(interceptor)
+	txn.interceptor = interceptor.ChainRPCInterceptors(txn.interceptor, it)
+	txn.GetSnapshot().AddRPCInterceptor(it)
 }
 
 // SetSchemaAmender sets an amender to update mutations after schema change.
@@ -364,10 +365,10 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 
 	if txn.interceptor != nil {
-		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
-		ctx = tikvrpc.SetInterceptorIntoCtx(ctx, txn.interceptor)
+		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
 
 	var err error
@@ -478,10 +479,10 @@ func (txn *KVTxn) rollbackPessimisticLocks() error {
 	}
 	bo := retry.NewBackofferWithVars(context.Background(), cleanupMaxBackoff, txn.vars)
 	if txn.interceptor != nil {
-		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
-		bo.SetCtx(tikvrpc.SetInterceptorIntoCtx(bo.GetCtx(), txn.interceptor))
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), txn.interceptor))
 	}
 	keys := txn.collectLockedKeys()
 	return txn.committer.pessimisticRollbackMutations(bo, &PlainMutations{keys: keys})
@@ -560,10 +561,10 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
 	if txn.interceptor != nil {
-		// User has called txn.SetInterceptor() to explicitly set an interceptor, we
+		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
-		ctx = tikvrpc.SetInterceptorIntoCtx(ctx, txn.interceptor)
+		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
 	// Exclude keys that are already locked.
 	var err error

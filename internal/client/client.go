@@ -59,6 +59,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/util"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
@@ -370,8 +371,8 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.
 // SendRequest sends a Request to server and receives Response.
 // If tikvrpc.Interceptor has been set in ctx, it will be used to wrap RPC action.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	if interceptor := tikvrpc.GetInterceptorFromCtx(ctx); interceptor != nil {
-		return interceptor(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
+		return it(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			return c.sendRequest(ctx, target, req, timeout)
 		})(addr, req)
 	}
