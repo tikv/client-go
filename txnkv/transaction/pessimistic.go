@@ -183,7 +183,12 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				c.run(c, action.LockCtx)
 			}
 
-			if action.ReturnValues || action.CheckExistence {
+			// Handle the case that the TiKV's version is too old and doesn't support `CheckExistence`.
+			// If `CheckExistence` is set, `ReturnValues` is not set and `CheckExistence` is not supported, skip
+			// retrieving value totally (indicated by `skipRetrievingValue`) to avoid panicking.
+			skipRetrievingValue := !action.ReturnValues && action.CheckExistence && len(lockResp.NotFounds) == 0
+
+			if (action.ReturnValues || action.CheckExistence) && !skipRetrievingValue {
 				action.ValuesLock.Lock()
 				for i, mutation := range mutations {
 					var value []byte

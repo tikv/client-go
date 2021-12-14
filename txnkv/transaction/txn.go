@@ -365,7 +365,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	defer committer.ttlManager.close()
 
 	initRegion := trace.StartRegion(ctx, "InitKeys")
-	err = committer.initKeysAndMutations()
+	err = committer.initKeysAndMutations(ctx)
 	initRegion.End()
 	if err != nil {
 		return err
@@ -683,10 +683,13 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
 		// For other lock modes, the locked key values always exist.
 		if lockCtx.ReturnValues || checkedExistence {
-			val := lockCtx.Values[string(key)]
-			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
-			if !val.Exists {
-				valExists = tikv.SetKeyLockedValueNotExists
+			// If ReturnValue is disabled and CheckExistence is requested, it's still possible that the TiKV's version
+			// is too old and CheckExistence is not supported.
+			if val, ok := lockCtx.Values[string(key)]; ok {
+				// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
+				if !val.Exists {
+					valExists = tikv.SetKeyLockedValueNotExists
+				}
 			}
 		}
 		memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, valExists)

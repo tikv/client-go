@@ -441,9 +441,10 @@ type KVFilter interface {
 	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) bool
 }
 
-func (c *twoPhaseCommitter) checkPessimisticMutationAssertion(key []byte, flags kv.KeyFlags, mustExist, mustNotExist bool) error {
+func (c *twoPhaseCommitter) checkPessimisticMutationAssertion(ctx context.Context, key []byte, flags kv.KeyFlags, mustExist, mustNotExist bool) error {
+	var assertionFailed *tikverr.ErrAssertionFailed
 	if flags.HasLockedValueExists() && mustNotExist {
-		return &tikverr.ErrAssertionFailed{
+		assertionFailed = &tikverr.ErrAssertionFailed{
 			AssertionFailed: &kvrpcpb.AssertionFailed{
 				StartTs:          c.startTS,
 				Key:              key,
@@ -453,7 +454,7 @@ func (c *twoPhaseCommitter) checkPessimisticMutationAssertion(key []byte, flags 
 			},
 		}
 	} else if !flags.HasLockedValueExists() && mustExist {
-		return &tikverr.ErrAssertionFailed{
+		assertionFailed = &tikverr.ErrAssertionFailed{
 			AssertionFailed: &kvrpcpb.AssertionFailed{
 				StartTs:          c.startTS,
 				Key:              key,
@@ -464,10 +465,29 @@ func (c *twoPhaseCommitter) checkPessimisticMutationAssertion(key []byte, flags 
 		}
 	}
 
+	if assertionFailed != nil {
+		return c.checkSchemaOnAssertionFail(ctx, assertionFailed)
+	}
+
 	return nil
 }
 
-func (c *twoPhaseCommitter) initKeysAndMutations() error {
+func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, assertionFailed *tikverr.ErrAssertionFailed) error {
+	// If the schema has changed, it might be a false-positive. In this case we should return schema changed, which
+	// is a usual case, instead of assertion failed.
+	ts, err := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+	if err != nil {
+		return err
+	}
+	_, _, err = c.checkSchemaValid(ctx, ts, c.txn.schemaVer, false)
+	if err != nil {
+		return err
+	}
+
+	return assertionFailed
+}
+
+func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	var size, putCnt, delCnt, lockCnt, checkCnt int
 
 	txn := c.txn
@@ -560,7 +580,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 				skipCheckFromLock = true
 			}
 			if isPessimistic && !skipCheckFromLock {
-				err = c.checkPessimisticMutationAssertion(key, flags, mustExist, mustNotExist)
+				err = c.checkPessimisticMutationAssertion(ctx, key, flags, mustExist, mustNotExist)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -1346,14 +1366,8 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	err = c.prewriteMutations(bo, c.mutations)
 
 	if err != nil {
-		if _, ok := errors.Cause(err).(*tikverr.ErrAssertionFailed); ok {
-			ts, err1 := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
-			if err1 == nil {
-				_, _, err2 := c.checkSchemaValid(ctx, ts, c.txn.schemaVer, false)
-				if err2 != nil {
-					err = err2
-				}
-			}
+		if assertionFailed, ok := errors.Cause(err).(*tikverr.ErrAssertionFailed); ok {
+			err = c.checkSchemaOnAssertionFail(ctx, assertionFailed)
 		}
 
 		// TODO: Now we return an undetermined error as long as one of the prewrite
@@ -1733,7 +1747,7 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 			logutil.Logger(ctx).Warn("schemaLeaseChecker is not set for this transaction",
 				zap.Uint64("sessionID", c.sessionID),
 				zap.Uint64("startTS", c.startTS),
-				zap.Uint64("commitTS", checkTS))
+				zap.Uint64("checkTS", checkTS))
 		}
 		return nil, false, nil
 	}

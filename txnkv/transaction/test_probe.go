@@ -96,7 +96,7 @@ func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommit
 	if err != nil {
 		return nil, err
 	}
-	if err = c.initKeysAndMutations(); err != nil {
+	if err = c.initKeysAndMutations(context.Background()); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -109,7 +109,7 @@ type CommitterProbe struct {
 
 // InitKeysAndMutations prepares the committer for commit.
 func (c CommitterProbe) InitKeysAndMutations() error {
-	return c.initKeysAndMutations()
+	return c.initKeysAndMutations(context.Background())
 }
 
 // SetPrimaryKey resets the committer's commit ts.
