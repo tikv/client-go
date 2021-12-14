@@ -120,6 +120,11 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 	}
 
+	assertionLevel := c.txn.assertionLevel
+	if _, err := util.EvalFailpoint("assertionSkipCheckFromPrewrite"); err == nil {
+		assertionLevel = kvrpcpb.AssertionLevel_Off
+	}
+
 	req := &kvrpcpb.PrewriteRequest{
 		Mutations:         mutations,
 		PrimaryLock:       c.primary(),
@@ -130,7 +135,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		TxnSize:           txnSize,
 		MinCommitTs:       minCommitTS,
 		MaxCommitTs:       c.maxCommitTS,
-		AssertionLevel:    c.txn.assertionLevel,
+		AssertionLevel:    assertionLevel,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {
