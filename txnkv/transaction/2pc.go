@@ -1019,10 +1019,9 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 		return false
 	}
 
-	// Don't use async commit when writing on cached table.
-	// The actual restriction is (cachedTableWriteLease < commitTS), so using async commit is possible.
-	// But that's unnecessary, because cached table is not designed for write performance.
-	if c.txn.cachedTableWriteLease != nil {
+	// Don't use async commit when commitTSUpperBoundCheck is set.
+	// For TiDB, this is used by cached table.
+	if c.txn.commitTSUpperBoundCheck != nil {
 		return false
 	}
 
@@ -1050,8 +1049,8 @@ func (c *twoPhaseCommitter) checkOnePC() bool {
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
 		return false
 	}
-	// Disable 1PC for transaction on cached table.
-	if c.txn.cachedTableWriteLease != nil {
+	// Disable 1PC for transaction when commitTSUpperBoundCheck is set.
+	if c.txn.commitTSUpperBoundCheck != nil {
 		return false
 	}
 
@@ -1368,14 +1367,10 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			c.sessionID, c.startTS, c.commitTS)
 		return err
 	}
-	if c.txn.cachedTableWriteLease != nil {
-		for i := 0; i < len(c.txn.cachedTableWriteLease); i++ {
-			writeLease := atomic.LoadUint64(&c.txn.cachedTableWriteLease[i])
-			if commitTS >= writeLease {
-				err = errors.Errorf("session %d txn on cached table write lock lease %d gone, txnStartTS: %d, comm: %d",
-					c.sessionID, writeLease, c.startTS, c.commitTS)
-				return err
-			}
+	if c.txn.commitTSUpperBoundCheck != nil {
+		if !c.txn.commitTSUpperBoundCheck(commitTS) {
+			err = errors.Errorf("session %d txn on cached table write lock lease %d gone, txnStartTS: %d, comm: %d",
+				c.sessionID, writeLease, c.startTS, c.commitTS)
 		}
 	}
 
