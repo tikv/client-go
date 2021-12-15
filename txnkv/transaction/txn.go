@@ -100,19 +100,20 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
-	binlog              BinlogExecutor
-	schemaLeaseChecker  SchemaLeaseChecker
-	syncLog             bool
-	priority            txnutil.Priority
-	isPessimistic       bool
-	enableAsyncCommit   bool
-	enable1PC           bool
-	causalConsistency   bool
-	scope               string
-	kvFilter            KVFilter
-	resourceGroupTag    []byte
-	resourceGroupTagger tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
-	diskFullOpt         kvrpcpb.DiskFullOpt
+	binlog                  BinlogExecutor
+	schemaLeaseChecker      SchemaLeaseChecker
+	syncLog                 bool
+	priority                txnutil.Priority
+	isPessimistic           bool
+	enableAsyncCommit       bool
+	enable1PC               bool
+	causalConsistency       bool
+	scope                   string
+	kvFilter                KVFilter
+	resourceGroupTag        []byte
+	resourceGroupTagger     tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
+	diskFullOpt             kvrpcpb.DiskFullOpt
+	commitTSUpperBoundCheck func(uint64) bool
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor interceptor.RPCInterceptor
 }
@@ -300,6 +301,13 @@ func (txn *KVTxn) SetScope(scope string) {
 // SetKVFilter sets the filter to ignore key-values in memory buffer.
 func (txn *KVTxn) SetKVFilter(filter KVFilter) {
 	txn.kvFilter = filter
+}
+
+// SetCommitTSUpperBoundCheck provide a way to restrict the commit TS upper bound.
+// The 2PC processing will pass the commitTS for the checker function, if the function
+// returns false, the 2PC processing will abort.
+func (txn *KVTxn) SetCommitTSUpperBoundCheck(f func(commitTS uint64) bool) {
+	txn.commitTSUpperBoundCheck = f
 }
 
 // SetDiskFullOpt sets whether current operation is allowed in each TiKV disk usage level.

@@ -1019,6 +1019,12 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 		return false
 	}
 
+	// Don't use async commit when commitTSUpperBoundCheck is set.
+	// For TiDB, this is used by cached table.
+	if c.txn.commitTSUpperBoundCheck != nil {
+		return false
+	}
+
 	asyncCommitCfg := config.GetGlobalConfig().TiKVClient.AsyncCommit
 	// TODO the keys limit need more tests, this value makes the unit test pass by now.
 	// Async commit is not compatible with Binlog because of the non unique timestamp issue.
@@ -1041,6 +1047,10 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 func (c *twoPhaseCommitter) checkOnePC() bool {
 	// Disable 1PC in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
+		return false
+	}
+	// Disable 1PC for transaction when commitTSUpperBoundCheck is set.
+	if c.txn.commitTSUpperBoundCheck != nil {
 		return false
 	}
 
@@ -1356,6 +1366,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
 			c.sessionID, c.startTS, c.commitTS)
 		return err
+	}
+	if c.txn.commitTSUpperBoundCheck != nil {
+		if !c.txn.commitTSUpperBoundCheck(commitTS) {
+			err = errors.Errorf("session %d check commit ts upper bound fail, txnStartTS: %d, comm: %d",
+				c.sessionID, c.startTS, c.commitTS)
+		}
 	}
 
 	if c.sessionID > 0 {
