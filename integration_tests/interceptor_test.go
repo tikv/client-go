@@ -34,7 +34,7 @@ func TestInterceptor(t *testing.T) {
 	manager := interceptor.MockInterceptorManager{}
 
 	txn, err := store.Begin()
-	txn.SetRPCInterceptor(manager.CreateMockInterceptor())
+	txn.SetRPCInterceptor(manager.CreateMockInterceptor("INTERCEPTOR-1"))
 	assert.NoError(t, err)
 	err = txn.Set([]byte("KEY-1"), []byte("VALUE-1"))
 	assert.NoError(t, err)
@@ -45,7 +45,7 @@ func TestInterceptor(t *testing.T) {
 	manager.Reset()
 
 	txn, err = store.Begin()
-	txn.SetRPCInterceptor(manager.CreateMockInterceptor())
+	txn.SetRPCInterceptor(manager.CreateMockInterceptor("INTERCEPTOR-2"))
 	assert.NoError(t, err)
 	value, err := txn.Get(context.Background(), []byte("KEY-1"))
 	assert.NoError(t, err)

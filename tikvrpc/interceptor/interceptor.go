@@ -155,14 +155,21 @@ func GetRPCInterceptorFromCtx(ctx context.Context) RPCInterceptor {
 // MockInterceptorManager can be used to create Interceptor and record the
 // number of executions of the created Interceptor.
 type MockInterceptorManager struct {
-	begin int32
-	end   int32
+	begin   int32
+	end     int32
+	execLog []string // interceptor name list
+}
+
+// NewMockInterceptorManager creates an empty MockInterceptorManager.
+func NewMockInterceptorManager() *MockInterceptorManager {
+	return &MockInterceptorManager{execLog: []string{}}
 }
 
 // CreateMockInterceptor creates an RPCInterceptor for testing.
-func (m *MockInterceptorManager) CreateMockInterceptor() RPCInterceptor {
+func (m *MockInterceptorManager) CreateMockInterceptor(name string) RPCInterceptor {
 	return func(next RPCInterceptorFunc) RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			m.execLog = append(m.execLog, name)
 			atomic.AddInt32(&m.begin, 1)
 			defer atomic.AddInt32(&m.end, 1)
 			return next(target, req)
@@ -174,6 +181,7 @@ func (m *MockInterceptorManager) CreateMockInterceptor() RPCInterceptor {
 func (m *MockInterceptorManager) Reset() {
 	atomic.StoreInt32(&m.begin, 0)
 	atomic.StoreInt32(&m.end, 0)
+	m.execLog = []string{}
 }
 
 // BeginCount gets how many times the previously created Interceptor has been executed.
@@ -184,4 +192,9 @@ func (m *MockInterceptorManager) BeginCount() int {
 // EndCount gets how many times the previously created Interceptor has been returned.
 func (m *MockInterceptorManager) EndCount() int {
 	return int(atomic.LoadInt32(&m.end))
+}
+
+// ExecLog gets execution log of all interceptors.
+func (m *MockInterceptorManager) ExecLog() []string {
+	return m.execLog
 }

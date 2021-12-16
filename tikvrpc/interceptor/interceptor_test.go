@@ -25,12 +25,16 @@ func TestInterceptor(t *testing.T) {
 	chain := NewRPCInterceptorChain()
 	manager := MockInterceptorManager{}
 	it := chain.
-		Link(manager.CreateMockInterceptor()).
-		Link(manager.CreateMockInterceptor()).
+		Link(manager.CreateMockInterceptor("INTERCEPTOR-1")).
+		Link(manager.CreateMockInterceptor("INTERCEPTOR-2")).
 		Build()
 	_, _ = it(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 		return nil, nil
 	})("", nil)
 	assert.Equal(t, 2, manager.BeginCount())
 	assert.Equal(t, 2, manager.EndCount())
+	execLog := manager.ExecLog()
+	assert.Len(t, execLog, 2)
+	assert.Equal(t, "INTERCEPTOR-1", execLog[0])
+	assert.Equal(t, "INTERCEPTOR-2", execLog[1])
 }
