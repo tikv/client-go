@@ -36,13 +36,11 @@ func TestInterceptor(t *testing.T) {
 	assert.NoError(t, err)
 	err = txn.Commit(context.Background())
 	assert.NoError(t, err)
-	if len(manager.ExecLog()) > 0 {
-		assert.Equal(t, 2, manager.BeginCount())
-		assert.Equal(t, 2, manager.EndCount())
-		assert.Len(t, manager.ExecLog(), 2)
-		assert.Equal(t, "INTERCEPTOR-1", manager.ExecLog()[0])
-		assert.Equal(t, "INTERCEPTOR-1", manager.ExecLog()[1])
-	}
+	assert.Equal(t, 2, manager.BeginCount())
+	assert.Equal(t, 2, manager.EndCount())
+	assert.Len(t, manager.ExecLog(), 2)
+	assert.Equal(t, "INTERCEPTOR-1", manager.ExecLog()[0])
+	assert.Equal(t, "INTERCEPTOR-1", manager.ExecLog()[1])
 	manager.Reset()
 
 	txn, err = store.Begin()
@@ -51,11 +49,9 @@ func TestInterceptor(t *testing.T) {
 	value, err := txn.Get(context.Background(), []byte("KEY-1"))
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("VALUE-1"), value)
-	if len(manager.ExecLog()) > 0 {
-		assert.Equal(t, 1, manager.BeginCount())
-		assert.Equal(t, 1, manager.EndCount())
-		assert.Len(t, manager.ExecLog(), 1)
-		assert.Equal(t, "INTERCEPTOR-2", manager.ExecLog()[0])
-	}
+	assert.Equal(t, 1, manager.BeginCount())
+	assert.Equal(t, 1, manager.EndCount())
+	assert.Len(t, manager.ExecLog(), 1)
+	assert.Equal(t, "INTERCEPTOR-2", manager.ExecLog()[0])
 	manager.Reset()
 }
