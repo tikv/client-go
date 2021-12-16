@@ -17,11 +17,8 @@ package tikv_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 )
 
@@ -30,7 +27,6 @@ func TestInterceptor(t *testing.T) {
 	defer func() {
 		assert.NoError(t, store.Close())
 	}()
-	store.SetTiKVClient(&mockRPCClient{store.GetTiKVClient()})
 	manager := interceptor.MockInterceptorManager{}
 
 	txn, err := store.Begin()
@@ -53,17 +49,4 @@ func TestInterceptor(t *testing.T) {
 	assert.Equal(t, 1, manager.BeginCount())
 	assert.Equal(t, 1, manager.EndCount())
 	manager.Reset()
-}
-
-type mockRPCClient struct {
-	tikv.Client
-}
-
-func (c *mockRPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
-		return it(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			return c.Client.SendRequest(ctx, addr, req, timeout)
-		})(addr, req)
-	}
-	return c.Client.SendRequest(ctx, addr, req, timeout)
 }
