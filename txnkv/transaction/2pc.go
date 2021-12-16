@@ -565,9 +565,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		if flags.HasLocked() {
 			isPessimistic = c.isPessimistic
 		}
-		mustExist, mustNotExist, hasAssertion := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertion()
+		mustExist, mustNotExist, hasAssertUnknown := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertUnknown()
 		if c.txn.schemaAmender != nil || c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
-			mustExist, mustNotExist, hasAssertion = false, false, false
+			mustExist, mustNotExist, hasAssertUnknown = false, false, false
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle())
 		size += len(key) + len(value)
@@ -591,7 +591,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 				metrics.PrewriteAssertionUsageCounterExist.Inc()
 			} else if mustNotExist {
 				metrics.PrewriteAssertionUsageCounterNotExist.Inc()
-			} else if hasAssertion {
+			} else if hasAssertUnknown {
 				metrics.PrewriteAssertionUsageCounterUnknown.Inc()
 			} else {
 				metrics.PrewriteAssertionUsageCounterNone.Inc()

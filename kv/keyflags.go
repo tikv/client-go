@@ -66,8 +66,13 @@ func (f KeyFlags) HasAssertNotExist() bool {
 	return f&flagAssertNotExist != 0 && f&flagAssertExist == 0
 }
 
-// HasAssertion returns whether the key has assertion.
-func (f KeyFlags) HasAssertion() bool {
+// HasAssertUnknown returns whether the key is marked unable to do any assertion.
+func (f KeyFlags) HasAssertUnknown() bool {
+	return f&flagAssertExist != 0 && f&flagAssertNotExist != 0
+}
+
+// HasAssertionFlag returns whether the key's assertion is set.
+func (f KeyFlags) HasAssertionFlag() bool {
 	return f&flagAssertExist != 0 || f&flagAssertNotExist != 0
 }
 
