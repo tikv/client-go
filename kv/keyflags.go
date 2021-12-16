@@ -50,6 +50,15 @@ const (
 	flagIgnoredIn2PC
 	flagReadable
 	flagNewlyInserted
+
+	// The following are assertion related flags.
+	// There are four choices of the two bits:
+	// * 0: Assertion is not set and can be set later.
+	// * flagAssertExists: We assert the key exists.
+	// * flagAssertNotExists: We assert the key doesn't exist.
+	// * flagAssertExists | flagAssertNotExists: Assertion cannot be made on this key (unknown).
+	// Once either (or both) of the two flags is set, we say assertion is set (`HasAssertionFlags` becomes true), and
+	// it's expected to be unchangeable within the current transaction.
 	flagAssertExist
 	flagAssertNotExist
 
@@ -71,8 +80,8 @@ func (f KeyFlags) HasAssertUnknown() bool {
 	return f&flagAssertExist != 0 && f&flagAssertNotExist != 0
 }
 
-// HasAssertionFlag returns whether the key's assertion is set.
-func (f KeyFlags) HasAssertionFlag() bool {
+// HasAssertionFlags returns whether the key's assertion is set.
+func (f KeyFlags) HasAssertionFlags() bool {
 	return f&flagAssertExist != 0 || f&flagAssertNotExist != 0
 }
 
