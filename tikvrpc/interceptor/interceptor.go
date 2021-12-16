@@ -122,6 +122,8 @@ func (c *RPCInterceptorChain) Build() RPCInterceptor {
 }
 
 // ChainRPCInterceptors chains multiple RPCInterceptors into one.
+// Multiple RPCInterceptors will be executed in the order of their parameters.
+// See RPCInterceptorChain for more information.
 func ChainRPCInterceptors(its ...RPCInterceptor) RPCInterceptor {
 	chain := NewRPCInterceptorChain()
 	for _, it := range its {
