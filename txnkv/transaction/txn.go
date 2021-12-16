@@ -367,7 +367,8 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	initRegion := trace.StartRegion(ctx, "InitKeys")
 	err = committer.initKeysAndMutations(ctx)
 	initRegion.End()
-	if err != nil {
+	if err != nil && txn.IsPessimistic() {
+		txn.asyncPessimisticRollback(ctx, committer.mutations.GetKeys())
 		return err
 	}
 	if committer.mutations.Len() == 0 {

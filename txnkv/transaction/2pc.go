@@ -441,7 +441,7 @@ type KVFilter interface {
 	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) bool
 }
 
-func (c *twoPhaseCommitter) checkPessimisticMutationAssertion(ctx context.Context, key []byte, flags kv.KeyFlags, mustExist, mustNotExist bool) error {
+func (c *twoPhaseCommitter) checkAssertionByPessimisticLockResults(ctx context.Context, key []byte, flags kv.KeyFlags, mustExist, mustNotExist bool) error {
 	var assertionFailed *tikverr.ErrAssertionFailed
 	if flags.HasLockedValueExists() && mustNotExist {
 		assertionFailed = &tikverr.ErrAssertionFailed{
@@ -498,6 +498,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	filter := txn.kvFilter
 
 	var err error
+	var assertionError error
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
@@ -580,9 +581,12 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 				skipCheckFromLock = true
 			}
 			if isPessimistic && !skipCheckFromLock {
-				err = c.checkPessimisticMutationAssertion(ctx, key, flags, mustExist, mustNotExist)
-				if err != nil {
-					return errors.WithStack(err)
+				err1 := c.checkAssertionByPessimisticLockResults(ctx, key, flags, mustExist, mustNotExist)
+				// Do not exit immediately here. To rollback the pessimistic locks (if any), we need to finish
+				// collecting all the keys.
+				// Keep only the first assertion error.
+				if err1 != nil && assertionError == nil {
+					assertionError = errors.WithStack(err1)
 				}
 			}
 
@@ -642,6 +646,11 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	c.resourceGroupTag = txn.resourceGroupTag
 	c.resourceGroupTagger = txn.resourceGroupTagger
 	c.setDetail(commitDetail)
+
+	if assertionError != nil {
+		return assertionError
+	}
+
 	return nil
 }
 
