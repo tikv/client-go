@@ -19,7 +19,10 @@ import (
 	"fmt"
 
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
 
 // Client is a txn client.
@@ -54,4 +57,14 @@ func NewClient(pdAddrs []string) (*Client, error) {
 		s.EnableTxnLocalLatches(cfg.TxnLocalLatches.Capacity)
 	}
 	return &Client{KVStore: s}, nil
+}
+
+// GetTimestamp returns the current global timestamp.
+func (c *Client) GetTimestamp(ctx context.Context) (uint64, error) {
+	bo := retry.NewBackofferWithVars(ctx, transaction.TsoMaxBackoff, nil)
+	startTS, err := c.GetTimestampWithRetry(bo, oracle.GlobalTxnScope)
+	if err != nil {
+		return 0, err
+	}
+	return startTS, nil
 }
