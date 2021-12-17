@@ -42,7 +42,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -66,15 +65,6 @@ func (r reqCollapse) Close() error {
 }
 
 func (r reqCollapse) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
-		return it(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			return r.sendRequest(ctx, target, req, timeout)
-		})(addr, req)
-	}
-	return r.sendRequest(ctx, addr, req, timeout)
-}
-
-func (r reqCollapse) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	if r.Client == nil {
 		panic("client should not be nil")
 	}

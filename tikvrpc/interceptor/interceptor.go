@@ -59,9 +59,9 @@ import (
 // ```
 //
 // NOTE: Interceptor calls may not correspond one-to-one with the underlying gRPC requests.
-// This is because there may be some exceptions, such as: request collapsed, request batched,
-// no valid connection etc. If you have questions about the execution location of RPCInterceptor,
-// please refer to: internal/client/client_collapse.go#SendRequest.
+// This is because there may be some exceptions, such as: request batched, no
+// valid connection etc. If you have questions about the execution location of
+// RPCInterceptor, please refer to: internal/client/client_collapse.go#SendRequest.
 type RPCInterceptor func(next RPCInterceptorFunc) RPCInterceptorFunc
 
 // RPCInterceptorFunc is a callable function used to initiate a request to TiKV.
