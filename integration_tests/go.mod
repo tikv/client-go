@@ -20,3 +20,7 @@ replace github.com/tikv/client-go/v2 => ../
 // cloud.google.com/go/storage will upgrade grpc to v1.40.0
 // we need keep the replacement until go.etcd.io supports the higher version of grpc.
 replace google.golang.org/grpc => google.golang.org/grpc v1.29.1
+
+replace github.com/pingcap/tidb => github.com/cfzjywxk/tidb v1.1.0-beta.0.20211217113134-daf2eab9a70e
+
+replace github.com/pingcap/tidb/parser => github.com/cfzjywxk/tidb/parser v0.0.0-20211217113134-daf2eab9a70e
