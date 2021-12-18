@@ -57,6 +57,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
@@ -136,6 +137,8 @@ type KVSnapshot struct {
 	resourceGroupTag []byte
 	// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
 	resourceGroupTagger tikvrpc.ResourceGroupTagger
+	// interceptor is used to decorate the RPC request logic related to the snapshot.
+	interceptor interceptor.RPCInterceptor
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -202,6 +205,13 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, batchGetMaxBackoff, s.vars)
+
+	if s.interceptor != nil {
+		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.interceptor))
+	}
 
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
@@ -468,6 +478,14 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
+
+	if s.interceptor != nil {
+		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.interceptor))
+	}
+
 	val, err := s.get(ctx, bo, k)
 	s.recordBackoffInfo(bo)
 	if err != nil {
@@ -732,6 +750,22 @@ func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
 // resourceGroupTag directly, otherwise use resourceGroupTagger.
 func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	s.resourceGroupTagger = tagger
+}
+
+// SetRPCInterceptor sets interceptor.RPCInterceptor for the snapshot.
+// interceptor.RPCInterceptor will be executed before each RPC request is initiated.
+// Note that SetRPCInterceptor will replace the previously set interceptor.
+func (s *KVSnapshot) SetRPCInterceptor(it interceptor.RPCInterceptor) {
+	s.interceptor = it
+}
+
+// AddRPCInterceptor adds an interceptor, the order of addition is the order of execution.
+func (s *KVSnapshot) AddRPCInterceptor(it interceptor.RPCInterceptor) {
+	if s.interceptor == nil {
+		s.SetRPCInterceptor(it)
+		return
+	}
+	s.interceptor = interceptor.ChainRPCInterceptors(s.interceptor, it)
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.
