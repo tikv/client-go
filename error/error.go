@@ -90,6 +90,8 @@ var (
 	ErrUnknown = errors.New("unknow")
 	// ErrResultUndetermined is the error when execution result is unknown.
 	ErrResultUndetermined = errors.New("execution result undetermined")
+	// ErrStoreIsExiting is the error when store is exiting.
+	ErrStoreIsExiting = errors.New("store is exiting")
 )
 
 // MismatchClusterID represents the message that the cluster ID of the PD client does not match the PD.
