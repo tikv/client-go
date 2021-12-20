@@ -364,6 +364,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.resourceGroupTag,
+			IsolationLevel:   s.isolationLevel.ToPB(),
 		})
 		if s.resourceGroupTag == nil && s.resourceGroupTagger != nil {
 			s.resourceGroupTagger(req)
@@ -542,6 +543,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.resourceGroupTag,
+			IsolationLevel:   s.isolationLevel.ToPB(),
 		})
 	if s.resourceGroupTag == nil && s.resourceGroupTagger != nil {
 		s.resourceGroupTagger(req)
