@@ -66,6 +66,33 @@ const (
 	rawBatchPairCount = 512
 )
 
+type scanOptions struct {
+	KeyOnly      bool
+	ColumnFamily string
+}
+
+type ScanOption interface {
+	apply(opts *scanOptions)
+}
+
+type scanOptionFunc func(opts *scanOptions)
+
+func (f scanOptionFunc) apply(opts *scanOptions) {
+	f(opts)
+}
+
+func ScanKeyOnly() ScanOption {
+	return scanOptionFunc(func(opts *scanOptions) {
+		opts.KeyOnly = true
+	})
+}
+
+func ScanColumnFamily(columnfamily string) ScanOption {
+	return scanOptionFunc(func(opts *scanOptions) {
+		opts.ColumnFamily = columnfamily
+	})
+}
+
 // Client is a client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
@@ -346,7 +373,7 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 // If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
 // `Scan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
-func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, options ...ScanOption) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithRawScan.Observe(time.Since(start).Seconds()) }()
 
@@ -354,11 +381,18 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
+	opts := scanOptions{}
+	for _, opt := range options {
+		opt.apply(&opts)
+	}
+
 	for len(keys) < limit && (len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0) {
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
 			StartKey: startKey,
 			EndKey:   endKey,
 			Limit:    uint32(limit - len(keys)),
+			KeyOnly:  opts.KeyOnly,
+			Cf:       opts.ColumnFamily,
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, false)
 		if err != nil {
@@ -387,7 +421,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int) (
 // (endKey, startKey], you can write:
 // `ReverseScan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
 // It doesn't support Scanning from "", because locating the last Region is not yet implemented.
-func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int, options ...ScanOption) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithRawReversScan.Observe(time.Since(start).Seconds())
@@ -397,12 +431,19 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
+	opts := scanOptions{}
+	for _, opt := range options {
+		opt.apply(&opts)
+	}
+
 	for len(keys) < limit && bytes.Compare(startKey, endKey) > 0 {
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
 			StartKey: startKey,
 			EndKey:   endKey,
 			Limit:    uint32(limit - len(keys)),
 			Reverse:  true,
+			KeyOnly:  opts.KeyOnly,
+			Cf:       opts.ColumnFamily,
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, true)
 		if err != nil {
