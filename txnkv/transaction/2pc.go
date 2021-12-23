@@ -778,7 +778,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
 		if c.store.IsClose() {
-			return tikverr.ErrStoreIsExiting
+			return nil
 		}
 		c.store.WaitGroup().Add(1)
 		go func() {
@@ -1106,7 +1106,7 @@ const (
 
 func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 	if c.store.IsClose() {
-		logutil.Logger(ctx).Error("twoPhaseCommitter fail to cleanup because the store exited",
+		logutil.Logger(ctx).Warn("twoPhaseCommitter fail to cleanup because the store exited",
 			zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
 			zap.Bool("isOnePC", c.isOnePC()))
 		return
@@ -1413,7 +1413,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
 		if c.store.IsClose() {
-			return tikverr.ErrStoreIsExiting
+			return nil
 		}
 		c.store.WaitGroup().Add(1)
 		go func() {
