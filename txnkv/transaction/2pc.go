@@ -778,6 +778,9 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
 		if c.store.IsClose() {
+			logutil.Logger(bo.GetCtx()).Warn("the store is closed",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID))
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
@@ -1413,6 +1416,9 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
 		if c.store.IsClose() {
+			logutil.Logger(ctx).Warn("2PC will use async commit protocol to commit this txn but the store is closed",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID))
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
