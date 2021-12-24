@@ -5,7 +5,7 @@ go 1.16
 require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/failpoint v0.0.0-20210316064728-7acb0f0a3dfd
-	github.com/pingcap/kvproto v0.0.0-20211122024046-03abd340988f
+	github.com/pingcap/kvproto v0.0.0-20211224055123-d1a140660c39
 	github.com/pingcap/tidb v1.1.0-beta.0.20211130051352-37e0dac25981
 	github.com/pingcap/tidb/parser v0.0.0-20211130051352-37e0dac25981 // indirect
 	github.com/pkg/errors v0.9.1
