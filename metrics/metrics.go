@@ -605,6 +605,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCommitBackoffCount)
 	prometheus.MustRegister(TiKVSmallReadDuration)
 	prometheus.MustRegister(TiKVReadThroughput)
+	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 }
 
 // readCounter reads the value of a prometheus.Counter.
