@@ -37,7 +37,6 @@ package tikv_test
 import (
 	"context"
 	"fmt"
-	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"math"
 	"sync"
 	"testing"
@@ -52,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 func TestSnapshot(t *testing.T) {
