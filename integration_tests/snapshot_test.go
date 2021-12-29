@@ -342,9 +342,8 @@ func (s *testSnapshotSuite) TestRCRead() {
 	for _, rowNum := range s.rowNums {
 		s.T().Logf("test BatchGet, length=%v", rowNum)
 		txn := s.beginTxn()
-		keys := make([][]byte, 0, rowNum)
-		for i := 0; i < rowNum; i++ {
-			k := encodeKey(s.prefix, s08d("key", i))
+		keys := makeKeys(rowNum, s.prefix)
+		for i, k := range keys {
 			err := txn.Set(k, valueBytes(i))
 			s.Nil(err)
 			keys = append(keys, k)
