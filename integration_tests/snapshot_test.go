@@ -342,10 +342,12 @@ func (s *testSnapshotSuite) TestRCRead() {
 	for _, rowNum := range s.rowNums {
 		s.T().Logf("test BatchGet, length=%v", rowNum)
 		txn := s.beginTxn()
+		keys := make([][]byte, 0, rowNum)
 		for i := 0; i < rowNum; i++ {
 			k := encodeKey(s.prefix, s08d("key", i))
 			err := txn.Set(k, valueBytes(i))
 			s.Nil(err)
+			keys = append(keys, k)
 		}
 		err := txn.Commit(context.Background())
 		s.Nil(err)
@@ -373,7 +375,6 @@ func (s *testSnapshotSuite) TestRCRead() {
 		s.Equal(len(meetLocks), 0)
 		s.Equal(v, valueBytes(0))
 		// batch get
-		keys := makeKeys(rowNum, s.prefix)
 		m, err := snapshot.BatchGet(context.Background(), keys)
 		s.Nil(err)
 		s.Equal(len(meetLocks), 0)
