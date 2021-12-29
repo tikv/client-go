@@ -346,7 +346,6 @@ func (s *testSnapshotSuite) TestRCRead() {
 		for i, k := range keys {
 			err := txn.Set(k, valueBytes(i))
 			s.Nil(err)
-			keys = append(keys, k)
 		}
 		err := txn.Commit(context.Background())
 		s.Nil(err)
@@ -378,8 +377,7 @@ func (s *testSnapshotSuite) TestRCRead() {
 		s.Nil(err)
 		s.Equal(len(meetLocks), 0)
 		s.Equal(len(m), rowNum)
-		for i := 0; i < rowNum; i++ {
-			k := encodeKey(s.prefix, s08d("key", i))
+		for i, k := range keys {
 			s.Equal(m[string(k)], valueBytes(i))
 		}
 
