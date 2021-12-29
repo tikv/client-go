@@ -340,7 +340,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 
 func (s *testSnapshotSuite) TestRCRead() {
 	for _, rowNum := range s.rowNums {
-		s.T().Logf("test BatchGet, length=%v", rowNum)
+		s.T().Logf("test RC Read, length=%v", rowNum)
 		txn := s.beginTxn()
 		keys := makeKeys(rowNum, s.prefix)
 		for i, k := range keys {
