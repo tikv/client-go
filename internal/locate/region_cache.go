@@ -174,13 +174,13 @@ func (r *regionStore) clone() *regionStore {
 
 // return next follower store's index
 func (r *regionStore) follower(seed uint32, op *storeSelectorOp) AccessIndex {
-	filteredStore := []*Store{}
-	defer func(filteredStore []*Store) {
+	var filteredStore []*Store
+	defer func() {
 		for _, s := range filteredStore {
 			_, err := s.reResolve(r.regionCache)
 			tikverr.Log(err)
 		}
-	}(filteredStore)
+	}()
 
 	l := uint32(r.accessStoreNum(tiKVOnly))
 	if l <= 1 {
