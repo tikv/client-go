@@ -132,6 +132,7 @@ type regionStore struct {
 	stores         []*Store             // stores in this region
 	storeEpochs    []uint32             // snapshots of store's epoch, need reload when `storeEpochs[curr] != stores[cur].fail`
 	accessIndex    [numAccessMode][]int // AccessMode => idx in stores
+	regionCache    *RegionCache
 }
 
 func (r *regionStore) accessStore(mode accessMode, idx AccessIndex) (int, *Store) {
@@ -160,6 +161,7 @@ func (r *regionStore) clone() *regionStore {
 		proxyTiKVIdx:   r.proxyTiKVIdx,
 		workTiKVIdx:    r.workTiKVIdx,
 		stores:         r.stores,
+		regionCache:    r.regionCache,
 		storeEpochs:    storeEpochs,
 	}
 	copy(storeEpochs, r.storeEpochs)
@@ -172,6 +174,14 @@ func (r *regionStore) clone() *regionStore {
 
 // return next follower store's index
 func (r *regionStore) follower(seed uint32, op *storeSelectorOp) AccessIndex {
+	filteredStore := []*Store{}
+	defer func(filteredStore []*Store) {
+		for _, s := range filteredStore {
+			_, err := s.reResolve(r.regionCache)
+			tikverr.Log(err)
+		}
+	}(filteredStore)
+
 	l := uint32(r.accessStoreNum(tiKVOnly))
 	if l <= 1 {
 		return r.workTiKVIdx
@@ -186,6 +196,7 @@ func (r *regionStore) follower(seed uint32, op *storeSelectorOp) AccessIndex {
 		if r.storeEpochs[storeIdx] == atomic.LoadUint32(&s.epoch) && r.filterStoreCandidate(followerIdx, op) {
 			return followerIdx
 		}
+		filteredStore = append(filteredStore, s)
 		seed++
 	}
 	return r.workTiKVIdx
@@ -226,6 +237,7 @@ func (r *Region) init(bo *retry.Backoffer, c *RegionCache) error {
 		workTiKVIdx:    0,
 		proxyTiKVIdx:   -1,
 		workTiFlashIdx: 0,
+		regionCache:    c,
 		stores:         make([]*Store, 0, len(r.meta.Peers)),
 		storeEpochs:    make([]uint32, 0, len(r.meta.Peers)),
 	}
