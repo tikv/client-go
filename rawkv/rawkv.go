@@ -71,6 +71,12 @@ type scanOptions struct {
 	ColumnFamily string
 }
 
+// ScanOption represents possible scan options that can be cotrolled by the user
+// to tweak the scanning behavior.
+//
+// Available options are:
+// - ScanKeyOnly
+// - ScanColumnFamily
 type ScanOption interface {
 	apply(opts *scanOptions)
 }
@@ -81,12 +87,16 @@ func (f scanOptionFunc) apply(opts *scanOptions) {
 	f(opts)
 }
 
+// ScanKeyOnly is a ScanOption that tells the scanner to only returns
+// keys and omit the values.
 func ScanKeyOnly() ScanOption {
 	return scanOptionFunc(func(opts *scanOptions) {
 		opts.KeyOnly = true
 	})
 }
 
+// ScanColumnFamily is a ScanOption that tells the scanner to only returns
+// the following column family elements.
 func ScanColumnFamily(columnfamily string) ScanOption {
 	return scanOptionFunc(func(opts *scanOptions) {
 		opts.ColumnFamily = columnfamily
