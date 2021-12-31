@@ -246,6 +246,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			NotFillCache:     s.snapshot.notFillCache,
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.resourceGroupTag,
+			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 		})
 		if s.snapshot.resourceGroupTag == nil && s.snapshot.resourceGroupTagger != nil {
 			s.snapshot.resourceGroupTagger(req)
