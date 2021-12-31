@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 func TestSnapshot(t *testing.T) {
@@ -335,4 +336,52 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"key_skipped_count: 2, " +
 		"block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
+}
+
+func (s *testSnapshotSuite) TestRCRead() {
+	for _, rowNum := range s.rowNums {
+		s.T().Logf("test RC Read, length=%v", rowNum)
+		txn := s.beginTxn()
+		keys := makeKeys(rowNum, s.prefix)
+		for i, k := range keys {
+			err := txn.Set(k, valueBytes(i))
+			s.Nil(err)
+		}
+		err := txn.Commit(context.Background())
+		s.Nil(err)
+
+		key0 := encodeKey(s.prefix, s08d("key", 0))
+		txn1 := s.beginTxn()
+		txn1.Set(key0, valueBytes(1))
+		committer1, err := txn1.NewCommitter(1)
+		s.Nil(err)
+		err = committer1.PrewriteAllMutations(context.Background())
+		s.Nil(err)
+
+		var meetLocks []*txnkv.Lock
+		resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
+		resolver.SetMeetLockCallback(func(locks []*txnkv.Lock) {
+			meetLocks = append(meetLocks, locks...)
+		})
+		// RC read
+		txn2 := s.beginTxn()
+		snapshot := txn2.GetSnapshot()
+		snapshot.SetIsolationLevel(txnsnapshot.RC)
+		// get
+		v, err := snapshot.Get(context.Background(), key0)
+		s.Nil(err)
+		s.Equal(len(meetLocks), 0)
+		s.Equal(v, valueBytes(0))
+		// batch get
+		m, err := snapshot.BatchGet(context.Background(), keys)
+		s.Nil(err)
+		s.Equal(len(meetLocks), 0)
+		s.Equal(len(m), rowNum)
+		for i, k := range keys {
+			s.Equal(m[string(k)], valueBytes(i))
+		}
+
+		committer1.Cleanup(context.Background())
+		s.deleteKeys(keys)
+	}
 }

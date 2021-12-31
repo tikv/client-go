@@ -112,6 +112,8 @@ type kvstore interface {
 	// TxnLatches returns txnLatches.
 	TxnLatches() *latch.LatchesScheduler
 	GetClusterID() uint64
+	// IsClose checks whether the store is closed.
+	IsClose() bool
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -781,6 +783,12 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	// Already spawned a goroutine for async commit transaction.
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
+		if c.store.IsClose() {
+			logutil.Logger(bo.GetCtx()).Warn("the store is closed",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID))
+			return nil
+		}
 		c.store.WaitGroup().Add(1)
 		go func() {
 			defer c.store.WaitGroup().Done()
@@ -1106,6 +1114,12 @@ const (
 )
 
 func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
+	if c.store.IsClose() {
+		logutil.Logger(ctx).Warn("twoPhaseCommitter fail to cleanup because the store exited",
+			zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
+			zap.Bool("isOnePC", c.isOnePC()))
+		return
+	}
 	c.cleanWg.Add(1)
 	c.store.WaitGroup().Add(1)
 	go func() {
@@ -1407,6 +1421,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Debug("2PC will use async commit protocol to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
+		if c.store.IsClose() {
+			logutil.Logger(ctx).Warn("2PC will use async commit protocol to commit this txn but the store is closed",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID))
+			return nil
+		}
 		c.store.WaitGroup().Add(1)
 		go func() {
 			defer c.store.WaitGroup().Done()
