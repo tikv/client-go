@@ -17,9 +17,9 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb v1.1.0-beta.0.20211229035549-783432895924 => github.com/lemonhx/tidb v1.1.0-beta.0.20220105032919-26710fad2c6e
+replace github.com/pingcap/tidb v1.1.0-beta.0.20211229035549-783432895924 => github.com/lemonhx/tidb v1.1.0-beta.0.20220105043412-73f7d78ce64d
 
-replace github.com/pingcap/tidb/parser v0.0.0-20211229035549-783432895924 => github.com/lemonhx/tidb/parser v0.0.0-20220105032919-26710fad2c6e // indirect
+replace github.com/pingcap/tidb/parser v0.0.0-20211229035549-783432895924 => github.com/lemonhx/tidb/parser v0.0.0-20220105043412-73f7d78ce64d // indirect
 
 // cloud.google.com/go/storage will upgrade grpc to v1.40.0
 // we need keep the replacement until go.etcd.io supports the higher version of grpc.
