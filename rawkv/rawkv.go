@@ -308,7 +308,7 @@ func (c *Client) BatchDelete(ctx context.Context, keys [][]byte) error {
 	return nil
 }
 
-// DeleteRange deletes all key-value pairs in a range from TiKV.
+// DeleteRange deletes all key-value pairs in the [startKey, endKey) range from TiKV.
 func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte) error {
 	start := time.Now()
 	var err error
