@@ -141,6 +141,18 @@ type mockPDClient struct {
 	stop   bool
 }
 
+func (c *mockPDClient) LoadGlobalConfig(ctx context.Context, names []string) ([]pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) StoreGlobalConfig(ctx context.Context, items []pd.GlobalConfigItem) error {
+	return nil
+}
+
+func (c *mockPDClient) WatchGlobalConfig(ctx context.Context) (chan []pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) disable() {
 	c.Lock()
 	defer c.Unlock()
