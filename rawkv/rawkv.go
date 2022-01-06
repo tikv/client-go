@@ -702,8 +702,17 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch) error {
 		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.Values[i]})
 	}
 
+	var ttl uint64
+	if len(batch.TTLs) > 0 {
+		ttl = batch.TTLs[0]
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawBatchPut,
-		&kvrpcpb.RawBatchPutRequest{Pairs: kvPair, ForCas: c.atomic, Ttls: batch.TTLs})
+		&kvrpcpb.RawBatchPutRequest{
+			Pairs:  kvPair,
+			ForCas: c.atomic,
+			Ttls:   batch.TTLs,
+			Ttl:    ttl,
+		})
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
