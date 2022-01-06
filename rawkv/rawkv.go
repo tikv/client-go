@@ -277,7 +277,12 @@ func (c *Client) Put(ctx context.Context, key, value []byte) error {
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte, ttls []uint64) error {
+func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
+	return c.BatchPutWithTTL(ctx, keys, values, nil)
+}
+
+// BatchPutWithTTL stores key-values pairs to TiKV with time-to-live durations.
+func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttls []uint64) error {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds())
@@ -345,7 +350,7 @@ func (c *Client) BatchDelete(ctx context.Context, keys [][]byte) error {
 	return nil
 }
 
-// DeleteRange deletes all key-value pairs in a range from TiKV.
+// DeleteRange deletes all key-value pairs in the [startKey, endKey) range from TiKV.
 func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte) error {
 	start := time.Now()
 	var err error
@@ -753,8 +758,17 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch) error {
 		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.Values[i]})
 	}
 
+	var ttl uint64
+	if len(batch.TTLs) > 0 {
+		ttl = batch.TTLs[0]
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawBatchPut,
-		&kvrpcpb.RawBatchPutRequest{Pairs: kvPair, ForCas: c.atomic, Ttls: batch.TTLs})
+		&kvrpcpb.RawBatchPutRequest{
+			Pairs:  kvPair,
+			ForCas: c.atomic,
+			Ttls:   batch.TTLs,
+			Ttl:    ttl,
+		})
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())

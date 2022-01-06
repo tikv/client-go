@@ -113,7 +113,7 @@ func (s *testRawKVSuite) mustPut(key, value []byte) {
 }
 
 func (s *testRawKVSuite) mustBatchPut(keys, values [][]byte) {
-	err := s.client.BatchPut(context.Background(), keys, values, nil)
+	err := s.client.BatchPut(context.Background(), keys, values)
 	s.Nil(err)
 }
 
