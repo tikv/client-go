@@ -240,7 +240,12 @@ func (c *Client) Put(ctx context.Context, key, value []byte) error {
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte, ttls []uint64) error {
+func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
+	return c.BatchPutWithTTL(ctx, keys, values, nil)
+}
+
+// BatchPutWithTTL stores key-values pairs to TiKV with time-to-live durations.
+func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttls []uint64) error {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds())
