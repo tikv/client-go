@@ -11,7 +11,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.7.0
 	github.com/tikv/client-go/v2 v2.0.0
-	github.com/tikv/pd v1.1.0-beta.0.20211214024235-3c626f28bd32
+	github.com/tikv/pd v1.1.0-beta.0.20220106095237-876f7e908a17
 	go.uber.org/goleak v1.1.12
 )
 
