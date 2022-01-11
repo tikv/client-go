@@ -4,7 +4,7 @@ go 1.16
 
 require (
 	github.com/ninedraft/israce v0.0.3
-	github.com/pingcap/errors v0.11.5-0.20211009033009-93128226aaa3
+	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20210316064728-7acb0f0a3dfd
 	github.com/pingcap/kvproto v0.0.0-20211207042851-78a55fb8e69c
 	github.com/pingcap/tidb v1.1.0-beta.0.20211229035549-783432895924
@@ -16,9 +16,9 @@ require (
 	go.uber.org/goleak v1.1.12
 )
 
-replace github.com/pingcap/tidb => github.com/pingcap/tidb v1.1.0-beta.0.20211209082958-583ff252d76a
+replace github.com/pingcap/tidb => github.com/pingcap/tidb v1.1.0-beta.0.20220111072137-1557caa44d0f
 
-replace github.com/pingcap/tidb/parser => github.com/pingcap/tidb/parser v0.0.0-20211209082958-583ff252d76a
+replace github.com/pingcap/tidb/parser => github.com/pingcap/tidb/parser v0.0.0-20220111072137-1557caa44d0f
 
 replace github.com/tikv/client-go/v2 => ../
 
