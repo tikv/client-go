@@ -7,7 +7,8 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20211009033009-93128226aaa3
 	github.com/pingcap/failpoint v0.0.0-20210316064728-7acb0f0a3dfd
 	github.com/pingcap/kvproto v0.0.0-20211207042851-78a55fb8e69c
-	github.com/pingcap/tidb v1.1.0-beta.0.20211130051352-37e0dac25981
+	github.com/pingcap/tidb v1.1.0-beta.0.20211229035549-783432895924
+	github.com/pingcap/tidb/parser v0.0.0-20211229035549-783432895924 // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.7.0
 	github.com/tikv/client-go/v2 v2.0.0

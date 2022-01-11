@@ -68,6 +68,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
+	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -126,6 +127,7 @@ type KVStore struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	close  atomicutil.Bool
 }
 
 // UpdateSPCache updates cached safepoint.
@@ -180,7 +182,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		ctx:             ctx,
 		cancel:          cancel,
 	}
-	store.clientMu.client = client.NewReqCollapse(tikvclient)
+	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
 
 	store.wg.Add(2)
@@ -188,36 +190,6 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	go store.safeTSUpdater()
 
 	return store, nil
-}
-
-// NewTxnClient creates a txn client with pdAddrs.
-func NewTxnClient(pdAddrs []string) (*KVStore, error) {
-	cfg := config.GetGlobalConfig()
-	pdClient, err := NewPDClient(pdAddrs)
-	if err != nil {
-		return nil, err
-	}
-	// init uuid
-	// FIXME: uuid will be a very long and ugly string, simplify it.
-	uuid := fmt.Sprintf("tikv-%v", pdClient.GetClusterID(context.TODO()))
-	tlsConfig, err := cfg.Security.ToTLSConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	spkv, err := NewEtcdSafePointKV(pdAddrs, tlsConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	s, err := NewKVStore(uuid, pdClient, spkv, NewRPCClient(WithSecurity(cfg.Security)))
-	if err != nil {
-		return nil, err
-	}
-	if cfg.TxnLocalLatches.Enabled {
-		s.EnableTxnLocalLatches(cfg.TxnLocalLatches.Capacity)
-	}
-	return s, nil
 }
 
 // NewPDClient creates pd.Client with pdAddrs.
@@ -325,6 +297,7 @@ func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
 
 // Close store
 func (s *KVStore) Close() error {
+	s.close.Store(true)
 	s.cancel()
 	s.wg.Wait()
 
@@ -486,6 +459,11 @@ func (s *KVStore) Ctx() context.Context {
 	return s.ctx
 }
 
+// IsClose checks whether the store is closed.
+func (s *KVStore) IsClose() bool {
+	return s.close.Load()
+}
+
 // WaitGroup returns wg
 func (s *KVStore) WaitGroup() *sync.WaitGroup {
 	return &s.wg
@@ -570,6 +548,13 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 				return
 			}
 			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
+			preSafeTS := s.getSafeTS(storeID)
+			if preSafeTS > safeTS {
+				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()
+				preSafeTSTime := oracle.GetTimeFromTS(preSafeTS)
+				metrics.TiKVMinSafeTSGapSeconds.WithLabelValues(storeIDStr).Set(time.Since(preSafeTSTime).Seconds())
+				return
+			}
 			s.setSafeTS(storeID, safeTS)
 			metrics.TiKVSafeTSUpdateCounter.WithLabelValues("success", storeIDStr).Inc()
 			safeTSTime := oracle.GetTimeFromTS(safeTS)

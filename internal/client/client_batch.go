@@ -313,8 +313,6 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.reqBuilder.reset()
 
 		start := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
-		a.pendingRequests.Observe(float64(len(a.batchCommandsCh)))
-		a.batchSize.Observe(float64(a.reqBuilder.len()))
 
 		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/tikvclient/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
@@ -330,6 +328,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(bestBatchWaitSize), cfg.MaxBatchWaitTime)
 			}
 		}
+		a.pendingRequests.Observe(float64(len(a.batchCommandsCh)))
+		a.batchSize.Observe(float64(a.reqBuilder.len()))
 		length := a.reqBuilder.len()
 		if uint(length) == 0 {
 			// The batch command channel is closed.

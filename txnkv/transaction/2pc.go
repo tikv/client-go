@@ -112,6 +112,8 @@ type kvstore interface {
 	// TxnLatches returns txnLatches.
 	TxnLatches() *latch.LatchesScheduler
 	GetClusterID() uint64
+	// IsClose checks whether the store is closed.
+	IsClose() bool
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -438,7 +440,7 @@ func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error 
 // KVFilter is a filter that filters out unnecessary KV pairs.
 type KVFilter interface {
 	// IsUnnecessaryKeyValue returns whether this KV pair should be committed.
-	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) bool
+	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (bool, error)
 }
 
 func (c *twoPhaseCommitter) checkAssertionByPessimisticLockResults(ctx context.Context, key []byte, flags kv.KeyFlags, mustExist, mustNotExist bool) error {
@@ -514,7 +516,13 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			lockCnt++
 		} else {
 			value = it.Value()
-			isUnnecessaryKV := filter != nil && filter.IsUnnecessaryKeyValue(key, value, flags)
+			var isUnnecessaryKV bool
+			if filter != nil {
+				isUnnecessaryKV, err = filter.IsUnnecessaryKeyValue(key, value, flags)
+				if err != nil {
+					return err
+				}
+			}
 			if len(value) > 0 {
 				if isUnnecessaryKV {
 					if !flags.HasLocked() {
@@ -917,6 +925,12 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	// Already spawned a goroutine for async commit transaction.
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
+		if c.store.IsClose() {
+			logutil.Logger(bo.GetCtx()).Warn("the store is closed",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID))
+			return nil
+		}
 		c.store.WaitGroup().Add(1)
 		go func() {
 			defer c.store.WaitGroup().Done()
@@ -1161,6 +1175,12 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 		return false
 	}
 
+	// Don't use async commit when commitTSUpperBoundCheck is set.
+	// For TiDB, this is used by cached table.
+	if c.txn.commitTSUpperBoundCheck != nil {
+		return false
+	}
+
 	asyncCommitCfg := config.GetGlobalConfig().TiKVClient.AsyncCommit
 	// TODO the keys limit need more tests, this value makes the unit test pass by now.
 	// Async commit is not compatible with Binlog because of the non unique timestamp issue.
@@ -1183,6 +1203,10 @@ func (c *twoPhaseCommitter) checkAsyncCommit() bool {
 func (c *twoPhaseCommitter) checkOnePC() bool {
 	// Disable 1PC in local transactions
 	if c.txn.GetScope() != oracle.GlobalTxnScope {
+		return false
+	}
+	// Disable 1PC for transaction when commitTSUpperBoundCheck is set.
+	if c.txn.commitTSUpperBoundCheck != nil {
 		return false
 	}
 
@@ -1232,6 +1256,12 @@ const (
 )
 
 func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
+	if c.store.IsClose() {
+		logutil.Logger(ctx).Warn("twoPhaseCommitter fail to cleanup because the store exited",
+			zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
+			zap.Bool("isOnePC", c.isOnePC()))
+		return
+	}
 	c.cleanWg.Add(1)
 	c.store.WaitGroup().Add(1)
 	go func() {
@@ -1503,6 +1533,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			c.sessionID, c.startTS, c.commitTS)
 		return err
 	}
+	if c.txn.commitTSUpperBoundCheck != nil {
+		if !c.txn.commitTSUpperBoundCheck(commitTS) {
+			err = errors.Errorf("session %d check commit ts upper bound fail, txnStartTS: %d, comm: %d",
+				c.sessionID, c.startTS, c.commitTS)
+		}
+	}
 
 	if c.sessionID > 0 {
 		if val, err := util.EvalFailpoint("beforeCommit"); err == nil {
@@ -1531,6 +1567,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Debug("2PC will use async commit protocol to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
+		if c.store.IsClose() {
+			logutil.Logger(ctx).Warn("2PC will use async commit protocol to commit this txn but the store is closed",
+				zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID))
+			return nil
+		}
 		c.store.WaitGroup().Add(1)
 		go func() {
 			defer c.store.WaitGroup().Done()
