@@ -128,8 +128,8 @@ var (
 	BoTxnLockFast = NewConfig(txnLockFastName, &metrics.BackoffHistogramLockFast, NewBackoffFnCfg(2, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
 )
 
-var isSleepExcluded = map[*Config]struct{}{
-	BoTiKVServerBusy: {},
+var isSleepExcluded = map[string]struct{}{
+	BoTiKVServerBusy.name: {},
 	// add BoTiFlashServerBusy if appropriate
 }
 
