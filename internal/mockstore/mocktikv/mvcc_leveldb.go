@@ -734,8 +734,9 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 		return nil, err
 	}
 	if !ok {
-		if m.Assertion == kvrpcpb.Assertion_Exist && assertionLevel != kvrpcpb.AssertionLevel_Off {
-			logutil.BgLogger().Error("ASSERTION FAIL!!! non-exist for must exist key", zap.Stringer("mutation", m))
+		if m.Assertion == kvrpcpb.Assertion_Exist && assertionLevel != kvrpcpb.AssertionLevel_Off && m.Op != kvrpcpb.Op_PessimisticLock {
+			logutil.BgLogger().Error("assertion failed!!! non-exist for must exist key", zap.Stringer("mutation", m))
+			return nil, errors.Errorf("assertion failed!!! non-exist for must exist key, mutation: %v", m.String())
 		}
 		return nil, nil
 	}
@@ -805,9 +806,9 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 			return nil, err
 		}
 		if m.Assertion == kvrpcpb.Assertion_Exist && !ok && assertionLevel != kvrpcpb.AssertionLevel_Off {
-			logutil.BgLogger().Error("ASSERTION FAIL!!! non-exist for must exist key", zap.Stringer("mutation", m))
+			logutil.BgLogger().Error("assertion failed!!! non-exist for must exist key", zap.Stringer("mutation", m))
 			// TODO: Use specific error type
-			return nil, errors.Errorf("assertion failed!!! exist for must non-exist key, mutation: %v", m.String())
+			return nil, errors.Errorf("assertion failed!!! non-exist for must exist key, mutation: %v", m.String())
 		}
 	}
 	if getVal {

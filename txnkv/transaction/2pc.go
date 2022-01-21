@@ -179,6 +179,10 @@ type twoPhaseCommitter struct {
 
 type memBufferMutations struct {
 	storage *unionstore.MemDB
+
+	// The format to put to the UserData of the handles:
+	// MSB                                                                            LSB
+	// [13 bits: Op][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
 	handles []unionstore.MemKeyHandle
 }
 
@@ -234,9 +238,6 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 }
 
 func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
-	// The format to put to the handle.UserData:
-	// MSB                                                                            LSB
-	// [13 bits: Op][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
 	aux := uint16(op) << 3
 	if isPessimisticLock {
 		aux |= 1
