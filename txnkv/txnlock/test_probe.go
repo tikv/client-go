@@ -15,8 +15,8 @@
 package txnlock
 
 import (
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 )
@@ -45,9 +45,10 @@ type LockResolverProbe struct {
 	*LockResolver
 }
 
-// ResolveLockAsync tries to resolve a lock using the txn states.
-func (l LockResolverProbe) ResolveLockAsync(bo *retry.Backoffer, lock *Lock, status TxnStatus) error {
-	return l.resolveLockAsync(bo, lock, status)
+// ResolveAsyncCommitLock tries to resolve a lock using the txn states.
+func (l LockResolverProbe) ResolveAsyncCommitLock(bo *retry.Backoffer, lock *Lock, status TxnStatus) error {
+	_, err := l.resolveAsyncCommitLock(bo, lock, status, false)
+	return err
 }
 
 // ResolveLock resolves single lock.
@@ -57,7 +58,7 @@ func (l LockResolverProbe) ResolveLock(bo *retry.Backoffer, lock *Lock) error {
 
 // ResolvePessimisticLock resolves single pessimistic lock.
 func (l LockResolverProbe) ResolvePessimisticLock(bo *retry.Backoffer, lock *Lock) error {
-	return l.resolvePessimisticLock(bo, lock, make(map[locate.RegionVerID]struct{}))
+	return l.resolvePessimisticLock(bo, lock)
 }
 
 // GetTxnStatus sends the CheckTxnStatus request to the TiKV server.

@@ -38,8 +38,8 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"go.uber.org/zap"
 )
@@ -86,7 +87,7 @@ func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize 
 	if tikverr.IsErrNotFound(err) {
 		return scanner, nil
 	}
-	return scanner, errors.Trace(err)
+	return scanner, err
 }
 
 // Valid return valid.
@@ -110,13 +111,19 @@ func (s *Scanner) Value() []byte {
 	return nil
 }
 
-const scannerNextMaxBackoff = 600000 // 10 minutes
+const scannerNextMaxBackoff = 20000
 
 // Next return next element.
 func (s *Scanner) Next() error {
 	bo := retry.NewBackofferWithVars(context.WithValue(context.Background(), retry.TxnStartKey, s.snapshot.version), scannerNextMaxBackoff, s.snapshot.vars)
 	if !s.valid {
 		return errors.New("scanner iterator is invalid")
+	}
+	if s.snapshot.interceptor != nil {
+		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.snapshot.interceptor))
 	}
 	var err error
 	for {
@@ -129,7 +136,7 @@ func (s *Scanner) Next() error {
 			err = s.getData(bo)
 			if err != nil {
 				s.Close()
-				return errors.Trace(err)
+				return err
 			}
 			if s.idx >= len(s.cache) {
 				continue
@@ -148,7 +155,7 @@ func (s *Scanner) Next() error {
 			// 'current' would be modified if the lock being resolved
 			if err := s.resolveCurrentLock(bo, current); err != nil {
 				s.Close()
-				return errors.Trace(err)
+				return err
 			}
 
 			// The check here does not violate the KeyOnly semantic, because current's value
@@ -175,7 +182,7 @@ func (s *Scanner) resolveCurrentLock(bo *retry.Backoffer, current *kvrpcpb.KvPai
 	ctx := context.Background()
 	val, err := s.snapshot.get(ctx, bo, current.Key)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	current.Error = nil
 	current.Value = val
@@ -199,7 +206,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			loc, err = s.snapshot.store.GetRegionCache().LocateEndKey(bo, s.nextEndKey)
 		}
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		if !s.reverse {
@@ -239,15 +246,19 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			NotFillCache:     s.snapshot.notFillCache,
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.resourceGroupTag,
+			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 		})
+		if s.snapshot.resourceGroupTag == nil && s.snapshot.resourceGroupTagger != nil {
+			s.snapshot.resourceGroupTagger(req)
+		}
 		s.snapshot.mu.RUnlock()
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if regionErr != nil {
 			logutil.BgLogger().Debug("scanner getData failed",
@@ -258,19 +269,19 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
 				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 			}
 			continue
 		}
 		if resp.Resp == nil {
-			return errors.Trace(tikverr.ErrBodyMissing)
+			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdScanResp := resp.Resp.(*kvrpcpb.ScanResponse)
 
 		err = s.snapshot.store.CheckVisibility(s.startTS())
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		// When there is a response-level key error, the returned pairs are incomplete.
@@ -278,16 +289,16 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		if keyErr := cmdScanResp.GetError(); keyErr != nil {
 			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
-			msBeforeExpired, _, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
+			msBeforeExpired, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			if msBeforeExpired > 0 {
 				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("key is locked during scanning"))
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 			}
 			continue
@@ -299,7 +310,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			if keyErr := pair.GetError(); keyErr != nil && len(pair.Key) == 0 {
 				lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 				pair.Key = lock.Key
 			}

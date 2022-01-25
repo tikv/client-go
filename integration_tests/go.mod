@@ -4,15 +4,23 @@ go 1.16
 
 require (
 	github.com/ninedraft/israce v0.0.3
-	github.com/pingcap/errors v0.11.5-0.20210425183316-da1aaba5fb63
 	github.com/pingcap/failpoint v0.0.0-20210316064728-7acb0f0a3dfd
-	github.com/pingcap/kvproto v0.0.0-20210806074406-317f69fb54b4
-	github.com/pingcap/parser v0.0.0-20210728060616-75cff0c906d2
-	github.com/pingcap/tidb v1.1.0-beta.0.20210729073017-a27d306e65a0
+	github.com/pingcap/kvproto v0.0.0-20211224055123-d1a140660c39
+	github.com/pingcap/tidb v1.1.0-beta.0.20211229035549-783432895924
+	github.com/pingcap/tidb/parser v0.0.0-20211229035549-783432895924 // indirect
+	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.7.0
 	github.com/tikv/client-go/v2 v2.0.0
-	github.com/tikv/pd v1.1.0-beta.0.20210323121136-78679e5e209d
-	go.uber.org/goleak v1.1.10
+	github.com/tikv/pd v1.1.0-beta.0.20220106095237-876f7e908a17
+	go.uber.org/goleak v1.1.12
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/pingcap/tidb v1.1.0-beta.0.20211229035549-783432895924 => github.com/lemonhx/tidb v1.1.0-beta.0.20220105043412-73f7d78ce64d
+
+replace github.com/pingcap/tidb/parser v0.0.0-20211229035549-783432895924 => github.com/lemonhx/tidb/parser v0.0.0-20220105043412-73f7d78ce64d // indirect
+
+// cloud.google.com/go/storage will upgrade grpc to v1.40.0
+// we need keep the replacement until go.etcd.io supports the higher version of grpc.
+replace google.golang.org/grpc => google.golang.org/grpc v1.29.1

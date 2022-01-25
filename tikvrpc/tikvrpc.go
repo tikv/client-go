@@ -36,11 +36,9 @@ package tikvrpc
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/debugpb"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -48,6 +46,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -737,7 +736,7 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	case CmdCheckSecondaryLocks:
 		req.CheckSecondaryLocks().Context = ctx
 	default:
-		return fmt.Errorf("invalid request type %v", req.Type)
+		return errors.Errorf("invalid request type %v", req.Type)
 	}
 	return nil
 }
@@ -880,7 +879,7 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 			RegionError: e,
 		}
 	default:
-		return nil, fmt.Errorf("invalid request type %v", req.Type)
+		return nil, errors.Errorf("invalid request type %v", req.Type)
 	}
 	resp.Resp = p
 	return resp, nil
@@ -900,7 +899,7 @@ func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 		if _, isEmpty := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); isEmpty {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("invalid response type %v", resp)
+		return nil, errors.Errorf("invalid response type %v", resp)
 	}
 	return err.GetRegionError(), nil
 }
@@ -1017,7 +1016,7 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return resp, nil
 }
@@ -1049,7 +1048,7 @@ func (resp *CopStreamResponse) Recv() (*coprocessor.Response, error) {
 	ret, err := resp.Tikv_CoprocessorStreamClient.Recv()
 
 	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
-	return ret, errors.Trace(err)
+	return ret, errors.WithStack(err)
 }
 
 // Close closes the CopStreamResponse object.
@@ -1070,7 +1069,7 @@ func (resp *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
 	ret, err := resp.Tikv_BatchCoprocessorClient.Recv()
 
 	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
-	return ret, errors.Trace(err)
+	return ret, errors.WithStack(err)
 }
 
 // Close closes the BatchCopStreamResponse object.
@@ -1091,7 +1090,7 @@ func (resp *MPPStreamResponse) Recv() (*mpp.MPPDataPacket, error) {
 	ret, err := resp.Tikv_EstablishMPPConnectionClient.Recv()
 
 	atomic.StoreInt64(&resp.Lease.deadline, 0) // Stop the lease check.
-	return ret, errors.Trace(err)
+	return ret, errors.WithStack(err)
 }
 
 // Close closes the MPPStreamResponse object.
@@ -1179,3 +1178,6 @@ func (req *Request) IsTxnWriteRequest() bool {
 	}
 	return false
 }
+
+// ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
+type ResourceGroupTagger func(req *Request)

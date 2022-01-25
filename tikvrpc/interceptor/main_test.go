@@ -12,22 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tikv_test
+package interceptor
 
 import (
 	"testing"
 
-	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	tikv.EnableFailpoints()
-
-	opts := []goleak.Option{
-		goleak.IgnoreTopFunction("github.com/pingcap/goleveldb/leveldb.(*DB).mpoolDrain"),
-		goleak.IgnoreTopFunction("github.com/tikv/client-go/v2/txnkv/transaction.keepAlive"), // TODO: fix ttlManager goroutine leak
-	}
-
-	goleak.VerifyTestMain(m, opts...)
+	goleak.VerifyTestMain(m)
 }

@@ -41,9 +41,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/pkg/errors"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -71,6 +71,18 @@ func NewPDClient(cluster *Cluster) pd.Client {
 		cluster:           cluster,
 		serviceSafePoints: make(map[string]uint64),
 	}
+}
+
+func (c *pdClient) LoadGlobalConfig(ctx context.Context, names []string) ([]pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
+func (c *pdClient) StoreGlobalConfig(ctx context.Context, items []pd.GlobalConfigItem) error {
+	return nil
+}
+
+func (c *pdClient) WatchGlobalConfig(ctx context.Context) (chan []pd.GlobalConfigItem, error) {
+	return nil, nil
 }
 
 func (c *pdClient) GetClusterID(ctx context.Context) uint64 {
@@ -229,3 +241,7 @@ func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
 }
 
 func (c *pdClient) GetLeaderAddr() string { return "mockpd" }
+
+func (c *pdClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
+	return nil
+}

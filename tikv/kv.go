@@ -46,9 +46,9 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -68,6 +68,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
+	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -87,7 +88,7 @@ func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, erro
 		DialKeepAliveTimeout: time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout),
 	})
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	return cli, nil
 }
@@ -126,6 +127,7 @@ type KVStore struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	close  atomicutil.Bool
 }
 
 // UpdateSPCache updates cached safepoint.
@@ -164,7 +166,7 @@ func (s *KVStore) CheckVisibility(startTime uint64) error {
 func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client) (*KVStore, error) {
 	o, err := oracles.NewPdOracle(pdClient, time.Duration(oracleUpdateInterval)*time.Millisecond)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &KVStore{
@@ -180,7 +182,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		ctx:             ctx,
 		cancel:          cancel,
 	}
-	store.clientMu.client = client.NewReqCollapse(tikvclient)
+	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
 
 	store.wg.Add(2)
@@ -188,37 +190,6 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	go store.safeTSUpdater()
 
 	return store, nil
-}
-
-// NewTxnClient creates a txn client with pdAddrs.
-func NewTxnClient(pdAddrs []string) (*KVStore, error) {
-
-	cfg := config.GetGlobalConfig()
-	pdClient, err := NewPDClient(pdAddrs)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	// init uuid
-	// FIXME: uuid will be a very long and ugly string, simplify it.
-	uuid := fmt.Sprintf("tikv-%v", pdClient.GetClusterID(context.TODO()))
-	tlsConfig, err := cfg.Security.ToTLSConfig()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	spkv, err := NewEtcdSafePointKV(pdAddrs, tlsConfig)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	s, err := NewKVStore(uuid, pdClient, spkv, NewRPCClient(WithSecurity(cfg.Security)))
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	if cfg.TxnLocalLatches.Enabled {
-		s.EnableTxnLocalLatches(cfg.TxnLocalLatches.Capacity)
-	}
-	return s, nil
 }
 
 // NewPDClient creates pd.Client with pdAddrs.
@@ -238,9 +209,8 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 		),
 		pd.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
 		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding))
-
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	pdClient := &CodecPDClient{Client: util.InterceptedPDClient{Client: pdCli}}
 	return pdClient, nil
@@ -280,16 +250,16 @@ func (s *KVStore) runSafePointChecker() {
 }
 
 // Begin a global transaction.
-func (s *KVStore) Begin() (*transaction.KVTxn, error) {
-	return s.BeginWithOption(DefaultStartTSOption())
-}
+func (s *KVStore) Begin(opts ...TxnOption) (*transaction.KVTxn, error) {
+	options := &txnOptions{}
+	// Inject the options
+	for _, opt := range opts {
+		opt(options)
+	}
 
-// BeginWithOption begins a transaction with the given StartTSOption
-func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, error) {
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
-
 	if options.StartTS != nil {
 		snapshot := txnsnapshot.NewTiKVSnapshot(s, *options.StartTS, s.nextReplicaReadSeed())
 		return transaction.NewTiKVTxn(s, snapshot, *options.StartTS, options.TxnScope)
@@ -298,7 +268,7 @@ func (s *KVStore) BeginWithOption(options StartTSOption) (*transaction.KVTxn, er
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
 	startTS, err := s.getTimestampWithRetry(bo, options.TxnScope)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	snapshot := txnsnapshot.NewTiKVSnapshot(s, startTS, s.nextReplicaReadSeed())
 	return transaction.NewTiKVTxn(s, snapshot, startTS, options.TxnScope)
@@ -316,8 +286,10 @@ func (s *KVStore) DeleteRange(ctx context.Context, startKey []byte, endKey []byt
 	return completedRegions, err
 }
 
-// GetSnapshot gets a snapshot that is able to read any data which data is <= ver.
-// if ts is MaxVersion or > current max committed version, we will use current version for this snapshot.
+// GetSnapshot gets a snapshot that is able to read any data which data is <= the given ts.
+// If the given ts is greater than the current TSO timestamp, the snapshot is not guaranteed
+// to be consistent.
+// Specially, it is useful to set ts to math.MaxUint64 to point get the latest committed data.
 func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
 	snapshot := txnsnapshot.NewTiKVSnapshot(s, ts, s.nextReplicaReadSeed())
 	return snapshot
@@ -325,14 +297,16 @@ func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
 
 // Close store
 func (s *KVStore) Close() error {
+	s.close.Store(true)
 	s.cancel()
 	s.wg.Wait()
 
 	s.oracle.Close()
 	s.pdClient.Close()
+	s.lockResolver.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	if s.txnLatches != nil {
@@ -341,7 +315,7 @@ func (s *KVStore) Close() error {
 	s.regionCache.Close()
 
 	if err := s.kv.Close(); err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	return nil
 }
@@ -356,7 +330,7 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
 	startTS, err := s.getTimestampWithRetry(bo, txnScope)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, err
 	}
 	return startTS, nil
 }
@@ -390,7 +364,7 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 		}
 		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get timestamp failed: %v", err))
 		if err != nil {
-			return 0, errors.Trace(err)
+			return 0, err
 		}
 	}
 }
@@ -485,6 +459,11 @@ func (s *KVStore) Ctx() context.Context {
 	return s.ctx
 }
 
+// IsClose checks whether the store is closed.
+func (s *KVStore) IsClose() bool {
+	return s.close.Load()
+}
+
 // WaitGroup returns wg
 func (s *KVStore) WaitGroup() *sync.WaitGroup {
 	return &s.wg
@@ -569,6 +548,13 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 				return
 			}
 			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
+			preSafeTS := s.getSafeTS(storeID)
+			if preSafeTS > safeTS {
+				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()
+				preSafeTSTime := oracle.GetTimeFromTS(preSafeTS)
+				metrics.TiKVMinSafeTSGapSeconds.WithLabelValues(storeIDStr).Set(time.Since(preSafeTSTime).Seconds())
+				return
+			}
 			s.setSafeTS(storeID, safeTS)
 			metrics.TiKVSafeTSUpdateCounter.WithLabelValues("success", storeIDStr).Inc()
 			safeTSTime := oracle.GetTimeFromTS(safeTS)
@@ -594,51 +580,50 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		KeyPath:  security.ClusterSSLKey,
 	}, opts...)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WithStack(err)
 	}
 	pdCli = util.InterceptedPDClient{Client: pdCli}
 	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID(context.TODO()))
 
 	tlsConfig, err := security.ToTLSConfig()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	spkv, err := NewEtcdSafePointKV(etcdAddrs, tlsConfig)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return s.lockResolver, nil
 }
 
-// StartTSOption indicates the option when beginning a transaction
-// `TxnScope` must be set for each object
-// Every other fields are optional, but currently at most one of them can be set
-type StartTSOption struct {
+// txnOptions indicates the option when beginning a transaction.
+// txnOptions are set by the TxnOption values passed to Begin
+type txnOptions struct {
 	TxnScope string
 	StartTS  *uint64
 }
 
-// DefaultStartTSOption creates a default StartTSOption, ie. Work in GlobalTxnScope and get start ts when got used
-func DefaultStartTSOption() StartTSOption {
-	return StartTSOption{TxnScope: oracle.GlobalTxnScope}
+// TxnOption configures Transaction
+type TxnOption func(*txnOptions)
+
+// WithTxnScope sets the TxnScope to txnScope
+func WithTxnScope(txnScope string) TxnOption {
+	return func(st *txnOptions) {
+		st.TxnScope = txnScope
+	}
 }
 
-// SetStartTS returns a new StartTSOption with StartTS set to the given startTS
-func (to StartTSOption) SetStartTS(startTS uint64) StartTSOption {
-	to.StartTS = &startTS
-	return to
-}
-
-// SetTxnScope returns a new StartTSOption with TxnScope set to txnScope
-func (to StartTSOption) SetTxnScope(txnScope string) StartTSOption {
-	to.TxnScope = txnScope
-	return to
+// WithStartTS sets the StartTS to startTS
+func WithStartTS(startTS uint64) TxnOption {
+	return func(st *txnOptions) {
+		st.StartTS = &startTS
+	}
 }
 
 // TODO: remove once tidb and br are ready

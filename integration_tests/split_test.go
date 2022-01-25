@@ -39,10 +39,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/tidb/store/mockstore/mockcopr"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
@@ -141,6 +141,18 @@ type mockPDClient struct {
 	stop   bool
 }
 
+func (c *mockPDClient) LoadGlobalConfig(ctx context.Context, names []string) ([]pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) StoreGlobalConfig(ctx context.Context, items []pd.GlobalConfigItem) error {
+	return nil
+}
+
+func (c *mockPDClient) WatchGlobalConfig(ctx context.Context) (chan []pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) disable() {
 	c.Lock()
 	defer c.Unlock()
@@ -160,7 +172,7 @@ func (c *mockPDClient) GetTS(ctx context.Context) (int64, int64, error) {
 	defer c.RUnlock()
 
 	if c.stop {
-		return 0, 0, errors.Trace(errStopped)
+		return 0, 0, errors.WithStack(errStopped)
 	}
 	return c.client.GetTS(ctx)
 }
@@ -182,7 +194,7 @@ func (c *mockPDClient) GetRegion(ctx context.Context, key []byte) (*pd.Region, e
 	defer c.RUnlock()
 
 	if c.stop {
-		return nil, errors.Trace(errStopped)
+		return nil, errors.WithStack(errStopped)
 	}
 	return c.client.GetRegion(ctx, key)
 }
@@ -196,7 +208,7 @@ func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte) (*pd.Regio
 	defer c.RUnlock()
 
 	if c.stop {
-		return nil, errors.Trace(errStopped)
+		return nil, errors.WithStack(errStopped)
 	}
 	return c.client.GetPrevRegion(ctx, key)
 }
@@ -206,7 +218,7 @@ func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64) (*pd.
 	defer c.RUnlock()
 
 	if c.stop {
-		return nil, errors.Trace(errStopped)
+		return nil, errors.WithStack(errStopped)
 	}
 	return c.client.GetRegionByID(ctx, regionID)
 }
@@ -216,7 +228,7 @@ func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey 
 	defer c.RUnlock()
 
 	if c.stop {
-		return nil, errors.Trace(errStopped)
+		return nil, errors.WithStack(errStopped)
 	}
 	return c.client.ScanRegions(ctx, startKey, endKey, limit)
 }
@@ -226,7 +238,7 @@ func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.St
 	defer c.RUnlock()
 
 	if c.stop {
-		return nil, errors.Trace(errStopped)
+		return nil, errors.WithStack(errStopped)
 	}
 	return c.client.GetStore(ctx, storeID)
 }
@@ -236,7 +248,7 @@ func (c *mockPDClient) GetAllStores(ctx context.Context, opts ...pd.GetStoreOpti
 	defer c.Unlock()
 
 	if c.stop {
-		return nil, errors.Trace(errStopped)
+		return nil, errors.WithStack(errStopped)
 	}
 	return c.client.GetAllStores(ctx)
 }
@@ -268,3 +280,7 @@ func (c *mockPDClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.
 }
 
 func (c *mockPDClient) GetLeaderAddr() string { return "mockpd" }
+
+func (c *mockPDClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
+	return nil
+}

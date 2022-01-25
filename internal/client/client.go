@@ -48,14 +48,14 @@ import (
 
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/debugpb"
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
-	"github.com/pingcap/parser/terror"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -138,7 +138,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 	if len(security.ClusterSSLCA) != 0 {
 		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
@@ -196,7 +196,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 		if err != nil {
 			// Cleanup if the initialization fails.
 			a.Close()
-			return errors.Trace(err)
+			return errors.WithStack(err)
 		}
 		a.v[i] = conn
 
@@ -237,7 +237,7 @@ func (a *connArray) Close() {
 	for i, c := range a.v {
 		if c != nil {
 			err := c.Close()
-			terror.Log(errors.Trace(err))
+			tikverr.Log(err)
 			a.v[i] = nil
 		}
 	}
@@ -344,21 +344,23 @@ func (c *RPCClient) closeConns() {
 var sendReqHistCache sync.Map
 
 type sendReqHistCacheKey struct {
-	tp tikvrpc.CmdType
-	id uint64
+	tp       tikvrpc.CmdType
+	id       uint64
+	staleRad bool
 }
 
-func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time) {
+func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time, staleRead bool) {
 	key := sendReqHistCacheKey{
 		req.Type,
 		req.Context.GetPeer().GetStoreId(),
+		staleRead,
 	}
 
 	v, ok := sendReqHistCache.Load(key)
 	if !ok {
 		reqType := req.Type.String()
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID)
+		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead))
 		sendReqHistCache.Store(key, v)
 	}
 
@@ -381,17 +383,18 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	enableBatch := req.StoreTp != tikvrpc.TiDB && req.StoreTp != tikvrpc.TiFlash
 	connArray, err := c.getConnArray(addr, enableBatch)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	start := time.Now()
+	staleRead := req.GetStaleRead()
 	defer func() {
 		stmtExec := ctx.Value(util.ExecDetailsKey)
 		if stmtExec != nil {
 			detail := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
-		c.updateTiKVSendReqHistogram(req, start)
+		c.updateTiKVSendReqHistogram(req, start, staleRead)
 	}()
 
 	// TiDB RPC server supports batch RPC, but batch connection will send heart beat, It's not necessary since
@@ -446,7 +449,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	resp, err := tikvrpc.CallRPC(ctx1, client, req)
 	if err != nil {
 		cancel()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -462,7 +465,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("copstream returns nothing for the request.")
 	}
@@ -481,7 +484,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	resp, err := tikvrpc.CallRPC(ctx1, client, req)
 	if err != nil {
 		cancel()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -497,7 +500,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 		logutil.BgLogger().Debug("batch copstream returns nothing for the request.")
 	}
@@ -515,7 +518,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	resp, err := tikvrpc.CallRPC(ctx1, client, req)
 	if err != nil {
 		cancel()
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	// Put the lease object to the timeout channel, so it would be checked periodically.
@@ -531,7 +534,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	first, err = copStream.Recv()
 	if err != nil {
 		if errors.Cause(err) != io.EOF {
-			return nil, errors.Trace(err)
+			return nil, errors.WithStack(err)
 		}
 	}
 	copStream.MPPDataPacket = first
