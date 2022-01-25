@@ -238,6 +238,7 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 }
 
 func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
+	// See comments of `m.handles` field about the format of the user data `aux`.
 	aux := uint16(op) << 3
 	if isPessimisticLock {
 		aux |= 1
