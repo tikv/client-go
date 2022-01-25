@@ -68,6 +68,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/clientv3"
+	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -126,6 +127,7 @@ type KVStore struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	close  atomicutil.Bool
 }
 
 // UpdateSPCache updates cached safepoint.
@@ -180,7 +182,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		ctx:             ctx,
 		cancel:          cancel,
 	}
-	store.clientMu.client = client.NewReqCollapse(tikvclient)
+	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
 
 	store.wg.Add(2)
@@ -295,6 +297,7 @@ func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
 
 // Close store
 func (s *KVStore) Close() error {
+	s.close.Store(true)
 	s.cancel()
 	s.wg.Wait()
 
@@ -454,6 +457,11 @@ func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
 // Ctx returns ctx.
 func (s *KVStore) Ctx() context.Context {
 	return s.ctx
+}
+
+// IsClose checks whether the store is closed.
+func (s *KVStore) IsClose() bool {
+	return s.close.Load()
 }
 
 // WaitGroup returns wg

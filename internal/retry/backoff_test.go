@@ -49,3 +49,26 @@ func TestBackoffWithMax(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 5, b.totalSleep)
 }
+
+func TestBackoffErrorType(t *testing.T) {
+	// the actual maxSleep is multiplied by weight, which is 400ms
+	b := NewBackofferWithVars(context.TODO(), 200, nil)
+	err := b.Backoff(BoRegionMiss, errors.New("region miss")) // 2ms sleep
+	assert.Nil(t, err)
+	// 300 ms sleep in total
+	for i := 0; i < 2; i++ {
+		err = b.Backoff(BoMaxDataNotReady, errors.New("data not ready"))
+		assert.Nil(t, err)
+	}
+	// sleep from ServerIsBusy is not counted
+	err = b.Backoff(BoTiKVServerBusy, errors.New("server is busy"))
+	assert.Nil(t, err)
+	// 126ms sleep in total
+	for i := 0; i < 6; i++ {
+		err = b.Backoff(BoTxnNotFound, errors.New("txn not found"))
+		assert.Nil(t, err)
+	}
+	// Next backoff should return error of backoff that sleeps for longest time.
+	err = b.Backoff(BoTxnNotFound, errors.New("tikv rpc"))
+	assert.ErrorIs(t, err, BoMaxDataNotReady.err)
+}

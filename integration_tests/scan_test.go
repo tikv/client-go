@@ -42,6 +42,9 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()
@@ -52,13 +55,13 @@ func TestScan(t *testing.T) {
 
 type testScanSuite struct {
 	suite.Suite
-	store        *tikv.KVStore
+	store        tikv.StoreProbe
 	recordPrefix []byte
 	rowNums      []int
 }
 
 func (s *testScanSuite) SetupSuite() {
-	s.store = NewTestStore(s.T())
+	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
 	s.recordPrefix = []byte("prefix")
 	s.rowNums = append(s.rowNums, 1, scanBatchSize, scanBatchSize+1, scanBatchSize*3)
 }
@@ -80,7 +83,7 @@ func (s *testScanSuite) TearDownSuite() {
 	s.Require().Nil(err)
 }
 
-func (s *testScanSuite) beginTxn() *tikv.KVTxn {
+func (s *testScanSuite) beginTxn() transaction.TxnProbe {
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
 	return txn
@@ -170,5 +173,26 @@ func (s *testScanSuite) TestScan() {
 		scan, err = txn3.Iter(s.recordPrefix, s.makeKey(upperBound))
 		s.Nil(err)
 		check(scan, upperBound, true)
+
+		// RC read
+		txn4 := s.beginTxn()
+		err = txn4.Set(s.makeKey(0), s.makeValue(1))
+		s.Nil(err)
+		committer4, err := txn4.NewCommitter(2)
+		s.Nil(err)
+		err = committer4.PrewriteAllMutations(context.Background())
+		s.Nil(err)
+		txn5 := s.beginTxn()
+		txn5.GetSnapshot().SetIsolationLevel(txnsnapshot.RC)
+		var meetLocks []*txnkv.Lock
+		resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
+		resolver.SetMeetLockCallback(func(locks []*txnkv.Lock) {
+			meetLocks = append(meetLocks, locks...)
+		})
+		scan, err = txn5.Iter(s.recordPrefix, nil)
+		s.Nil(err)
+		check(scan, rowNum, false)
+		s.Equal(len(meetLocks), 0)
+		committer4.Cleanup(context.Background())
 	}
 }

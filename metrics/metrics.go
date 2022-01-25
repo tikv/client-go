@@ -300,7 +300,7 @@ func initMetrics(namespace, subsystem string) {
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "batch_pending_requests",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 8),
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 11), // 1 ~ 1024
 			Help:      "number of requests pending in the batch channel",
 		}, []string{"store"})
 
@@ -309,7 +309,7 @@ func initMetrics(namespace, subsystem string) {
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "batch_requests",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 8),
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 11), // 1 ~ 1024
 			Help:      "number of requests in one batch",
 		}, []string{"store"})
 
@@ -605,6 +605,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCommitBackoffCount)
 	prometheus.MustRegister(TiKVSmallReadDuration)
 	prometheus.MustRegister(TiKVReadThroughput)
+	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 }
 
 // readCounter reads the value of a prometheus.Counter.
