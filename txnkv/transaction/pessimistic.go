@@ -133,6 +133,9 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				req.PessimisticLock().WaitTimeout = timeLeft
 			}
 		}
+		elapsed := uint64(time.Since(c.txn.startTime) / time.Millisecond)
+		ttl := elapsed + atomic.LoadUint64(&ManagedLockTTL)
+		req.PessimisticLock().LockTtl = ttl
 		if _, err := util.EvalFailpoint("PessimisticLockErrWriteConflict"); err == nil {
 			time.Sleep(300 * time.Millisecond)
 			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})
