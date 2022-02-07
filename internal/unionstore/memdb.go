@@ -43,6 +43,7 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 )
 
 var tombstone = []byte{}
@@ -163,6 +164,8 @@ func (db *MemDB) Reset() {
 	db.vlogInvalid = false
 	db.size = 0
 	db.count = 0
+	metrics.MemdbSize.Set(0.0)
+	metrics.MemdbCount.Set(0.0)
 	db.vlog.reset()
 	db.allocator.reset()
 }
@@ -358,6 +361,7 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 	}
 	x.vptr = db.vlog.appendValue(x.addr, x.vptr, value)
 	db.size = db.size - len(oldVal) + len(value)
+	metrics.MemdbSize.Set(float64(db.size))
 }
 
 // traverse search for and if not found and insert is true, will add a new node in.
@@ -563,6 +567,8 @@ func (db *MemDB) deleteNode(z memdbNodeAddr) {
 
 	db.count--
 	db.size -= int(z.klen)
+	metrics.MemdbCount.Dec()
+	metrics.MemdbSize.Set(float64(db.size))
 
 	if z.left.isNull() || z.right.isNull() {
 		y = z
@@ -763,6 +769,8 @@ func (db *MemDB) getRoot() memdbNodeAddr {
 func (db *MemDB) allocNode(key []byte) memdbNodeAddr {
 	db.size += len(key)
 	db.count++
+	metrics.MemdbCount.Inc()
+	metrics.MemdbSize.Set(float64(db.size))
 	x, xn := db.allocator.allocNode(key)
 	return memdbNodeAddr{xn, x}
 }
@@ -843,5 +851,6 @@ func (db *MemDB) RemoveFromBuffer(key []byte) {
 		return
 	}
 	db.size -= len(db.vlog.getValue(x.vptr))
+	metrics.MemdbSize.Set(float64(db.size))
 	db.deleteNode(x)
 }

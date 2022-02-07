@@ -93,6 +93,8 @@ var (
 	TiKVReadThroughput                       prometheus.Histogram
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
+	MemdbCount                               prometheus.Gauge
+	MemdbSize                                prometheus.Gauge
 )
 
 // Label constants.
@@ -559,6 +561,21 @@ func initMetrics(namespace, subsystem string) {
 			Name:      "prewrite_assertion_count",
 			Help:      "Counter of assertions used in prewrite requests",
 		}, []string{LblType})
+	MemdbCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "memdb_count",
+			Help:      "Count of the memdb entries.",
+		})
+
+	MemdbSize = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "memdb_size",
+			Help:      "Size of the memdb.",
+		})
 
 	initShortcuts()
 }
@@ -627,6 +644,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadThroughput)
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
+	prometheus.MustRegister(MemdbCount)
+	prometheus.MustRegister(MemdbSize)
 }
 
 // readCounter reads the value of a prometheus.Counter.
