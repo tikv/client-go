@@ -73,6 +73,18 @@ func NewPDClient(cluster *Cluster) pd.Client {
 	}
 }
 
+func (c *pdClient) LoadGlobalConfig(ctx context.Context, names []string) ([]pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
+func (c *pdClient) StoreGlobalConfig(ctx context.Context, items []pd.GlobalConfigItem) error {
+	return nil
+}
+
+func (c *pdClient) WatchGlobalConfig(ctx context.Context) (chan []pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
 func (c *pdClient) GetClusterID(ctx context.Context) uint64 {
 	return 1
 }

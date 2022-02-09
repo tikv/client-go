@@ -230,7 +230,9 @@ func (s *testCommitterSuite) TestCommitOnTiKVDiskFullOpt() {
 	s.Nil(failpoint.Enable("tikvclient/rpcAllowedOnAlmostFull", `return("true")`))
 	txn = s.begin()
 	txn.Set([]byte("c"), []byte("c1"))
-	err = txn.Commit(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err = txn.Commit(ctx)
 	s.NotNil(err)
 	s.Nil(failpoint.Disable("tikvclient/rpcAllowedOnAlmostFull"))
 }
