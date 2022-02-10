@@ -16,6 +16,7 @@ package tikv_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
@@ -54,7 +56,7 @@ func (*mockAmender) AmendTxn(ctx context.Context, startInfoSchema transaction.Sc
 	return nil, nil
 }
 
-func (s *testAssertionSuite) testAssertionImpl(keyPrefix byte, pessimistic bool, lockKeys bool, assertionLevel kvrpcpb.AssertionLevel, enableAmend bool) {
+func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic bool, lockKeys bool, assertionLevel kvrpcpb.AssertionLevel, enableAmend bool) {
 	if assertionLevel != kvrpcpb.AssertionLevel_Strict {
 		s.Nil(failpoint.Enable("tikvclient/assertionSkipCheckFromPrewrite", "return"))
 		defer func() {
@@ -70,7 +72,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix byte, pessimistic bool,
 
 	// Compose the key
 	k := func(i byte) []byte {
-		return []byte{keyPrefix, 'k', i}
+		return append([]byte(keyPrefix), 'k', i)
 	}
 
 	// Prepare some data. Make k1, k3, k7 exist.
@@ -191,19 +193,31 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix byte, pessimistic bool,
 }
 
 func (s *testAssertionSuite) TestPrewriteAssertion() {
-	s.testAssertionImpl('a', false, false, kvrpcpb.AssertionLevel_Strict, false)
-	s.testAssertionImpl('b', true, false, kvrpcpb.AssertionLevel_Strict, false)
-	s.testAssertionImpl('c', true, true, kvrpcpb.AssertionLevel_Strict, false)
-	s.testAssertionImpl('a', false, false, kvrpcpb.AssertionLevel_Strict, true)
-	s.testAssertionImpl('b', true, false, kvrpcpb.AssertionLevel_Strict, true)
-	s.testAssertionImpl('c', true, true, kvrpcpb.AssertionLevel_Strict, true)
+	// When the test cases runs with TiKV, the TiKV cluster can be reused, thus there may be deleted versions caused by
+	// previous tests. This test case may meet different behavior if there are deleted versions. To avoid it, compose a
+	// key prefix with a timestamp to ensure the keys to be unique.
+	ts, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.Nil(err)
+	prefix := fmt.Sprintf("test-prewrite-assertion-%d-", ts)
+	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Strict, false)
+	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Strict, false)
+	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Strict, false)
+	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Strict, true)
+	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Strict, true)
+	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Strict, true)
 }
 
 func (s *testAssertionSuite) TestFastAssertion() {
-	s.testAssertionImpl('a', false, false, kvrpcpb.AssertionLevel_Fast, false)
-	s.testAssertionImpl('b', true, false, kvrpcpb.AssertionLevel_Fast, false)
-	s.testAssertionImpl('c', true, true, kvrpcpb.AssertionLevel_Fast, false)
-	s.testAssertionImpl('a', false, false, kvrpcpb.AssertionLevel_Fast, true)
-	s.testAssertionImpl('b', true, false, kvrpcpb.AssertionLevel_Fast, true)
-	s.testAssertionImpl('c', true, true, kvrpcpb.AssertionLevel_Fast, true)
+	// When the test cases runs with TiKV, the TiKV cluster can be reused, thus there may be deleted versions caused by
+	// previous tests. This test case may meet different behavior if there are deleted versions. To avoid it, compose a
+	// key prefix with a timestamp to ensure the keys to be unique.
+	ts, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.Nil(err)
+	prefix := fmt.Sprintf("test-fast-assertion-%d-", ts)
+	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Fast, false)
+	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Fast, false)
+	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Fast, false)
+	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Fast, true)
+	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Fast, true)
+	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Fast, true)
 }
