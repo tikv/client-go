@@ -123,6 +123,11 @@ var (
 
 	BatchRecvHistogramOK    prometheus.Observer
 	BatchRecvHistogramError prometheus.Observer
+
+	PrewriteAssertionUsageCounterNone     prometheus.Counter
+	PrewriteAssertionUsageCounterExist    prometheus.Counter
+	PrewriteAssertionUsageCounterNotExist prometheus.Counter
+	PrewriteAssertionUsageCounterUnknown  prometheus.Counter
 )
 
 func initShortcuts() {
@@ -211,4 +216,9 @@ func initShortcuts() {
 
 	BatchRecvHistogramOK = TiKVBatchRecvLatency.WithLabelValues("ok")
 	BatchRecvHistogramError = TiKVBatchRecvLatency.WithLabelValues("err")
+
+	PrewriteAssertionUsageCounterNone = TiKVPrewriteAssertionUsageCounter.WithLabelValues("none")
+	PrewriteAssertionUsageCounterExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("exist")
+	PrewriteAssertionUsageCounterNotExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("not-exist")
+	PrewriteAssertionUsageCounterUnknown = TiKVPrewriteAssertionUsageCounter.WithLabelValues("unknown")
 }

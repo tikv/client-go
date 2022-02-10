@@ -179,6 +179,10 @@ type twoPhaseCommitter struct {
 
 type memBufferMutations struct {
 	storage *unionstore.MemDB
+
+	// The format to put to the UserData of the handles:
+	// MSB                                                                            LSB
+	// [13 bits: Op][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
 	handles []unionstore.MemKeyHandle
 }
 
@@ -211,11 +215,19 @@ func (m *memBufferMutations) GetValue(i int) []byte {
 }
 
 func (m *memBufferMutations) GetOp(i int) kvrpcpb.Op {
-	return kvrpcpb.Op(m.handles[i].UserData >> 1)
+	return kvrpcpb.Op(m.handles[i].UserData >> 3)
 }
 
 func (m *memBufferMutations) IsPessimisticLock(i int) bool {
 	return m.handles[i].UserData&1 != 0
+}
+
+func (m *memBufferMutations) IsAssertExists(i int) bool {
+	return m.handles[i].UserData&(1<<1) != 0
+}
+
+func (m *memBufferMutations) IsAssertNotExist(i int) bool {
+	return m.handles[i].UserData&(1<<2) != 0
 }
 
 func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
@@ -225,13 +237,48 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 	}
 }
 
-func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock bool, handle unionstore.MemKeyHandle) {
-	aux := uint16(op) << 1
+func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
+	// See comments of `m.handles` field about the format of the user data `aux`.
+	aux := uint16(op) << 3
 	if isPessimisticLock {
 		aux |= 1
 	}
+	if assertExist {
+		aux |= 1 << 1
+	}
+	if assertNotExist {
+		aux |= 1 << 2
+	}
 	handle.UserData = aux
 	m.handles = append(m.handles, handle)
+}
+
+// CommitterMutationFlags represents various bit flags of mutations.
+type CommitterMutationFlags uint8
+
+const (
+	// MutationFlagIsPessimisticLock is the flag that marks a mutation needs to be pessimistic-locked.
+	MutationFlagIsPessimisticLock CommitterMutationFlags = 1 << iota
+
+	// MutationFlagIsAssertExists is the flag that marks a mutation needs to be asserted to be existed when prewriting.
+	MutationFlagIsAssertExists
+
+	// MutationFlagIsAssertNotExists is the flag that marks a mutation needs to be asserted to be not-existed when prewriting.
+	MutationFlagIsAssertNotExists
+)
+
+func makeMutationFlags(isPessimisticLock, assertExist, assertNotExist bool) CommitterMutationFlags {
+	var flags CommitterMutationFlags = 0
+	if isPessimisticLock {
+		flags |= MutationFlagIsPessimisticLock
+	}
+	if assertExist {
+		flags |= MutationFlagIsAssertExists
+	}
+	if assertNotExist {
+		flags |= MutationFlagIsAssertNotExists
+	}
+	return flags
 }
 
 // CommitterMutations contains the mutations to be submitted.
@@ -243,23 +290,25 @@ type CommitterMutations interface {
 	GetValue(i int) []byte
 	IsPessimisticLock(i int) bool
 	Slice(from, to int) CommitterMutations
+	IsAssertExists(i int) bool
+	IsAssertNotExist(i int) bool
 }
 
 // PlainMutations contains transaction operations.
 type PlainMutations struct {
-	ops               []kvrpcpb.Op
-	keys              [][]byte
-	values            [][]byte
-	isPessimisticLock []bool
+	ops    []kvrpcpb.Op
+	keys   [][]byte
+	values [][]byte
+	flags  []CommitterMutationFlags
 }
 
 // NewPlainMutations creates a PlainMutations object with sizeHint reserved.
 func NewPlainMutations(sizeHint int) PlainMutations {
 	return PlainMutations{
-		ops:               make([]kvrpcpb.Op, 0, sizeHint),
-		keys:              make([][]byte, 0, sizeHint),
-		values:            make([][]byte, 0, sizeHint),
-		isPessimisticLock: make([]bool, 0, sizeHint),
+		ops:    make([]kvrpcpb.Op, 0, sizeHint),
+		keys:   make([][]byte, 0, sizeHint),
+		values: make([][]byte, 0, sizeHint),
+		flags:  make([]CommitterMutationFlags, 0, sizeHint),
 	}
 }
 
@@ -273,18 +322,18 @@ func (c *PlainMutations) Slice(from, to int) CommitterMutations {
 	if c.values != nil {
 		res.values = c.values[from:to]
 	}
-	if c.isPessimisticLock != nil {
-		res.isPessimisticLock = c.isPessimisticLock[from:to]
+	if c.flags != nil {
+		res.flags = c.flags[from:to]
 	}
 	return &res
 }
 
 // Push another mutation into mutations.
-func (c *PlainMutations) Push(op kvrpcpb.Op, key []byte, value []byte, isPessimisticLock bool) {
+func (c *PlainMutations) Push(op kvrpcpb.Op, key []byte, value []byte, isPessimisticLock, assertExist, assertNotExist bool) {
 	c.ops = append(c.ops, op)
 	c.keys = append(c.keys, key)
 	c.values = append(c.values, value)
-	c.isPessimisticLock = append(c.isPessimisticLock, isPessimisticLock)
+	c.flags = append(c.flags, makeMutationFlags(isPessimisticLock, assertExist, assertNotExist))
 }
 
 // Len returns the count of mutations.
@@ -312,9 +361,19 @@ func (c *PlainMutations) GetValues() [][]byte {
 	return c.values
 }
 
-// GetPessimisticFlags returns the key pessimistic flags.
-func (c *PlainMutations) GetPessimisticFlags() []bool {
-	return c.isPessimisticLock
+// GetFlags returns the flags on the mutations.
+func (c *PlainMutations) GetFlags() []CommitterMutationFlags {
+	return c.flags
+}
+
+// IsAssertExists returns the key assertExist flag at index.
+func (c *PlainMutations) IsAssertExists(i int) bool {
+	return c.flags[i]&MutationFlagIsAssertExists != 0
+}
+
+// IsAssertNotExist returns the key assertNotExist flag at index.
+func (c *PlainMutations) IsAssertNotExist(i int) bool {
+	return c.flags[i]&MutationFlagIsAssertNotExists != 0
 }
 
 // GetOp returns the key op at index.
@@ -332,15 +391,15 @@ func (c *PlainMutations) GetValue(i int) []byte {
 
 // IsPessimisticLock returns the key pessimistic flag at index.
 func (c *PlainMutations) IsPessimisticLock(i int) bool {
-	return c.isPessimisticLock[i]
+	return c.flags[i]&MutationFlagIsPessimisticLock != 0
 }
 
 // PlainMutation represents a single transaction operation.
 type PlainMutation struct {
-	KeyOp             kvrpcpb.Op
-	Key               []byte
-	Value             []byte
-	IsPessimisticLock bool
+	KeyOp kvrpcpb.Op
+	Key   []byte
+	Value []byte
+	Flags CommitterMutationFlags
 }
 
 // MergeMutations append input mutations into current mutations.
@@ -348,7 +407,7 @@ func (c *PlainMutations) MergeMutations(mutations PlainMutations) {
 	c.ops = append(c.ops, mutations.ops...)
 	c.keys = append(c.keys, mutations.keys...)
 	c.values = append(c.values, mutations.values...)
-	c.isPessimisticLock = append(c.isPessimisticLock, mutations.isPessimisticLock...)
+	c.flags = append(c.flags, mutations.flags...)
 }
 
 // AppendMutation merges a single Mutation into the current mutations.
@@ -356,7 +415,7 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 	c.ops = append(c.ops, mutation.KeyOp)
 	c.keys = append(c.keys, mutation.Key)
 	c.values = append(c.values, mutation.Value)
-	c.isPessimisticLock = append(c.isPessimisticLock, mutation.IsPessimisticLock)
+	c.flags = append(c.flags, mutation.Flags)
 }
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
@@ -386,7 +445,53 @@ type KVFilter interface {
 	IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (bool, error)
 }
 
-func (c *twoPhaseCommitter) initKeysAndMutations() error {
+func (c *twoPhaseCommitter) checkAssertionByPessimisticLockResults(ctx context.Context, key []byte, flags kv.KeyFlags, mustExist, mustNotExist bool) error {
+	var assertionFailed *tikverr.ErrAssertionFailed
+	if flags.HasLockedValueExists() && mustNotExist {
+		assertionFailed = &tikverr.ErrAssertionFailed{
+			AssertionFailed: &kvrpcpb.AssertionFailed{
+				StartTs:          c.startTS,
+				Key:              key,
+				Assertion:        kvrpcpb.Assertion_NotExist,
+				ExistingStartTs:  0,
+				ExistingCommitTs: 0,
+			},
+		}
+	} else if !flags.HasLockedValueExists() && mustExist {
+		assertionFailed = &tikverr.ErrAssertionFailed{
+			AssertionFailed: &kvrpcpb.AssertionFailed{
+				StartTs:          c.startTS,
+				Key:              key,
+				Assertion:        kvrpcpb.Assertion_Exist,
+				ExistingStartTs:  0,
+				ExistingCommitTs: 0,
+			},
+		}
+	}
+
+	if assertionFailed != nil {
+		return c.checkSchemaOnAssertionFail(ctx, assertionFailed)
+	}
+
+	return nil
+}
+
+func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, assertionFailed *tikverr.ErrAssertionFailed) error {
+	// If the schema has changed, it might be a false-positive. In this case we should return schema changed, which
+	// is a usual case, instead of assertion failed.
+	ts, err := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
+	if err != nil {
+		return err
+	}
+	_, _, err = c.checkSchemaValid(ctx, ts, c.txn.schemaVer, false)
+	if err != nil {
+		return err
+	}
+
+	return assertionFailed
+}
+
+func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	var size, putCnt, delCnt, lockCnt, checkCnt int
 
 	txn := c.txn
@@ -397,6 +502,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 	filter := txn.kvFilter
 
 	var err error
+	var assertionError error
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
@@ -470,8 +576,41 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 		if flags.HasLocked() {
 			isPessimistic = c.isPessimistic
 		}
-		c.mutations.Push(op, isPessimistic, it.Handle())
+		mustExist, mustNotExist, hasAssertUnknown := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertUnknown()
+		if c.txn.schemaAmender != nil || c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
+			mustExist, mustNotExist, hasAssertUnknown = false, false, false
+		}
+		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle())
 		size += len(key) + len(value)
+
+		if c.txn.assertionLevel != kvrpcpb.AssertionLevel_Off {
+			// Check mutations for pessimistic-locked keys with the read results of pessimistic lock requests.
+			// This can be disabled by failpoint.
+			skipCheckFromLock := false
+			if _, err := util.EvalFailpoint("assertionSkipCheckFromLock"); err == nil {
+				skipCheckFromLock = true
+			}
+			if isPessimistic && !skipCheckFromLock {
+				err1 := c.checkAssertionByPessimisticLockResults(ctx, key, flags, mustExist, mustNotExist)
+				// Do not exit immediately here. To rollback the pessimistic locks (if any), we need to finish
+				// collecting all the keys.
+				// Keep only the first assertion error.
+				if err1 != nil && assertionError == nil {
+					assertionError = errors.WithStack(err1)
+				}
+			}
+
+			// Update metrics
+			if mustExist {
+				metrics.PrewriteAssertionUsageCounterExist.Inc()
+			} else if mustNotExist {
+				metrics.PrewriteAssertionUsageCounterNotExist.Inc()
+			} else if hasAssertUnknown {
+				metrics.PrewriteAssertionUsageCounterUnknown.Inc()
+			} else {
+				metrics.PrewriteAssertionUsageCounterNone.Inc()
+			}
+		}
 
 		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
 			c.primaryKey = key
@@ -517,6 +656,11 @@ func (c *twoPhaseCommitter) initKeysAndMutations() error {
 	c.resourceGroupTag = txn.resourceGroupTag
 	c.resourceGroupTagger = txn.resourceGroupTagger
 	c.setDetail(commitDetail)
+
+	if assertionError != nil {
+		return assertionError
+	}
+
 	return nil
 }
 
@@ -1263,6 +1407,10 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	err = c.prewriteMutations(bo, c.mutations)
 
 	if err != nil {
+		if assertionFailed, ok := errors.Cause(err).(*tikverr.ErrAssertionFailed); ok {
+			err = c.checkSchemaOnAssertionFail(ctx, assertionFailed)
+		}
+
 		// TODO: Now we return an undetermined error as long as one of the prewrite
 		// RPCs fails. However, if there are multiple errors and some of the errors
 		// are not RPC failures, we can return the actual error instead of undetermined.
@@ -1523,7 +1671,8 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 	keysNeedToLock := NewPlainMutations(addMutations.Len())
 	for i := 0; i < addMutations.Len(); i++ {
 		if addMutations.IsPessimisticLock(i) {
-			keysNeedToLock.Push(addMutations.GetOp(i), addMutations.GetKey(i), addMutations.GetValue(i), addMutations.IsPessimisticLock(i))
+			keysNeedToLock.Push(addMutations.GetOp(i), addMutations.GetKey(i), addMutations.GetValue(i), addMutations.IsPessimisticLock(i),
+				addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i))
 		}
 	}
 	// For unique index amend, we need to pessimistic lock the generated new index keys first.
@@ -1607,7 +1756,7 @@ func (c *twoPhaseCommitter) tryAmendTxn(ctx context.Context, startInfoSchema Sch
 				return false, err
 			}
 			handle := c.txn.GetMemBuffer().IterWithFlags(key, nil).Handle()
-			c.mutations.Push(op, addMutations.IsPessimisticLock(i), handle)
+			c.mutations.Push(op, addMutations.IsPessimisticLock(i), addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i), handle)
 		}
 	}
 	return false, nil
@@ -1651,7 +1800,7 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 			logutil.Logger(ctx).Warn("schemaLeaseChecker is not set for this transaction",
 				zap.Uint64("sessionID", c.sessionID),
 				zap.Uint64("startTS", c.startTS),
-				zap.Uint64("commitTS", checkTS))
+				zap.Uint64("checkTS", checkTS))
 		}
 		return nil, false, nil
 	}
@@ -1940,7 +2089,8 @@ func (c *twoPhaseCommitter) mutationsOfKeys(keys [][]byte) CommitterMutations {
 	for i := 0; i < c.mutations.Len(); i++ {
 		for _, key := range keys {
 			if bytes.Equal(c.mutations.GetKey(i), key) {
-				res.Push(c.mutations.GetOp(i), c.mutations.GetKey(i), c.mutations.GetValue(i), c.mutations.IsPessimisticLock(i))
+				res.Push(c.mutations.GetOp(i), c.mutations.GetKey(i), c.mutations.GetValue(i), c.mutations.IsPessimisticLock(i),
+					c.mutations.IsAssertExists(i), c.mutations.IsAssertNotExist(i))
 				break
 			}
 		}

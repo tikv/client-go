@@ -96,7 +96,7 @@ func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommit
 	if err != nil {
 		return nil, err
 	}
-	if err = c.initKeysAndMutations(); err != nil {
+	if err = c.initKeysAndMutations(context.Background()); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -109,7 +109,7 @@ type CommitterProbe struct {
 
 // InitKeysAndMutations prepares the committer for commit.
 func (c CommitterProbe) InitKeysAndMutations() error {
-	return c.initKeysAndMutations()
+	return c.initKeysAndMutations(context.Background())
 }
 
 // SetPrimaryKey resets the committer's commit ts.
@@ -365,4 +365,14 @@ func (c ConfigProbe) LoadPreSplitSizeThreshold() uint32 {
 // StorePreSplitSizeThreshold updates presplit size threshold config.
 func (c ConfigProbe) StorePreSplitSizeThreshold(v uint32) {
 	atomic.StoreUint32(&preSplitSizeThreshold, v)
+}
+
+// MemBufferMutationsProbe exports memBufferMutations for test purposes.
+type MemBufferMutationsProbe struct {
+	*memBufferMutations
+}
+
+// NewMemBufferMutationsProbe creates a new memBufferMutations instance for testing purpose.
+func NewMemBufferMutationsProbe(sizeHint int, storage *unionstore.MemDB) MemBufferMutationsProbe {
+	return MemBufferMutationsProbe{newMemBufferMutations(sizeHint, storage)}
 }
