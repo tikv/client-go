@@ -18,6 +18,10 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
+replace github.com/pingcap/tidb => github.com/MyonKeminta/tidb v1.1.0-alpha.1.0.20220209122621-178d12563430
+
+replace github.com/pingcap/tidb/parser => github.com/MyonKeminta/tidb/parser v0.0.0-20220209122621-178d12563430
+
 // cloud.google.com/go/storage will upgrade grpc to v1.40.0
 // we need keep the replacement until go.etcd.io supports the higher version of grpc.
 replace google.golang.org/grpc => google.golang.org/grpc v1.29.1
