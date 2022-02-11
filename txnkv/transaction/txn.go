@@ -115,7 +115,8 @@ type KVTxn struct {
 	diskFullOpt             kvrpcpb.DiskFullOpt
 	commitTSUpperBoundCheck func(uint64) bool
 	// interceptor is used to decorate the RPC request logic related to the txn.
-	interceptor interceptor.RPCInterceptor
+	interceptor    interceptor.RPCInterceptor
+	assertionLevel kvrpcpb.AssertionLevel
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -325,6 +326,11 @@ func (txn *KVTxn) ClearDiskFullOpt() {
 	txn.diskFullOpt = kvrpcpb.DiskFullOpt_NotAllowedOnFull
 }
 
+// SetAssertionLevel sets how strict the assertions in the transaction should be.
+func (txn *KVTxn) SetAssertionLevel(assertionLevel kvrpcpb.AssertionLevel) {
+	txn.assertionLevel = assertionLevel
+}
+
 // IsPessimistic returns true if it is pessimistic.
 func (txn *KVTxn) IsPessimistic() bool {
 	return txn.isPessimistic
@@ -395,9 +401,12 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	defer committer.ttlManager.close()
 
 	initRegion := trace.StartRegion(ctx, "InitKeys")
-	err = committer.initKeysAndMutations()
+	err = committer.initKeysAndMutations(ctx)
 	initRegion.End()
 	if err != nil {
+		if txn.IsPessimistic() {
+			txn.asyncPessimisticRollback(ctx, committer.mutations.GetKeys())
+		}
 		return err
 	}
 	if committer.mutations.Len() == 0 {
@@ -631,6 +640,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		return nil
 	}
 	keys = deduplicateKeys(keys)
+	checkedExistence := false
 	if txn.IsPessimistic() && lockCtx.ForUpdateTS > 0 {
 		if txn.committer == nil {
 			// sessionID is used for log.
@@ -714,15 +724,23 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			}
 			return err
 		}
+
+		if lockCtx.CheckExistence {
+			checkedExistence = true
+		}
 	}
 	for _, key := range keys {
 		valExists := tikv.SetKeyLockedValueExists
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
 		// For other lock modes, the locked key values always exist.
-		if lockCtx.ReturnValues {
-			val := lockCtx.Values[string(key)]
-			if len(val.Value) == 0 {
-				valExists = tikv.SetKeyLockedValueNotExists
+		if lockCtx.ReturnValues || checkedExistence {
+			// If ReturnValue is disabled and CheckExistence is requested, it's still possible that the TiKV's version
+			// is too old and CheckExistence is not supported.
+			if val, ok := lockCtx.Values[string(key)]; ok {
+				// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
+				if !val.Exists {
+					valExists = tikv.SetKeyLockedValueNotExists
+				}
 			}
 		}
 		memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, valExists)

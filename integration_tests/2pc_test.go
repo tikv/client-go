@@ -748,6 +748,39 @@ func (s *testCommitterSuite) TestPessimisticLockReturnValues() {
 	s.Equal(lockCtx.Values[string(key2)].Value, key2)
 }
 
+func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {
+	key := []byte("key")
+	key2 := []byte("key2")
+	txn := s.begin()
+	s.Nil(txn.Set(key, key))
+	s.Nil(txn.Commit(context.Background()))
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitCheckExistence(2)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Len(lockCtx.Values, 2)
+	s.Empty(lockCtx.Values[string(key)].Value)
+	s.True(lockCtx.Values[string(key)].Exists)
+	s.Empty(lockCtx.Values[string(key2)].Value)
+	s.False(lockCtx.Values[string(key2)].Exists)
+	s.Nil(txn.Rollback())
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitCheckExistence(2)
+	lockCtx.InitReturnValues(2)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Len(lockCtx.Values, 2)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	s.True(lockCtx.Values[string(key)].Exists)
+	s.Empty(lockCtx.Values[string(key2)].Value)
+	s.False(lockCtx.Values[string(key2)].Exists)
+	s.Nil(txn.Rollback())
+}
+
 // TestElapsedTTL tests that elapsed time is correct even if ts physical time is greater than local time.
 func (s *testCommitterSuite) TestElapsedTTL() {
 	key := []byte("key")
@@ -1217,7 +1250,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	// stop txn ttl manager and remove primary key, make the other keys left behind
 	committer.CloseTTLManager()
 	muts := transaction.NewPlainMutations(1)
-	muts.Push(kvrpcpb.Op_Lock, pk, nil, true)
+	muts.Push(kvrpcpb.Op_Lock, pk, nil, true, false, false)
 	err = committer.PessimisticRollbackMutations(context.Background(), &muts)
 	s.Nil(err)
 
@@ -1599,4 +1632,57 @@ func (s *testCommitterSuite) TestNewlyInsertedMemDBFlag() {
 
 	err = txn.Commit(ctx)
 	s.Nil(err)
+}
+
+func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
+	// Get a MemDB object from a transaction object.
+	db := s.begin().GetMemBuffer()
+
+	// A helper for iterating all cases.
+	forEachCase := func(f func(op kvrpcpb.Op, key []byte, value []byte, index int, isPessimisticLock, assertExist, assertNotExist bool)) {
+		keyIndex := 0
+		for _, op := range []kvrpcpb.Op{kvrpcpb.Op_Put, kvrpcpb.Op_Del, kvrpcpb.Op_CheckNotExists} {
+			for flags := 0; flags < (1 << 3); flags++ {
+				key := []byte(fmt.Sprintf("k%05d", keyIndex))
+				value := []byte(fmt.Sprintf("v%05d", keyIndex))
+
+				// `flag` Iterates all combinations of flags in binary.
+				isPessimisticLock := (flags & 0x4) != 0
+				assertExist := (flags & 0x2) != 0
+				assertNotExist := (flags & 0x1) != 0
+
+				f(op, key, value, keyIndex, isPessimisticLock, assertExist, assertNotExist)
+				keyIndex++
+			}
+		}
+	}
+
+	// Put some keys to the MemDB
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		if op == kvrpcpb.Op_Put {
+			err := db.Set(key, value)
+			s.Nil(err)
+		} else if op == kvrpcpb.Op_Del {
+			err := db.Delete(key)
+			s.Nil(err)
+		} else {
+			db.UpdateFlags(key, kv.SetPresumeKeyNotExists)
+		}
+	})
+
+	// Create memBufferMutations object and add keys with flags to it.
+	mutations := transaction.NewMemBufferMutationsProbe(db.Len(), db)
+
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		handle := db.IterWithFlags(key, nil).Handle()
+		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, handle)
+	})
+
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		s.Equal(key, mutations.GetKey(i))
+		s.Equal(op, mutations.GetOp(i))
+		s.Equal(isPessimisticLock, mutations.IsPessimisticLock(i))
+		s.Equal(assertExist, mutations.IsAssertExists(i))
+		s.Equal(assertNotExist, mutations.IsAssertNotExist(i))
+	})
 }

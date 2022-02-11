@@ -501,8 +501,10 @@ type lockCtx struct {
 	ttl         uint64
 	minCommitTs uint64
 
-	returnValues bool
-	values       [][]byte
+	returnValues   bool
+	checkExistence bool
+	values         [][]byte
+	keyNotFound    []bool
 }
 
 // PessimisticLock writes the pessimistic lock.
@@ -512,12 +514,13 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 	defer mvcc.mu.Unlock()
 	mutations := req.Mutations
 	lCtx := &lockCtx{
-		startTS:      req.StartVersion,
-		forUpdateTS:  req.ForUpdateTs,
-		primary:      req.PrimaryLock,
-		ttl:          req.LockTtl,
-		minCommitTs:  req.MinCommitTs,
-		returnValues: req.ReturnValues,
+		startTS:        req.StartVersion,
+		forUpdateTS:    req.ForUpdateTs,
+		primary:        req.PrimaryLock,
+		ttl:            req.LockTtl,
+		minCommitTs:    req.MinCommitTs,
+		returnValues:   req.ReturnValues,
+		checkExistence: req.CheckExistence,
 	}
 	lockWaitTime := req.WaitTimeout
 
@@ -550,6 +553,9 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 	}
 	if req.ReturnValues {
 		resp.Values = lCtx.values
+		resp.NotFounds = lCtx.keyNotFound
+	} else if req.CheckExistence {
+		resp.NotFounds = lCtx.keyNotFound
 	}
 	return resp
 }
@@ -587,12 +593,15 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 
 	// For pessimisticLockMutation, check the correspond rollback record, there may be rollbackLock
 	// operation between startTS and forUpdateTS
-	val, err := checkConflictValue(iter, mutation, forUpdateTS, startTS, true)
+	val, err := checkConflictValue(iter, mutation, forUpdateTS, startTS, true, kvrpcpb.AssertionLevel_Off)
 	if err != nil {
 		return err
 	}
 	if lctx.returnValues {
 		lctx.values = append(lctx.values, val)
+		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
+	} else if lctx.checkExistence {
+		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
 	}
 
 	lock := mvccLock{
@@ -700,7 +709,7 @@ func (mvcc *MVCCLevelDB) Prewrite(req *kvrpcpb.PrewriteRequest) []error {
 			continue
 		}
 		isPessimisticLock := len(req.IsPessimisticLock) > 0 && req.IsPessimisticLock[i]
-		err = prewriteMutation(mvcc.db, batch, m, startTS, primary, ttl, txnSize, isPessimisticLock, minCommitTS)
+		err = prewriteMutation(mvcc.db, batch, m, startTS, primary, ttl, txnSize, isPessimisticLock, minCommitTS, req.AssertionLevel)
 		errs = append(errs, err)
 		if err != nil {
 			anyError = true
@@ -716,7 +725,7 @@ func (mvcc *MVCCLevelDB) Prewrite(req *kvrpcpb.PrewriteRequest) []error {
 	return errs
 }
 
-func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64, startTS uint64, getVal bool) ([]byte, error) {
+func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64, startTS uint64, getVal bool, assertionLevel kvrpcpb.AssertionLevel) ([]byte, error) {
 	dec := &valueDecoder{
 		expectKey: m.Key,
 	}
@@ -725,6 +734,10 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 		return nil, err
 	}
 	if !ok {
+		if m.Assertion == kvrpcpb.Assertion_Exist && assertionLevel != kvrpcpb.AssertionLevel_Off && m.Op != kvrpcpb.Op_PessimisticLock {
+			logutil.BgLogger().Error("assertion failed!!! non-exist for must exist key", zap.Stringer("mutation", m))
+			return nil, errors.Errorf("assertion failed!!! non-exist for must exist key, mutation: %v", m.String())
+		}
 		return nil, nil
 	}
 
@@ -739,7 +752,8 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 	}
 
 	needGetVal := getVal
-	needCheckAssertion := m.Assertion == kvrpcpb.Assertion_NotExist
+	needCheckShouldNotExistForPessimisticLock := m.Assertion == kvrpcpb.Assertion_NotExist && m.Op == kvrpcpb.Op_PessimisticLock
+	needCheckAssertionForPrewerite := m.Assertion != kvrpcpb.Assertion_None && m.Op != kvrpcpb.Op_PessimisticLock && assertionLevel != kvrpcpb.AssertionLevel_Off
 	needCheckRollback := true
 	var retVal []byte
 	// do the check or get operations within one iteration to make CI faster
@@ -762,29 +776,39 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 				needCheckRollback = false
 			}
 		}
-		if needCheckAssertion {
-			if dec.value.valueType == typePut || dec.value.valueType == typeLock {
-				if m.Op == kvrpcpb.Op_PessimisticLock {
-					return nil, &ErrKeyAlreadyExist{
-						Key: m.Key,
-					}
+
+		if dec.value.valueType == typePut || dec.value.valueType == typeLock {
+			if needCheckShouldNotExistForPessimisticLock {
+				return nil, &ErrKeyAlreadyExist{
+					Key: m.Key,
 				}
-			} else if dec.value.valueType == typeDelete {
-				needCheckAssertion = false
 			}
+			if needCheckAssertionForPrewerite && m.Assertion == kvrpcpb.Assertion_NotExist {
+				logutil.BgLogger().Error("assertion failed!!! exist for must non-exist key", zap.Stringer("mutation", m))
+				// TODO: Use specific error type
+				return nil, errors.Errorf("assertion failed!!! exist for must non-exist key, mutation: %v", m.String())
+			}
+		} else if dec.value.valueType == typeDelete {
+			needCheckShouldNotExistForPessimisticLock = false
 		}
+
 		if needGetVal {
 			if dec.value.valueType == typeDelete || dec.value.valueType == typePut {
 				retVal = dec.value.value
 				needGetVal = false
 			}
 		}
-		if !needCheckAssertion && !needGetVal && !needCheckRollback {
+		if !needCheckShouldNotExistForPessimisticLock && !needGetVal && !needCheckRollback {
 			break
 		}
 		ok, err = dec.Decode(iter)
 		if err != nil {
 			return nil, err
+		}
+		if m.Assertion == kvrpcpb.Assertion_Exist && !ok && assertionLevel != kvrpcpb.AssertionLevel_Off {
+			logutil.BgLogger().Error("assertion failed!!! non-exist for must exist key", zap.Stringer("mutation", m))
+			// TODO: Use specific error type
+			return nil, errors.Errorf("assertion failed!!! non-exist for must exist key, mutation: %v", m.String())
 		}
 	}
 	if getVal {
@@ -796,7 +820,8 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 	mutation *kvrpcpb.Mutation, startTS uint64,
 	primary []byte, ttl uint64, txnSize uint64,
-	isPessimisticLock bool, minCommitTS uint64) error {
+	isPessimisticLock bool, minCommitTS uint64,
+	assertionLevel kvrpcpb.AssertionLevel) error {
 	startKey := mvccEncode(mutation.Key, lockVer)
 	iter := newIterator(db, &util.Range{
 		Start: startKey,
@@ -836,7 +861,7 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 		if isPessimisticLock {
 			return ErrAbort("pessimistic lock not found")
 		}
-		_, err = checkConflictValue(iter, mutation, startTS, startTS, false)
+		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel)
 		if err != nil {
 			return err
 		}
