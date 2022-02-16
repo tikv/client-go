@@ -44,8 +44,8 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"go.etcd.io/etcd/clientv3"
-	"go.etcd.io/etcd/mvcc/mvccpb"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )
 
