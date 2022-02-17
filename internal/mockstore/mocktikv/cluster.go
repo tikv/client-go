@@ -42,7 +42,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/proto" //nolint
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	pd "github.com/tikv/pd/client"
