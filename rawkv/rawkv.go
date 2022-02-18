@@ -67,8 +67,7 @@ const (
 )
 
 type scanOptions struct {
-	KeyOnly      bool
-	ColumnFamily string
+	KeyOnly bool
 }
 
 // ScanOption represents possible scan options that can be cotrolled by the user
@@ -95,14 +94,6 @@ func ScanKeyOnly() ScanOption {
 	})
 }
 
-// ScanColumnFamily is a ScanOption that tells the scanner to only returns
-// the following column family elements.
-func ScanColumnFamily(columnfamily string) ScanOption {
-	return scanOptionFunc(func(opts *scanOptions) {
-		opts.ColumnFamily = columnfamily
-	})
-}
-
 // Client is a client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
@@ -110,12 +101,18 @@ type Client struct {
 	regionCache *locate.RegionCache
 	pdClient    pd.Client
 	rpcClient   client.Client
+	cf          string
 	atomic      bool
 }
 
 // SetAtomicForCAS sets atomic mode for CompareAndSwap
 func (c *Client) SetAtomicForCAS(b bool) *Client {
 	c.atomic = b
+	return c
+}
+
+func (c *Client) SetColumnFamily(columnFamily string) *Client {
+	c.cf = columnFamily
 	return c
 }
 
@@ -161,7 +158,7 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithGet.Observe(time.Since(start).Seconds()) }()
 
-	req := tikvrpc.NewRequest(tikvrpc.CmdRawGet, &kvrpcpb.RawGetRequest{Key: key})
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawGet, &kvrpcpb.RawGetRequest{Key: key, Cf: c.cf})
 	resp, _, err := c.sendReq(ctx, key, req, false)
 	if err != nil {
 		return nil, err
@@ -226,6 +223,7 @@ func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64) 
 		Key:    key,
 		Value:  value,
 		Ttl:    ttl,
+		Cf:     c.cf,
 		ForCas: c.atomic,
 	})
 	resp, _, err := c.sendReq(ctx, key, req, false)
@@ -248,6 +246,7 @@ func (c *Client) GetKeyTTL(ctx context.Context, key []byte) (*uint64, error) {
 	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
 	req := tikvrpc.NewRequest(tikvrpc.CmdGetKeyTTL, &kvrpcpb.RawGetKeyTTLRequest{
 		Key: key,
+		Cf:  c.cf,
 	})
 	resp, _, err := c.sendReq(ctx, key, req, false)
 
@@ -311,6 +310,7 @@ func (c *Client) Delete(ctx context.Context, key []byte) error {
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawDelete, &kvrpcpb.RawDeleteRequest{
 		Key:    key,
+		Cf:     c.cf,
 		ForCas: c.atomic,
 	})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -407,7 +407,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 			EndKey:   endKey,
 			Limit:    uint32(limit - len(keys)),
 			KeyOnly:  opts.KeyOnly,
-			Cf:       opts.ColumnFamily,
+			Cf:       c.cf,
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, false)
 		if err != nil {
@@ -458,7 +458,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 			Limit:    uint32(limit - len(keys)),
 			Reverse:  true,
 			KeyOnly:  opts.KeyOnly,
-			Cf:       opts.ColumnFamily,
+			Cf:       c.cf,
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, true)
 		if err != nil {
@@ -502,6 +502,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 	reqArgs := kvrpcpb.RawCASRequest{
 		Key:   key,
 		Value: newValue,
+		Cf:    c.cf,
 	}
 	if previousValue == nil {
 		reqArgs.PreviousNotExist = true
@@ -616,10 +617,12 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, cmdType tikv
 	case tikvrpc.CmdRawBatchGet:
 		req = tikvrpc.NewRequest(cmdType, &kvrpcpb.RawBatchGetRequest{
 			Keys: batch.Keys,
+			Cf:   c.cf,
 		})
 	case tikvrpc.CmdRawBatchDelete:
 		req = tikvrpc.NewRequest(cmdType, &kvrpcpb.RawBatchDeleteRequest{
 			Keys:   batch.Keys,
+			Cf:     c.cf,
 			ForCas: c.atomic,
 		})
 	}
@@ -689,6 +692,7 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawDeleteRange, &kvrpcpb.RawDeleteRangeRequest{
 			StartKey: startKey,
 			EndKey:   actualEndKey,
+			Cf:       c.cf,
 		})
 
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -765,6 +769,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch) error {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawBatchPut,
 		&kvrpcpb.RawBatchPutRequest{
 			Pairs:  kvPair,
+			Cf:     c.cf,
 			ForCas: c.atomic,
 			Ttls:   batch.TTLs,
 			Ttl:    ttl,
