@@ -198,3 +198,67 @@ func (s *testRawkvSuite) TestReplaceStore() {
 	err = client.Put(context.Background(), testKey, testValue)
 	s.Nil(err)
 }
+
+func (s *testRawkvSuite) TestColumnFamily() {
+	mvccStore := mocktikv.MustNewMVCCStore()
+	defer mvccStore.Close()
+
+	client := &Client{
+		clusterID:   0,
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
+	}
+	// test put
+	client.SetColumnFamily("test_cf1")
+	defer client.Close()
+	testKeyCf1 := []byte("test_key_cf1")
+	testValueCf1 := []byte("test_value_cf1")
+	err := client.Put(context.Background(), testKeyCf1, testValueCf1)
+	s.Nil(err)
+
+	client.SetColumnFamily("test_cf2")
+	testKeyCf2 := []byte("test_key_cf2")
+	testValueCf2 := []byte("test_value_cf2")
+	err = client.Put(context.Background(), testKeyCf2, testValueCf2)
+	s.Nil(err)
+
+	// make store2 using store1's addr and store1 offline
+	store1Addr := s.storeAddr(s.store1)
+	s.cluster.UpdateStoreAddr(s.store1, s.storeAddr(s.store2))
+	s.cluster.UpdateStoreAddr(s.store2, store1Addr)
+	s.cluster.RemoveStore(s.store1)
+	s.cluster.ChangeLeader(s.region1, s.peer2)
+	s.cluster.RemovePeer(s.region1, s.peer1)
+
+	// test get
+	client.SetColumnFamily("test_cf1")
+	getVal, err := client.Get(context.Background(), testKeyCf1)
+	s.Nil(err)
+	s.Equal(getVal, testValueCf1)
+	getVal, err = client.Get(context.Background(), testKeyCf2)
+	s.Nil(err)
+	s.Equal(getVal, []byte(nil))
+
+	client.SetColumnFamily("test_cf2")
+	getVal, err = client.Get(context.Background(), testKeyCf2)
+	s.Nil(err)
+	s.Equal(getVal, testValueCf2) // get delete
+	getVal, err = client.Get(context.Background(), testKeyCf1)
+	s.Nil(err)
+	s.Equal(getVal, []byte(nil))
+
+	// test delete
+	client.SetColumnFamily("test_cf1")
+	err = client.Delete(context.Background(), testKeyCf1)
+	s.Nil(err)
+	getVal, err = client.Get(context.Background(), testKeyCf1)
+	s.Nil(err)
+	s.Equal(getVal, []byte(nil))
+
+	client.SetColumnFamily("test_cf2")
+	err = client.Delete(context.Background(), testKeyCf2)
+	s.Nil(err)
+	getVal, err = client.Get(context.Background(), testKeyCf2)
+	s.Nil(err)
+	s.Equal(getVal, []byte(nil))
+}
