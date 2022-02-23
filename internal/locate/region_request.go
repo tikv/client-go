@@ -387,7 +387,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
-	if !selector.regionCache.switchWorkLeaderToPeer(selector.region, selector.targetReplica().peer) {
+	if !selector.region.switchWorkLeaderToPeer(selector.targetReplica().peer) {
 		panic("the store must exist")
 	}
 }
@@ -822,7 +822,7 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 			}
 			s.state = &accessKnownLeader{leaderIdx: AccessIndex(i)}
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
-			if !s.regionCache.switchWorkLeaderToPeer(s.region, leader) {
+			if !s.region.switchWorkLeaderToPeer(leader) {
 				panic("the store must exist")
 			}
 			logutil.BgLogger().Debug("switch region leader to specific leader due to kv return NotLeader",

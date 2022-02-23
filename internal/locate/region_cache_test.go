@@ -1263,8 +1263,7 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 		DownPeers: []*metapb.Peer{{Id: s.peer1, StoreId: s.store1}},
 	}
 	filterUnavailablePeers(cpRegion)
-	region := &Region{meta: cpRegion.Meta}
-	err = region.init(s.bo, s.cache)
+	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
 	s.cache.insertRegionToCache(region)
 
