@@ -39,9 +39,11 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -1383,4 +1385,123 @@ func (s *testRegionCacheSuite) TestNoBackoffWhenFailToDecodeRegion() {
 	_, err = s.cache.scanRegions(s.bo, []byte{}, []byte{}, 10)
 	s.NotNil(err)
 	s.Equal(0, s.bo.GetTotalBackoffTimes())
+}
+
+func (s *testRegionCacheSuite) TestBuckets() {
+	// proto.Clone clones []byte{} to nil and [][]byte{nil or []byte{}} to [][]byte{[]byte{}}.
+	// nilToEmtpyBytes unifies it for tests.
+	nilToEmtpyBytes := func(s []byte) []byte {
+		if s == nil {
+			s = []byte{}
+		}
+		return s
+	}
+
+	// 1. cached region contains buckets information fetched from PD.
+	r, _ := s.cluster.GetRegion(s.region1)
+	defaultBuckets := &metapb.Buckets{
+		RegionId: s.region1,
+		Version:  uint64(time.Now().Nanosecond()),
+		Keys:     [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), []byte("b"), nilToEmtpyBytes(r.GetEndKey())},
+	}
+	s.cluster.SplitRegionBuckets(s.region1, defaultBuckets.Keys, defaultBuckets.Version)
+
+	cachedRegion := s.getRegion([]byte("a"))
+	s.Equal(s.region1, cachedRegion.GetID())
+	buckets := cachedRegion.getStore().buckets
+	s.Equal(defaultBuckets, buckets)
+
+	// test LocateBucket
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.Nil(err)
+	s.Equal(buckets, loc.Buckets)
+	s.Equal(buckets.GetVersion(), loc.GetBucketVersion())
+	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
+		b := loc.LocateBucket(key)
+		s.NotNil(b)
+		s.True(b.Contains(key))
+	}
+	// Modify the buckets manually to mock stale information.
+	loc.Buckets = proto.Clone(loc.Buckets).(*metapb.Buckets)
+	loc.Buckets.Keys = [][]byte{[]byte("b"), []byte("c"), []byte("d")}
+	for _, key := range [][]byte{[]byte("a"), []byte("d"), []byte("e")} {
+		b := loc.LocateBucket(key)
+		s.Nil(b)
+	}
+
+	// 2. insertRegionToCache keeps old buckets information if needed.
+	fakeRegion := &Region{
+		meta:          cachedRegion.meta,
+		syncFlag:      cachedRegion.syncFlag,
+		lastAccess:    cachedRegion.lastAccess,
+		invalidReason: cachedRegion.invalidReason,
+	}
+	fakeRegion.setStore(cachedRegion.getStore().clone())
+	// no buckets
+	fakeRegion.getStore().buckets = nil
+	s.cache.insertRegionToCache(fakeRegion)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
+	// stale buckets
+	fakeRegion.getStore().buckets = &metapb.Buckets{Version: defaultBuckets.Version - 1}
+	s.cache.insertRegionToCache(fakeRegion)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
+	// new buckets
+	newBuckets := &metapb.Buckets{
+		RegionId: buckets.RegionId,
+		Version:  defaultBuckets.Version + 1,
+		Keys:     buckets.Keys,
+	}
+	fakeRegion.getStore().buckets = newBuckets
+	s.cache.insertRegionToCache(fakeRegion)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(newBuckets, cachedRegion.getStore().buckets)
+
+	// 3. epochNotMatch keeps old buckets information.
+	cachedRegion = s.getRegion([]byte("a"))
+	newMeta := proto.Clone(cachedRegion.meta).(*metapb.Region)
+	newMeta.RegionEpoch.Version++
+	newMeta.RegionEpoch.ConfVer++
+	_, err = s.cache.OnRegionEpochNotMatch(s.bo, &RPCContext{Region: cachedRegion.VerID(), Store: s.cache.getStoreByStoreID(s.store1)}, []*metapb.Region{newMeta})
+	s.Nil(err)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(newBuckets, cachedRegion.getStore().buckets)
+
+	// 4. test UpdateBuckets
+	waitUpdateBuckets := func(expected *metapb.Buckets, key []byte) {
+		var buckets *metapb.Buckets
+		for i := 0; i < 10; i++ {
+			buckets = s.getRegion(key).getStore().buckets
+			if reflect.DeepEqual(expected, buckets) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		s.Equal(expected, buckets)
+	}
+
+	cachedRegion = s.getRegion([]byte("a"))
+	buckets = cachedRegion.getStore().buckets
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), buckets.GetVersion()-1)
+	// don't update bucket if the new one's version is stale.
+	waitUpdateBuckets(buckets, []byte("a"))
+
+	// update buckets if it's nil.
+	cachedRegion.getStore().buckets = nil
+	s.cluster.SplitRegionBuckets(cachedRegion.GetID(), defaultBuckets.Keys, defaultBuckets.Version)
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), defaultBuckets.GetVersion())
+	waitUpdateBuckets(defaultBuckets, []byte("a"))
+
+	// update buckets if the new one's version is greater than old one's.
+	cachedRegion = s.getRegion([]byte("a"))
+	newBuckets = &metapb.Buckets{
+		RegionId: cachedRegion.GetID(),
+		Version:  defaultBuckets.Version + 1,
+		Keys:     [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), nilToEmtpyBytes(r.GetEndKey())},
+	}
+	s.cluster.SplitRegionBuckets(newBuckets.RegionId, newBuckets.Keys, newBuckets.Version)
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), newBuckets.GetVersion())
+	waitUpdateBuckets(newBuckets, []byte("a"))
 }

@@ -142,7 +142,7 @@ func (s *Session) CheckRequestContext(ctx *kvrpcpb.Context) *errorpb.Error {
 	}
 	// Region epoch does not match.
 	if !proto.Equal(region.GetRegionEpoch(), ctx.GetRegionEpoch()) {
-		nextRegion, _ := s.cluster.GetRegionByKey(region.GetEndKey())
+		nextRegion, _, _ := s.cluster.GetRegionByKey(region.GetEndKey())
 		currentRegions := []*metapb.Region{region}
 		if nextRegion != nil {
 			currentRegions = append(currentRegions, nextRegion)

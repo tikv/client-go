@@ -39,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -113,7 +114,7 @@ const (
 
 // Region presents kv region
 type Region struct {
-	meta          *metapb.Region // raw region meta from PD immutable after init
+	meta          *metapb.Region // raw region meta from PD, immutable after init
 	store         unsafe.Pointer // point to region store info, see RegionStore
 	syncFlag      int32          // region need be sync in next turn
 	lastAccess    int64          // last region access time, see checkRegionCacheTTL
@@ -139,6 +140,9 @@ type regionStore struct {
 	proxyTiKVIdx AccessIndex
 	// accessIndex[tiFlashOnly][workTiFlashIdx] is the index of the current working TiFlash in stores.
 	workTiFlashIdx int32
+	// buckets is not accurate and it can change even if the region is not changed.
+	// It can be stale and buckets keys can be out of the region range.
+	buckets *metapb.Buckets
 }
 
 func (r *regionStore) accessStore(mode accessMode, idx AccessIndex) (int, *Store) {
@@ -169,6 +173,7 @@ func (r *regionStore) clone() *regionStore {
 		workTiKVIdx:    r.workTiKVIdx,
 		stores:         r.stores,
 		storeEpochs:    storeEpochs,
+		buckets:        r.buckets,
 	}
 	for i := 0; i < int(numAccessMode); i++ {
 		rs.accessIndex[i] = make([]int, len(r.accessIndex[i]))
@@ -235,6 +240,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		workTiFlashIdx: 0,
 		stores:         make([]*Store, 0, len(r.meta.Peers)),
 		storeEpochs:    make([]uint32, 0, len(r.meta.Peers)),
+		buckets:        pdRegion.Buckets,
 	}
 
 	leader := pdRegion.Leader
@@ -276,7 +282,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	rs.workTiKVIdx = leaderAccessIdx
 	r.meta.Peers = availablePeers
 
-	atomic.StorePointer(&r.store, unsafe.Pointer(rs))
+	r.setStore(rs)
 
 	// mark region has been init accessed.
 	r.lastAccess = time.Now().Unix()
@@ -286,6 +292,10 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 func (r *Region) getStore() (store *regionStore) {
 	store = (*regionStore)(atomic.LoadPointer(&r.store))
 	return
+}
+
+func (r *Region) setStore(store *regionStore) {
+	atomic.StorePointer(&r.store, unsafe.Pointer(store))
 }
 
 func (r *Region) compareAndSwapStore(oldStore, newStore *regionStore) bool {
@@ -721,6 +731,7 @@ type KeyLocation struct {
 	Region   RegionVerID
 	StartKey []byte
 	EndKey   []byte
+	Buckets  *metapb.Buckets
 }
 
 // Contains checks if key is in [StartKey, EndKey).
@@ -734,6 +745,48 @@ func (l *KeyLocation) String() string {
 	return fmt.Sprintf("region %s,startKey:%s,endKey:%s", l.Region.String(), kv.StrKey(l.StartKey), kv.StrKey(l.EndKey))
 }
 
+// GetBucketVersion gets the bucket version of the region.
+// If the region doesn't contain buckets, returns 0.
+func (l *KeyLocation) GetBucketVersion() uint64 {
+	if l.Buckets == nil {
+		return 0
+	}
+	return l.Buckets.GetVersion()
+}
+
+// LocateBucket returns the bucket the key is located.
+func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
+	keys := l.Buckets.GetKeys()
+	searchLen := len(keys)
+	isMaxEndKey := len(keys[len(keys)-1]) == 0
+	if isMaxEndKey {
+		// filter out the max endKey
+		searchLen--
+	}
+	i := sort.Search(searchLen, func(i int) bool {
+		return bytes.Compare(key, keys[i]) < 0
+	})
+	// buckets contains region's start/end key, so i==0 means it can't find a suitable bucket
+	// which can happen if the bucket information is stale.
+	if i == 0 ||
+		// the key isn't located in the last range.
+		(i == searchLen && !isMaxEndKey) {
+		return nil
+	}
+	return &Bucket{keys[i-1], keys[i]}
+}
+
+// Bucket contains the bucket version, bucket ranges of a region.
+type Bucket struct {
+	StartKey []byte
+	EndKey   []byte
+}
+
+// Contains checks whether the key is in the Bucket.
+func (b *Bucket) Contains(key []byte) bool {
+	return contains(b.StartKey, b.EndKey, key)
+}
+
 // LocateKey searches for the region and range that the key is located.
 func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, error) {
 	r, err := c.findRegionByKey(bo, key, false)
@@ -744,6 +797,7 @@ func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, 
 		Region:   r.VerID(),
 		StartKey: r.StartKey(),
 		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
 	}, nil
 }
 
@@ -758,6 +812,7 @@ func (c *RegionCache) LocateEndKey(bo *retry.Backoffer, key []byte) (*KeyLocatio
 		Region:   r.VerID(),
 		StartKey: r.StartKey(),
 		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
 	}, nil
 }
 
@@ -927,6 +982,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 			Region:   r.VerID(),
 			StartKey: r.StartKey(),
 			EndKey:   r.EndKey(),
+			Buckets:  r.getStore().buckets,
 		}
 		return loc, nil
 	}
@@ -943,6 +999,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 		Region:   r.VerID(),
 		StartKey: r.StartKey(),
 		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
 	}, nil
 }
 
@@ -1027,6 +1084,8 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// TODO(youjiali1995): scanRegions always fetch regions from PD and these regions don't contain buckets information
+	// for less traffic, so newly inserted regions in region cache don't have buckets information. We should improve it.
 	for _, region := range regions {
 		c.insertRegionToCache(region)
 	}
@@ -1123,6 +1182,11 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 		// Don't refresh TiFlash work idx for region. Otherwise, it will always goto a invalid store which
 		// is under transferring regions.
 		store.workTiFlashIdx = atomic.LoadInt32(&oldRegionStore.workTiFlashIdx)
+
+		// Keep the buckets information if needed.
+		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
+			store.buckets = oldRegionStore.buckets
+		}
 		c.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
 	}
 	c.mu.regions[cachedRegion.VerID()] = cachedRegion
@@ -1259,9 +1323,9 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		var reg *pd.Region
 		var err error
 		if searchPrev {
-			reg, err = c.pdClient.GetPrevRegion(ctx, key)
+			reg, err = c.pdClient.GetPrevRegion(ctx, key, pd.WithBuckets())
 		} else {
-			reg, err = c.pdClient.GetRegion(ctx, key)
+			reg, err = c.pdClient.GetRegion(ctx, key, pd.WithBuckets())
 		}
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionError.Inc()
@@ -1307,7 +1371,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 				return nil, errors.WithStack(err)
 			}
 		}
-		reg, err := c.pdClient.GetRegionByID(ctx, regionID)
+		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pd.WithBuckets())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
 		} else {
@@ -1329,6 +1393,38 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 		}
 		return newRegion(bo, c, reg)
 	}
+}
+
+func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+	if limit == 0 {
+		return nil, nil
+	}
+	ctx := bo.GetCtx()
+	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("scanRegions", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		ctx = opentracing.ContextWithSpan(ctx, span1)
+	}
+
+	var regions []*Region
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	c.mu.sorted.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item btree.Item) bool {
+		region := item.(*btreeItem).cachedRegion
+		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
+			return false
+		}
+		regions = append(regions, region)
+		if len(regions) >= limit {
+			return false
+		}
+		return true
+	})
+
+	if len(regions) == 0 {
+		return nil, errors.New("no regions in the cache")
+	}
+	return regions, nil
 }
 
 // scanRegions scans at most `limit` regions from PD, starts from the region containing `startKey` and in key order.
@@ -1533,17 +1629,29 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 		}
 	}
 
+	var buckets *metapb.Buckets
+	c.mu.Lock()
+	cachedRegion, ok := c.mu.regions[ctx.Region]
+	if ok {
+		buckets = cachedRegion.getStore().buckets
+	}
+	c.mu.Unlock()
+
 	needInvalidateOld := true
 	newRegions := make([]*Region, 0, len(currentRegions))
 	// If the region epoch is not ahead of TiKV's, replace region meta in region cache.
 	for _, meta := range currentRegions {
 		if _, ok := c.pdClient.(*CodecPDClient); ok {
 			var err error
+			// Can't modify currentRegions in this function because it can be shared by
+			// multiple goroutines, refer to https://github.com/pingcap/tidb/pull/16962.
 			if meta, err = decodeRegionMetaKeyWithShallowCopy(meta); err != nil {
 				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", meta, err)
 			}
 		}
-		region, err := newRegion(bo, c, &pd.Region{Meta: meta})
+		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error
+		// carry buckets information. Can it bring much overhead?
+		region, err := newRegion(bo, c, &pd.Region{Meta: meta, Buckets: buckets})
 		if err != nil {
 			return false, err
 		}
@@ -1559,17 +1667,16 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 			needInvalidateOld = false
 		}
 	}
+	if needInvalidateOld && cachedRegion != nil {
+		cachedRegion.invalidate(EpochNotMatch)
+	}
+
 	c.mu.Lock()
 	for _, region := range newRegions {
 		c.insertRegionToCache(region)
 	}
-	if needInvalidateOld {
-		cachedRegion, ok := c.mu.regions[ctx.Region]
-		if ok {
-			cachedRegion.invalidate(EpochNotMatch)
-		}
-	}
 	c.mu.Unlock()
+
 	return false, nil
 }
 
@@ -1589,6 +1696,37 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 		}
 	}
 	return stores
+}
+
+// UpdateBucketsIfNeeded queries PD to updates the buckets of the region in the cache if
+// the latestBucketsVer is newer than the cached one.
+func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsVer uint64) {
+	r := c.GetCachedRegionWithRLock(regionID)
+	if r == nil {
+		return
+	}
+
+	buckets := r.getStore().buckets
+	var bucketsVer uint64
+	if buckets != nil {
+		bucketsVer = buckets.GetVersion()
+	}
+	if bucketsVer < latestBucketsVer {
+		// TODO(youjiali1995): use singleflight.
+		go func() {
+			bo := retry.NewBackoffer(context.Background(), 20000)
+			new, err := c.loadRegionByID(bo, regionID.id)
+			if err != nil {
+				logutil.Logger(bo.GetCtx()).Error("failed to update buckets",
+					zap.String("region", regionID.String()), zap.Uint64("bucketsVer", bucketsVer),
+					zap.Uint64("latestBucketsVer", latestBucketsVer), zap.Error(err))
+				return
+			}
+			c.mu.Lock()
+			c.insertRegionToCache(new)
+			c.mu.Unlock()
+		}()
+	}
 }
 
 // btreeItem is BTree's Item that uses []byte to compare.
@@ -1822,8 +1960,7 @@ func (r *Region) getPeerOnStore(storeID uint64) *metapb.Peer {
 // Contains checks whether the key is in the region, for the maximum region endKey is empty.
 // startKey <= key < endKey.
 func (r *Region) Contains(key []byte) bool {
-	return bytes.Compare(r.meta.GetStartKey(), key) <= 0 &&
-		(bytes.Compare(key, r.meta.GetEndKey()) < 0 || len(r.meta.GetEndKey()) == 0)
+	return contains(r.meta.GetStartKey(), r.meta.GetEndKey(), key)
 }
 
 // ContainsByEnd check the region contains the greatest key that is less than key.
@@ -1832,6 +1969,15 @@ func (r *Region) Contains(key []byte) bool {
 func (r *Region) ContainsByEnd(key []byte) bool {
 	return bytes.Compare(r.meta.GetStartKey(), key) < 0 &&
 		(bytes.Compare(key, r.meta.GetEndKey()) <= 0 || len(r.meta.GetEndKey()) == 0)
+}
+
+func (r *Region) updateBuckets(buckets *metapb.Buckets) {
+	rs := r.getStore()
+	if rs.buckets == nil || rs.buckets.GetVersion() < buckets.GetVersion() {
+		newRs := rs.clone()
+		newRs.buckets = buckets
+		r.compareAndSwapStore(rs, newRs)
+	}
 }
 
 // Store contains a kv process's address.
@@ -2260,4 +2406,10 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 
 func isSamePeer(lhs *metapb.Peer, rhs *metapb.Peer) bool {
 	return lhs == rhs || (lhs.GetId() == rhs.GetId() && lhs.GetStoreId() == rhs.GetStoreId())
+}
+
+// contains returns true if startKey <= key < endKey. Emtpy endKey is the maximum key.
+func contains(startKey, endKey, key []byte) bool {
+	return bytes.Compare(startKey, key) <= 0 &&
+		(bytes.Compare(key, endKey) < 0 || len(endKey) == 0)
 }

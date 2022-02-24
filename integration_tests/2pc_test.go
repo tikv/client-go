@@ -530,7 +530,7 @@ func (s *testCommitterSuite) TestPrewritePrimaryKeyFailed() {
 func (s *testCommitterSuite) TestWrittenKeysOnConflict() {
 	// This test checks that when there is a write conflict, written keys is collected,
 	// so we can use it to clean up keys.
-	region, _ := s.cluster.GetRegionByKey([]byte("x"))
+	region, _, _ := s.cluster.GetRegionByKey([]byte("x"))
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
 	s.cluster.Split(region.Id, newRegionID, []byte("y"), []uint64{newPeerID}, newPeerID)
@@ -561,7 +561,7 @@ func (s *testCommitterSuite) TestWrittenKeysOnConflict() {
 
 func (s *testCommitterSuite) TestPrewriteTxnSize() {
 	// Prepare two regions first: (, 100) and [100, )
-	region, _ := s.cluster.GetRegionByKey([]byte{50})
+	region, _, _ := s.cluster.GetRegionByKey([]byte{50})
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
 	s.cluster.Split(region.Id, newRegionID, []byte{100}, []uint64{newPeerID}, newPeerID)
@@ -1118,8 +1118,8 @@ func (s *testCommitterSuite) TestCommitDeadLock() {
 	k1 := []byte("a_deadlock_k1")
 	k2 := []byte("y_deadlock_k2")
 
-	region1, _ := s.cluster.GetRegionByKey(k1)
-	region2, _ := s.cluster.GetRegionByKey(k2)
+	region1, _, _ := s.cluster.GetRegionByKey(k1)
+	region2, _, _ := s.cluster.GetRegionByKey(k2)
 	s.True(region1.Id != region2.Id)
 
 	txn1 := s.begin()
@@ -1279,7 +1279,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 // accurate list of secondary keys.
 func (s *testCommitterSuite) TestPrewriteSecondaryKeys() {
 	// Prepare two regions first: (, 100) and [100, )
-	region, _ := s.cluster.GetRegionByKey([]byte{50})
+	region, _, _ := s.cluster.GetRegionByKey([]byte{50})
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
 	s.cluster.Split(region.Id, newRegionID, []byte{100}, []uint64{newPeerID}, newPeerID)
