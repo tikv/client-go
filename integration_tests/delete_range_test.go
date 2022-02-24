@@ -118,7 +118,7 @@ func (s *testDeleteRangeSuite) deleteRange(startKey []byte, endKey []byte) int {
 func deleteRangeFromMap(m map[string]string, startKey []byte, endKey []byte) {
 	for keyStr := range m {
 		key := []byte(keyStr)
-		if bytes.Compare(startKey, key) <= 0 && bytes.Compare(key, endKey) < 0 {
+		if bytes.Compare(startKey, key) <= 0 && (len(endKey) == 0 || bytes.Compare(key, endKey) < 0) {
 			delete(m, keyStr)
 		}
 	}
@@ -160,4 +160,5 @@ func (s *testDeleteRangeSuite) TestDeleteRange() {
 	s.mustDeleteRange([]byte("d0\x00"), []byte("d1\x00"), testData, 1)
 	s.mustDeleteRange([]byte("c5"), []byte("d5"), testData, 2)
 	s.mustDeleteRange([]byte("a"), []byte("z"), testData, 4)
+	s.mustDeleteRange(nil, nil, testData, 4)
 }
