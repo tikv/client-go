@@ -67,7 +67,8 @@ const (
 )
 
 type scanOptions struct {
-	KeyOnly bool
+	KeyOnly      bool
+	ColumnFamily string
 }
 
 // ScanOption represents possible scan options that can be cotrolled by the user
@@ -94,6 +95,12 @@ func ScanKeyOnly() ScanOption {
 	})
 }
 
+func ScanColumnFamily(columnfamily string) ScanOption {
+	return scanOptionFunc(func(opts *scanOptions) {
+		opts.ColumnFamily = columnfamily
+	})
+}
+
 // Client is a client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
@@ -111,6 +118,7 @@ func (c *Client) SetAtomicForCAS(b bool) *Client {
 	return c
 }
 
+// SetAtomicForCAS sets columnFamily for client
 func (c *Client) SetColumnFamily(columnFamily string) *Client {
 	c.cf = columnFamily
 	return c
@@ -401,13 +409,17 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		opt.apply(&opts)
 	}
 
+	if opts.ColumnFamily == "" {
+		opts.ColumnFamily = c.cf
+	}
+
 	for len(keys) < limit && (len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0) {
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
 			StartKey: startKey,
 			EndKey:   endKey,
 			Limit:    uint32(limit - len(keys)),
 			KeyOnly:  opts.KeyOnly,
-			Cf:       c.cf,
+			Cf:       opts.ColumnFamily,
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, false)
 		if err != nil {
@@ -451,6 +463,10 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		opt.apply(&opts)
 	}
 
+	if opts.ColumnFamily == "" {
+		opts.ColumnFamily = c.cf
+	}
+
 	for len(keys) < limit && bytes.Compare(startKey, endKey) > 0 {
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
 			StartKey: startKey,
@@ -458,7 +474,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 			Limit:    uint32(limit - len(keys)),
 			Reverse:  true,
 			KeyOnly:  opts.KeyOnly,
-			Cf:       c.cf,
+			Cf:       opts.ColumnFamily,
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, true)
 		if err != nil {

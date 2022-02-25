@@ -61,7 +61,7 @@ import (
 var (
 	LockAlwaysWait = int64(0)
 	LockNoWait     = int64(-1)
-	default_cf     = "test_cf"
+	defaultCf      = "test_cf"
 )
 
 // MVCCLevelDB implements the MVCCStore interface.
@@ -161,7 +161,7 @@ func NewMVCCLevelDB(path string) (*MVCCLevelDB, error) {
 		dbs:              make(map[string]*leveldb.DB, 0),
 		deadlockDetector: deadlock.NewDetector(),
 	}
-	mvccLevelDBs.dbs[default_cf] = d
+	mvccLevelDBs.dbs[defaultCf] = d
 	return mvccLevelDBs, nil
 }
 
@@ -310,7 +310,7 @@ func (mvcc *MVCCLevelDB) Get(key []byte, startTS uint64, isoLevel kvrpcpb.Isolat
 
 func (mvcc *MVCCLevelDB) getDB(cf string) *leveldb.DB {
 	if cf == "" {
-		cf = default_cf
+		cf = defaultCf
 	}
 	db, exist := mvcc.dbs[cf]
 	if !exist {
@@ -1569,7 +1569,7 @@ func (mvcc *MVCCLevelDB) GC(startKey, endKey []byte, safePoint uint64) error {
 
 // DeleteRange implements the MVCCStore interface.
 func (mvcc *MVCCLevelDB) DeleteRange(startKey, endKey []byte) error {
-	return mvcc.doRawDeleteRange(codec.EncodeBytes(nil, startKey), codec.EncodeBytes(nil, endKey), "")
+	return mvcc.doRawDeleteRange("", codec.EncodeBytes(nil, startKey), codec.EncodeBytes(nil, endKey))
 }
 
 // Close calls leveldb's Close to free resources.
@@ -1578,7 +1578,7 @@ func (mvcc *MVCCLevelDB) Close() error {
 }
 
 // RawPut implements the RawKV interface.
-func (mvcc *MVCCLevelDB) RawPut(key, value []byte, cf string) {
+func (mvcc *MVCCLevelDB) RawPut(cf string, key, value []byte) {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1596,7 +1596,7 @@ func (mvcc *MVCCLevelDB) RawPut(key, value []byte, cf string) {
 }
 
 // RawBatchPut implements the RawKV interface
-func (mvcc *MVCCLevelDB) RawBatchPut(keys, values [][]byte, cf string) {
+func (mvcc *MVCCLevelDB) RawBatchPut(cf string, keys, values [][]byte) {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1622,7 +1622,7 @@ func (mvcc *MVCCLevelDB) RawBatchPut(keys, values [][]byte, cf string) {
 }
 
 // RawGet implements the RawKV interface.
-func (mvcc *MVCCLevelDB) RawGet(key []byte, cf string) []byte {
+func (mvcc *MVCCLevelDB) RawGet(cf string, key []byte) []byte {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1637,7 +1637,7 @@ func (mvcc *MVCCLevelDB) RawGet(key []byte, cf string) []byte {
 }
 
 // RawBatchGet implements the RawKV interface.
-func (mvcc *MVCCLevelDB) RawBatchGet(keys [][]byte, cf string) [][]byte {
+func (mvcc *MVCCLevelDB) RawBatchGet(cf string, keys [][]byte) [][]byte {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1656,7 +1656,7 @@ func (mvcc *MVCCLevelDB) RawBatchGet(keys [][]byte, cf string) [][]byte {
 }
 
 // RawDelete implements the RawKV interface.
-func (mvcc *MVCCLevelDB) RawDelete(key []byte, cf string) {
+func (mvcc *MVCCLevelDB) RawDelete(cf string, key []byte) {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1668,7 +1668,7 @@ func (mvcc *MVCCLevelDB) RawDelete(key []byte, cf string) {
 }
 
 // RawBatchDelete implements the RawKV interface.
-func (mvcc *MVCCLevelDB) RawBatchDelete(keys [][]byte, cf string) {
+func (mvcc *MVCCLevelDB) RawBatchDelete(cf string, keys [][]byte) {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1685,7 +1685,7 @@ func (mvcc *MVCCLevelDB) RawBatchDelete(keys [][]byte, cf string) {
 }
 
 // RawScan implements the RawKV interface.
-func (mvcc *MVCCLevelDB) RawScan(startKey, endKey []byte, limit int, cf string) []Pair {
+func (mvcc *MVCCLevelDB) RawScan(cf string, startKey, endKey []byte, limit int) []Pair {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1718,7 +1718,7 @@ func (mvcc *MVCCLevelDB) RawScan(startKey, endKey []byte, limit int, cf string) 
 // RawReverseScan implements the RawKV interface.
 // Scan the range of [endKey, startKey)
 // It doesn't support Scanning from "", because locating the last Region is not yet implemented.
-func (mvcc *MVCCLevelDB) RawReverseScan(startKey, endKey []byte, limit int, cf string) []Pair {
+func (mvcc *MVCCLevelDB) RawReverseScan(cf string, startKey, endKey []byte, limit int) []Pair {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
@@ -1752,12 +1752,12 @@ func (mvcc *MVCCLevelDB) RawReverseScan(startKey, endKey []byte, limit int, cf s
 }
 
 // RawDeleteRange implements the RawKV interface.
-func (mvcc *MVCCLevelDB) RawDeleteRange(startKey, endKey []byte, cf string) {
-	tikverr.Log(mvcc.doRawDeleteRange(startKey, endKey, cf))
+func (mvcc *MVCCLevelDB) RawDeleteRange(cf string, startKey, endKey []byte) {
+	tikverr.Log(mvcc.doRawDeleteRange(cf, startKey, endKey))
 }
 
 // doRawDeleteRange deletes all keys in a range and return the error if any.
-func (mvcc *MVCCLevelDB) doRawDeleteRange(startKey, endKey []byte, cf string) error {
+func (mvcc *MVCCLevelDB) doRawDeleteRange(cf string, startKey, endKey []byte) error {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 

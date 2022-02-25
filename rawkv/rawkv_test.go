@@ -242,7 +242,7 @@ func (s *testRawkvSuite) TestColumnFamily() {
 	client.SetColumnFamily("test_cf2")
 	getVal, err = client.Get(context.Background(), testKeyCf2)
 	s.Nil(err)
-	s.Equal(getVal, testValueCf2) // get delete
+	s.Equal(getVal, testValueCf2)
 	getVal, err = client.Get(context.Background(), testKeyCf1)
 	s.Nil(err)
 	s.Equal(getVal, []byte(nil))
