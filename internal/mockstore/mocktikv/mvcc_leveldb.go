@@ -1569,7 +1569,11 @@ func (mvcc *MVCCLevelDB) GC(startKey, endKey []byte, safePoint uint64) error {
 
 // DeleteRange implements the MVCCStore interface.
 func (mvcc *MVCCLevelDB) DeleteRange(startKey, endKey []byte) error {
-	return mvcc.doRawDeleteRange("", codec.EncodeBytes(nil, startKey), codec.EncodeBytes(nil, endKey))
+	var end []byte
+	if len(endKey) > 0 {
+		end = codec.EncodeBytes(nil, endKey)
+	}
+	return mvcc.doRawDeleteRange("", codec.EncodeBytes(nil, startKey), end)
 }
 
 // Close calls leveldb's Close to free resources.
@@ -1761,8 +1765,7 @@ func (mvcc *MVCCLevelDB) doRawDeleteRange(cf string, startKey, endKey []byte) er
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
-	var db *leveldb.DB
-	db = mvcc.getDB(cf)
+	db := mvcc.getDB(cf)
 	if db == nil {
 		return errors.Errorf("%s not exist", cf)
 	}
