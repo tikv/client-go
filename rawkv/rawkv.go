@@ -70,7 +70,7 @@ type rawOptions struct {
 	// ColumnFamily filed is used for manipulate kv in specified column family
 	ColumnFamily string
 
-	// This field is used for Scan().
+	// This field is used for Scan()/ReverseScan().
 	KeyOnly bool
 }
 
@@ -168,11 +168,17 @@ func (c *Client) ClusterID() uint64 {
 }
 
 // Get queries value with the key. When the key does not exist, it returns `nil, nil`.
-func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (c *Client) Get(ctx context.Context, key []byte, options ...RawOption) ([]byte, error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithGet.Observe(time.Since(start).Seconds()) }()
 
-	req := tikvrpc.NewRequest(tikvrpc.CmdRawGet, &kvrpcpb.RawGetRequest{Key: key, Cf: c.cf})
+	opts := c.getRawKVOptions(options...)
+	req := tikvrpc.NewRequest(
+		tikvrpc.CmdRawGet,
+		&kvrpcpb.RawGetRequest{
+			Key: key,
+			Cf:  c.getColumnFamily(opts),
+		})
 	resp, _, err := c.sendReq(ctx, key, req, false)
 	if err != nil {
 		return nil, err
@@ -294,8 +300,8 @@ func (c *Client) Put(ctx context.Context, key, value []byte, options ...RawOptio
 }
 
 // BatchPut stores key-value pairs to TiKV.
-func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
-	return c.BatchPutWithTTL(ctx, keys, values, nil)
+func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte, options ...RawOption) error {
+	return c.BatchPutWithTTL(ctx, keys, values, nil, options...)
 }
 
 // BatchPutWithTTL stores key-values pairs to TiKV with time-to-live durations.
