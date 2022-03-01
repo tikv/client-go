@@ -315,9 +315,8 @@ func (mvcc *MVCCLevelDB) getDB(cf string) *leveldb.DB {
 	db, exist := mvcc.dbs[cf]
 	if !exist {
 		return nil
-	} else {
-		return db
 	}
+	return db
 }
 
 func (mvcc *MVCCLevelDB) createDB(cf string) (*leveldb.DB, error) {

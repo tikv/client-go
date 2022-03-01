@@ -95,6 +95,8 @@ func ScanKeyOnly() ScanOption {
 	})
 }
 
+// ScanColumnFamily is a ScanOption that tells the scanner to only returns
+// the following column family elements.
 func ScanColumnFamily(columnfamily string) ScanOption {
 	return scanOptionFunc(func(opts *scanOptions) {
 		opts.ColumnFamily = columnfamily
@@ -118,7 +120,7 @@ func (c *Client) SetAtomicForCAS(b bool) *Client {
 	return c
 }
 
-// SetAtomicForCAS sets columnFamily for client
+// SetColumnFamily sets columnFamily for client
 func (c *Client) SetColumnFamily(columnFamily string) *Client {
 	c.cf = columnFamily
 	return c
