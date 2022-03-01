@@ -50,7 +50,6 @@ import (
 	"github.com/ninedraft/israce"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	drivertxn "github.com/pingcap/tidb/store/driver/txn"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
@@ -1089,12 +1088,23 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	s.Equal(tikverr.ErrLockWaitTimeout, errors.Unwrap(waitErr))
 }
 
+type kvFilter struct{}
+
+func (f kvFilter) IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (bool, error) {
+	untouched := bytes.Equal(key, []byte("t00000001_i000000001"))
+	if untouched && flags.HasPresumeKeyNotExists() {
+		return false, errors.New("unexpected path the untouched key value with PresumeKeyNotExists flag")
+	}
+	return untouched, nil
+}
+
 func (s *testCommitterSuite) TestResolvePessimisticLock() {
 	untouchedIndexKey := []byte("t00000001_i000000001")
 	untouchedIndexValue := []byte{0, 0, 0, 0, 0, 0, 0, 1, 49}
 	noValueIndexKey := []byte("t00000001_i000000002")
+
 	txn := s.begin()
-	txn.SetKVFilter(drivertxn.TiDBKVFilter{})
+	txn.SetKVFilter(kvFilter{})
 	err := txn.Set(untouchedIndexKey, untouchedIndexValue)
 	s.Nil(err)
 	lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
