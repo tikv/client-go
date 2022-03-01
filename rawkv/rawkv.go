@@ -66,60 +66,44 @@ const (
 	rawBatchPairCount = 512
 )
 
-type scanOptions struct {
-	KeyOnly      bool
+type rawOptions struct {
+	// ColumnFamily filed is used for manipulate kv in specified column family
 	ColumnFamily string
+
+	// This field is used for Scan().
+	KeyOnly bool
 }
 
-// ScanOption represents possible scan options that can be cotrolled by the user
-// to tweak the scanning behavior.
+// RawOption represents possible options that can be cotrolled by the user
+// to tweak the API behavior.
 //
 // Available options are:
-// - ScanKeyOnly
 // - ScanColumnFamily
-type ScanOption interface {
-	apply(opts *scanOptions)
+// - ScanKeyOnly
+type RawOption interface {
+	apply(opts *rawOptions)
 }
 
-type scanOptionFunc func(opts *scanOptions)
+//
+type rawOptionFunc func(opts *rawOptions)
 
-func (f scanOptionFunc) apply(opts *scanOptions) {
+func (f rawOptionFunc) apply(opts *rawOptions) {
 	f(opts)
 }
 
-// ScanKeyOnly is a ScanOption that tells the scanner to only returns
-// keys and omit the values.
-func ScanKeyOnly() ScanOption {
-	return scanOptionFunc(func(opts *scanOptions) {
-		opts.KeyOnly = true
-	})
-}
-
-// ScanColumnFamily is a ScanOption that tells the scanner to only returns
-// the following column family elements.
-func ScanColumnFamily(columnfamily string) ScanOption {
-	return scanOptionFunc(func(opts *scanOptions) {
-		opts.ColumnFamily = columnfamily
-	})
-}
-
-type rawkvOptions struct {
-	ColumnFamily string
-}
-
-type RawkvOption interface {
-	apply(opts *rawkvOptions)
-}
-
-type RawkvOptionFunc func(opts *rawkvOptions)
-
-func (f RawkvOptionFunc) apply(opts *rawkvOptions) {
-	f(opts)
-}
-
-func ColumnFamily(cf string) RawkvOption {
-	return RawkvOptionFunc(func(opts *rawkvOptions) {
+// SetColumnFamily is a RawkvOption to only manipulate the k-v in specified column family
+func SetColumnFamily(cf string) RawOption {
+	return rawOptionFunc(func(opts *rawOptions) {
 		opts.ColumnFamily = cf
+	})
+}
+
+// ScanKeyOnly is a rawkvOptions that tells the scanner to only returns
+// keys and omit the values.
+// It can work only in API scan().
+func ScanKeyOnly() RawOption {
+	return rawOptionFunc(func(opts *rawOptions) {
+		opts.KeyOnly = true
 	})
 }
 
@@ -209,7 +193,7 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 const rawkvMaxBackoff = 20000
 
 // BatchGet queries values with the keys.
-func (c *Client) BatchGet(ctx context.Context, keys [][]byte, options ...RawkvOption) ([][]byte, error) {
+func (c *Client) BatchGet(ctx context.Context, keys [][]byte, options ...RawOption) ([][]byte, error) {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithBatchGet.Observe(time.Since(start).Seconds())
@@ -240,7 +224,7 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, options ...RawkvOp
 }
 
 // PutWithTTL stores a key-value pair to TiKV with a time-to-live duration.
-func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64, options ...RawkvOption) error {
+func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64, options ...RawOption) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds()) }()
 	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
@@ -273,7 +257,7 @@ func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64, 
 }
 
 // GetKeyTTL get the TTL of a raw key from TiKV if key exists
-func (c *Client) GetKeyTTL(ctx context.Context, key []byte, options ...RawkvOption) (*uint64, error) {
+func (c *Client) GetKeyTTL(ctx context.Context, key []byte, options ...RawOption) (*uint64, error) {
 	var ttl uint64
 	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
 
@@ -305,7 +289,7 @@ func (c *Client) GetKeyTTL(ctx context.Context, key []byte, options ...RawkvOpti
 }
 
 // Put stores a key-value pair to TiKV.
-func (c *Client) Put(ctx context.Context, key, value []byte, options ...RawkvOption) error {
+func (c *Client) Put(ctx context.Context, key, value []byte, options ...RawOption) error {
 	return c.PutWithTTL(ctx, key, value, 0, options...)
 }
 
@@ -315,7 +299,7 @@ func (c *Client) BatchPut(ctx context.Context, keys, values [][]byte) error {
 }
 
 // BatchPutWithTTL stores key-values pairs to TiKV with time-to-live durations.
-func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttls []uint64, options ...RawkvOption) error {
+func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttls []uint64, options ...RawOption) error {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds())
@@ -339,7 +323,7 @@ func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttl
 }
 
 // Delete deletes a key-value pair from TiKV.
-func (c *Client) Delete(ctx context.Context, key []byte, options ...RawkvOption) error {
+func (c *Client) Delete(ctx context.Context, key []byte, options ...RawOption) error {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithDelete.Observe(time.Since(start).Seconds()) }()
 
@@ -365,7 +349,7 @@ func (c *Client) Delete(ctx context.Context, key []byte, options ...RawkvOption)
 }
 
 // BatchDelete deletes key-value pairs from TiKV.
-func (c *Client) BatchDelete(ctx context.Context, keys [][]byte, options ...RawkvOption) error {
+func (c *Client) BatchDelete(ctx context.Context, keys [][]byte, options ...RawOption) error {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithBatchDelete.Observe(time.Since(start).Seconds())
@@ -388,7 +372,7 @@ func (c *Client) BatchDelete(ctx context.Context, keys [][]byte, options ...Rawk
 }
 
 // DeleteRange deletes all key-value pairs in the [startKey, endKey) range from TiKV.
-func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte, options ...RawkvOption) error {
+func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte, options ...RawOption) error {
 	start := time.Now()
 	var err error
 	defer func() {
@@ -426,7 +410,7 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 // If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
 // `Scan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
-func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, options ...ScanOption,
+func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, options ...RawOption,
 ) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithRawScan.Observe(time.Since(start).Seconds()) }()
@@ -435,14 +419,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
-	opts := scanOptions{}
-	for _, opt := range options {
-		opt.apply(&opts)
-	}
-
-	if opts.ColumnFamily == "" {
-		opts.ColumnFamily = c.cf
-	}
+	opts := c.getRawKVOptions(options...)
 
 	for len(keys) < limit && (len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0) {
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
@@ -450,7 +427,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 			EndKey:   endKey,
 			Limit:    uint32(limit - len(keys)),
 			KeyOnly:  opts.KeyOnly,
-			Cf:       opts.ColumnFamily,
+			Cf:       c.getColumnFamily(opts),
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, false)
 		if err != nil {
@@ -479,7 +456,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 // (endKey, startKey], you can write:
 // `ReverseScan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
 // It doesn't support Scanning from "", because locating the last Region is not yet implemented.
-func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int, options ...ScanOption) (keys [][]byte, values [][]byte, err error) {
+func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit int, options ...RawOption) (keys [][]byte, values [][]byte, err error) {
 	start := time.Now()
 	defer func() {
 		metrics.RawkvCmdHistogramWithRawReversScan.Observe(time.Since(start).Seconds())
@@ -489,14 +466,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		return nil, nil, errors.WithStack(ErrMaxScanLimitExceeded)
 	}
 
-	opts := scanOptions{}
-	for _, opt := range options {
-		opt.apply(&opts)
-	}
-
-	if opts.ColumnFamily == "" {
-		opts.ColumnFamily = c.cf
-	}
+	opts := c.getRawKVOptions(options...)
 
 	for len(keys) < limit && bytes.Compare(startKey, endKey) > 0 {
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
@@ -505,7 +475,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 			Limit:    uint32(limit - len(keys)),
 			Reverse:  true,
 			KeyOnly:  opts.KeyOnly,
-			Cf:       opts.ColumnFamily,
+			Cf:       c.getColumnFamily(opts),
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, true)
 		if err != nil {
@@ -611,7 +581,7 @@ func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, 
 	}
 }
 
-func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawkvOptions, cmdType tikvrpc.CmdType) (*tikvrpc.Response, error) { // split the keys
+func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOptions, cmdType tikvrpc.CmdType) (*tikvrpc.Response, error) { // split the keys
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
 		return nil, err
@@ -658,7 +628,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawkv
 	return resp, firstError
 }
 
-func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *rawkvOptions, cmdType tikvrpc.CmdType) kvrpc.BatchResult {
+func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *rawOptions, cmdType tikvrpc.CmdType) kvrpc.BatchResult {
 	var req *tikvrpc.Request
 	switch cmdType {
 	case tikvrpc.CmdRawBatchGet:
@@ -722,7 +692,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *raw
 // If the given range spans over more than one regions, the actual endKey is the end of the first region.
 // We can't use sendReq directly, because we need to know the end of the region before we send the request
 // TODO: Is there any better way to avoid duplicating code with func `sendReq` ?
-func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey []byte, opts *rawkvOptions) (*tikvrpc.Response, []byte, error) {
+func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey []byte, opts *rawOptions) (*tikvrpc.Response, []byte, error) {
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	for {
@@ -762,7 +732,7 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 	}
 }
 
-func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls []uint64, opts *rawkvOptions) error {
+func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls []uint64, opts *rawOptions) error {
 	keyToValue := make(map[string][]byte, len(keys))
 	keyTottl := make(map[string]uint64, len(keys))
 	for i, key := range keys {
@@ -803,7 +773,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 	return err
 }
 
-func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawkvOptions) error {
+func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOptions) error {
 	kvPair := make([]*kvrpcpb.KvPair, 0, len(batch.Keys))
 	for i, key := range batch.Keys {
 		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.Values[i]})
@@ -851,15 +821,15 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawkvO
 	return nil
 }
 
-func (c *Client) getColumnFamily(options *rawkvOptions) string {
+func (c *Client) getColumnFamily(options *rawOptions) string {
 	if options.ColumnFamily == "" {
 		return c.cf
 	}
 	return options.ColumnFamily
 }
 
-func (c *Client) getRawKVOptions(options ...RawkvOption) *rawkvOptions {
-	opts := rawkvOptions{}
+func (c *Client) getRawKVOptions(options ...RawOption) *rawOptions {
+	opts := rawOptions{}
 	for _, op := range options {
 		op.apply(&opts)
 	}
