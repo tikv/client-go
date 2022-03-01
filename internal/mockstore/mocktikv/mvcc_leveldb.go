@@ -158,7 +158,7 @@ func NewMVCCLevelDB(path string) (*MVCCLevelDB, error) {
 	}
 
 	mvccLevelDBs := &MVCCLevelDB{
-		dbs:              make(map[string]*leveldb.DB, 0),
+		dbs:              make(map[string]*leveldb.DB),
 		deadlockDetector: deadlock.NewDetector(),
 	}
 	mvccLevelDBs.dbs[defaultCf] = d
