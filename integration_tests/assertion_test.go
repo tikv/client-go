@@ -43,7 +43,7 @@ type testAssertionSuite struct {
 }
 
 func (s *testAssertionSuite) SetupTest() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
+	s.store = tikv.StoreProbe{KVStore: NewTestUniStore(s.T())}
 }
 
 func (s *testAssertionSuite) TearDownTest() {
