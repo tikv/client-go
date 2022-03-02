@@ -1759,6 +1759,42 @@ func (mvcc *MVCCLevelDB) RawDeleteRange(cf string, startKey, endKey []byte) {
 	tikverr.Log(mvcc.doRawDeleteRange(cf, startKey, endKey))
 }
 
+func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newValue []byte,
+) ([]byte, bool, error) {
+	mvcc.mu.Lock()
+	defer mvcc.mu.Unlock()
+
+	var db *leveldb.DB
+	var err error
+	db = mvcc.getDB(cf)
+	if db == nil {
+		db, err = mvcc.createDB(cf)
+		if err != nil {
+			tikverr.Log(err)
+			return nil, false, errors.WithStack(err)
+		}
+	}
+
+	oldValue, err := db.Get(key, nil)
+	if err != nil {
+		err = db.Put(key, newValue, nil)
+		if err != nil {
+			tikverr.Log(err)
+			return nil, false, errors.WithStack(err)
+		}
+
+		return nil, true, nil
+	}
+
+	if !bytes.Equal(oldValue, expectedValue) {
+		return oldValue, false, errors.Errorf("not expected value")
+	}
+
+	err = db.Put(key, newValue, nil)
+	tikverr.Log(err)
+	return oldValue, err == nil, errors.WithStack(err)
+}
+
 // doRawDeleteRange deletes all keys in a range and return the error if any.
 func (mvcc *MVCCLevelDB) doRawDeleteRange(cf string, startKey, endKey []byte) error {
 	mvcc.mu.Lock()

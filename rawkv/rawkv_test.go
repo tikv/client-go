@@ -507,3 +507,61 @@ func (s *testRawkvSuite) TestDeleteRange() {
 	s.Equal(0, len(ks))
 	s.Equal(0, len(vs))
 }
+
+func (s *testRawkvSuite) TestCompareAndSwap() {
+	mvccStore := mocktikv.MustNewMVCCStore()
+	defer mvccStore.Close()
+
+	client := &Client{
+		clusterID:   0,
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
+	}
+	defer client.Close()
+
+	cf := "my_cf"
+	key, value, newValue := []byte("kv"), []byte("TiDB"), []byte("TiKV")
+
+	// test CompareAndSwap for false atomic
+	_, _, err := client.CompareAndSwap(
+		context.Background(),
+		key,
+		value,
+		newValue,
+		SetColumnFamily(cf))
+	s.Error(err)
+
+	// test CompareAndSwap for previous value not Existed
+	client.SetAtomicForCAS(true)
+	oldValue, success, err := client.CompareAndSwap(
+		context.Background(),
+		key,
+		value,
+		value,
+		SetColumnFamily(cf))
+	s.Nil(err)
+	s.True(success)
+	s.Equal(oldValue, []byte(nil))
+
+	// make store2 using store1's addr and store1 offline
+	store1Addr := s.storeAddr(s.store1)
+	s.cluster.UpdateStoreAddr(s.store1, s.storeAddr(s.store2))
+	s.cluster.UpdateStoreAddr(s.store2, store1Addr)
+	s.cluster.RemoveStore(s.store1)
+	s.cluster.ChangeLeader(s.region1, s.peer2)
+	s.cluster.RemovePeer(s.region1, s.peer1)
+
+	oldvalue, success, err := client.CompareAndSwap(
+		context.Background(),
+		key,
+		value,
+		newValue,
+		SetColumnFamily(cf))
+	s.Nil(err)
+	s.True(success)
+	s.True(bytes.Equal(value, oldvalue))
+
+	v, err := client.Get(context.Background(), key, SetColumnFamily(cf))
+	s.Nil(err)
+	s.Equal(string(v), string(newValue))
+}
