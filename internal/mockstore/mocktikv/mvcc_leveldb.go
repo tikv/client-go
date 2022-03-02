@@ -1759,17 +1759,14 @@ func (mvcc *MVCCLevelDB) RawDeleteRange(cf string, startKey, endKey []byte) {
 	tikverr.Log(mvcc.doRawDeleteRange(cf, startKey, endKey))
 }
 
-// RawCompareAndSwap implements the RawKV interface.
-// If value stored do not exist in DB, write newValue and return (nil, true, nil) .
-// If value stored and existed in DB don't equals expectedValue, return (valueStored, false, err).
-// If Value stored in DB equals expectedValue, write newValue atomicly and return (valueStored, true, nil).
+// RawCompareAndSwap supports CAS function(write newValue if expectedValue equals value stored in db).
+// OldValue and swaped returned specify the old value stored in db and whether swaping happen.
 func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newValue []byte,
-) ([]byte, bool, error) {
+) (oldValue []byte, swaped bool, err error) {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
 	var db *leveldb.DB
-	var err error
 	db = mvcc.getDB(cf)
 	if db == nil {
 		db, err = mvcc.createDB(cf)
@@ -1779,24 +1776,23 @@ func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newVal
 		}
 	}
 
-	oldValue, err := db.Get(key, nil)
+	oldValue, err = db.Get(key, nil)
 	if err != nil {
-		err = db.Put(key, newValue, nil)
-		if err != nil {
-			tikverr.Log(err)
-			return nil, false, errors.WithStack(err)
-		}
-
-		return nil, true, nil
+		tikverr.Log(err)
+		return nil, false, errors.WithStack(err)
 	}
 
 	if !bytes.Equal(oldValue, expectedValue) {
-		return oldValue, false, errors.Errorf("not expected value")
+		return oldValue, false, nil
 	}
 
 	err = db.Put(key, newValue, nil)
-	tikverr.Log(err)
-	return oldValue, err == nil, errors.WithStack(err)
+	if err != nil {
+		tikverr.Log(err)
+		return oldValue, false, errors.WithStack(err)
+	}
+
+	return oldValue, true, nil
 }
 
 // doRawDeleteRange deletes all keys in a range and return the error if any.

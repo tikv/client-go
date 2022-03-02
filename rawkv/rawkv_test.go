@@ -522,26 +522,9 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 	cf := "my_cf"
 	key, value, newValue := []byte("kv"), []byte("TiDB"), []byte("TiKV")
 
-	// test CompareAndSwap for false atomic
-	_, _, err := client.CompareAndSwap(
-		context.Background(),
-		key,
-		value,
-		newValue,
-		SetColumnFamily(cf))
-	s.Error(err)
-
-	// test CompareAndSwap for previous value not Existed
-	client.SetAtomicForCAS(true)
-	oldValue, success, err := client.CompareAndSwap(
-		context.Background(),
-		key,
-		value,
-		value,
-		SetColumnFamily(cf))
+	// put
+	err := client.Put(context.Background(), key, value, SetColumnFamily(cf))
 	s.Nil(err)
-	s.True(success)
-	s.Equal(oldValue, []byte(nil))
 
 	// make store2 using store1's addr and store1 offline
 	store1Addr := s.storeAddr(s.store1)
@@ -551,15 +534,38 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
-	oldvalue, success, err := client.CompareAndSwap(
+	// test CompareAndSwap for false atomic
+	_, _, err = client.CompareAndSwap(
+		context.Background(),
+		key,
+		value,
+		newValue,
+		SetColumnFamily(cf))
+	s.Error(err)
+
+	// test CompareAndSwap for swap successfully
+	client.SetAtomicForCAS(true)
+	returnValue, swaped, err := client.CompareAndSwap(
+		context.Background(),
+		key,
+		newValue,
+		newValue,
+		SetColumnFamily(cf))
+	s.Nil(err)
+	s.False(swaped)
+	s.True(bytes.Equal(value, returnValue))
+
+	// test CompareAndSwap for swap successfully
+	client.SetAtomicForCAS(true)
+	returnValue, swaped, err = client.CompareAndSwap(
 		context.Background(),
 		key,
 		value,
 		newValue,
 		SetColumnFamily(cf))
 	s.Nil(err)
-	s.True(success)
-	s.True(bytes.Equal(value, oldvalue))
+	s.True(swaped)
+	s.True(bytes.Equal(value, returnValue))
 
 	v, err := client.Get(context.Background(), key, SetColumnFamily(cf))
 	s.Nil(err)
