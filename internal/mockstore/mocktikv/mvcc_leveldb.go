@@ -1759,6 +1759,10 @@ func (mvcc *MVCCLevelDB) RawDeleteRange(cf string, startKey, endKey []byte) {
 	tikverr.Log(mvcc.doRawDeleteRange(cf, startKey, endKey))
 }
 
+// RawCompareAndSwap implements the RawKV interface.
+// If value stored do not exist in DB, write newValue and return (nil, true, nil) .
+// If value stored and existed in DB don't equals expectedValue, return (valueStored, false, err).
+// If Value stored in DB equals expectedValue, write newValue atomicly and return (valueStored, true, nil).
 func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newValue []byte,
 ) ([]byte, bool, error) {
 	mvcc.mu.Lock()
