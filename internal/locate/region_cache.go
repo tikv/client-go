@@ -2220,7 +2220,7 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 
 	cfg := config.GetGlobalConfig()
 
-	opt := grpc.WithInsecure()
+	opt := grpc.WithInsecure() //nolint
 	if len(cfg.Security.ClusterSSLCA) != 0 {
 		tlsConfig, err := cfg.Security.ToTLSConfig()
 		if err != nil {
