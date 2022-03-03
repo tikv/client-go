@@ -507,3 +507,67 @@ func (s *testRawkvSuite) TestDeleteRange() {
 	s.Equal(0, len(ks))
 	s.Equal(0, len(vs))
 }
+
+func (s *testRawkvSuite) TestCompareAndSwap() {
+	mvccStore := mocktikv.MustNewMVCCStore()
+	defer mvccStore.Close()
+
+	client := &Client{
+		clusterID:   0,
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
+	}
+	defer client.Close()
+
+	cf := "my_cf"
+	key, value, newValue := []byte("kv"), []byte("TiDB"), []byte("TiKV")
+
+	// put
+	err := client.Put(context.Background(), key, value, SetColumnFamily(cf))
+	s.Nil(err)
+
+	// make store2 using store1's addr and store1 offline
+	store1Addr := s.storeAddr(s.store1)
+	s.cluster.UpdateStoreAddr(s.store1, s.storeAddr(s.store2))
+	s.cluster.UpdateStoreAddr(s.store2, store1Addr)
+	s.cluster.RemoveStore(s.store1)
+	s.cluster.ChangeLeader(s.region1, s.peer2)
+	s.cluster.RemovePeer(s.region1, s.peer1)
+
+	// test CompareAndSwap for false atomic
+	_, _, err = client.CompareAndSwap(
+		context.Background(),
+		key,
+		value,
+		newValue,
+		SetColumnFamily(cf))
+	s.Error(err)
+
+	// test CompareAndSwap for swap successfully
+	client.SetAtomicForCAS(true)
+	returnValue, swapped, err := client.CompareAndSwap(
+		context.Background(),
+		key,
+		newValue,
+		newValue,
+		SetColumnFamily(cf))
+	s.Nil(err)
+	s.False(swapped)
+	s.True(bytes.Equal(value, returnValue))
+
+	// test CompareAndSwap for swap successfully
+	client.SetAtomicForCAS(true)
+	returnValue, swapped, err = client.CompareAndSwap(
+		context.Background(),
+		key,
+		value,
+		newValue,
+		SetColumnFamily(cf))
+	s.Nil(err)
+	s.True(swapped)
+	s.True(bytes.Equal(value, returnValue))
+
+	v, err := client.Get(context.Background(), key, SetColumnFamily(cf))
+	s.Nil(err)
+	s.Equal(string(v), string(newValue))
+}

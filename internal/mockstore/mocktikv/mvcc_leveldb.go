@@ -1759,6 +1759,42 @@ func (mvcc *MVCCLevelDB) RawDeleteRange(cf string, startKey, endKey []byte) {
 	tikverr.Log(mvcc.doRawDeleteRange(cf, startKey, endKey))
 }
 
+// RawCompareAndSwap supports CAS function(write newValue if expectedValue equals value stored in db).
+// `oldValue` and `swapped` returned specify the old value stored in db and whether CAS has happened.
+func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newValue []byte,
+) (oldValue []byte, swapped bool, err error) {
+	mvcc.mu.Lock()
+	defer mvcc.mu.Unlock()
+
+	var db *leveldb.DB
+	db = mvcc.getDB(cf)
+	if db == nil {
+		db, err = mvcc.createDB(cf)
+		if err != nil {
+			tikverr.Log(err)
+			return nil, false, errors.WithStack(err)
+		}
+	}
+
+	oldValue, err = db.Get(key, nil)
+	if err != nil {
+		tikverr.Log(err)
+		return nil, false, errors.WithStack(err)
+	}
+
+	if !bytes.Equal(oldValue, expectedValue) {
+		return oldValue, false, nil
+	}
+
+	err = db.Put(key, newValue, nil)
+	if err != nil {
+		tikverr.Log(err)
+		return oldValue, false, errors.WithStack(err)
+	}
+
+	return oldValue, true, nil
+}
+
 // doRawDeleteRange deletes all keys in a range and return the error if any.
 func (mvcc *MVCCLevelDB) doRawDeleteRange(cf string, startKey, endKey []byte) error {
 	mvcc.mu.Lock()
