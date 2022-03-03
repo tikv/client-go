@@ -1760,9 +1760,9 @@ func (mvcc *MVCCLevelDB) RawDeleteRange(cf string, startKey, endKey []byte) {
 }
 
 // RawCompareAndSwap supports CAS function(write newValue if expectedValue equals value stored in db).
-// OldValue and swaped returned specify the old value stored in db and whether swaping happen.
+// `oldValue` and `swapped` returned specify the old value stored in db and whether CAS has happened.
 func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newValue []byte,
-) (oldValue []byte, swaped bool, err error) {
+) (oldValue []byte, swapped bool, err error) {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 

@@ -545,26 +545,26 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 
 	// test CompareAndSwap for swap successfully
 	client.SetAtomicForCAS(true)
-	returnValue, swaped, err := client.CompareAndSwap(
+	returnValue, swapped, err := client.CompareAndSwap(
 		context.Background(),
 		key,
 		newValue,
 		newValue,
 		SetColumnFamily(cf))
 	s.Nil(err)
-	s.False(swaped)
+	s.False(swapped)
 	s.True(bytes.Equal(value, returnValue))
 
 	// test CompareAndSwap for swap successfully
 	client.SetAtomicForCAS(true)
-	returnValue, swaped, err = client.CompareAndSwap(
+	returnValue, swapped, err = client.CompareAndSwap(
 		context.Background(),
 		key,
 		value,
 		newValue,
 		SetColumnFamily(cf))
 	s.Nil(err)
-	s.True(swaped)
+	s.True(swapped)
 	s.True(bytes.Equal(value, returnValue))
 
 	v, err := client.Get(context.Background(), key, SetColumnFamily(cf))
