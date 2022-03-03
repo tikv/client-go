@@ -123,7 +123,7 @@ func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (Ta
 		default:
 		}
 
-		if bytes.Compare(startKey, rangeEndKey) >= 0 {
+		if len(rangeEndKey) > 0 && bytes.Compare(startKey, rangeEndKey) >= 0 {
 			break
 		}
 
@@ -135,8 +135,9 @@ func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (Ta
 
 		// Delete to the end of the region, except if it's the last region overlapping the range
 		endKey := loc.EndKey
+		isLast := len(endKey) == 0 || (len(rangeEndKey) > 0 && bytes.Compare(endKey, rangeEndKey) >= 0)
 		// If it is the last region
-		if loc.Contains(rangeEndKey) {
+		if isLast {
 			endKey = rangeEndKey
 		}
 
@@ -169,6 +170,9 @@ func (t *DeleteRangeTask) sendReqOnRange(ctx context.Context, r kv.KeyRange) (Ta
 			return stat, errors.Errorf("unexpected delete range err: %v", err)
 		}
 		stat.CompletedRegions++
+		if isLast {
+			break
+		}
 		startKey = endKey
 	}
 

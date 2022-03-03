@@ -47,5 +47,9 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	opts := []goleak.Option{
+		goleak.IgnoreTopFunction("github.com/pingcap/goleveldb/leveldb.(*DB).mpoolDrain"),
+	}
+
+	goleak.VerifyTestMain(m, opts...)
 }

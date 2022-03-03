@@ -33,15 +33,17 @@ import (
 // ReturnedValue pairs the Value and AlreadyLocked flag for PessimisticLock return values result.
 type ReturnedValue struct {
 	Value         []byte
+	Exists        bool
 	AlreadyLocked bool
 }
 
 // Used for pessimistic lock wait time
 // these two constants are special for lock protocol with tikv
-// math.MaxInt64 means always wait, 0 means nowait, others meaning lock wait in milliseconds
+// math.MaxInt64 means always wait, -1 means nowait, 0 means the default wait duration in TiKV,
+// others meaning lock wait in milliseconds
 const (
 	LockAlwaysWait = int64(math.MaxInt64)
-	LockNoWait     = int64(0)
+	LockNoWait     = int64(-1)
 )
 
 type lockWaitTimeInMs struct {
@@ -62,6 +64,7 @@ type LockCtx struct {
 	LockKeysDuration      *int64
 	LockKeysCount         *int32
 	ReturnValues          bool
+	CheckExistence        bool
 	Values                map[string]ReturnedValue
 	ValuesLock            sync.Mutex
 	LockExpired           *uint32
@@ -93,9 +96,19 @@ func NewLockCtx(forUpdateTS uint64, lockWaitTime int64, waitStartTime time.Time)
 }
 
 // InitReturnValues creates the map to store returned value.
-func (ctx *LockCtx) InitReturnValues(valueLen int) {
+func (ctx *LockCtx) InitReturnValues(capacity int) {
 	ctx.ReturnValues = true
-	ctx.Values = make(map[string]ReturnedValue, valueLen)
+	if ctx.Values == nil {
+		ctx.Values = make(map[string]ReturnedValue, capacity)
+	}
+}
+
+// InitCheckExistence creates the map to store whether each key exists or not.
+func (ctx *LockCtx) InitCheckExistence(capacity int) {
+	ctx.CheckExistence = true
+	if ctx.Values == nil {
+		ctx.Values = make(map[string]ReturnedValue, capacity)
+	}
 }
 
 // GetValueNotLocked returns a value if the key is not already locked.

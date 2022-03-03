@@ -51,8 +51,39 @@ const (
 	flagReadable
 	flagNewlyInserted
 
+	// The following are assertion related flags.
+	// There are four choices of the two bits:
+	// * 0: Assertion is not set and can be set later.
+	// * flagAssertExists: We assert the key exists.
+	// * flagAssertNotExists: We assert the key doesn't exist.
+	// * flagAssertExists | flagAssertNotExists: Assertion cannot be made on this key (unknown).
+	// Once either (or both) of the two flags is set, we say assertion is set (`HasAssertionFlags` becomes true), and
+	// it's expected to be unchangeable within the current transaction.
+	flagAssertExist
+	flagAssertNotExist
+
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist
 )
+
+// HasAssertExist returns whether the key need ensure exists in 2pc.
+func (f KeyFlags) HasAssertExist() bool {
+	return f&flagAssertExist != 0 && f&flagAssertNotExist == 0
+}
+
+// HasAssertNotExist returns whether the key need ensure non-exists in 2pc.
+func (f KeyFlags) HasAssertNotExist() bool {
+	return f&flagAssertNotExist != 0 && f&flagAssertExist == 0
+}
+
+// HasAssertUnknown returns whether the key is marked unable to do any assertion.
+func (f KeyFlags) HasAssertUnknown() bool {
+	return f&flagAssertExist != 0 && f&flagAssertNotExist != 0
+}
+
+// HasAssertionFlags returns whether the key's assertion is set.
+func (f KeyFlags) HasAssertionFlags() bool {
+	return f&flagAssertExist != 0 || f&flagAssertNotExist != 0
+}
 
 // HasPresumeKeyNotExists returns whether the associated key use lazy check.
 func (f KeyFlags) HasPresumeKeyNotExists() bool {
@@ -134,13 +165,25 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin |= flagReadable
 		case SetNewlyInserted:
 			origin |= flagNewlyInserted
+		case SetAssertExist:
+			origin &= ^flagAssertNotExist
+			origin |= flagAssertExist
+		case SetAssertNotExist:
+			origin &= ^flagAssertExist
+			origin |= flagAssertNotExist
+		case SetAssertUnknown:
+			origin |= flagAssertNotExist
+			origin |= flagAssertExist
+		case SetAssertNone:
+			origin &= ^flagAssertExist
+			origin &= ^flagAssertNotExist
 		}
 	}
 	return origin
 }
 
 // FlagsOp describes KeyFlags modify operation.
-type FlagsOp uint16
+type FlagsOp uint32
 
 const (
 	// SetPresumeKeyNotExists marks the existence of the associated key is checked lazily.
@@ -170,4 +213,12 @@ const (
 	SetReadable
 	// SetNewlyInserted marks the key is newly inserted with value length greater than zero.
 	SetNewlyInserted
+	// SetAssertExist marks the key must exist.
+	SetAssertExist
+	// SetAssertNotExist marks the key must not exist.
+	SetAssertNotExist
+	// SetAssertUnknown mark the key maybe exists or not exists.
+	SetAssertUnknown
+	// SetAssertNone cleans up the key's assert.
+	SetAssertNone
 )

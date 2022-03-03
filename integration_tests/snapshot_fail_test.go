@@ -42,7 +42,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
@@ -62,11 +61,7 @@ type testSnapshotFailSuite struct {
 }
 
 func (s *testSnapshotFailSuite) SetupSuite() {
-	client, pdClient, cluster, err := unistore.New("")
-	s.Require().Nil(err)
-	unistore.BootstrapWithSingleStore(cluster)
-	store, err := tikv.NewTestTiKVStore(fpClient{Client: client}, pdClient, nil, nil, 0)
-	s.Require().Nil(err)
+	store := NewTestUniStore(s.T())
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 

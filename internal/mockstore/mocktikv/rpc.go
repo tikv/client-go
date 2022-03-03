@@ -420,7 +420,7 @@ func (h kvHandler) handleKvRawGet(req *kvrpcpb.RawGetRequest) *kvrpcpb.RawGetRes
 		}
 	}
 	return &kvrpcpb.RawGetResponse{
-		Value: rawKV.RawGet(req.GetKey()),
+		Value: rawKV.RawGet(req.Cf, req.GetKey()),
 	}
 }
 
@@ -434,7 +434,7 @@ func (h kvHandler) handleKvRawBatchGet(req *kvrpcpb.RawBatchGetRequest) *kvrpcpb
 			},
 		}
 	}
-	values := rawKV.RawBatchGet(req.Keys)
+	values := rawKV.RawBatchGet(req.Cf, req.Keys)
 	kvPairs := make([]*kvrpcpb.KvPair, len(values))
 	for i, key := range req.Keys {
 		kvPairs[i] = &kvrpcpb.KvPair{
@@ -454,7 +454,7 @@ func (h kvHandler) handleKvRawPut(req *kvrpcpb.RawPutRequest) *kvrpcpb.RawPutRes
 			Error: "not implemented",
 		}
 	}
-	rawKV.RawPut(req.GetKey(), req.GetValue())
+	rawKV.RawPut(req.GetCf(), req.GetKey(), req.GetValue())
 	return &kvrpcpb.RawPutResponse{}
 }
 
@@ -471,7 +471,7 @@ func (h kvHandler) handleKvRawBatchPut(req *kvrpcpb.RawBatchPutRequest) *kvrpcpb
 		keys = append(keys, pair.Key)
 		values = append(values, pair.Value)
 	}
-	rawKV.RawBatchPut(keys, values)
+	rawKV.RawBatchPut(req.GetCf(), keys, values)
 	return &kvrpcpb.RawBatchPutResponse{}
 }
 
@@ -482,7 +482,7 @@ func (h kvHandler) handleKvRawDelete(req *kvrpcpb.RawDeleteRequest) *kvrpcpb.Raw
 			Error: "not implemented",
 		}
 	}
-	rawKV.RawDelete(req.GetKey())
+	rawKV.RawDelete(req.GetCf(), req.GetKey())
 	return &kvrpcpb.RawDeleteResponse{}
 }
 
@@ -493,7 +493,7 @@ func (h kvHandler) handleKvRawBatchDelete(req *kvrpcpb.RawBatchDeleteRequest) *k
 			Error: "not implemented",
 		}
 	}
-	rawKV.RawBatchDelete(req.Keys)
+	rawKV.RawBatchDelete(req.GetCf(), req.Keys)
 	return &kvrpcpb.RawBatchDeleteResponse{}
 }
 
@@ -504,7 +504,7 @@ func (h kvHandler) handleKvRawDeleteRange(req *kvrpcpb.RawDeleteRangeRequest) *k
 			Error: "not implemented",
 		}
 	}
-	rawKV.RawDeleteRange(req.GetStartKey(), req.GetEndKey())
+	rawKV.RawDeleteRange(req.GetCf(), req.GetStartKey(), req.GetEndKey())
 	return &kvrpcpb.RawDeleteRangeResponse{}
 }
 
@@ -526,6 +526,7 @@ func (h kvHandler) handleKvRawScan(req *kvrpcpb.RawScanRequest) *kvrpcpb.RawScan
 			lowerBound = req.EndKey
 		}
 		pairs = rawKV.RawReverseScan(
+			req.GetCf(),
 			req.StartKey,
 			lowerBound,
 			int(req.GetLimit()),
@@ -536,6 +537,7 @@ func (h kvHandler) handleKvRawScan(req *kvrpcpb.RawScanRequest) *kvrpcpb.RawScan
 			upperBound = req.EndKey
 		}
 		pairs = rawKV.RawScan(
+			req.GetCf(),
 			req.StartKey,
 			upperBound,
 			int(req.GetLimit()),
