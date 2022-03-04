@@ -84,11 +84,6 @@ func (s *testSnapshotFailSuite) TearDownTest() {
 }
 
 func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
-	// Meaningless to test with tikv because it has a mock key error
-	if *withTiKV {
-		return
-	}
-
 	// Put two KV pairs
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
@@ -112,11 +107,6 @@ func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 }
 
 func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
-	// Meaningless to test with tikv because it has a mock key error
-	if *withTiKV {
-		return
-	}
-
 	// Put two KV pairs
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
