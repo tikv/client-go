@@ -119,6 +119,17 @@ func convertToKeyError(err error) *kvrpcpb.KeyError {
 			TxnNotFound: &tmp.TxnNotFound,
 		}
 	}
+	if assertFailed, ok := errors.Cause(err).(*ErrAssertionFailed); ok {
+		return &kvrpcpb.KeyError{
+			AssertionFailed: &kvrpcpb.AssertionFailed{
+				StartTs:          assertFailed.StartTS,
+				Key:              assertFailed.Key,
+				Assertion:        assertFailed.Assertion,
+				ExistingStartTs:  assertFailed.ExistingStartTS,
+				ExistingCommitTs: assertFailed.ExistingCommitTS,
+			},
+		}
+	}
 	return &kvrpcpb.KeyError{
 		Abort: err.Error(),
 	}
