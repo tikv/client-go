@@ -1360,8 +1360,10 @@ func (s *testCommitterSuite) TestRetryPushTTL() {
 	txn2GotLock := make(chan struct{})
 	txn3GotLock := make(chan struct{})
 	go func() {
-		// txn1 tries to lock k
+		// txn2 tries to lock k, will blocked by txn1
 		lockCtx := &kv.LockCtx{ForUpdateTS: txn2.StartTS(), WaitStartTime: time.Now()}
+		// after txn1 rolled back, txn2 should acquire its lock successfully
+		// with the **latest** ttl
 		err := txn2.LockKeys(ctx, lockCtx, k)
 		s.Nil(err)
 		txn2GotLock <- struct{}{}
@@ -1374,6 +1376,8 @@ func (s *testCommitterSuite) TestRetryPushTTL() {
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn3.StartTS(), WaitStartTime: time.Now()}
 	done := make(chan struct{})
 	go func() {
+		// if txn2 use the old ttl calculation method, here txn3 can resolve its lock and
+		// get lock successfully here, which is not expected behavior
 		txn3.LockKeys(ctx, lockCtx, k)
 		txn3GotLock <- struct{}{}
 		txn3.Rollback()
