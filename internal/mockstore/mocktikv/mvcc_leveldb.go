@@ -766,7 +766,13 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 	if !ok {
 		if m.Assertion == kvrpcpb.Assertion_Exist && assertionLevel != kvrpcpb.AssertionLevel_Off && m.Op != kvrpcpb.Op_PessimisticLock {
 			logutil.BgLogger().Error("assertion failed!!! non-exist for must exist key", zap.Stringer("mutation", m))
-			return nil, errors.Errorf("assertion failed!!! non-exist for must exist key, mutation: %v", m.String())
+			return nil, &ErrAssertionFailed{
+				StartTS:          startTS,
+				Key:              m.Key,
+				Assertion:        m.Assertion,
+				ExistingStartTS:  0,
+				ExistingCommitTS: 0,
+			}
 		}
 		return nil, nil
 	}
@@ -809,14 +815,23 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 
 		if dec.value.valueType == typePut || dec.value.valueType == typeLock {
 			if needCheckShouldNotExistForPessimisticLock {
-				return nil, &ErrKeyAlreadyExist{
-					Key: m.Key,
+				return nil, &ErrAssertionFailed{
+					StartTS:          startTS,
+					Key:              m.Key,
+					Assertion:        m.Assertion,
+					ExistingStartTS:  dec.value.startTS,
+					ExistingCommitTS: dec.value.commitTS,
 				}
 			}
 			if needCheckAssertionForPrewerite && m.Assertion == kvrpcpb.Assertion_NotExist {
 				logutil.BgLogger().Error("assertion failed!!! exist for must non-exist key", zap.Stringer("mutation", m))
-				// TODO: Use specific error type
-				return nil, errors.Errorf("assertion failed!!! exist for must non-exist key, mutation: %v", m.String())
+				return nil, &ErrAssertionFailed{
+					StartTS:          startTS,
+					Key:              m.Key,
+					Assertion:        m.Assertion,
+					ExistingStartTS:  dec.value.startTS,
+					ExistingCommitTS: dec.value.commitTS,
+				}
 			}
 		} else if dec.value.valueType == typeDelete {
 			needCheckShouldNotExistForPessimisticLock = false
@@ -837,8 +852,13 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 		}
 		if m.Assertion == kvrpcpb.Assertion_Exist && !ok && assertionLevel != kvrpcpb.AssertionLevel_Off {
 			logutil.BgLogger().Error("assertion failed!!! non-exist for must exist key", zap.Stringer("mutation", m))
-			// TODO: Use specific error type
-			return nil, errors.Errorf("assertion failed!!! non-exist for must exist key, mutation: %v", m.String())
+			return nil, &ErrAssertionFailed{
+				StartTS:          startTS,
+				Key:              m.Key,
+				Assertion:        m.Assertion,
+				ExistingStartTS:  0,
+				ExistingCommitTS: 0,
+			}
 		}
 	}
 	if getVal {
@@ -886,6 +906,10 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 		if minCommitTS < dec.lock.minCommitTS {
 			// The minCommitTS has been pushed forward.
 			minCommitTS = dec.lock.minCommitTS
+		}
+		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel)
+		if err != nil {
+			return err
 		}
 	} else {
 		if isPessimisticLock {
@@ -1757,6 +1781,42 @@ func (mvcc *MVCCLevelDB) RawReverseScan(cf string, startKey, endKey []byte, limi
 // RawDeleteRange implements the RawKV interface.
 func (mvcc *MVCCLevelDB) RawDeleteRange(cf string, startKey, endKey []byte) {
 	tikverr.Log(mvcc.doRawDeleteRange(cf, startKey, endKey))
+}
+
+// RawCompareAndSwap supports CAS function(write newValue if expectedValue equals value stored in db).
+// `oldValue` and `swapped` returned specify the old value stored in db and whether CAS has happened.
+func (mvcc *MVCCLevelDB) RawCompareAndSwap(cf string, key, expectedValue, newValue []byte,
+) (oldValue []byte, swapped bool, err error) {
+	mvcc.mu.Lock()
+	defer mvcc.mu.Unlock()
+
+	var db *leveldb.DB
+	db = mvcc.getDB(cf)
+	if db == nil {
+		db, err = mvcc.createDB(cf)
+		if err != nil {
+			tikverr.Log(err)
+			return nil, false, errors.WithStack(err)
+		}
+	}
+
+	oldValue, err = db.Get(key, nil)
+	if err != nil {
+		tikverr.Log(err)
+		return nil, false, errors.WithStack(err)
+	}
+
+	if !bytes.Equal(oldValue, expectedValue) {
+		return oldValue, false, nil
+	}
+
+	err = db.Put(key, newValue, nil)
+	if err != nil {
+		tikverr.Log(err)
+		return oldValue, false, errors.WithStack(err)
+	}
+
+	return oldValue, true, nil
 }
 
 // doRawDeleteRange deletes all keys in a range and return the error if any.

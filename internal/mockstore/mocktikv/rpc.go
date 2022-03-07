@@ -119,6 +119,17 @@ func convertToKeyError(err error) *kvrpcpb.KeyError {
 			TxnNotFound: &tmp.TxnNotFound,
 		}
 	}
+	if assertFailed, ok := errors.Cause(err).(*ErrAssertionFailed); ok {
+		return &kvrpcpb.KeyError{
+			AssertionFailed: &kvrpcpb.AssertionFailed{
+				StartTs:          assertFailed.StartTS,
+				Key:              assertFailed.Key,
+				Assertion:        assertFailed.Assertion,
+				ExistingStartTs:  assertFailed.ExistingStartTS,
+				ExistingCommitTs: assertFailed.ExistingCommitTS,
+			},
+		}
+	}
 	return &kvrpcpb.KeyError{
 		Abort: err.Error(),
 	}
@@ -484,6 +495,33 @@ func (h kvHandler) handleKvRawDelete(req *kvrpcpb.RawDeleteRequest) *kvrpcpb.Raw
 	}
 	rawKV.RawDelete(req.GetCf(), req.GetKey())
 	return &kvrpcpb.RawDeleteResponse{}
+}
+
+func (h kvHandler) HandleKvRawCompareAndSwap(req *kvrpcpb.RawCASRequest) *kvrpcpb.RawCASResponse {
+	rawKV, ok := h.mvccStore.(RawKV)
+	if !ok {
+		return &kvrpcpb.RawCASResponse{
+			Error: "not implemented",
+		}
+	}
+
+	oldValue, success, err := rawKV.RawCompareAndSwap(
+		req.Cf,
+		req.GetKey(),
+		req.GetPreviousValue(),
+		req.GetValue(),
+	)
+	if err != nil {
+		return &kvrpcpb.RawCASResponse{
+			Error: err.Error(),
+		}
+	}
+
+	return &kvrpcpb.RawCASResponse{
+		Succeed:          success,
+		PreviousNotExist: oldValue == nil,
+		PreviousValue:    oldValue,
+	}
 }
 
 func (h kvHandler) handleKvRawBatchDelete(req *kvrpcpb.RawBatchDeleteRequest) *kvrpcpb.RawBatchDeleteResponse {
@@ -879,6 +917,13 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			return resp, nil
 		}
 		resp.Resp = kvHandler{session}.handleKvRawScan(r)
+	case tikvrpc.CmdRawCompareAndSwap:
+		r := req.RawCompareAndSwap()
+		if err := session.checkRequest(reqCtx, r.Size()); err != nil {
+			resp.Resp = &kvrpcpb.RawCASResponse{RegionError: err}
+			return resp, nil
+		}
+		resp.Resp = kvHandler{session}.HandleKvRawCompareAndSwap(r)
 	case tikvrpc.CmdUnsafeDestroyRange:
 		panic("unimplemented")
 	case tikvrpc.CmdRegisterLockObserver:
