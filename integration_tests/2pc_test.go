@@ -1345,6 +1345,51 @@ func (s *testCommitterSuite) TestAsyncCommit() {
 	})
 }
 
+func (s *testCommitterSuite) TestRetryPushTTL() {
+	ctx := context.Background()
+	k := []byte("a")
+
+	txn1 := s.begin()
+	txn1.SetPessimistic(true)
+	// txn1 lock k
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
+	err := txn1.LockKeys(ctx, lockCtx, k)
+	s.Nil(err)
+	txn2 := s.begin()
+	txn2.SetPessimistic(true)
+	txn2GotLock := make(chan struct{})
+	txn3GotLock := make(chan struct{})
+	go func() {
+		// txn1 tries to lock k
+		lockCtx := &kv.LockCtx{ForUpdateTS: txn2.StartTS(), WaitStartTime: time.Now()}
+		err := txn2.LockKeys(ctx, lockCtx, k)
+		s.Nil(err)
+		txn2GotLock <- struct{}{}
+	}()
+	time.Sleep(time.Second * 2)
+	txn1.Rollback()
+	<-txn2GotLock
+	txn3 := s.begin()
+	txn3.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn3.StartTS(), WaitStartTime: time.Now()}
+	done := make(chan struct{})
+	go func() {
+		txn3.LockKeys(ctx, lockCtx, k)
+		txn3GotLock <- struct{}{}
+		txn3.Rollback()
+		done <- struct{}{}
+	}()
+	select {
+	case <-txn3GotLock:
+		s.Fail("txn3 should not get lock at this time")
+	case <-time.After(time.Second * 2):
+		break
+	}
+	txn2.Rollback()
+	<-txn3GotLock
+	<-done
+}
+
 func updateGlobalConfig(f func(conf *config.Config)) {
 	g := config.GetGlobalConfig()
 	newConf := *g
