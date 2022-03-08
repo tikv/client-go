@@ -32,6 +32,7 @@ type IsoLevel = txnsnapshot.IsoLevel
 
 // IsoLevel value for transaction priority.
 const (
-	SI = txnsnapshot.SI
-	RC = txnsnapshot.RC
+	SI        = txnsnapshot.SI
+	RC        = txnsnapshot.RC
+	RCCheckTS = txnsnapshot.RCCheckTS
 )
