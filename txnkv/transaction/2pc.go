@@ -2026,11 +2026,17 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 	}
 
 	// For prewrite, stop sending other requests after receiving first error.
+	// However, AssertionFailed error is less prior to other kinds of errors. If we meet an AssertionFailed error,
+	// we hold it to see if there's other error, and return it if there are no other kinds of errors.
+	// This is because when there are transaction conflicts in pessimistic transaction, it's possible that the
+	// non-pessimistic-locked keys may report false-positive assertion failure.
+	// See also: https://github.com/tikv/tikv/issues/12113
 	var cancel context.CancelFunc
 	if _, ok := batchExe.action.(actionPrewrite); ok {
 		batchExe.backoffer, cancel = batchExe.backoffer.Fork()
 		defer cancel()
 	}
+	var assertionFailedErr error = nil
 	// concurrently do the work for each batch.
 	ch := make(chan error, len(batches))
 	exitCh := make(chan struct{})
@@ -2043,17 +2049,23 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 				zap.Stringer("action type", batchExe.action),
 				zap.Error(e),
 				zap.Uint64("txnStartTS", batchExe.committer.startTS))
-			// Cancel other requests and return the first error.
-			if cancel != nil {
-				logutil.Logger(batchExe.backoffer.GetCtx()).Debug("2PC doActionOnBatch to cancel other actions",
-					zap.Uint64("session", batchExe.committer.sessionID),
-					zap.Stringer("action type", batchExe.action),
-					zap.Uint64("txnStartTS", batchExe.committer.startTS))
-				atomic.StoreUint32(&batchExe.committer.prewriteCancelled, 1)
-				cancel()
-			}
-			if err == nil {
-				err = e
+			if _, isAssertionFailed := errors.Cause(e).(*tikverr.ErrAssertionFailed); isAssertionFailed {
+				if assertionFailedErr == nil {
+					assertionFailedErr = e
+				}
+			} else {
+				// Cancel other requests and return the first error.
+				if cancel != nil {
+					logutil.Logger(batchExe.backoffer.GetCtx()).Debug("2PC doActionOnBatch to cancel other actions",
+						zap.Uint64("session", batchExe.committer.sessionID),
+						zap.Stringer("action type", batchExe.action),
+						zap.Uint64("txnStartTS", batchExe.committer.startTS))
+					atomic.StoreUint32(&batchExe.committer.prewriteCancelled, 1)
+					cancel()
+				}
+				if err == nil {
+					err = e
+				}
 			}
 		}
 	}
@@ -2061,7 +2073,19 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 	if batchExe.tokenWaitDuration > 0 {
 		metrics.TiKVTokenWaitDuration.Observe(float64(batchExe.tokenWaitDuration.Nanoseconds()))
 	}
-	return err
+	if err != nil {
+		if assertionFailedErr != nil {
+			logutil.Logger(batchExe.backoffer.GetCtx()).Debug("2PC doActionOnBatch met assertion failed error but ignored due to other kinds of error",
+				zap.Uint64("session", batchExe.committer.sessionID),
+				zap.Stringer("actoin type", batchExe.action),
+				zap.Uint64("txnStartTS", batchExe.committer.startTS),
+				zap.Uint64("forUpdateTS", batchExe.committer.forUpdateTS),
+				zap.NamedError("assertionFailed", assertionFailedErr),
+				zap.Error(err))
+		}
+		return err
+	}
+	return assertionFailedErr
 }
 
 func (c *twoPhaseCommitter) setDetail(d *util.CommitDetails) {

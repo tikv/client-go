@@ -221,3 +221,66 @@ func (s *testAssertionSuite) TestFastAssertion() {
 	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Fast, true)
 	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Fast, true)
 }
+
+func (s *testAssertionSuite) TestAssertionErrorLessPriorToOtherError() {
+	s.NoError(failpoint.Enable("tikvclient/shortPessimisticLockTTL", "return"))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/shortPessimisticLockTTL"))
+	}()
+
+	testOnce := func(lockKey []byte, nonLockKey []byte, noBatch bool, delayPrimary bool, delaySecondary bool) {
+		if noBatch {
+			s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", "return"))
+			defer func() {
+				s.NoError(failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit"))
+			}()
+		}
+
+		ctx := context.Background()
+		// Transaction 1 locks the keys.
+		tx, err := s.store.Begin()
+		s.NoError(err)
+		tx.SetPessimistic(true)
+		tx.SetAssertionLevel(kvrpcpb.AssertionLevel_Strict)
+		s.NoError(tx.LockKeysWithWaitTime(ctx, 1, lockKey))
+		s.NoError(tx.Set(lockKey, []byte("rv1")))
+		s.NoError(tx.Set(nonLockKey, []byte("iv1")))
+		tx.GetMemBuffer().UpdateFlags(lockKey, kv.SetAssertNotExist)
+		tx.GetMemBuffer().UpdateFlags(nonLockKey, kv.SetAssertNotExist)
+		tx.GetCommitter().CloseTTLManager()
+
+		// Transaction 2 resolves the lock of transaction 1 and then
+		tx2, err := s.store.Begin()
+		s.NoError(err)
+		tx2.SetPessimistic(true)
+		tx2.SetAssertionLevel(kvrpcpb.AssertionLevel_Strict)
+		s.NoError(tx.LockKeysWithWaitTime(ctx, 1000, lockKey))
+		s.NoError(tx2.Set(lockKey, []byte("rv2")))
+		s.NoError(tx2.Set(nonLockKey, []byte("iv2")))
+		tx2.GetMemBuffer().UpdateFlags(lockKey, kv.SetAssertNotExist)
+		tx2.GetMemBuffer().UpdateFlags(nonLockKey, kv.SetAssertNotExist)
+		s.NoError(tx2.Commit(ctx))
+
+		if delayPrimary {
+			s.NoError(failpoint.Enable("tikvclient/prewritePrimary", "sleep(200)"))
+			defer func() {
+				s.NoError(failpoint.Disable("tikvclient/prewritePrimary"))
+			}()
+		}
+		if delaySecondary {
+			s.NoError(failpoint.Enable("tikvclient/prewriteSecondary", "sleep(200)"))
+			defer func() {
+				s.NoError(failpoint.Disable("tikvclient/prewriteSecondary"))
+			}()
+		}
+
+		err = tx.Commit(ctx)
+		s.NotNil(err)
+		s.IsType(&tikverr.ErrAssertionFailed{}, errors.Cause(err))
+	}
+
+	testOnce([]byte("kr1"), []byte("ki1"), false, false, false)
+	testOnce([]byte("kr2"), []byte("ki2"), true, false, false)
+	testOnce([]byte("kr3"), []byte("ki3"), true, true, false)
+	testOnce([]byte("kr4"), []byte("ki4"), true, false, true)
+}
