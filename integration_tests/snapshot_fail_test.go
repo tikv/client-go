@@ -42,7 +42,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
@@ -62,11 +61,7 @@ type testSnapshotFailSuite struct {
 }
 
 func (s *testSnapshotFailSuite) SetupSuite() {
-	client, pdClient, cluster, err := unistore.New("")
-	s.Require().Nil(err)
-	unistore.BootstrapWithSingleStore(cluster)
-	store, err := tikv.NewTestTiKVStore(fpClient{Client: client}, pdClient, nil, nil, 0)
-	s.Require().Nil(err)
+	store := NewTestUniStore(s.T())
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 
@@ -89,11 +84,6 @@ func (s *testSnapshotFailSuite) TearDownTest() {
 }
 
 func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
-	// Meaningless to test with tikv because it has a mock key error
-	if *withTiKV {
-		return
-	}
-
 	// Put two KV pairs
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
@@ -117,11 +107,6 @@ func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
 }
 
 func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
-	// Meaningless to test with tikv because it has a mock key error
-	if *withTiKV {
-		return
-	}
-
 	// Put two KV pairs
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)

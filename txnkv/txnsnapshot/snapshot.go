@@ -78,6 +78,8 @@ const (
 	SI IsoLevel = IsoLevel(kvrpcpb.IsolationLevel_SI)
 	// RC stands for 'read committed'.
 	RC IsoLevel = IsoLevel(kvrpcpb.IsolationLevel_RC)
+	// RCCheckTS stands for 'read consistency' with ts check.
+	RCCheckTS IsoLevel = IsoLevel(kvrpcpb.IsolationLevel_RCCheckTS)
 )
 
 // ToPB converts isolation level to wire type.

@@ -41,7 +41,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/pingcap/tidb/store/mockstore/mockcopr"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/testutils"
@@ -86,7 +85,7 @@ func (s *testRangeTaskSuite) SetupTest() {
 	}
 	allRegionRanges = append(allRegionRanges, makeRange("z", ""))
 
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithMultiRegions(cluster, splitKeys...)
 	s.cluster = cluster

@@ -41,7 +41,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/pingcap/tidb/store/mockstore/mockcopr"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
@@ -58,7 +57,7 @@ type testDeleteRangeSuite struct {
 }
 
 func (s *testDeleteRangeSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithMultiRegions(cluster, []byte("b"), []byte("c"), []byte("d"))
 	s.cluster = cluster
@@ -118,7 +117,7 @@ func (s *testDeleteRangeSuite) deleteRange(startKey []byte, endKey []byte) int {
 func deleteRangeFromMap(m map[string]string, startKey []byte, endKey []byte) {
 	for keyStr := range m {
 		key := []byte(keyStr)
-		if bytes.Compare(startKey, key) <= 0 && bytes.Compare(key, endKey) < 0 {
+		if bytes.Compare(startKey, key) <= 0 && (len(endKey) == 0 || bytes.Compare(key, endKey) < 0) {
 			delete(m, keyStr)
 		}
 	}
@@ -160,4 +159,5 @@ func (s *testDeleteRangeSuite) TestDeleteRange() {
 	s.mustDeleteRange([]byte("d0\x00"), []byte("d1\x00"), testData, 1)
 	s.mustDeleteRange([]byte("c5"), []byte("d5"), testData, 2)
 	s.mustDeleteRange([]byte("a"), []byte("z"), testData, 4)
+	s.mustDeleteRange(nil, nil, testData, 4)
 }

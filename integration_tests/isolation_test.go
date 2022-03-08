@@ -32,6 +32,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !race
 // +build !race
 
 package tikv_test
@@ -44,8 +45,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/tidb/kv"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	kverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
@@ -123,7 +125,8 @@ func (s *testIsolationSuite) GetWithRetry(k []byte) readRecord {
 				value:   val,
 			}
 		}
-		s.True(kv.IsTxnRetryableError(err))
+		var e *kverr.ErrRetryable
+		s.True(errors.As(err, &e))
 	}
 }
 

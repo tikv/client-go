@@ -41,7 +41,6 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/pingcap/tidb/store/mockstore/mockcopr"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/testutils"
@@ -62,7 +61,7 @@ type testSplitSuite struct {
 }
 
 func (s *testSplitSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
