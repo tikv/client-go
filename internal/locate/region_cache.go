@@ -1395,15 +1395,12 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 	}
 }
 
+// TODO(youjiali1995): for optimizing BatchLoadRegionsWithKeyRange, not used now.
+//
+//nolint:unused
 func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
 	if limit == 0 {
 		return nil, nil
-	}
-	ctx := bo.GetCtx()
-	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("scanRegions", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
 
 	var regions []*Region
@@ -1415,10 +1412,7 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 			return false
 		}
 		regions = append(regions, region)
-		if len(regions) >= limit {
-			return false
-		}
-		return true
+		return len(regions) < limit
 	})
 
 	if len(regions) == 0 {
@@ -1971,15 +1965,6 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 		(bytes.Compare(key, r.meta.GetEndKey()) <= 0 || len(r.meta.GetEndKey()) == 0)
 }
 
-func (r *Region) updateBuckets(buckets *metapb.Buckets) {
-	rs := r.getStore()
-	if rs.buckets == nil || rs.buckets.GetVersion() < buckets.GetVersion() {
-		newRs := rs.clone()
-		newRs.buckets = buckets
-		r.compareAndSwapStore(rs, newRs)
-	}
-}
-
 // Store contains a kv process's address.
 type Store struct {
 	addr         string               // loaded store address
@@ -2408,7 +2393,7 @@ func isSamePeer(lhs *metapb.Peer, rhs *metapb.Peer) bool {
 	return lhs == rhs || (lhs.GetId() == rhs.GetId() && lhs.GetStoreId() == rhs.GetStoreId())
 }
 
-// contains returns true if startKey <= key < endKey. Emtpy endKey is the maximum key.
+// contains returns true if startKey <= key < endKey. Empty endKey is the maximum key.
 func contains(startKey, endKey, key []byte) bool {
 	return bytes.Compare(startKey, key) <= 0 &&
 		(bytes.Compare(key, endKey) < 0 || len(endKey) == 0)
