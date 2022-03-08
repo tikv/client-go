@@ -35,6 +35,7 @@
 package transaction
 
 import (
+	"encoding/hex"
 	"math/rand"
 	"strings"
 	"sync/atomic"
@@ -123,6 +124,15 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		}
 		elapsed := uint64(time.Since(c.txn.startTime) / time.Millisecond)
 		ttl := elapsed + atomic.LoadUint64(&ManagedLockTTL)
+		if _, err := util.EvalFailpoint("shortPessimisticLockTTL"); err == nil {
+			ttl = 1
+			keys := make([]string, 0, len(mutations))
+			for _, m := range mutations {
+				keys = append(keys, hex.EncodeToString(m.Key))
+			}
+			logutil.BgLogger().Info("[failpoint] injected lock ttl = 1 on pessimistic lock",
+				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys))
+		}
 		req.PessimisticLock().LockTtl = ttl
 		if _, err := util.EvalFailpoint("PessimisticLockErrWriteConflict"); err == nil {
 			time.Sleep(300 * time.Millisecond)
