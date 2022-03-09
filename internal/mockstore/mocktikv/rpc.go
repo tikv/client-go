@@ -592,7 +592,7 @@ func (h kvHandler) handleSplitRegion(req *kvrpcpb.SplitRegionRequest) *kvrpcpb.S
 	resp := &kvrpcpb.SplitRegionResponse{Regions: make([]*metapb.Region, 0, len(keys)+1)}
 	for i, key := range keys {
 		k := NewMvccKey(key)
-		region, _ := h.cluster.GetRegionByKey(k)
+		region, _, _ := h.cluster.GetRegionByKey(k)
 		if bytes.Equal(region.GetStartKey(), key) {
 			continue
 		}

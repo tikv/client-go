@@ -95,25 +95,25 @@ func (m InterceptedPDClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 }
 
 // GetRegion implements pd.Client#GetRegion.
-func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte) (*pd.Region, error) {
+func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
-	r, err := m.Client.GetRegion(ctx, key)
+	r, err := m.Client.GetRegion(ctx, key, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err
 }
 
 // GetPrevRegion implements pd.Client#GetPrevRegion.
-func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte) (*pd.Region, error) {
+func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
-	r, err := m.Client.GetPrevRegion(ctx, key)
+	r, err := m.Client.GetPrevRegion(ctx, key, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err
 }
 
 // GetRegionByID implements pd.Client#GetRegionByID.
-func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64) (*pd.Region, error) {
+func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
-	r, err := m.Client.GetRegionByID(ctx, regionID)
+	r, err := m.Client.GetRegionByID(ctx, regionID, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err
 }

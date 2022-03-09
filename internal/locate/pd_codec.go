@@ -43,6 +43,8 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
+var _ pd.Client = &CodecPDClient{}
+
 // CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
 type CodecPDClient struct {
 	pd.Client
@@ -55,24 +57,24 @@ func NewCodeCPDClient(client pd.Client) *CodecPDClient {
 
 // GetRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte) (*pd.Region, error) {
+func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	encodedKey := codec.EncodeBytes([]byte(nil), key)
-	region, err := c.Client.GetRegion(ctx, encodedKey)
+	region, err := c.Client.GetRegion(ctx, encodedKey, opts...)
 	return processRegionResult(region, err)
 }
 
 // GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte) (*pd.Region, error) {
+func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	encodedKey := codec.EncodeBytes([]byte(nil), key)
-	region, err := c.Client.GetPrevRegion(ctx, encodedKey)
+	region, err := c.Client.GetPrevRegion(ctx, encodedKey, opts...)
 	return processRegionResult(region, err)
 }
 
 // GetRegionByID encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64) (*pd.Region, error) {
-	region, err := c.Client.GetRegionByID(ctx, regionID)
+func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	region, err := c.Client.GetRegionByID(ctx, regionID, opts...)
 	return processRegionResult(region, err)
 }
 
@@ -90,7 +92,7 @@ func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey
 	}
 	for _, region := range regions {
 		if region != nil {
-			err = decodeRegionMetaKeyInPlace(region.Meta)
+			err = decodeRegionKeyInPlace(region)
 			if err != nil {
 				return nil, err
 			}
@@ -106,7 +108,7 @@ func processRegionResult(region *pd.Region, err error) (*pd.Region, error) {
 	if region == nil || region.Meta == nil {
 		return nil, nil
 	}
-	err = decodeRegionMetaKeyInPlace(region.Meta)
+	err = decodeRegionKeyInPlace(region)
 	if err != nil {
 		return nil, err
 	}
@@ -128,20 +130,32 @@ func isDecodeError(err error) bool {
 	return ok
 }
 
-func decodeRegionMetaKeyInPlace(r *metapb.Region) error {
-	if len(r.StartKey) != 0 {
-		_, decoded, err := codec.DecodeBytes(r.StartKey, nil)
+func decodeRegionKeyInPlace(r *pd.Region) error {
+	if len(r.Meta.StartKey) != 0 {
+		_, decoded, err := codec.DecodeBytes(r.Meta.StartKey, nil)
 		if err != nil {
 			return errors.WithStack(&decodeError{err})
 		}
-		r.StartKey = decoded
+		r.Meta.StartKey = decoded
 	}
-	if len(r.EndKey) != 0 {
-		_, decoded, err := codec.DecodeBytes(r.EndKey, nil)
+	if len(r.Meta.EndKey) != 0 {
+		_, decoded, err := codec.DecodeBytes(r.Meta.EndKey, nil)
 		if err != nil {
 			return errors.WithStack(&decodeError{err})
 		}
-		r.EndKey = decoded
+		r.Meta.EndKey = decoded
+	}
+	if r.Buckets != nil {
+		for i, k := range r.Buckets.Keys {
+			if len(k) == 0 {
+				continue
+			}
+			_, decoded, err := codec.DecodeBytes(k, nil)
+			if err != nil {
+				return errors.WithStack(&decodeError{err})
+			}
+			r.Buckets.Keys[i] = decoded
+		}
 	}
 	return nil
 }
