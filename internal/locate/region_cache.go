@@ -757,26 +757,22 @@ func (l *KeyLocation) GetBucketVersion() uint64 {
 // LocateBucket returns the bucket the key is located.
 func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
-	searchLen := len(keys)
-	isMaxEndKey := len(keys[len(keys)-1]) == 0
-	if isMaxEndKey {
-		// filter out the max endKey
-		searchLen--
-	}
+	searchLen := len(keys) - 1
 	i := sort.Search(searchLen, func(i int) bool {
 		return bytes.Compare(key, keys[i]) < 0
 	})
+
 	// buckets contains region's start/end key, so i==0 means it can't find a suitable bucket
 	// which can happen if the bucket information is stale.
 	if i == 0 ||
 		// the key isn't located in the last range.
-		(i == searchLen && !isMaxEndKey) {
+		(i == searchLen && len(keys[searchLen]) != 0 && bytes.Compare(key, keys[searchLen]) >= 0) {
 		return nil
 	}
 	return &Bucket{keys[i-1], keys[i]}
 }
 
-// Bucket contains the bucket version, bucket ranges of a region.
+// Bucket is a single bucket of a region.
 type Bucket struct {
 	StartKey []byte
 	EndKey   []byte
@@ -1692,7 +1688,7 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 	return stores
 }
 
-// UpdateBucketsIfNeeded queries PD to updates the buckets of the region in the cache if
+// UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
 // the latestBucketsVer is newer than the cached one.
 func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsVer uint64) {
 	r := c.GetCachedRegionWithRLock(regionID)
