@@ -129,23 +129,29 @@ func (m *mockTSFuture) Wait() (int64, int64, error) {
 	return m.pdc.GetTS(m.ctx)
 }
 
-func (c *pdClient) GetRegion(ctx context.Context, key []byte) (*pd.Region, error) {
-	region, peer := c.cluster.GetRegionByKey(key)
-	return &pd.Region{Meta: region, Leader: peer}, nil
+func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	region, peer, buckets := c.cluster.GetRegionByKey(key)
+	if len(opts) == 0 {
+		buckets = nil
+	}
+	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets}, nil
 }
 
 func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string) (*pd.Region, error) {
 	return &pd.Region{}, nil
 }
 
-func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte) (*pd.Region, error) {
-	region, peer := c.cluster.GetPrevRegionByKey(key)
-	return &pd.Region{Meta: region, Leader: peer}, nil
+func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	region, peer, buckets := c.cluster.GetPrevRegionByKey(key)
+	if len(opts) == 0 {
+		buckets = nil
+	}
+	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets}, nil
 }
 
-func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64) (*pd.Region, error) {
-	region, peer := c.cluster.GetRegionByID(regionID)
-	return &pd.Region{Meta: region, Leader: peer}, nil
+func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	region, peer, buckets := c.cluster.GetRegionByID(regionID)
+	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets}, nil
 }
 
 func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int) ([]*pd.Region, error) {
