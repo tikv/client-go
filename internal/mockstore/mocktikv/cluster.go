@@ -45,8 +45,11 @@ import (
 	"github.com/golang/protobuf/proto" //nolint
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/tikv/client-go/v2/internal/mockstore/cluster"
 	pd "github.com/tikv/pd/client"
 )
+
+var _ cluster.Cluster = &Cluster{}
 
 // Cluster simulates a TiKV cluster. It focuses on management and the change of
 // meta data. A Cluster mainly includes following 3 kinds of meta data:
@@ -261,7 +264,7 @@ func (c *Cluster) GetRegion(regionID uint64) (*metapb.Region, uint64) {
 }
 
 // GetRegionByKey returns the Region and its leader whose range contains the key.
-func (c *Cluster) GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer) {
+func (c *Cluster) GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -269,43 +272,43 @@ func (c *Cluster) GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer) {
 }
 
 // getRegionByKeyNoLock returns the Region and its leader whose range contains the key without Lock.
-func (c *Cluster) getRegionByKeyNoLock(key []byte) (*metapb.Region, *metapb.Peer) {
+func (c *Cluster) getRegionByKeyNoLock(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
 	for _, r := range c.regions {
 		if regionContains(r.Meta.StartKey, r.Meta.EndKey, key) {
-			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer)
+			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer), proto.Clone(r.Buckets).(*metapb.Buckets)
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 // GetPrevRegionByKey returns the previous Region and its leader whose range contains the key.
-func (c *Cluster) GetPrevRegionByKey(key []byte) (*metapb.Region, *metapb.Peer) {
+func (c *Cluster) GetPrevRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
 	c.RLock()
 	defer c.RUnlock()
 
-	currentRegion, _ := c.getRegionByKeyNoLock(key)
+	currentRegion, _, _ := c.getRegionByKeyNoLock(key)
 	if len(currentRegion.StartKey) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for _, r := range c.regions {
 		if bytes.Equal(r.Meta.EndKey, currentRegion.StartKey) {
-			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer)
+			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer), proto.Clone(r.Buckets).(*metapb.Buckets)
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 // GetRegionByID returns the Region and its leader whose ID is regionID.
-func (c *Cluster) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer) {
+func (c *Cluster) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
 	c.RLock()
 	defer c.RUnlock()
 
 	for _, r := range c.regions {
 		if r.Meta.GetId() == regionID {
-			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer)
+			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer), proto.Clone(r.Buckets).(*metapb.Buckets)
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 // ScanRegions returns at most `limit` regions from given `key` and their leaders.
@@ -407,6 +410,18 @@ func (c *Cluster) GiveUpLeader(regionID uint64) {
 // Split splits a Region at the key (encoded) and creates new Region.
 func (c *Cluster) Split(regionID, newRegionID uint64, key []byte, peerIDs []uint64, leaderPeerID uint64) {
 	c.SplitRaw(regionID, newRegionID, NewMvccKey(key), peerIDs, leaderPeerID)
+}
+
+// SplitRegionBuckets splits a Region to buckets logically.
+func (c *Cluster) SplitRegionBuckets(regionID uint64, keys [][]byte, bucketVer uint64) {
+	c.Lock()
+	defer c.Unlock()
+	region := c.regions[regionID]
+	mvccKeys := make([][]byte, 0, len(keys))
+	for _, k := range keys {
+		mvccKeys = append(mvccKeys, NewMvccKey(k))
+	}
+	region.Buckets = &metapb.Buckets{RegionId: regionID, Version: bucketVer, Keys: mvccKeys}
 }
 
 // SplitRaw splits a Region at the key (not encoded) and creates new Region.
@@ -569,8 +584,9 @@ func (c *Cluster) getRegionsCoverRange(start, end MvccKey) []*Region {
 
 // Region is the Region meta data.
 type Region struct {
-	Meta   *metapb.Region
-	leader uint64
+	Meta    *metapb.Region
+	leader  uint64
+	Buckets *metapb.Buckets
 }
 
 func newPeerMeta(peerID, storeID uint64) *metapb.Peer {
@@ -589,8 +605,9 @@ func newRegion(regionID uint64, storeIDs, peerIDs []uint64, leaderPeerID uint64)
 		peers = append(peers, newPeerMeta(peerIDs[i], storeIDs[i]))
 	}
 	meta := &metapb.Region{
-		Id:    regionID,
-		Peers: peers,
+		Id:          regionID,
+		Peers:       peers,
+		RegionEpoch: &metapb.RegionEpoch{},
 	}
 	return &Region{
 		Meta:   meta,

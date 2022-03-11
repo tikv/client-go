@@ -96,23 +96,11 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		}
 		mutations[i] = mut
 	}
-	elapsed := uint64(time.Since(c.txn.startTime) / time.Millisecond)
-	ttl := elapsed + atomic.LoadUint64(&ManagedLockTTL)
-	if _, err := util.EvalFailpoint("shortPessimisticLockTTL"); err == nil {
-		ttl = 1
-		keys := make([]string, 0, len(mutations))
-		for _, m := range mutations {
-			keys = append(keys, hex.EncodeToString(m.Key))
-		}
-		logutil.BgLogger().Info("[failpoint] injected lock ttl = 1 on pessimistic lock",
-			zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys))
-	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
 		Mutations:      mutations,
 		PrimaryLock:    c.primary(),
 		StartVersion:   c.startTS,
 		ForUpdateTs:    c.forUpdateTS,
-		LockTtl:        ttl,
 		IsFirstLock:    c.isFirstLock,
 		WaitTimeout:    action.LockWaitTime(),
 		ReturnValues:   action.ReturnValues,
@@ -134,6 +122,18 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				req.PessimisticLock().WaitTimeout = timeLeft
 			}
 		}
+		elapsed := uint64(time.Since(c.txn.startTime) / time.Millisecond)
+		ttl := elapsed + atomic.LoadUint64(&ManagedLockTTL)
+		if _, err := util.EvalFailpoint("shortPessimisticLockTTL"); err == nil {
+			ttl = 1
+			keys := make([]string, 0, len(mutations))
+			for _, m := range mutations {
+				keys = append(keys, hex.EncodeToString(m.Key))
+			}
+			logutil.BgLogger().Info("[failpoint] injected lock ttl = 1 on pessimistic lock",
+				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys))
+		}
+		req.PessimisticLock().LockTtl = ttl
 		if _, err := util.EvalFailpoint("PessimisticLockErrWriteConflict"); err == nil {
 			time.Sleep(300 * time.Millisecond)
 			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})

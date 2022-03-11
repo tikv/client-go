@@ -46,8 +46,8 @@ type Cluster interface {
 	// AllocID creates an unique ID in cluster. The ID could be used as either
 	// StoreID, RegionID, or PeerID.
 	AllocID() uint64
-	// GetRegionByKey returns the Region and its leader whose range contains the key.
-	GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer)
+	// GetRegionByKey returns the Region, Buckets and its leader whose range contains the key.
+	GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets)
 	// GetAllStores returns all Stores' meta.
 	GetAllStores() []*metapb.Store
 	// ScheduleDelay schedules a delay event for a transaction on a region.
