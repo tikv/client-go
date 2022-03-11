@@ -228,6 +228,15 @@ func (h kvHandler) handleKvPrewrite(req *kvrpcpb.PrewriteRequest) *kvrpcpb.Prewr
 		}
 	}
 	errs := h.mvccStore.Prewrite(req)
+	for i, e := range errs {
+		if e != nil {
+			if _, isLocked := errors.Cause(e).(*ErrLocked); !isLocked {
+				// Keep only one error if it's not a KeyIsLocked error.
+				errs = errs[i : i+1]
+				break
+			}
+		}
+	}
 	return &kvrpcpb.PrewriteResponse{
 		Errors: convertToKeyErrors(errs),
 	}
