@@ -289,14 +289,14 @@ func (sd *ScanDetail) MergeFromScanDetailV2(scanDetail *kvrpcpb.ScanDetailV2) {
 
 // TimeDetail contains coprocessor time detail information.
 type TimeDetail struct {
-	// WaitWallTimeMs is the off-cpu wall time which is elapsed in TiKV side. Usually this includes queue waiting time and
-	// other kind of waitings in series.
-	ProcessTime time.Duration
 	// Off-cpu and on-cpu wall time elapsed to actually process the request payload. It does not
 	// include `wait_wall_time`.
 	// This field is very close to the CPU time in most cases. Some wait time spend in RocksDB
 	// cannot be excluded for now, like Mutex wait time, which is included in this field, so that
 	// this field is called wall time instead of CPU time.
+	ProcessTime time.Duration
+	// Off-cpu wall time elapsed in TiKV side. Usually this includes queue waiting time and
+	// other kind of waits in series.
 	WaitTime time.Duration
 	// KvReadWallTimeMs is the time used in KV Scan/Get.
 	KvReadWallTimeMs time.Duration
