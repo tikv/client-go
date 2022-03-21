@@ -1372,7 +1372,6 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	// Retry it when tikv disk full happens.
 	if diskFull := regionErr.GetDiskFull(); diskFull != nil {
 		if err = bo.Backoff(retry.BoTiKVDiskFull, errors.Errorf("tikv disk full: %v ctx: %v", diskFull.String(), ctx.String())); err != nil {
-			retry.BoTiKVDiskFull.SetErrors(errors.Errorf("tikv disk full: %v", diskFull.String()))
 			return false, nil
 		}
 		return true, nil
