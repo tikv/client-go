@@ -72,3 +72,20 @@ func TestBackoffErrorType(t *testing.T) {
 	err = b.Backoff(BoTxnNotFound, errors.New("tikv rpc"))
 	assert.ErrorIs(t, err, BoMaxDataNotReady.err)
 }
+
+func TestBackoffDeepCopy(t *testing.T) {
+	var err error
+	b := NewBackofferWithVars(context.TODO(), 200, nil)
+	// 700 ms sleep in total and the backoffer will return an error next time.
+	for i := 0; i < 3; i++ {
+		err = b.Backoff(BoMaxDataNotReady, errors.New("data not ready"))
+		assert.Nil(t, err)
+	}
+	bForked, cancel := b.Fork()
+	defer cancel()
+	bCloned := b.Clone()
+	for _, b := range []*Backoffer{bForked, bCloned} {
+		err = b.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
+		assert.ErrorIs(t, err, BoMaxDataNotReady.err)
+	}
+}
