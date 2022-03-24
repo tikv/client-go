@@ -1309,7 +1309,7 @@ func (s *testCommitterSuite) TestPrewriteSecondaryKeys() {
 	committer, err := txn.NewCommitter(1)
 	s.Nil(err)
 
-	mock := mockClient{inner: s.store.GetTiKVClient()}
+	mock := mockClient{Client: s.store.GetTiKVClient()}
 	s.store.SetTiKVClient(&mock)
 	ctx := context.Background()
 	// TODO remove this when minCommitTS is returned from mockStore prewrite response.
@@ -1442,7 +1442,7 @@ func (s *testCommitterSuite) TestAsyncCommitCheck() {
 }
 
 type mockClient struct {
-	inner            tikv.Client
+	tikv.Client
 	seenPrimaryReq   uint32
 	seenSecondaryReq uint32
 }
@@ -1464,11 +1464,7 @@ func (m *mockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.
 			}
 		}
 	}
-	return m.inner.SendRequest(ctx, addr, req, timeout)
-}
-
-func (m *mockClient) Close() error {
-	return m.inner.Close()
+	return m.Client.SendRequest(ctx, addr, req, timeout)
 }
 
 func isPrimary(req *kvrpcpb.PrewriteRequest) bool {

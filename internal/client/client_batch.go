@@ -813,18 +813,7 @@ func (c *RPCClient) recycleIdleConnArray() {
 	c.RUnlock()
 
 	for _, addr := range addrs {
-		c.Lock()
-		conn, ok := c.conns[addr]
-		if ok {
-			delete(c.conns, addr)
-			logutil.BgLogger().Debug("recycle idle connection",
-				zap.String("target", addr))
-		}
-		c.Unlock()
-
-		if conn != nil {
-			conn.Close()
-		}
+		c.CloseAddr(addr)
 	}
 
 	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())

@@ -1439,6 +1439,9 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			zap.Stringer("ctx", ctx))
 		ctx.Store.markNeedCheck(s.regionCache.notifyCheckCh)
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		// It's possible the address of store is not changed but the DNS resolves to a different address in k8s environment,
+		// so we always reconnect in this case.
+		s.client.CloseAddr(ctx.Addr)
 		return false, nil
 	}
 
