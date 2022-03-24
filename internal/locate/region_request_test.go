@@ -99,7 +99,7 @@ func (f *fnClient) Close() error {
 	return nil
 }
 
-func (f *fnClient) CloseOne(addr string) error {
+func (f *fnClient) CloseAddr(addr string) error {
 	f.closedAddr = addr
 	return nil
 }

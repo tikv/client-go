@@ -69,7 +69,7 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
-	assert.Nil(t, client.CloseOne(addr))
+	assert.Nil(t, client.CloseAddr(addr))
 	_, ok := client.conns[addr]
 	assert.False(t, ok)
 	conn3, err := client.getConnArray(addr, true)
@@ -126,7 +126,7 @@ func (c *chanClient) Close() error {
 	return nil
 }
 
-func (c *chanClient) CloseOne(addr string) error {
+func (c *chanClient) CloseAddr(addr string) error {
 	return nil
 }
 

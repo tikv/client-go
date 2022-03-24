@@ -34,7 +34,7 @@ func (c emptyClient) Close() error {
 	return nil
 }
 
-func (c emptyClient) CloseOne(addr string) error {
+func (c emptyClient) CloseAddr(addr string) error {
 	return nil
 }
 

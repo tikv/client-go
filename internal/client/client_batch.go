@@ -813,7 +813,7 @@ func (c *RPCClient) recycleIdleConnArray() {
 	c.RUnlock()
 
 	for _, addr := range addrs {
-		c.CloseOne(addr)
+		c.CloseAddr(addr)
 	}
 
 	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())

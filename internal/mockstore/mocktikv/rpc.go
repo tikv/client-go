@@ -1040,7 +1040,7 @@ func (c *RPCClient) Close() error {
 	return nil
 }
 
-// CloseOne does nothing.
-func (c *RPCClient) CloseOne(addr string) error {
+// CloseAddr does nothing.
+func (c *RPCClient) CloseAddr(addr string) error {
 	return nil
 }

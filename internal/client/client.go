@@ -100,8 +100,8 @@ const forwardMetadataKey = "tikv-forwarded-host"
 type Client interface {
 	// Close should release all data.
 	Close() error
-	// CloseOne closes gRPC connections to the address. It will reconnect the next time it's used.
-	CloseOne(addr string) error
+	// CloseAddr closes gRPC connections to the address. It will reconnect the next time it's used.
+	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 }
@@ -551,14 +551,13 @@ func (c *RPCClient) Close() error {
 	return nil
 }
 
-// CloseOne closes gRPC connections to the address.
-func (c *RPCClient) CloseOne(addr string) error {
+// CloseAddr closes gRPC connections to the address.
+func (c *RPCClient) CloseAddr(addr string) error {
 	c.Lock()
 	conn, ok := c.conns[addr]
 	if ok {
 		delete(c.conns, addr)
-		logutil.BgLogger().Debug("recycle idle connection",
-			zap.String("target", addr))
+		logutil.BgLogger().Debug("close connection", zap.String("target", addr))
 	}
 	c.Unlock()
 
