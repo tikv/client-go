@@ -1039,3 +1039,8 @@ func (c *RPCClient) Close() error {
 	}
 	return nil
 }
+
+// CloseOne does nothing.
+func (c *RPCClient) CloseOne(addr string) error {
+	return nil
+}

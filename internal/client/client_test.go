@@ -69,10 +69,17 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
-	client.Close()
+	assert.Nil(t, client.CloseOne(addr))
+	_, ok := client.conns[addr]
+	assert.False(t, ok)
 	conn3, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	assert.NotNil(t, conn3)
+
+	client.Close()
+	conn4, err := client.getConnArray(addr, true)
 	assert.NotNil(t, err)
-	assert.Nil(t, conn3)
+	assert.Nil(t, conn4)
 }
 
 func TestCancelTimeoutRetErr(t *testing.T) {
@@ -116,6 +123,10 @@ type chanClient struct {
 }
 
 func (c *chanClient) Close() error {
+	return nil
+}
+
+func (c *chanClient) CloseOne(addr string) error {
 	return nil
 }
 
