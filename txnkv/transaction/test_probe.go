@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
@@ -329,7 +330,7 @@ type ConfigProbe struct{}
 
 // GetTxnCommitBatchSize returns the batch size to commit txn.
 func (c ConfigProbe) GetTxnCommitBatchSize() uint64 {
-	return txnCommitBatchSize
+	return uint64(config.GetGlobalConfig().TiKVClient.TxnCommitBatchSize)
 }
 
 // GetPessimisticLockMaxBackoff returns pessimisticLockMaxBackoff
