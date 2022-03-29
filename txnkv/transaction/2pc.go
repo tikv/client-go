@@ -700,7 +700,7 @@ func txnLockTTL(startTime time.Time, txnSize int) uint64 {
 	// When writeSize is less than 256KB, the base ttl is defaultTTL (3s);
 	// When writeSize is 1MiB, 4MiB, or 10MiB, ttl is 6s, 12s, 20s correspondingly;
 	lockTTL := defaultLockTTL
-	if txnSize >= int(config.GetGlobalConfig().TiKVClient.TxnCommitBatchSize) {
+	if txnSize >= int(kv.TxnCommitBatchSize.Load()) {
 		sizeMiB := float64(txnSize) / bytesPerMiB
 		lockTTL = uint64(float64(ttlFactor) * math.Sqrt(sizeMiB))
 		if lockTTL < defaultLockTTL {
@@ -875,7 +875,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	batchBuilder := newBatched(c.primary())
 	for _, group := range groups {
 		batchBuilder.appendBatchMutationsBySize(group.region, group.mutations, sizeFunc,
-			int(config.GetGlobalConfig().TiKVClient.TxnCommitBatchSize))
+			int(kv.TxnCommitBatchSize.Load()))
 	}
 	firstIsPrimary := batchBuilder.setPrimary()
 
