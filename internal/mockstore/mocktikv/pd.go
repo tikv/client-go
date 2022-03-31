@@ -35,6 +35,7 @@
 package mocktikv
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -231,7 +232,26 @@ func (c *pdClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts 
 }
 
 func (c *pdClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
-	return nil, nil
+	regionsId := make([]uint64, 0, len(splitKeys))
+	for i, key := range splitKeys {
+		k := NewMvccKey(key)
+		region, _, _ := c.cluster.GetRegionByKey(k)
+		if bytes.Equal(region.GetStartKey(), key) {
+			continue
+		}
+		if i == 0 {
+			regionsId = append(regionsId, region.Id)
+		}
+		newRegionID, newPeerIDs := c.cluster.AllocID(), c.cluster.AllocIDs(len(region.Peers))
+		newRegion := c.cluster.SplitRaw(region.GetId(), newRegionID, k, newPeerIDs, newPeerIDs[0])
+		regionsId = append(regionsId, newRegion.Id)
+	}
+	response := &pdpb.SplitRegionsResponse{
+		Header:             &pdpb.ResponseHeader{},
+		FinishedPercentage: 100,
+		RegionsId:          regionsId,
+	}
+	return response, nil
 }
 
 func (c *pdClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetOperatorResponse, error) {
