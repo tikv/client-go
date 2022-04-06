@@ -137,7 +137,7 @@ func newConnArray(maxSize uint, addr string, security config.Security, idleNotif
 func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool) error {
 	a.target = addr
 
-	opt := grpc.WithInsecure() //nolint
+	opt := grpc.WithInsecure()
 	if len(security.ClusterSSLCA) != 0 {
 		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
@@ -238,10 +238,8 @@ func (a *connArray) Close() {
 	}
 
 	for _, c := range a.v {
-		if c != nil {
-			err := c.Close()
-			tikverr.Log(err)
-		}
+		err := c.Close()
+		tikverr.Log(err)
 	}
 
 	close(a.done)
