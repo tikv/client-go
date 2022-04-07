@@ -82,7 +82,7 @@ func TestGetConnAfterClose(t *testing.T) {
 	addr := "127.0.0.1:6379"
 	connArray, err := client.getConnArray(addr, true)
 	assert.Nil(t, err)
-	assert.Nil(t, client.CloseAddr(addr))
+	connArray.Close()
 	conn := connArray.Get()
 	state := conn.GetState()
 	assert.True(t, state == connectivity.Shutdown)
