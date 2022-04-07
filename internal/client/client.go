@@ -234,12 +234,9 @@ func (a *connArray) Close() {
 		a.batchConn.Close()
 	}
 
-	for i, c := range a.v {
-		if c != nil {
-			err := c.Close()
-			tikverr.Log(err)
-			a.v[i] = nil
-		}
+	for _, c := range a.v {
+		err := c.Close()
+		tikverr.Log(err)
 	}
 
 	close(a.done)
