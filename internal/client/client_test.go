@@ -51,6 +51,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -73,6 +74,18 @@ func TestConn(t *testing.T) {
 	conn3, err := client.getConnArray(addr, true)
 	assert.NotNil(t, err)
 	assert.Nil(t, conn3)
+}
+
+func TestGetConnAfterClose(t *testing.T) {
+	client := NewRPCClient()
+
+	addr := "127.0.0.1:6379"
+	connArray, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	connArray.Close()
+	conn := connArray.Get()
+	state := conn.GetState()
+	assert.True(t, state == connectivity.Shutdown)
 }
 
 func TestCancelTimeoutRetErr(t *testing.T) {
