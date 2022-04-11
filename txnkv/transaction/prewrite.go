@@ -190,6 +190,11 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 				return errors.New("injected error on prewriting secondary batch")
 			}
 			util.EvalFailpoint("prewriteSecondary") // for other failures like sleep or pause
+			// concurrent failpoint sleep doesn't work as expected. So we need a separate fail point.
+			// `1*sleep()` can block multiple concurrent threads that meet the failpoint.
+			if val, err := util.EvalFailpoint("prewriteSecondarySleep"); err == nil {
+				time.Sleep(time.Millisecond * time.Duration(val.(int)))
+			}
 		}
 	}
 
