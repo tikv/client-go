@@ -123,9 +123,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 		}
 
 		// If the split succeeds and the scatter fails, we also need to add the region IDs.
-		if batchResp.RegionsId != nil {
-			srResp.RegionsId = append(srResp.RegionsId, batchResp.RegionsId...)
-		}
+		srResp.RegionsId = append(srResp.RegionsId, batchResp.RegionsId...)
 	}
 	return srResp, err
 }
@@ -160,6 +158,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	if resp.FinishedPercentage != 100 {
 		err = errors.Errorf("Fail to batch split regions, finishedPercentage : %d, batch region ID : %d",
 			resp.FinishedPercentage, batch.RegionID.GetID())
+		resp.Header.Error = &pdpb.Error{Message: err.Error()}
 	}
 	if !scatter {
 		return resp
@@ -193,10 +192,8 @@ func (s *KVStore) SplitRegions(ctx context.Context, splitKeys [][]byte, scatter 
 	bo := retry.NewBackofferWithVars(ctx, int(math.Min(float64(len(splitKeys))*splitRegionBackoff, maxSplitRegionsBackoff)), nil)
 	resp, err := s.splitBatchRegionsReq(bo, splitKeys, scatter, tableID)
 	regionIDs = make([]uint64, 0, len(splitKeys))
-	if resp != nil && resp.RegionsId != nil {
-		for _, id := range resp.RegionsId {
-			regionIDs = append(regionIDs, id)
-		}
+	if resp != nil {
+		regionIDs = append(regionIDs, resp.GetRegionsId()...)
 		logutil.BgLogger().Info("split regions complete", zap.Int("region count", len(regionIDs)), zap.Uint64s("region IDs", regionIDs))
 	}
 	return regionIDs, err

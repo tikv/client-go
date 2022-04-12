@@ -232,7 +232,7 @@ func (c *pdClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts 
 }
 
 func (c *pdClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
-	regionsId := make([]uint64, 0, len(splitKeys))
+	regionsID := make([]uint64, 0, len(splitKeys))
 	for i, key := range splitKeys {
 		k := NewMvccKey(key)
 		region, _, _ := c.cluster.GetRegionByKey(k)
@@ -240,16 +240,16 @@ func (c *pdClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ..
 			continue
 		}
 		if i == 0 {
-			regionsId = append(regionsId, region.Id)
+			regionsID = append(regionsID, region.Id)
 		}
 		newRegionID, newPeerIDs := c.cluster.AllocID(), c.cluster.AllocIDs(len(region.Peers))
 		newRegion := c.cluster.SplitRaw(region.GetId(), newRegionID, k, newPeerIDs, newPeerIDs[0])
-		regionsId = append(regionsId, newRegion.Id)
+		regionsID = append(regionsID, newRegion.Id)
 	}
 	response := &pdpb.SplitRegionsResponse{
 		Header:             &pdpb.ResponseHeader{},
 		FinishedPercentage: 100,
-		RegionsId:          regionsId,
+		RegionsId:          regionsID,
 	}
 	return response, nil
 }
