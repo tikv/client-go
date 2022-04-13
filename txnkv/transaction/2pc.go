@@ -700,7 +700,7 @@ func txnLockTTL(startTime time.Time, txnSize int) uint64 {
 	// When writeSize is less than 256KB, the base ttl is defaultTTL (3s);
 	// When writeSize is 1MiB, 4MiB, or 10MiB, ttl is 6s, 12s, 20s correspondingly;
 	lockTTL := defaultLockTTL
-	if txnSize >= txnCommitBatchSize {
+	if txnSize >= int(kv.TxnCommitBatchSize.Load()) {
 		sizeMiB := float64(txnSize) / bytesPerMiB
 		lockTTL = uint64(float64(ttlFactor) * math.Sqrt(sizeMiB))
 		if lockTTL < defaultLockTTL {
@@ -874,7 +874,8 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 
 	batchBuilder := newBatched(c.primary())
 	for _, group := range groups {
-		batchBuilder.appendBatchMutationsBySize(group.region, group.mutations, sizeFunc, txnCommitBatchSize)
+		batchBuilder.appendBatchMutationsBySize(group.region, group.mutations, sizeFunc,
+			int(kv.TxnCommitBatchSize.Load()))
 	}
 	firstIsPrimary := batchBuilder.setPrimary()
 
@@ -1850,10 +1851,6 @@ func (c *twoPhaseCommitter) calculateMaxCommitTS(ctx context.Context) error {
 func (c *twoPhaseCommitter) shouldWriteBinlog() bool {
 	return c.binlog != nil
 }
-
-// TiKV recommends each RPC packet should be less than ~1MB. We keep each packet's
-// Key+Value size below 16KB.
-const txnCommitBatchSize = 16 * 1024
 
 type batchMutations struct {
 	region    locate.RegionVerID

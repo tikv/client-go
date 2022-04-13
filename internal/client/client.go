@@ -65,6 +65,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
@@ -137,7 +138,7 @@ func newConnArray(maxSize uint, addr string, security config.Security, idleNotif
 func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool) error {
 	a.target = addr
 
-	opt := grpc.WithInsecure() //nolint
+	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if len(security.ClusterSSLCA) != 0 {
 		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
@@ -237,12 +238,9 @@ func (a *connArray) Close() {
 		a.batchConn.Close()
 	}
 
-	for i, c := range a.v {
-		if c != nil {
-			err := c.Close()
-			tikverr.Log(err)
-			a.v[i] = nil
-		}
+	for _, c := range a.v {
+		err := c.Close()
+		tikverr.Log(err)
 	}
 
 	close(a.done)
