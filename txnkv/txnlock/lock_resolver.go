@@ -62,6 +62,8 @@ type LockResolver struct {
 	resolveLockLiteThreshold uint64
 	mu                       struct {
 		sync.RWMutex
+		// currentStartTS resolving locks
+		resolving map[uint64][]Lock
 		// resolved caches resolved txns (FIFO, txn id -> txnStatus).
 		resolved       map[uint64]TxnStatus
 		recentResolved *list.List
@@ -76,6 +78,13 @@ type LockResolver struct {
 	asyncResolveCancel func()
 }
 
+type LockInfo struct {
+	TxnID     uint64
+	LockTxnId uint64
+	Key       []byte
+	Primary   []byte
+}
+
 // NewLockResolver creates a new LockResolver instance.
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
@@ -83,6 +92,7 @@ func NewLockResolver(store storage) *LockResolver {
 		resolveLockLiteThreshold: config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
+	r.mu.resolving = make(map[uint64][]Lock)
 	r.mu.recentResolved = list.New()
 	r.asyncResolveCtx, r.asyncResolveCancel = context.WithCancel(context.Background())
 	return r
@@ -311,6 +321,13 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 // 3) Send `ResolveLock` cmd to the lock's region to resolve all locks belong to
 //    the same transaction.
 func (lr *LockResolver) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock) (int64, error) {
+	resolving := []Lock{}
+	for _, lock := range locks {
+		resolving = append(resolving, *lock)
+	}
+	lr.mu.Lock()
+	lr.mu.resolving[callerStartTS] = resolving
+	lr.mu.Unlock()
 	ttl, _, _, err := lr.resolveLocks(bo, callerStartTS, locks, false, false)
 	return ttl, err
 }
@@ -319,6 +336,13 @@ func (lr *LockResolver) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 // Read operations needn't wait for resolve secondary locks and can read through(the lock's transaction is committed
 // and its commitTS is less than or equal to callerStartTS) or ignore(the lock's transaction is rolled back or its minCommitTS is pushed) the lock .
 func (lr *LockResolver) ResolveLocksForRead(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock, lite bool) (int64, []uint64 /* canIgnore */, []uint64 /* canAccess */, error) {
+	resolving := []Lock{}
+	for _, lock := range locks {
+		resolving = append(resolving, *lock)
+	}
+	lr.mu.Lock()
+	lr.mu.resolving[callerStartTS] = resolving
+	lr.mu.Unlock()
 	return lr.resolveLocks(bo, callerStartTS, locks, true, lite)
 }
 
@@ -423,6 +447,29 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 		metrics.LockResolverCountWithWaitExpired.Inc()
 	}
 	return msBeforeTxnExpired.value(), canIgnore, canAccess, nil
+}
+
+func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64) {
+	lr.mu.Lock()
+	delete(lr.mu.resolving, callerStartTS)
+	lr.mu.Unlock()
+}
+
+func (lr *LockResolver) Resolving() []LockInfo {
+	result := []LockInfo{}
+	lr.mu.RLock()
+	defer lr.mu.RUnlock()
+	for txnID, item := range lr.mu.resolving {
+		for _, lock := range item {
+			result = append(result, LockInfo{
+				TxnID:     txnID,
+				LockTxnId: lock.TxnID,
+				Key:       lock.Key,
+				Primary:   lock.Primary,
+			})
+		}
+	}
+	return result
 }
 
 type txnExpireTime struct {

@@ -365,6 +365,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 		}
 		start := time.Now()
 		msBeforeExpired, err := c.store.GetLockResolver().ResolveLocks(bo, c.startTS, locks)
+		defer c.store.GetLockResolver().ResolveLocksDone(c.startTS)
 		if err != nil {
 			return err
 		}
