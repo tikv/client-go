@@ -1069,6 +1069,23 @@ func (h *RPCCanceller) CancelAll() {
 	h.Unlock()
 }
 
+func fetchRespInfo(resp *tikvrpc.Response) string {
+	var extraInfo string
+	if resp == nil || resp.Resp == nil {
+		extraInfo = "nil response"
+	} else {
+		regionErr, e := resp.GetRegionError()
+		if e != nil {
+			extraInfo = e.Error()
+		} else if regionErr != nil {
+			extraInfo = regionErr.String()
+		} else if prewriteResp, ok := resp.Resp.(*kvrpcpb.PrewriteResponse); ok {
+			extraInfo = prewriteResp.String()
+		}
+	}
+	return extraInfo
+}
+
 func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, retry bool, err error) {
 	if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 		return nil, false, err
@@ -1130,7 +1147,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		if s.Stats != nil {
 			RecordRegionRequestRuntimeStats(s.Stats, req.Type, time.Since(start))
-			if val, err := util.EvalFailpoint("tikvStoreRespResult"); err == nil {
+			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
 				if val.(bool) {
 					if req.Type == tikvrpc.CmdCop && bo.GetTotalSleep() == 0 {
 						return &tikvrpc.Response{
@@ -1156,7 +1173,8 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 
 			if inject {
 				logutil.Logger(ctx).Info("[failpoint] injected RPC error on recv", zap.Stringer("type", req.Type),
-					zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("ctx", &req.Context))
+					zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("ctx", &req.Context),
+					zap.Error(err), zap.String("extra response info", fetchRespInfo(resp)))
 				err = errors.New("injected RPC error on recv")
 				resp = nil
 			}
