@@ -78,9 +78,10 @@ type LockResolver struct {
 	asyncResolveCancel func()
 }
 
-type LockInfo struct {
+// ResolvingLock stands for current resolving locks' information
+type ResolvingLock struct {
 	TxnID     uint64
-	LockTxnId uint64
+	LockTxnID uint64
 	Key       []byte
 	Primary   []byte
 }
@@ -449,21 +450,23 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 	return msBeforeTxnExpired.value(), canIgnore, canAccess, nil
 }
 
+// ResolveLocksDone will remove resolving locks information related with callerStartTS
 func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64) {
 	lr.mu.Lock()
 	delete(lr.mu.resolving, callerStartTS)
 	lr.mu.Unlock()
 }
 
-func (lr *LockResolver) Resolving() []LockInfo {
-	result := []LockInfo{}
+// Resolving returns the locks' information we are resolving currently.
+func (lr *LockResolver) Resolving() []ResolvingLock {
+	result := []ResolvingLock{}
 	lr.mu.RLock()
 	defer lr.mu.RUnlock()
 	for txnID, item := range lr.mu.resolving {
 		for _, lock := range item {
-			result = append(result, LockInfo{
+			result = append(result, ResolvingLock{
 				TxnID:     txnID,
-				LockTxnId: lock.TxnID,
+				LockTxnID: lock.TxnID,
 				Key:       lock.Key,
 				Primary:   lock.Primary,
 			})
