@@ -100,3 +100,10 @@ func (l LockResolverProbe) IsNonAsyncCommitLock(err error) bool {
 	_, ok := errors.Cause(err).(*nonAsyncCommitLock)
 	return ok
 }
+
+// SetResolving set the resolving lock status for LockResolver
+func (l LockResolverProbe) SetResolving(currentStartTS uint64, locks []Lock) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.mu.resolving[currentStartTS] = append(l.mu.resolving[currentStartTS], locks...)
+}
