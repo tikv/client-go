@@ -144,13 +144,6 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 		resp.Header.Error = &pdpb.Error{Message: err.Error()}
 		return resp
 	}
-	if resp == nil {
-		return &pdpb.SplitRegionsResponse{
-			Header: &pdpb.ResponseHeader{
-				Error: &pdpb.Error{Message: "empty response"},
-			},
-		}
-	}
 	regionIDs := resp.GetRegionsId()
 	if len(regionIDs) > 0 {
 		// Divide a region into n, one of them may not need to be scattered,
