@@ -113,7 +113,7 @@ func (s *Scanner) Value() []byte {
 
 const scannerNextMaxBackoff = 20000
 
-// Next return next element.
+// Next returns next element.
 func (s *Scanner) Next() error {
 	bo := retry.NewBackofferWithVars(context.WithValue(context.Background(), retry.TxnStartKey, s.snapshot.version), scannerNextMaxBackoff, s.snapshot.vars)
 	if !s.valid {
@@ -230,6 +230,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				NotFillCache:     s.snapshot.notFillCache,
 				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 				ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
+				RequestSource:    s.snapshot.GetRequestSource(),
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
@@ -250,6 +251,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
+			RequestSource:    s.snapshot.GetRequestSource(),
 		})
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)
@@ -302,7 +304,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			} else {
 				s.snapshot.store.GetLockResolver().UpdateResolvingLocks(locks, s.snapshot.version, *resolvingRecordToken)
 			}
-			msBeforeExpired, err := s.snapshot.store.GetLockResolver().ResolveLocks(bo, s.snapshot.version, locks)
+			msBeforeExpired, err := s.snapshot.store.GetLockResolver().ResolveLocks(bo, s.snapshot.version, locks, nil)
 			if err != nil {
 				return err
 			}

@@ -43,6 +43,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -121,11 +122,11 @@ func NewLockResolverProb(r *txnlock.LockResolver) *LockResolverProbe {
 }
 
 // ForceResolveLock forces to resolve a single lock. It's a helper function only for writing test.
-func (l LockResolverProbe) ForceResolveLock(ctx context.Context, lock *txnlock.Lock) error {
+func (l LockResolverProbe) ForceResolveLock(ctx context.Context, lock *txnlock.Lock, detail *util.ResolveLockDetail) error {
 	bo := retry.NewBackofferWithVars(ctx, transaction.ConfigProbe{}.GetPessimisticLockMaxBackoff(), nil)
 	// make use of forcing resolving lock
 	lock.TTL = 0
-	_, err := l.LockResolverProbe.ResolveLocks(bo, 0, []*txnlock.Lock{lock})
+	_, err := l.LockResolverProbe.ResolveLocks(bo, 0, []*txnlock.Lock{lock}, detail)
 	return err
 }
 

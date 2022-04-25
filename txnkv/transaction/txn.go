@@ -77,6 +77,13 @@ type SchemaAmender interface {
 	AmendTxn(ctx context.Context, startInfoSchema SchemaVer, change *RelatedSchemaChange, mutations CommitterMutations) (CommitterMutations, error)
 }
 
+// TxnOptions indicates the option when beginning a transaction.
+// TxnOptions are set by the TxnOption values passed to Begin
+type TxnOptions struct {
+	TxnScope string
+	StartTS  *uint64
+}
+
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn struct {
 	snapshot  *txnsnapshot.KVSnapshot
@@ -117,10 +124,11 @@ type KVTxn struct {
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
+	*util.RequestSource
 }
 
 // NewTiKVTxn creates a new KVTxn.
-func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, scope string) (*KVTxn, error) {
+func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
@@ -130,10 +138,11 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		startTime:         time.Now(),
 		valid:             true,
 		vars:              tikv.DefaultVars,
-		scope:             scope,
+		scope:             options.TxnScope,
 		enableAsyncCommit: cfg.EnableAsyncCommit,
 		enable1PC:         cfg.Enable1PC,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:     snapshot.RequestSource,
 	}
 	return newTiKVTxn, nil
 }
@@ -663,6 +672,9 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 
 		lockCtx.Stats = &util.LockKeysDetails{
 			LockKeys: int32(len(keys)),
+			ResolveLock: util.ResolveLockDetail{
+				RequestSource: txn.RequestSource,
+			},
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
@@ -868,4 +880,14 @@ func (txn *KVTxn) SetBinlogExecutor(binlog BinlogExecutor) {
 // GetClusterID returns store's cluster id.
 func (txn *KVTxn) GetClusterID() uint64 {
 	return txn.store.GetClusterID()
+}
+
+// SetRequestSourceInternal sets the scope of the request source.
+func (txn *KVTxn) SetRequestSourceInternal(internal bool) {
+	txn.RequestSource.SetRequestSourceInternal(internal)
+}
+
+// SetRequestSourceType sets the type of the request source.
+func (txn *KVTxn) SetRequestSourceType(tp string) {
+	txn.RequestSource.SetRequestSourceType(tp)
 }

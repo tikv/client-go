@@ -298,7 +298,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	s.Nil(err)
 	snapshot.RecordBackoffInfo(bo)
 	snapshot.RecordBackoffInfo(bo)
-	expect := "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}"
+	expect := "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, scan_detail: {total_process_keys: 0, total_process_keys_size: 0, total_keys: 0, rocksdb: {delete_skipped_count: 0, key_skipped_count: 0, block: {cache_hit_count: 0, read_count: 0, read_byte: 0 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
 	detail := &kvrpcpb.ExecDetailsV2{
 		TimeDetail: &kvrpcpb.TimeDetail{

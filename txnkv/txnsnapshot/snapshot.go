@@ -141,6 +141,7 @@ type KVSnapshot struct {
 		interceptor interceptor.RPCInterceptor
 	}
 	sampleStep uint32
+	*util.RequestSource
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -157,6 +158,7 @@ func NewTiKVSnapshot(store kvstore, ts uint64, replicaReadSeed uint32) *KVSnapsh
 		priority:        txnutil.PriorityNormal,
 		vars:            kv.DefaultVars,
 		replicaReadSeed: replicaReadSeed,
+		RequestSource:   &util.RequestSource{},
 	}
 }
 
@@ -368,6 +370,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
+			RequestSource:    s.GetRequestSource(),
 		})
 		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 			s.mu.resourceGroupTagger(req)
@@ -458,7 +461,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			} else {
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
 			}
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
+			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks, s.getResolveLockDetail())
 			if err != nil {
 				return err
 			}
@@ -523,7 +526,6 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			return value, nil
 		}
 	}
-	s.mu.RUnlock()
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("tikvSnapshot.get", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -531,13 +533,13 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	}
 	if _, err := util.EvalFailpoint("snapshot-get-cache-fail"); err == nil {
 		if bo.GetCtx().Value("TestSnapshotCache") != nil {
+			s.mu.RUnlock()
 			panic("cache miss")
 		}
 	}
 
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, true)
 
-	s.mu.RLock()
 	if s.mu.stats != nil {
 		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
 		defer func() {
@@ -554,6 +556,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
+			RequestSource:    s.GetRequestSource(),
 		})
 	if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 		s.mu.resourceGroupTagger(req)
@@ -634,7 +637,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			} else {
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
 			}
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
+			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks, s.getResolveLockDetail())
 			if err != nil {
 				return nil, err
 			}
@@ -655,12 +658,6 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 	defer s.mu.Unlock()
 	if detail == nil || s.mu.stats == nil {
 		return
-	}
-	if s.mu.stats.scanDetail == nil {
-		s.mu.stats.scanDetail = &util.ScanDetail{}
-	}
-	if s.mu.stats.timeDetail == nil {
-		s.mu.stats.timeDetail = &util.TimeDetail{}
 	}
 	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.ScanDetailV2)
 	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetail)
@@ -729,6 +726,20 @@ func (s *KVSnapshot) SetTaskID(id uint64) {
 func (s *KVSnapshot) SetRuntimeStats(stats *SnapshotRuntimeStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if stats == nil {
+		s.mu.stats = nil
+		return
+	}
+	if stats.scanDetail == nil {
+		stats.scanDetail = &util.ScanDetail{
+			ResolveLock: util.ResolveLockDetail{
+				RequestSource: s.RequestSource,
+			},
+		}
+	}
+	if stats.timeDetail == nil {
+		stats.timeDetail = &util.TimeDetail{}
+	}
 	s.mu.stats = stats
 }
 
@@ -857,6 +868,15 @@ func (s *KVSnapshot) mergeRegionRequestStats(stats map[tikvrpc.CmdType]*locate.R
 		stat.Count += v.Count
 		stat.Consume += v.Consume
 	}
+}
+
+func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.stats == nil {
+		return nil
+	}
+	return &s.mu.stats.scanDetail.ResolveLock
 }
 
 // SnapshotRuntimeStats records the runtime stats of snapshot.

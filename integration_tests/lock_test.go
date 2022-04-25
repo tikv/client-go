@@ -262,7 +262,7 @@ func (s *testLockSuite) TestCheckTxnStatusTTL() {
 	// Rollback the txn.
 	lock := s.mustGetLock([]byte("key"))
 
-	err = s.store.NewLockResolver().ForceResolveLock(context.Background(), lock)
+	err = s.store.NewLockResolver().ForceResolveLock(context.Background(), lock, nil)
 	s.Nil(err)
 
 	// Check its status is rollbacked.
@@ -295,7 +295,7 @@ func (s *testLockSuite) TestTxnHeartBeat() {
 	s.Equal(newTTL, uint64(6666))
 
 	lock := s.mustGetLock([]byte("key"))
-	err = s.store.NewLockResolver().ForceResolveLock(context.Background(), lock)
+	err = s.store.NewLockResolver().ForceResolveLock(context.Background(), lock, nil)
 	s.Nil(err)
 
 	newTTL, err = s.store.SendTxnHeartbeat(context.Background(), []byte("key"), txn.StartTS(), 6666)
@@ -327,13 +327,13 @@ func (s *testLockSuite) TestCheckTxnStatus() {
 
 	// Test the ResolveLocks API
 	lock := s.mustGetLock([]byte("second"))
-	timeBeforeExpire, err := resolver.ResolveLocks(bo, currentTS, []*txnkv.Lock{lock})
+	timeBeforeExpire, err := resolver.ResolveLocks(bo, currentTS, []*txnkv.Lock{lock}, nil)
 	s.Nil(err)
 	s.True(timeBeforeExpire > int64(0))
 
 	// Force rollback the lock using lock.TTL = 0.
 	lock.TTL = uint64(0)
-	timeBeforeExpire, err = resolver.ResolveLocks(bo, currentTS, []*txnkv.Lock{lock})
+	timeBeforeExpire, err = resolver.ResolveLocks(bo, currentTS, []*txnkv.Lock{lock}, nil)
 	s.Nil(err)
 	s.Equal(timeBeforeExpire, int64(0))
 
@@ -577,19 +577,19 @@ func (s *testLockSuite) TestZeroMinCommitTS() {
 	s.Nil(failpoint.Disable("tikvclient/mockZeroCommitTS"))
 
 	lock := s.mustGetLock([]byte("key"))
-	expire, pushed, _, err := s.store.NewLockResolver().ResolveLocksForRead(bo, 0, []*txnkv.Lock{lock}, true)
+	expire, pushed, _, err := s.store.NewLockResolver().ResolveLocksForRead(bo, 0, []*txnkv.Lock{lock}, nil, true)
 	s.Nil(err)
 	s.Len(pushed, 0)
 	s.Greater(expire, int64(0))
 
-	expire, pushed, _, err = s.store.NewLockResolver().ResolveLocksForRead(bo, math.MaxUint64, []*txnkv.Lock{lock}, true)
+	expire, pushed, _, err = s.store.NewLockResolver().ResolveLocksForRead(bo, math.MaxUint64, []*txnkv.Lock{lock}, nil, true)
 	s.Nil(err)
 	s.Len(pushed, 1)
 	s.Equal(expire, int64(0))
 
 	// Clean up this test.
 	lock.TTL = uint64(0)
-	expire, err = s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
+	expire, err = s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock}, nil)
 	s.Nil(err)
 	s.Equal(expire, int64(0))
 }
@@ -646,7 +646,7 @@ func (s *testLockSuite) TestResolveTxnFallenBackFromAsyncCommit() {
 	lock := s.mustGetLock([]byte("fb1"))
 	s.True(lock.UseAsyncCommit)
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
-	expire, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
+	expire, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock}, nil)
 	s.Nil(err)
 	s.Equal(expire, int64(0))
 
@@ -912,7 +912,7 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 	// rolled back
 	startTS, _ = s.lockKey([]byte("k2"), []byte("v2"), []byte("k22"), []byte("v22"), 3000, false, false)
 	lock = s.mustGetLock([]byte("k22"))
-	err := s.store.NewLockResolver().ForceResolveLock(ctx, lock)
+	err := s.store.NewLockResolver().ForceResolveLock(ctx, lock, nil)
 	s.Nil(err)
 	resolvedLocks = append(resolvedLocks, startTS)
 	lock = s.mustGetLock([]byte("k2"))
@@ -964,7 +964,7 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
 	lr := s.store.NewLockResolver()
 	defer lr.Close()
-	msBeforeExpired, resolved, committed, err := lr.ResolveLocksForRead(bo, readStartTS, locks, false)
+	msBeforeExpired, resolved, committed, err := lr.ResolveLocksForRead(bo, readStartTS, locks, nil, false)
 	s.Nil(err)
 	s.Greater(msBeforeExpired, int64(0))
 	s.Equal(resolvedLocks, resolved)

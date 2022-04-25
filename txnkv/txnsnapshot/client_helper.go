@@ -78,13 +78,13 @@ func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, committedLocks *u
 }
 
 // ResolveLocks wraps the ResolveLocks function and store the resolved result.
-func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*txnlock.Lock) (int64, error) {
+func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*txnlock.Lock, detail *util.ResolveLockDetail) (int64, error) {
 	if ch.Stats != nil {
 		defer func(start time.Time) {
 			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
 		}(time.Now())
 	}
-	msBeforeTxnExpired, resolvedLocks, committedLocks, err := ch.lockResolver.ResolveLocksForRead(bo, callerStartTS, locks, ch.resolveLite)
+	msBeforeTxnExpired, resolvedLocks, committedLocks, err := ch.lockResolver.ResolveLocksForRead(bo, callerStartTS, locks, detail, ch.resolveLite)
 	if err != nil {
 		return msBeforeTxnExpired, err
 	}

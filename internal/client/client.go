@@ -347,9 +347,10 @@ func (c *RPCClient) closeConns() {
 var sendReqHistCache sync.Map
 
 type sendReqHistCacheKey struct {
-	tp       tikvrpc.CmdType
-	id       uint64
-	staleRad bool
+	tp            tikvrpc.CmdType
+	id            uint64
+	staleRad      bool
+	requestSource string
 }
 
 func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time, staleRead bool) {
@@ -357,13 +358,14 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.
 		req.Type,
 		req.Context.GetPeer().GetStoreId(),
 		staleRead,
+		req.Context.GetRequestSource(),
 	}
 
 	v, ok := sendReqHistCache.Load(key)
 	if !ok {
 		reqType := req.Type.String()
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead))
+		v = metrics.TiKVSendReqHistogram.WithLabelValues(req.Context.GetRequestSource(), reqType, storeID, strconv.FormatBool(staleRead))
 		sendReqHistCache.Store(key, v)
 	}
 
