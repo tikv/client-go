@@ -47,10 +47,10 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tidwall/btree"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -361,10 +361,10 @@ type RegionCache struct {
 	enableForwarding bool
 
 	mu struct {
-		sync.RWMutex                           // mutex protect cached region
-		regions        map[RegionVerID]*Region // cached regions are organized as regionVerID to region ref mapping
-		latestVersions map[uint64]RegionVerID  // cache the map from regionID to its latest RegionVerID
-		sorted         *btree.BTree            // cache regions are organized as sorted key to region ref mapping
+		sync.RWMutex                             // mutex protect cached region
+		regions        map[RegionVerID]*Region   // cached regions are organized as regionVerID to region ref mapping
+		latestVersions map[uint64]RegionVerID    // cache the map from regionID to its latest RegionVerID
+		sorted         btree.Generic[*btreeItem] // cache regions are organized as sorted key to region ref mapping
 	}
 	storeMu struct {
 		sync.RWMutex
@@ -387,7 +387,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	}
 	c.mu.regions = make(map[RegionVerID]*Region)
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted = btree.New(btreeDegree)
+	c.mu.sorted = *btree.NewGeneric[*btreeItem](less)
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.closeCh = make(chan struct{})
@@ -402,7 +402,7 @@ func (c *RegionCache) clear() {
 	c.mu.Lock()
 	c.mu.regions = make(map[RegionVerID]*Region)
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted = btree.New(btreeDegree)
+	c.mu.sorted = *btree.NewGeneric[*btreeItem](less)
 	c.mu.Unlock()
 	c.storeMu.Lock()
 	c.storeMu.stores = make(map[uint64]*Store)
@@ -1159,10 +1159,10 @@ func (c *RegionCache) removeVersionFromCache(oldVer RegionVerID, regionID uint64
 // insertRegionToCache tries to insert the Region to cache.
 // It should be protected by c.mu.Lock().
 func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
-	old := c.mu.sorted.ReplaceOrInsert(newBtreeItem(cachedRegion))
-	if old != nil {
+	old, isReplace := c.mu.sorted.Set(newBtreeItem(cachedRegion))
+	if isReplace {
 		store := cachedRegion.getStore()
-		oldRegion := old.(*btreeItem).cachedRegion
+		oldRegion := old.cachedRegion
 		oldRegionStore := oldRegion.getStore()
 		// TODO(youjiali1995): remove this because the new retry logic can handle this issue.
 		//
@@ -1203,8 +1203,8 @@ func (c *RegionCache) searchCachedRegion(key []byte, isEndKey bool) *Region {
 	ts := time.Now().Unix()
 	var r *Region
 	c.mu.RLock()
-	c.mu.sorted.DescendLessOrEqual(newBtreeSearchItem(key), func(item btree.Item) bool {
-		r = item.(*btreeItem).cachedRegion
+	c.mu.sorted.Descend(newBtreeSearchItem(key), func(item *btreeItem) bool {
+		r = item.cachedRegion
 		if isEndKey && bytes.Equal(r.StartKey(), key) {
 			r = nil     // clear result
 			return true // iterate next item
@@ -1403,8 +1403,8 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 	var regions []*Region
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	c.mu.sorted.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item btree.Item) bool {
-		region := item.(*btreeItem).cachedRegion
+	c.mu.sorted.Ascend(newBtreeSearchItem(startKey), func(item *btreeItem) bool {
+		region := item.cachedRegion
 		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
 			return false
 		}
@@ -1739,8 +1739,8 @@ func newBtreeSearchItem(key []byte) *btreeItem {
 	}
 }
 
-func (item *btreeItem) Less(other btree.Item) bool {
-	return bytes.Compare(item.key, other.(*btreeItem).key) < 0
+func less(a *btreeItem, b *btreeItem) bool {
+	return bytes.Compare(a.key, b.key) < 0
 }
 
 // GetID returns id.

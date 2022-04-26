@@ -44,10 +44,10 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tidwall/btree"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
@@ -98,7 +98,7 @@ func (s *testRegionCacheSuite) checkCache(len int) {
 	ts := time.Now().Unix()
 	s.Equal(validRegions(s.cache.mu.regions, ts), len)
 	s.Equal(validRegionsSearchedByVersions(s.cache.mu.latestVersions, s.cache.mu.regions, ts), len)
-	s.Equal(validRegionsInBtree(s.cache.mu.sorted, ts), len)
+	s.Equal(validRegionsInBtree(&s.cache.mu.sorted, ts), len)
 }
 
 func validRegionsSearchedByVersions(
@@ -126,9 +126,9 @@ func validRegions(regions map[RegionVerID]*Region, ts int64) (len int) {
 	return
 }
 
-func validRegionsInBtree(t *btree.BTree, ts int64) (len int) {
-	t.Descend(func(item btree.Item) bool {
-		r := item.(*btreeItem).cachedRegion
+func validRegionsInBtree(t *btree.Generic[*btreeItem], ts int64) (len int) {
+	t.Scan(func(item *btreeItem) bool {
+		r := item.cachedRegion
 		if !r.checkRegionCacheTTL(ts) {
 			return true
 		}
