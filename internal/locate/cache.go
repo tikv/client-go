@@ -92,18 +92,6 @@ func (mu *CacheMu) Clear() {
 	mu.Unlock()
 }
 
-func validRegionsInBtree(t *btree.Generic[*btreeItem], ts int64) (len int) {
-	t.Scan(func(item *btreeItem) bool {
-		r := item.cachedRegion
-		if !r.checkRegionCacheTTL(ts) {
-			return true
-		}
-		len++
-		return true
-	})
-	return
-}
-
 func validRegionsInBtree(t *CacheMu, ts int64) (len int) {
 	t.sorted.Descend(func(item btree.Item) bool {
 		r := item.(*btreeItem).cachedRegion
