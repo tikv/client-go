@@ -50,7 +50,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
-	"github.com/tidwall/btree"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -73,7 +72,6 @@ import (
 )
 
 const (
-	btreeDegree               = 32
 	invalidatedLastAccessTime = -1
 	defaultRegionsPerBatch    = 128
 )
@@ -360,12 +358,7 @@ type RegionCache struct {
 	pdClient         pd.Client
 	enableForwarding bool
 
-	mu struct {
-		sync.RWMutex                             // mutex protect cached region
-		regions        map[RegionVerID]*Region   // cached regions are organized as regionVerID to region ref mapping
-		latestVersions map[uint64]RegionVerID    // cache the map from regionID to its latest RegionVerID
-		sorted         btree.Generic[*btreeItem] // cache regions are organized as sorted key to region ref mapping
-	}
+	mu      CacheMu
 	storeMu struct {
 		sync.RWMutex
 		stores map[uint64]*Store
@@ -385,9 +378,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c := &RegionCache{
 		pdClient: pdClient,
 	}
-	c.mu.regions = make(map[RegionVerID]*Region)
-	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted = *btree.NewGeneric[*btreeItem](less)
+	c.mu = NewCache()
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.closeCh = make(chan struct{})
@@ -399,11 +390,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 
 // clear clears all cached data in the RegionCache. It's only used in tests.
 func (c *RegionCache) clear() {
-	c.mu.Lock()
-	c.mu.regions = make(map[RegionVerID]*Region)
-	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted = *btree.NewGeneric[*btreeItem](less)
-	c.mu.Unlock()
+	c.mu.Clear()
 	c.storeMu.Lock()
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.storeMu.Unlock()
@@ -1159,8 +1146,8 @@ func (c *RegionCache) removeVersionFromCache(oldVer RegionVerID, regionID uint64
 // insertRegionToCache tries to insert the Region to cache.
 // It should be protected by c.mu.Lock().
 func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
-	old, isReplace := c.mu.sorted.Set(newBtreeItem(cachedRegion))
-	if isReplace {
+	old := c.mu.ReplaceOrInsert(newBtreeItem(cachedRegion))
+	if old != nil {
 		store := cachedRegion.getStore()
 		oldRegion := old.cachedRegion
 		oldRegionStore := oldRegion.getStore()
@@ -1201,21 +1188,7 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 // when processing in reverse order.
 func (c *RegionCache) searchCachedRegion(key []byte, isEndKey bool) *Region {
 	ts := time.Now().Unix()
-	var r *Region
-	c.mu.RLock()
-	c.mu.sorted.Descend(newBtreeSearchItem(key), func(item *btreeItem) bool {
-		r = item.cachedRegion
-		if isEndKey && bytes.Equal(r.StartKey(), key) {
-			r = nil     // clear result
-			return true // iterate next item
-		}
-		if !r.checkRegionCacheTTL(ts) {
-			r = nil
-			return true
-		}
-		return false
-	})
-	c.mu.RUnlock()
+	r := c.mu.searchCachedRegion(key, isEndKey, ts)
 	if r != nil && (!isEndKey && r.Contains(key) || isEndKey && r.ContainsByEnd(key)) {
 		return r
 	}
@@ -1399,19 +1372,7 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 	if limit == 0 {
 		return nil, nil
 	}
-
-	var regions []*Region
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	c.mu.sorted.Ascend(newBtreeSearchItem(startKey), func(item *btreeItem) bool {
-		region := item.cachedRegion
-		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
-			return false
-		}
-		regions = append(regions, region)
-		return len(regions) < limit
-	})
-
+	regions := c.mu.scanRegionsFromCache(startKey, endKey, limit)
 	if len(regions) == 0 {
 		return nil, errors.New("no regions in the cache")
 	}
@@ -1737,10 +1698,6 @@ func newBtreeSearchItem(key []byte) *btreeItem {
 	return &btreeItem{
 		key: key,
 	}
-}
-
-func less(a *btreeItem, b *btreeItem) bool {
-	return bytes.Compare(a.key, b.key) < 0
 }
 
 // GetID returns id.
