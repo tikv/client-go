@@ -82,7 +82,10 @@ func (mu *CacheMu) scanRegionsFromCache(startKey, endKey []byte, limit int) (reg
 
 func (mu *CacheMu) ReplaceOrInsert(item *btreeItem) *btreeItem {
 	old := mu.sorted.ReplaceOrInsert(item)
-	return old.(*btreeItem)
+	if vara, ok := old.(*btreeItem); ok {
+		return vara
+	}
+	return nil
 }
 func (mu *CacheMu) Clear() {
 	mu.Lock()
