@@ -856,3 +856,40 @@ func (s *testLockSuite) TestStartHeartBeatAfterLockingPrimary() {
 
 	s.Nil(txn.Rollback())
 }
+
+func (s *testLockSuite) TestLockWaitTimeLimit() {
+	k1 := []byte("k1")
+	k2 := []byte("k2")
+
+	txn1, err := s.store.Begin()
+	s.Nil(err)
+	txn1.SetPessimistic(true)
+
+	// lock the primary key
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
+	err = txn1.LockKeys(context.Background(), lockCtx, k1, k2)
+	s.Nil(err)
+
+	txn2, err := s.store.Begin()
+	s.Nil(err)
+	txn2.SetPessimistic(true)
+
+	// test no wait
+	lockCtx = kv.NewLockCtx(txn2.StartTS(), kv.LockNoWait, time.Now())
+	err = txn2.LockKeys(context.Background(), lockCtx, k1)
+	// cannot acquire lock immediately thus error
+	s.Equal(tikverr.ErrLockAcquireFailAndNoWaitSet.Error(), err.Error())
+	// Default wait time is 1s, we use 500ms as an upper bound
+	s.Less(time.Since(lockCtx.WaitStartTime), 500*time.Millisecond)
+
+	// test for wait limited time (200ms)
+	lockCtx = kv.NewLockCtx(txn2.StartTS(), 200, time.Now())
+	err = txn2.LockKeys(context.Background(), lockCtx, k2)
+	// cannot acquire lock in time thus error
+	s.Equal(tikverr.ErrLockWaitTimeout.Error(), err.Error())
+	s.GreaterOrEqual(time.Since(lockCtx.WaitStartTime), 200*time.Millisecond)
+	s.Less(time.Since(lockCtx.WaitStartTime), 800*time.Millisecond)
+
+	s.Nil(txn1.Rollback())
+	s.Nil(txn2.Rollback())
+}
