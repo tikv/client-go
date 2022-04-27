@@ -1688,6 +1688,23 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 	return stores
 }
 
+// GetTiFlashMPPStores returns all stores with lable <engine, tiflash_mpp>
+func (c *RegionCache) GetTiFlashMPPStores() (res []*Store) {
+	allStores := c.GetTiFlashStores()
+	mppLabels := []*metapb.StoreLabel{
+		{
+			Key:   "engine",
+			Value: "tiflash_mpp",
+		},
+	}
+	for _, store := range allStores {
+		if store.IsLabelsMatch(mppLabels) {
+			res = append(res, store)
+		}
+	}
+	return res
+}
+
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
 // the latestBucketsVer is newer than the cached one.
 func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsVer uint64) {
