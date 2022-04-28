@@ -37,6 +37,7 @@ package rawkv
 import (
 	"bytes"
 	"context"
+	"github.com/tikv/client-go/v2/kv"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -110,6 +111,7 @@ func ScanKeyOnly() RawOption {
 // Client is a client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
+	apiVersion  kvrpcpb.APIVersion
 	clusterID   uint64
 	regionCache *locate.RegionCache
 	pdClient    pd.Client
@@ -148,6 +150,25 @@ func NewClient(ctx context.Context, pdAddrs []string, security config.Security, 
 	}, nil
 }
 
+// NewClientV2 creates a client with PD cluster addrs with api version of v2.
+func NewClientV2(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
+	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
+		CAPath:   security.ClusterSSLCA,
+		CertPath: security.ClusterSSLCert,
+		KeyPath:  security.ClusterSSLKey,
+	}, opts...)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	pdCli = locate.NewCodecPDClientV2(pdCli, kv.ModeRaw)
+	return &Client{
+		clusterID:   pdCli.GetClusterID(ctx),
+		regionCache: locate.NewRegionCache(pdCli),
+		pdClient:    pdCli,
+		rpcClient:   client.NewRPCClient(client.WithSecurity(security)),
+	}, nil
+}
+
 // Close closes the client.
 func (c *Client) Close() error {
 	if c.pdClient != nil {
@@ -176,7 +197,7 @@ func (c *Client) Get(ctx context.Context, key []byte, options ...RawOption) ([]b
 	req := tikvrpc.NewRequest(
 		tikvrpc.CmdRawGet,
 		&kvrpcpb.RawGetRequest{
-			Key: key,
+			Key: c.buildRequestKey(key),
 			Cf:  c.getColumnFamily(opts),
 		})
 	resp, _, err := c.sendReq(ctx, key, req, false)
@@ -242,7 +263,7 @@ func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64, 
 
 	opts := c.getRawKVOptions(options...)
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
-		Key:    key,
+		Key:    c.buildRequestKey(key),
 		Value:  value,
 		Ttl:    ttl,
 		Cf:     c.getColumnFamily(opts),
@@ -269,7 +290,7 @@ func (c *Client) GetKeyTTL(ctx context.Context, key []byte, options ...RawOption
 
 	opts := c.getRawKVOptions(options...)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGetKeyTTL, &kvrpcpb.RawGetKeyTTLRequest{
-		Key: key,
+		Key: c.buildRequestKey(key),
 		Cf:  c.getColumnFamily(opts),
 	})
 	resp, _, err := c.sendReq(ctx, key, req, false)
@@ -335,7 +356,7 @@ func (c *Client) Delete(ctx context.Context, key []byte, options ...RawOption) e
 
 	opts := c.getRawKVOptions(options...)
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawDelete, &kvrpcpb.RawDeleteRequest{
-		Key:    key,
+		Key:    c.buildRequestKey(key),
 		Cf:     c.getColumnFamily(opts),
 		ForCas: c.atomic,
 	})
@@ -429,8 +450,13 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 	opts := c.getRawKVOptions(options...)
 
 	for len(keys) < limit && (len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0) {
+		if len(endKey) > 0 {
+			endKey = c.buildRequestKey(endKey)
+		} else {
+			endKey = kv.GetV2EndKey(kv.ModeRaw)
+		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
-			StartKey: startKey,
+			StartKey: c.buildRequestKey(startKey),
 			EndKey:   endKey,
 			Limit:    uint32(limit - len(keys)),
 			KeyOnly:  opts.KeyOnly,
@@ -445,7 +471,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
-			keys = append(keys, pair.Key)
+			keys = append(keys, c.unwrapResponseKey(pair.Key))
 			values = append(values, pair.Value)
 		}
 		startKey = loc.EndKey
@@ -476,8 +502,13 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 	opts := c.getRawKVOptions(options...)
 
 	for len(keys) < limit && bytes.Compare(startKey, endKey) > 0 {
+		if len(endKey) > 0 {
+			endKey = c.buildRequestKey(endKey)
+		} else {
+			endKey = kv.GetV2EndKey(kv.ModeRaw)
+		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
-			StartKey: startKey,
+			StartKey: c.buildRequestKey(startKey),
 			EndKey:   endKey,
 			Limit:    uint32(limit - len(keys)),
 			Reverse:  true,
@@ -493,7 +524,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
-			keys = append(keys, pair.Key)
+			keys = append(keys, c.unwrapResponseKey(pair.Key))
 			values = append(values, pair.Value)
 		}
 		startKey = loc.StartKey
@@ -525,7 +556,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 
 	opts := c.getRawKVOptions(options...)
 	reqArgs := kvrpcpb.RawCASRequest{
-		Key:   key,
+		Key:   c.buildRequestKey(key),
 		Value: newValue,
 		Cf:    c.getColumnFamily(opts),
 	}
@@ -554,6 +585,20 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 		return nil, cmdResp.Succeed, nil
 	}
 	return cmdResp.PreviousValue, cmdResp.Succeed, nil
+}
+
+func (c *Client) buildRequestKey(key []byte) []byte {
+	if c.apiVersion == kvrpcpb.APIVersion_V2 {
+		return kv.BuildV2RequestKey(kv.ModeRaw, key)
+	}
+	return key
+}
+
+func (c *Client) unwrapResponseKey(key []byte) []byte {
+	if c.apiVersion == kvrpcpb.APIVersion_V2 {
+		return key[len(kv.ApiV2RawKeyPrefix):]
+	}
+	return key
 }
 
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
@@ -628,6 +673,9 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 				}
 			} else if cmdType == tikvrpc.CmdRawBatchGet {
 				cmdResp := singleResp.Resp.(*kvrpcpb.RawBatchGetResponse)
+				for i := range cmdResp.Pairs {
+					cmdResp.Pairs[i].Key = c.buildRequestKey(cmdResp.Pairs[i].Key)
+				}
 				resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs = append(resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs, cmdResp.Pairs...)
 			}
 		}
@@ -638,6 +686,9 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 
 func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *rawOptions, cmdType tikvrpc.CmdType) kvrpc.BatchResult {
 	var req *tikvrpc.Request
+	for i := range batch.Keys {
+		batch.Keys[i] = c.buildRequestKey(batch.Keys[i])
+	}
 	switch cmdType {
 	case tikvrpc.CmdRawBatchGet:
 		req = tikvrpc.NewRequest(cmdType, &kvrpcpb.RawBatchGetRequest{
@@ -715,7 +766,7 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 		}
 
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawDeleteRange, &kvrpcpb.RawDeleteRangeRequest{
-			StartKey: startKey,
+			StartKey: c.buildRequestKey(startKey),
 			EndKey:   actualEndKey,
 			Cf:       c.getColumnFamily(opts),
 		})
@@ -742,11 +793,11 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 
 func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls []uint64, opts *rawOptions) error {
 	keyToValue := make(map[string][]byte, len(keys))
-	keyTottl := make(map[string]uint64, len(keys))
+	keyToTTL := make(map[string]uint64, len(keys))
 	for i, key := range keys {
 		keyToValue[string(key)] = values[i]
 		if len(ttls) > 0 {
-			keyTottl[string(key)] = ttls[i]
+			keyToTTL[string(key)] = ttls[i]
 		}
 	}
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys, nil)
@@ -756,7 +807,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 	var batches []kvrpc.Batch
 	// split the keys by size and RegionVerID
 	for regionID, groupKeys := range groups {
-		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyTottl, rawBatchPutSize)
+		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyToTTL, rawBatchPutSize)
 	}
 	bo, cancel := bo.Fork()
 	ch := make(chan error, len(batches))
@@ -784,7 +835,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOptions) error {
 	kvPair := make([]*kvrpcpb.KvPair, 0, len(batch.Keys))
 	for i, key := range batch.Keys {
-		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: key, Value: batch.Values[i]})
+		kvPair = append(kvPair, &kvrpcpb.KvPair{Key: c.buildRequestKey(key), Value: batch.Values[i]})
 	}
 
 	var ttl uint64
