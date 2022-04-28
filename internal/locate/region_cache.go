@@ -369,6 +369,11 @@ type RegionCache struct {
 		sync.RWMutex
 		stores map[uint64]*Store
 	}
+	tiflashMPPStoreMu struct {
+		sync.RWMutex
+		needReload bool
+		stores     []*Store
+	}
 	notifyCheckCh chan struct{}
 	closeCh       chan struct{}
 
@@ -388,6 +393,8 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
 	c.mu.sorted = btree.New(btreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
+	c.tiflashMPPStoreMu.needReload = true
+	c.tiflashMPPStoreMu.stores = make([]*Store, 1)
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.closeCh = make(chan struct{})
 	interval := config.GetGlobalConfig().StoresRefreshInterval
@@ -1689,20 +1696,56 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 }
 
 // GetTiFlashMPPStores returns all stores with lable <engine, tiflash_mpp>
-func (c *RegionCache) GetTiFlashMPPStores() (res []*Store) {
-	allStores := c.GetTiFlashStores()
+func (c *RegionCache) GetTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, err error) {
+	c.tiflashMPPStoreMu.RLock()
+	needReload := c.tiflashMPPStoreMu.needReload
+	stores := c.tiflashMPPStoreMu.stores
+	c.tiflashMPPStoreMu.RUnlock()
+
+	if needReload {
+		return c.ReloadTiFlashMPPStores(bo)
+	}
+	return stores, nil
+}
+
+func (c *RegionCache) ReloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, _ error) {
+	// todo: thread safe?
+	stores, err := c.pdClient.GetAllStores(bo.GetCtx())
+	if err != nil {
+		return nil, err
+	}
 	mppLabels := []*metapb.StoreLabel{
 		{
 			Key:   "engine",
 			Value: "tiflash_mpp",
 		},
 	}
-	for _, store := range allStores {
-		if store.IsLabelsMatch(mppLabels) {
-			res = append(res, store)
+	for _, s := range stores {
+		tmpStore := &Store{
+			storeID:   s.GetId(),
+			addr:      s.GetAddress(),
+			saddr:     s.GetStatusAddress(),
+			storeType: tikvrpc.GetStoreTypeByMeta(s),
+			labels:    s.GetLabels(),
+			// todo: ok?
+			state: uint64(resolved),
+		}
+		if tmpStore.IsLabelsMatch(mppLabels) {
+			res = append(res, tmpStore)
 		}
 	}
-	return res
+
+	c.tiflashMPPStoreMu.Lock()
+	c.tiflashMPPStoreMu.stores = res
+	c.tiflashMPPStoreMu.Unlock()
+	return res, nil
+}
+
+func (c *RegionCache) InvalidateTiFlashMPPStores() {
+	c.tiflashMPPStoreMu.Lock()
+	defer c.tiflashMPPStoreMu.Unlock()
+	c.tiflashMPPStoreMu.needReload = true
+	return
 }
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
