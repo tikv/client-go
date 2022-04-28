@@ -298,7 +298,7 @@ func (db *MemDB) Dirty() bool {
 func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	db.Lock()
 	defer db.Unlock()
-	
+
 	if db.vlogInvalid {
 		// panic for easier debugging.
 		panic("vlog is resetted")
