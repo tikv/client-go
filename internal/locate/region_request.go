@@ -1348,6 +1348,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "region_not_initialized"
 	} else if e.GetDiskFull() != nil {
 		return "disk_full"
+	} else if e.GetRecoveryInProgress() != nil {
+		return "recovery_in_progress"
 	}
 	return "unknown"
 }
@@ -1391,6 +1393,16 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	if diskFull := regionErr.GetDiskFull(); diskFull != nil {
 		if err = bo.Backoff(retry.BoTiKVDiskFull, errors.Errorf("tikv disk full: %v ctx: %v", diskFull.String(), ctx.String())); err != nil {
 			return false, nil
+		}
+		return true, nil
+	}
+
+	if regionErr.GetRecoveryInProgress() != nil {
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		logutil.BgLogger().Debug("tikv reports `RecoveryInProgress`", zap.Stringer("ctx", ctx))
+		err = bo.Backoff(retry.BoRegionRecoveryInProgress, errors.Errorf("region recovery in progress, ctx: %v", ctx))
+		if err != nil {
+			return false, err
 		}
 		return true, nil
 	}

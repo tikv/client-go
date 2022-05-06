@@ -54,17 +54,18 @@ var (
 	RawkvSizeHistogramWithKey          prometheus.Observer
 	RawkvSizeHistogramWithValue        prometheus.Observer
 
-	BackoffHistogramRPC              prometheus.Observer
-	BackoffHistogramLock             prometheus.Observer
-	BackoffHistogramLockFast         prometheus.Observer
-	BackoffHistogramPD               prometheus.Observer
-	BackoffHistogramRegionMiss       prometheus.Observer
-	BackoffHistogramRegionScheduling prometheus.Observer
-	BackoffHistogramServerBusy       prometheus.Observer
-	BackoffHistogramTiKVDiskFull     prometheus.Observer
-	BackoffHistogramStaleCmd         prometheus.Observer
-	BackoffHistogramDataNotReady     prometheus.Observer
-	BackoffHistogramEmpty            prometheus.Observer
+	BackoffHistogramRPC                      prometheus.Observer
+	BackoffHistogramLock                     prometheus.Observer
+	BackoffHistogramLockFast                 prometheus.Observer
+	BackoffHistogramPD                       prometheus.Observer
+	BackoffHistogramRegionMiss               prometheus.Observer
+	BackoffHistogramRegionScheduling         prometheus.Observer
+	BackoffHistogramServerBusy               prometheus.Observer
+	BackoffHistogramTiKVDiskFull             prometheus.Observer
+	BackoffHistogramRegionRecoveryInProgress prometheus.Observer
+	BackoffHistogramStaleCmd                 prometheus.Observer
+	BackoffHistogramDataNotReady             prometheus.Observer
+	BackoffHistogramEmpty                    prometheus.Observer
 
 	TxnRegionsNumHistogramWithSnapshot         prometheus.Observer
 	TxnRegionsNumHistogramPrewrite             prometheus.Observer
@@ -155,6 +156,7 @@ func initShortcuts() {
 	BackoffHistogramRegionScheduling = TiKVBackoffHistogram.WithLabelValues("regionScheduling")
 	BackoffHistogramServerBusy = TiKVBackoffHistogram.WithLabelValues("serverBusy")
 	BackoffHistogramTiKVDiskFull = TiKVBackoffHistogram.WithLabelValues("tikvDiskFull")
+	BackoffHistogramRegionRecoveryInProgress = TiKVBackoffHistogram.WithLabelValues("regionRecoveryInProgress")
 	BackoffHistogramStaleCmd = TiKVBackoffHistogram.WithLabelValues("staleCommand")
 	BackoffHistogramDataNotReady = TiKVBackoffHistogram.WithLabelValues("dataNotReady")
 	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")
