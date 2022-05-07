@@ -1404,7 +1404,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		if err != nil {
 			return false, err
 		}
-		return true, nil
+		return false, nil
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.
