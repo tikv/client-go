@@ -1505,3 +1505,47 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), newBuckets.GetVersion())
 	waitUpdateBuckets(newBuckets, []byte("a"))
 }
+
+func (s *testRegionCacheSuite) TestLocateBucketV2() {
+	// proto.Clone clones []byte{} to nil and [][]byte{nil or []byte{}} to [][]byte{[]byte{}}.
+	// nilToEmtpyBytes unifies it for tests.
+	nilToEmtpyBytes := func(s []byte) []byte {
+		if s == nil {
+			s = []byte{}
+		}
+		return s
+	}
+	r, _ := s.cluster.GetRegion(s.region1)
+
+	// First test normal case: region start equals to the first bucket keys and
+	// region end equals to the last bucket key
+	bucketKeys := [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), []byte("b"), nilToEmtpyBytes(r.GetEndKey())}
+	s.cluster.SplitRegionBuckets(s.region1, bucketKeys, uint64(time.Now().Nanosecond()))
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.Nil(err)
+	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
+		b := loc.LocateBucket(key)
+		s.NotNil(b)
+		s.True(b.Contains(key))
+	}
+
+	// Then test cases where there's some holes in region start and the first bucket key
+	// and in the last bucket key and region end
+	bucketKeys = [][]byte{[]byte("a"), []byte("b")}
+	bucketVersion := uint64(time.Now().Nanosecond())
+	s.cluster.SplitRegionBuckets(s.region1, bucketKeys, bucketVersion)
+	s.cache.UpdateBucketsIfNeeded(s.getRegion([]byte("a")).VerID(), bucketVersion)
+	// wait for region update
+	time.Sleep(300 * time.Millisecond)
+	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.Nil(err)
+	for _, key := range [][]byte{{'a' - 1}, []byte("c")} {
+		b := loc.LocateBucket(key)
+		s.Nil(b)
+		b = loc.LocateBucketV2(key)
+		s.NotNil(b)
+		s.True(b.Contains(key))
+	}
+}
