@@ -63,6 +63,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	atomicutil "go.uber.org/atomic"
 	zap "go.uber.org/zap"
 )
 
@@ -82,7 +83,7 @@ var (
 
 var (
 	// PrewriteMaxBackoff is max sleep time of the `pre-write` command.
-	PrewriteMaxBackoff = 40000
+	PrewriteMaxBackoff = atomicutil.NewUint32(40000)
 	// CommitMaxBackoff is max sleep time of the 'commit' command
 	CommitMaxBackoff = uint64(40000)
 )
@@ -1369,7 +1370,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	//     The maxSleep should't be very long in this case.
 	//   - If the region isn't found in PD, it's possible the reason is write-stall.
 	//     The maxSleep can be long in this case.
-	bo := retry.NewBackofferWithVars(ctx, PrewriteMaxBackoff, c.txn.vars)
+	bo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
 
 	// If we want to use async commit or 1PC and also want linearizability across
 	// all nodes, we have to make sure the commit TS of this transaction is greater
@@ -1733,7 +1734,7 @@ func (c *twoPhaseCommitter) tryAmendTxn(ctx context.Context, startInfoSchema Sch
 			return false, err
 		}
 		if c.prewriteStarted {
-			prewriteBo := retry.NewBackofferWithVars(ctx, PrewriteMaxBackoff, c.txn.vars)
+			prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
 			err = c.prewriteMutations(prewriteBo, addMutations)
 			if err != nil {
 				logutil.Logger(ctx).Warn("amend prewrite has failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS))
