@@ -139,6 +139,8 @@ type KVSnapshot struct {
 	resourceGroupTag []byte
 	// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
 	resourceGroupTagger tikvrpc.ResourceGroupTagger
+	// interceptorMutex is a lock for interceptor
+	interceptorMutex sync.RWMutex
 	// interceptor is used to decorate the RPC request logic related to the snapshot.
 	interceptor interceptor.RPCInterceptor
 }
@@ -207,14 +209,14 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, batchGetMaxBackoff, s.vars)
-
+	s.interceptorMutex.RLock()
 	if s.interceptor != nil {
 		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
 		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.interceptor))
 	}
-
+	s.interceptorMutex.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
 	err := s.batchGetKeysByRegions(bo, keys, func(k, v []byte) {
@@ -481,14 +483,14 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
-
+	s.interceptorMutex.RLock()
 	if s.interceptor != nil {
 		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
 		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.interceptor))
 	}
-
+	s.interceptorMutex.RUnlock()
 	val, err := s.get(ctx, bo, k)
 	s.recordBackoffInfo(bo)
 	if err != nil {
@@ -760,11 +762,15 @@ func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) 
 // interceptor.RPCInterceptor will be executed before each RPC request is initiated.
 // Note that SetRPCInterceptor will replace the previously set interceptor.
 func (s *KVSnapshot) SetRPCInterceptor(it interceptor.RPCInterceptor) {
+	s.interceptorMutex.Lock()
+	defer s.interceptorMutex.Unlock()
 	s.interceptor = it
 }
 
 // AddRPCInterceptor adds an interceptor, the order of addition is the order of execution.
 func (s *KVSnapshot) AddRPCInterceptor(it interceptor.RPCInterceptor) {
+	s.interceptorMutex.Lock()
+	defer s.interceptorMutex.Unlock()
 	if s.interceptor == nil {
 		s.SetRPCInterceptor(it)
 		return

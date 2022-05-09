@@ -119,12 +119,14 @@ func (s *Scanner) Next() error {
 	if !s.valid {
 		return errors.New("scanner iterator is invalid")
 	}
+	s.snapshot.interceptorMutex.RLock()
 	if s.snapshot.interceptor != nil {
 		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
 		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.snapshot.interceptor))
 	}
+	s.snapshot.interceptorMutex.RUnlock()
 	var err error
 	for {
 		s.idx++
