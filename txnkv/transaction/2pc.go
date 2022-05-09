@@ -83,7 +83,7 @@ var (
 
 var (
 	// PrewriteMaxBackoff is max sleep time of the `pre-write` command.
-	PrewriteMaxBackoff = atomicutil.NewUint32(40000)
+	PrewriteMaxBackoff = atomicutil.NewUint64(40000)
 	// CommitMaxBackoff is max sleep time of the 'commit' command
 	CommitMaxBackoff = uint64(40000)
 )
