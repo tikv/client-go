@@ -746,6 +746,8 @@ func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
 
 // SetResourceGroupTag sets resource group tag of the kv request.
 func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.mu.resourceGroupTag = tag
 }
 
