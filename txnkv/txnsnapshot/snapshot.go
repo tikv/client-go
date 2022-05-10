@@ -755,6 +755,8 @@ func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
 // Before sending the request, if resourceGroupTag is not nil, use
 // resourceGroupTag directly, otherwise use resourceGroupTagger.
 func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.resourceGroupTagger = tagger
 }
 
