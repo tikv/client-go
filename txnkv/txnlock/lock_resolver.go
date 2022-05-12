@@ -322,13 +322,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 // 3) Send `ResolveLock` cmd to the lock's region to resolve all locks belong to
 //    the same transaction.
 func (lr *LockResolver) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock) (int64, error) {
-	resolving := []Lock{}
-	for _, lock := range locks {
-		resolving = append(resolving, *lock)
-	}
-	lr.mu.Lock()
-	lr.mu.resolving[callerStartTS] = resolving
-	lr.mu.Unlock()
+	lr.saveResolvingLocks(locks, callerStartTS)
 	ttl, _, _, err := lr.resolveLocks(bo, callerStartTS, locks, false, false)
 	return ttl, err
 }
@@ -337,6 +331,11 @@ func (lr *LockResolver) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 // Read operations needn't wait for resolve secondary locks and can read through(the lock's transaction is committed
 // and its commitTS is less than or equal to callerStartTS) or ignore(the lock's transaction is rolled back or its minCommitTS is pushed) the lock .
 func (lr *LockResolver) ResolveLocksForRead(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock, lite bool) (int64, []uint64 /* canIgnore */, []uint64 /* canAccess */, error) {
+	lr.saveResolvingLocks(locks, callerStartTS)
+	return lr.resolveLocks(bo, callerStartTS, locks, true, lite)
+}
+
+func (lr *LockResolver) saveResolvingLocks(locks []*Lock, callerStartTS uint64) {
 	resolving := []Lock{}
 	for _, lock := range locks {
 		resolving = append(resolving, *lock)
@@ -344,7 +343,6 @@ func (lr *LockResolver) ResolveLocksForRead(bo *retry.Backoffer, callerStartTS u
 	lr.mu.Lock()
 	lr.mu.resolving[callerStartTS] = resolving
 	lr.mu.Unlock()
-	return lr.resolveLocks(bo, callerStartTS, locks, true, lite)
 }
 
 func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock, forRead bool, lite bool) (int64, []uint64 /* canIgnore */, []uint64 /* canAccess */, error) {
