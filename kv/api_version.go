@@ -50,7 +50,7 @@ func DecodeV2StartKey(mode Mode, key []byte) []byte {
 
 func DecodeV2EndKey(mode Mode, key []byte) []byte {
 	maxKey := GetV2EndKey(mode)
-	if bytes.Compare(key, maxKey) > 0 {
+	if len(key) == 0 || bytes.Compare(key, maxKey) > 0 {
 		return []byte{}
 	}
 	return key[len(maxKey):]

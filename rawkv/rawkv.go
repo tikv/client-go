@@ -162,6 +162,7 @@ func NewClientV2(ctx context.Context, pdAddrs []string, security config.Security
 	}
 	pdCli = locate.NewCodecPDClientV2(pdCli, kv.ModeRaw)
 	return &Client{
+		apiVersion:  kvrpcpb.APIVersion_V2,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
 		pdClient:    pdCli,
@@ -450,14 +451,9 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 	opts := c.getRawKVOptions(options...)
 
 	for len(keys) < limit && (len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0) {
-		if len(endKey) > 0 {
-			endKey = c.buildRequestKey(endKey)
-		} else {
-			endKey = kv.GetV2EndKey(kv.ModeRaw)
-		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
 			StartKey: c.buildRequestKey(startKey),
-			EndKey:   endKey,
+			EndKey:   c.buildRequestEndKey(endKey),
 			Limit:    uint32(limit - len(keys)),
 			KeyOnly:  opts.KeyOnly,
 			Cf:       c.getColumnFamily(opts),
@@ -502,14 +498,9 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 	opts := c.getRawKVOptions(options...)
 
 	for len(keys) < limit && bytes.Compare(startKey, endKey) > 0 {
-		if len(endKey) > 0 {
-			endKey = c.buildRequestKey(endKey)
-		} else {
-			endKey = kv.GetV2EndKey(kv.ModeRaw)
-		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawScan, &kvrpcpb.RawScanRequest{
 			StartKey: c.buildRequestKey(startKey),
-			EndKey:   endKey,
+			EndKey:   c.buildRequestEndKey(endKey),
 			Limit:    uint32(limit - len(keys)),
 			Reverse:  true,
 			KeyOnly:  opts.KeyOnly,
@@ -594,6 +585,17 @@ func (c *Client) buildRequestKey(key []byte) []byte {
 	return key
 }
 
+func (c *Client) buildRequestEndKey(key []byte) []byte {
+	if c.apiVersion == kvrpcpb.APIVersion_V2 {
+		if len(key) == 0 {
+			return kv.GetV2EndKey(kv.ModeRaw)
+		} else {
+			return kv.BuildV2RequestKey(kv.ModeRaw, key)
+		}
+	}
+	return key
+}
+
 func (c *Client) unwrapResponseKey(key []byte) []byte {
 	if c.apiVersion == kvrpcpb.APIVersion_V2 {
 		return key[len(kv.ApiV2RawKeyPrefix):]
@@ -615,6 +617,7 @@ func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, 
 		if err != nil {
 			return nil, nil, err
 		}
+		req.ApiVersion = c.apiVersion
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
@@ -674,7 +677,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 			} else if cmdType == tikvrpc.CmdRawBatchGet {
 				cmdResp := singleResp.Resp.(*kvrpcpb.RawBatchGetResponse)
 				for i := range cmdResp.Pairs {
-					cmdResp.Pairs[i].Key = c.buildRequestKey(cmdResp.Pairs[i].Key)
+					cmdResp.Pairs[i].Key = c.unwrapResponseKey(cmdResp.Pairs[i].Key)
 				}
 				resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs = append(resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs, cmdResp.Pairs...)
 			}
@@ -705,6 +708,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *raw
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
+	req.ApiVersion = c.apiVersion
 	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 
 	batchResp := kvrpc.BatchResult{}
@@ -767,11 +771,12 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawDeleteRange, &kvrpcpb.RawDeleteRangeRequest{
 			StartKey: c.buildRequestKey(startKey),
-			EndKey:   actualEndKey,
+			EndKey:   c.buildRequestEndKey(actualEndKey),
 			Cf:       c.getColumnFamily(opts),
 		})
 
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
+		req.ApiVersion = c.apiVersion
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
@@ -853,6 +858,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOpt
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
+	req.ApiVersion = c.apiVersion
 	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 	if err != nil {
 		return err
