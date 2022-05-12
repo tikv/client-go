@@ -119,12 +119,14 @@ func (s *Scanner) Next() error {
 	if !s.valid {
 		return errors.New("scanner iterator is invalid")
 	}
-	if s.snapshot.interceptor != nil {
+	s.snapshot.mu.RLock()
+	if s.snapshot.mu.interceptor != nil {
 		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
-		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.snapshot.interceptor))
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.snapshot.mu.interceptor))
 	}
+	s.snapshot.mu.RUnlock()
 	var err error
 	for {
 		s.idx++
@@ -226,7 +228,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				Priority:         s.snapshot.priority.ToPB(),
 				NotFillCache:     s.snapshot.notFillCache,
 				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
-				ResourceGroupTag: s.snapshot.resourceGroupTag,
+				ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
@@ -245,11 +247,11 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			Priority:         s.snapshot.priority.ToPB(),
 			NotFillCache:     s.snapshot.notFillCache,
 			TaskId:           s.snapshot.mu.taskID,
-			ResourceGroupTag: s.snapshot.resourceGroupTag,
+			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 		})
-		if s.snapshot.resourceGroupTag == nil && s.snapshot.resourceGroupTagger != nil {
-			s.snapshot.resourceGroupTagger(req)
+		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
+			s.snapshot.mu.resourceGroupTagger(req)
 		}
 		s.snapshot.mu.RUnlock()
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)

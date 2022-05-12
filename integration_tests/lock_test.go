@@ -247,7 +247,7 @@ func (s *testLockSuite) TestCheckTxnStatusTTL() {
 	txn.Set([]byte("key"), []byte("value"))
 	s.prewriteTxnWithTTL(txn, 1000)
 
-	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
 	lr := s.store.NewLockResolver()
 	callerStartTS, err := s.store.GetOracle().GetTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
@@ -315,7 +315,7 @@ func (s *testLockSuite) TestCheckTxnStatus() {
 	s.Nil(err)
 	s.Greater(currentTS, txn.StartTS())
 
-	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
 	resolver := s.store.NewLockResolver()
 	// Call getTxnStatus to check the lock status.
 	status, err := resolver.GetTxnStatus(bo, txn.StartTS(), []byte("key"), currentTS, currentTS, true, false, nil)
@@ -372,7 +372,7 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	o := s.store.GetOracle()
 	currentTS, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
-	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
 	resolver := s.store.NewLockResolver()
 
 	// Call getTxnStatus for the TxnNotFound case.
@@ -569,7 +569,7 @@ func (s *testLockSuite) TestZeroMinCommitTS() {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.Set([]byte("key"), []byte("value"))
-	bo := tikv.NewBackofferWithVars(context.Background(), transaction.PrewriteMaxBackoff, nil)
+	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
 
 	mockValue := fmt.Sprintf(`return(%d)`, txn.StartTS())
 	s.Nil(failpoint.Enable("tikvclient/mockZeroCommitTS", mockValue))

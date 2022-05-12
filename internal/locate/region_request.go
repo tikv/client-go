@@ -1348,6 +1348,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "region_not_initialized"
 	} else if e.GetDiskFull() != nil {
 		return "disk_full"
+	} else if e.GetRecoveryInProgress() != nil {
+		return "recovery_in_progress"
 	}
 	return "unknown"
 }
@@ -1393,6 +1395,16 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			return false, nil
 		}
 		return true, nil
+	}
+
+	if regionErr.GetRecoveryInProgress() != nil {
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		logutil.BgLogger().Debug("tikv reports `RecoveryInProgress`", zap.Stringer("ctx", ctx))
+		err = bo.Backoff(retry.BoRegionRecoveryInProgress, errors.Errorf("region recovery in progress, ctx: %v", ctx))
+		if err != nil {
+			return false, err
+		}
+		return false, nil
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.
