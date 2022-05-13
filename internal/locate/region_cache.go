@@ -755,13 +755,13 @@ func (l *KeyLocation) GetBucketVersion() uint64 {
 	return l.Buckets.GetVersion()
 }
 
-// LocateBucketV2 will not return nil if the key is in the region.
-// LocateBucketV2 is similar with LocateBucket. The difference is that when the key is in [KeyLocation.StartKey, first Bucket key)
-// it will return Bucket{KeyLocation.StartKey, first Bucket key} rather than nil --- it's reasonable to assume that
-// Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region. Key in [last Bucket key, KeyLocation.EndKey)
-// is handled similarly.
-func (l *KeyLocation) LocateBucketV2(key []byte) *Bucket {
-	bucket := l.LocateBucket(key)
+// LocateBucket calls locateBucket and check the result.
+// When the key is in [KeyLocation.StartKey, first Bucket key), the result returned by locateBucket will be nil
+// as there's no bucket containing this key. LocateBucket will return Bucket{KeyLocation.StartKey, first Bucket key}
+//  --- it's reasonable to assume that Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region.
+// Key in [last Bucket key, KeyLocation.EndKey) is handled similarly.
+func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
+	bucket := l.locateBucket(key)
 	if bucket != nil || !l.Contains(key) {
 		return bucket
 	}
@@ -789,8 +789,8 @@ func (l *KeyLocation) LocateBucketV2(key []byte) *Bucket {
 	return bucket
 }
 
-// LocateBucket returns the bucket the key is located.
-func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
+// locateBucket returns the bucket the key is located.
+func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1
 	i := sort.Search(searchLen, func(i int) bool {
