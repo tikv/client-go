@@ -756,8 +756,8 @@ func (l *KeyLocation) GetBucketVersion() uint64 {
 }
 
 // LocateBucket calls locateBucket and check the result.
-// When the key is in [ KeyLocation.StartKey, first Bucket key ), the result returned by locateBucket will be nil
-// as there's no bucket containing this key. LocateBucket will return Bucket{ KeyLocation.StartKey, first Bucket key }
+// When the key is in [KeyLocation.StartKey, first Bucket key), the result returned by locateBucket will be nil
+// as there's no bucket containing this key. LocateBucket will return Bucket{KeyLocation.StartKey, first Bucket key}
 //  --- it's reasonable to assume that Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region.
 // Key in [last Bucket key, KeyLocation.EndKey) is handled similarly.
 func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
