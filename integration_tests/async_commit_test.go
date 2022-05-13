@@ -606,17 +606,6 @@ func (s *testAsyncCommitSuite) TestPessimisticTxnResolveAsyncCommitLock() {
 
 func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 	// This test doesn't support tikv mode.
-	if *withTiKV {
-		return
-	}
-
-	s.putAlphabets(true)
-
-	loc, err := s.store.GetRegionCache().LocateKey(s.bo, []byte("a"))
-	s.Nil(err)
-	newRegionID, peerID := s.cluster.AllocID(), s.cluster.AllocID()
-	s.cluster.Split(loc.Region.GetID(), newRegionID, []byte("e"), []uint64{peerID}, peerID)
-	s.store.GetRegionCache().InvalidateCachedRegion(loc.Region)
 
 	t1 := s.beginAsyncCommit()
 	t1.SetPessimistic(true)
@@ -625,7 +614,8 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 	committer, err := t1.NewCommitter(1)
 	s.Nil(err)
 	committer.SetUseAsyncCommit()
-	committer.SetMaxCommitTS(oracle.ComposeTS(oracle.ExtractPhysical(committer.GetStartTS())+4000, 0))
+	committer.SetLockTTL(1000)
+	committer.SetMaxCommitTS(oracle.ComposeTS(oracle.ExtractPhysical(committer.GetStartTS())+1500, 0))
 	committer.PrewriteMutations(context.Background(), committer.GetMutations().Slice(0, 1))
 	s.True(committer.IsAsyncCommit())
 	lock := s.mustGetLock([]byte("a"))
@@ -638,7 +628,7 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 		if status.IsRolledBack() {
 			break
 		}
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 30)
 	}
 	s.True(committer.IsAsyncCommit())
 	committer.PrewriteMutations(context.Background(), committer.GetMutations().Slice(1, 2))
