@@ -620,9 +620,9 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 	s.True(committer.IsAsyncCommit())
 	lock := s.mustGetLock([]byte("a"))
 	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
-	currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	s.Nil(err)
 	for {
+		currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		s.Nil(err)
 		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("a"), currentTS, currentTS, false, false, nil)
 		s.Nil(err)
 		if status.IsRolledBack() {
