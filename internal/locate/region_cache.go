@@ -799,8 +799,7 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 	}
 	// unreachable
 	logutil.Logger(context.Background()).Info(
-		fmt.Sprintf("Unreachable place: Region: [%v, %v), Key: %v",
-			hex.EncodeToString(l.StartKey), hex.EncodeToString(l.EndKey), hex.EncodeToString(key)))
+		"Unreachable place", zap.String("KeyLocation", l.String()), zap.String("Key", hex.EncodeToString(key)))
 	panic("Unreachable")
 }
 
