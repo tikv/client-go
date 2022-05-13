@@ -790,7 +790,7 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 	return bucket
 }
 
-// LocateBucket returns the bucket the key is located.
+// locateBucket returns the bucket the key is located.
 func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1
