@@ -37,6 +37,7 @@ package locate
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -797,7 +798,9 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 		}
 	}
 	// unreachable
-	logutil.Eventf(context.Background(), "Unreachable place: Region: [%v, %v), Key: %v", l.StartKey, l.EndKey, key)
+	logutil.Logger(context.Background()).Info(
+		fmt.Sprintf("Unreachable place: Region: [%v, %v), Key: %v",
+			hex.EncodeToString(l.StartKey), hex.EncodeToString(l.EndKey), hex.EncodeToString(key)))
 	panic("Unreachable")
 }
 
