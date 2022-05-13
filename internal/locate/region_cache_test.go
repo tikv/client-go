@@ -1506,7 +1506,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	waitUpdateBuckets(newBuckets, []byte("a"))
 }
 
-func (s *testRegionCacheSuite) TestLocateBucketV2() {
+func (s *testRegionCacheSuite) TestLocateBucketMoreRobust() {
 	// proto.Clone clones []byte{} to nil and [][]byte{nil or []byte{}} to [][]byte{[]byte{}}.
 	// nilToEmtpyBytes unifies it for tests.
 	nilToEmtpyBytes := func(s []byte) []byte {
@@ -1544,7 +1544,7 @@ func (s *testRegionCacheSuite) TestLocateBucketV2() {
 	for _, key := range [][]byte{{'a' - 1}, []byte("c")} {
 		b := loc.LocateBucket(key)
 		s.Nil(b)
-		b = loc.LocateBucketV2(key)
+		b = loc.LocateBucketMoreRobust(key)
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}

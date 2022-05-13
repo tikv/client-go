@@ -755,12 +755,12 @@ func (l *KeyLocation) GetBucketVersion() uint64 {
 	return l.Buckets.GetVersion()
 }
 
-// LocateBucketV2 will not return nil if the key is in the region.
-// LocateBucketV2 is similar with LocateBucket. The difference is that when the key is in [KeyLocation.StartKey, first Bucket key)
-// it will return Bucket{KeyLocation.StartKey, first Bucket key} rather than nil --- it's reasonable to assume that
-// Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region. Key in [last Bucket key, KeyLocation.EndKey)
-// is handled similarly.
-func (l *KeyLocation) LocateBucketV2(key []byte) *Bucket {
+// LocateBucketMoreRobust is similar to the LocateBucket except for that it will not return nil if the key is in the region.
+// Specifically, when the key is in [ KeyLocation.StartKey, first Bucket key ), LocateBucket will return nil
+// as there's no bucket containing this key.  LocateBucketMoreRobust will return Bucket{ KeyLocation.StartKey, first Bucket key }
+//  --- it's reasonable to assume that Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region.
+// Key in [last Bucket key, KeyLocation.EndKey) is handled similarly.
+func (l *KeyLocation) LocateBucketMoreRobust(key []byte) *Bucket {
 	bucket := l.LocateBucket(key)
 	if bucket != nil || !l.Contains(key) {
 		return bucket
