@@ -110,7 +110,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	ttl := c.lockTTL
 
 	// ref: https://github.com/pingcap/tidb/issues/33641
-	// we make TTL to satisfy the following condition:
+	// we make the TTL satisfy the following condition:
 	// 	max_commit_ts.physical < start_ts.physical + TTL < (current_ts of some check_txn_status that wants to resolve this lock).physical
 	// and we have:
 	//  current_ts <= max_ts <= min_commit_ts of this lock
