@@ -585,6 +585,14 @@ func (c *Client) buildRequestKey(key []byte) []byte {
 	return key
 }
 
+func (c *Client) buildRequestKeys(keys [][]byte) [][]byte {
+	var ks [][]byte
+	for _, k := range keys {
+		ks = append(ks, c.buildRequestKey(k))
+	}
+	return ks
+}
+
 func (c *Client) buildRequestEndKey(key []byte) []byte {
 	if c.apiVersion == kvrpcpb.APIVersion_V2 {
 		if len(key) == 0 {
@@ -689,18 +697,15 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 
 func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *rawOptions, cmdType tikvrpc.CmdType) kvrpc.BatchResult {
 	var req *tikvrpc.Request
-	for i := range batch.Keys {
-		batch.Keys[i] = c.buildRequestKey(batch.Keys[i])
-	}
 	switch cmdType {
 	case tikvrpc.CmdRawBatchGet:
 		req = tikvrpc.NewRequest(cmdType, &kvrpcpb.RawBatchGetRequest{
-			Keys: batch.Keys,
+			Keys: c.buildRequestKeys(batch.Keys),
 			Cf:   c.getColumnFamily(options),
 		})
 	case tikvrpc.CmdRawBatchDelete:
 		req = tikvrpc.NewRequest(cmdType, &kvrpcpb.RawBatchDeleteRequest{
-			Keys:   batch.Keys,
+			Keys:   c.buildRequestKeys(batch.Keys),
 			Cf:     c.getColumnFamily(options),
 			ForCas: c.atomic,
 		})

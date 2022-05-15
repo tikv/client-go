@@ -3,7 +3,7 @@ package raw_tikv_test
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/kv"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -15,7 +15,6 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/rawkv"
 	pd "github.com/tikv/pd/client"
-	"go.uber.org/atomic"
 )
 
 func TestApi(t *testing.T) {
@@ -29,7 +28,8 @@ type apiTestSuite struct {
 	suite.Suite
 	client       *rawkv.Client
 	clientForCas *rawkv.Client
-	version      atomic.Uint64
+	pdClient     pd.Client
+	isV2Cluster  bool
 }
 
 func getConfig(url string) (string, error) {
@@ -51,16 +51,13 @@ func getConfig(url string) (string, error) {
 	return string(body), nil
 }
 
-func isV2Enabled(t *testing.T, ctx context.Context, addrs []string) bool {
-	pdCli, err := pd.NewClientWithContext(ctx, addrs, pd.SecurityOption{})
-	defer pdCli.Close()
-	require.Nil(t, err)
-	stores, err := pdCli.GetAllStores(ctx)
-	require.Nilf(t, err, "fail to get store, %v", err)
+func (s *apiTestSuite) isV2Enabled(pdCli pd.Client) bool {
+	stores, err := pdCli.GetAllStores(context.Background())
+	s.Nilf(err, "fail to get store, %v", err)
 
 	for _, store := range stores {
 		resp, err := getConfig(fmt.Sprintf("http://%s/config", store.StatusAddress))
-		require.Nilf(t, err, "fail to get config of TiKV store %s: %v", store.StatusAddress, err)
+		s.Nilf(err, "fail to get config of TiKV store %s: %v", store.StatusAddress, err)
 		v := gjson.Get(resp, "storage.api-version")
 		if v.Type == gjson.Null || v.Uint() != 2 {
 			return false
@@ -69,39 +66,37 @@ func isV2Enabled(t *testing.T, ctx context.Context, addrs []string) bool {
 	return true
 }
 
-func newRawKVClient(t *testing.T, ctx context.Context, addrs []string) *rawkv.Client {
+func (s *apiTestSuite) newRawKVClient(addrs []string) *rawkv.Client {
 	var clientBuilder func(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*rawkv.Client, error)
-	if isV2Enabled(t, ctx, addrs) {
+	if s.isV2Cluster {
 		clientBuilder = rawkv.NewClientV2
 	} else {
 		clientBuilder = rawkv.NewClient
 	}
-	cli, err := clientBuilder(ctx, addrs, config.DefaultConfig().Security)
-	require.Nil(t, err)
+	cli, err := clientBuilder(context.Background(), addrs, config.DefaultConfig().Security)
+	s.Nil(err)
 	return cli
 }
 
 func (s *apiTestSuite) SetupTest() {
-	ctx := context.Background()
 	addrs := strings.Split(*pdAddrs, ",")
 
-	if !isV2Enabled(s.T(), ctx, addrs) {
-		s.T().Skip("skipping because the TiKV cluster is not enable ApiV2")
-	}
-
-	client, err := rawkv.NewClientV2(ctx, addrs, config.DefaultConfig().Security)
+	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
 	s.Nil(err)
+	s.pdClient = pdClient
+
+	s.isV2Cluster = s.isV2Enabled(pdClient)
+
+	client := s.newRawKVClient(addrs)
 	s.client = client
 
-	clientForCas, err := rawkv.NewClientV2(ctx, addrs, config.DefaultConfig().Security)
-	s.Nil(err)
-
+	clientForCas := s.newRawKVClient(addrs)
 	clientForCas.SetAtomicForCAS(true)
 	s.clientForCas = clientForCas
 }
 
 func withPrefix(prefix, key string) string {
-	return fmt.Sprintf("%s:%s", prefix, key)
+	return prefix + key
 }
 
 func withPrefixes(prefix string, keys []string) []string {
@@ -138,6 +133,17 @@ func (s *apiTestSuite) mustScan(prefix string, start string, end string, limit i
 	ks, vs, err := s.client.Scan(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)), limit)
 	s.Nil(err)
 	return toStrings(ks), toStrings(vs)
+}
+
+func (s *apiTestSuite) mustReverseScan(prefix string, start string, end string, limit int) ([]string, []string) {
+	ks, vs, err := s.client.ReverseScan(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)), limit)
+	s.Nil(err)
+	return toStrings(ks), toStrings(vs)
+}
+
+func (s *apiTestSuite) mustDeleteRange(prefix string, start, end string) {
+	err := s.client.DeleteRange(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)))
+	s.Nil(err)
 }
 
 func toStrings(data [][]byte) []string {
@@ -221,13 +227,44 @@ func (s *apiTestSuite) TestScan() {
 	prefix := "test_scan"
 	s.cleanKeyPrefix(prefix)
 
-	for i := 0; i < 10; i++ {
-		s.mustPut(prefix, fmt.Sprintf("key:%v", i), fmt.Sprintf("value:%v", i))
+	var (
+		keys   []string
+		values []string
+	)
+	for i := 0; i < 20480; i++ {
+		keys = append(keys, fmt.Sprintf("key@%v", i))
+		values = append(values, fmt.Sprintf("value@%v", i))
 	}
-	keys, values := s.mustScan(prefix, "key:", "", 5)
+	s.mustBatchPut(prefix, keys, values)
+
+	var (
+		splitKey = []byte(withPrefix(prefix, "key@10240"))
+		err      error
+	)
+	if s.isV2Cluster {
+		splitKey = kv.BuildV2RequestKey(kv.ModeRaw, splitKey)
+	}
+	_, err = s.pdClient.SplitRegions(context.Background(), [][]byte{splitKey})
+	s.Nil(err)
+
+	keys, values = s.mustScan(prefix, "key:", "", 5)
 	for i := range keys {
 		s.Equal(fmt.Sprintf("key:%v", i), keys[i])
 		s.Equal(fmt.Sprintf("value:%v", i), values[i])
+	}
+}
+
+func (s *apiTestSuite) TestReverseScan() {
+	prefix := "test_reverse_scan"
+	s.cleanKeyPrefix(prefix)
+
+	for i := 0; i < 10; i++ {
+		s.mustPut(prefix, fmt.Sprintf("key:%v", i), fmt.Sprintf("value:%v", i))
+	}
+	keys, values := s.mustReverseScan(prefix, "key:", "", 5)
+	for i := range keys {
+		s.Equal(fmt.Sprintf("key:%v", i), keys[len(keys)-1-i])
+		s.Equal(fmt.Sprintf("value:%v", i), values[len(keys)-1-i])
 	}
 }
 
@@ -289,11 +326,35 @@ func (s *apiTestSuite) TestTTL() {
 	s.Nil(rest)
 }
 
+func (s *apiTestSuite) TestDeleteRange() {
+	prefix := "test_delete_range"
+
+	s.cleanKeyPrefix(prefix)
+
+	var (
+		keys   []string
+		values []string
+	)
+	for i := 0; i < 20480; i++ {
+		keys = append(keys, fmt.Sprintf("key@%v", i))
+		values = append(values, fmt.Sprintf("value@%v", i))
+	}
+	s.mustBatchPut(prefix, keys, values)
+
+	s.mustDeleteRange(prefix, "", "")
+	s.mustNotExist(prefix, "key@0")
+	s.mustNotExist(prefix, "key@1")
+	s.mustNotExist(prefix, "key@2")
+}
+
 func (s *apiTestSuite) TearDownTest() {
 	if s.client != nil {
 		_ = s.client.Close()
 	}
 	if s.clientForCas != nil {
 		_ = s.clientForCas.Close()
+	}
+	if s.pdClient != nil {
+		s.pdClient.Close()
 	}
 }

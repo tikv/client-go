@@ -2,6 +2,7 @@ package locate
 
 import (
 	"context"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 
 	"github.com/tikv/client-go/v2/kv"
 	pd "github.com/tikv/pd/client"
@@ -60,6 +61,13 @@ func (c *CodecPDClientV2) ScanRegions(ctx context.Context, startKey []byte, endK
 	return regions, nil
 }
 
+func (c *CodecPDClientV2) SplitRegion(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+	for i := range splitKeys {
+		splitKeys[i] = kv.BuildV2RequestKey(c.mode, splitKeys[i])
+	}
+	return c.CodecPDClient.SplitRegions()
+}
+
 func (c *CodecPDClientV2) processRegionResult(region *pd.Region, err error) (*pd.Region, error) {
 	if err != nil {
 		return nil, err
@@ -70,7 +78,7 @@ func (c *CodecPDClientV2) processRegionResult(region *pd.Region, err error) (*pd
 		region.Buckets = nil
 
 		region.Meta.StartKey = kv.DecodeV2StartKey(c.mode, region.Meta.StartKey)
-		region.Meta.EndKey = kv.DecodeV2EndKey(c.mode, region.Meta.StartKey)
+		region.Meta.EndKey = kv.DecodeV2EndKey(c.mode, region.Meta.EndKey)
 	}
 
 	return region, nil
