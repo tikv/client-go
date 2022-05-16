@@ -1365,6 +1365,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 				return nil, errors.WithStack(err)
 			}
 		}
+		start := time.Now()
 		var reg *pd.Region
 		var err error
 		if searchPrev {
@@ -1372,10 +1373,11 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		} else {
 			reg, err = c.pdClient.GetRegion(ctx, key, pd.WithBuckets())
 		}
+		metrics.LoadRegionCacheHistogramWithRegionMiss.Observe(time.Since(start).Seconds())
 		if err != nil {
-			metrics.RegionCacheCounterWithGetRegionError.Inc()
+			metrics.RegionCacheCounterWithGetRegionMissError.Inc()
 		} else {
-			metrics.RegionCacheCounterWithGetRegionOK.Inc()
+			metrics.RegionCacheCounterWithGetRegionMissOK.Inc()
 		}
 		if err != nil {
 			if isDecodeError(err) {
@@ -1416,7 +1418,9 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 				return nil, errors.WithStack(err)
 			}
 		}
+		start := time.Now()
 		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pd.WithBuckets())
+		metrics.LoadRegionCacheHistogramWithRegionByID.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
 		} else {
@@ -1487,7 +1491,9 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 				return nil, errors.WithStack(err)
 			}
 		}
+		start := time.Now()
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
+		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if isDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", util.HexRegionKeyStr(startKey), limit, err)
@@ -2071,7 +2077,9 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 	}
 	var store *metapb.Store
 	for {
+		start := time.Now()
 		store, err = c.pdClient.GetStore(bo.GetCtx(), s.storeID)
+		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
 		} else {
