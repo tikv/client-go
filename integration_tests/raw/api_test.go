@@ -3,7 +3,6 @@ package raw_tikv_test
 import (
 	"context"
 	"fmt"
-	"github.com/tikv/client-go/v2/tikv"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/rawkv"
+	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 )
 
