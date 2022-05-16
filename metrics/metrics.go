@@ -55,6 +55,7 @@ var (
 	TiKVLoadSafepointCounter                 *prometheus.CounterVec
 	TiKVSecondaryLockCleanupFailureCounter   *prometheus.CounterVec
 	TiKVRegionCacheCounter                   *prometheus.CounterVec
+	TiKVLoadRegionCacheHistogram             *prometheus.HistogramVec
 	TiKVLocalLatchWaitTimeHistogram          prometheus.Histogram
 	TiKVStatusDuration                       *prometheus.HistogramVec
 	TiKVStatusCounter                        *prometheus.CounterVec
@@ -234,6 +235,15 @@ func initMetrics(namespace, subsystem string) {
 			Name:      "region_cache_operations_total",
 			Help:      "Counter of region cache.",
 		}, []string{LblType, LblResult})
+
+	TiKVLoadRegionCacheHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "load_region_cache_seconds",
+			Help:      "Load region information duration",
+			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 52s
+		}, []string{LblType})
 
 	TiKVLocalLatchWaitTimeHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -579,6 +589,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVLoadSafepointCounter)
 	prometheus.MustRegister(TiKVSecondaryLockCleanupFailureCounter)
 	prometheus.MustRegister(TiKVRegionCacheCounter)
+	prometheus.MustRegister(TiKVLoadRegionCacheHistogram)
 	prometheus.MustRegister(TiKVLocalLatchWaitTimeHistogram)
 	prometheus.MustRegister(TiKVStatusDuration)
 	prometheus.MustRegister(TiKVStatusCounter)
