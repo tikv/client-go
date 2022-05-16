@@ -103,7 +103,7 @@ var (
 	RegionCacheCounterWithGetStoreError               prometheus.Counter
 	RegionCacheCounterWithInvalidateStoreRegionsOK    prometheus.Counter
 
-	LoadRegionCacheHistogramWithCacheMiss  prometheus.Observer
+	LoadRegionCacheHistogramWhenCacheMiss  prometheus.Observer
 	LoadRegionCacheHistogramWithRegions    prometheus.Observer
 	LoadRegionCacheHistogramWithRegionByID prometheus.Observer
 	LoadRegionCacheHistogramWithGetStore   prometheus.Observer
@@ -202,7 +202,7 @@ func initShortcuts() {
 	RegionCacheCounterWithGetStoreError = TiKVRegionCacheCounter.WithLabelValues("get_store", "err")
 	RegionCacheCounterWithInvalidateStoreRegionsOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_store_regions", "ok")
 
-	LoadRegionCacheHistogramWithCacheMiss = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_when_miss")
+	LoadRegionCacheHistogramWhenCacheMiss = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_when_miss")
 	LoadRegionCacheHistogramWithRegionByID = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_by_id")
 	LoadRegionCacheHistogramWithRegions = TiKVLoadRegionCacheHistogram.WithLabelValues("scan_regions")
 	LoadRegionCacheHistogramWithGetStore = TiKVLoadRegionCacheHistogram.WithLabelValues("get_store")
