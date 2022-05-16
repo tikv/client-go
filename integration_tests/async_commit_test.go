@@ -596,3 +596,34 @@ func (s *testAsyncCommitSuite) TestPessimisticTxnResolveAsyncCommitLock() {
 	err = txn.Commit(context.Background())
 	s.Nil(err)
 }
+
+func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
+	// This test doesn't support tikv mode.
+
+	t1 := s.beginAsyncCommit()
+	t1.SetPessimistic(true)
+	t1.Set([]byte("a"), []byte("a"))
+	t1.Set([]byte("z"), []byte("z"))
+	committer, err := t1.NewCommitter(1)
+	s.Nil(err)
+	committer.SetUseAsyncCommit()
+	committer.SetLockTTL(1000)
+	committer.SetMaxCommitTS(oracle.ComposeTS(oracle.ExtractPhysical(committer.GetStartTS())+1500, 0))
+	committer.PrewriteMutations(context.Background(), committer.GetMutations().Slice(0, 1))
+	s.True(committer.IsAsyncCommit())
+	lock := s.mustGetLock([]byte("a"))
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
+	for {
+		currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		s.Nil(err)
+		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("a"), currentTS, currentTS, false, false, nil)
+		s.Nil(err)
+		if status.IsRolledBack() {
+			break
+		}
+		time.Sleep(time.Millisecond * 30)
+	}
+	s.True(committer.IsAsyncCommit())
+	committer.PrewriteMutations(context.Background(), committer.GetMutations().Slice(1, 2))
+	s.False(committer.IsAsyncCommit())
+}
