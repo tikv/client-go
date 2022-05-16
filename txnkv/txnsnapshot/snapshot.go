@@ -451,6 +451,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		if len(lockedKeys) > 0 {
 			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
+			defer cli.ResolveLocksDone(s.version)
 			if err != nil {
 				return err
 			}
@@ -619,6 +620,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			}
 
 			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, []*txnlock.Lock{lock})
+			defer cli.ResolveLocksDone(s.version)
 			if err != nil {
 				return nil, err
 			}

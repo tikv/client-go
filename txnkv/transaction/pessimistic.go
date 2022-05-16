@@ -227,6 +227,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 		startTime = time.Now()
 		msBeforeTxnExpired, err := c.store.GetLockResolver().ResolveLocks(bo, 0, locks)
+		defer c.store.GetLockResolver().ResolveLocksDone(c.startTS)
 		if err != nil {
 			return err
 		}
