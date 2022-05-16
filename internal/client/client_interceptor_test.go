@@ -34,6 +34,10 @@ func (c emptyClient) Close() error {
 	return nil
 }
 
+func (c emptyClient) CloseAddr(addr string) error {
+	return nil
+}
+
 func TestInterceptedClient(t *testing.T) {
 	executed := false
 	client := NewInterceptedClient(emptyClient{})

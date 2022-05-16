@@ -86,6 +86,8 @@ var (
 	ErrRegionNotInitialized = errors.New("region not Initialized")
 	// ErrTiKVDiskFull is the error when tikv server disk usage is full.
 	ErrTiKVDiskFull = errors.New("tikv disk full")
+	// ErrRegionRecoveryInProgress is the error when region is recovering.
+	ErrRegionRecoveryInProgress = errors.New("region is being online unsafe recovered")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
 	// ErrResultUndetermined is the error when execution result is unknown.

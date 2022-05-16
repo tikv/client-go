@@ -51,6 +51,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -69,10 +70,29 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
-	client.Close()
+	assert.Nil(t, client.CloseAddr(addr))
+	_, ok := client.conns[addr]
+	assert.False(t, ok)
 	conn3, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	assert.NotNil(t, conn3)
+
+	client.Close()
+	conn4, err := client.getConnArray(addr, true)
 	assert.NotNil(t, err)
-	assert.Nil(t, conn3)
+	assert.Nil(t, conn4)
+}
+
+func TestGetConnAfterClose(t *testing.T) {
+	client := NewRPCClient()
+
+	addr := "127.0.0.1:6379"
+	connArray, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	assert.Nil(t, client.CloseAddr(addr))
+	conn := connArray.Get()
+	state := conn.GetState()
+	assert.True(t, state == connectivity.Shutdown)
 }
 
 func TestCancelTimeoutRetErr(t *testing.T) {
@@ -116,6 +136,10 @@ type chanClient struct {
 }
 
 func (c *chanClient) Close() error {
+	return nil
+}
+
+func (c *chanClient) CloseAddr(addr string) error {
 	return nil
 }
 

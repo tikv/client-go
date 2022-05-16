@@ -60,10 +60,12 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
@@ -99,6 +101,8 @@ const forwardMetadataKey = "tikv-forwarded-host"
 type Client interface {
 	// Close should release all data.
 	Close() error
+	// CloseAddr closes gRPC connections to the address. It will reconnect the next time it's used.
+	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 }
@@ -134,7 +138,7 @@ func newConnArray(maxSize uint, addr string, security config.Security, idleNotif
 func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool) error {
 	a.target = addr
 
-	opt := grpc.WithInsecure() //nolint
+	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if len(security.ClusterSSLCA) != 0 {
 		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
@@ -234,12 +238,9 @@ func (a *connArray) Close() {
 		a.batchConn.Close()
 	}
 
-	for i, c := range a.v {
-		if c != nil {
-			err := c.Close()
-			tikverr.Log(err)
-			a.v[i] = nil
-		}
+	for _, c := range a.v {
+		err := c.Close()
+		tikverr.Log(err)
 	}
 
 	close(a.done)
@@ -546,5 +547,21 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 func (c *RPCClient) Close() error {
 	// TODO: add a unit test for SendRequest After Closed
 	c.closeConns()
+	return nil
+}
+
+// CloseAddr closes gRPC connections to the address.
+func (c *RPCClient) CloseAddr(addr string) error {
+	c.Lock()
+	conn, ok := c.conns[addr]
+	if ok {
+		delete(c.conns, addr)
+		logutil.BgLogger().Debug("close connection", zap.String("target", addr))
+	}
+	c.Unlock()
+
+	if conn != nil {
+		conn.Close()
+	}
 	return nil
 }

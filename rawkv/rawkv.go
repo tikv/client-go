@@ -412,6 +412,7 @@ func (c *Client) DeleteRange(ctx context.Context, startKey []byte, endKey []byte
 }
 
 // Scan queries continuous kv pairs in range [startKey, endKey), up to limit pairs.
+// The returned keys are in lexicographical order.
 // If endKey is empty, it means unbounded.
 // If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
@@ -456,7 +457,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 }
 
 // ReverseScan queries continuous kv pairs in range [endKey, startKey), up to limit pairs.
-// Direction is different from Scan, upper to lower.
+// The returned keys are in reversed lexicographical order.
 // If endKey is empty, it means unbounded.
 // If you want to include the startKey or exclude the endKey, push a '\0' to the key. For example, to scan
 // (endKey, startKey], you can write:
