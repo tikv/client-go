@@ -1373,11 +1373,11 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		} else {
 			reg, err = c.pdClient.GetRegion(ctx, key, pd.WithBuckets())
 		}
-		metrics.LoadRegionCacheHistogramWithRegionMiss.Observe(time.Since(start).Seconds())
+		metrics.LoadRegionCacheHistogramWithCacheMiss.Observe(time.Since(start).Seconds())
 		if err != nil {
-			metrics.RegionCacheCounterWithGetRegionMissError.Inc()
+			metrics.RegionCacheCounterWithGetCacheMissError.Inc()
 		} else {
-			metrics.RegionCacheCounterWithGetRegionMissOK.Inc()
+			metrics.RegionCacheCounterWithGetCacheMissOK.Inc()
 		}
 		if err != nil {
 			if isDecodeError(err) {
