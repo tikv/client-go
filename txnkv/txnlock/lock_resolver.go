@@ -62,7 +62,7 @@ type LockResolver struct {
 	resolveLockLiteThreshold uint64
 	mu                       struct {
 		sync.RWMutex
-		// currentStartTS resolving locks
+		// currentStartTS -> resolving locks
 		resolving map[uint64][]Lock
 		// resolved caches resolved txns (FIFO, txn id -> txnStatus).
 		resolved       map[uint64]TxnStatus
@@ -336,7 +336,7 @@ func (lr *LockResolver) ResolveLocksForRead(bo *retry.Backoffer, callerStartTS u
 }
 
 func (lr *LockResolver) saveResolvingLocks(locks []*Lock, callerStartTS uint64) {
-	resolving := []Lock{}
+	resolving := make([]Lock, 0, len(locks))
 	for _, lock := range locks {
 		resolving = append(resolving, *lock)
 	}
