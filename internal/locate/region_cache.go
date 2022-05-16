@@ -1695,7 +1695,7 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 	return stores
 }
 
-// GetTiFlashMPPStores returns all stores with lable <engine, tiflash_mpp>
+// GetTiFlashMPPStores returns all stores with lable <engine, tiflash_mpp>.
 func (c *RegionCache) GetTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, err error) {
 	c.tiflashMPPStoreMu.RLock()
 	needReload := c.tiflashMPPStoreMu.needReload
@@ -1703,13 +1703,12 @@ func (c *RegionCache) GetTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, er
 	c.tiflashMPPStoreMu.RUnlock()
 
 	if needReload {
-		return c.ReloadTiFlashMPPStores(bo)
+		return c.reloadTiFlashMPPStores(bo)
 	}
 	return stores, nil
 }
 
-func (c *RegionCache) ReloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, _ error) {
-	// todo: thread safe?
+func (c *RegionCache) reloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, _ error) {
 	stores, err := c.pdClient.GetAllStores(bo.GetCtx())
 	if err != nil {
 		return nil, err
@@ -1727,7 +1726,6 @@ func (c *RegionCache) ReloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store,
 			saddr:     s.GetStatusAddress(),
 			storeType: tikvrpc.GetStoreTypeByMeta(s),
 			labels:    s.GetLabels(),
-			// todo: ok?
 			state: uint64(resolved),
 		}
 		if tmpStore.IsLabelsMatch(mppLabels) {
@@ -1741,6 +1739,8 @@ func (c *RegionCache) ReloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store,
 	return res, nil
 }
 
+// InvalidateTiFlashMPPStores set needReload be true,
+// and will refresh tiflash_mpp store cache next time.
 func (c *RegionCache) InvalidateTiFlashMPPStores() {
 	c.tiflashMPPStoreMu.Lock()
 	defer c.tiflashMPPStoreMu.Unlock()
