@@ -1411,14 +1411,14 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	buckets := cachedRegion.getStore().buckets
 	s.Equal(defaultBuckets, buckets)
 
-	// test LocateBucket
+	// test locateBucket
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
 	s.NotNil(loc)
 	s.Nil(err)
 	s.Equal(buckets, loc.Buckets)
 	s.Equal(buckets.GetVersion(), loc.GetBucketVersion())
 	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}
@@ -1426,7 +1426,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	loc.Buckets = proto.Clone(loc.Buckets).(*metapb.Buckets)
 	loc.Buckets.Keys = [][]byte{[]byte("b"), []byte("c"), []byte("d")}
 	for _, key := range [][]byte{[]byte("a"), []byte("d"), []byte("e")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.Nil(b)
 	}
 
@@ -1506,7 +1506,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	waitUpdateBuckets(newBuckets, []byte("a"))
 }
 
-func (s *testRegionCacheSuite) TestLocateBucketV2() {
+func (s *testRegionCacheSuite) TestLocateBucket() {
 	// proto.Clone clones []byte{} to nil and [][]byte{nil or []byte{}} to [][]byte{[]byte{}}.
 	// nilToEmtpyBytes unifies it for tests.
 	nilToEmtpyBytes := func(s []byte) []byte {
@@ -1525,7 +1525,7 @@ func (s *testRegionCacheSuite) TestLocateBucketV2() {
 	s.NotNil(loc)
 	s.Nil(err)
 	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}
@@ -1542,9 +1542,9 @@ func (s *testRegionCacheSuite) TestLocateBucketV2() {
 	s.NotNil(loc)
 	s.Nil(err)
 	for _, key := range [][]byte{{'a' - 1}, []byte("c")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.Nil(b)
-		b = loc.LocateBucketV2(key)
+		b = loc.LocateBucket(key)
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}
