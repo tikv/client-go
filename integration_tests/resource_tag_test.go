@@ -13,23 +13,20 @@ import (
 var _ tikv.Client = &resourceGroupTagMockClient{}
 
 type resourceGroupTagMockClient struct {
+	tikv.Client
+
 	t            *testing.T
-	inner        tikv.Client
 	expectedTag  []byte
 	requestCount int
 }
 
 func (c *resourceGroupTagMockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	if len(req.ResourceGroupTag) == 0 {
-		return c.inner.SendRequest(ctx, addr, req, timeout)
+		return c.Client.SendRequest(ctx, addr, req, timeout)
 	}
 	c.requestCount++
 	assert.Equal(c.t, c.expectedTag, req.ResourceGroupTag)
-	return c.inner.SendRequest(ctx, addr, req, timeout)
-}
-
-func (c *resourceGroupTagMockClient) Close() error {
-	return c.inner.Close()
+	return c.Client.SendRequest(ctx, addr, req, timeout)
 }
 
 func TestResourceGroupTag(t *testing.T) {
@@ -43,7 +40,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTag
 	store := NewTestStore(t)
-	client := &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag1}
+	client := &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag1}
 	store.SetTiKVClient(client)
 	txn, err := store.Begin()
 	assert.NoError(t, err)
@@ -54,7 +51,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTagger
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag2}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag2}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)
@@ -65,7 +62,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTag + SetResourceGroupTagger
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag1}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag1}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)
@@ -79,7 +76,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTag
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag1}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag1}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)
@@ -90,7 +87,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTagger
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag2}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag2}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)
@@ -101,7 +98,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTag + SetResourceGroupTagger
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag1}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag1}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)
@@ -115,7 +112,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTag
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag1}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag1}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)
@@ -126,7 +123,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTagger
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag2}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag2}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)
@@ -137,7 +134,7 @@ func TestResourceGroupTag(t *testing.T) {
 
 	// SetResourceGroupTag + SetResourceGroupTagger
 	store = NewTestStore(t)
-	client = &resourceGroupTagMockClient{t: t, inner: store.GetTiKVClient(), expectedTag: testTag1}
+	client = &resourceGroupTagMockClient{t: t, Client: store.GetTiKVClient(), expectedTag: testTag1}
 	store.SetTiKVClient(client)
 	txn, err = store.Begin()
 	assert.NoError(t, err)

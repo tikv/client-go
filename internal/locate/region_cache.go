@@ -67,6 +67,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 )
@@ -761,8 +762,42 @@ func (l *KeyLocation) GetBucketVersion() uint64 {
 	return l.Buckets.GetVersion()
 }
 
-// LocateBucket returns the bucket the key is located.
+// LocateBucket calls locateBucket and check the result.
+// When the key is in [KeyLocation.StartKey, first Bucket key), the result returned by locateBucket will be nil
+// as there's no bucket containing this key. LocateBucket will return Bucket{KeyLocation.StartKey, first Bucket key}
+//  --- it's reasonable to assume that Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region.
+// Key in [last Bucket key, KeyLocation.EndKey) is handled similarly.
 func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
+	bucket := l.locateBucket(key)
+	if bucket != nil || !l.Contains(key) {
+		return bucket
+	}
+	counts := len(l.Buckets.Keys)
+	if counts == 0 {
+		return &Bucket{
+			l.StartKey,
+			l.EndKey,
+		}
+	}
+	firstBucketKey := l.Buckets.Keys[0]
+	if bytes.Compare(key, firstBucketKey) < 0 {
+		return &Bucket{
+			l.StartKey,
+			firstBucketKey,
+		}
+	}
+	lastBucketKey := l.Buckets.Keys[counts-1]
+	if bytes.Compare(lastBucketKey, key) <= 0 {
+		return &Bucket{
+			lastBucketKey,
+			l.EndKey,
+		}
+	}
+	return bucket
+}
+
+// locateBucket returns the bucket the key is located.
+func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1
 	i := sort.Search(searchLen, func(i int) bool {
@@ -2407,7 +2442,7 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 
 	cfg := config.GetGlobalConfig()
 
-	opt := grpc.WithInsecure() //nolint
+	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if len(cfg.Security.ClusterSSLCA) != 0 {
 		tlsConfig, err := cfg.Security.ToTLSConfig()
 		if err != nil {

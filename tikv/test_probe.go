@@ -84,7 +84,7 @@ func (s StoreProbe) ClearTxnLatches() {
 
 // SendTxnHeartbeat renews a txn's ttl.
 func (s StoreProbe) SendTxnHeartbeat(ctx context.Context, key []byte, startTS uint64, ttl uint64) (uint64, error) {
-	bo := retry.NewBackofferWithVars(ctx, transaction.PrewriteMaxBackoff, nil)
+	bo := retry.NewBackofferWithVars(ctx, int(transaction.PrewriteMaxBackoff.Load()), nil)
 	newTTL, _, err := transaction.SendTxnHeartBeat(bo, s.KVStore, key, startTS, ttl)
 	return newTTL, err
 }

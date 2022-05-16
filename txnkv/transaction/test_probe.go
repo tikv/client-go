@@ -23,6 +23,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
@@ -215,7 +216,7 @@ func (c CommitterProbe) PrewriteAllMutations(ctx context.Context) error {
 
 // PrewriteMutations performs the first phase of commit for given keys.
 func (c CommitterProbe) PrewriteMutations(ctx context.Context, mutations CommitterMutations) error {
-	return c.prewriteMutations(retry.NewBackofferWithVars(ctx, PrewriteMaxBackoff, nil), mutations)
+	return c.prewriteMutations(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), nil), mutations)
 }
 
 // CommitMutations performs the second phase of commit.
@@ -329,7 +330,7 @@ type ConfigProbe struct{}
 
 // GetTxnCommitBatchSize returns the batch size to commit txn.
 func (c ConfigProbe) GetTxnCommitBatchSize() uint64 {
-	return txnCommitBatchSize
+	return kv.TxnCommitBatchSize.Load()
 }
 
 // GetPessimisticLockMaxBackoff returns pessimisticLockMaxBackoff

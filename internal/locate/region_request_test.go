@@ -91,10 +91,16 @@ func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 }
 
 type fnClient struct {
-	fn func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+	fn         func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+	closedAddr string
 }
 
 func (f *fnClient) Close() error {
+	return nil
+}
+
+func (f *fnClient) CloseAddr(addr string) error {
+	f.closedAddr = addr
 	return nil
 }
 
@@ -117,7 +123,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 		defer func() {
 			s.regionRequestSender.client = oc
 		}()
-		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			staleResp := &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
 				RegionError: &errorpb.Error{StaleCommand: &errorpb.StaleCommand{}},
 			}}
@@ -511,7 +517,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnMaxTimestampNotSyncedError()
 			s.regionRequestSender.client = oc
 		}()
 		count := 0
-		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			count++
 			var resp *tikvrpc.Response
 			if count < 3 {
@@ -566,4 +572,36 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	s.NotNil(region)
 	s.Equal(region.Region.confVer, region.Region.confVer)
 	s.Equal(region.Region.ver, v3)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestCloseConnectionOnStoreNotMatch() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+
+	oc := s.regionRequestSender.client
+	defer func() {
+		s.regionRequestSender.client = oc
+	}()
+
+	var target string
+	client := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		target = addr
+		resp := &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			RegionError: &errorpb.Error{StoreNotMatch: &errorpb.StoreNotMatch{}},
+		}}
+		return resp, nil
+	}}
+
+	s.regionRequestSender.client = client
+	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+	resp, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.NotNil(regionErr)
+	s.Equal(target, client.closedAddr)
 }
