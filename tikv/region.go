@@ -91,6 +91,10 @@ type RPCRuntimeStats = locate.RPCRuntimeStats
 // CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
 type CodecPDClient = locate.CodecPDClient
 
+type CodecPDClientV2 = locate.CodecPDClientV2
+
+var NewCodecPDClientV2 = locate.NewCodecPDClientV2
+
 // RecordRegionRequestRuntimeStats records request runtime stats.
 func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*locate.RPCRuntimeStats, cmd tikvrpc.CmdType, d time.Duration) {
 	locate.RecordRegionRequestRuntimeStats(stats, cmd, d)

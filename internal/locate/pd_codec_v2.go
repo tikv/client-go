@@ -3,6 +3,7 @@ package locate
 import (
 	"context"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/tikv/client-go/v2/util/codec"
 
 	"github.com/tikv/client-go/v2/kv"
 	pd "github.com/tikv/pd/client"
@@ -61,11 +62,13 @@ func (c *CodecPDClientV2) ScanRegions(ctx context.Context, startKey []byte, endK
 	return regions, nil
 }
 
-func (c *CodecPDClientV2) SplitRegion(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+func (c *CodecPDClientV2) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+	var keys [][]byte
 	for i := range splitKeys {
-		splitKeys[i] = kv.BuildV2RequestKey(c.mode, splitKeys[i])
+		withPrefix := kv.BuildV2RequestKey(c.mode, splitKeys[i])
+		keys = append(keys, codec.EncodeBytes(nil, withPrefix))
 	}
-	return c.CodecPDClient.SplitRegions()
+	return c.CodecPDClient.SplitRegions(ctx, keys, opts...)
 }
 
 func (c *CodecPDClientV2) processRegionResult(region *pd.Region, err error) (*pd.Region, error) {
@@ -74,7 +77,7 @@ func (c *CodecPDClientV2) processRegionResult(region *pd.Region, err error) (*pd
 	}
 
 	if region != nil {
-		// TODO(iosmanthus): enable buckets support.
+		// TODO(@iosmanthus): enable buckets support.
 		region.Buckets = nil
 
 		region.Meta.StartKey = kv.DecodeV2StartKey(c.mode, region.Meta.StartKey)

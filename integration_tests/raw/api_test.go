@@ -3,7 +3,7 @@ package raw_tikv_test
 import (
 	"context"
 	"fmt"
-	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/tikv"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tidwall/gjson"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/rawkv"
 	pd "github.com/tikv/pd/client"
 )
@@ -29,7 +30,6 @@ type apiTestSuite struct {
 	client       *rawkv.Client
 	clientForCas *rawkv.Client
 	pdClient     pd.Client
-	isV2Cluster  bool
 }
 
 func getConfig(url string) (string, error) {
@@ -66,9 +66,9 @@ func (s *apiTestSuite) isV2Enabled(pdCli pd.Client) bool {
 	return true
 }
 
-func (s *apiTestSuite) newRawKVClient(addrs []string) *rawkv.Client {
+func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Client {
 	var clientBuilder func(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*rawkv.Client, error)
-	if s.isV2Cluster {
+	if s.isV2Enabled(pdCli) {
 		clientBuilder = rawkv.NewClientV2
 	} else {
 		clientBuilder = rawkv.NewClient
@@ -78,19 +78,25 @@ func (s *apiTestSuite) newRawKVClient(addrs []string) *rawkv.Client {
 	return cli
 }
 
+func (s *apiTestSuite) newPDClient(pdCli pd.Client, addrs []string) pd.Client {
+	if s.isV2Enabled(pdCli) {
+		return tikv.NewCodecPDClientV2(pdCli, kv.ModeRaw)
+	}
+	return pdCli
+}
+
 func (s *apiTestSuite) SetupTest() {
 	addrs := strings.Split(*pdAddrs, ",")
 
 	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
 	s.Nil(err)
-	s.pdClient = pdClient
 
-	s.isV2Cluster = s.isV2Enabled(pdClient)
+	s.pdClient = s.newPDClient(pdClient, addrs)
 
-	client := s.newRawKVClient(addrs)
+	client := s.newRawKVClient(pdClient, addrs)
 	s.client = client
 
-	clientForCas := s.newRawKVClient(addrs)
+	clientForCas := s.newRawKVClient(pdClient, addrs)
 	clientForCas.SetAtomicForCAS(true)
 	s.clientForCas = clientForCas
 }
@@ -108,7 +114,7 @@ func withPrefixes(prefix string, keys []string) []string {
 }
 
 func (s *apiTestSuite) cleanKeyPrefix(prefix string) {
-	end := append([]byte(prefix), 128)
+	end := append([]byte(prefix), 127)
 	err := s.client.DeleteRange(context.Background(), []byte(prefix), end)
 	s.Nil(err)
 }
@@ -208,6 +214,15 @@ func (s *apiTestSuite) mustNotExist(prefix string, key string) {
 	s.Empty(v)
 }
 
+func (s *apiTestSuite) mustSplitRegion(prefix string, splitKeys []string) {
+	var keys [][]byte
+	for i := range splitKeys {
+		keys = append(keys, []byte(withPrefix(prefix, splitKeys[i])))
+	}
+	_, err := s.pdClient.SplitRegions(context.Background(), keys)
+	s.Nil(err)
+}
+
 func (s *apiTestSuite) TestSimple() {
 	prefix := "test_simple"
 	s.cleanKeyPrefix(prefix)
@@ -237,17 +252,9 @@ func (s *apiTestSuite) TestScan() {
 	}
 	s.mustBatchPut(prefix, keys, values)
 
-	var (
-		splitKey = []byte(withPrefix(prefix, "key@10240"))
-		err      error
-	)
-	if s.isV2Cluster {
-		splitKey = kv.BuildV2RequestKey(kv.ModeRaw, splitKey)
-	}
-	_, err = s.pdClient.SplitRegions(context.Background(), [][]byte{splitKey})
-	s.Nil(err)
+	s.mustSplitRegion(prefix, []string{"key@4096"})
 
-	keys, values = s.mustScan(prefix, "key:", "", 5)
+	keys, values = s.mustScan(prefix, "key:", "", 10240)
 	for i := range keys {
 		s.Equal(fmt.Sprintf("key:%v", i), keys[i])
 		s.Equal(fmt.Sprintf("value:%v", i), values[i])
@@ -340,6 +347,8 @@ func (s *apiTestSuite) TestDeleteRange() {
 		values = append(values, fmt.Sprintf("value@%v", i))
 	}
 	s.mustBatchPut(prefix, keys, values)
+
+	s.mustSplitRegion(prefix, []string{"key@4096"})
 
 	s.mustDeleteRange(prefix, "", "")
 	s.mustNotExist(prefix, "key@0")
