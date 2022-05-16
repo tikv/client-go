@@ -380,7 +380,8 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
-	enableBatch := req.StoreTp != tikvrpc.TiDB && req.StoreTp != tikvrpc.TiFlash
+	// tiflash/tiflash_mpp/tidb don't use BatchCommand.
+	enableBatch := req.StoreTp == tikvrpc.TiKV
 	connArray, err := c.getConnArray(addr, enableBatch)
 	if err != nil {
 		return nil, err

@@ -45,6 +45,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+	"strconv"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
@@ -69,6 +70,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+	"github.com/stathat/consistent"
 )
 
 const (
@@ -394,7 +396,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.mu.sorted = btree.New(btreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.tiflashMPPStoreMu.needReload = true
-	c.tiflashMPPStoreMu.stores = make([]*Store, 1)
+	c.tiflashMPPStoreMu.stores = make([]*Store, 0)
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.closeCh = make(chan struct{})
 	interval := config.GetGlobalConfig().StoresRefreshInterval
@@ -731,6 +733,56 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 
 	cachedRegion.invalidate(Other)
 	return nil, nil
+}
+
+// GetTiFlashMPPRPCContextByConsistentHash return rpcCtx of tiflash_mpp stores.
+// Each mpp computation of specific region will be handled by specific tiflash_mpp node.
+// 1. Get all stores with label <engine, tiflash_mpp>.
+// 2. Get rpcCtx that indicates where the region is stored.
+// 3. Compute which tiflash_mpp node should handle this region by consistent hash.
+// 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
+func (c *RegionCache) GetTiFlashMPPRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID) (res []*RPCContext, err error) {
+	mppStores, err := c.GetTiFlashMPPStores(bo)
+	if err != nil {
+		return nil, err
+	}
+	if len(mppStores) == 0 {
+		return nil, errors.New("Number of tiflash_mpp node is zero")
+	}
+
+	hasher := consistent.New()
+	mppStoreMap := make(map[string]*Store)
+	for _, store := range mppStores {
+		if _, ok := mppStoreMap[store.GetAddr()]; ok {
+			return nil, errors.New(fmt.Sprintf("unexpected duplicated tiflash_mpp store: %v", store.GetAddr()))
+		} else {
+			mppStoreMap[store.GetAddr()] = store
+			hasher.Add(store.GetAddr())
+		}
+	}
+
+	for _, id := range ids {
+		addr, err := hasher.Get(strconv.Itoa(int(id.GetID())))
+		if err != nil {
+			return nil, err
+		}
+		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, true)
+		if err != nil {
+			return nil, err
+		}
+		if rpcCtx == nil {
+			return nil, nil
+		}
+		if store, ok := mppStoreMap[addr]; !ok {
+			return nil, errors.New("unexpected missing store")
+		} else {
+			rpcCtx.Store = store
+		}
+		rpcCtx.Addr = addr
+		// Maybe no need to replace rpcCtx.AccessMode, it's only used for loadBalance when access storeIdx.
+		res = append(res, rpcCtx)
+	}
+	return res, nil
 }
 
 // KeyLocation is the region and range that a key is located.
@@ -1713,23 +1765,16 @@ func (c *RegionCache) reloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store,
 	if err != nil {
 		return nil, err
 	}
-	mppLabels := []*metapb.StoreLabel{
-		{
-			Key:   "engine",
-			Value: "tiflash_mpp",
-		},
-	}
 	for _, s := range stores {
-		tmpStore := &Store{
-			storeID:   s.GetId(),
-			addr:      s.GetAddress(),
-			saddr:     s.GetStatusAddress(),
-			storeType: tikvrpc.GetStoreTypeByMeta(s),
-			labels:    s.GetLabels(),
-			state: uint64(resolved),
-		}
-		if tmpStore.IsLabelsMatch(mppLabels) {
-			res = append(res, tmpStore)
+		if isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashMPP) {
+			res = append(res, &Store{
+				storeID:   s.GetId(),
+				addr:      s.GetAddress(),
+				saddr:     s.GetStatusAddress(),
+				storeType: tikvrpc.GetStoreTypeByMeta(s),
+				labels:    s.GetLabels(),
+				state: uint64(resolved),
+			})
 		}
 	}
 
@@ -2220,18 +2265,21 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 		return true
 	}
 	for _, targetLabel := range labels {
-		match := false
-		for _, label := range s.labels {
-			if targetLabel.Key == label.Key && targetLabel.Value == label.Value {
-				match = true
-				break
-			}
-		}
-		if !match {
+		if !isStoreContainLabel(s.labels, targetLabel.Key, targetLabel.Value) {
 			return false
 		}
 	}
 	return true
+}
+
+func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
+	for _, label := range labels {
+		if label.GetKey() == key && label.GetValue() == val {
+			res = true
+			break
+		}
+	}
+	return res
 }
 
 type livenessState uint32
