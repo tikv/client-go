@@ -37,7 +37,6 @@ package locate
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -756,24 +755,15 @@ func (l *KeyLocation) GetBucketVersion() uint64 {
 	return l.Buckets.GetVersion()
 }
 
-// LocateBucket handles with a type of edge case of locateBucket that returns nil.
-// There are two cases where locateBucket returns nil:
-// Case one is that the key neither does not belong to any bucket nor does not belong to the region.
-// Case two is that the key belongs to the region but not any bucket.
-// LocateBucket will not return nil in the case two.
-// Specifically, when the key is in [KeyLocation.StartKey, first Bucket key), the result returned by locateBucket will be nil
+// LocateBucket calls locateBucket and check the result.
+// When the key is in [KeyLocation.StartKey, first Bucket key), the result returned by locateBucket will be nil
 // as there's no bucket containing this key. LocateBucket will return Bucket{KeyLocation.StartKey, first Bucket key}
-// as it's reasonable to assume that Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region.
+//  --- it's reasonable to assume that Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region.
 // Key in [last Bucket key, KeyLocation.EndKey) is handled similarly.
 func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 	bucket := l.locateBucket(key)
-	// Return the bucket when locateBucket can locate the key
-	if bucket != nil {
+	if bucket != nil || !l.Contains(key) {
 		return bucket
-	}
-	// Case one returns nil too.
-	if !l.Contains(key) {
-		return nil
 	}
 	counts := len(l.Buckets.Keys)
 	if counts == 0 {
@@ -782,7 +772,6 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 			l.EndKey,
 		}
 	}
-	// Handle case two
 	firstBucketKey := l.Buckets.Keys[0]
 	if bytes.Compare(key, firstBucketKey) < 0 {
 		return &Bucket{
@@ -797,13 +786,10 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 			l.EndKey,
 		}
 	}
-	// unreachable
-	logutil.Logger(context.Background()).Info(
-		"Unreachable place", zap.String("KeyLocation", l.String()), zap.String("Key", hex.EncodeToString(key)))
-	panic("Unreachable")
+	return bucket
 }
 
-// locateBucket returns the bucket the key is located. It returns nil if the key is outside the bucket.
+// locateBucket returns the bucket the key is located.
 func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1

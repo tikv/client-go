@@ -225,6 +225,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 
 	req := c.buildPrewriteRequest(batch, txnSize)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	var resolvingRecordToken *int
 	defer func() {
 		if err != nil {
 			// If we fail to receive response for async commit prewrite, it will be undetermined whether this
@@ -379,8 +380,14 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			locks = append(locks, lock)
 		}
 		start := time.Now()
+		if resolvingRecordToken == nil {
+			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
+			resolvingRecordToken = &token
+			defer c.store.GetLockResolver().ResolveLocksDone(c.startTS, *resolvingRecordToken)
+		} else {
+			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
+		}
 		msBeforeExpired, err := c.store.GetLockResolver().ResolveLocks(bo, c.startTS, locks)
-		defer c.store.GetLockResolver().ResolveLocksDone(c.startTS)
 		if err != nil {
 			return err
 		}

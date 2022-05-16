@@ -112,6 +112,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
 	}
 	lockWaitStartTime := action.WaitStartTime
+	var resolvingRecordToken *int
 	for {
 		// if lockWaitTime set, refine the request `WaitTimeout` field based on timeout limit
 		if action.LockWaitTime() > 0 && action.LockWaitTime() != kv.LockAlwaysWait {
@@ -226,8 +227,14 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		// Because we already waited on tikv, no need to Backoff here.
 		// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 		startTime = time.Now()
+		if resolvingRecordToken == nil {
+			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
+			resolvingRecordToken = &token
+			defer c.store.GetLockResolver().ResolveLocksDone(c.startTS, *resolvingRecordToken)
+		} else {
+			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
+		}
 		msBeforeTxnExpired, err := c.store.GetLockResolver().ResolveLocks(bo, 0, locks)
-		defer c.store.GetLockResolver().ResolveLocksDone(c.startTS)
 		if err != nil {
 			return err
 		}
