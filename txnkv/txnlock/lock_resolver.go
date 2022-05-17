@@ -62,6 +62,13 @@ type LockResolver struct {
 	resolveLockLiteThreshold uint64
 	mu                       struct {
 		sync.RWMutex
+		// These two fields is used to tracking lock resolving information
+		// currentStartTS -> caller token -> resolving locks
+		resolving map[uint64][][]Lock
+		// currentStartTS -> concurrency resolving lock process in progress
+		// use concurrency counting here to speed up checking
+		// whether we can free the resource used in `resolving`
+		resolvingConcurrency map[uint64]int
 		// resolved caches resolved txns (FIFO, txn id -> txnStatus).
 		resolved       map[uint64]TxnStatus
 		recentResolved *list.List
@@ -76,6 +83,14 @@ type LockResolver struct {
 	asyncResolveCancel func()
 }
 
+// ResolvingLock stands for current resolving locks' information
+type ResolvingLock struct {
+	TxnID     uint64
+	LockTxnID uint64
+	Key       []byte
+	Primary   []byte
+}
+
 // NewLockResolver creates a new LockResolver instance.
 func NewLockResolver(store storage) *LockResolver {
 	r := &LockResolver{
@@ -83,6 +98,8 @@ func NewLockResolver(store storage) *LockResolver {
 		resolveLockLiteThreshold: config.GetGlobalConfig().TiKVClient.ResolveLockLiteThreshold,
 	}
 	r.mu.resolved = make(map[uint64]TxnStatus)
+	r.mu.resolving = make(map[uint64][][]Lock)
+	r.mu.resolvingConcurrency = make(map[uint64]int)
 	r.mu.recentResolved = list.New()
 	r.asyncResolveCtx, r.asyncResolveCancel = context.WithCancel(context.Background())
 	return r
@@ -322,6 +339,45 @@ func (lr *LockResolver) ResolveLocksForRead(bo *retry.Backoffer, callerStartTS u
 	return lr.resolveLocks(bo, callerStartTS, locks, true, lite)
 }
 
+// RecordResolvingLocks records a txn which startTS is callerStartTS tries to resolve locks
+// Call this when start trying to resolve locks
+// Return a token which is used to call ResolvingLocksDone
+func (lr *LockResolver) RecordResolvingLocks(locks []*Lock, callerStartTS uint64) int {
+	resolving := make([]Lock, 0, len(locks))
+	for _, lock := range locks {
+		resolving = append(resolving, *lock)
+	}
+	lr.mu.Lock()
+	lr.mu.resolvingConcurrency[callerStartTS]++
+	token := len(lr.mu.resolving[callerStartTS])
+	lr.mu.resolving[callerStartTS] = append(lr.mu.resolving[callerStartTS], resolving)
+	lr.mu.Unlock()
+	return token
+}
+
+// UpdateResolvingLocks update the lock resoling information of the txn `callerStartTS`
+func (lr *LockResolver) UpdateResolvingLocks(locks []*Lock, callerStartTS uint64, token int) {
+	resolving := make([]Lock, 0, len(locks))
+	for _, lock := range locks {
+		resolving = append(resolving, *lock)
+	}
+	lr.mu.Lock()
+	lr.mu.resolving[callerStartTS][token] = resolving
+	lr.mu.Unlock()
+}
+
+// ResolveLocksDone will remove resolving locks information related with callerStartTS
+func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
+	lr.mu.Lock()
+	lr.mu.resolving[callerStartTS] = nil
+	lr.mu.resolvingConcurrency[callerStartTS]--
+	if lr.mu.resolvingConcurrency[callerStartTS] == 0 {
+		delete(lr.mu.resolving, callerStartTS)
+		delete(lr.mu.resolvingConcurrency, callerStartTS)
+	}
+	lr.mu.Unlock()
+}
+
 func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock, forRead bool, lite bool) (int64, []uint64 /* canIgnore */, []uint64 /* canAccess */, error) {
 	if lr.testingKnobs.meetLock != nil {
 		lr.testingKnobs.meetLock(locks)
@@ -423,6 +479,26 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 		metrics.LockResolverCountWithWaitExpired.Inc()
 	}
 	return msBeforeTxnExpired.value(), canIgnore, canAccess, nil
+}
+
+// Resolving returns the locks' information we are resolving currently.
+func (lr *LockResolver) Resolving() []ResolvingLock {
+	result := []ResolvingLock{}
+	lr.mu.RLock()
+	defer lr.mu.RUnlock()
+	for txnID, items := range lr.mu.resolving {
+		for _, item := range items {
+			for _, lock := range item {
+				result = append(result, ResolvingLock{
+					TxnID:     txnID,
+					LockTxnID: lock.TxnID,
+					Key:       lock.Key,
+					Primary:   lock.Primary,
+				})
+			}
+		}
+	}
+	return result
 }
 
 type txnExpireTime struct {
