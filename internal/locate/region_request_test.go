@@ -289,6 +289,8 @@ func (c *cancelContextClient) SendRequest(ctx context.Context, addr string, req 
 // mockTikvGrpcServer mock a tikv gprc server for testing.
 type mockTikvGrpcServer struct{}
 
+var _ tikvpb.TikvServer = &mockTikvGrpcServer{}
+
 // KvGet commands with mvcc/txn supported.
 func (s *mockTikvGrpcServer) KvGet(context.Context, *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, error) {
 	return nil, errors.New("unreachable")
@@ -457,6 +459,10 @@ func (s *mockTikvGrpcServer) GetLockWaitInfo(context.Context, *kvrpcpb.GetLockWa
 }
 
 func (s *mockTikvGrpcServer) RawChecksum(context.Context, *kvrpcpb.RawChecksumRequest) (*kvrpcpb.RawChecksumResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) Compact(ctx context.Context, request *kvrpcpb.CompactRequest) (*kvrpcpb.CompactResponse, error) {
 	return nil, errors.New("unreachable")
 }
 
