@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"math/rand"
 	"sort"
 	"strings"
@@ -481,6 +482,15 @@ func (c *RegionCache) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointT
 // SetPDClient replaces pd client,for testing only
 func (c *RegionCache) SetPDClient(client pd.Client) {
 	c.pdClient = client
+}
+
+func (c *RegionCache) GetApiVersion() kvrpcpb.APIVersion {
+	switch c.pdClient.(type) {
+	case *CodecPDClientV2:
+		return kvrpcpb.APIVersion_V2
+	default:
+		return kvrpcpb.APIVersion_V1
+	}
 }
 
 // RPCContext contains data that is needed to send RPC to a region.
