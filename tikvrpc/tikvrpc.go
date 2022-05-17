@@ -97,16 +97,17 @@ const (
 	CmdCop CmdType = 512 + iota
 	CmdCopStream
 	CmdBatchCop
-	CmdMPPTask
-	CmdMPPConn
-	CmdMPPCancel
-	CmdMPPAlive
+	CmdMPPTask   // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdMPPConn   // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdMPPCancel // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdMPPAlive  // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdMvccGetByKey CmdType = 1024 + iota
 	CmdMvccGetByStartTs
 	CmdSplitRegion
 
 	CmdDebugGetRegionProperties CmdType = 2048 + iota
+	CmdCompact                          // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
 )
@@ -191,6 +192,8 @@ func (t CmdType) String() string {
 		return "CheckSecondaryLocks"
 	case CmdDebugGetRegionProperties:
 		return "DebugGetRegionProperties"
+	case CmdCompact:
+		return "Compact"
 	case CmdTxnHeartBeat:
 		return "TxnHeartBeat"
 	case CmdStoreSafeTS:
@@ -463,6 +466,11 @@ func (req *Request) PessimisticRollback() *kvrpcpb.PessimisticRollbackRequest {
 // DebugGetRegionProperties returns GetRegionPropertiesRequest in request.
 func (req *Request) DebugGetRegionProperties() *debugpb.GetRegionPropertiesRequest {
 	return req.Req.(*debugpb.GetRegionPropertiesRequest)
+}
+
+// Compact returns CompactRequest in request.
+func (req *Request) Compact() *kvrpcpb.CompactRequest {
+	return req.Req.(*kvrpcpb.CompactRequest)
 }
 
 // Empty returns BatchCommandsEmptyRequest in request.
@@ -1012,6 +1020,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.GetStoreSafeTS(ctx, req.StoreSafeTS())
 	case CmdLockWaitInfo:
 		resp.Resp, err = client.GetLockWaitInfo(ctx, req.LockWaitInfo())
+	case CmdCompact:
+		resp.Resp, err = client.Compact(ctx, req.Compact())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
