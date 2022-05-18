@@ -369,7 +369,7 @@ func (lr *LockResolver) UpdateResolvingLocks(locks []*Lock, callerStartTS uint64
 // ResolveLocksDone will remove resolving locks information related with callerStartTS
 func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 	lr.mu.Lock()
-	lr.mu.resolving[callerStartTS] = nil
+	lr.mu.resolving[callerStartTS][token] = nil
 	lr.mu.resolvingConcurrency[callerStartTS]--
 	if lr.mu.resolvingConcurrency[callerStartTS] == 0 {
 		delete(lr.mu.resolving, callerStartTS)
