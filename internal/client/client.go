@@ -408,6 +408,9 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	clientConn := connArray.Get()
+	if clientConn == nil {
+		return nil, fmt.Errorf("connection is closed")
+	}
 	if state := clientConn.GetState(); state == connectivity.TransientFailure {
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
 		metrics.TiKVGRPCConnTransientFailureCounter.WithLabelValues(addr, storeID).Inc()
