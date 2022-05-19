@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tidwall/gjson"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/rawkv"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -80,7 +79,7 @@ func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Cl
 
 func (s *apiTestSuite) newPDClient(pdCli pd.Client, addrs []string) pd.Client {
 	if s.isV2Enabled(pdCli) {
-		return tikv.NewCodecPDClientV2(pdCli, kv.ModeRaw)
+		return tikv.NewCodecPDClientV2(pdCli, tikv.ModeRaw)
 	}
 	return pdCli
 }

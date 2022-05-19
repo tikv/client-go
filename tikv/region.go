@@ -95,6 +95,13 @@ type CodecPDClientV2 = locate.CodecPDClientV2
 
 var NewCodecPDClientV2 = locate.NewCodecPDClientV2
 
+type Mode = client.Mode
+
+var (
+	ModeRaw Mode = client.ModeRaw
+	ModeTxn Mode = client.ModeTxn
+)
+
 // RecordRegionRequestRuntimeStats records request runtime stats.
 func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*locate.RPCRuntimeStats, cmd tikvrpc.CmdType, d time.Duration) {
 	locate.RecordRegionRequestRuntimeStats(stats, cmd, d)

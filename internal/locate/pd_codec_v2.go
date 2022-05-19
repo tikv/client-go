@@ -3,18 +3,18 @@ package locate
 import (
 	"context"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/util/codec"
 
-	"github.com/tikv/client-go/v2/kv"
 	pd "github.com/tikv/pd/client"
 )
 
 type CodecPDClientV2 struct {
 	*CodecPDClient
-	mode kv.Mode
+	mode client.Mode
 }
 
-func NewCodecPDClientV2(client pd.Client, mode kv.Mode) *CodecPDClientV2 {
+func NewCodecPDClientV2(client pd.Client, mode client.Mode) *CodecPDClientV2 {
 	codecClient := NewCodeCPDClient(client)
 	return &CodecPDClientV2{codecClient, mode}
 }
@@ -22,7 +22,7 @@ func NewCodecPDClientV2(client pd.Client, mode kv.Mode) *CodecPDClientV2 {
 // GetRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClientV2) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	key = kv.BuildV2RequestKey(c.mode, key)
+	key = client.EncodeV2Key(c.mode, key)
 	region, err := c.CodecPDClient.GetRegion(ctx, key, opts...)
 	return c.processRegionResult(region, err)
 }
@@ -30,7 +30,7 @@ func (c *CodecPDClientV2) GetRegion(ctx context.Context, key []byte, opts ...pd.
 // GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClientV2) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	key = kv.BuildV2RequestKey(c.mode, key)
+	key = client.EncodeV2Key(c.mode, key)
 	region, err := c.CodecPDClient.GetPrevRegion(ctx, key, opts...)
 	return c.processRegionResult(region, err)
 }
@@ -45,13 +45,8 @@ func (c *CodecPDClientV2) GetRegionByID(ctx context.Context, regionID uint64, op
 // ScanRegions encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClientV2) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int) ([]*pd.Region, error) {
-	startKey = kv.BuildV2RequestKey(c.mode, startKey)
-	if len(endKey) > 0 {
-		endKey = kv.BuildV2RequestKey(c.mode, endKey)
-	} else {
-		endKey = kv.GetV2EndKey(c.mode)
-	}
-	regions, err := c.CodecPDClient.ScanRegions(ctx, startKey, endKey, limit)
+	start, end := client.EncodeV2Range(c.mode, startKey, endKey)
+	regions, err := c.CodecPDClient.ScanRegions(ctx, start, end, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +60,7 @@ func (c *CodecPDClientV2) ScanRegions(ctx context.Context, startKey []byte, endK
 func (c *CodecPDClientV2) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
 	var keys [][]byte
 	for i := range splitKeys {
-		withPrefix := kv.BuildV2RequestKey(c.mode, splitKeys[i])
+		withPrefix := client.EncodeV2Key(c.mode, splitKeys[i])
 		keys = append(keys, codec.EncodeBytes(nil, withPrefix))
 	}
 	return c.CodecPDClient.SplitRegions(ctx, keys, opts...)
@@ -80,8 +75,8 @@ func (c *CodecPDClientV2) processRegionResult(region *pd.Region, err error) (*pd
 		// TODO(@iosmanthus): enable buckets support.
 		region.Buckets = nil
 
-		region.Meta.StartKey = kv.DecodeV2StartKey(c.mode, region.Meta.StartKey)
-		region.Meta.EndKey = kv.DecodeV2EndKey(c.mode, region.Meta.EndKey)
+		region.Meta.StartKey, region.Meta.EndKey =
+			client.MapV2RangeToV1(c.mode, region.Meta.StartKey, region.Meta.EndKey)
 	}
 
 	return region, nil
