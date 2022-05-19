@@ -1281,7 +1281,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 	}
 
 	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashMPP {
-		s.regionCache.InvalidateTiFlashMPPStores()
+		s.regionCache.InvalidateTiFlashMPPStoresIfGRPCError(err)
 	} else if ctx.Meta != nil {
 		if s.replicaSelector != nil {
 			s.replicaSelector.onSendFailure(bo, err)

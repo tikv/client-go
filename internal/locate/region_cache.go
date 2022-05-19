@@ -40,18 +40,19 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
-	"strconv"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stathat/consistent"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -67,11 +68,12 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
-	"github.com/stathat/consistent"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -742,6 +744,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 // 2. Get rpcCtx that indicates where the region is stored.
 // 3. Compute which tiflash_mpp node should handle this region by consistent hash.
 // 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
+// NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
 func (c *RegionCache) GetTiFlashMPPRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID) (res []*RPCContext, err error) {
 	mppStores, err := c.GetTiFlashMPPStores(bo)
 	if err != nil {
@@ -1808,7 +1811,7 @@ func (c *RegionCache) reloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store,
 				saddr:     s.GetStatusAddress(),
 				storeType: tikvrpc.GetStoreTypeByMeta(s),
 				labels:    s.GetLabels(),
-				state: uint64(resolved),
+				state:     uint64(resolved),
 			})
 		}
 	}
@@ -1817,6 +1820,25 @@ func (c *RegionCache) reloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store,
 	c.tiflashMPPStoreMu.stores = res
 	c.tiflashMPPStoreMu.Unlock()
 	return res, nil
+}
+
+// InvalidateTiFlashMPPStoresIfGRPCError will invalid cache if is GRPC error.
+// For now, only consider GRPC unavailable error.
+func (c *RegionCache) InvalidateTiFlashMPPStoresIfGRPCError(err error) bool {
+	var invalidate bool
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable:
+			invalidate = true
+		default:
+		}
+	}
+	if !invalidate {
+		return false
+	}
+
+	c.InvalidateTiFlashMPPStores()
+	return true
 }
 
 // InvalidateTiFlashMPPStores set needReload be true,
