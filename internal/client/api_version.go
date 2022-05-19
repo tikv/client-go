@@ -95,6 +95,10 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		return req, nil
 	}
 
+	if !req.ForRetry.CAS(false, true) {
+		return req, nil
+	}
+
 	switch req.Type {
 	case CmdGet:
 	case CmdScan:
