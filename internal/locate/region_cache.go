@@ -756,14 +756,8 @@ func (c *RegionCache) GetTiFlashMPPRPCContextByConsistentHash(bo *retry.Backoffe
 	}
 
 	hasher := consistent.New()
-	mppStoreMap := make(map[string]*Store)
 	for _, store := range mppStores {
-		if _, ok := mppStoreMap[store.GetAddr()]; ok {
-			return nil, errors.New(fmt.Sprintf("unexpected duplicated tiflash_mpp store: %v", store.GetAddr()))
-		} else {
-			mppStoreMap[store.GetAddr()] = store
-			hasher.Add(store.GetAddr())
-		}
+		hasher.Add(store.GetAddr())
 	}
 
 	for _, id := range ids {
@@ -778,11 +772,19 @@ func (c *RegionCache) GetTiFlashMPPRPCContextByConsistentHash(bo *retry.Backoffe
 		if rpcCtx == nil {
 			return nil, nil
 		}
-		if store, ok := mppStoreMap[addr]; !ok {
-			return nil, errors.New("unexpected missing store")
-		} else {
-			rpcCtx.Store = store
+
+		var store *Store
+		for _, s := range mppStores {
+			if s.GetAddr() == addr {
+				store = s
+				break
+			}
 		}
+		if store == nil {
+			return nil, errors.New(fmt.Sprintf("cannot find mpp store: %v", addr))
+		}
+
+		rpcCtx.Store = store
 		rpcCtx.Addr = addr
 		// Maybe no need to replace rpcCtx.AccessMode, it's only used for loadBalance when access storeIdx.
 		res = append(res, rpcCtx)
@@ -1867,7 +1869,6 @@ func (c *RegionCache) InvalidateTiFlashMPPStores() {
 	c.tiflashMPPStoreMu.Lock()
 	defer c.tiflashMPPStoreMu.Unlock()
 	c.tiflashMPPStoreMu.needReload = true
-	return
 }
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
