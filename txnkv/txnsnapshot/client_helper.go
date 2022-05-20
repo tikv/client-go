@@ -97,6 +97,21 @@ func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 	return msBeforeTxnExpired, nil
 }
 
+// UpdateResolvingLocks wraps the UpdateResolvingLocks function
+func (ch *ClientHelper) UpdateResolvingLocks(locks []*txnlock.Lock, callerStartTS uint64, token int) {
+	ch.lockResolver.UpdateResolvingLocks(locks, callerStartTS, token)
+}
+
+// RecordResolvingLocks wraps the RecordResolvingLocks function
+func (ch *ClientHelper) RecordResolvingLocks(locks []*txnlock.Lock, callerStartTS uint64) int {
+	return ch.lockResolver.RecordResolvingLocks(locks, callerStartTS)
+}
+
+// ResolveLocksDone wraps the ResolveLocksDone function
+func (ch *ClientHelper) ResolveLocksDone(callerStartTS uint64, token int) {
+	ch.lockResolver.ResolveLocksDone(callerStartTS, token)
+}
+
 // SendReqCtx wraps the SendReqCtx function and use the resolved lock result in the kvrpcpb.Context.
 func (ch *ClientHelper) SendReqCtx(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration, et tikvrpc.EndpointType, directStoreAddr string, opts ...locate.StoreSelectorOption) (*tikvrpc.Response, *locate.RPCContext, string, error) {
 	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client)
