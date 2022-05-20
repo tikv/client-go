@@ -36,7 +36,6 @@ package tikvrpc
 
 import (
 	"context"
-	atomic2 "go.uber.org/atomic"
 	"sync/atomic"
 	"time"
 
@@ -218,7 +217,7 @@ type Request struct {
 	// If it's not empty, the store which receive the request will forward it to
 	// the forwarded host. It's useful when network partition occurs.
 	ForwardedHost string
-	ForRetry      atomic2.Bool
+	// ForRetry      atomic2.Bool
 }
 
 // NewRequest returns new kv rpc request.

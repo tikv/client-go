@@ -1414,7 +1414,11 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	if regionErr.GetKeyNotInRegion() != nil {
-		logutil.BgLogger().Debug("tikv reports `KeyNotInRegion`", zap.Stringer("ctx", ctx))
+		var key []byte
+		if req.Type == tikvrpc.CmdRawPut {
+			key = req.RawPut().Key
+		}
+		logutil.BgLogger().Debug("tikv reports `KeyNotInRegion`", zap.String("key", string(key)), zap.Stringer("req", req), zap.Stringer("ctx", ctx))
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return false, nil
 	}

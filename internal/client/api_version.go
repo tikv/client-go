@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -95,9 +94,10 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		return req, nil
 	}
 
-	if !req.ForRetry.CAS(false, true) {
-		return req, nil
-	}
+	// if !req.ForRetry.CAS(false, true) {
+	// 	return req, nil
+	// }
+	newReq := *req
 
 	switch req.Type {
 	case CmdGet:
@@ -114,27 +114,45 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	case CmdGC:
 	case CmdDeleteRange:
 	case CmdRawGet:
-		req.RawGet().Key = EncodeV2Key(ModeRaw, req.RawGet().Key)
+		r := *req.RawGet()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawBatchGet:
-		req.RawBatchGet().Keys = encodeV2Keys(ModeRaw, req.RawBatchGet().Keys)
+		r := *req.RawBatchGet()
+		r.Keys = encodeV2Keys(ModeRaw, r.Keys)
+		newReq.Req = &r
 	case CmdRawPut:
-		req.RawPut().Key = EncodeV2Key(ModeRaw, req.RawPut().Key)
+		r := *req.RawPut()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawBatchPut:
-		req.RawBatchPut().Pairs = encodeV2Pairs(ModeRaw, req.RawBatchPut().Pairs)
+		r := *req.RawBatchPut()
+		r.Pairs = encodeV2Pairs(ModeRaw, r.Pairs)
+		newReq.Req = &r
 	case CmdRawDelete:
-		req.RawDelete().Key = EncodeV2Key(ModeRaw, req.RawDelete().Key)
+		r := *req.RawDelete()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawBatchDelete:
-		req.RawBatchDelete().Keys = encodeV2Keys(ModeRaw, req.RawBatchDelete().Keys)
+		r := *req.RawBatchDelete()
+		r.Keys = encodeV2Keys(ModeRaw, r.Keys)
+		newReq.Req = &r
 	case CmdRawDeleteRange:
-		req.RawDeleteRange().StartKey, req.RawDeleteRange().EndKey =
-			EncodeV2Range(ModeRaw, req.RawDeleteRange().StartKey, req.RawDeleteRange().EndKey)
+		r := *req.RawDeleteRange()
+		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
+		newReq.Req = &r
 	case CmdRawScan:
-		req.RawScan().StartKey, req.RawScan().EndKey =
-			EncodeV2Range(ModeRaw, req.RawScan().StartKey, req.RawScan().EndKey)
+		r := *req.RawScan()
+		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
+		newReq.Req = &r
 	case CmdGetKeyTTL:
-		req.RawGetKeyTTL().Key = EncodeV2Key(ModeRaw, req.RawGetKeyTTL().Key)
+		r := *req.RawGetKeyTTL()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawCompareAndSwap:
-		req.RawCompareAndSwap().Key = EncodeV2Key(ModeRaw, req.RawCompareAndSwap().Key)
+		r := *req.RawCompareAndSwap()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdUnsafeDestroyRange:
 	case CmdRegisterLockObserver:
 	case CmdCheckLockObserver:
@@ -154,7 +172,7 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	default:
 		return nil, errors.Errorf("invalid request type %v", req.Type)
 	}
-	return req, nil
+	return &newReq, nil
 }
 
 func decodeV2Key(mode Mode, key []byte) ([]byte, error) {

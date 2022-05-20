@@ -219,6 +219,9 @@ func (s *apiTestSuite) mustSplitRegion(prefix string, splitKeys []string) {
 		keys = append(keys, []byte(withPrefix(prefix, splitKeys[i])))
 	}
 	_, err := s.pdClient.SplitRegions(context.Background(), keys)
+	if err != nil {
+		s.T().Fatalf("failed to split regions: %v", err)
+	}
 	s.Nil(err)
 }
 
@@ -251,7 +254,11 @@ func (s *apiTestSuite) TestScan() {
 	}
 	s.mustBatchPut(prefix, keys, values)
 
-	s.mustSplitRegion(prefix, []string{"key@4096"})
+	var splitKeys []string
+	for i := 0; i < 20480; i += 1024 {
+		splitKeys = append(splitKeys, fmt.Sprintf("key@%v", i))
+	}
+	s.mustSplitRegion(prefix, splitKeys)
 
 	keys, values = s.mustScan(prefix, "key:", "", 10240)
 	for i := range keys {

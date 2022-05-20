@@ -22,16 +22,16 @@ func NewCodecPDClientV2(client pd.Client, mode client.Mode) *CodecPDClientV2 {
 // GetRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClientV2) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	key = client.EncodeV2Key(c.mode, key)
-	region, err := c.CodecPDClient.GetRegion(ctx, key, opts...)
+	queryKey := client.EncodeV2Key(c.mode, key)
+	region, err := c.CodecPDClient.GetRegion(ctx, queryKey, opts...)
 	return c.processRegionResult(region, err)
 }
 
 // GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClientV2) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	key = client.EncodeV2Key(c.mode, key)
-	region, err := c.CodecPDClient.GetPrevRegion(ctx, key, opts...)
+	queryKey := client.EncodeV2Key(c.mode, key)
+	region, err := c.CodecPDClient.GetPrevRegion(ctx, queryKey, opts...)
 	return c.processRegionResult(region, err)
 }
 

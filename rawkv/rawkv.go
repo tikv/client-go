@@ -591,7 +591,6 @@ func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, 
 		if err != nil {
 			return nil, nil, err
 		}
-		req.ApiVersion = c.apiVersion
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
