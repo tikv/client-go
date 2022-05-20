@@ -356,6 +356,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	s.mu.RUnlock()
 
 	pending := batch.keys
+	var resolvingRecordToken *int
 	for {
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
@@ -450,6 +451,13 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			s.mergeExecDetail(batchGetResp.ExecDetailsV2)
 		}
 		if len(lockedKeys) > 0 {
+			if resolvingRecordToken == nil {
+				token := cli.RecordResolvingLocks(locks, s.version)
+				resolvingRecordToken = &token
+				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
+			} else {
+				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
 			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
 			if err != nil {
 				return err
@@ -565,6 +573,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	}
 
 	var firstLock *txnlock.Lock
+	var resolvingRecordToken *int
 	for {
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.GetRegionCache().LocateKey(bo, k)
@@ -617,8 +626,15 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				cli.resolvedLocks.Put(lock.TxnID)
 				continue
 			}
-
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, []*txnlock.Lock{lock})
+			locks := []*txnlock.Lock{lock}
+			if resolvingRecordToken == nil {
+				token := cli.RecordResolvingLocks(locks, s.version)
+				resolvingRecordToken = &token
+				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
+			} else {
+				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
+			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
 			if err != nil {
 				return nil, err
 			}
