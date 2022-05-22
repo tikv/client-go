@@ -867,7 +867,9 @@ func (s *RegionRequestSender) getRPCContext(
 		if err != nil {
 			return nil, err
 		}
-		if len(rpcCtxs) != 1 {
+		if rpcCtxs == nil {
+			return nil, nil
+		} else if len(rpcCtxs) != 1 {
 			return nil, errors.New(fmt.Sprintf("unexpected number of rpcCtx, expect 1, got: %v", len(rpcCtxs)))
 		}
 		return rpcCtxs[0], nil
