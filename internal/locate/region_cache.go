@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stathat/consistent"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -67,10 +69,12 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -371,6 +375,11 @@ type RegionCache struct {
 		sync.RWMutex
 		stores map[uint64]*Store
 	}
+	tiflashMPPStoreMu struct {
+		sync.RWMutex
+		needReload bool
+		stores     []*Store
+	}
 	notifyCheckCh chan struct{}
 	closeCh       chan struct{}
 
@@ -390,6 +399,8 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
 	c.mu.sorted = btree.New(btreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
+	c.tiflashMPPStoreMu.needReload = true
+	c.tiflashMPPStoreMu.stores = make([]*Store, 0)
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.closeCh = make(chan struct{})
 	interval := config.GetGlobalConfig().StoresRefreshInterval
@@ -726,6 +737,59 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 
 	cachedRegion.invalidate(Other)
 	return nil, nil
+}
+
+// GetTiFlashMPPRPCContextByConsistentHash return rpcCtx of tiflash_mpp stores.
+// Each mpp computation of specific region will be handled by specific tiflash_mpp node.
+// 1. Get all stores with label <engine, tiflash_mpp>.
+// 2. Get rpcCtx that indicates where the region is stored.
+// 3. Compute which tiflash_mpp node should handle this region by consistent hash.
+// 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
+// NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
+func (c *RegionCache) GetTiFlashMPPRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID) (res []*RPCContext, err error) {
+	mppStores, err := c.GetTiFlashMPPStores(bo)
+	if err != nil {
+		return nil, err
+	}
+	if len(mppStores) == 0 {
+		return nil, errors.New("Number of tiflash_mpp node is zero")
+	}
+
+	hasher := consistent.New()
+	for _, store := range mppStores {
+		hasher.Add(store.GetAddr())
+	}
+
+	for _, id := range ids {
+		addr, err := hasher.Get(strconv.Itoa(int(id.GetID())))
+		if err != nil {
+			return nil, err
+		}
+		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, true)
+		if err != nil {
+			return nil, err
+		}
+		if rpcCtx == nil {
+			return nil, nil
+		}
+
+		var store *Store
+		for _, s := range mppStores {
+			if s.GetAddr() == addr {
+				store = s
+				break
+			}
+		}
+		if store == nil {
+			return nil, errors.New(fmt.Sprintf("cannot find mpp store: %v", addr))
+		}
+
+		rpcCtx.Store = store
+		rpcCtx.Addr = addr
+		// Maybe no need to replace rpcCtx.AccessMode, it's only used for loadBalance when access storeIdx.
+		res = append(res, rpcCtx)
+	}
+	return res, nil
 }
 
 // KeyLocation is the region and range that a key is located.
@@ -1743,6 +1807,70 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 	return stores
 }
 
+// GetTiFlashMPPStores returns all stores with lable <engine, tiflash_mpp>.
+func (c *RegionCache) GetTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, err error) {
+	c.tiflashMPPStoreMu.RLock()
+	needReload := c.tiflashMPPStoreMu.needReload
+	stores := c.tiflashMPPStoreMu.stores
+	c.tiflashMPPStoreMu.RUnlock()
+
+	if needReload {
+		return c.reloadTiFlashMPPStores(bo)
+	}
+	return stores, nil
+}
+
+func (c *RegionCache) reloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, _ error) {
+	stores, err := c.pdClient.GetAllStores(bo.GetCtx())
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range stores {
+		if isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashMPP) {
+			res = append(res, &Store{
+				storeID:   s.GetId(),
+				addr:      s.GetAddress(),
+				saddr:     s.GetStatusAddress(),
+				storeType: tikvrpc.GetStoreTypeByMeta(s),
+				labels:    s.GetLabels(),
+				state:     uint64(resolved),
+			})
+		}
+	}
+
+	c.tiflashMPPStoreMu.Lock()
+	c.tiflashMPPStoreMu.stores = res
+	c.tiflashMPPStoreMu.Unlock()
+	return res, nil
+}
+
+// InvalidateTiFlashMPPStoresIfGRPCError will invalid cache if is GRPC error.
+// For now, only consider GRPC unavailable error.
+func (c *RegionCache) InvalidateTiFlashMPPStoresIfGRPCError(err error) bool {
+	var invalidate bool
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable:
+			invalidate = true
+		default:
+		}
+	}
+	if !invalidate {
+		return false
+	}
+
+	c.InvalidateTiFlashMPPStores()
+	return true
+}
+
+// InvalidateTiFlashMPPStores set needReload be true,
+// and will refresh tiflash_mpp store cache next time.
+func (c *RegionCache) InvalidateTiFlashMPPStores() {
+	c.tiflashMPPStoreMu.Lock()
+	defer c.tiflashMPPStoreMu.Unlock()
+	c.tiflashMPPStoreMu.needReload = true
+}
+
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
 // the latestBucketsVer is newer than the cached one.
 func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsVer uint64) {
@@ -2217,18 +2345,21 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 		return true
 	}
 	for _, targetLabel := range labels {
-		match := false
-		for _, label := range s.labels {
-			if targetLabel.Key == label.Key && targetLabel.Value == label.Value {
-				match = true
-				break
-			}
-		}
-		if !match {
+		if !isStoreContainLabel(s.labels, targetLabel.Key, targetLabel.Value) {
 			return false
 		}
 	}
 	return true
+}
+
+func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
+	for _, label := range labels {
+		if label.GetKey() == key && label.GetValue() == val {
+			res = true
+			break
+		}
+	}
+	return res
 }
 
 type livenessState uint32
