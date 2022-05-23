@@ -167,18 +167,18 @@ func (a *memdbArenaBlock) reset() {
 	a.length = 0
 }
 
-type memdbCheckpoint struct {
+type MemdbCheckpoint struct {
 	blockSize     int
 	blocks        int
 	offsetInBlock int
 }
 
-func (cp *memdbCheckpoint) isSamePosition(other *memdbCheckpoint) bool {
+func (cp *MemdbCheckpoint) isSamePosition(other *MemdbCheckpoint) bool {
 	return cp.blocks == other.blocks && cp.offsetInBlock == other.offsetInBlock
 }
 
-func (a *memdbArena) checkpoint() memdbCheckpoint {
-	snap := memdbCheckpoint{
+func (a *memdbArena) checkpoint() MemdbCheckpoint {
+	snap := MemdbCheckpoint{
 		blockSize: a.blockSize,
 		blocks:    len(a.blocks),
 	}
@@ -188,7 +188,7 @@ func (a *memdbArena) checkpoint() memdbCheckpoint {
 	return snap
 }
 
-func (a *memdbArena) truncate(snap *memdbCheckpoint) {
+func (a *memdbArena) truncate(snap *MemdbCheckpoint) {
 	for i := snap.blocks; i < len(a.blocks); i++ {
 		a.blocks[i] = memdbArenaBlock{}
 	}
@@ -310,7 +310,7 @@ func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
 	return block[valueOff:lenOff:lenOff]
 }
 
-func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *memdbCheckpoint) ([]byte, bool) {
+func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *MemdbCheckpoint) ([]byte, bool) {
 	result := l.selectValueHistory(addr, func(addr memdbArenaAddr) bool {
 		return !l.canModify(snap, addr)
 	})
@@ -332,7 +332,7 @@ func (l *memdbVlog) selectValueHistory(addr memdbArenaAddr, predicate func(memdb
 	return nullAddr
 }
 
-func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *memdbCheckpoint) {
+func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *MemdbCheckpoint) {
 	cursor := l.checkpoint()
 	for !cp.isSamePosition(&cursor) {
 		hdrOff := cursor.offsetInBlock - memdbVlogHdrSize
@@ -361,7 +361,7 @@ func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *memdbCheckpoint) {
 	}
 }
 
-func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *memdbCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
+func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *MemdbCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
 	cursor := *tail
 	for !head.isSamePosition(&cursor) {
 		cursorAddr := memdbArenaAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
@@ -381,7 +381,7 @@ func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *memdbCheckpoint, f fun
 	}
 }
 
-func (l *memdbVlog) moveBackCursor(cursor *memdbCheckpoint, hdr *memdbVlogHdr) {
+func (l *memdbVlog) moveBackCursor(cursor *MemdbCheckpoint, hdr *memdbVlogHdr) {
 	cursor.offsetInBlock -= (memdbVlogHdrSize + int(hdr.valueLen))
 	if cursor.offsetInBlock == 0 {
 		cursor.blocks--
@@ -391,7 +391,7 @@ func (l *memdbVlog) moveBackCursor(cursor *memdbCheckpoint, hdr *memdbVlogHdr) {
 	}
 }
 
-func (l *memdbVlog) canModify(cp *memdbCheckpoint, addr memdbArenaAddr) bool {
+func (l *memdbVlog) canModify(cp *MemdbCheckpoint, addr memdbArenaAddr) bool {
 	if cp == nil {
 		return true
 	}
