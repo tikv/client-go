@@ -2,6 +2,7 @@ package locate
 
 import (
 	"context"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/util/codec"
@@ -80,4 +81,27 @@ func (c *CodecPDClientV2) processRegionResult(region *pd.Region, err error) (*pd
 	}
 
 	return region, nil
+}
+
+func (c *CodecPDClientV2) decodeRegionWithShallowCopy(region *metapb.Region) (*metapb.Region, error) {
+	var err error
+	newRegion := *region
+
+	if len(region.StartKey) > 0 {
+		_, newRegion.StartKey, err = codec.DecodeBytes(region.StartKey, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if len(region.EndKey) > 0 {
+		_, newRegion.EndKey, err = codec.DecodeBytes(region.EndKey, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	newRegion.StartKey, newRegion.EndKey = client.MapV2RangeToV1(c.mode, newRegion.StartKey, newRegion.EndKey)
+
+	return &newRegion, nil
 }

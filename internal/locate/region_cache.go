@@ -1676,12 +1676,18 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	newRegions := make([]*Region, 0, len(currentRegions))
 	// If the region epoch is not ahead of TiKV's, replace region meta in region cache.
 	for _, meta := range currentRegions {
-		if _, ok := c.pdClient.(*CodecPDClient); ok {
-			var err error
+		var err error
+		oldMeta := meta
+		switch c.pdClient.(type) {
+		case *CodecPDClient:
 			// Can't modify currentRegions in this function because it can be shared by
 			// multiple goroutines, refer to https://github.com/pingcap/tidb/pull/16962.
 			if meta, err = decodeRegionMetaKeyWithShallowCopy(meta); err != nil {
-				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", meta, err)
+				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
+			}
+		case *CodecPDClientV2:
+			if meta, err = c.pdClient.(*CodecPDClientV2).decodeRegionWithShallowCopy(meta); err != nil {
+				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
 			}
 		}
 		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error

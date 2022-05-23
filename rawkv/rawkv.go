@@ -742,7 +742,6 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 		})
 
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
-		req.ApiVersion = c.apiVersion
 		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
