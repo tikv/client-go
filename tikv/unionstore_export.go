@@ -52,4 +52,4 @@ type Iterator = unionstore.Iterator
 // If there are persistent flags associated with key, we will keep this key in node without value.
 type MemDB = unionstore.MemDB
 
-type MemCheckpoint = unionstore.MemdbCheckpoint
+type MemDBCheckpoint = unionstore.MemdbCheckpoint
