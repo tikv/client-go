@@ -296,6 +296,7 @@ type RawKV interface {
 	RawBatchDelete(cf string, keys [][]byte)
 	RawDeleteRange(cf string, startKey, endKey []byte)
 	RawCompareAndSwap(cf string, key, expectedValue, newvalue []byte) ([]byte, bool, error)
+	RawChecksum(cf string, startKey, endKey []byte) (uint64, uint64, uint64, error)
 }
 
 // MVCCDebugger is for debugging.

@@ -504,6 +504,47 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 	return
 }
 
+// Checksum do checksum of continuous kv pairs in range [startKey, endKey).
+// If endKey is empty, it means unbounded.
+// If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
+// (startKey, endKey], you can write:
+// `Scan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
+func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options ...RawOption,
+) (crc64Xor, totalKvs, totalBytes uint64, err error) {
+
+	start := time.Now()
+	defer func() { metrics.RawkvCmdHistogramWithRawChecksum.Observe(time.Since(start).Seconds()) }()
+
+	crc64Xor = 0
+	totalKvs = 0
+	totalBytes = 0
+	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawChecksum, &kvrpcpb.RawChecksumRequest{
+			Algorithm: kvrpcpb.ChecksumAlgorithm_Crc64_Xor,
+			Ranges: []*kvrpcpb.KeyRange{{
+				StartKey: startKey,
+				EndKey:   endKey,
+			}},
+		})
+		resp, loc, err := c.sendReq(ctx, startKey, req, false)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if resp.Resp == nil {
+			return 0, 0, 0, errors.WithStack(tikverr.ErrBodyMissing)
+		}
+		cmdResp := resp.Resp.(*kvrpcpb.RawChecksumResponse)
+		crc64Xor ^= cmdResp.GetChecksum()
+		totalKvs += cmdResp.GetTotalKvs()
+		totalBytes += cmdResp.GetTotalBytes()
+		startKey = loc.EndKey
+		if len(startKey) == 0 {
+			break
+		}
+	}
+	return
+}
+
 // CompareAndSwap results in an atomic compare-and-set operation for the given key while SetAtomicForCAS(true)
 // If the value retrieved is equal to previousValue, newValue is written.
 // It returns the previous value and whether the value is successfully swapped.
