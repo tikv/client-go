@@ -167,6 +167,7 @@ func (a *memdbArenaBlock) reset() {
 	a.length = 0
 }
 
+// MemdbCheckpoint is the checkpoint of memory DB.
 type MemdbCheckpoint struct {
 	blockSize     int
 	blocks        int
