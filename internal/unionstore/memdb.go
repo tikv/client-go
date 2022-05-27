@@ -85,14 +85,14 @@ type MemDB struct {
 
 	vlogInvalid bool
 	dirty       bool
-	stages      []MemdbCheckpoint
+	stages      []MemDBCheckpoint
 }
 
 func newMemDB() *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr
-	db.stages = make([]MemdbCheckpoint, 0, 2)
+	db.stages = make([]MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
 	return db
@@ -156,13 +156,13 @@ func (db *MemDB) Cleanup(h int) {
 }
 
 // Checkpoint returns a checkpoint of MemDB.
-func (db *MemDB) Checkpoint() *MemdbCheckpoint {
+func (db *MemDB) Checkpoint() *MemDBCheckpoint {
 	cp := db.vlog.checkpoint()
 	return &cp
 }
 
 // RevertToCheckpoint reverts the MemDB to the checkpoint.
-func (db *MemDB) RevertToCheckpoint(cp *MemdbCheckpoint) {
+func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
 	db.vlog.revertToCheckpoint(db, cp)
 	db.vlog.truncate(cp)
 }
@@ -350,7 +350,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 }
 
 func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
-	var activeCp *MemdbCheckpoint
+	var activeCp *MemDBCheckpoint
 	if len(db.stages) > 0 {
 		activeCp = &db.stages[len(db.stages)-1]
 	}
