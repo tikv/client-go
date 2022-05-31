@@ -90,6 +90,7 @@ func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 
 }
 
+// TestIsRetryRequestFlagWithRegionError tests that the is_retry_request flag is true for all retrying prewrite requests.
 func TestIsRetryRequestFlagWithRegionError(t *testing.T) {
 	require := require.New(t)
 
@@ -141,8 +142,11 @@ func TestIsRetryRequestFlagWithRegionError(t *testing.T) {
 	failpoint.Disable("tikvclient/invalidCacheAndRetry")
 	wg.Wait()
 
-	// 1. succeed, but resp is lost
-	// 2. retry with is_retry_request = true, -> region error
-	// 3. retry for region error, but is_retry_request should be kept as true, for key 'a' and key 'z'
+	// The event history should be:
+	// 1. The first prewrite succeeds in TiKV, but due to some reason, client-go doesn't get the response. We inject a retry to simulate it.
+	// 2. The second prewrite request returns a region error, which is caused by the region split. And it retries.
+	// 3. The third and fourth prewrite requests (for 'a' and 'z' respectively, so there are 2 of them) succeed.
+	//
+	// The last three requests are retry requests, we assert the is_retry_request flags are all true.
 	require.Equal([]bool{false, true, true, true}, isRetryRequest)
 }
