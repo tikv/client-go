@@ -590,14 +590,14 @@ func (s *testAsyncCommitSuite) TestPessimisticTxnResolveAsyncCommitLock() {
 	ctx := context.Background()
 	k := []byte("k")
 
+	// Lock the key with an async-commit lock.
+	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, k, k, false)
+
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.SetPessimistic(true)
 	err = txn.LockKeys(ctx, &kv.LockCtx{ForUpdateTS: txn.StartTS()}, []byte("k1"))
 	s.Nil(err)
-
-	// Lock the key with a async-commit lock.
-	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, k, k, false)
 
 	txn.Set(k, k)
 	err = txn.Commit(context.Background())
