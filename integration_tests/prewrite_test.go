@@ -48,7 +48,6 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
-	"github.com/tikv/client-go/v2/util"
 )
 
 func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
@@ -92,7 +91,6 @@ func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 }
 
 func TestIsRetryRequestFlagWithRegionError(t *testing.T) {
-	util.EnableFailpoints()
 	require := require.New(t)
 
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
