@@ -91,7 +91,7 @@ func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 
 }
 
-func TestIncorrectIsRetryRequest(t *testing.T) {
+func TestIsRetryRequestFlagWithRegionError(t *testing.T) {
 	util.EnableFailpoints()
 	require := require.New(t)
 
@@ -145,6 +145,6 @@ func TestIncorrectIsRetryRequest(t *testing.T) {
 
 	// 1. succeed, but resp is lost
 	// 2. retry with is_retry_request = true, -> region error
-	// 3. retry region error, but is_retry_request = false, for key 'a' and key 'z'
-	require.Equal(isRetryRequest, []bool{false, true, false, false})
+	// 3. retry for region error, but is_retry_request should be kept as true, for key 'a' and key 'z'
+	require.Equal([]bool{false, true, true, true}, isRetryRequest)
 }
