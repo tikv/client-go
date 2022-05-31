@@ -239,8 +239,10 @@ func (a *connArray) Close() {
 	}
 
 	for _, c := range a.v {
-		err := c.Close()
-		tikverr.Log(err)
+		if c != nil {
+			err := c.Close()
+			tikverr.Log(err)
+		}
 	}
 
 	close(a.done)
