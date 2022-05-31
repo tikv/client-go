@@ -978,6 +978,14 @@ func (s *RegionRequestSender) SendReqCtx(
 
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
 		s.storeAddr = rpcCtx.Addr
+
+		if _, err := util.EvalFailpoint("beforeSendReqToRegion"); err == nil {
+			if hook := bo.GetCtx().Value("sendReqToRegionHook"); hook != nil {
+				h := hook.(func(*tikvrpc.Request))
+				h(req)
+			}
+		}
+
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
