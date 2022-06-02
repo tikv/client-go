@@ -862,6 +862,17 @@ func (s *RegionRequestSender) getRPCContext(
 		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true)
 	case tikvrpc.TiDB:
 		return &RPCContext{Addr: s.storeAddr}, nil
+	case tikvrpc.TiFlashMPP:
+		rpcCtxs, err := s.regionCache.GetTiFlashMPPRPCContextByConsistentHash(bo, []RegionVerID{regionID})
+		if err != nil {
+			return nil, err
+		}
+		if rpcCtxs == nil {
+			return nil, nil
+		} else if len(rpcCtxs) != 1 {
+			return nil, errors.New(fmt.Sprintf("unexpected number of rpcCtx, expect 1, got: %v", len(rpcCtxs)))
+		}
+		return rpcCtxs[0], nil
 	default:
 		return nil, errors.Errorf("unsupported storage type: %v", et)
 	}
@@ -978,6 +989,14 @@ func (s *RegionRequestSender) SendReqCtx(
 
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
 		s.storeAddr = rpcCtx.Addr
+
+		if _, err := util.EvalFailpoint("beforeSendReqToRegion"); err == nil {
+			if hook := bo.GetCtx().Value("sendReqToRegionHook"); hook != nil {
+				h := hook.(func(*tikvrpc.Request))
+				h(req)
+			}
+		}
+
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
@@ -1271,7 +1290,9 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		}
 	}
 
-	if ctx.Meta != nil {
+	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashMPP {
+		s.regionCache.InvalidateTiFlashMPPStoresIfGRPCError(err)
+	} else if ctx.Meta != nil {
 		if s.replicaSelector != nil {
 			s.replicaSelector.onSendFailure(bo, err)
 		} else {
@@ -1283,7 +1304,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 	// When a store is not available, the leader of related region should be elected quickly.
 	// TODO: the number of retry time should be limited:since region may be unavailable
 	// when some unrecoverable disaster happened.
-	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlash {
+	if ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
 		err = bo.Backoff(retry.BoTiFlashRPC, errors.Errorf("send tiflash request error: %v, ctx: %v, try next peer later", err, ctx))
 	} else {
 		err = bo.Backoff(retry.BoTiKVRPC, errors.Errorf("send tikv request error: %v, ctx: %v, try next peer later", err, ctx))
@@ -1348,6 +1369,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "region_not_initialized"
 	} else if e.GetDiskFull() != nil {
 		return "disk_full"
+	} else if e.GetRecoveryInProgress() != nil {
+		return "recovery_in_progress"
 	}
 	return "unknown"
 }
@@ -1395,6 +1418,16 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		return true, nil
 	}
 
+	if regionErr.GetRecoveryInProgress() != nil {
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		logutil.BgLogger().Debug("tikv reports `RecoveryInProgress`", zap.Stringer("ctx", ctx))
+		err = bo.Backoff(retry.BoRegionRecoveryInProgress, errors.Errorf("region recovery in progress, ctx: %v", ctx))
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
 	// This peer is removed from the region. Invalidate the region since it's too stale.
 	if regionErr.GetRegionNotFound() != nil {
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
@@ -1422,7 +1455,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx))
-		if ctx != nil && ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlash {
+		if ctx != nil && ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
 			err = bo.Backoff(retry.BoTiFlashServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 		} else {
 			err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))

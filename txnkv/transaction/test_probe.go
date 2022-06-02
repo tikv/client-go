@@ -216,7 +216,7 @@ func (c CommitterProbe) PrewriteAllMutations(ctx context.Context) error {
 
 // PrewriteMutations performs the first phase of commit for given keys.
 func (c CommitterProbe) PrewriteMutations(ctx context.Context, mutations CommitterMutations) error {
-	return c.prewriteMutations(retry.NewBackofferWithVars(ctx, PrewriteMaxBackoff, nil), mutations)
+	return c.prewriteMutations(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), nil), mutations)
 }
 
 // CommitMutations performs the second phase of commit.

@@ -133,14 +133,14 @@ type KVSnapshot struct {
 		readReplicaScope string
 		// MatchStoreLabels indicates the labels the store should be matched
 		matchStoreLabels []*metapb.StoreLabel
+		// resourceGroupTag is use to set the kv request resource group tag.
+		resourceGroupTag []byte
+		// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
+		resourceGroupTagger tikvrpc.ResourceGroupTagger
+		// interceptor is used to decorate the RPC request logic related to the snapshot.
+		interceptor interceptor.RPCInterceptor
 	}
 	sampleStep uint32
-	// resourceGroupTag is use to set the kv request resource group tag.
-	resourceGroupTag []byte
-	// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
-	resourceGroupTagger tikvrpc.ResourceGroupTagger
-	// interceptor is used to decorate the RPC request logic related to the snapshot.
-	interceptor interceptor.RPCInterceptor
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -207,14 +207,14 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, batchGetMaxBackoff, s.vars)
-
-	if s.interceptor != nil {
+	s.mu.RLock()
+	if s.mu.interceptor != nil {
 		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
-		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.interceptor))
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.mu.interceptor))
 	}
-
+	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
 	err := s.batchGetKeysByRegions(bo, keys, func(k, v []byte) {
@@ -356,6 +356,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	s.mu.RUnlock()
 
 	pending := batch.keys
+	var resolvingRecordToken *int
 	for {
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
@@ -365,11 +366,11 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTag,
+			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
 		})
-		if s.resourceGroupTag == nil && s.resourceGroupTagger != nil {
-			s.resourceGroupTagger(req)
+		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
+			s.mu.resourceGroupTagger(req)
 		}
 		scope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
@@ -450,6 +451,13 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			s.mergeExecDetail(batchGetResp.ExecDetailsV2)
 		}
 		if len(lockedKeys) > 0 {
+			if resolvingRecordToken == nil {
+				token := cli.RecordResolvingLocks(locks, s.version)
+				resolvingRecordToken = &token
+				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
+			} else {
+				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
 			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
 			if err != nil {
 				return err
@@ -481,14 +489,14 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
-
-	if s.interceptor != nil {
+	s.mu.RLock()
+	if s.mu.interceptor != nil {
 		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
 		// it before initiating an RPC request.
-		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.interceptor))
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.mu.interceptor))
 	}
-
+	s.mu.RUnlock()
 	val, err := s.get(ctx, bo, k)
 	s.recordBackoffInfo(bo)
 	if err != nil {
@@ -544,11 +552,11 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTag,
+			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
 		})
-	if s.resourceGroupTag == nil && s.resourceGroupTagger != nil {
-		s.resourceGroupTagger(req)
+	if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
+		s.mu.resourceGroupTagger(req)
 	}
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
@@ -565,6 +573,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	}
 
 	var firstLock *txnlock.Lock
+	var resolvingRecordToken *int
 	for {
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.GetRegionCache().LocateKey(bo, k)
@@ -617,8 +626,15 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				cli.resolvedLocks.Put(lock.TxnID)
 				continue
 			}
-
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, []*txnlock.Lock{lock})
+			locks := []*txnlock.Lock{lock}
+			if resolvingRecordToken == nil {
+				token := cli.RecordResolvingLocks(locks, s.version)
+				resolvingRecordToken = &token
+				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
+			} else {
+				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
+			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
 			if err != nil {
 				return nil, err
 			}
@@ -746,30 +762,38 @@ func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
 
 // SetResourceGroupTag sets resource group tag of the kv request.
 func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
-	s.resourceGroupTag = tag
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.resourceGroupTag = tag
 }
 
 // SetResourceGroupTagger sets resource group tagger of the kv request.
 // Before sending the request, if resourceGroupTag is not nil, use
 // resourceGroupTag directly, otherwise use resourceGroupTagger.
 func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
-	s.resourceGroupTagger = tagger
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.resourceGroupTagger = tagger
 }
 
 // SetRPCInterceptor sets interceptor.RPCInterceptor for the snapshot.
 // interceptor.RPCInterceptor will be executed before each RPC request is initiated.
 // Note that SetRPCInterceptor will replace the previously set interceptor.
 func (s *KVSnapshot) SetRPCInterceptor(it interceptor.RPCInterceptor) {
-	s.interceptor = it
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.interceptor = it
 }
 
 // AddRPCInterceptor adds an interceptor, the order of addition is the order of execution.
 func (s *KVSnapshot) AddRPCInterceptor(it interceptor.RPCInterceptor) {
-	if s.interceptor == nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.interceptor == nil {
 		s.SetRPCInterceptor(it)
 		return
 	}
-	s.interceptor = interceptor.ChainRPCInterceptors(s.interceptor, it)
+	s.mu.interceptor = interceptor.ChainRPCInterceptors(s.mu.interceptor, it)
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.

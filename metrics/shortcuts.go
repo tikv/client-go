@@ -55,17 +55,18 @@ var (
 	RawkvSizeHistogramWithValue        prometheus.Observer
 	RawkvCmdHistogramWithRawChecksum   prometheus.Observer
 
-	BackoffHistogramRPC              prometheus.Observer
-	BackoffHistogramLock             prometheus.Observer
-	BackoffHistogramLockFast         prometheus.Observer
-	BackoffHistogramPD               prometheus.Observer
-	BackoffHistogramRegionMiss       prometheus.Observer
-	BackoffHistogramRegionScheduling prometheus.Observer
-	BackoffHistogramServerBusy       prometheus.Observer
-	BackoffHistogramTiKVDiskFull     prometheus.Observer
-	BackoffHistogramStaleCmd         prometheus.Observer
-	BackoffHistogramDataNotReady     prometheus.Observer
-	BackoffHistogramEmpty            prometheus.Observer
+	BackoffHistogramRPC                      prometheus.Observer
+	BackoffHistogramLock                     prometheus.Observer
+	BackoffHistogramLockFast                 prometheus.Observer
+	BackoffHistogramPD                       prometheus.Observer
+	BackoffHistogramRegionMiss               prometheus.Observer
+	BackoffHistogramRegionScheduling         prometheus.Observer
+	BackoffHistogramServerBusy               prometheus.Observer
+	BackoffHistogramTiKVDiskFull             prometheus.Observer
+	BackoffHistogramRegionRecoveryInProgress prometheus.Observer
+	BackoffHistogramStaleCmd                 prometheus.Observer
+	BackoffHistogramDataNotReady             prometheus.Observer
+	BackoffHistogramEmpty                    prometheus.Observer
 
 	TxnRegionsNumHistogramWithSnapshot         prometheus.Observer
 	TxnRegionsNumHistogramPrewrite             prometheus.Observer
@@ -95,13 +96,18 @@ var (
 	RegionCacheCounterWithSendFail                    prometheus.Counter
 	RegionCacheCounterWithGetRegionByIDOK             prometheus.Counter
 	RegionCacheCounterWithGetRegionByIDError          prometheus.Counter
-	RegionCacheCounterWithGetRegionOK                 prometheus.Counter
-	RegionCacheCounterWithGetRegionError              prometheus.Counter
+	RegionCacheCounterWithGetCacheMissOK              prometheus.Counter
+	RegionCacheCounterWithGetCacheMissError           prometheus.Counter
 	RegionCacheCounterWithScanRegionsOK               prometheus.Counter
 	RegionCacheCounterWithScanRegionsError            prometheus.Counter
 	RegionCacheCounterWithGetStoreOK                  prometheus.Counter
 	RegionCacheCounterWithGetStoreError               prometheus.Counter
 	RegionCacheCounterWithInvalidateStoreRegionsOK    prometheus.Counter
+
+	LoadRegionCacheHistogramWhenCacheMiss  prometheus.Observer
+	LoadRegionCacheHistogramWithRegions    prometheus.Observer
+	LoadRegionCacheHistogramWithRegionByID prometheus.Observer
+	LoadRegionCacheHistogramWithGetStore   prometheus.Observer
 
 	TxnHeartBeatHistogramOK    prometheus.Observer
 	TxnHeartBeatHistogramError prometheus.Observer
@@ -157,6 +163,7 @@ func initShortcuts() {
 	BackoffHistogramRegionScheduling = TiKVBackoffHistogram.WithLabelValues("regionScheduling")
 	BackoffHistogramServerBusy = TiKVBackoffHistogram.WithLabelValues("serverBusy")
 	BackoffHistogramTiKVDiskFull = TiKVBackoffHistogram.WithLabelValues("tikvDiskFull")
+	BackoffHistogramRegionRecoveryInProgress = TiKVBackoffHistogram.WithLabelValues("regionRecoveryInProgress")
 	BackoffHistogramStaleCmd = TiKVBackoffHistogram.WithLabelValues("staleCommand")
 	BackoffHistogramDataNotReady = TiKVBackoffHistogram.WithLabelValues("dataNotReady")
 	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")
@@ -189,13 +196,18 @@ func initShortcuts() {
 	RegionCacheCounterWithSendFail = TiKVRegionCacheCounter.WithLabelValues("send_fail", "ok")
 	RegionCacheCounterWithGetRegionByIDOK = TiKVRegionCacheCounter.WithLabelValues("get_region_by_id", "ok")
 	RegionCacheCounterWithGetRegionByIDError = TiKVRegionCacheCounter.WithLabelValues("get_region_by_id", "err")
-	RegionCacheCounterWithGetRegionOK = TiKVRegionCacheCounter.WithLabelValues("get_region", "ok")
-	RegionCacheCounterWithGetRegionError = TiKVRegionCacheCounter.WithLabelValues("get_region", "err")
+	RegionCacheCounterWithGetCacheMissOK = TiKVRegionCacheCounter.WithLabelValues("get_region_when_miss", "ok")
+	RegionCacheCounterWithGetCacheMissError = TiKVRegionCacheCounter.WithLabelValues("get_region_when_miss", "err")
 	RegionCacheCounterWithScanRegionsOK = TiKVRegionCacheCounter.WithLabelValues("scan_regions", "ok")
 	RegionCacheCounterWithScanRegionsError = TiKVRegionCacheCounter.WithLabelValues("scan_regions", "err")
 	RegionCacheCounterWithGetStoreOK = TiKVRegionCacheCounter.WithLabelValues("get_store", "ok")
 	RegionCacheCounterWithGetStoreError = TiKVRegionCacheCounter.WithLabelValues("get_store", "err")
 	RegionCacheCounterWithInvalidateStoreRegionsOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_store_regions", "ok")
+
+	LoadRegionCacheHistogramWhenCacheMiss = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_when_miss")
+	LoadRegionCacheHistogramWithRegionByID = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_by_id")
+	LoadRegionCacheHistogramWithRegions = TiKVLoadRegionCacheHistogram.WithLabelValues("scan_regions")
+	LoadRegionCacheHistogramWithGetStore = TiKVLoadRegionCacheHistogram.WithLabelValues("get_store")
 
 	TxnHeartBeatHistogramOK = TiKVTxnHeartBeatHistogram.WithLabelValues("ok")
 	TxnHeartBeatHistogramError = TiKVTxnHeartBeatHistogram.WithLabelValues("err")
