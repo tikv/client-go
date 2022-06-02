@@ -1811,7 +1811,7 @@ func (mvcc *MVCCLevelDB) RawChecksum(cf string, startKey, endKey []byte) (uint64
 		digest.Write(key)
 		digest.Write(value)
 		crc64Xor ^= digest.Sum64()
-		totalKvs += 1
+		totalKvs++
 		totalBytes += (uint64)(len(key) + len(value))
 	}
 	return crc64Xor, totalKvs, totalBytes, nil

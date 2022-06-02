@@ -609,7 +609,7 @@ func (s *testRawkvSuite) TestRawChecksum() {
 		digest.Write(key)
 		digest.Write(values[i])
 		expectCrc64Xor ^= digest.Sum64()
-		expectTotalKvs += 1
+		expectTotalKvs++
 		expectTotalBytes += (uint64)(len(key) + len(values[i]))
 	}
 
