@@ -219,9 +219,39 @@ func (lr *LockResolver) getResolved(txnID uint64) (TxnStatus, bool) {
 	return s, ok
 }
 
+// TryBatchResolveLocks tries to resolve locks with batch method.
+func (lr *LockResolver) TryBatchResolveLocks(
+	bo *retry.Backoffer,
+	locks []*Lock,
+	loc locate.RegionVerID,
+	safepoint uint64,
+	targetResolveTS uint64,
+) (bool, error) {
+	if len(locks) == 0 {
+		return true, nil
+	}
+
+	locksBeforeSafePoint := make([]*Lock, 0, len(locks))
+	locksAfterSafePoint := make([]*Lock, 0, len(locks))
+	for _, l := range locks {
+		if l.TxnID < safepoint {
+			locksBeforeSafePoint = append(locksBeforeSafePoint, l)
+		} else {
+			locksAfterSafePoint = append(locksAfterSafePoint, l)
+		}
+	}
+
+	ok, err := lr.BatchResolveLocks(bo, locksBeforeSafePoint, loc, math.MaxUint64)
+	if err != nil || !ok {
+		return ok, err
+	}
+
+	return lr.BatchResolveLocks(bo, locksAfterSafePoint, loc, targetResolveTS)
+}
+
 // BatchResolveLocks resolve locks in a batch.
 // Used it in gcworker only!
-func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, loc locate.RegionVerID) (bool, error) {
+func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, loc locate.RegionVerID, usedCheckTTL uint64) (bool, error) {
 	if len(locks) == 0 {
 		return true, nil
 	}
@@ -241,7 +271,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		metrics.LockResolverCountWithExpired.Inc()
 
 		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
-		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, false, l)
+		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, usedCheckTTL, true, false, l)
 		if err != nil {
 			return false, err
 		}
@@ -255,7 +285,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 				continue
 			}
 			if _, ok := errors.Cause(err).(*nonAsyncCommitLock); ok {
-				status, err = lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, true, l)
+				status, err = lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, usedCheckTTL, true, true, l)
 				if err != nil {
 					return false, err
 				}
@@ -264,7 +294,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			}
 		}
 
-		if status.ttl > 0 {
+		if usedCheckTTL == math.MaxUint64 && status.ttl > 0 {
 			logutil.BgLogger().Error("BatchResolveLocks fail to clean locks, this result is not expected!")
 			return false, errors.New("TiDB ask TiKV to rollback locks but it doesn't, the protocol maybe wrong")
 		}

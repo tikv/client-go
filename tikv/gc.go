@@ -17,6 +17,7 @@ package tikv
 import (
 	"bytes"
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -175,7 +176,7 @@ func (s *KVStore) scanLocksInRegionWithStartKey(bo *retry.Backoffer, startKey []
 func (s *KVStore) batchResolveLocksInARegion(bo *Backoffer, locks []*txnlock.Lock, expectedLoc *locate.KeyLocation) (resolvedLocation *locate.KeyLocation, err error) {
 	resolvedLocation = expectedLoc
 	for {
-		ok, err := s.GetLockResolver().BatchResolveLocks(bo, locks, resolvedLocation.Region)
+		ok, err := s.GetLockResolver().BatchResolveLocks(bo, locks, resolvedLocation.Region, math.MaxUint64)
 		if ok {
 			return resolvedLocation, nil
 		}
