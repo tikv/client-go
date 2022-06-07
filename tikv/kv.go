@@ -56,6 +56,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -250,13 +251,18 @@ func (s *KVStore) runSafePointChecker() {
 }
 
 // Begin a global transaction.
-func (s *KVStore) Begin(opts ...TxnOption) (*transaction.KVTxn, error) {
+func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 	options := &txnOptions{}
 	// Inject the options
 	for _, opt := range opts {
 		opt(options)
 	}
 
+	defer func() {
+		if err == nil && txn != nil && options.MemoryFootprintChangeHook != nil {
+			txn.SetMemoryFootprintChangeHook(options.MemoryFootprintChangeHook)
+		}
+	}()
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
@@ -605,8 +611,9 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 // txnOptions indicates the option when beginning a transaction.
 // txnOptions are set by the TxnOption values passed to Begin
 type txnOptions struct {
-	TxnScope string
-	StartTS  *uint64
+	TxnScope                  string
+	StartTS                   *uint64
+	MemoryFootprintChangeHook unionstore.MemoryFootprintChangeHook
 }
 
 // TxnOption configures Transaction
@@ -623,6 +630,14 @@ func WithTxnScope(txnScope string) TxnOption {
 func WithStartTS(startTS uint64) TxnOption {
 	return func(st *txnOptions) {
 		st.StartTS = &startTS
+	}
+}
+
+// WithMemoryFootprintChangeHook sets the MemoryFootprintChangeHook to hook, which is triggered when the memory
+// footprint of the mem buffer changes.
+func WithMemoryFootprintChangeHook(hook unionstore.MemoryFootprintChangeHook) TxnOption {
+	return func(st *txnOptions) {
+		st.MemoryFootprintChangeHook = hook
 	}
 }
 

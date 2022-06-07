@@ -869,3 +869,13 @@ func (txn *KVTxn) SetBinlogExecutor(binlog BinlogExecutor) {
 func (txn *KVTxn) GetClusterID() uint64 {
 	return txn.store.GetClusterID()
 }
+
+// SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows
+func (txn *KVTxn) SetMemoryFootprintChangeHook(hook unionstore.MemoryFootprintChangeHook) {
+	txn.us.GetMemBuffer().SetMemoryFootprintChangeHook(hook)
+}
+
+// Mem returns the current memory footprint
+func (txn *KVTxn) Mem() uint64 {
+	return txn.us.GetMemBuffer().Mem()
+}
