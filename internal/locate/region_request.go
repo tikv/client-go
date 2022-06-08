@@ -99,6 +99,7 @@ func LoadShuttingDown() uint32 {
 // split, so we simply return the error to caller.
 type RegionRequestSender struct {
 	regionCache       *RegionCache
+	apiVersion        kvrpcpb.APIVersion
 	client            client.Client
 	storeAddr         string
 	rpcError          error
@@ -189,8 +190,18 @@ func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats,
 
 // NewRegionRequestSender creates a new sender.
 func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
+	var v kvrpcpb.APIVersion
+
+	switch regionCache.pdClient.(type) {
+	case *CodecPDClientV2:
+		v = kvrpcpb.APIVersion_V2
+	default:
+		v = kvrpcpb.APIVersion_V1
+	}
+
 	return &RegionRequestSender{
 		regionCache: regionCache,
+		apiVersion:  v,
 		client:      client,
 	}
 }
@@ -1087,7 +1098,7 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 }
 
 func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, retry bool, err error) {
-	if e := tikvrpc.SetContext(s.regionCache.GetApiVersion(), req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+	if e := tikvrpc.SetContext(s.apiVersion, req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 		return nil, false, err
 	}
 	// judge the store limit switch.

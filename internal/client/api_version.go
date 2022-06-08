@@ -16,10 +16,11 @@ const (
 )
 
 var (
-	ApiV2RawKeyPrefix = []byte("r")
-	ApiV2TxnKeyPrefix = []byte("x")
-	ApiV2RawEndKey    = []byte{ApiV2RawKeyPrefix[0] + 1}
-	ApiV2TxnEndKey    = []byte{ApiV2TxnKeyPrefix[0] + 1}
+	ApiV2RawKeyPrefix = []byte{'r', 0, 0, 0}
+	ApiV2RawEndKey    = []byte{'r', 0, 0, 1}
+
+	ApiV2TxnKeyPrefix = []byte{'x', 0, 0, 0}
+	ApiV2TxnEndKey    = []byte{'x', 0, 0, 1}
 )
 
 func GetV2Prefix(mode Mode) []byte {
@@ -75,14 +76,14 @@ func MapV2RangeToV1(mode Mode, start []byte, end []byte) ([]byte, []byte) {
 	return a, b
 }
 
-func encodeV2Keys(mode Mode, keys [][]byte) [][]byte {
+func EncodeV2Keys(mode Mode, keys [][]byte) [][]byte {
 	for i, key := range keys {
 		keys[i] = EncodeV2Key(mode, key)
 	}
 	return keys
 }
 
-func encodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair {
+func EncodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair {
 	for _, pair := range pairs {
 		pair.Key = EncodeV2Key(mode, pair.Key)
 	}
@@ -94,88 +95,38 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		return req, nil
 	}
 
-	// if !req.ForRetry.CAS(false, true) {
-	// 	return req, nil
-	// }
-	newReq := *req
-
-	switch req.Type {
-	case CmdGet:
-	case CmdScan:
-	case CmdPrewrite:
-	case CmdPessimisticLock:
-	case CmdPessimisticRollback:
-	case CmdCommit:
-	case CmdCleanup:
-	case CmdBatchGet:
-	case CmdBatchRollback:
-	case CmdScanLock:
-	case CmdResolveLock:
-	case CmdGC:
-	case CmdDeleteRange:
-	case CmdRawGet:
-		r := *req.RawGet()
-		r.Key = EncodeV2Key(ModeRaw, r.Key)
-		newReq.Req = &r
-	case CmdRawBatchGet:
-		r := *req.RawBatchGet()
-		r.Keys = encodeV2Keys(ModeRaw, r.Keys)
-		newReq.Req = &r
-	case CmdRawPut:
-		r := *req.RawPut()
-		r.Key = EncodeV2Key(ModeRaw, r.Key)
-		newReq.Req = &r
-	case CmdRawBatchPut:
-		r := *req.RawBatchPut()
-		r.Pairs = encodeV2Pairs(ModeRaw, r.Pairs)
-		newReq.Req = &r
-	case CmdRawDelete:
-		r := *req.RawDelete()
-		r.Key = EncodeV2Key(ModeRaw, r.Key)
-		newReq.Req = &r
-	case CmdRawBatchDelete:
-		r := *req.RawBatchDelete()
-		r.Keys = encodeV2Keys(ModeRaw, r.Keys)
-		newReq.Req = &r
-	case CmdRawDeleteRange:
-		r := *req.RawDeleteRange()
-		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
-		newReq.Req = &r
-	case CmdRawScan:
-		r := *req.RawScan()
-		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
-		newReq.Req = &r
-	case CmdGetKeyTTL:
-		r := *req.RawGetKeyTTL()
-		r.Key = EncodeV2Key(ModeRaw, r.Key)
-		newReq.Req = &r
-	case CmdRawCompareAndSwap:
-		r := *req.RawCompareAndSwap()
-		r.Key = EncodeV2Key(ModeRaw, r.Key)
-		newReq.Req = &r
-	case CmdUnsafeDestroyRange:
-	case CmdRegisterLockObserver:
-	case CmdCheckLockObserver:
-	case CmdRemoveLockObserver:
-	case CmdPhysicalScanLock:
-	case CmdCop:
-	case CmdCopStream:
-	case CmdBatchCop:
-	case CmdMPPTask:
-	case CmdMvccGetByKey:
-	case CmdMvccGetByStartTs:
-	case CmdSplitRegion:
-	case CmdEmpty:
-	case CmdTxnHeartBeat:
-	case CmdCheckTxnStatus:
-	case CmdCheckSecondaryLocks:
-	default:
-		return nil, errors.Errorf("invalid request type %v", req.Type)
+	if !req.IsRetry.CAS(false, true) {
+		return req, nil
 	}
-	return &newReq, nil
+
+	// TODO(iosmanthus): support transaction request types
+	switch req.Type {
+	case CmdRawGet:
+		req.RawGet().Key = EncodeV2Key(ModeRaw, req.RawGet().Key)
+	case CmdRawBatchGet:
+		req.RawBatchGet().Keys = EncodeV2Keys(ModeRaw, req.RawBatchGet().Keys)
+	case CmdRawPut:
+		req.RawPut().Key = EncodeV2Key(ModeRaw, req.RawPut().Key)
+	case CmdRawBatchPut:
+		req.RawBatchPut().Pairs = EncodeV2Pairs(ModeRaw, req.RawBatchPut().Pairs)
+	case CmdRawDelete:
+		req.RawDelete().Key = EncodeV2Key(ModeRaw, req.RawDelete().Key)
+	case CmdRawBatchDelete:
+		req.RawBatchDelete().Keys = EncodeV2Keys(ModeRaw, req.RawBatchDelete().Keys)
+	case CmdRawDeleteRange:
+		req.RawDeleteRange().StartKey, req.RawDeleteRange().EndKey = EncodeV2Range(ModeRaw, req.RawDeleteRange().StartKey, req.RawDeleteRange().EndKey)
+	case CmdRawScan:
+		req.RawScan().StartKey, req.RawScan().EndKey = EncodeV2Range(ModeRaw, req.RawScan().StartKey, req.RawScan().EndKey)
+	case CmdGetKeyTTL:
+		req.RawGetKeyTTL().Key = EncodeV2Key(ModeRaw, req.RawGetKeyTTL().Key)
+	case CmdRawCompareAndSwap:
+		req.RawCompareAndSwap().Key = EncodeV2Key(ModeRaw, req.RawCompareAndSwap().Key)
+	}
+
+	return req, nil
 }
 
-func decodeV2Key(mode Mode, key []byte) ([]byte, error) {
+func DecodeKey(mode Mode, key []byte) ([]byte, error) {
 	prefix := GetV2Prefix(mode)
 	if !bytes.HasPrefix(key, prefix) {
 		return nil, errors.Errorf("invalid encoded key prefix: %q", key)
@@ -183,10 +134,10 @@ func decodeV2Key(mode Mode, key []byte) ([]byte, error) {
 	return key[len(prefix):], nil
 }
 
-func decodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair, error) {
+func DecodePairs(mode Mode, pairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair, error) {
 	for _, pair := range pairs {
 		var err error
-		pair.Key, err = decodeV2Key(mode, pair.Key)
+		pair.Key, err = DecodeKey(mode, pair.Key)
 		if err != nil {
 			return nil, err
 		}
@@ -202,56 +153,13 @@ func DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Resp
 	var err error
 
 	switch req.Type {
-	case CmdGet:
-	case CmdScan:
-	case CmdPrewrite:
-	case CmdPessimisticLock:
-	case CmdPessimisticRollback:
-	case CmdCommit:
-	case CmdCleanup:
-	case CmdBatchGet:
-	case CmdBatchRollback:
-	case CmdScanLock:
-	case CmdResolveLock:
-	case CmdGC:
-	case CmdDeleteRange:
-	case CmdRawGet:
 	case CmdRawBatchGet:
 		r := resp.Resp.(*kvrpcpb.RawBatchGetResponse)
-		r.Pairs, err = decodeV2Pairs(ModeRaw, r.Pairs)
-	case CmdRawPut:
-	case CmdRawBatchPut:
-	case CmdRawDelete:
-	case CmdRawBatchDelete:
-	case CmdRawDeleteRange:
+		r.Pairs, err = DecodePairs(ModeRaw, r.Pairs)
 	case CmdRawScan:
 		r := resp.Resp.(*kvrpcpb.RawScanResponse)
-		r.Kvs, err = decodeV2Pairs(ModeRaw, r.Kvs)
-	case CmdGetKeyTTL:
-	case CmdRawCompareAndSwap:
-	case CmdUnsafeDestroyRange:
-	case CmdRegisterLockObserver:
-	case CmdCheckLockObserver:
-	case CmdRemoveLockObserver:
-	case CmdPhysicalScanLock:
-	case CmdCop:
-	case CmdCopStream:
-	case CmdBatchCop:
-	case CmdMPPTask:
-	case CmdMvccGetByKey:
-	case CmdMvccGetByStartTs:
-	case CmdSplitRegion:
-	case CmdEmpty:
-	case CmdTxnHeartBeat:
-	case CmdCheckTxnStatus:
-	case CmdCheckSecondaryLocks:
-	default:
-		return nil, errors.Errorf("invalid request type %v", req.Type)
+		r.Kvs, err = DecodePairs(ModeRaw, r.Kvs)
 	}
 
-	if err != nil {
-		return nil, err
-	}
-
-	return resp, nil
+	return resp, err
 }

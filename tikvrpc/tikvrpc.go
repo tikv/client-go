@@ -49,6 +49,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
+	atomic2 "go.uber.org/atomic"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.
@@ -217,7 +218,7 @@ type Request struct {
 	// If it's not empty, the store which receive the request will forward it to
 	// the forwarded host. It's useful when network partition occurs.
 	ForwardedHost string
-	// ForRetry      atomic2.Bool
+	IsRetry       atomic2.Bool
 }
 
 // NewRequest returns new kv rpc request.
