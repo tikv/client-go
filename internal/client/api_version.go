@@ -67,7 +67,7 @@ func MapV2RangeToV1(mode Mode, start []byte, end []byte) ([]byte, []byte) {
 	}
 
 	maxKey := GetV2EndKey(mode)
-	if len(end) == 0 || bytes.Compare(end, maxKey) > 0 {
+	if len(end) == 0 || bytes.Compare(end, maxKey) >= 0 {
 		b = []byte{}
 	} else {
 		b = end[len(maxKey):]
@@ -77,17 +77,21 @@ func MapV2RangeToV1(mode Mode, start []byte, end []byte) ([]byte, []byte) {
 }
 
 func EncodeV2Keys(mode Mode, keys [][]byte) [][]byte {
-	for i, key := range keys {
-		keys[i] = EncodeV2Key(mode, key)
+	var ks [][]byte
+	for _, key := range keys {
+		ks = append(ks, EncodeV2Key(mode, key))
 	}
-	return keys
+	return ks
 }
 
 func EncodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair {
+	var ps []*kvrpcpb.KvPair
 	for _, pair := range pairs {
-		pair.Key = EncodeV2Key(mode, pair.Key)
+		p := *pair
+		p.Key = EncodeV2Key(mode, p.Key)
+		ps = append(ps, &p)
 	}
-	return pairs
+	return ps
 }
 
 func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
@@ -95,35 +99,53 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		return req, nil
 	}
 
-	if !req.IsRetry.CAS(false, true) {
-		return req, nil
-	}
+	newReq := *req
 
 	// TODO(iosmanthus): support transaction request types
 	switch req.Type {
 	case CmdRawGet:
-		req.RawGet().Key = EncodeV2Key(ModeRaw, req.RawGet().Key)
+		r := *req.RawGet()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawBatchGet:
-		req.RawBatchGet().Keys = EncodeV2Keys(ModeRaw, req.RawBatchGet().Keys)
+		r := *req.RawBatchGet()
+		r.Keys = EncodeV2Keys(ModeRaw, r.Keys)
+		newReq.Req = &r
 	case CmdRawPut:
-		req.RawPut().Key = EncodeV2Key(ModeRaw, req.RawPut().Key)
+		r := *req.RawPut()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawBatchPut:
-		req.RawBatchPut().Pairs = EncodeV2Pairs(ModeRaw, req.RawBatchPut().Pairs)
+		r := *req.RawBatchPut()
+		r.Pairs = EncodeV2Pairs(ModeRaw, r.Pairs)
+		newReq.Req = &r
 	case CmdRawDelete:
-		req.RawDelete().Key = EncodeV2Key(ModeRaw, req.RawDelete().Key)
+		r := *req.RawDelete()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawBatchDelete:
-		req.RawBatchDelete().Keys = EncodeV2Keys(ModeRaw, req.RawBatchDelete().Keys)
+		r := *req.RawBatchDelete()
+		r.Keys = EncodeV2Keys(ModeRaw, r.Keys)
+		newReq.Req = &r
 	case CmdRawDeleteRange:
-		req.RawDeleteRange().StartKey, req.RawDeleteRange().EndKey = EncodeV2Range(ModeRaw, req.RawDeleteRange().StartKey, req.RawDeleteRange().EndKey)
+		r := *req.RawDeleteRange()
+		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
+		newReq.Req = &r
 	case CmdRawScan:
-		req.RawScan().StartKey, req.RawScan().EndKey = EncodeV2Range(ModeRaw, req.RawScan().StartKey, req.RawScan().EndKey)
+		r := *req.RawScan()
+		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
+		newReq.Req = &r
 	case CmdGetKeyTTL:
-		req.RawGetKeyTTL().Key = EncodeV2Key(ModeRaw, req.RawGetKeyTTL().Key)
+		r := *req.RawGetKeyTTL()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	case CmdRawCompareAndSwap:
-		req.RawCompareAndSwap().Key = EncodeV2Key(ModeRaw, req.RawCompareAndSwap().Key)
+		r := *req.RawCompareAndSwap()
+		r.Key = EncodeV2Key(ModeRaw, r.Key)
+		newReq.Req = &r
 	}
 
-	return req, nil
+	return &newReq, nil
 }
 
 func DecodeKey(mode Mode, key []byte) ([]byte, error) {
@@ -135,14 +157,17 @@ func DecodeKey(mode Mode, key []byte) ([]byte, error) {
 }
 
 func DecodePairs(mode Mode, pairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair, error) {
+	var ps []*kvrpcpb.KvPair
 	for _, pair := range pairs {
 		var err error
-		pair.Key, err = DecodeKey(mode, pair.Key)
+		p := *pair
+		p.Key, err = DecodeKey(mode, p.Key)
 		if err != nil {
 			return nil, err
 		}
+		ps = append(ps, &p)
 	}
-	return pairs, nil
+	return ps, nil
 }
 
 func DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
