@@ -619,9 +619,9 @@ func (s *testRawkvSuite) TestRawChecksum() {
 
 	// test Checksum
 	startKey, endKey := []byte("db"), []byte(nil)
-	crc64Xor, totalKvs, totalBytes, err := client.Checksum(context.Background(), startKey, endKey, SetColumnFamily(cf))
+	check, err := client.Checksum(context.Background(), startKey, endKey, SetColumnFamily(cf))
 	s.Nil(err)
-	s.Equal(expectCrc64Xor, crc64Xor)
-	s.Equal(expectTotalKvs, totalKvs)
-	s.Equal(expectTotalBytes, totalBytes)
+	s.Equal(expectCrc64Xor, check.Crc64Xor)
+	s.Equal(expectTotalKvs, check.TotalKvs)
+	s.Equal(expectTotalBytes, check.TotalBytes)
 }

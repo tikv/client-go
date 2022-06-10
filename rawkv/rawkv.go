@@ -74,6 +74,15 @@ type rawOptions struct {
 	KeyOnly bool
 }
 
+type RawChecksum struct {
+	// Crc64Xor is the checksum result with crc64 algorithm
+	Crc64Xor uint64
+	// TotalKvs is the total number of kvpairs
+	TotalKvs uint64
+	// TotalBytes is the total bytes of kvpairs, including prefix in APIV2
+	TotalBytes uint64
+}
+
 // RawOption represents possible options that can be cotrolled by the user
 // to tweak the API behavior.
 //
@@ -508,16 +517,13 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 // If endKey is empty, it means unbounded.
 // If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
 // (startKey, endKey], you can write:
-// `Scan(ctx, push(startKey, '\0'), push(endKey, '\0'), limit)`.
+// `Checksum(ctx, push(startKey, '\0'), push(endKey, '\0'))`.
 func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options ...RawOption,
-) (crc64Xor, totalKvs, totalBytes uint64, err error) {
+) (check RawChecksum, err error) {
 
 	start := time.Now()
 	defer func() { metrics.RawkvCmdHistogramWithRawChecksum.Observe(time.Since(start).Seconds()) }()
 
-	crc64Xor = 0
-	totalKvs = 0
-	totalBytes = 0
 	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
 		req := tikvrpc.NewRequest(tikvrpc.CmdRawChecksum, &kvrpcpb.RawChecksumRequest{
 			Algorithm: kvrpcpb.ChecksumAlgorithm_Crc64_Xor,
@@ -528,15 +534,15 @@ func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options 
 		})
 		resp, loc, err := c.sendReq(ctx, startKey, req, false)
 		if err != nil {
-			return 0, 0, 0, err
+			return RawChecksum{0, 0, 0}, err
 		}
 		if resp.Resp == nil {
-			return 0, 0, 0, errors.WithStack(tikverr.ErrBodyMissing)
+			return RawChecksum{0, 0, 0}, errors.WithStack(tikverr.ErrBodyMissing)
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.RawChecksumResponse)
-		crc64Xor ^= cmdResp.GetChecksum()
-		totalKvs += cmdResp.GetTotalKvs()
-		totalBytes += cmdResp.GetTotalBytes()
+		check.Crc64Xor ^= cmdResp.GetChecksum()
+		check.TotalKvs += cmdResp.GetTotalKvs()
+		check.TotalBytes += cmdResp.GetTotalBytes()
 		startKey = loc.EndKey
 		if len(startKey) == 0 {
 			break
