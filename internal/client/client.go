@@ -60,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
@@ -542,5 +543,21 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 func (c *RPCClient) Close() error {
 	// TODO: add a unit test for SendRequest After Closed
 	c.closeConns()
+	return nil
+}
+
+// CloseAddr closes gRPC connections to the address.
+func (c *RPCClient) CloseAddr(addr string) error {
+	c.Lock()
+	conn, ok := c.conns[addr]
+	if ok {
+		delete(c.conns, addr)
+		logutil.BgLogger().Debug("close connection", zap.String("target", addr))
+	}
+	c.Unlock()
+
+	if conn != nil {
+		conn.Close()
+	}
 	return nil
 }
