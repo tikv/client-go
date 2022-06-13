@@ -83,9 +83,11 @@ type testCommitterSuite struct {
 func (s *testCommitterSuite) SetupSuite() {
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // 3s
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 1000)
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("reachable")`))
 }
 
 func (s *testCommitterSuite) TearDownSuite() {
+	s.Nil(failpoint.Disable("tikvclient/injectLiveness"))
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 20000)
 }
 
@@ -99,7 +101,6 @@ func (s *testCommitterSuite) SetupTest() {
 	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client)
 	store.EnableTxnLocalLatches(8096)
 	s.Require().Nil(err)
-
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 
