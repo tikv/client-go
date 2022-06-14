@@ -122,7 +122,7 @@ type connArray struct {
 }
 
 func newConnArray(maxSize uint, addr string, security config.Security,
-	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, opts ...grpc.DialOption) (*connArray, error) {
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, opts []grpc.DialOption) (*connArray, error) {
 	a := &connArray{
 		index:         0,
 		v:             make([]*grpc.ClientConn, maxSize),
@@ -348,7 +348,7 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 			&c.idleNotify,
 			enableBatch,
 			c.option.dialTimeout,
-			c.option.gRPCDialOptions...)
+			c.option.gRPCDialOptions)
 
 		if err != nil {
 			return nil, err

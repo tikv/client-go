@@ -166,7 +166,12 @@ func (c *Client) SetColumnFamily(columnFamily string) *Client {
 }
 
 // NewClient creates a client with PD cluster addrs.
-func NewClient(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
+func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
+	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
+}
+
+// NewClientWithOpts creates a client with PD cluster addrs and client options.
+func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	opt := &option{}
 	for _, o := range opts {
 		o(opt)
