@@ -121,7 +121,8 @@ type connArray struct {
 	done chan struct{}
 }
 
-func newConnArray(maxSize uint, addr string, security config.Security, idleNotify *uint32, enableBatch bool, dialTimeout time.Duration) (*connArray, error) {
+func newConnArray(maxSize uint, addr string, security config.Security,
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, opts ...grpc.DialOption) (*connArray, error) {
 	a := &connArray{
 		index:         0,
 		v:             make([]*grpc.ClientConn, maxSize),
@@ -129,13 +130,13 @@ func newConnArray(maxSize uint, addr string, security config.Security, idleNotif
 		done:          make(chan struct{}),
 		dialTimeout:   dialTimeout,
 	}
-	if err := a.Init(addr, security, idleNotify, enableBatch); err != nil {
+	if err := a.Init(addr, security, idleNotify, enableBatch, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
 }
 
-func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool) error {
+func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, opts ...grpc.DialOption) error {
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -172,9 +173,8 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
-		conn, err := grpc.DialContext(
-			ctx,
-			addr,
+
+		opts = append([]grpc.DialOption{
 			opt,
 			grpc.WithInitialWindowSize(GrpcInitialWindowSize),
 			grpc.WithInitialConnWindowSize(GrpcInitialConnWindowSize),
@@ -195,6 +195,12 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				Timeout:             time.Duration(keepAliveTimeout) * time.Second,
 				PermitWithoutStream: true,
 			}),
+		}, opts...)
+
+		conn, err := grpc.DialContext(
+			ctx,
+			addr,
+			opts...,
 		)
 		cancel()
 		if err != nil {
@@ -246,13 +252,25 @@ func (a *connArray) Close() {
 	close(a.done)
 }
 
+type option struct {
+	gRPCDialOptions []grpc.DialOption
+	security        config.Security
+	dialTimeout     time.Duration
+}
+
 // Opt is the option for the client.
-type Opt func(*RPCClient)
+type Opt func(*option)
 
 // WithSecurity is used to set the security config.
 func WithSecurity(security config.Security) Opt {
-	return func(c *RPCClient) {
+	return func(c *option) {
 		c.security = security
+	}
+}
+
+func WithGRPCDialOptions(grpcDialOptions ...grpc.DialOption) Opt {
+	return func(c *option) {
+		c.gRPCDialOptions = grpcDialOptions
 	}
 }
 
@@ -263,25 +281,26 @@ func WithSecurity(security config.Security) Opt {
 type RPCClient struct {
 	sync.RWMutex
 
-	conns    map[string]*connArray
-	security config.Security
+	conns  map[string]*connArray
+	option *option
 
 	idleNotify uint32
 
 	// Periodically check whether there is any connection that is idle and then close and remove these connections.
 	// Implement background cleanup.
-	isClosed    bool
-	dialTimeout time.Duration
+	isClosed bool
 }
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
-		conns:       make(map[string]*connArray),
-		dialTimeout: dialTimeout,
+		conns: make(map[string]*connArray),
+		option: &option{
+			dialTimeout: dialTimeout,
+		},
 	}
 	for _, opt := range opts {
-		opt(cli)
+		opt(cli.option)
 	}
 	return cli
 }
@@ -321,7 +340,16 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 		for _, opt := range opts {
 			opt(&client)
 		}
-		array, err = newConnArray(client.GrpcConnectionCount, addr, c.security, &c.idleNotify, enableBatch, c.dialTimeout)
+
+		array, err = newConnArray(
+			client.GrpcConnectionCount,
+			addr,
+			c.option.security,
+			&c.idleNotify,
+			enableBatch,
+			c.option.dialTimeout,
+			c.option.gRPCDialOptions...)
+
 		if err != nil {
 			return nil, err
 		}

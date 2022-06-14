@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tidwall/gjson"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/rawkv"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -50,7 +50,7 @@ func getConfig(url string) (string, error) {
 	return string(body), nil
 }
 
-func (s *apiTestSuite) isV2Enabled(pdCli pd.Client) bool {
+func (s *apiTestSuite) getApiVersion(pdCli pd.Client) kvrpcpb.APIVersion {
 	stores, err := pdCli.GetAllStores(context.Background())
 	s.Nilf(err, "fail to get store, %v", err)
 
@@ -59,26 +59,21 @@ func (s *apiTestSuite) isV2Enabled(pdCli pd.Client) bool {
 		s.Nilf(err, "fail to get config of TiKV store %s: %v", store.StatusAddress, err)
 		v := gjson.Get(resp, "storage.api-version")
 		if v.Type == gjson.Null || v.Uint() != 2 {
-			return false
+			return kvrpcpb.APIVersion_V1
 		}
 	}
-	return true
+	return kvrpcpb.APIVersion_V2
 }
 
 func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Client {
-	var clientBuilder func(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*rawkv.Client, error)
-	if s.isV2Enabled(pdCli) {
-		clientBuilder = rawkv.NewClientV2
-	} else {
-		clientBuilder = rawkv.NewClient
-	}
-	cli, err := clientBuilder(context.Background(), addrs, config.DefaultConfig().Security)
+	version := s.getApiVersion(pdCli)
+	cli, err := rawkv.NewClient(context.Background(), addrs, rawkv.WithApiVersion(version))
 	s.Nil(err)
 	return cli
 }
 
-func (s *apiTestSuite) newPDClient(pdCli pd.Client, addrs []string) pd.Client {
-	if s.isV2Enabled(pdCli) {
+func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
+	if s.getApiVersion(pdCli) == kvrpcpb.APIVersion_V2 {
 		return tikv.NewCodecPDClientV2(pdCli, tikv.ModeRaw)
 	}
 	return pdCli
@@ -90,7 +85,7 @@ func (s *apiTestSuite) SetupTest() {
 	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
 	s.Nil(err)
 
-	s.pdClient = s.newPDClient(pdClient, addrs)
+	s.pdClient = s.wrapPDClient(pdClient, addrs)
 
 	client := s.newRawKVClient(pdClient, addrs)
 	s.client = client

@@ -37,6 +37,7 @@ package rawkv
 import (
 	"bytes"
 	"context"
+	"google.golang.org/grpc"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -119,6 +120,39 @@ type Client struct {
 	atomic      bool
 }
 
+type option struct {
+	apiVersion      kvrpcpb.APIVersion
+	security        config.Security
+	gRPCDialOptions []grpc.DialOption
+	pdOptions       []pd.ClientOption
+}
+
+type ClientOpt func(*option)
+
+func WithPDOptions(opts ...pd.ClientOption) ClientOpt {
+	return func(o *option) {
+		o.pdOptions = append(o.pdOptions, opts...)
+	}
+}
+
+func WithSecurity(security config.Security) ClientOpt {
+	return func(o *option) {
+		o.security = security
+	}
+}
+
+func WithGRPCDialOptions(opts ...grpc.DialOption) ClientOpt {
+	return func(o *option) {
+		o.gRPCDialOptions = append(o.gRPCDialOptions, opts...)
+	}
+}
+
+func WithApiVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
+	return func(o *option) {
+		o.apiVersion = apiVersion
+	}
+}
+
 // SetAtomicForCAS sets atomic mode for CompareAndSwap
 func (c *Client) SetAtomicForCAS(b bool) *Client {
 	c.atomic = b
@@ -132,40 +166,32 @@ func (c *Client) SetColumnFamily(columnFamily string) *Client {
 }
 
 // NewClient creates a client with PD cluster addrs.
-func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
-	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   security.ClusterSSLCA,
-		CertPath: security.ClusterSSLCert,
-		KeyPath:  security.ClusterSSLKey,
-	}, opts...)
-	if err != nil {
-		return nil, errors.WithStack(err)
+func NewClient(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
+	opt := &option{}
+	for _, o := range opts {
+		o(opt)
 	}
-	return &Client{
-		clusterID:   pdCli.GetClusterID(ctx),
-		regionCache: locate.NewRegionCache(pdCli),
-		pdClient:    pdCli,
-		rpcClient:   client.NewRPCClient(client.WithSecurity(security)),
-	}, nil
-}
 
-// NewClientV2 creates a client with PD cluster addrs with api version of v2.
-func NewClientV2(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   security.ClusterSSLCA,
-		CertPath: security.ClusterSSLCert,
-		KeyPath:  security.ClusterSSLKey,
-	}, opts...)
+		CAPath:   opt.security.ClusterSSLCA,
+		CertPath: opt.security.ClusterSSLCert,
+		KeyPath:  opt.security.ClusterSSLKey,
+	}, opt.pdOptions...)
+
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdCli = locate.NewCodecPDClientV2(pdCli, client.ModeRaw)
+
+	if opt.apiVersion == kvrpcpb.APIVersion_V2 {
+		pdCli = locate.NewCodecPDClientV2(pdCli, client.ModeRaw)
+	}
+
 	return &Client{
-		apiVersion:  kvrpcpb.APIVersion_V2,
+		apiVersion:  opt.apiVersion,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
 		pdClient:    pdCli,
-		rpcClient:   client.NewRPCClient(client.WithSecurity(security)),
+		rpcClient:   client.NewRPCClient(client.WithSecurity(opt.security), client.WithGRPCDialOptions(opt.gRPCDialOptions...)),
 	}, nil
 }
 
