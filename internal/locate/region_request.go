@@ -322,7 +322,16 @@ type accessKnownLeader struct {
 
 func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	leader := selector.replicas[state.leaderIdx]
-	if leader.isExhausted(maxReplicaAttempt) {
+	liveness := leader.store.getLivenessState()
+	if liveness == unreachable && selector.regionCache.enableForwarding {
+		selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
+		return nil, stateChanged{}
+	}
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	if liveness != reachable || leader.isExhausted(maxReplicaAttempt) {
 		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
 		return nil, stateChanged{}
 	}
@@ -332,7 +341,8 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 
 func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
 	liveness := selector.checkLiveness(bo, selector.targetReplica())
-	if liveness != reachable && len(selector.replicas) > 1 && selector.regionCache.enableForwarding {
+	// Only enable forwarding when unreachable to avoid using proxy to access a TiKV that cannot serve.
+	if liveness == unreachable && len(selector.replicas) > 1 && selector.regionCache.enableForwarding {
 		selector.state = &accessByKnownProxy{leaderIdx: state.leaderIdx}
 		return
 	}
@@ -407,7 +417,7 @@ type accessByKnownProxy struct {
 
 func (state *accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	leader := selector.replicas[state.leaderIdx]
-	if atomic.LoadInt32(&leader.store.unreachable) == 0 {
+	if leader.store.getLivenessState() == reachable {
 		selector.regionStore.unsetProxyStoreIfNeeded(selector.region)
 		selector.state = &accessKnownLeader{leaderIdx: state.leaderIdx}
 		return nil, stateChanged{}
@@ -442,7 +452,7 @@ type tryNewProxy struct {
 
 func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	leader := selector.replicas[state.leaderIdx]
-	if atomic.LoadInt32(&leader.store.unreachable) == 0 {
+	if leader.store.getLivenessState() == reachable {
 		selector.regionStore.unsetProxyStoreIfNeeded(selector.region)
 		selector.state = &accessKnownLeader{leaderIdx: state.leaderIdx}
 		return nil, stateChanged{}
@@ -770,11 +780,8 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
 	store := accessReplica.store
 	liveness := store.requestLiveness(bo, s.regionCache)
-	// We only check health in loop if forwarding is enabled now.
-	// The restriction might be relaxed if necessary, but the implementation
-	// may be checked carefully again.
-	if liveness != reachable && s.regionCache.enableForwarding {
-		store.startHealthCheckLoopIfNeeded(s.regionCache)
+	if liveness != reachable {
+		store.startHealthCheckLoopIfNeeded(s.regionCache, liveness)
 	}
 	return liveness
 }
@@ -815,6 +822,13 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 	}
 	for i, replica := range s.replicas {
 		if isSamePeer(replica.peer, leader) {
+			// If hibernate region is enabled and the leader is not reachable, the raft group
+			// will not be wakened up and re-elect the leader until the follower receives
+			// a request. So, before the new leader is elected, we should not send requests
+			// to the unreachable old leader to avoid unnecessary timeout.
+			if replica.store.getLivenessState() != reachable {
+				return
+			}
 			if replica.isExhausted(maxReplicaAttempt) {
 				// Give the replica one more chance and because each follower is tried only once,
 				// it won't result in infinite retry.
