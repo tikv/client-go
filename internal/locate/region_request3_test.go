@@ -163,9 +163,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		}
 		return innerClient.SendRequest(ctx, addr, req, timeout)
 	}}
-	var storeState uint32 = uint32(unreachable)
+	var storeState = uint32(unreachable)
 	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
-		return livenessState(atomic.LoadUint32(&storeState))
+		if s.addr == leaderAddr {
+			return livenessState(atomic.LoadUint32(&storeState))
+		}
+		return reachable
 	}
 
 	loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("k"))
@@ -191,7 +194,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	atomic.StoreUint32(&storeState, uint32(reachable))
 	start := time.Now()
 	for {
-		if atomic.LoadInt32(&leaderStore.unreachable) == 0 {
+		if leaderStore.getLivenessState() == reachable {
 			break
 		}
 		if time.Since(start) > 3*time.Second {
@@ -386,6 +389,47 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.NotEqual(replicaSelector.targetIdx, regionStore.workTiKVIdx)
 	assertRPCCtxEqual(rpcCtx, replicaSelector.targetReplica(), nil)
 	s.Equal(replicaSelector.targetReplica().attempts, 1)
+	// If the NotLeader errors provides an unreachable leader, do not switch to it.
+	replicaSelector.onNotLeader(s.bo, rpcCtx, &errorpb.NotLeader{
+		RegionId: region.GetID(), Leader: &metapb.Peer{Id: s.peerIDs[regionStore.workTiKVIdx], StoreId: s.storeIDs[regionStore.workTiKVIdx]},
+	})
+	s.IsType(&tryFollower{}, replicaSelector.state)
+
+	// If the leader is unreachable and forwarding is not enabled, just do not try
+	// the unreachable leader.
+	refreshEpochs(regionStore)
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
+	s.Nil(err)
+	s.NotNil(replicaSelector)
+	s.IsType(&accessKnownLeader{}, replicaSelector.state)
+	// Now, livenessState is unreachable, so it will try a reachable follower instead of the unreachable leader.
+	rpcCtx, err = replicaSelector.next(s.bo)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	_, ok := replicaSelector.state.(*tryFollower)
+	s.True(ok)
+	s.NotEqual(regionStore.workTiKVIdx, replicaSelector.targetIdx)
+
+	// Do not try to use proxy if livenessState is unknown instead of unreachable.
+	refreshEpochs(regionStore)
+	cache.enableForwarding = true
+	cache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+		return unknown
+	}
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
+	s.Nil(err)
+	s.NotNil(replicaSelector)
+	s.Eventually(func() bool {
+		return regionStore.stores[regionStore.workTiKVIdx].getLivenessState() == unknown
+	}, 3*time.Second, 200*time.Millisecond)
+	s.IsType(&accessKnownLeader{}, replicaSelector.state)
+	// Now, livenessState is unknown. Even if forwarding is enabled, it should try followers
+	// instead of using the proxy.
+	rpcCtx, err = replicaSelector.next(s.bo)
+	s.Nil(err)
+	s.NotNil(rpcCtx)
+	_, ok = replicaSelector.state.(*tryFollower)
+	s.True(ok)
 
 	// Test switching to tryNewProxy if leader is unreachable and forwarding is enabled
 	refreshEpochs(regionStore)
@@ -396,20 +440,21 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	cache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
 		return unreachable
 	}
+	s.Eventually(func() bool {
+		return regionStore.stores[regionStore.workTiKVIdx].getLivenessState() == unreachable
+	}, 3*time.Second, 200*time.Millisecond)
 	s.IsType(&accessKnownLeader{}, replicaSelector.state)
-	_, err = replicaSelector.next(s.bo)
-	s.Nil(err)
-	replicaSelector.onSendFailure(s.bo, nil)
+	// Now, livenessState is unreachable, so it will try a new proxy instead of the leader.
 	rpcCtx, err = replicaSelector.next(s.bo)
-	s.NotNil(rpcCtx)
 	s.Nil(err)
+	s.NotNil(rpcCtx)
 	state, ok := replicaSelector.state.(*tryNewProxy)
 	s.True(ok)
 	s.Equal(regionStore.workTiKVIdx, state.leaderIdx)
 	s.Equal(AccessIndex(2), replicaSelector.targetIdx)
 	s.NotEqual(AccessIndex(2), replicaSelector.proxyIdx)
 	assertRPCCtxEqual(rpcCtx, replicaSelector.targetReplica(), replicaSelector.proxyReplica())
-	s.Equal(replicaSelector.targetReplica().attempts, 2)
+	s.Equal(replicaSelector.targetReplica().attempts, 1)
 	s.Equal(replicaSelector.proxyReplica().attempts, 1)
 
 	// When the current proxy node fails, it should try another one.
@@ -423,7 +468,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Equal(regionStore.workTiKVIdx, state.leaderIdx)
 	s.Equal(AccessIndex(2), replicaSelector.targetIdx)
 	s.NotEqual(lastProxy, replicaSelector.proxyIdx)
-	s.Equal(replicaSelector.targetReplica().attempts, 3)
+	s.Equal(replicaSelector.targetReplica().attempts, 2)
 	s.Equal(replicaSelector.proxyReplica().attempts, 1)
 
 	// Test proxy store is saves when proxy is enabled
@@ -643,15 +688,21 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
-	s.Equal(bo.GetTotalBackoffTimes(), 3)
+	s.Equal(bo.GetTotalBackoffTimes(), 2) // The unreachable leader is skipped
 	s.False(sender.replicaSelector.region.isValid())
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
 
 	// The leader store is alive but can't provide service.
-	// Region will be invalidated due to running out of all replicas.
 	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
 		return reachable
 	}
+	s.Eventually(func() bool {
+		stores := s.regionRequestSender.replicaSelector.regionStore.stores
+		return stores[0].getLivenessState() == reachable &&
+			stores[1].getLivenessState() == reachable &&
+			stores[2].getLivenessState() == reachable
+	}, 3*time.Second, 200*time.Millisecond)
+	// Region will be invalidated due to running out of all replicas.
 	reloadRegion()
 	s.cluster.StopStore(s.storeIDs[0])
 	bo = retry.NewBackoffer(context.Background(), -1)
