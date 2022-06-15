@@ -32,9 +32,11 @@ import (
 
 // ReturnedValue pairs the Value and AlreadyLocked flag for PessimisticLock return values result.
 type ReturnedValue struct {
-	Value         []byte
-	Exists        bool
-	AlreadyLocked bool
+	Value                []byte
+	Exists               bool
+	LockedWithConflictTS uint64
+	AlreadyLocked        bool
+	LockStatusUncertain  bool
 }
 
 // Used for pessimistic lock wait time
@@ -65,6 +67,7 @@ type LockCtx struct {
 	LockKeysCount         *int32
 	ReturnValues          bool
 	CheckExistence        bool
+	LockWaitMode          kvrpcpb.PessimisticWaitLockMode
 	Values                map[string]ReturnedValue
 	ValuesLock            sync.Mutex
 	LockExpired           *uint32
@@ -92,6 +95,7 @@ func NewLockCtx(forUpdateTS uint64, lockWaitTime int64, waitStartTime time.Time)
 		ForUpdateTS:   forUpdateTS,
 		lockWaitTime:  &lockWaitTimeInMs{value: lockWaitTime},
 		WaitStartTime: waitStartTime,
+		LockWaitMode:  kvrpcpb.PessimisticWaitLockMode_RetryFirst,
 	}
 }
 

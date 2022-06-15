@@ -238,6 +238,16 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 	}
 }
 
+func (m *memBufferMutations) GetMutation(i int) PlainMutation {
+	mutation := PlainMutation{
+		KeyOp: m.GetOp(i),
+		Key:   m.GetKey(i),
+		Value: m.GetValue(i),
+		Flags: makeMutationFlags(m.IsPessimisticLock(i), m.IsAssertExists(i), m.IsAssertNotExist(i)),
+	}
+	return mutation
+}
+
 func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
 	// See comments of `m.handles` field about the format of the user data `aux`.
 	aux := uint16(op) << 3
@@ -293,6 +303,7 @@ type CommitterMutations interface {
 	Slice(from, to int) CommitterMutations
 	IsAssertExists(i int) bool
 	IsAssertNotExist(i int) bool
+	GetMutation(i int) PlainMutation
 }
 
 // PlainMutations contains transaction operations.
@@ -417,6 +428,17 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 	c.keys = append(c.keys, mutation.Key)
 	c.values = append(c.values, mutation.Value)
 	c.flags = append(c.flags, mutation.Flags)
+}
+
+// GetMutation returns the mutation at the specified index.
+func (c *PlainMutations) GetMutation(i int) PlainMutation {
+	mutation := PlainMutation{
+		KeyOp: c.ops[i],
+		Key:   c.keys[i],
+		Value: c.values[i],
+		Flags: c.flags[i],
+	}
+	return mutation
 }
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
@@ -1854,9 +1876,10 @@ func (c *twoPhaseCommitter) shouldWriteBinlog() bool {
 }
 
 type batchMutations struct {
-	region    locate.RegionVerID
-	mutations CommitterMutations
-	isPrimary bool
+	region       locate.RegionVerID
+	mutations    CommitterMutations
+	isPrimary    bool
+	primaryIndex int
 }
 
 func (b *batchMutations) relocate(bo *retry.Backoffer, c *locate.RegionCache) (bool, error) {
@@ -1894,6 +1917,8 @@ func (b *batched) appendBatchMutationsBySize(region locate.RegionVerID, mutation
 
 	var start, end int
 	for start = 0; start < mutations.Len(); start = end {
+		isPrimary := false
+		primaryIndexInBatch := -1
 		var size int
 		for end = start; end < mutations.Len() && size < limit; end++ {
 			var k, v []byte
@@ -1902,11 +1927,15 @@ func (b *batched) appendBatchMutationsBySize(region locate.RegionVerID, mutation
 			size += sizeFn(k, v)
 			if b.primaryIdx < 0 && bytes.Equal(k, b.primaryKey) {
 				b.primaryIdx = len(b.batches)
+				isPrimary = true
+				primaryIndexInBatch = end - start
 			}
 		}
 		b.batches = append(b.batches, batchMutations{
-			region:    region,
-			mutations: mutations.Slice(start, end),
+			region:       region,
+			mutations:    mutations.Slice(start, end),
+			isPrimary:    isPrimary,
+			primaryIndex: primaryIndexInBatch,
 		})
 	}
 }
