@@ -228,6 +228,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 		return true, errors.WithStack(tikverr.ErrBodyMissing)
 	}
 	lockResp := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
+	if len(lockResp.Results) != 0 {
+		// We use old protocol in this mode. The `Result` field should not be used.
+		return true, errors.New("Pessimistic lock response corrupted")
+	}
 	keyErrs := lockResp.GetErrors()
 	if len(keyErrs) == 0 {
 		if batch.isPrimary {
