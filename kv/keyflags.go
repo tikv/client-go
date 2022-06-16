@@ -38,9 +38,10 @@ package kv
 // Notice that the highest bit is used by red black tree, do not set flags on it.
 type KeyFlags uint16
 
+// FlagBytes is the byte size of type KeyFlags
+const FlagBytes = 2
+
 const (
-	// FlagBytes is the byte size of type KeyFlags
-	FlagBytes               = 2
 	flagPresumeKNE KeyFlags = 1 << iota
 	flagKeyLocked
 	flagNeedLocked

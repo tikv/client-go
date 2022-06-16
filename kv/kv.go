@@ -69,6 +69,7 @@ type LockCtx struct {
 	CheckExistence        bool
 	LockWaitMode          kvrpcpb.PessimisticWaitLockMode
 	Values                map[string]ReturnedValue
+	MaxLockWithConflictTS uint64
 	ValuesLock            sync.Mutex
 	LockExpired           *uint32
 	Stats                 *util.LockKeysDetails

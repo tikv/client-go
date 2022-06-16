@@ -350,6 +350,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 				Exists:               res.Existence,
 				LockedWithConflictTS: res.LockedWithConflictTs,
 			}
+			if res.LockedWithConflictTs > action.MaxLockWithConflictTS {
+				action.MaxLockWithConflictTS = res.LockedWithConflictTs
+			}
 			action.ValuesLock.Unlock()
 		case kvrpcpb.PessimisticLockKeyResultType_Failed:
 			action.ValuesLock.Lock()
@@ -452,9 +455,13 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 }
 
 func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+	forUpdateTS := c.forUpdateTS
+	if c.maxLockWithConflictTS > forUpdateTS {
+		forUpdateTS = c.maxLockWithConflictTS
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
 		StartVersion: c.startTS,
-		ForUpdateTs:  c.forUpdateTS,
+		ForUpdateTs:  forUpdateTS,
 		Keys:         batch.mutations.GetKeys(),
 	})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())

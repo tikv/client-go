@@ -682,6 +682,9 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			// We need to reset the killed flag here.
 			atomic.CompareAndSwapUint32(lockCtx.Killed, 1, 0)
 		}
+		if lockCtx.MaxLockWithConflictTS < txn.committer.maxLockWithConflictTS {
+			txn.committer.maxLockWithConflictTS = lockCtx.MaxLockWithConflictTS
+		}
 		if err != nil {
 			for _, key := range keys {
 				if txn.us.HasPresumeKeyNotExists(key) {
@@ -733,16 +736,18 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		valExists := tikv.SetKeyLockedValueExists
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
 		// For other lock modes, the locked key values always exist.
-		if lockCtx.ReturnValues || checkedExistence {
-			// If ReturnValue is disabled and CheckExistence is requested, it's still possible that the TiKV's version
-			// is too old and CheckExistence is not supported.
-			if val, ok := lockCtx.Values[string(key)]; ok {
-				// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
+		//if lockCtx.ReturnValues || checkedExistence {
+		// If ReturnValue is disabled and CheckExistence is requested, it's still possible that the TiKV's version
+		// is too old and CheckExistence is not supported.
+		if val, ok := lockCtx.Values[string(key)]; ok {
+			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
+			if lockCtx.ReturnValues || checkedExistence || val.LockedWithConflictTS != 0 {
 				if !val.Exists {
 					valExists = tikv.SetKeyLockedValueNotExists
 				}
 			}
 		}
+		//}
 		memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, valExists)
 	}
 	txn.lockedCnt += len(keys)
@@ -768,11 +773,12 @@ const pessimisticRollbackMaxBackoff = 20000
 func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte) *sync.WaitGroup {
 	// Clone a new committer for execute in background.
 	committer := &twoPhaseCommitter{
-		store:       txn.committer.store,
-		sessionID:   txn.committer.sessionID,
-		startTS:     txn.committer.startTS,
-		forUpdateTS: txn.committer.forUpdateTS,
-		primaryKey:  txn.committer.primaryKey,
+		store:                 txn.committer.store,
+		sessionID:             txn.committer.sessionID,
+		startTS:               txn.committer.startTS,
+		forUpdateTS:           txn.committer.forUpdateTS,
+		maxLockWithConflictTS: txn.committer.maxLockWithConflictTS,
+		primaryKey:            txn.committer.primaryKey,
 	}
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
