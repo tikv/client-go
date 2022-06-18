@@ -85,6 +85,10 @@ func (c *pdClient) WatchGlobalConfig(ctx context.Context) (chan []pd.GlobalConfi
 	return nil, nil
 }
 
+func (c *pdClient) GetAllocID(ctx context.Context) (uint64, error) {
+	return 1, nil
+}
+
 func (c *pdClient) GetClusterID(ctx context.Context) uint64 {
 	return 1
 }
