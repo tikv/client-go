@@ -1417,7 +1417,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		// RPCs fails. However, if there are multiple errors and some of the errors
 		// are not RPC failures, we can return the actual error instead of undetermined.
 		if undeterminedErr := c.getUndeterminedErr(); undeterminedErr != nil {
-			logutil.Logger(ctx).Error("Async commit prewrite/1PC result undetermined",
+			logutil.Logger(ctx).Error("Async commit/1PC result undetermined",
 				zap.Error(err),
 				zap.NamedError("rpcErr", undeterminedErr),
 				zap.Uint64("txnStartTS", c.startTS))
