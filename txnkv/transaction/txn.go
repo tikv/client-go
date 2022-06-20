@@ -77,6 +77,39 @@ type SchemaAmender interface {
 	AmendTxn(ctx context.Context, startInfoSchema SchemaVer, change *RelatedSchemaChange, mutations CommitterMutations) (CommitterMutations, error)
 }
 
+type tempLockBufferEntry struct {
+	HasReturnValue    bool
+	HasCheckExistence bool
+	Value             tikv.ReturnedValue
+}
+
+func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExistence bool) bool {
+	if e.Value.LockStatusUncertain {
+		// We are not sure if this key is successfully locked.
+		return false
+	}
+	if e.Value.LockedWithConflictTS != 0 {
+		e.Value.LockedWithConflictTS = 0
+	} else {
+		// If we need require more information than those we already got during last attempt, we need to lock it again.
+		if !e.HasReturnValue && returnValue {
+			return false
+		}
+		if !returnValue && !e.HasCheckExistence && checkExistence {
+			return false
+		}
+	}
+	if !returnValue {
+		e.HasReturnValue = false
+		e.Value.Value = nil
+	}
+	if !checkExistence {
+		e.HasCheckExistence = false
+		e.Value.Exists = true
+	}
+	return true
+}
+
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn struct {
 	snapshot  *txnsnapshot.KVSnapshot
@@ -117,6 +150,8 @@ type KVTxn struct {
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
+
+	aggressiveLockingContext *aggressiveLockingContext
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -574,6 +609,58 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 	return txn.LockKeys(ctx, lockCtx, keysInput...)
 }
 
+func (txn *KVTxn) StartAggressiveLocking() {
+	if txn.aggressiveLockingContext != nil {
+		panic("Trying to start aggressive locking while it's already started")
+	}
+	txn.aggressiveLockingContext = &aggressiveLockingContext{
+		lastRetryUnnecessaryLocks: nil,
+		currentLockedKeys:         make(map[string]tempLockBufferEntry),
+		primary:                   nil,
+	}
+}
+
+func (txn *KVTxn) RetryAggressiveLocking() {
+	if txn.aggressiveLockingContext == nil {
+		panic("Trying to retry aggressive locking while it's not started")
+	}
+	txn.cleanupAggressiveLockingRedundantLocks()
+	txn.aggressiveLockingContext.lastRetryUnnecessaryLocks = txn.aggressiveLockingContext.currentLockedKeys
+	txn.aggressiveLockingContext.currentLockedKeys = make(map[string]tempLockBufferEntry)
+}
+
+func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
+	if txn.aggressiveLockingContext == nil {
+		panic("Trying to cancel aggressive locking while it's not started")
+	}
+	txn.cleanupAggressiveLockingRedundantLocks()
+	keys := make([][]byte, 0, len(txn.aggressiveLockingContext.currentLockedKeys))
+	for key := range txn.aggressiveLockingContext.currentLockedKeys {
+		keys = append(keys, []byte(key))
+	}
+	txn.asyncPessimisticRollback(ctx, keys)
+}
+
+func (txn *KVTxn) DoneAggressiveLocking() {
+	if txn.aggressiveLockingContext == nil {
+		panic("Trying to finish aggressive locking while it's not started")
+	}
+	txn.cleanupAggressiveLockingRedundantLocks()
+	memBuffer := txn.GetMemBuffer()
+	for key, entry := range txn.aggressiveLockingContext.currentLockedKeys {
+		setValExists := tikv.SetKeyLockedValueExists
+		if (entry.HasCheckExistence || entry.HasReturnValue) && !entry.Value.Exists {
+			setValExists = tikv.SetKeyLockedValueNotExists
+		}
+		memBuffer.UpdateFlags([]byte(key), tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists)
+	}
+	txn.aggressiveLockingContext = nil
+}
+
+func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks() {
+	// TODO: async pessimistic rollback
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
@@ -621,20 +708,36 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			valueExist = flags.HasLockedValueExists()
 			checkKeyExists = flags.HasNeedCheckExists()
 		}
-		if !locked {
-			keys = append(keys, key)
-		} else if txn.IsPessimistic() {
+		if locked && txn.IsPessimistic() {
 			if checkKeyExists && valueExist {
 				alreadyExist := kvrpcpb.AlreadyExist{Key: key}
 				e := &tikverr.ErrKeyExist{AlreadyExist: &alreadyExist}
 				return txn.committer.extractKeyExistsErr(e)
 			}
 		}
+		keyStr := string(key)
 		if lockCtx.ReturnValues && locked {
 			// An already locked key can not return values, we add an entry to let the caller get the value
 			// in other ways.
-			lockCtx.Values[string(key)] = tikv.ReturnedValue{AlreadyLocked: true}
+			lockCtx.Values[keyStr] = tikv.ReturnedValue{AlreadyLocked: true}
+			continue
 		}
+		if txn.aggressiveLockingContext != nil {
+			if lastResult, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[keyStr]; ok {
+				if lockCtx.ForUpdateTS < lastResult.Value.LockedWithConflictTS {
+					return errors.Errorf("Txn %v Retrying aggressive locking with ForUpdateTS (%v) less than previous LockedWithConflictTS (%v)", txn.StartTS(), lockCtx.ForUpdateTS, lastResult.Value.LockedWithConflictTS)
+				}
+				delete(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks, keyStr)
+				if lastResult.trySkipLockingOnRetry(lockCtx.ReturnValues, lockCtx.CheckExistence) {
+					// We can skip locking it since it's already locked during last attempt to aggressive locking and
+					// we already have the information that we need.
+					lockCtx.Values[keyStr] = lastResult.Value
+					txn.aggressiveLockingContext.currentLockedKeys[keyStr] = lastResult
+					continue
+				}
+			}
+		}
+		keys = append(keys, key)
 	}
 	if len(keys) == 0 {
 		return nil
@@ -733,25 +836,46 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		}
 	}
 	for _, key := range keys {
-		valExists := tikv.SetKeyLockedValueExists
+		valExists := true // tikv.SetKeyLockedValueExists
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
 		// For other lock modes, the locked key values always exist.
 		//if lockCtx.ReturnValues || checkedExistence {
 		// If ReturnValue is disabled and CheckExistence is requested, it's still possible that the TiKV's version
 		// is too old and CheckExistence is not supported.
-		if val, ok := lockCtx.Values[string(key)]; ok {
+		keyStr := string(key)
+		var val tikv.ReturnedValue
+		var ok bool
+		if val, ok = lockCtx.Values[keyStr]; ok {
 			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
 			if lockCtx.ReturnValues || checkedExistence || val.LockedWithConflictTS != 0 {
 				if !val.Exists {
-					valExists = tikv.SetKeyLockedValueNotExists
+					valExists = false // tikv.SetKeyLockedValueNotExists
 				}
 			}
 		}
 		//}
-		memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, valExists)
+		if txn.aggressiveLockingContext != nil {
+			txn.aggressiveLockingContext.currentLockedKeys[keyStr] = tempLockBufferEntry{
+				HasReturnValue:    lockCtx.ReturnValues,
+				HasCheckExistence: lockCtx.CheckExistence,
+				Value:             val,
+			}
+		} else {
+			setValExists := tikv.SetKeyLockedValueExists
+			if !valExists {
+				setValExists = tikv.SetKeyLockedValueNotExists
+			}
+			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists)
+		}
 	}
 	txn.lockedCnt += len(keys)
 	return nil
+}
+
+type aggressiveLockingContext struct {
+	lastRetryUnnecessaryLocks map[string]tempLockBufferEntry
+	currentLockedKeys         map[string]tempLockBufferEntry
+	primary                   []byte
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
