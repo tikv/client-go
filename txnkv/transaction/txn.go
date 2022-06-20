@@ -661,6 +661,10 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	txn.aggressiveLockingContext = nil
 }
 
+func (txn *KVTxn) IsInAggressiveLockingMode() bool {
+	return txn.aggressiveLockingContext != nil
+}
+
 func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) {
 	if len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks) == 0 {
 		return
