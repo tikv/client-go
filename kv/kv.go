@@ -58,22 +58,21 @@ func defaultLockWaitTime() *lockWaitTimeInMs {
 
 // LockCtx contains information for LockKeys method.
 type LockCtx struct {
-	Killed                *uint32
-	ForUpdateTS           uint64
-	lockWaitTime          *lockWaitTimeInMs
-	WaitStartTime         time.Time
-	PessimisticLockWaited *int32
-	LockKeysDuration      *int64
-	LockKeysCount         *int32
-	ReturnValues          bool
-	CheckExistence        bool
-	LockWaitMode          kvrpcpb.PessimisticWaitLockMode
-	Values                map[string]ReturnedValue
-	MaxLockWithConflictTS uint64
-	ValuesLock            sync.Mutex
-	LockExpired           *uint32
-	Stats                 *util.LockKeysDetails
-	ResourceGroupTag      []byte
+	Killed                  *uint32
+	ForUpdateTS             uint64
+	lockWaitTime            *lockWaitTimeInMs
+	WaitStartTime           time.Time
+	PessimisticLockWaited   *int32
+	LockKeysDuration        *int64
+	LockKeysCount           *int32
+	ReturnValues            bool
+	CheckExistence          bool
+	Values                  map[string]ReturnedValue
+	MaxLockedWithConflictTS uint64
+	ValuesLock              sync.Mutex
+	LockExpired             *uint32
+	Stats                   *util.LockKeysDetails
+	ResourceGroupTag        []byte
 	// ResourceGroupTagger is a special tagger used only for PessimisticLockRequest.
 	// We did not use tikvrpc.ResourceGroupTagger here because the kv package is a
 	// more basic component, and we cannot rely on tikvrpc.Request here, so we treat
@@ -96,7 +95,6 @@ func NewLockCtx(forUpdateTS uint64, lockWaitTime int64, waitStartTime time.Time)
 		ForUpdateTS:   forUpdateTS,
 		lockWaitTime:  &lockWaitTimeInMs{value: lockWaitTime},
 		WaitStartTime: waitStartTime,
-		LockWaitMode:  kvrpcpb.PessimisticWaitLockMode_RetryFirst,
 	}
 }
 

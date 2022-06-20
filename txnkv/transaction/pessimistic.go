@@ -59,6 +59,7 @@ import (
 
 type actionPessimisticLock struct {
 	*kv.LockCtx
+	lockWaitMode kvrpcpb.PessimisticWaitLockMode
 }
 type actionPessimisticRollback struct{}
 
@@ -111,7 +112,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		ReturnValues:   action.ReturnValues,
 		CheckExistence: action.CheckExistence,
 		MinCommitTs:    c.forUpdateTS + 1,
-		WaitLockMode:   action.LockWaitMode,
+		WaitLockMode:   action.lockWaitMode,
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: action.LockCtx.ResourceGroupTag,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
 	if action.LockCtx.ResourceGroupTag == nil && action.LockCtx.ResourceGroupTagger != nil {
@@ -154,7 +155,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			return err
 		}
 
-		if action.LockWaitMode == kvrpcpb.PessimisticWaitLockMode_RetryFirst {
+		if action.lockWaitMode == kvrpcpb.PessimisticWaitLockMode_RetryFirst {
 			finished, err := action.handlePessimisticLockResponseRetryFirstMode(c, bo, batch, mutations, resp)
 			if err != nil {
 				return err
@@ -162,7 +163,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			if finished {
 				return nil
 			}
-		} else if action.LockWaitMode == kvrpcpb.PessimisticWaitLockMode_LockFirst {
+		} else if action.lockWaitMode == kvrpcpb.PessimisticWaitLockMode_LockFirst {
 			finished, retryMutations, err := action.handlePessimisticLockResponseLockFirstMode(c, bo, batch, mutations, resp)
 			if err != nil {
 				return err
@@ -221,7 +222,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 		if same {
 			return false, nil
 		}
-		err = c.pessimisticLockMutations(bo, action.LockCtx, batch.mutations)
+		err = c.pessimisticLockMutations(bo, action.LockCtx, action.lockWaitMode, batch.mutations)
 		return true, err
 	}
 	if resp.Resp == nil {
@@ -354,8 +355,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 				Exists:               res.Existence,
 				LockedWithConflictTS: res.LockedWithConflictTs,
 			}
-			if res.LockedWithConflictTs > action.MaxLockWithConflictTS {
-				action.MaxLockWithConflictTS = res.LockedWithConflictTs
+			if res.LockedWithConflictTs > action.MaxLockedWithConflictTS {
+				action.MaxLockedWithConflictTS = res.LockedWithConflictTs
 			}
 			action.ValuesLock.Unlock()
 		case kvrpcpb.PessimisticLockKeyResultType_Failed:
@@ -412,7 +413,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 			if same {
 				return false, &failedMutations, nil
 			}
-			err = c.pessimisticLockMutations(bo, action.LockCtx, &failedMutations)
+			err = c.pessimisticLockMutations(bo, action.LockCtx, action.lockWaitMode, &failedMutations)
 			return true, nil, err
 		}
 
@@ -459,13 +460,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 }
 
 func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
-	forUpdateTS := c.forUpdateTS
-	if c.maxLockWithConflictTS > forUpdateTS {
-		forUpdateTS = c.maxLockWithConflictTS
-	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
 		StartVersion: c.startTS,
-		ForUpdateTs:  forUpdateTS,
+		ForUpdateTs:  c.forUpdateTS,
 		Keys:         batch.mutations.GetKeys(),
 	})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -487,7 +484,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 	return nil
 }
 
-func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticWaitLockMode, mutations CommitterMutations) error {
 	if c.sessionID > 0 {
 		if val, err := util.EvalFailpoint("beforePessimisticLock"); err == nil {
 			// Pass multiple instructions in one string, delimited by commas, to trigger multiple behaviors, like
@@ -508,7 +505,7 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCt
 			}
 		}
 	}
-	return c.doActionOnMutations(bo, actionPessimisticLock{lockCtx}, mutations)
+	return c.doActionOnMutations(bo, actionPessimisticLock{LockCtx: lockCtx, lockWaitMode: lockWaitMode}, mutations)
 }
 
 func (c *twoPhaseCommitter) pessimisticRollbackMutations(bo *retry.Backoffer, mutations CommitterMutations) error {

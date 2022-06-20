@@ -440,7 +440,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	initRegion.End()
 	if err != nil {
 		if txn.IsPessimistic() {
-			txn.asyncPessimisticRollback(ctx, committer.mutations.GetKeys())
+			txn.asyncPessimisticRollback(ctx, committer.mutations.GetKeys(), txn.committer.forUpdateTS)
 		}
 		return err
 	}
@@ -620,11 +620,11 @@ func (txn *KVTxn) StartAggressiveLocking() {
 	}
 }
 
-func (txn *KVTxn) RetryAggressiveLocking() {
+func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to retry aggressive locking while it's not started")
 	}
-	txn.cleanupAggressiveLockingRedundantLocks()
+	txn.cleanupAggressiveLockingRedundantLocks(ctx)
 	txn.aggressiveLockingContext.lastRetryUnnecessaryLocks = txn.aggressiveLockingContext.currentLockedKeys
 	txn.aggressiveLockingContext.currentLockedKeys = make(map[string]tempLockBufferEntry)
 }
@@ -633,19 +633,23 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to cancel aggressive locking while it's not started")
 	}
-	txn.cleanupAggressiveLockingRedundantLocks()
+	txn.cleanupAggressiveLockingRedundantLocks(ctx)
 	keys := make([][]byte, 0, len(txn.aggressiveLockingContext.currentLockedKeys))
 	for key := range txn.aggressiveLockingContext.currentLockedKeys {
 		keys = append(keys, []byte(key))
 	}
-	txn.asyncPessimisticRollback(ctx, keys)
+	forUpdateTS := txn.committer.forUpdateTS
+	if txn.aggressiveLockingContext.maxLockedWithConflictTS > forUpdateTS {
+		forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
+	}
+	txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
 }
 
-func (txn *KVTxn) DoneAggressiveLocking() {
+func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
-	txn.cleanupAggressiveLockingRedundantLocks()
+	txn.cleanupAggressiveLockingRedundantLocks(ctx)
 	memBuffer := txn.GetMemBuffer()
 	for key, entry := range txn.aggressiveLockingContext.currentLockedKeys {
 		setValExists := tikv.SetKeyLockedValueExists
@@ -657,8 +661,20 @@ func (txn *KVTxn) DoneAggressiveLocking() {
 	txn.aggressiveLockingContext = nil
 }
 
-func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks() {
-	// TODO: async pessimistic rollback
+func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) {
+	if len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks) == 0 {
+		return
+	}
+	keys := make([][]byte, 0, len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks))
+	for keyStr := range txn.aggressiveLockingContext.lastRetryUnnecessaryLocks {
+		key := []byte(keyStr)
+		keys = append(keys, key)
+	}
+	forUpdateTS := txn.committer.forUpdateTS
+	if txn.aggressiveLockingContext.maxLockedWithConflictTS > forUpdateTS {
+		forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
+	}
+	txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
 }
 
 // LockKeys tries to lock the entries with the keys in KV store.
@@ -764,6 +780,11 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			assignedPrimaryKey = true
 		}
 
+		lockWaitMode := kvrpcpb.PessimisticWaitLockMode_RetryFirst
+		if txn.aggressiveLockingContext != nil {
+			lockWaitMode = kvrpcpb.PessimisticWaitLockMode_LockFirst
+		}
+
 		lockCtx.Stats = &util.LockKeysDetails{
 			LockKeys: int32(len(keys)),
 		}
@@ -772,7 +793,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// If the number of keys greater than 1, it can be on different region,
 		// concurrently execute on multiple regions may lead to deadlock.
 		txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
-		err = txn.committer.pessimisticLockMutations(bo, lockCtx, &PlainMutations{keys: keys})
+		err = txn.committer.pessimisticLockMutations(bo, lockCtx, lockWaitMode, &PlainMutations{keys: keys})
 		if bo.GetTotalSleep() > 0 {
 			atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 			lockCtx.Stats.Mu.Lock()
@@ -785,8 +806,10 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			// We need to reset the killed flag here.
 			atomic.CompareAndSwapUint32(lockCtx.Killed, 1, 0)
 		}
-		if lockCtx.MaxLockWithConflictTS < txn.committer.maxLockWithConflictTS {
-			txn.committer.maxLockWithConflictTS = lockCtx.MaxLockWithConflictTS
+		if txn.aggressiveLockingContext != nil {
+			if txn.aggressiveLockingContext.maxLockedWithConflictTS < lockCtx.MaxLockedWithConflictTS {
+				txn.aggressiveLockingContext.maxLockedWithConflictTS = lockCtx.MaxLockedWithConflictTS
+			}
 		}
 		if err != nil {
 			for _, key := range keys {
@@ -808,7 +831,14 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 					}
 				}
 
-				wg := txn.asyncPessimisticRollback(ctx, keys)
+				// TODO: It's possible that there are some locks successfully locked with conflict but the client didn't
+				//   receive the response due to RPC error. In case the lost LockedWithConflictTS > any received
+				//   LockedWithConflictTS, it might not be successfully rolled back here.
+				rollbackForUpdateTS := lockCtx.ForUpdateTS
+				if lockCtx.MaxLockedWithConflictTS > rollbackForUpdateTS {
+					rollbackForUpdateTS = lockCtx.MaxLockedWithConflictTS
+				}
+				wg := txn.asyncPessimisticRollback(ctx, keys, rollbackForUpdateTS)
 
 				if isDeadlock {
 					logutil.Logger(ctx).Debug("deadlock error received", zap.Uint64("startTS", txn.startTS), zap.Stringer("deadlockInfo", dl))
@@ -876,6 +906,7 @@ type aggressiveLockingContext struct {
 	lastRetryUnnecessaryLocks map[string]tempLockBufferEntry
 	currentLockedKeys         map[string]tempLockBufferEntry
 	primary                   []byte
+	maxLockedWithConflictTS   uint64
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
@@ -894,15 +925,17 @@ func deduplicateKeys(keys [][]byte) [][]byte {
 
 const pessimisticRollbackMaxBackoff = 20000
 
-func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte) *sync.WaitGroup {
+func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, specifiedForUpdateTS uint64) *sync.WaitGroup {
 	// Clone a new committer for execute in background.
 	committer := &twoPhaseCommitter{
-		store:                 txn.committer.store,
-		sessionID:             txn.committer.sessionID,
-		startTS:               txn.committer.startTS,
-		forUpdateTS:           txn.committer.forUpdateTS,
-		maxLockWithConflictTS: txn.committer.maxLockWithConflictTS,
-		primaryKey:            txn.committer.primaryKey,
+		store:       txn.committer.store,
+		sessionID:   txn.committer.sessionID,
+		startTS:     txn.committer.startTS,
+		forUpdateTS: txn.committer.forUpdateTS,
+		primaryKey:  txn.committer.primaryKey,
+	}
+	if specifiedForUpdateTS > committer.forUpdateTS {
+		committer.forUpdateTS = specifiedForUpdateTS
 	}
 	wg := new(sync.WaitGroup)
 	wg.Add(1)

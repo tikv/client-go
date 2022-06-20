@@ -135,8 +135,6 @@ type twoPhaseCommitter struct {
 	primaryKey  []byte
 	forUpdateTS uint64
 
-	maxLockWithConflictTS uint64
-
 	mu struct {
 		sync.RWMutex
 		undeterminedErr error // undeterminedErr saves the rpc error we encounter when commit primary key.
@@ -1713,7 +1711,7 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 		var err error
 		for tryTimes < retryLimit {
 			pessimisticLockBo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, c.txn.vars)
-			err = c.pessimisticLockMutations(pessimisticLockBo, lCtx, &keysNeedToLock)
+			err = c.pessimisticLockMutations(pessimisticLockBo, lCtx, kvrpcpb.PessimisticWaitLockMode_RetryFirst, &keysNeedToLock)
 			if err != nil {
 				// KeysNeedToLock won't change, so don't async rollback pessimistic locks here for write conflict.
 				if _, ok := errors.Cause(err).(*tikverr.ErrWriteConflict); ok {
