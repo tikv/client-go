@@ -74,6 +74,7 @@ type rawOptions struct {
 	KeyOnly bool
 }
 
+// RawChecksum represents the checksum result of raw kv pairs in TiKV cluster.
 type RawChecksum struct {
 	// Crc64Xor is the checksum result with crc64 algorithm
 	Crc64Xor uint64
