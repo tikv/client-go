@@ -221,7 +221,11 @@ func (txn *KVTxn) Set(k []byte, v []byte) error {
 
 // String implements fmt.Stringer interface.
 func (txn *KVTxn) String() string {
-	return fmt.Sprintf("%d", txn.StartTS())
+	res := fmt.Sprintf("%d", txn.StartTS())
+	if txn.aggressiveLockingContext != nil {
+		res += fmt.Sprintf(" (aggressiveLocking: prev %d keys, current %d keys)", len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks), len(txn.aggressiveLockingContext.currentLockedKeys))
+	}
+	return res
 }
 
 // Iter creates an Iterator positioned on the first entry that k <= entry's key.
