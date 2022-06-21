@@ -231,12 +231,18 @@ func (lr *LockResolver) TryBatchResolveLocks(
 		return true, nil
 	}
 
+	logutil.BgLogger().Info("TryBatchResolveLocks", zap.Uint64("safepoint", safepoint), zap.Uint64("target-resolve-ts", targetResolveTS))
+
 	locksBeforeSafePoint := make([]*Lock, 0, len(locks))
 	locksAfterSafePoint := make([]*Lock, 0, len(locks))
 	for _, l := range locks {
 		if l.TxnID < safepoint {
+			logutil.BgLogger().Info("smaller than safepoint", zap.ByteString("lock-key", l.Key),
+				zap.ByteString("lock-primary", l.Primary), zap.Uint64("lock-txnID", l.TxnID))
 			locksBeforeSafePoint = append(locksBeforeSafePoint, l)
 		} else {
+			logutil.BgLogger().Info("larger than safepoint", zap.ByteString("lock-key", l.Key),
+				zap.ByteString("lock-primary", l.Primary), zap.Uint64("lock-txnID", l.TxnID))
 			locksAfterSafePoint = append(locksAfterSafePoint, l)
 		}
 	}
@@ -294,12 +300,14 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			}
 		}
 
-		if usedCheckTTL == math.MaxUint64 && status.ttl > 0 {
-			logutil.BgLogger().Error("BatchResolveLocks fail to clean locks, this result is not expected!")
-			return false, errors.New("TiDB ask TiKV to rollback locks but it doesn't, the protocol maybe wrong")
+		if status.ttl > 0 {
+			if usedCheckTTL == math.MaxUint64 {
+				logutil.BgLogger().Error("BatchResolveLocks fail to clean locks, this result is not expected!")
+				return false, errors.New("TiDB ask TiKV to rollback locks but it doesn't, the protocol maybe wrong")
+			}
+		} else {
+			txnInfos[l.TxnID] = status.commitTS
 		}
-
-		txnInfos[l.TxnID] = status.commitTS
 	}
 	logutil.BgLogger().Info("BatchResolveLocks: lookup txn status",
 		zap.Duration("cost time", time.Since(startTime)),
