@@ -37,7 +37,6 @@ package rawkv
 import (
 	"bytes"
 	"context"
-	"google.golang.org/grpc"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -51,6 +50,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	"google.golang.org/grpc"
 )
 
 var (
