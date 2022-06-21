@@ -643,6 +643,7 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 		forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 	}
 	txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
+	txn.aggressiveLockingContext = nil
 }
 
 func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
