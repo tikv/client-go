@@ -433,10 +433,19 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 // GetMutation returns the mutation at the specified index.
 func (c *PlainMutations) GetMutation(i int) PlainMutation {
 	mutation := PlainMutation{
-		KeyOp: c.ops[i],
+		// When a PlainMutations is created for pessimistic locks, it may not set `c.ops`. So for PlainMutations with
+		// no `ops` field, return `Op_PessimisticLock` as the op.
+		KeyOp: kvrpcpb.Op_PessimisticLock,
 		Key:   c.keys[i],
-		Value: c.values[i],
-		Flags: c.flags[i],
+	}
+	if c.ops != nil {
+		mutation.KeyOp = c.ops[i]
+	}
+	if c.values != nil {
+		mutation.Value = c.values[i]
+	}
+	if c.flags != nil {
+		mutation.Flags = c.flags[i]
 	}
 	return mutation
 }
