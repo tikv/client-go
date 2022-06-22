@@ -659,6 +659,19 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 	if detail == nil || s.mu.stats == nil {
 		return
 	}
+	if s.mu.stats.resolveLockDetail == nil {
+		s.mu.stats.resolveLockDetail = &util.ResolveLockDetail{
+			RequestSource: s.RequestSource,
+		}
+	}
+	if s.mu.stats.scanDetail == nil {
+		s.mu.stats.scanDetail = &util.ScanDetail{
+			ResolveLock: s.mu.stats.resolveLockDetail,
+		}
+	}
+	if s.mu.stats.timeDetail == nil {
+		s.mu.stats.timeDetail = &util.TimeDetail{}
+	}
 	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.ScanDetailV2)
 	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetail)
 }
@@ -726,20 +739,6 @@ func (s *KVSnapshot) SetTaskID(id uint64) {
 func (s *KVSnapshot) SetRuntimeStats(stats *SnapshotRuntimeStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if stats == nil {
-		s.mu.stats = nil
-		return
-	}
-	if stats.scanDetail == nil {
-		stats.scanDetail = &util.ScanDetail{
-			ResolveLock: util.ResolveLockDetail{
-				RequestSource: s.RequestSource,
-			},
-		}
-	}
-	if stats.timeDetail == nil {
-		stats.timeDetail = &util.TimeDetail{}
-	}
 	s.mu.stats = stats
 }
 
@@ -876,16 +875,17 @@ func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {
 	if s.mu.stats == nil {
 		return nil
 	}
-	return &s.mu.stats.scanDetail.ResolveLock
+	return s.mu.stats.resolveLockDetail
 }
 
 // SnapshotRuntimeStats records the runtime stats of snapshot.
 type SnapshotRuntimeStats struct {
-	rpcStats       locate.RegionRequestRuntimeStats
-	backoffSleepMS map[string]int
-	backoffTimes   map[string]int
-	scanDetail     *util.ScanDetail
-	timeDetail     *util.TimeDetail
+	rpcStats          locate.RegionRequestRuntimeStats
+	backoffSleepMS    map[string]int
+	backoffTimes      map[string]int
+	scanDetail        *util.ScanDetail
+	timeDetail        *util.TimeDetail
+	resolveLockDetail *util.ResolveLockDetail
 }
 
 // Clone implements the RuntimeStats interface.

@@ -113,7 +113,7 @@ func (s *Scanner) Value() []byte {
 
 const scannerNextMaxBackoff = 20000
 
-// Next returns next element.
+// Next return next element.
 func (s *Scanner) Next() error {
 	bo := retry.NewBackofferWithVars(context.WithValue(context.Background(), retry.TxnStartKey, s.snapshot.version), scannerNextMaxBackoff, s.snapshot.vars)
 	if !s.valid {

@@ -228,7 +228,7 @@ type ScanDetail struct {
 	RocksdbBlockReadCount uint64
 	// RocksdbBlockReadByte is the total number of bytes from block reads.
 	RocksdbBlockReadByte uint64
-	ResolveLock          ResolveLockDetail
+	ResolveLock          *ResolveLockDetail
 }
 
 // Merge merges scan detail execution details into self.
