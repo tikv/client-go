@@ -698,7 +698,10 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 func (c *twoPhaseCommitter) primary() []byte {
 	if len(c.primaryKey) == 0 {
-		return c.mutations.GetKey(0)
+		if c.mutations != nil {
+			return c.mutations.GetKey(0)
+		}
+		return nil
 	}
 	return c.primaryKey
 }

@@ -173,6 +173,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			}
 
 			if retryMutations != nil && retryMutations.Len() < batch.mutations.Len() {
+				// The request may be partially succeeded. Replace the request with remaining mutations.
 				// The primary lock (if it's in this request) must have been succeeded.
 				batch = batchMutations{
 					region:       batch.region,
@@ -325,7 +326,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 	failedMutations := NewPlainMutations(0)
 	keyErrs := lockResp.GetErrors()
 
-	if batch.isPrimary && lockResp.Results[batch.primaryIndex].Type != kvrpcpb.PessimisticLockKeyResultType_Failed {
+	if batch.isPrimary && len(lockResp.Results) > 0 && lockResp.Results[batch.primaryIndex].Type != kvrpcpb.PessimisticLockKeyResultType_Failed {
 		// After locking the primary key, we should protect the primary lock from expiring
 		// now in case locking the remaining keys take a long time.
 		c.run(c, action.LockCtx)
@@ -372,7 +373,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 	}
 
 	// The primary must be locked first, otherwise there should be some bug in the implementation.
-	if failedMutations.Len() < len(lockResp.Results) && lockResp.Results[batch.primaryIndex].Type == kvrpcpb.PessimisticLockKeyResultType_Failed {
+	if batch.isPrimary && failedMutations.Len() < len(lockResp.Results) && lockResp.Results[batch.primaryIndex].Type == kvrpcpb.PessimisticLockKeyResultType_Failed {
 		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 
@@ -411,7 +412,12 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 				return true, nil, err
 			}
 			if same {
-				return false, &failedMutations, nil
+				if len(lockResp.Results) > 0 {
+					// Maybe partially succeeded
+					return false, &failedMutations, nil
+				} else {
+					return false, nil, nil
+				}
 			}
 			err = c.pessimisticLockMutations(bo, action.LockCtx, action.lockWaitMode, &failedMutations)
 			return true, nil, err
@@ -453,6 +459,12 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 	}
 
 	if regionErr != nil || len(locks) != 0 {
+		return true, nil, errors.New("Pessimistic lock response corrupted")
+	}
+
+	// If the Results in response, there must be either some unretryable error in keyErrs or some region error, therefore
+	// the function must have returned.
+	if len(lockResp.Results) == 0 {
 		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 
