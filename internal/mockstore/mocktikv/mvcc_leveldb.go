@@ -36,6 +36,7 @@ package mocktikv
 
 import (
 	"bytes"
+	"hash/crc64"
 	"math"
 	"sync"
 
@@ -1776,6 +1777,44 @@ func (mvcc *MVCCLevelDB) RawReverseScan(cf string, startKey, endKey []byte, limi
 		success = iter.Prev()
 	}
 	return pairs
+}
+
+// RawChecksum implements the RawKV interface.
+func (mvcc *MVCCLevelDB) RawChecksum(cf string, startKey, endKey []byte) (uint64, uint64, uint64, error) {
+	mvcc.mu.Lock()
+	defer mvcc.mu.Unlock()
+
+	db := mvcc.getDB(cf)
+	if db == nil {
+		return 0, 0, 0, nil
+	}
+
+	iter := db.NewIterator(&util.Range{
+		Start: startKey,
+	}, nil)
+
+	crc64Xor := uint64(0)
+	totalKvs := uint64(0)
+	totalBytes := uint64(0)
+	digest := crc64.New(crc64.MakeTable(crc64.ECMA))
+	for iter.Next() {
+		key := iter.Key()
+		value := iter.Value()
+		err := iter.Error()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if len(endKey) > 0 && bytes.Compare(key, endKey) >= 0 {
+			break
+		}
+		digest.Reset()
+		digest.Write(key)
+		digest.Write(value)
+		crc64Xor ^= digest.Sum64()
+		totalKvs++
+		totalBytes += (uint64)(len(key) + len(value))
+	}
+	return crc64Xor, totalKvs, totalBytes, nil
 }
 
 // RawDeleteRange implements the RawKV interface.
