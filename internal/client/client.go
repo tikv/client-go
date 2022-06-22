@@ -344,32 +344,50 @@ func (c *RPCClient) closeConns() {
 	c.Unlock()
 }
 
-var sendReqHistCache sync.Map
+var (
+	sendReqHistCache    sync.Map
+	sendReqCounterCache sync.Map
+)
 
 type sendReqHistCacheKey struct {
-	tp            tikvrpc.CmdType
-	id            uint64
-	staleRad      bool
+	tp       tikvrpc.CmdType
+	id       uint64
+	staleRad bool
+}
+
+type sendReqCounterCacheKey struct {
+	sendReqHistCacheKey
 	requestSource string
 }
 
 func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time, staleRead bool) {
-	key := sendReqHistCacheKey{
+	histKey := sendReqHistCacheKey{
 		req.Type,
 		req.Context.GetPeer().GetStoreId(),
 		staleRead,
-		req.Context.GetRequestSource(),
+	}
+	counterKey := sendReqCounterCacheKey{
+		histKey,
+		req.GetRequestSource(),
 	}
 
-	v, ok := sendReqHistCache.Load(key)
+	hist, ok := sendReqHistCache.Load(histKey)
 	if !ok {
 		reqType := req.Type.String()
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		v = metrics.TiKVSendReqHistogram.WithLabelValues(req.Context.GetRequestSource(), reqType, storeID, strconv.FormatBool(staleRead))
-		sendReqHistCache.Store(key, v)
+		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead))
+		sendReqHistCache.Store(histKey, hist)
+	}
+	counter, ok := sendReqCounterCache.Load(counterKey)
+	if !ok {
+		reqType := req.Type.String()
+		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
+		counter = metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead), counterKey.requestSource)
+		sendReqCounterCache.Store(histKey, hist)
 	}
 
-	v.(prometheus.Observer).Observe(time.Since(start).Seconds())
+	hist.(prometheus.Observer).Observe(time.Since(start).Seconds())
+	counter.(prometheus.Counter).Inc()
 }
 
 // SendRequest sends a Request to server and receives Response.
