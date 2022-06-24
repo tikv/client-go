@@ -88,7 +88,6 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 			zap.Uint64("first batch, region ID", batches[0].RegionID.GetID()),
 			zap.String("first split key", kv.StrKey(batches[0].Keys[0])))
 	}
-	bo.SetCtx(util.WithInternalSourceType(bo.GetCtx(), util.InternalTxnMeta))
 	if len(batches) == 1 {
 		resp := s.batchSendSingleRegion(bo, batches[0], scatter, tableID)
 		return resp.Response, resp.Error

@@ -53,7 +53,7 @@ func (l LockResolverProbe) ResolveAsyncCommitLock(bo *retry.Backoffer, lock *Loc
 
 // ResolveLock resolves single lock.
 func (l LockResolverProbe) ResolveLock(bo *retry.Backoffer, lock *Lock) error {
-	return l.resolveLock(bo, lock, TxnStatus{}, false, make(map[locate.RegionVerID]struct{}), false)
+	return l.resolveLock(bo, lock, TxnStatus{}, false, make(map[locate.RegionVerID]struct{}))
 }
 
 // ResolvePessimisticLock resolves single pessimistic lock.

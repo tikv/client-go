@@ -413,11 +413,7 @@ func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 }
 
 func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (ResolveLockResult, error) {
-	callerStartTS := opts.CallerStartTS
-	locks := opts.Locks
-	detail := opts.Detail
-	forRead := opts.ForRead
-	lite := opts.Lite
+	callerStartTS, locks, forRead, lite, detail := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail
 	if lr.testingKnobs.meetLock != nil {
 		lr.testingKnobs.meetLock(locks)
 	}
@@ -480,14 +476,14 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 				go func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
-					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{}, true)
+					err := lr.resolveLock(asyncBo, l, status, lite, map[locate.RegionVerID]struct{}{})
 					if err != nil {
 						logutil.BgLogger().Info("failed to resolve lock asynchronously",
 							zap.String("lock", l.String()), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 					}
 				}()
 			} else {
-				err = lr.resolveLock(bo, l, status, lite, cleanRegions, false)
+				err = lr.resolveLock(bo, l, status, lite, cleanRegions)
 			}
 		}
 		return status, err
@@ -1048,7 +1044,7 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	return nil
 }
 
-func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}, async bool) error {
+func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
 	util.EvalFailpoint("resolveLock")
 
 	metrics.LockResolverCountWithResolveLocks.Inc()
