@@ -45,6 +45,7 @@ var (
 	TiKVBackoffHistogram                     *prometheus.HistogramVec
 	TiKVSendReqHistogram                     *prometheus.HistogramVec
 	TiKVSendReqCounter                       *prometheus.CounterVec
+	TiKVSendReqTimeCounter                   *prometheus.CounterVec
 	TiKVCoprocessorHistogram                 *prometheus.HistogramVec
 	TiKVLockResolverCounter                  *prometheus.CounterVec
 	TiKVRegionErrorCounter                   *prometheus.CounterVec
@@ -150,6 +151,14 @@ func initMetrics(namespace, subsystem string) {
 			Subsystem: subsystem,
 			Name:      "request_counter",
 			Help:      "Counter of sending request with multi dimensions.",
+		}, []string{LblType, LblStore, LblStaleRead, LblSource})
+
+	TiKVSendReqTimeCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "request_time_counter",
+			Help:      "Counter of request time with multi dimensions.",
 		}, []string{LblType, LblStore, LblStaleRead, LblSource})
 
 	TiKVCoprocessorHistogram = prometheus.NewHistogramVec(
@@ -589,6 +598,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBackoffHistogram)
 	prometheus.MustRegister(TiKVSendReqHistogram)
 	prometheus.MustRegister(TiKVSendReqCounter)
+	prometheus.MustRegister(TiKVSendReqTimeCounter)
 	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVRegionErrorCounter)

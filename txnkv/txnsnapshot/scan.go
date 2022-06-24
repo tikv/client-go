@@ -304,7 +304,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			} else {
 				s.snapshot.store.GetLockResolver().UpdateResolvingLocks(locks, s.snapshot.version, *resolvingRecordToken)
 			}
-			msBeforeExpired, err := s.snapshot.store.GetLockResolver().ResolveLocks(bo, s.snapshot.version, locks, nil)
+			msBeforeExpired, err := s.snapshot.store.GetLockResolver().ResolveLocks(bo, s.snapshot.version, locks)
 			if err != nil {
 				return err
 			}

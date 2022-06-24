@@ -520,7 +520,7 @@ func (s *KVStore) safeTSUpdater() {
 	t := time.NewTicker(time.Second * 2)
 	defer t.Stop()
 	ctx, cancel := context.WithCancel(s.ctx)
-	ctx = context.WithValue(ctx, util.RequestSourceTypeKey, util.InternalTxnGC)
+	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
 	defer cancel()
 	for {
 		select {

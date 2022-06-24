@@ -10,6 +10,12 @@ type RequestSourceTypeKeyType struct{}
 // RequestSourceTypeKey is used as the key of request source type in context.
 var RequestSourceTypeKey = RequestSourceTypeKeyType{}
 
+// RequestSourceKeyType is a dummy type to avoid naming collision in context.
+type RequestSourceKeyType struct{}
+
+// RequestSourceKey is used as the key of request source type in context.
+var RequestSourceKey = RequestSourceKeyType{}
+
 const (
 	// InternalTxnOthers is the type of requests that consume low resources.
 	// This reduces the size of metrics.
@@ -45,6 +51,14 @@ func (r *RequestSource) SetRequestSourceType(tp string) {
 	r.RequestSourceType = tp
 }
 
+// WithInternalSourceType create context with internal source.
+func WithInternalSourceType(ctx context.Context, source string) context.Context {
+	return context.WithValue(ctx, RequestSourceKey, RequestSource{
+		RequestSourceInternal: true,
+		RequestSourceType:     source,
+	})
+}
+
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
 	// if r.RequestSourceType is not set, it's mostly possible that r.RequestSourceInternal is not set
@@ -58,10 +72,11 @@ func (r *RequestSource) GetRequestSource() string {
 	return ExternalRequest + r.RequestSourceType
 }
 
-// RequestSourceFromCtx extract source from passed context, only used by internal txns.
+// RequestSourceFromCtx extract source from passed context.
 func RequestSourceFromCtx(ctx context.Context) string {
-	if source := ctx.Value(RequestSourceTypeKey); source != nil {
-		return InternalRequest + source.(string)
+	if source := ctx.Value(RequestSourceKey); source != nil {
+		rs := source.(RequestSource)
+		return rs.GetRequestSource()
 	}
 	return SourceUnknown
 }

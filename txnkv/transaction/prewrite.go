@@ -394,10 +394,16 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 		} else {
 			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
 		}
-		msBeforeExpired, err := c.store.GetLockResolver().ResolveLocks(bo, c.startTS, locks, &c.getDetail().ResolveLock)
+		resolveLockOpts := txnlock.ResolveLocksOptions{
+			CallerStartTS: c.startTS,
+			Locks:         locks,
+			Detail:        &c.getDetail().ResolveLock,
+		}
+		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
 			return err
 		}
+		msBeforeExpired := resolveLockRes.TTL
 		if msBeforeExpired > 0 {
 			err = bo.BackoffWithCfgAndMaxSleep(retry.BoTxnLock, int(msBeforeExpired), errors.Errorf("2PC prewrite lockedKeys: %d", len(locks)))
 			if err != nil {

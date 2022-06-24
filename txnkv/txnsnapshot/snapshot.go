@@ -208,6 +208,9 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	}
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
+	if ctx.Value(util.RequestSourceKey) == nil {
+		ctx = context.WithValue(ctx, util.RequestSourceKey, *s.RequestSource)
+	}
 	bo := retry.NewBackofferWithVars(ctx, batchGetMaxBackoff, s.vars)
 	s.mu.RLock()
 	if s.mu.interceptor != nil {
@@ -461,7 +464,13 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			} else {
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
 			}
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks, s.getResolveLockDetail())
+			resolveLocksOpts := txnlock.ResolveLocksOptions{
+				CallerStartTS: s.version,
+				Locks:         locks,
+				Detail:        s.getResolveLockDetail(),
+			}
+			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
+			msBeforeExpired := resolveLocksRes.TTL
 			if err != nil {
 				return err
 			}
@@ -491,6 +500,9 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	}(time.Now())
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
+	if ctx.Value(util.RequestSourceKey) == nil {
+		ctx = context.WithValue(ctx, util.RequestSourceKey, *s.RequestSource)
+	}
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
 	s.mu.RLock()
 	if s.mu.interceptor != nil {
@@ -637,10 +649,16 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			} else {
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
 			}
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks, s.getResolveLockDetail())
+			resolveLocksOpts := txnlock.ResolveLocksOptions{
+				CallerStartTS: s.version,
+				Locks:         locks,
+				Detail:        s.getResolveLockDetail(),
+			}
+			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 			if err != nil {
 				return nil, err
 			}
+			msBeforeExpired := resolveLocksRes.TTL
 			if msBeforeExpired > 0 {
 				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.New(keyErr.String()))
 				if err != nil {

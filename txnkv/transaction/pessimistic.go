@@ -238,14 +238,19 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		} else {
 			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
 		}
-		msBeforeTxnExpired, err := c.store.GetLockResolver().ResolveLocks(bo, 0, locks, &action.LockCtx.Stats.ResolveLock)
+		resolveLockOpts := txnlock.ResolveLocksOptions{
+			CallerStartTS: 0,
+			Locks:         locks,
+			Detail:        &action.LockCtx.Stats.ResolveLock,
+		}
+		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
 			return err
 		}
 
 		// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 		// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
-		if msBeforeTxnExpired > 0 {
+		if resolveLockRes.TTL > 0 {
 			if action.LockWaitTime() == kv.LockNoWait {
 				return errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 			} else if action.LockWaitTime() == kv.LockAlwaysWait {
@@ -281,6 +286,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 		ForUpdateTs:  c.forUpdateTS,
 		Keys:         batch.mutations.GetKeys(),
 	})
+	req.RequestSource = util.RequestSourceFromCtx(bo.GetCtx())
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {

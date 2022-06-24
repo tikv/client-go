@@ -47,13 +47,13 @@ type LockResolverProbe struct {
 
 // ResolveAsyncCommitLock tries to resolve a lock using the txn states.
 func (l LockResolverProbe) ResolveAsyncCommitLock(bo *retry.Backoffer, lock *Lock, status TxnStatus) error {
-	_, err := l.resolveAsyncCommitLock(bo, lock, status, false, nil)
+	_, err := l.resolveAsyncCommitLock(bo, lock, status, false)
 	return err
 }
 
 // ResolveLock resolves single lock.
 func (l LockResolverProbe) ResolveLock(bo *retry.Backoffer, lock *Lock) error {
-	return l.resolveLock(bo, lock, TxnStatus{}, false, make(map[locate.RegionVerID]struct{}), false, nil)
+	return l.resolveLock(bo, lock, TxnStatus{}, false, make(map[locate.RegionVerID]struct{}), false)
 }
 
 // ResolvePessimisticLock resolves single pessimistic lock.
@@ -64,7 +64,7 @@ func (l LockResolverProbe) ResolvePessimisticLock(bo *retry.Backoffer, lock *Loc
 // GetTxnStatus sends the CheckTxnStatus request to the TiKV server.
 func (l LockResolverProbe) GetTxnStatus(bo *retry.Backoffer, txnID uint64, primary []byte,
 	callerStartTS, currentTS uint64, rollbackIfNotExist bool, forceSyncCommit bool, lockInfo *Lock) (TxnStatus, error) {
-	return l.getTxnStatus(bo, txnID, primary, callerStartTS, currentTS, rollbackIfNotExist, forceSyncCommit, lockInfo, nil)
+	return l.getTxnStatus(bo, txnID, primary, callerStartTS, currentTS, rollbackIfNotExist, forceSyncCommit, lockInfo)
 }
 
 // GetTxnStatusFromLock queries tikv for a txn's status.
@@ -85,7 +85,7 @@ func (l LockResolverProbe) SetMeetLockCallback(f func([]*Lock)) {
 // CheckAllSecondaries checks the secondary locks of an async commit transaction to find out the final
 // status of the transaction.
 func (l LockResolverProbe) CheckAllSecondaries(bo *retry.Backoffer, lock *Lock, status *TxnStatus) error {
-	_, err := l.checkAllSecondaries(bo, lock, status, nil)
+	_, err := l.checkAllSecondaries(bo, lock, status)
 	return err
 }
 

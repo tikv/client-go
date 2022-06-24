@@ -370,6 +370,8 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 	defer txn.close()
 
+	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
+
 	if val, err := util.EvalFailpoint("mockCommitError"); err == nil && val.(bool) {
 		if _, err := util.EvalFailpoint("mockCommitErrorOpt"); err == nil {
 			failpoint.Disable("tikvclient/mockCommitErrorOpt")
@@ -503,7 +505,8 @@ func (txn *KVTxn) rollbackPessimisticLocks() error {
 	if txn.lockedCnt == 0 {
 		return nil
 	}
-	bo := retry.NewBackofferWithVars(context.Background(), cleanupMaxBackoff, txn.vars)
+	ctx := context.WithValue(context.Background(), util.RequestSourceKey, *txn.RequestSource)
+	bo := retry.NewBackofferWithVars(ctx, cleanupMaxBackoff, txn.vars)
 	if txn.interceptor != nil {
 		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
@@ -592,6 +595,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// it before initiating an RPC request.
 		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
+	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
 	// Exclude keys that are already locked.
 	var err error
 	keys := make([][]byte, 0, len(keysInput))
