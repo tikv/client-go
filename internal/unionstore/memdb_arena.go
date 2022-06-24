@@ -94,7 +94,7 @@ type memdbArena struct {
 	// the total size of all blocks, also the approximate memory footprint of the arena.
 	capacity uint64
 	// when it enlarges or shrinks, call this function with the current memory footprint (in bytes)
-	enlargeHook MemoryFootprintChangeHook
+	enlargeHook func()
 }
 
 func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
@@ -129,7 +129,7 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 	})
 	a.capacity += uint64(a.blockSize)
 	if a.enlargeHook != nil {
-		a.enlargeHook(a.capacity)
+		a.enlargeHook()
 	}
 }
 

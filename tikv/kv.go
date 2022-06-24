@@ -56,7 +56,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -613,7 +612,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 type txnOptions struct {
 	TxnScope                  string
 	StartTS                   *uint64
-	MemoryFootprintChangeHook unionstore.MemoryFootprintChangeHook
+	MemoryFootprintChangeHook func(uint64)
 }
 
 // TxnOption configures Transaction
@@ -630,14 +629,6 @@ func WithTxnScope(txnScope string) TxnOption {
 func WithStartTS(startTS uint64) TxnOption {
 	return func(st *txnOptions) {
 		st.StartTS = &startTS
-	}
-}
-
-// WithMemoryFootprintChangeHook sets the MemoryFootprintChangeHook to hook, which is triggered when the memory
-// footprint of the mem buffer changes.
-func WithMemoryFootprintChangeHook(hook unionstore.MemoryFootprintChangeHook) TxnOption {
-	return func(st *txnOptions) {
-		st.MemoryFootprintChangeHook = hook
 	}
 }
 

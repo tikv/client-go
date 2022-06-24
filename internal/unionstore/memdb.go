@@ -50,9 +50,6 @@ var tombstone = []byte{}
 // IsTombstone returns whether the value is a tombstone.
 func IsTombstone(val []byte) bool { return len(val) == 0 }
 
-// MemoryFootprintChangeHook is a callback that accepts a component's memory footprint in bytes
-type MemoryFootprintChangeHook func(footprint uint64)
-
 // MemKeyHandle represents a pointer for key in MemBuffer.
 type MemKeyHandle struct {
 	// Opaque user data
@@ -862,8 +859,8 @@ func (db *MemDB) RemoveFromBuffer(key []byte) {
 }
 
 // SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows.
-func (db *MemDB) SetMemoryFootprintChangeHook(hook MemoryFootprintChangeHook) {
-	innerHook := func(capacity uint64) {
+func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	innerHook := func() {
 		hook(db.allocator.capacity + db.vlog.capacity)
 	}
 	db.allocator.enlargeHook = innerHook

@@ -871,7 +871,7 @@ func (txn *KVTxn) GetClusterID() uint64 {
 }
 
 // SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows
-func (txn *KVTxn) SetMemoryFootprintChangeHook(hook unionstore.MemoryFootprintChangeHook) {
+func (txn *KVTxn) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	txn.us.GetMemBuffer().SetMemoryFootprintChangeHook(hook)
 }
 
