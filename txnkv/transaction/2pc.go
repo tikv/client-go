@@ -648,11 +648,9 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	}
 
 	commitDetail := &util.CommitDetails{
-		WriteSize: size,
-		WriteKeys: c.mutations.Len(),
-		ResolveLock: util.ResolveLockDetail{
-			RequestSource: txn.RequestSource,
-		},
+		WriteSize:   size,
+		WriteKeys:   c.mutations.Len(),
+		ResolveLock: util.ResolveLockDetail{},
 	}
 	metrics.TiKVTxnWriteKVCountHistogram.Observe(float64(commitDetail.WriteKeys))
 	metrics.TiKVTxnWriteSizeHistogram.Observe(float64(commitDetail.WriteSize))

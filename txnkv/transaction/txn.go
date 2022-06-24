@@ -675,10 +675,8 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		}
 
 		lockCtx.Stats = &util.LockKeysDetails{
-			LockKeys: int32(len(keys)),
-			ResolveLock: util.ResolveLockDetail{
-				RequestSource: txn.RequestSource,
-			},
+			LockKeys:    int32(len(keys)),
+			ResolveLock: util.ResolveLockDetail{},
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS

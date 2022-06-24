@@ -334,7 +334,6 @@ func (td *TimeDetail) MergeFromTimeDetail(timeDetail *kvrpcpb.TimeDetail) {
 
 // ResolveLockDetail contains the resolve lock detail information.
 type ResolveLockDetail struct {
-	*RequestSource
 	// ResolveLockTime is the total duration of resolving lock.
 	ResolveLockTime int64
 	// TODO(you06): add more details of resolving locks.
