@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/txnkv"
 )
 
 var (
@@ -31,7 +31,7 @@ var (
 
 func main() {
 	flag.Parse()
-	client, err := tikv.NewTxnClient([]string{*pdAddr})
+	client, err := txnkv.NewClient([]string{*pdAddr})
 	if err != nil {
 		panic(err)
 	}
