@@ -236,7 +236,7 @@ func (lr *LockResolver) TryBatchResolveLocks(
 	locksBeforeSafePoint := make([]*Lock, 0, len(locks))
 	locksAfterSafePoint := make([]*Lock, 0, len(locks))
 	for _, l := range locks {
-		if l.TxnID < safepoint {
+		if l.TxnID <= safepoint {
 			logutil.BgLogger().Info("smaller than safepoint", zap.ByteString("lock-key", l.Key),
 				zap.ByteString("lock-primary", l.Primary), zap.Uint64("lock-txnID", l.TxnID))
 			locksBeforeSafePoint = append(locksBeforeSafePoint, l)
