@@ -863,8 +863,8 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
 		hook(db.allocator.capacity + db.vlog.capacity)
 	}
-	db.allocator.enlargeHook = innerHook
-	db.vlog.enlargeHook = innerHook
+	db.allocator.memChangeHook = innerHook
+	db.vlog.memChangeHook = innerHook
 }
 
 // Mem returns the current memory footprint
