@@ -219,45 +219,55 @@ func (lr *LockResolver) getResolved(txnID uint64) (TxnStatus, bool) {
 	return s, ok
 }
 
-// TryBatchResolveLocks tries to resolve locks with batch method.
-func (lr *LockResolver) TryBatchResolveLocks(
+// BatchResolveLegacyLocks tries to resolve legacy locks with batch method.
+// Travesal the given locks and check that:
+// 1. If the tts of lock is equal with or smaller than safepoint, it will
+// rollback the txn, no matter the lock is expired of not.
+// 2. If the tts of lock is larger than safepoint, it will check status of the txn.
+// Resolve the lock if txn is expired, Or do nothing.
+func (lr *LockResolver) BatchResolveLegacyLocks(
 	bo *retry.Backoffer,
 	locks []*Lock,
 	loc locate.RegionVerID,
 	safepoint uint64,
-	targetResolveTS uint64,
+	lowResolutionTS uint64,
 ) (bool, error) {
 	if len(locks) == 0 {
 		return true, nil
 	}
 
-	logutil.BgLogger().Info("TryBatchResolveLocks", zap.Uint64("safepoint", safepoint), zap.Uint64("target-resolve-ts", targetResolveTS))
-
 	locksBeforeSafePoint := make([]*Lock, 0, len(locks))
 	locksAfterSafePoint := make([]*Lock, 0, len(locks))
 	for _, l := range locks {
 		if l.TxnID <= safepoint {
-			logutil.BgLogger().Info("smaller than safepoint", zap.ByteString("lock-key", l.Key),
-				zap.ByteString("lock-primary", l.Primary), zap.Uint64("lock-txnID", l.TxnID))
 			locksBeforeSafePoint = append(locksBeforeSafePoint, l)
 		} else {
-			logutil.BgLogger().Info("larger than safepoint", zap.ByteString("lock-key", l.Key),
-				zap.ByteString("lock-primary", l.Primary), zap.Uint64("lock-txnID", l.TxnID))
 			locksAfterSafePoint = append(locksAfterSafePoint, l)
 		}
 	}
 
+	logutil.BgLogger().Info("TryBatchResolveLocks",
+		zap.Uint64("safepoint", safepoint),
+		zap.Uint64("target-resolve-ts", lowResolutionTS),
+		zap.Int("before-safepoint-count", len(locksBeforeSafePoint)),
+		zap.Int("after-safepoint-count", len(locksAfterSafePoint)))
+
+	// Use math.MaxUint64 as usedCheckTTL, which means rollback the txn, no matter the lock is expired or not!
 	ok, err := lr.BatchResolveLocks(bo, locksBeforeSafePoint, loc, math.MaxUint64)
 	if err != nil || !ok {
 		return ok, err
 	}
 
-	return lr.BatchResolveLocks(bo, locksAfterSafePoint, loc, targetResolveTS)
+	// Use given `lowResolutionTS` to check whether the txn is expired.
+	// If expired, resolve the txn.
+	return lr.BatchResolveLocks(bo, locksAfterSafePoint, loc, lowResolutionTS)
 }
 
 // BatchResolveLocks resolve locks in a batch.
 // Used it in gcworker only!
-func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, loc locate.RegionVerID, usedCheckTTL uint64) (bool, error) {
+// The given `checkTxnExpired` is the TS used for checking whether txn is expired.
+// Set math.MaxUint64 to checkTxnExpired, which means rollback the txn, no matter the lock is expired or not!
+func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, loc locate.RegionVerID, checkTxnExpired uint64) (bool, error) {
 	if len(locks) == 0 {
 		return true, nil
 	}
@@ -276,8 +286,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		}
 		metrics.LockResolverCountWithExpired.Inc()
 
-		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
-		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, usedCheckTTL, true, false, l)
+		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, checkTxnExpired, true, false, l)
 		if err != nil {
 			return false, err
 		}
@@ -291,7 +300,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 				continue
 			}
 			if _, ok := errors.Cause(err).(*nonAsyncCommitLock); ok {
-				status, err = lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, usedCheckTTL, true, true, l)
+				status, err = lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, checkTxnExpired, true, true, l)
 				if err != nil {
 					return false, err
 				}
@@ -301,7 +310,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		}
 
 		if status.ttl > 0 {
-			if usedCheckTTL == math.MaxUint64 {
+			if checkTxnExpired == math.MaxUint64 {
 				logutil.BgLogger().Error("BatchResolveLocks fail to clean locks, this result is not expected!")
 				return false, errors.New("TiDB ask TiKV to rollback locks but it doesn't, the protocol maybe wrong")
 			}

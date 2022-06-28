@@ -535,7 +535,7 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 	loc, err := s.store.GetRegionCache().LocateKey(bo, locks[0].Primary)
 	s.Nil(err)
 	// Check BatchResolveLocks resolve the lock even the ttl is not expired.
-	success, err := lr.BatchResolveLocks(bo, locks, loc.Region)
+	success, err := lr.BatchResolveLocks(bo, locks, loc.Region, math.MaxUint64)
 	s.True(success)
 	s.Nil(err)
 
@@ -666,7 +666,7 @@ func (s *testLockSuite) TestBatchResolveTxnFallenBackFromAsyncCommit() {
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
 	loc, err := s.store.GetRegionCache().LocateKey(bo, []byte("fb1"))
 	s.Nil(err)
-	ok, err := s.store.NewLockResolver().BatchResolveLocks(bo, []*txnkv.Lock{lock}, loc.Region)
+	ok, err := s.store.NewLockResolver().BatchResolveLocks(bo, []*txnkv.Lock{lock}, loc.Region, math.MaxUint64)
 	s.Nil(err)
 	s.True(ok)
 
