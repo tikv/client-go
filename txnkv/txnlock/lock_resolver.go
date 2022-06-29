@@ -247,7 +247,7 @@ func (lr *LockResolver) BatchResolveLegacyLocks(
 		}
 	}
 
-	logutil.BgLogger().Info("TryBatchResolveLocks",
+	logutil.BgLogger().Info("BatchResolveLegacyLocks",
 		zap.Uint64("safepoint", safepoint),
 		zap.Uint64("low-resolve-ts", lowResolveTS),
 		zap.Int("before-safepoint-count", len(locksBeforeSafePoint)),

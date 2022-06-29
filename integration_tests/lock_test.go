@@ -508,29 +508,29 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	// The first transaction is a normal transaction with TTL=10000
 	txn1, err := s.store.Begin()
 	s.Nil(err)
-	txn1.Set([]byte("k1"), []byte("v1"))
-	txn1.Set([]byte("k2"), []byte("v2"))
-	s.prewriteTxnWithTTL(txn1, 10000)
+	txn1.Set([]byte("key1"), []byte("value1"))
+	txn1.Set([]byte("key2"), []byte("value2"))
+	s.prewriteTxnWithTTL(txn1, 5)
 
 	// The third transaction is a normal transaction with TTL=20000
 	txn2, err := s.store.Begin()
 	s.Nil(err)
-	txn2.Set([]byte("k3"), []byte("v3"))
-	txn2.Set([]byte("k4"), []byte("v4"))
-	s.prewriteTxnWithTTL(txn2, 20000)
+	txn2.Set([]byte("key3"), []byte("value3"))
+	txn2.Set([]byte("key4"), []byte("value4"))
+	s.prewriteTxnWithTTL(txn2, 10)
 
 	// The third transaction is a normal transaction with TTL=30000
 	txn3, err := s.store.Begin()
 	s.Nil(err)
-	txn3.Set([]byte("k5"), []byte("v5"))
-	txn3.Set([]byte("k6"), []byte("v6"))
-	s.prewriteTxnWithTTL(txn3, 30000)
+	txn3.Set([]byte("key5"), []byte("value5"))
+	txn3.Set([]byte("key6"), []byte("value6"))
+	s.prewriteTxnWithTTL(txn3, 20)
 
 	// The third transaction is an async commit transaction
 	txn4, err := s.store.Begin()
 	s.Nil(err)
-	txn4.Set([]byte("k7"), []byte("v7"))
-	txn4.Set([]byte("k8"), []byte("v8"))
+	txn4.Set([]byte("key7"), []byte("value7"))
+	txn4.Set([]byte("key8"), []byte("value8"))
 	committer, err := txn4.NewCommitter(0)
 	s.Nil(err)
 	committer.SetUseAsyncCommit()
@@ -539,13 +539,13 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	s.Nil(err)
 
 	var locks []*txnkv.Lock
-	for _, key := range []string{"k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"} {
+	for _, key := range []string{"key1", "key2", "key3", "key4", "key5", "key6", "key7", "key8"} {
 		l := s.mustGetLock([]byte(key))
 		locks = append(locks, l)
 	}
 
 	// Locks may not expired
-	msBeforeTxnExpired := s.store.GetOracle().UntilExpired(locks[3].TxnID, 25000, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	msBeforeTxnExpired := s.store.GetOracle().UntilExpired(locks[3].TxnID, locks[3].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Greater(msBeforeTxnExpired, int64(0))
 	msBeforeTxnExpired = s.store.GetOracle().UntilExpired(locks[5].TxnID, locks[5].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Greater(msBeforeTxnExpired, int64(0))
@@ -556,7 +556,7 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	s.Nil(err)
 
 	safepointTS := txn1.StartTS() + 1
-	lowResolveTS := oracle.ComposeTS(oracle.ExtractPhysical(txn2.StartTS())+25000, oracle.ExtractLogical(txn2.StartTS()))
+	lowResolveTS := oracle.ComposeTS(oracle.ExtractPhysical(txn2.StartTS())+15, oracle.ExtractLogical(txn2.StartTS()))
 	success, err := lr.BatchResolveLegacyLocks(bo, locks, loc.Region, safepointTS, lowResolveTS)
 	s.True(success)
 	s.Nil(err)
@@ -571,29 +571,29 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	// transaction 1 is rolled back
-	_, err = txn.Get(context.Background(), []byte("k1"))
+	_, err = txn.Get(context.Background(), []byte("key1"))
 	s.Equal(err, tikverr.ErrNotExist)
-	_, err = txn.Get(context.Background(), []byte("k2"))
+	_, err = txn.Get(context.Background(), []byte("key2"))
 	s.Equal(err, tikverr.ErrNotExist)
 	// transaction 2 is expired and rolled back
-	_, err = txn.Get(context.Background(), []byte("k3"))
+	_, err = txn.Get(context.Background(), []byte("key3"))
 	s.Equal(err, tikverr.ErrNotExist)
-	_, err = txn.Get(context.Background(), []byte("k4"))
+	_, err = txn.Get(context.Background(), []byte("key4"))
 	s.Equal(err, tikverr.ErrNotExist)
 	// transaction 3 is committed
-	v, err := txn.Get(context.Background(), []byte("k5"))
+	v, err := txn.Get(context.Background(), []byte("key5"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v5")))
-	v, err = txn.Get(context.Background(), []byte("k6"))
+	s.True(bytes.Equal(v, []byte("value5")))
+	v, err = txn.Get(context.Background(), []byte("key6"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v6")))
+	s.True(bytes.Equal(v, []byte("value6")))
 	// transaction 4 is committed
-	v, err = txn.Get(context.Background(), []byte("k7"))
+	v, err = txn.Get(context.Background(), []byte("key7"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v7")))
-	v, err = txn.Get(context.Background(), []byte("k8"))
+	s.True(bytes.Equal(v, []byte("value7")))
+	v, err = txn.Get(context.Background(), []byte("key8"))
 	s.Nil(err)
-	s.True(bytes.Equal(v, []byte("v8")))
+	s.True(bytes.Equal(v, []byte("value8")))
 }
 
 func (s *testLockSuite) TestBatchResolveLocks() {
