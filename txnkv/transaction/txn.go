@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"runtime/trace"
 	"sort"
@@ -637,6 +638,7 @@ func (txn *KVTxn) StartAggressiveLocking() {
 	txn.aggressiveLockingContext = &aggressiveLockingContext{
 		lastRetryUnnecessaryLocks: nil,
 		currentLockedKeys:         make(map[string]tempLockBufferEntry),
+		startTime:                 time.Now(),
 	}
 }
 
@@ -652,6 +654,9 @@ func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 
 	txn.aggressiveLockingContext.lastPrimaryKey = txn.aggressiveLockingContext.primaryKey
 	txn.aggressiveLockingContext.primaryKey = nil
+
+	txn.aggressiveLockingContext.lastAttemptStartTime = txn.aggressiveLockingContext.startTime
+	txn.aggressiveLockingContext.startTime = time.Now()
 
 	txn.aggressiveLockingContext.lastRetryUnnecessaryLocks = txn.aggressiveLockingContext.currentLockedKeys
 	txn.aggressiveLockingContext.currentLockedKeys = make(map[string]tempLockBufferEntry)
@@ -709,6 +714,12 @@ func (txn *KVTxn) IsInAggressiveLockingStage(key []byte) bool {
 		return ok
 	}
 	return false
+}
+
+func (txn *KVTxn) mayAggressiveLockingLastLockedKeysExpire() bool {
+	ttl := atomic.LoadUint64(&ManagedLockTTL)
+	return ttl <= math.MaxInt64 &&
+		time.Since(txn.aggressiveLockingContext.lastAttemptStartTime).Milliseconds() >= int64(ttl)
 }
 
 func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) {
@@ -782,13 +793,15 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			locked = flags.HasLocked()
 			valueExist = flags.HasLockedValueExists()
 			checkKeyExists = flags.HasNeedCheckExists()
-		} else if txn.aggressiveLockingContext != nil {
+		}
+		// If the key is locked in the current aggressive locking stage, override the information in memBuf.
+		if txn.aggressiveLockingContext != nil {
 			if entry, ok := txn.aggressiveLockingContext.currentLockedKeys[string(key)]; ok {
 				locked = true
 				valueExist = entry.Value.Exists
-				checkKeyExists = false
 			}
 		}
+
 		if !locked {
 			keys = append(keys, key)
 		} else if txn.IsPessimistic() {
@@ -835,15 +848,16 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// RPC to those already locked keys.
 		if txn.aggressiveLockingContext != nil {
 			// In aggressive locking mode, we can skip locking if all of these conditions are met:
-			// * It's not primary
 			// * The primary is unchanged during the current aggressive locking (which means primary is already set
 			//   before the current aggressive locking or the selected primary is the same as that selected during the
 			//   previous attempt).
 			// * The key is already locked in the previous attempt.
+			// * The time since last attempt is short enough so that the locks we acquired during last attempt is
+			//   unlikely to be resolved by other transactions.
 
 			// In case primary is not assigned in this phase, or primary is set but unchanged, we don't need to update
 			// the locks.
-			canSkipSecondary := !txn.aggressiveLockingContext.assignedPrimaryKey || bytes.Equal(txn.aggressiveLockingContext.lastPrimaryKey, txn.aggressiveLockingContext.primaryKey)
+			canTrySkip := !txn.aggressiveLockingContext.assignedPrimaryKey || bytes.Equal(txn.aggressiveLockingContext.lastPrimaryKey, txn.aggressiveLockingContext.primaryKey)
 
 			// Do not preallocate since in most cases the keys need to lock doesn't change during pessimistic-retry.
 			keys = make([][]byte, 0)
@@ -854,7 +868,9 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 						return errors.Errorf("Txn %v Retrying aggressive locking with ForUpdateTS (%v) less than previous LockedWithConflictTS (%v)", txn.StartTS(), lockCtx.ForUpdateTS, lastResult.Value.LockedWithConflictTS)
 					}
 					delete(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks, keyStr)
-					if canSkipSecondary && lastResult.trySkipLockingOnRetry(lockCtx.ReturnValues, lockCtx.CheckExistence) && !bytes.Equal(k, txn.committer.primaryKey) {
+					if canTrySkip &&
+						lastResult.trySkipLockingOnRetry(lockCtx.ReturnValues, lockCtx.CheckExistence) &&
+						!txn.mayAggressiveLockingLastLockedKeysExpire() {
 						// We can skip locking it since it's already locked during last attempt to aggressive locking, and
 						// we already have the information that we need.
 						lockCtx.Values[keyStr] = lastResult.Value
@@ -1033,11 +1049,14 @@ func (txn *KVTxn) selectPrimaryForPessimisticLock(sortedKeys [][]byte) {
 
 type aggressiveLockingContext struct {
 	lastRetryUnnecessaryLocks map[string]tempLockBufferEntry
-	currentLockedKeys         map[string]tempLockBufferEntry
-	maxLockedWithConflictTS   uint64
-	assignedPrimaryKey        bool
 	lastPrimaryKey            []byte
-	primaryKey                []byte
+	lastAttemptStartTime      time.Time
+
+	currentLockedKeys       map[string]tempLockBufferEntry
+	maxLockedWithConflictTS uint64
+	assignedPrimaryKey      bool
+	primaryKey              []byte
+	startTime               time.Time
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
