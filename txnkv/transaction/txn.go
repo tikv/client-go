@@ -703,6 +703,14 @@ func (txn *KVTxn) IsInAggressiveLockingMode() bool {
 	return txn.aggressiveLockingContext != nil
 }
 
+func (txn *KVTxn) IsInAggressiveLockingStage(key []byte) bool {
+	if txn.aggressiveLockingContext != nil {
+		_, ok := txn.aggressiveLockingContext.currentLockedKeys[string(key)]
+		return ok
+	}
+	return false
+}
+
 func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) {
 	if len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks) == 0 {
 		return
