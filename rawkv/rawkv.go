@@ -595,6 +595,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 		return nil, err
 	}
 
+	//
 	var batches []kvrpc.Batch
 	for regionID, groupKeys := range groups {
 		batches = kvrpc.AppendKeyBatches(batches, regionID, groupKeys, rawBatchPairCount)
