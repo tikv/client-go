@@ -498,6 +498,91 @@ func (s *testLockSuite) TestLockTTL() {
 	s.ttlEquals(l.TTL, defaultLockTTL+uint64(elapsed))
 }
 
+func (s *testLockSuite) TestBatchResolveLegacyLocks() {
+	// The first transaction is a normal transaction with TTL=10000
+	txn1, err := s.store.Begin()
+	s.Nil(err)
+	txn1.Set([]byte("k1"), []byte("v1"))
+	txn1.Set([]byte("k2"), []byte("v2"))
+	s.prewriteTxnWithTTL(txn1, 10000)
+
+	// The third transaction is a normal transaction with TTL=20000
+	txn2, err := s.store.Begin()
+	s.Nil(err)
+	txn2.Set([]byte("k3"), []byte("v3"))
+	txn2.Set([]byte("k4"), []byte("v4"))
+	s.prewriteTxnWithTTL(txn2, 20000)
+
+	// The third transaction is a normal transaction with TTL=30000
+	txn3, err := s.store.Begin()
+	s.Nil(err)
+	txn3.Set([]byte("k5"), []byte("v5"))
+	txn3.Set([]byte("k6"), []byte("v6"))
+	s.prewriteTxnWithTTL(txn3, 30000)
+
+	// The third transaction is an async commit transaction
+	txn4, err := s.store.Begin()
+	s.Nil(err)
+	txn4.Set([]byte("k7"), []byte("v7"))
+	txn4.Set([]byte("k8"), []byte("v8"))
+	committer, err := txn4.NewCommitter(0)
+	s.Nil(err)
+	committer.SetUseAsyncCommit()
+	committer.SetLockTTL(20000)
+	committer.PrewriteAllMutations(context.Background())
+	s.Nil(err)
+
+	var locks []*txnkv.Lock
+	for _, key := range []string{"k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"} {
+		l := s.mustGetLock([]byte(key))
+		locks = append(locks, l)
+	}
+
+	// Locks may not expired
+	msBeforeTxnExpired := s.store.GetOracle().UntilExpired(locks[5].TxnID, locks[3].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	s.Greater(msBeforeTxnExpired, int64(0))
+
+	lr := s.store.NewLockResolver()
+	bo := tikv.NewGcResolveLockMaxBackoffer(context.Background())
+	loc, err := s.store.GetRegionCache().LocateKey(bo, locks[0].Primary)
+	s.Nil(err)
+
+	safepoint := locks[3].TxnID - 1
+	lowResolutionTS := locks[5].TxnID + uint64(msBeforeTxnExpired)
+	success, err := lr.BatchResolveLegacyLocks(bo, locks, loc.Region, safepoint, lowResolutionTS)
+	s.True(success)
+	s.Nil(err)
+
+	err = txn3.Commit(context.Background())
+	s.Nil(err)
+	txn, err := s.store.Begin()
+	s.Nil(err)
+	// transaction 1 is rolled back
+	_, err = txn.Get(context.Background(), []byte("k1"))
+	s.Equal(err, tikverr.ErrNotExist)
+	_, err = txn.Get(context.Background(), []byte("k2"))
+	s.Equal(err, tikverr.ErrNotExist)
+	// transaction 2 is expired and rolled back
+	_, err = txn.Get(context.Background(), []byte("k3"))
+	s.Equal(err, tikverr.ErrNotExist)
+	_, err = txn.Get(context.Background(), []byte("k4"))
+	s.Equal(err, tikverr.ErrNotExist)
+	// transaction 3 is committed
+	v, err := txn.Get(context.Background(), []byte("k5"))
+	s.Nil(err)
+	s.True(bytes.Equal(v, []byte("v5")))
+	v, err = txn.Get(context.Background(), []byte("k6"))
+	s.Nil(err)
+	s.True(bytes.Equal(v, []byte("v6")))
+	// transaction 4 is committed
+	v, err = txn.Get(context.Background(), []byte("k7"))
+	s.Nil(err)
+	s.True(bytes.Equal(v, []byte("v7")))
+	v, err = txn.Get(context.Background(), []byte("k8"))
+	s.Nil(err)
+	s.True(bytes.Equal(v, []byte("v8")))
+}
+
 func (s *testLockSuite) TestBatchResolveLocks() {
 	// The first transaction is a normal transaction with a long TTL
 	txn, err := s.store.Begin()
