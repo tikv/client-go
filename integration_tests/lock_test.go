@@ -499,7 +499,7 @@ func (s *testLockSuite) TestLockTTL() {
 }
 
 // TestBatchResolveLegacyLocks builds a testcase
-// txn1 safepoint  txn2 txn3  txn2+TTL lowResolutionTS  txn3+TTL
+// txn1 safepoint  txn2 txn3  txn2+TTL lowResolveTS   txn3+TTL
 // --^---^----------^----^-------^--------^---------------^---------> ts
 // (1) txn1 < safepoint, rollback txn1
 // (2) safepoint < txn2, txn2+TTL < lowResolutionTS, which means txn2 is expired, and will be rollback
@@ -555,9 +555,9 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	loc, err := s.store.GetRegionCache().LocateKey(bo, locks[0].Primary)
 	s.Nil(err)
 
-	safepoint := txn1.StartTS() + 1
-	lowResolutionTS := oracle.ComposeTS(oracle.ExtractPhysical(txn2.StartTS())+25000, oracle.ExtractLogical(txn2.StartTS()))
-	success, err := lr.BatchResolveLegacyLocks(bo, locks, loc.Region, safepoint, lowResolutionTS)
+	safepointTS := txn1.StartTS() + 1
+	lowResolveTS := oracle.ComposeTS(oracle.ExtractPhysical(txn2.StartTS())+25000, oracle.ExtractLogical(txn2.StartTS()))
+	success, err := lr.BatchResolveLegacyLocks(bo, locks, loc.Region, safepointTS, lowResolveTS)
 	s.True(success)
 	s.Nil(err)
 
