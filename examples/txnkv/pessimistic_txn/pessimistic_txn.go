@@ -21,7 +21,6 @@ import (
 	"os"
 
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
 )
 
@@ -35,14 +34,14 @@ func (kv KV) String() string {
 }
 
 var (
-	client *tikv.KVStore
+	client *txnkv.Client
 	pdAddr = flag.String("pd", "127.0.0.1:2379", "pd address")
 )
 
 // Init initializes information.
 func initStore() {
 	var err error
-	client, err = tikv.NewTxnClient([]string{*pdAddr})
+	client, err = txnkv.NewClient([]string{*pdAddr})
 	if err != nil {
 		panic(err)
 	}

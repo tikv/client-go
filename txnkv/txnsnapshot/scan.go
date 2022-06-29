@@ -230,6 +230,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				NotFillCache:     s.snapshot.notFillCache,
 				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 				ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
+				RequestSource:    s.snapshot.GetRequestSource(),
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
@@ -250,6 +251,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
+			RequestSource:    s.snapshot.GetRequestSource(),
 		})
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)

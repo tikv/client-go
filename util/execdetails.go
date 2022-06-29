@@ -72,11 +72,11 @@ type CommitDetails struct {
 		CommitBackoffTime int64
 		BackoffTypes      []string
 	}
-	ResolveLockTime   int64
 	WriteKeys         int
 	WriteSize         int
 	PrewriteRegionNum int32
 	TxnRetry          int
+	ResolveLock       ResolveLockDetail
 }
 
 // Merge merges commit details into itself.
@@ -86,7 +86,7 @@ func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.WaitPrewriteBinlogTime += other.WaitPrewriteBinlogTime
 	cd.CommitTime += other.CommitTime
 	cd.LocalLatchTime += other.LocalLatchTime
-	cd.ResolveLockTime += other.ResolveLockTime
+	cd.ResolveLock.ResolveLockTime += other.ResolveLock.ResolveLockTime
 	cd.WriteKeys += other.WriteKeys
 	cd.WriteSize += other.WriteSize
 	cd.PrewriteRegionNum += other.PrewriteRegionNum
@@ -103,11 +103,11 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 		WaitPrewriteBinlogTime: cd.WaitPrewriteBinlogTime,
 		CommitTime:             cd.CommitTime,
 		LocalLatchTime:         cd.LocalLatchTime,
-		ResolveLockTime:        cd.ResolveLockTime,
 		WriteKeys:              cd.WriteKeys,
 		WriteSize:              cd.WriteSize,
 		PrewriteRegionNum:      cd.PrewriteRegionNum,
 		TxnRetry:               cd.TxnRetry,
+		ResolveLock:            cd.ResolveLock,
 	}
 	commit.Mu.BackoffTypes = append([]string{}, cd.Mu.BackoffTypes...)
 	commit.Mu.CommitBackoffTime = cd.Mu.CommitBackoffTime
@@ -116,12 +116,12 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 
 // LockKeysDetails contains pessimistic lock keys detail information.
 type LockKeysDetails struct {
-	TotalTime       time.Duration
-	RegionNum       int32
-	LockKeys        int32
-	ResolveLockTime int64
-	BackoffTime     int64
-	Mu              struct {
+	TotalTime   time.Duration
+	RegionNum   int32
+	LockKeys    int32
+	ResolveLock ResolveLockDetail
+	BackoffTime int64
+	Mu          struct {
 		sync.Mutex
 		BackoffTypes []string
 	}
@@ -135,7 +135,7 @@ func (ld *LockKeysDetails) Merge(lockKey *LockKeysDetails) {
 	ld.TotalTime += lockKey.TotalTime
 	ld.RegionNum += lockKey.RegionNum
 	ld.LockKeys += lockKey.LockKeys
-	ld.ResolveLockTime += lockKey.ResolveLockTime
+	ld.ResolveLock.ResolveLockTime += lockKey.ResolveLock.ResolveLockTime
 	ld.BackoffTime += lockKey.BackoffTime
 	ld.LockRPCTime += lockKey.LockRPCTime
 	ld.LockRPCCount += ld.LockRPCCount
@@ -146,14 +146,14 @@ func (ld *LockKeysDetails) Merge(lockKey *LockKeysDetails) {
 // Clone returns a deep copy of itself.
 func (ld *LockKeysDetails) Clone() *LockKeysDetails {
 	lock := &LockKeysDetails{
-		TotalTime:       ld.TotalTime,
-		RegionNum:       ld.RegionNum,
-		LockKeys:        ld.LockKeys,
-		ResolveLockTime: ld.ResolveLockTime,
-		BackoffTime:     ld.BackoffTime,
-		LockRPCTime:     ld.LockRPCTime,
-		LockRPCCount:    ld.LockRPCCount,
-		RetryCount:      ld.RetryCount,
+		TotalTime:    ld.TotalTime,
+		RegionNum:    ld.RegionNum,
+		LockKeys:     ld.LockKeys,
+		BackoffTime:  ld.BackoffTime,
+		LockRPCTime:  ld.LockRPCTime,
+		LockRPCCount: ld.LockRPCCount,
+		RetryCount:   ld.RetryCount,
+		ResolveLock:  ld.ResolveLock,
 	}
 	lock.Mu.BackoffTypes = append([]string{}, ld.Mu.BackoffTypes...)
 	return lock
@@ -228,6 +228,7 @@ type ScanDetail struct {
 	RocksdbBlockReadCount uint64
 	// RocksdbBlockReadByte is the total number of bytes from block reads.
 	RocksdbBlockReadByte uint64
+	ResolveLock          *ResolveLockDetail
 }
 
 // Merge merges scan detail execution details into self.
@@ -329,4 +330,16 @@ func (td *TimeDetail) MergeFromTimeDetail(timeDetail *kvrpcpb.TimeDetail) {
 		td.ProcessTime += time.Duration(timeDetail.ProcessWallTimeMs) * time.Millisecond
 		td.KvReadWallTimeMs += time.Duration(timeDetail.KvReadWallTimeMs) * time.Millisecond
 	}
+}
+
+// ResolveLockDetail contains the resolve lock detail information.
+type ResolveLockDetail struct {
+	// ResolveLockTime is the total duration of resolving lock.
+	ResolveLockTime int64
+	// TODO(you06): add more details of resolving locks.
+}
+
+// Merge merges resolve lock detail details into self.
+func (rd *ResolveLockDetail) Merge(resolveLock *ResolveLockDetail) {
+	rd.ResolveLockTime += resolveLock.ResolveLockTime
 }

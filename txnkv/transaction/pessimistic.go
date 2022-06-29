@@ -106,8 +106,13 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		ReturnValues:   action.ReturnValues,
 		CheckExistence: action.CheckExistence,
 		MinCommitTs:    c.forUpdateTS + 1,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: action.LockCtx.ResourceGroupTag,
-		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	}, kvrpcpb.Context{
+		Priority:               c.priority,
+		SyncLog:                c.syncLog,
+		ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
+		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+		RequestSource:          c.txn.GetRequestSource(),
+	})
 	if action.LockCtx.ResourceGroupTag == nil && action.LockCtx.ResourceGroupTagger != nil {
 		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
 	}
@@ -226,7 +231,6 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		}
 		// Because we already waited on tikv, no need to Backoff here.
 		// tikv default will wait 3s(also the maximum wait value) when lock error occurs
-		startTime = time.Now()
 		if resolvingRecordToken == nil {
 			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
 			resolvingRecordToken = &token
@@ -234,17 +238,19 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		} else {
 			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
 		}
-		msBeforeTxnExpired, err := c.store.GetLockResolver().ResolveLocks(bo, 0, locks)
+		resolveLockOpts := txnlock.ResolveLocksOptions{
+			CallerStartTS: 0,
+			Locks:         locks,
+			Detail:        &action.LockCtx.Stats.ResolveLock,
+		}
+		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
 			return err
-		}
-		if action.LockCtx.Stats != nil {
-			atomic.AddInt64(&action.LockCtx.Stats.ResolveLockTime, int64(time.Since(startTime)))
 		}
 
 		// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 		// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
-		if msBeforeTxnExpired > 0 {
+		if resolveLockRes.TTL > 0 {
 			if action.LockWaitTime() == kv.LockNoWait {
 				return errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 			} else if action.LockWaitTime() == kv.LockAlwaysWait {
@@ -280,6 +286,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 		ForUpdateTs:  c.forUpdateTS,
 		Keys:         batch.mutations.GetKeys(),
 	})
+	req.RequestSource = util.RequestSourceFromCtx(bo.GetCtx())
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {
