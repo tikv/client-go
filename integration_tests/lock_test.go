@@ -498,6 +498,12 @@ func (s *testLockSuite) TestLockTTL() {
 	s.ttlEquals(l.TTL, defaultLockTTL+uint64(elapsed))
 }
 
+// TestBatchResolveLegacyLocks builds a testcase
+// txn1 safepoint  txn2 txn3  txn2+TTL lowResolutionTS  txn3+TTL
+// --^---^----------^----^-------^--------^---------------^---------> ts
+// (1) txn1 < safepoint, rollback txn1
+// (2) safepoint < txn2, txn2+TTL < lowResolutionTS, which means txn2 is expired, and will be rollback
+// (3) txn3 + TTL > lowResolutionTS, which mean txn3 is not expired.
 func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	// The first transaction is a normal transaction with TTL=10000
 	txn1, err := s.store.Begin()
@@ -539,7 +545,9 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	}
 
 	// Locks may not expired
-	msBeforeTxnExpired := s.store.GetOracle().UntilExpired(locks[5].TxnID, locks[3].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	msBeforeTxnExpired := s.store.GetOracle().UntilExpired(locks[3].TxnID, 25000, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	s.Greater(msBeforeTxnExpired, int64(0))
+	msBeforeTxnExpired = s.store.GetOracle().UntilExpired(locks[5].TxnID, locks[5].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Greater(msBeforeTxnExpired, int64(0))
 
 	lr := s.store.NewLockResolver()
@@ -547,14 +555,19 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 	loc, err := s.store.GetRegionCache().LocateKey(bo, locks[0].Primary)
 	s.Nil(err)
 
-	safepoint := locks[3].TxnID - 1
-	lowResolutionTS := locks[5].TxnID + uint64(msBeforeTxnExpired)
+	safepoint := txn1.StartTS() + 1
+	lowResolutionTS := oracle.ComposeTS(oracle.ExtractPhysical(txn2.StartTS())+25000, oracle.ExtractLogical(txn2.StartTS()))
 	success, err := lr.BatchResolveLegacyLocks(bo, locks, loc.Region, safepoint, lowResolutionTS)
 	s.True(success)
 	s.Nil(err)
 
+	err = txn1.Commit(context.Background())
+	s.NotNil(err)
+	err = txn2.Commit(context.Background())
+	s.NotNil(err)
 	err = txn3.Commit(context.Background())
 	s.Nil(err)
+
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	// transaction 1 is rolled back
