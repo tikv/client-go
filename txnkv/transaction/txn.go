@@ -152,6 +152,7 @@ type KVTxn struct {
 	assertionLevel kvrpcpb.AssertionLevel
 
 	aggressiveLockingContext *aggressiveLockingContext
+	aggressiveLockingDirty   bool
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -660,7 +661,7 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to cancel aggressive locking while it's not started")
 	}
-	txn.cleanupAggressiveLockingRedundantLocks(ctx)
+	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 	if txn.aggressiveLockingContext.assignedPrimaryKey {
 		txn.resetPrimary()
 		txn.aggressiveLockingContext.assignedPrimaryKey = false
@@ -676,7 +677,7 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 		if txn.aggressiveLockingContext.maxLockedWithConflictTS > forUpdateTS {
 			forUpdateTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 		}
-		txn.asyncPessimisticRollback(ctx, keys, forUpdateTS)
+		txn.asyncPessimisticRollback(context.Background(), keys, forUpdateTS)
 		txn.lockedCnt -= len(keys)
 	}
 	txn.aggressiveLockingContext = nil
@@ -686,7 +687,7 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
-	txn.cleanupAggressiveLockingRedundantLocks(ctx)
+	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 	memBuffer := txn.GetMemBuffer()
 	for key, entry := range txn.aggressiveLockingContext.currentLockedKeys {
 		setValExists := tikv.SetKeyLockedValueExists
@@ -976,6 +977,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				HasCheckExistence: lockCtx.CheckExistence,
 				Value:             val,
 			}
+			txn.aggressiveLockingDirty = true
 		} else {
 			setValExists := tikv.SetKeyLockedValueExists
 			if !valExists {
@@ -1097,7 +1099,7 @@ func hashInKeys(deadlockKeyHash uint64, keys [][]byte) bool {
 
 // IsReadOnly checks if the transaction has only performed read operations.
 func (txn *KVTxn) IsReadOnly() bool {
-	return !txn.us.GetMemBuffer().Dirty()
+	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty)
 }
 
 // StartTS returns the transaction start timestamp.
