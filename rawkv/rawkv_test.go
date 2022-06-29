@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/crc64"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -570,4 +571,57 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 	v, err := client.Get(context.Background(), key, SetColumnFamily(cf))
 	s.Nil(err)
 	s.Equal(string(v), string(newValue))
+}
+
+func (s *testRawkvSuite) TestRawChecksum() {
+	mvccStore := mocktikv.MustNewMVCCStore()
+	defer mvccStore.Close()
+
+	client := &Client{
+		clusterID:   0,
+		regionCache: locate.NewRegionCache(mocktikv.NewPDClient(s.cluster)),
+		rpcClient:   mocktikv.NewRPCClient(s.cluster, mvccStore, nil),
+	}
+	defer client.Close()
+
+	cf := "CF_DEFAULT"
+	paris := map[string]string{
+		"db":   "TiDB",
+		"key2": "value2",
+		"key1": "value1",
+		"key4": "value4",
+		"key3": "value3",
+		"kv":   "TiKV",
+	}
+	keys := make([]key, 0)
+	values := make([]value, 0)
+	for k, v := range paris {
+		keys = append(keys, []byte(k))
+		values = append(values, []byte(v))
+	}
+
+	expectCrc64Xor := uint64(0)
+	expectTotalKvs := uint64(0)
+	expectTotalBytes := uint64(0)
+	digest := crc64.New(crc64.MakeTable(crc64.ECMA))
+	for i, key := range keys {
+		digest.Reset()
+		digest.Write(key)
+		digest.Write(values[i])
+		expectCrc64Xor ^= digest.Sum64()
+		expectTotalKvs++
+		expectTotalBytes += (uint64)(len(key) + len(values[i]))
+	}
+
+	// BatchPut
+	err := client.BatchPut(context.Background(), keys, values, SetColumnFamily(cf))
+	s.Nil(err)
+
+	// test Checksum
+	startKey, endKey := []byte("db"), []byte(nil)
+	check, err := client.Checksum(context.Background(), startKey, endKey, SetColumnFamily(cf))
+	s.Nil(err)
+	s.Equal(expectCrc64Xor, check.Crc64Xor)
+	s.Equal(expectTotalKvs, check.TotalKvs)
+	s.Equal(expectTotalBytes, check.TotalBytes)
 }
