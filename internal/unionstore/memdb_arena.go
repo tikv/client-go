@@ -128,6 +128,10 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 		buf: make([]byte, a.blockSize),
 	})
 	a.capacity += uint64(a.blockSize)
+	a.onMemChange()
+}
+
+func (a *memdbArena) onMemChange() {
 	if a.memChangeHook != nil {
 		a.memChangeHook()
 	}
@@ -149,6 +153,7 @@ func (a *memdbArena) reset() {
 	a.blocks = a.blocks[:0]
 	a.blockSize = 0
 	a.capacity = 0
+	a.onMemChange()
 }
 
 type memdbArenaBlock struct {
@@ -212,7 +217,7 @@ func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 	for _, block := range a.blocks {
 		a.capacity += uint64(block.length)
 	}
-	a.memChangeHook()
+	a.onMemChange()
 }
 
 type nodeAllocator struct {
