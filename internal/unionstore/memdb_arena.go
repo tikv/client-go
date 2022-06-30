@@ -91,6 +91,10 @@ func (addr *memdbArenaAddr) load(src []byte) {
 type memdbArena struct {
 	blockSize int
 	blocks    []memdbArenaBlock
+	// the total size of all blocks, also the approximate memory footprint of the arena.
+	capacity uint64
+	// when it enlarges or shrinks, call this function with the current memory footprint (in bytes)
+	memChangeHook func()
 }
 
 func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
@@ -123,6 +127,14 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 	a.blocks = append(a.blocks, memdbArenaBlock{
 		buf: make([]byte, a.blockSize),
 	})
+	a.capacity += uint64(a.blockSize)
+	a.onMemChange()
+}
+
+func (a *memdbArena) onMemChange() {
+	if a.memChangeHook != nil {
+		a.memChangeHook()
+	}
 }
 
 func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []byte) {
@@ -140,6 +152,8 @@ func (a *memdbArena) reset() {
 	}
 	a.blocks = a.blocks[:0]
 	a.blockSize = 0
+	a.capacity = 0
+	a.onMemChange()
 }
 
 type memdbArenaBlock struct {
@@ -198,6 +212,12 @@ func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 		a.blocks[len(a.blocks)-1].length = snap.offsetInBlock
 	}
 	a.blockSize = snap.blockSize
+
+	a.capacity = 0
+	for _, block := range a.blocks {
+		a.capacity += uint64(block.length)
+	}
+	a.onMemChange()
 }
 
 type nodeAllocator struct {

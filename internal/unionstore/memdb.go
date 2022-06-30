@@ -857,3 +857,17 @@ func (db *MemDB) RemoveFromBuffer(key []byte) {
 	db.size -= len(db.vlog.getValue(x.vptr))
 	db.deleteNode(x)
 }
+
+// SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows.
+func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	innerHook := func() {
+		hook(db.allocator.capacity + db.vlog.capacity)
+	}
+	db.allocator.memChangeHook = innerHook
+	db.vlog.memChangeHook = innerHook
+}
+
+// Mem returns the current memory footprint
+func (db *MemDB) Mem() uint64 {
+	return db.allocator.capacity + db.vlog.capacity
+}
