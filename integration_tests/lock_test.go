@@ -544,12 +544,6 @@ func (s *testLockSuite) TestBatchResolveLegacyLocks() {
 		locks = append(locks, l)
 	}
 
-	// Locks may not expired
-	msBeforeTxnExpired := s.store.GetOracle().UntilExpired(locks[3].TxnID, locks[3].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	s.Greater(msBeforeTxnExpired, int64(0))
-	msBeforeTxnExpired = s.store.GetOracle().UntilExpired(locks[5].TxnID, locks[5].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
-	s.Greater(msBeforeTxnExpired, int64(0))
-
 	lr := s.store.NewLockResolver()
 	bo := tikv.NewGcResolveLockMaxBackoffer(context.Background())
 	loc, err := s.store.GetRegionCache().LocateKey(bo, locks[0].Primary)
