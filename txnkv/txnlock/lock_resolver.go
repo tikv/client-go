@@ -222,16 +222,16 @@ func (lr *LockResolver) getResolved(txnID uint64) (TxnStatus, bool) {
 
 // BatchResolveLegacyLocks tries to resolve legacy locks with batch method.
 // Travesal the given locks and check that:
-// 1. If the tts of lock is equal with or smaller than safepoint, it will
+// 1. If the tts of lock is equal with or smaller than safepointTS, it will
 // rollback the txn, no matter the lock is expired of not.
-// 2. If the tts of lock is larger than safepoint, it will check status of the txn.
+// 2. If the tts of lock is larger than safepointTS, it will check status of the txn.
 // Resolve the lock if txn is expired, Or do nothing.
 func (lr *LockResolver) BatchResolveLegacyLocks(
 	bo *retry.Backoffer,
 	locks []*Lock,
 	loc locate.RegionVerID,
 	safepoint uint64,
-	lowResolveTS uint64,
+	lowResolutionTS uint64,
 ) (bool, error) {
 	if len(locks) == 0 {
 		return true, nil
@@ -249,7 +249,7 @@ func (lr *LockResolver) BatchResolveLegacyLocks(
 
 	logutil.BgLogger().Info("BatchResolveLegacyLocks",
 		zap.Uint64("safepoint", safepoint),
-		zap.Uint64("low-resolve-ts", lowResolveTS),
+		zap.Uint64("low-resolution-ts", lowResolutionTS),
 		zap.Int("before-safepoint-count", len(locksBeforeSafePoint)),
 		zap.Int("after-safepoint-count", len(locksAfterSafePoint)))
 
@@ -261,7 +261,7 @@ func (lr *LockResolver) BatchResolveLegacyLocks(
 
 	// Use given `lowResolutionTS` to check whether the txn is expired.
 	// If expired, resolve the txn.
-	return lr.BatchResolveLocks(bo, locksAfterSafePoint, loc, lowResolveTS)
+	return lr.BatchResolveLocks(bo, locksAfterSafePoint, loc, lowResolutionTS)
 }
 
 // BatchResolveLocks resolve locks in a batch.
