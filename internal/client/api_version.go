@@ -160,6 +160,16 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		r := *req.RawCompareAndSwap()
 		r.Key = EncodeV2Key(ModeRaw, r.Key)
 		newReq.Req = &r
+	case tikvrpc.CmdRawChecksum:
+		r := *req.RawChecksum()
+		oriRanges := r.Ranges
+		r.Ranges = make([]*kvrpcpb.KeyRange, 0, len(oriRanges))
+		for i := 0; i < len(oriRanges); i++ {
+			keyRange := kvrpcpb.KeyRange{}
+			keyRange.StartKey, keyRange.EndKey = EncodeV2Range(ModeRaw, oriRanges[i].StartKey, oriRanges[i].EndKey)
+			r.Ranges = append(r.Ranges, &keyRange)
+		}
+		newReq.Req = &r
 	}
 
 	return &newReq, nil
