@@ -18,4 +18,4 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/glorv/tidb v1.1.0-beta.0.20220706082703-c76d686e67a3
+replace github.com/pingcap/tidb => github.com/glorv/tidb v1.1.0-beta.0.20220706085636-88fb3fa642bb

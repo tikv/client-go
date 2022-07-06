@@ -315,8 +315,8 @@ github.com/ghemawat/stream v0.0.0-20171120220530-696b145b53b9/go.mod h1:106OIgoo
 github.com/ghodss/yaml v1.0.0/go.mod h1:4dBDuWmgqj2HViK6kFavaiC9ZROes6MMH2rRYeMEF04=
 github.com/gin-contrib/sse v0.0.0-20190301062529-5545eab6dad3/go.mod h1:VJ0WA2NBN22VlZ2dKZQPAPnyWw5XTlK1KymzLKsr59s=
 github.com/gin-gonic/gin v1.4.0/go.mod h1:OW2EZn3DO8Ln9oIKOvM++LBO+5UPHJJDH72/q/3rZdM=
-github.com/glorv/tidb v1.1.0-beta.0.20220706082703-c76d686e67a3 h1:Fbxcduewl164kLEP1BrnaPo5cCAxrHXu01k+jN+BTrw=
-github.com/glorv/tidb v1.1.0-beta.0.20220706082703-c76d686e67a3/go.mod h1:IIqGhAIt0r50T65i+1Mc0DZQFxgmwaaUq7UitomEfwA=
+github.com/glorv/tidb v1.1.0-beta.0.20220706085636-88fb3fa642bb h1:culCktyyKqIJk7rN3HtZdlwZhoxw6/BpoOrT7Sbiatk=
+github.com/glorv/tidb v1.1.0-beta.0.20220706085636-88fb3fa642bb/go.mod h1:OvOievcYoWbwv84qbZ7EyOE/UhZasJzVVQuQ/xsvtnk=
 github.com/go-check/check v0.0.0-20180628173108-788fd7840127/go.mod h1:9ES+weclKsC9YodN5RgxqK/VD9HM9JsCSh7rNhMZE98=
 github.com/go-critic/go-critic v0.6.3/go.mod h1:c6b3ZP1MQ7o6lPR7Rv3lEf7pYQUmAcx8ABHgdZCQt/k=
 github.com/go-errors/errors v1.0.1/go.mod h1:f4zRHt4oKfwPJE5k8C9vpYG+aDHdBFUsgrm6/TyX73Q=
