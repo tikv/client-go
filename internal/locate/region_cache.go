@@ -37,9 +37,11 @@ package locate
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +53,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stathat/consistent"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -66,10 +69,12 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -370,8 +375,16 @@ type RegionCache struct {
 		sync.RWMutex
 		stores map[uint64]*Store
 	}
+	tiflashMPPStoreMu struct {
+		sync.RWMutex
+		needReload bool
+		stores     []*Store
+	}
 	notifyCheckCh chan struct{}
-	closeCh       chan struct{}
+
+	// Context for background jobs
+	ctx        context.Context
+	cancelFunc context.CancelFunc
 
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
@@ -389,8 +402,10 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
 	c.mu.sorted = btree.New(btreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
+	c.tiflashMPPStoreMu.needReload = true
+	c.tiflashMPPStoreMu.stores = make([]*Store, 0)
 	c.notifyCheckCh = make(chan struct{}, 1)
-	c.closeCh = make(chan struct{})
+	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
@@ -411,7 +426,7 @@ func (c *RegionCache) clear() {
 
 // Close releases region cache's resource.
 func (c *RegionCache) Close() {
-	close(c.closeCh)
+	c.cancelFunc()
 }
 
 // asyncCheckAndResolveLoop with
@@ -422,7 +437,7 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	for {
 		needCheckStores = needCheckStores[:0]
 		select {
-		case <-c.closeCh:
+		case <-c.ctx.Done():
 			return
 		case <-c.notifyCheckCh:
 			c.checkAndResolve(needCheckStores, func(s *Store) bool {
@@ -601,7 +616,7 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 		proxyAddr  string
 	)
 	if c.enableForwarding && isLeaderReq {
-		if atomic.LoadInt32(&store.unreachable) == 0 {
+		if store.getLivenessState() == reachable {
 			regionStore.unsetProxyStoreIfNeeded(cachedRegion)
 		} else {
 			proxyStore, _, _ = c.getProxyStore(cachedRegion, store, regionStore, accessIdx)
@@ -727,6 +742,59 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	return nil, nil
 }
 
+// GetTiFlashMPPRPCContextByConsistentHash return rpcCtx of tiflash_mpp stores.
+// Each mpp computation of specific region will be handled by specific tiflash_mpp node.
+// 1. Get all stores with label <engine, tiflash_mpp>.
+// 2. Get rpcCtx that indicates where the region is stored.
+// 3. Compute which tiflash_mpp node should handle this region by consistent hash.
+// 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
+// NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
+func (c *RegionCache) GetTiFlashMPPRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID) (res []*RPCContext, err error) {
+	mppStores, err := c.GetTiFlashMPPStores(bo)
+	if err != nil {
+		return nil, err
+	}
+	if len(mppStores) == 0 {
+		return nil, errors.New("Number of tiflash_mpp node is zero")
+	}
+
+	hasher := consistent.New()
+	for _, store := range mppStores {
+		hasher.Add(store.GetAddr())
+	}
+
+	for _, id := range ids {
+		addr, err := hasher.Get(strconv.Itoa(int(id.GetID())))
+		if err != nil {
+			return nil, err
+		}
+		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, true)
+		if err != nil {
+			return nil, err
+		}
+		if rpcCtx == nil {
+			return nil, nil
+		}
+
+		var store *Store
+		for _, s := range mppStores {
+			if s.GetAddr() == addr {
+				store = s
+				break
+			}
+		}
+		if store == nil {
+			return nil, errors.New(fmt.Sprintf("cannot find mpp store: %v", addr))
+		}
+
+		rpcCtx.Store = store
+		rpcCtx.Addr = addr
+		// Maybe no need to replace rpcCtx.AccessMode, it's only used for loadBalance when access storeIdx.
+		res = append(res, rpcCtx)
+	}
+	return res, nil
+}
+
 // KeyLocation is the region and range that a key is located.
 type KeyLocation struct {
 	Region   RegionVerID
@@ -755,15 +823,24 @@ func (l *KeyLocation) GetBucketVersion() uint64 {
 	return l.Buckets.GetVersion()
 }
 
-// LocateBucketV2 will not return nil if the key is in the region.
-// LocateBucketV2 is similar with LocateBucket. The difference is that when the key is in [KeyLocation.StartKey, first Bucket key)
-// it will return Bucket{KeyLocation.StartKey, first Bucket key} rather than nil --- it's reasonable to assume that
-// Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region. Key in [last Bucket key, KeyLocation.EndKey)
-// is handled similarly.
-func (l *KeyLocation) LocateBucketV2(key []byte) *Bucket {
-	bucket := l.LocateBucket(key)
-	if bucket != nil || !l.Contains(key) {
+// LocateBucket handles with a type of edge case of locateBucket that returns nil.
+// There are two cases where locateBucket returns nil:
+// Case one is that the key neither does not belong to any bucket nor does not belong to the region.
+// Case two is that the key belongs to the region but not any bucket.
+// LocateBucket will not return nil in the case two.
+// Specifically, when the key is in [KeyLocation.StartKey, first Bucket key), the result returned by locateBucket will be nil
+// as there's no bucket containing this key. LocateBucket will return Bucket{KeyLocation.StartKey, first Bucket key}
+// as it's reasonable to assume that Bucket{KeyLocation.StartKey, first Bucket key} is a bucket belonging to the region.
+// Key in [last Bucket key, KeyLocation.EndKey) is handled similarly.
+func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
+	bucket := l.locateBucket(key)
+	// Return the bucket when locateBucket can locate the key
+	if bucket != nil {
 		return bucket
+	}
+	// Case one returns nil too.
+	if !l.Contains(key) {
+		return nil
 	}
 	counts := len(l.Buckets.Keys)
 	if counts == 0 {
@@ -772,6 +849,7 @@ func (l *KeyLocation) LocateBucketV2(key []byte) *Bucket {
 			l.EndKey,
 		}
 	}
+	// Handle case two
 	firstBucketKey := l.Buckets.Keys[0]
 	if bytes.Compare(key, firstBucketKey) < 0 {
 		return &Bucket{
@@ -786,11 +864,14 @@ func (l *KeyLocation) LocateBucketV2(key []byte) *Bucket {
 			l.EndKey,
 		}
 	}
-	return bucket
+	// unreachable
+	logutil.Logger(context.Background()).Info(
+		"Unreachable place", zap.String("KeyLocation", l.String()), zap.String("Key", hex.EncodeToString(key)))
+	panic("Unreachable")
 }
 
-// LocateBucket returns the bucket the key is located.
-func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
+// locateBucket returns the bucket the key is located. It returns nil if the key is outside the bucket.
+func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1
 	i := sort.Search(searchLen, func(i int) bool {
@@ -1351,6 +1432,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 				return nil, errors.WithStack(err)
 			}
 		}
+		start := time.Now()
 		var reg *pd.Region
 		var err error
 		if searchPrev {
@@ -1358,10 +1440,11 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		} else {
 			reg, err = c.pdClient.GetRegion(ctx, key, pd.WithBuckets())
 		}
+		metrics.LoadRegionCacheHistogramWhenCacheMiss.Observe(time.Since(start).Seconds())
 		if err != nil {
-			metrics.RegionCacheCounterWithGetRegionError.Inc()
+			metrics.RegionCacheCounterWithGetCacheMissError.Inc()
 		} else {
-			metrics.RegionCacheCounterWithGetRegionOK.Inc()
+			metrics.RegionCacheCounterWithGetCacheMissOK.Inc()
 		}
 		if err != nil {
 			if isDecodeError(err) {
@@ -1402,7 +1485,9 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 				return nil, errors.WithStack(err)
 			}
 		}
+		start := time.Now()
 		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pd.WithBuckets())
+		metrics.LoadRegionCacheHistogramWithRegionByID.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
 		} else {
@@ -1473,7 +1558,9 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 				return nil, errors.WithStack(err)
 			}
 		}
+		start := time.Now()
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
+		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if isDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", util.HexRegionKeyStr(startKey), limit, err)
@@ -1543,7 +1630,7 @@ func (c *RegionCache) getStoreAddr(bo *retry.Backoffer, region *Region, store *S
 }
 
 func (c *RegionCache) getProxyStore(region *Region, store *Store, rs *regionStore, workStoreIdx AccessIndex) (proxyStore *Store, proxyAccessIdx AccessIndex, proxyStoreIdx int) {
-	if !c.enableForwarding || store.storeType != tikvrpc.TiKV || atomic.LoadInt32(&store.unreachable) == 0 {
+	if !c.enableForwarding || store.storeType != tikvrpc.TiKV || store.getLivenessState() == reachable {
 		return
 	}
 
@@ -1573,7 +1660,7 @@ func (c *RegionCache) getProxyStore(region *Region, store *Store, rs *regionStor
 		}
 		storeIdx, store := rs.accessStore(tiKVOnly, AccessIndex(index))
 		// Skip unreachable stores.
-		if atomic.LoadInt32(&store.unreachable) != 0 {
+		if store.getLivenessState() == unreachable {
 			continue
 		}
 
@@ -1727,6 +1814,70 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 		}
 	}
 	return stores
+}
+
+// GetTiFlashMPPStores returns all stores with lable <engine, tiflash_mpp>.
+func (c *RegionCache) GetTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, err error) {
+	c.tiflashMPPStoreMu.RLock()
+	needReload := c.tiflashMPPStoreMu.needReload
+	stores := c.tiflashMPPStoreMu.stores
+	c.tiflashMPPStoreMu.RUnlock()
+
+	if needReload {
+		return c.reloadTiFlashMPPStores(bo)
+	}
+	return stores, nil
+}
+
+func (c *RegionCache) reloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, _ error) {
+	stores, err := c.pdClient.GetAllStores(bo.GetCtx())
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range stores {
+		if isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashMPP) {
+			res = append(res, &Store{
+				storeID:   s.GetId(),
+				addr:      s.GetAddress(),
+				saddr:     s.GetStatusAddress(),
+				storeType: tikvrpc.GetStoreTypeByMeta(s),
+				labels:    s.GetLabels(),
+				state:     uint64(resolved),
+			})
+		}
+	}
+
+	c.tiflashMPPStoreMu.Lock()
+	c.tiflashMPPStoreMu.stores = res
+	c.tiflashMPPStoreMu.Unlock()
+	return res, nil
+}
+
+// InvalidateTiFlashMPPStoresIfGRPCError will invalid cache if is GRPC error.
+// For now, only consider GRPC unavailable error.
+func (c *RegionCache) InvalidateTiFlashMPPStoresIfGRPCError(err error) bool {
+	var invalidate bool
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable:
+			invalidate = true
+		default:
+		}
+	}
+	if !invalidate {
+		return false
+	}
+
+	c.InvalidateTiFlashMPPStores()
+	return true
+}
+
+// InvalidateTiFlashMPPStores set needReload be true,
+// and will refresh tiflash_mpp store cache next time.
+func (c *RegionCache) InvalidateTiFlashMPPStores() {
+	c.tiflashMPPStoreMu.Lock()
+	defer c.tiflashMPPStoreMu.Unlock()
+	c.tiflashMPPStoreMu.needReload = true
 }
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
@@ -2017,7 +2168,7 @@ type Store struct {
 	// whether the store is unreachable due to some reason, therefore requests to the store needs to be
 	// forwarded by other stores. this is also the flag that a checkUntilHealth goroutine is running for this store.
 	// this mechanism is currently only applicable for TiKV stores.
-	unreachable      int32
+	livenessState    uint32
 	unreachableSince time.Time
 }
 
@@ -2063,7 +2214,9 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 	}
 	var store *metapb.Store
 	for {
+		start := time.Now()
 		store, err = c.pdClient.GetStore(bo.GetCtx(), s.storeID)
+		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
 		} else {
@@ -2201,18 +2354,28 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 		return true
 	}
 	for _, targetLabel := range labels {
-		match := false
-		for _, label := range s.labels {
-			if targetLabel.Key == label.Key && targetLabel.Value == label.Value {
-				match = true
-				break
-			}
-		}
-		if !match {
+		if !isStoreContainLabel(s.labels, targetLabel.Key, targetLabel.Value) {
 			return false
 		}
 	}
 	return true
+}
+
+func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
+	for _, label := range labels {
+		if label.GetKey() == key && label.GetValue() == val {
+			res = true
+			break
+		}
+	}
+	return res
+}
+
+// getLivenessState gets the cached liveness state of the store.
+// When it's not reachable, a goroutine will update the state in background.
+// To get the accurate liveness state, use checkLiveness instead.
+func (s *Store) getLivenessState() livenessState {
+	return livenessState(atomic.LoadUint32(&s.livenessState))
 }
 
 type livenessState uint32
@@ -2220,7 +2383,7 @@ type livenessState uint32
 var (
 	livenessSf singleflight.Group
 	// storeLivenessTimeout is the max duration of resolving liveness of a TiKV instance.
-	storeLivenessTimeout time.Duration
+	storeLivenessTimeout = time.Second
 )
 
 // SetStoreLivenessTimeout sets storeLivenessTimeout to t.
@@ -2234,12 +2397,12 @@ func GetStoreLivenessTimeout() time.Duration {
 }
 
 const (
-	unknown livenessState = iota
-	reachable
+	reachable livenessState = iota
 	unreachable
+	unknown
 )
 
-func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache) {
+func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
 	// This mechanism doesn't support non-TiKV stores currently.
 	if s.storeType != tikvrpc.TiKV {
 		logutil.BgLogger().Info("[health check] skip running health check loop for non-tikv store",
@@ -2248,24 +2411,21 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache) {
 	}
 
 	// It may be already started by another thread.
-	if atomic.CompareAndSwapInt32(&s.unreachable, 0, 1) {
+	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
 		go s.checkUntilHealth(c)
 	}
 }
 
 func (s *Store) checkUntilHealth(c *RegionCache) {
-	defer atomic.CompareAndSwapInt32(&s.unreachable, 1, 0)
+	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
 
 	ticker := time.NewTicker(time.Second)
 	lastCheckPDTime := time.Now()
 
-	// TODO(MyonKeminta): Set a more proper ctx here so that it can be interrupted immediately when the RegionCache is
-	// shutdown.
-	ctx := context.Background()
 	for {
 		select {
-		case <-c.closeCh:
+		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
 			if time.Since(lastCheckPDTime) > time.Second*30 {
@@ -2280,18 +2440,30 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 				}
 			}
 
-			bo := retry.NewNoopBackoff(ctx)
+			bo := retry.NewNoopBackoff(c.ctx)
 			l := s.requestLiveness(bo, c)
 			if l == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
 
 				return
 			}
+			atomic.StoreUint32(&s.livenessState, uint32(l))
 		}
 	}
 }
 
 func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l livenessState) {
+	// It's not convenient to mock liveness in integration tests. Use failpoint to achieve that instead.
+	if val, err := util.EvalFailpoint("injectLiveness"); err == nil {
+		switch val.(string) {
+		case "unreachable":
+			return unreachable
+		case "reachable":
+			return reachable
+		case "unknown":
+			return unknown
+		}
+	}
 	if c != nil && c.testingKnobs.mockRequestLiveness != nil {
 		return c.testingKnobs.mockRequestLiveness(s, bo)
 	}
@@ -2364,7 +2536,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	}
 
 	status := resp.GetStatus()
-	if status == healthpb.HealthCheckResponse_UNKNOWN {
+	if status == healthpb.HealthCheckResponse_UNKNOWN || status == healthpb.HealthCheckResponse_SERVICE_UNKNOWN {
 		logutil.BgLogger().Info("[health check] check health returns unknown", zap.String("store", addr))
 		l = unknown
 		return

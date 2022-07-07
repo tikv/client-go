@@ -85,14 +85,14 @@ type MemDB struct {
 
 	vlogInvalid bool
 	dirty       bool
-	stages      []memdbCheckpoint
+	stages      []MemDBCheckpoint
 }
 
 func newMemDB() *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr
-	db.stages = make([]memdbCheckpoint, 0, 2)
+	db.stages = make([]MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
 	return db
@@ -153,6 +153,18 @@ func (db *MemDB) Cleanup(h int) {
 		}
 	}
 	db.stages = db.stages[:h-1]
+}
+
+// Checkpoint returns a checkpoint of MemDB.
+func (db *MemDB) Checkpoint() *MemDBCheckpoint {
+	cp := db.vlog.checkpoint()
+	return &cp
+}
+
+// RevertToCheckpoint reverts the MemDB to the checkpoint.
+func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
+	db.vlog.revertToCheckpoint(db, cp)
+	db.vlog.truncate(cp)
 }
 
 // Reset resets the MemBuffer to initial states.
@@ -338,7 +350,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 }
 
 func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
-	var activeCp *memdbCheckpoint
+	var activeCp *MemDBCheckpoint
 	if len(db.stages) > 0 {
 		activeCp = &db.stages[len(db.stages)-1]
 	}
@@ -844,4 +856,18 @@ func (db *MemDB) RemoveFromBuffer(key []byte) {
 	}
 	db.size -= len(db.vlog.getValue(x.vptr))
 	db.deleteNode(x)
+}
+
+// SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows.
+func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	innerHook := func() {
+		hook(db.allocator.capacity + db.vlog.capacity)
+	}
+	db.allocator.memChangeHook = innerHook
+	db.vlog.memChangeHook = innerHook
+}
+
+// Mem returns the current memory footprint
+func (db *MemDB) Mem() uint64 {
+	return db.allocator.capacity + db.vlog.capacity
 }

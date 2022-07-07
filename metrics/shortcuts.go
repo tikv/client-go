@@ -53,6 +53,7 @@ var (
 	RawkvCmdHistogramWithRawReversScan prometheus.Observer
 	RawkvSizeHistogramWithKey          prometheus.Observer
 	RawkvSizeHistogramWithValue        prometheus.Observer
+	RawkvCmdHistogramWithRawChecksum   prometheus.Observer
 
 	BackoffHistogramRPC                      prometheus.Observer
 	BackoffHistogramLock                     prometheus.Observer
@@ -95,13 +96,18 @@ var (
 	RegionCacheCounterWithSendFail                    prometheus.Counter
 	RegionCacheCounterWithGetRegionByIDOK             prometheus.Counter
 	RegionCacheCounterWithGetRegionByIDError          prometheus.Counter
-	RegionCacheCounterWithGetRegionOK                 prometheus.Counter
-	RegionCacheCounterWithGetRegionError              prometheus.Counter
+	RegionCacheCounterWithGetCacheMissOK              prometheus.Counter
+	RegionCacheCounterWithGetCacheMissError           prometheus.Counter
 	RegionCacheCounterWithScanRegionsOK               prometheus.Counter
 	RegionCacheCounterWithScanRegionsError            prometheus.Counter
 	RegionCacheCounterWithGetStoreOK                  prometheus.Counter
 	RegionCacheCounterWithGetStoreError               prometheus.Counter
 	RegionCacheCounterWithInvalidateStoreRegionsOK    prometheus.Counter
+
+	LoadRegionCacheHistogramWhenCacheMiss  prometheus.Observer
+	LoadRegionCacheHistogramWithRegions    prometheus.Observer
+	LoadRegionCacheHistogramWithRegionByID prometheus.Observer
+	LoadRegionCacheHistogramWithGetStore   prometheus.Observer
 
 	TxnHeartBeatHistogramOK    prometheus.Observer
 	TxnHeartBeatHistogramError prometheus.Observer
@@ -147,6 +153,7 @@ func initShortcuts() {
 	RawkvCmdHistogramWithRawReversScan = TiKVRawkvCmdHistogram.WithLabelValues("raw_reverse_scan")
 	RawkvSizeHistogramWithKey = TiKVRawkvSizeHistogram.WithLabelValues("key")
 	RawkvSizeHistogramWithValue = TiKVRawkvSizeHistogram.WithLabelValues("value")
+	RawkvCmdHistogramWithRawChecksum = TiKVRawkvSizeHistogram.WithLabelValues("raw_checksum")
 
 	BackoffHistogramRPC = TiKVBackoffHistogram.WithLabelValues("tikvRPC")
 	BackoffHistogramLock = TiKVBackoffHistogram.WithLabelValues("txnLock")
@@ -189,13 +196,18 @@ func initShortcuts() {
 	RegionCacheCounterWithSendFail = TiKVRegionCacheCounter.WithLabelValues("send_fail", "ok")
 	RegionCacheCounterWithGetRegionByIDOK = TiKVRegionCacheCounter.WithLabelValues("get_region_by_id", "ok")
 	RegionCacheCounterWithGetRegionByIDError = TiKVRegionCacheCounter.WithLabelValues("get_region_by_id", "err")
-	RegionCacheCounterWithGetRegionOK = TiKVRegionCacheCounter.WithLabelValues("get_region", "ok")
-	RegionCacheCounterWithGetRegionError = TiKVRegionCacheCounter.WithLabelValues("get_region", "err")
+	RegionCacheCounterWithGetCacheMissOK = TiKVRegionCacheCounter.WithLabelValues("get_region_when_miss", "ok")
+	RegionCacheCounterWithGetCacheMissError = TiKVRegionCacheCounter.WithLabelValues("get_region_when_miss", "err")
 	RegionCacheCounterWithScanRegionsOK = TiKVRegionCacheCounter.WithLabelValues("scan_regions", "ok")
 	RegionCacheCounterWithScanRegionsError = TiKVRegionCacheCounter.WithLabelValues("scan_regions", "err")
 	RegionCacheCounterWithGetStoreOK = TiKVRegionCacheCounter.WithLabelValues("get_store", "ok")
 	RegionCacheCounterWithGetStoreError = TiKVRegionCacheCounter.WithLabelValues("get_store", "err")
 	RegionCacheCounterWithInvalidateStoreRegionsOK = TiKVRegionCacheCounter.WithLabelValues("invalidate_store_regions", "ok")
+
+	LoadRegionCacheHistogramWhenCacheMiss = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_when_miss")
+	LoadRegionCacheHistogramWithRegionByID = TiKVLoadRegionCacheHistogram.WithLabelValues("get_region_by_id")
+	LoadRegionCacheHistogramWithRegions = TiKVLoadRegionCacheHistogram.WithLabelValues("scan_regions")
+	LoadRegionCacheHistogramWithGetStore = TiKVLoadRegionCacheHistogram.WithLabelValues("get_store")
 
 	TxnHeartBeatHistogramOK = TiKVTxnHeartBeatHistogram.WithLabelValues("ok")
 	TxnHeartBeatHistogramError = TiKVTxnHeartBeatHistogram.WithLabelValues("err")

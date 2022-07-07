@@ -69,7 +69,7 @@ func (l LockResolverProbe) GetTxnStatus(bo *retry.Backoffer, txnID uint64, prima
 
 // GetTxnStatusFromLock queries tikv for a txn's status.
 func (l LockResolverProbe) GetTxnStatusFromLock(bo *retry.Backoffer, lock *Lock, callerStartTS uint64, forceSyncCommit bool) (TxnStatus, error) {
-	return l.getTxnStatusFromLock(bo, lock, callerStartTS, forceSyncCommit)
+	return l.getTxnStatusFromLock(bo, lock, callerStartTS, forceSyncCommit, nil)
 }
 
 // GetSecondariesFromTxnStatus returns the secondary locks from txn status.
@@ -99,4 +99,11 @@ func (l LockResolverProbe) IsErrorNotFound(err error) bool {
 func (l LockResolverProbe) IsNonAsyncCommitLock(err error) bool {
 	_, ok := errors.Cause(err).(*nonAsyncCommitLock)
 	return ok
+}
+
+// SetResolving set the resolving lock status for LockResolver
+func (l LockResolverProbe) SetResolving(currentStartTS uint64, locks []Lock) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.mu.resolving[currentStartTS] = append(l.mu.resolving[currentStartTS], locks)
 }

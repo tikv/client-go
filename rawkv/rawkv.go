@@ -75,6 +75,16 @@ type rawOptions struct {
 	KeyOnly bool
 }
 
+// RawChecksum represents the checksum result of raw kv pairs in TiKV cluster.
+type RawChecksum struct {
+	// Crc64Xor is the checksum result with crc64 algorithm
+	Crc64Xor uint64
+	// TotalKvs is the total number of kvpairs
+	TotalKvs uint64
+	// TotalBytes is the total bytes of kvpairs, including prefix in APIV2
+	TotalBytes uint64
+}
+
 // RawOption represents possible options that can be cotrolled by the user
 // to tweak the API behavior.
 //
@@ -549,6 +559,44 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 			values = append(values, pair.Value)
 		}
 		startKey = loc.StartKey
+		if len(startKey) == 0 {
+			break
+		}
+	}
+	return
+}
+
+// Checksum do checksum of continuous kv pairs in range [startKey, endKey).
+// If endKey is empty, it means unbounded.
+// If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
+// (startKey, endKey], you can write:
+// `Checksum(ctx, push(startKey, '\0'), push(endKey, '\0'))`.
+func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options ...RawOption,
+) (check RawChecksum, err error) {
+
+	start := time.Now()
+	defer func() { metrics.RawkvCmdHistogramWithRawChecksum.Observe(time.Since(start).Seconds()) }()
+
+	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawChecksum, &kvrpcpb.RawChecksumRequest{
+			Algorithm: kvrpcpb.ChecksumAlgorithm_Crc64_Xor,
+			Ranges: []*kvrpcpb.KeyRange{{
+				StartKey: startKey,
+				EndKey:   endKey,
+			}},
+		})
+		resp, loc, err := c.sendReq(ctx, startKey, req, false)
+		if err != nil {
+			return RawChecksum{0, 0, 0}, err
+		}
+		if resp.Resp == nil {
+			return RawChecksum{0, 0, 0}, errors.WithStack(tikverr.ErrBodyMissing)
+		}
+		cmdResp := resp.Resp.(*kvrpcpb.RawChecksumResponse)
+		check.Crc64Xor ^= cmdResp.GetChecksum()
+		check.TotalKvs += cmdResp.GetTotalKvs()
+		check.TotalBytes += cmdResp.GetTotalBytes()
+		startKey = loc.EndKey
 		if len(startKey) == 0 {
 			break
 		}
