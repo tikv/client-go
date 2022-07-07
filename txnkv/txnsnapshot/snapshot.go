@@ -100,6 +100,10 @@ type kvstore interface {
 	GetOracle() oracle.Oracle
 }
 
+// ReplicaReadAdjuster is a function that adjust the StoreSelectorOption and ReplicaReadType
+// based on the keys count for BatchPointGet and PointGet
+type ReplicaReadAdjuster func(int) (locate.StoreSelectorOption, kv.ReplicaReadType)
+
 // KVSnapshot implements the tidbkv.Snapshot interface.
 type KVSnapshot struct {
 	store           kvstore
@@ -131,6 +135,8 @@ type KVSnapshot struct {
 		taskID           uint64
 		isStaleness      bool
 		readReplicaScope string
+		// replicaReadAdjuster check and adjust the replica read type and store match labels.
+		replicaReadAdjuster ReplicaReadAdjuster
 		// MatchStoreLabels indicates the labels the store should be matched
 		matchStoreLabels []*metapb.StoreLabel
 		// resourceGroupTag is use to set the kv request resource group tag.
@@ -381,6 +387,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		scope := s.mu.readReplicaScope
 		isStaleness := s.mu.isStaleness
 		matchStoreLabels := s.mu.matchStoreLabels
+		replicaAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
 		req.TxnScope = scope
 		req.ReadReplicaScope = scope
@@ -390,6 +397,13 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		ops := make([]locate.StoreSelectorOption, 0, 2)
 		if len(matchStoreLabels) > 0 {
 			ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
+		}
+		if req.ReplicaReadType.IsFollowerRead() && replicaAdjuster != nil {
+			op, readType := replicaAdjuster(len(pending))
+			if op != nil {
+				ops = append(ops, op)
+			}
+			req.ReplicaReadType = readType
 		}
 		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, client.ReadTimeoutMedium, tikvrpc.TiKV, "", ops...)
 		if err != nil {
@@ -576,6 +590,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
 	scope := s.mu.readReplicaScope
+	replicaAdjuster := s.mu.replicaReadAdjuster
 	s.mu.RUnlock()
 	req.TxnScope = scope
 	req.ReadReplicaScope = scope
@@ -585,6 +600,13 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	}
 	if len(matchStoreLabels) > 0 {
 		ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
+	}
+	if req.ReplicaReadType.IsFollowerRead() && replicaAdjuster != nil {
+		op, readType := replicaAdjuster(1)
+		if op != nil {
+			ops = append(ops, op)
+		}
+		req.ReplicaReadType = readType
 	}
 
 	var firstLock *txnlock.Lock
@@ -772,8 +794,15 @@ func (s *KVSnapshot) SetReadReplicaScope(scope string) {
 	s.mu.readReplicaScope = scope
 }
 
-// SetIsStatenessReadOnly indicates whether the transaction is staleness read only transaction
-func (s *KVSnapshot) SetIsStatenessReadOnly(b bool) {
+// SetReplicaReadAdjuster set replica read adjust function
+func (s *KVSnapshot) SetReplicaReadAdjuster(f ReplicaReadAdjuster) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.replicaReadAdjuster = f
+}
+
+// SetIsStalenessReadOnly indicates whether the transaction is staleness read only transaction
+func (s *KVSnapshot) SetIsStalenessReadOnly(b bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mu.isStaleness = b
