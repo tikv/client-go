@@ -2,71 +2,85 @@ package client
 
 import (
 	"bytes"
+
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	. "github.com/tikv/client-go/v2/tikvrpc"
 )
 
+// Mode represents the operation mode of a request.
 type Mode int
 
 const (
+	// ModeRaw represent a raw operation in TiKV
 	ModeRaw = iota
+
+	// ModeTxn represent a transaction operation in TiKV
 	ModeTxn
 )
 
 var (
-	ApiV2RawKeyPrefix = []byte{'r', 0, 0, 0}
-	ApiV2RawEndKey    = []byte{'r', 0, 0, 1}
+	// APIV2RawKeyPrefix is prefix of raw key in API V2.
+	APIV2RawKeyPrefix = []byte{'r', 0, 0, 0}
 
-	ApiV2TxnKeyPrefix = []byte{'x', 0, 0, 0}
-	ApiV2TxnEndKey    = []byte{'x', 0, 0, 1}
+	// APIV2RawEndKey is max key of raw key in API V2.
+	APIV2RawEndKey = []byte{'r', 0, 0, 1}
+
+	// APIV2TxnKeyPrefix is prefix of txn key in API V2.
+	APIV2TxnKeyPrefix = []byte{'x', 0, 0, 0}
+
+	// APIV2TxnEndKey is max key of txn key in API V2.
+	APIV2TxnEndKey = []byte{'x', 0, 0, 1}
 )
 
-func GetV2Prefix(mode Mode) []byte {
+func getV2Prefix(mode Mode) []byte {
 	switch mode {
 	case ModeRaw:
-		return ApiV2RawKeyPrefix
+		return APIV2RawKeyPrefix
 	case ModeTxn:
-		return ApiV2TxnKeyPrefix
+		return APIV2TxnKeyPrefix
 	}
 	panic("unreachable")
 }
 
-func GetV2EndKey(mode Mode) []byte {
+func getV2EndKey(mode Mode) []byte {
 	switch mode {
 	case ModeRaw:
-		return ApiV2RawEndKey
+		return APIV2RawEndKey
 	case ModeTxn:
-		return ApiV2TxnEndKey
+		return APIV2TxnEndKey
 	}
 	panic("unreachable")
 }
 
+// EncodeV2Key encode a user key into API V2 format.
 func EncodeV2Key(mode Mode, key []byte) []byte {
-	return append(GetV2Prefix(mode), key...)
+	return append(getV2Prefix(mode), key...)
 }
 
+// EncodeV2Range encode a range into API V2 format.
 func EncodeV2Range(mode Mode, start, end []byte) ([]byte, []byte) {
 	var b []byte
 	if len(end) > 0 {
 		b = EncodeV2Key(mode, end)
 	} else {
-		b = GetV2EndKey(mode)
+		b = getV2EndKey(mode)
 	}
 	return EncodeV2Key(mode, start), b
 }
 
+// MapV2RangeToV1 maps a range in API V2 format into V1 range.
+// This function forbid the user seeing other keyspace.
 func MapV2RangeToV1(mode Mode, start []byte, end []byte) ([]byte, []byte) {
 	var a, b []byte
-	minKey := GetV2Prefix(mode)
+	minKey := getV2Prefix(mode)
 	if bytes.Compare(start, minKey) < 0 {
 		a = []byte{}
 	} else {
 		a = start[len(minKey):]
 	}
 
-	maxKey := GetV2EndKey(mode)
+	maxKey := getV2EndKey(mode)
 	if len(end) == 0 || bytes.Compare(end, maxKey) >= 0 {
 		b = []byte{}
 	} else {
@@ -76,6 +90,7 @@ func MapV2RangeToV1(mode Mode, start []byte, end []byte) ([]byte, []byte) {
 	return a, b
 }
 
+// EncodeV2Keys encodes keys into API V2 format.
 func EncodeV2Keys(mode Mode, keys [][]byte) [][]byte {
 	var ks [][]byte
 	for _, key := range keys {
@@ -84,6 +99,7 @@ func EncodeV2Keys(mode Mode, keys [][]byte) [][]byte {
 	return ks
 }
 
+// EncodeV2Pairs encodes pairs into API V2 format.
 func EncodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair {
 	var ps []*kvrpcpb.KvPair
 	for _, pair := range pairs {
@@ -94,6 +110,7 @@ func EncodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair {
 	return ps
 }
 
+// EncodeRequest encodes req into specified API version format.
 func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	if req.GetApiVersion() == kvrpcpb.APIVersion_V1 {
 		return req, nil
@@ -103,43 +120,43 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 
 	// TODO(iosmanthus): support transaction request types
 	switch req.Type {
-	case CmdRawGet:
+	case tikvrpc.CmdRawGet:
 		r := *req.RawGet()
 		r.Key = EncodeV2Key(ModeRaw, r.Key)
 		newReq.Req = &r
-	case CmdRawBatchGet:
+	case tikvrpc.CmdRawBatchGet:
 		r := *req.RawBatchGet()
 		r.Keys = EncodeV2Keys(ModeRaw, r.Keys)
 		newReq.Req = &r
-	case CmdRawPut:
+	case tikvrpc.CmdRawPut:
 		r := *req.RawPut()
 		r.Key = EncodeV2Key(ModeRaw, r.Key)
 		newReq.Req = &r
-	case CmdRawBatchPut:
+	case tikvrpc.CmdRawBatchPut:
 		r := *req.RawBatchPut()
 		r.Pairs = EncodeV2Pairs(ModeRaw, r.Pairs)
 		newReq.Req = &r
-	case CmdRawDelete:
+	case tikvrpc.CmdRawDelete:
 		r := *req.RawDelete()
 		r.Key = EncodeV2Key(ModeRaw, r.Key)
 		newReq.Req = &r
-	case CmdRawBatchDelete:
+	case tikvrpc.CmdRawBatchDelete:
 		r := *req.RawBatchDelete()
 		r.Keys = EncodeV2Keys(ModeRaw, r.Keys)
 		newReq.Req = &r
-	case CmdRawDeleteRange:
+	case tikvrpc.CmdRawDeleteRange:
 		r := *req.RawDeleteRange()
 		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
 		newReq.Req = &r
-	case CmdRawScan:
+	case tikvrpc.CmdRawScan:
 		r := *req.RawScan()
 		r.StartKey, r.EndKey = EncodeV2Range(ModeRaw, r.StartKey, r.EndKey)
 		newReq.Req = &r
-	case CmdGetKeyTTL:
+	case tikvrpc.CmdGetKeyTTL:
 		r := *req.RawGetKeyTTL()
 		r.Key = EncodeV2Key(ModeRaw, r.Key)
 		newReq.Req = &r
-	case CmdRawCompareAndSwap:
+	case tikvrpc.CmdRawCompareAndSwap:
 		r := *req.RawCompareAndSwap()
 		r.Key = EncodeV2Key(ModeRaw, r.Key)
 		newReq.Req = &r
@@ -148,20 +165,22 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	return &newReq, nil
 }
 
-func DecodeKey(mode Mode, key []byte) ([]byte, error) {
-	prefix := GetV2Prefix(mode)
+// DecodeV2Key decodes API V2 encoded key into a normal user key.
+func DecodeV2Key(mode Mode, key []byte) ([]byte, error) {
+	prefix := getV2Prefix(mode)
 	if !bytes.HasPrefix(key, prefix) {
 		return nil, errors.Errorf("invalid encoded key prefix: %q", key)
 	}
 	return key[len(prefix):], nil
 }
 
-func DecodePairs(mode Mode, pairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair, error) {
+// DecodeV2Pairs decodes API V2 encoded pairs into normal user pairs.
+func DecodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair, error) {
 	var ps []*kvrpcpb.KvPair
 	for _, pair := range pairs {
 		var err error
 		p := *pair
-		p.Key, err = DecodeKey(mode, p.Key)
+		p.Key, err = DecodeV2Key(mode, p.Key)
 		if err != nil {
 			return nil, err
 		}
@@ -170,6 +189,7 @@ func DecodePairs(mode Mode, pairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair, error) 
 	return ps, nil
 }
 
+// DecodeResponse decode the resp in specified API version format.
 func DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
 	if req.GetApiVersion() == kvrpcpb.APIVersion_V1 {
 		return resp, nil
@@ -178,12 +198,12 @@ func DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Resp
 	var err error
 
 	switch req.Type {
-	case CmdRawBatchGet:
+	case tikvrpc.CmdRawBatchGet:
 		r := resp.Resp.(*kvrpcpb.RawBatchGetResponse)
-		r.Pairs, err = DecodePairs(ModeRaw, r.Pairs)
-	case CmdRawScan:
+		r.Pairs, err = DecodeV2Pairs(ModeRaw, r.Pairs)
+	case tikvrpc.CmdRawScan:
 		r := resp.Resp.(*kvrpcpb.RawScanResponse)
-		r.Kvs, err = DecodePairs(ModeRaw, r.Kvs)
+		r.Kvs, err = DecodeV2Pairs(ModeRaw, r.Kvs)
 	}
 
 	return resp, err

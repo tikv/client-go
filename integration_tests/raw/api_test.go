@@ -67,7 +67,7 @@ func (s *apiTestSuite) getApiVersion(pdCli pd.Client) kvrpcpb.APIVersion {
 
 func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Client {
 	version := s.getApiVersion(pdCli)
-	cli, err := rawkv.NewClient(context.Background(), addrs, rawkv.WithApiVersion(version))
+	cli, err := rawkv.NewClient(context.Background(), addrs, rawkv.WithAPIVersion(version))
 	s.Nil(err)
 	return cli
 }

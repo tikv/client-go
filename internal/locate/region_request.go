@@ -190,18 +190,9 @@ func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats,
 
 // NewRegionRequestSender creates a new sender.
 func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
-	var v kvrpcpb.APIVersion
-
-	switch regionCache.pdClient.(type) {
-	case *CodecPDClientV2:
-		v = kvrpcpb.APIVersion_V2
-	default:
-		v = kvrpcpb.APIVersion_V1
-	}
-
 	return &RegionRequestSender{
 		regionCache: regionCache,
-		apiVersion:  v,
+		apiVersion:  regionCache.apiVersion,
 		client:      client,
 	}
 }

@@ -137,27 +137,32 @@ type option struct {
 	pdOptions       []pd.ClientOption
 }
 
+// ClientOpt is factory to set the client options.
 type ClientOpt func(*option)
 
+// WithPDOptions is used to set the pd.ClientOption
 func WithPDOptions(opts ...pd.ClientOption) ClientOpt {
 	return func(o *option) {
 		o.pdOptions = append(o.pdOptions, opts...)
 	}
 }
 
+// WithSecurity is used to set the config.Security
 func WithSecurity(security config.Security) ClientOpt {
 	return func(o *option) {
 		o.security = security
 	}
 }
 
+// WithGRPCDialOptions is used to set the grpc.DialOption.
 func WithGRPCDialOptions(opts ...grpc.DialOption) ClientOpt {
 	return func(o *option) {
 		o.gRPCDialOptions = append(o.gRPCDialOptions, opts...)
 	}
 }
 
-func WithApiVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
+// WithAPIVersion is used to set the api version.
+func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 	return func(o *option) {
 		o.apiVersion = apiVersion
 	}

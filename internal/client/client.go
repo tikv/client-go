@@ -270,6 +270,7 @@ func WithSecurity(security config.Security) Opt {
 	}
 }
 
+// WithGRPCDialOptions is used to set the grpc.DialOption.
 func WithGRPCDialOptions(grpcDialOptions ...grpc.DialOption) Opt {
 	return func(c *option) {
 		c.gRPCDialOptions = grpcDialOptions

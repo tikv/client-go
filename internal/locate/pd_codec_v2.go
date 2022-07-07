@@ -2,19 +2,21 @@ package locate
 
 import (
 	"context"
+
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/util/codec"
-
 	pd "github.com/tikv/pd/client"
 )
 
+// CodecPDClientV2 wraps a PD Client to decode the region meta in API v2 manner.
 type CodecPDClientV2 struct {
 	*CodecPDClient
 	mode client.Mode
 }
 
+// NewCodecPDClientV2 create a CodecPDClientV2.
 func NewCodecPDClientV2(client pd.Client, mode client.Mode) *CodecPDClientV2 {
 	codecClient := NewCodeCPDClient(client)
 	return &CodecPDClientV2{codecClient, mode}
@@ -58,6 +60,7 @@ func (c *CodecPDClientV2) ScanRegions(ctx context.Context, startKey []byte, endK
 	return regions, nil
 }
 
+// SplitRegions split regions by given split keys
 func (c *CodecPDClientV2) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
 	var keys [][]byte
 	for i := range splitKeys {

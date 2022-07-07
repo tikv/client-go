@@ -51,6 +51,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stathat/consistent"
@@ -363,6 +364,7 @@ func (r *Region) isValid() bool {
 // purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
+	apiVersion       kvrpcpb.APIVersion
 	enableForwarding bool
 
 	mu struct {
@@ -398,6 +400,14 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c := &RegionCache{
 		pdClient: pdClient,
 	}
+
+	switch pdClient.(type) {
+	case *CodecPDClientV2:
+		c.apiVersion = kvrpcpb.APIVersion_V2
+	default:
+		c.apiVersion = kvrpcpb.APIVersion_V1
+	}
+
 	c.mu.regions = make(map[RegionVerID]*Region)
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
 	c.mu.sorted = btree.New(btreeDegree)
