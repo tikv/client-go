@@ -664,14 +664,13 @@ type MPPStreamResponse struct {
 }
 
 // SetContext set the Context field for the given req to the specified ctx.
-func SetContext(version kvrpcpb.APIVersion, req *Request, region *metapb.Region, peer *metapb.Peer) error {
+func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	ctx := &req.Context
 	if region != nil {
 		ctx.RegionId = region.Id
 		ctx.RegionEpoch = region.RegionEpoch
 	}
 	ctx.Peer = peer
-	ctx.ApiVersion = version
 
 	switch req.Type {
 	case CmdGet:
