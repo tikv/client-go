@@ -471,3 +471,22 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	assert.Equal(t, len(builder.forwardingReqs), 0)
 	assert.NotEqual(t, builder.idAlloc, 0)
 }
+
+func TestSendAfterClose(t *testing.T) {
+	server, port := startMockTikvService()
+	require.True(t, port > 0)
+
+	rpcClient := NewRPCClient()
+	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
+	conn, err := rpcClient.getConnArray(addr, true)
+	assert.Nil(t, err)
+
+	rpcClient.close()
+
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
+	_, err = rpcClient.SendRequest(context.Background(), addr, req, 100*time.Second)
+	assert.True(t, err.Error() == "rpcClient is closed")
+	conn.Close()
+	server.Stop()
+}
