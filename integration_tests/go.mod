@@ -12,10 +12,10 @@ require (
 	github.com/pingcap/tidb/parser v0.0.0-20220621061036-5c9ad77ae1f1 // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.7.2-0.20220504104629-106ec21d14df
+	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.1-0.20220613112734-be31f33ba03b
 	github.com/tikv/pd/client v0.0.0-20220307081149-841fa61e9710
 	go.uber.org/goleak v1.1.12
-	golang.org/x/crypto v0.0.0-20220214200702-86341886e292 // indirect
 )
 
 replace github.com/tikv/client-go/v2 => ../
