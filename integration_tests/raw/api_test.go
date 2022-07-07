@@ -153,6 +153,10 @@ func (s *apiTestSuite) mustReverseScan(prefix string, start string, end string, 
 }
 
 func (s *apiTestSuite) mustDeleteRange(prefix string, start, end string) {
+	if end == "" {
+		end = prefix
+	}
+	end += string([]byte{127})
 	err := s.client.DeleteRange(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)))
 	s.Nil(err)
 }
