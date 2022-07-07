@@ -1,6 +1,7 @@
 package raw_tikv_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
@@ -104,13 +105,16 @@ func withPrefixes(prefix string, keys []string) []string {
 	for i := range keys {
 		result = append(result, withPrefix(prefix, keys[i]))
 	}
-	return keys
+	return result
 }
 
 func (s *apiTestSuite) cleanKeyPrefix(prefix string) {
 	end := append([]byte(prefix), 127)
 	err := s.client.DeleteRange(context.Background(), []byte(prefix), end)
 	s.Nil(err)
+
+	ks, _ := s.mustScan(prefix, "", "", 10240)
+	s.Empty(ks)
 }
 
 func (s *apiTestSuite) mustPut(prefix string, key string, value string) {
@@ -130,8 +134,15 @@ func (s *apiTestSuite) mustDelete(prefix string, key string) {
 }
 
 func (s *apiTestSuite) mustScan(prefix string, start string, end string, limit int) ([]string, []string) {
-	ks, vs, err := s.client.Scan(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)), limit)
+	end = withPrefix(prefix, end)
+	end += string([]byte{127})
+	ks, vs, err := s.client.Scan(context.Background(), []byte(withPrefix(prefix, start)), []byte(end), limit)
 	s.Nil(err)
+
+	for i := range ks {
+		ks[i] = bytes.TrimPrefix(ks[i], []byte(prefix))
+	}
+
 	return toStrings(ks), toStrings(vs)
 }
 
@@ -173,6 +184,7 @@ func (s *apiTestSuite) mustBatchGet(prefix string, keys []string) []string {
 	keys = withPrefixes(prefix, keys)
 	vs, err := s.client.BatchGet(context.Background(), toBytes(keys))
 	s.Nil(err)
+
 	return toStrings(vs)
 }
 
@@ -253,12 +265,16 @@ func (s *apiTestSuite) TestScan() {
 	for i := 0; i < 20480; i += 1024 {
 		splitKeys = append(splitKeys, fmt.Sprintf("key@%v", i))
 	}
+
 	s.mustSplitRegion(prefix, splitKeys)
 
-	keys, values = s.mustScan(prefix, "key:", "", 10240)
+	keys, values = s.mustScan(prefix, keys[0], "", 10240)
+	s.Equal(10240, len(keys))
+	s.Equal(10240, len(values))
+	s.Equal(len(keys), len(values))
 	for i := range keys {
-		s.Equal(fmt.Sprintf("key:%v", i), keys[i])
-		s.Equal(fmt.Sprintf("value:%v", i), values[i])
+		s.True(strings.HasPrefix(keys[i], "key@"))
+		s.True(strings.HasPrefix(values[i], "value@"))
 	}
 }
 
