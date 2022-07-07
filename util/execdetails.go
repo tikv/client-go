@@ -63,6 +63,7 @@ var (
 // CommitDetails contains commit detail information.
 type CommitDetails struct {
 	GetCommitTsTime        time.Duration
+	GetLatestTsTime        time.Duration
 	PrewriteTime           time.Duration
 	WaitPrewriteBinlogTime time.Duration
 	CommitTime             time.Duration

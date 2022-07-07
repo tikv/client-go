@@ -250,19 +250,23 @@ func (s *KVStore) runSafePointChecker() {
 }
 
 // Begin a global transaction.
-func (s *KVStore) Begin(opts ...TxnOption) (*transaction.KVTxn, error) {
+func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 	options := &transaction.TxnOptions{}
 	// Inject the options
 	for _, opt := range opts {
 		opt(options)
 	}
 
+	defer func() {
+		if err == nil && txn != nil && options.MemoryFootprintChangeHook != nil {
+			txn.SetMemoryFootprintChangeHook(options.MemoryFootprintChangeHook)
+		}
+	}()
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
 	var (
 		startTS uint64
-		err     error
 	)
 	if options.StartTS != nil {
 		startTS = *options.StartTS

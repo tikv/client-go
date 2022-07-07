@@ -80,8 +80,9 @@ type SchemaAmender interface {
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope string
-	StartTS  *uint64
+	TxnScope                  string
+	StartTS                   *uint64
+	MemoryFootprintChangeHook func(uint64)
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -882,6 +883,16 @@ func (txn *KVTxn) SetBinlogExecutor(binlog BinlogExecutor) {
 // GetClusterID returns store's cluster id.
 func (txn *KVTxn) GetClusterID() uint64 {
 	return txn.store.GetClusterID()
+}
+
+// SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows
+func (txn *KVTxn) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	txn.us.GetMemBuffer().SetMemoryFootprintChangeHook(hook)
+}
+
+// Mem returns the current memory footprint
+func (txn *KVTxn) Mem() uint64 {
+	return txn.us.GetMemBuffer().Mem()
 }
 
 // SetRequestSourceInternal sets the scope of the request source.
