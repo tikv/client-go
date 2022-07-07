@@ -1354,6 +1354,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 	}()
 
+	commitDetail := c.getDetail()
 	commitTSMayBeCalculated := false
 	// Check async commit is available or not.
 	if c.checkAsyncCommit() {
@@ -1382,6 +1383,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// from PD and plus one as our MinCommitTS.
 	if commitTSMayBeCalculated && c.needLinearizability() {
 		util.EvalFailpoint("getMinCommitTSFromTSO")
+		start := time.Now()
 		latestTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 		// If we fail to get a timestamp from PD, we just propagate the failure
 		// instead of falling back to the normal 2PC because a normal 2PC will
@@ -1389,6 +1391,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if err != nil {
 			return err
 		}
+		commitDetail.GetLatestTsTime = time.Since(start)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
 		c.minCommitTS = latestTS + 1
 	}
@@ -1429,7 +1432,6 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 	}
 
-	commitDetail := c.getDetail()
 	commitDetail.PrewriteTime = time.Since(start)
 	if bo.GetTotalSleep() > 0 {
 		boSleep := int64(bo.GetTotalSleep()) * int64(time.Millisecond)
