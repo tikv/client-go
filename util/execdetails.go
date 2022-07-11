@@ -83,6 +83,7 @@ type CommitDetails struct {
 // Merge merges commit details into itself.
 func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.GetCommitTsTime += other.GetCommitTsTime
+	cd.GetLatestTsTime += other.GetLatestTsTime
 	cd.PrewriteTime += other.PrewriteTime
 	cd.WaitPrewriteBinlogTime += other.WaitPrewriteBinlogTime
 	cd.CommitTime += other.CommitTime
@@ -100,6 +101,7 @@ func (cd *CommitDetails) Merge(other *CommitDetails) {
 func (cd *CommitDetails) Clone() *CommitDetails {
 	commit := &CommitDetails{
 		GetCommitTsTime:        cd.GetCommitTsTime,
+		GetLatestTsTime:        cd.GetLatestTsTime,
 		PrewriteTime:           cd.PrewriteTime,
 		WaitPrewriteBinlogTime: cd.WaitPrewriteBinlogTime,
 		CommitTime:             cd.CommitTime,
