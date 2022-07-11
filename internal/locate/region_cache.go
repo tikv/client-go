@@ -51,6 +51,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stathat/consistent"
@@ -363,6 +364,7 @@ func (r *Region) isValid() bool {
 // purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
+	apiVersion       kvrpcpb.APIVersion
 	enableForwarding bool
 
 	mu struct {
@@ -398,6 +400,14 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c := &RegionCache{
 		pdClient: pdClient,
 	}
+
+	switch pdClient.(type) {
+	case *CodecPDClientV2:
+		c.apiVersion = kvrpcpb.APIVersion_V2
+	default:
+		c.apiVersion = kvrpcpb.APIVersion_V1
+	}
+
 	c.mu.regions = make(map[RegionVerID]*Region)
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
 	c.mu.sorted = btree.New(btreeDegree)
@@ -1753,12 +1763,18 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	newRegions := make([]*Region, 0, len(currentRegions))
 	// If the region epoch is not ahead of TiKV's, replace region meta in region cache.
 	for _, meta := range currentRegions {
-		if _, ok := c.pdClient.(*CodecPDClient); ok {
-			var err error
+		var err error
+		oldMeta := meta
+		switch c.pdClient.(type) {
+		case *CodecPDClient:
 			// Can't modify currentRegions in this function because it can be shared by
 			// multiple goroutines, refer to https://github.com/pingcap/tidb/pull/16962.
 			if meta, err = decodeRegionMetaKeyWithShallowCopy(meta); err != nil {
-				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", meta, err)
+				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
+			}
+		case *CodecPDClientV2:
+			if meta, err = c.pdClient.(*CodecPDClientV2).decodeRegionWithShallowCopy(meta); err != nil {
+				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
 			}
 		}
 		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error
