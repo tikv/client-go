@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,8 +51,10 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stathat/consistent"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -67,10 +70,12 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -359,6 +364,7 @@ func (r *Region) isValid() bool {
 // purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
+	apiVersion       kvrpcpb.APIVersion
 	enableForwarding bool
 
 	mu struct {
@@ -371,8 +377,16 @@ type RegionCache struct {
 		sync.RWMutex
 		stores map[uint64]*Store
 	}
+	tiflashMPPStoreMu struct {
+		sync.RWMutex
+		needReload bool
+		stores     []*Store
+	}
 	notifyCheckCh chan struct{}
-	closeCh       chan struct{}
+
+	// Context for background jobs
+	ctx        context.Context
+	cancelFunc context.CancelFunc
 
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
@@ -386,12 +400,22 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c := &RegionCache{
 		pdClient: pdClient,
 	}
+
+	switch pdClient.(type) {
+	case *CodecPDClientV2:
+		c.apiVersion = kvrpcpb.APIVersion_V2
+	default:
+		c.apiVersion = kvrpcpb.APIVersion_V1
+	}
+
 	c.mu.regions = make(map[RegionVerID]*Region)
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
 	c.mu.sorted = btree.New(btreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
+	c.tiflashMPPStoreMu.needReload = true
+	c.tiflashMPPStoreMu.stores = make([]*Store, 0)
 	c.notifyCheckCh = make(chan struct{}, 1)
-	c.closeCh = make(chan struct{})
+	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
@@ -412,7 +436,7 @@ func (c *RegionCache) clear() {
 
 // Close releases region cache's resource.
 func (c *RegionCache) Close() {
-	close(c.closeCh)
+	c.cancelFunc()
 }
 
 // asyncCheckAndResolveLoop with
@@ -423,7 +447,7 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	for {
 		needCheckStores = needCheckStores[:0]
 		select {
-		case <-c.closeCh:
+		case <-c.ctx.Done():
 			return
 		case <-c.notifyCheckCh:
 			c.checkAndResolve(needCheckStores, func(s *Store) bool {
@@ -602,7 +626,7 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 		proxyAddr  string
 	)
 	if c.enableForwarding && isLeaderReq {
-		if atomic.LoadInt32(&store.unreachable) == 0 {
+		if store.getLivenessState() == reachable {
 			regionStore.unsetProxyStoreIfNeeded(cachedRegion)
 		} else {
 			proxyStore, _, _ = c.getProxyStore(cachedRegion, store, regionStore, accessIdx)
@@ -726,6 +750,59 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 
 	cachedRegion.invalidate(Other)
 	return nil, nil
+}
+
+// GetTiFlashMPPRPCContextByConsistentHash return rpcCtx of tiflash_mpp stores.
+// Each mpp computation of specific region will be handled by specific tiflash_mpp node.
+// 1. Get all stores with label <engine, tiflash_mpp>.
+// 2. Get rpcCtx that indicates where the region is stored.
+// 3. Compute which tiflash_mpp node should handle this region by consistent hash.
+// 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
+// NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
+func (c *RegionCache) GetTiFlashMPPRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID) (res []*RPCContext, err error) {
+	mppStores, err := c.GetTiFlashMPPStores(bo)
+	if err != nil {
+		return nil, err
+	}
+	if len(mppStores) == 0 {
+		return nil, errors.New("Number of tiflash_mpp node is zero")
+	}
+
+	hasher := consistent.New()
+	for _, store := range mppStores {
+		hasher.Add(store.GetAddr())
+	}
+
+	for _, id := range ids {
+		addr, err := hasher.Get(strconv.Itoa(int(id.GetID())))
+		if err != nil {
+			return nil, err
+		}
+		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, true)
+		if err != nil {
+			return nil, err
+		}
+		if rpcCtx == nil {
+			return nil, nil
+		}
+
+		var store *Store
+		for _, s := range mppStores {
+			if s.GetAddr() == addr {
+				store = s
+				break
+			}
+		}
+		if store == nil {
+			return nil, errors.New(fmt.Sprintf("cannot find mpp store: %v", addr))
+		}
+
+		rpcCtx.Store = store
+		rpcCtx.Addr = addr
+		// Maybe no need to replace rpcCtx.AccessMode, it's only used for loadBalance when access storeIdx.
+		res = append(res, rpcCtx)
+	}
+	return res, nil
 }
 
 // KeyLocation is the region and range that a key is located.
@@ -1563,7 +1640,7 @@ func (c *RegionCache) getStoreAddr(bo *retry.Backoffer, region *Region, store *S
 }
 
 func (c *RegionCache) getProxyStore(region *Region, store *Store, rs *regionStore, workStoreIdx AccessIndex) (proxyStore *Store, proxyAccessIdx AccessIndex, proxyStoreIdx int) {
-	if !c.enableForwarding || store.storeType != tikvrpc.TiKV || atomic.LoadInt32(&store.unreachable) == 0 {
+	if !c.enableForwarding || store.storeType != tikvrpc.TiKV || store.getLivenessState() == reachable {
 		return
 	}
 
@@ -1593,7 +1670,7 @@ func (c *RegionCache) getProxyStore(region *Region, store *Store, rs *regionStor
 		}
 		storeIdx, store := rs.accessStore(tiKVOnly, AccessIndex(index))
 		// Skip unreachable stores.
-		if atomic.LoadInt32(&store.unreachable) != 0 {
+		if store.getLivenessState() == unreachable {
 			continue
 		}
 
@@ -1686,12 +1763,18 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	newRegions := make([]*Region, 0, len(currentRegions))
 	// If the region epoch is not ahead of TiKV's, replace region meta in region cache.
 	for _, meta := range currentRegions {
-		if _, ok := c.pdClient.(*CodecPDClient); ok {
-			var err error
+		var err error
+		oldMeta := meta
+		switch c.pdClient.(type) {
+		case *CodecPDClient:
 			// Can't modify currentRegions in this function because it can be shared by
 			// multiple goroutines, refer to https://github.com/pingcap/tidb/pull/16962.
 			if meta, err = decodeRegionMetaKeyWithShallowCopy(meta); err != nil {
-				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", meta, err)
+				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
+			}
+		case *CodecPDClientV2:
+			if meta, err = c.pdClient.(*CodecPDClientV2).decodeRegionWithShallowCopy(meta); err != nil {
+				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
 			}
 		}
 		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error
@@ -1741,6 +1824,70 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 		}
 	}
 	return stores
+}
+
+// GetTiFlashMPPStores returns all stores with lable <engine, tiflash_mpp>.
+func (c *RegionCache) GetTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, err error) {
+	c.tiflashMPPStoreMu.RLock()
+	needReload := c.tiflashMPPStoreMu.needReload
+	stores := c.tiflashMPPStoreMu.stores
+	c.tiflashMPPStoreMu.RUnlock()
+
+	if needReload {
+		return c.reloadTiFlashMPPStores(bo)
+	}
+	return stores, nil
+}
+
+func (c *RegionCache) reloadTiFlashMPPStores(bo *retry.Backoffer) (res []*Store, _ error) {
+	stores, err := c.pdClient.GetAllStores(bo.GetCtx())
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range stores {
+		if isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashMPP) {
+			res = append(res, &Store{
+				storeID:   s.GetId(),
+				addr:      s.GetAddress(),
+				saddr:     s.GetStatusAddress(),
+				storeType: tikvrpc.GetStoreTypeByMeta(s),
+				labels:    s.GetLabels(),
+				state:     uint64(resolved),
+			})
+		}
+	}
+
+	c.tiflashMPPStoreMu.Lock()
+	c.tiflashMPPStoreMu.stores = res
+	c.tiflashMPPStoreMu.Unlock()
+	return res, nil
+}
+
+// InvalidateTiFlashMPPStoresIfGRPCError will invalid cache if is GRPC error.
+// For now, only consider GRPC unavailable error.
+func (c *RegionCache) InvalidateTiFlashMPPStoresIfGRPCError(err error) bool {
+	var invalidate bool
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable:
+			invalidate = true
+		default:
+		}
+	}
+	if !invalidate {
+		return false
+	}
+
+	c.InvalidateTiFlashMPPStores()
+	return true
+}
+
+// InvalidateTiFlashMPPStores set needReload be true,
+// and will refresh tiflash_mpp store cache next time.
+func (c *RegionCache) InvalidateTiFlashMPPStores() {
+	c.tiflashMPPStoreMu.Lock()
+	defer c.tiflashMPPStoreMu.Unlock()
+	c.tiflashMPPStoreMu.needReload = true
 }
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
@@ -2031,7 +2178,7 @@ type Store struct {
 	// whether the store is unreachable due to some reason, therefore requests to the store needs to be
 	// forwarded by other stores. this is also the flag that a checkUntilHealth goroutine is running for this store.
 	// this mechanism is currently only applicable for TiKV stores.
-	unreachable      int32
+	livenessState    uint32
 	unreachableSince time.Time
 }
 
@@ -2217,18 +2364,28 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 		return true
 	}
 	for _, targetLabel := range labels {
-		match := false
-		for _, label := range s.labels {
-			if targetLabel.Key == label.Key && targetLabel.Value == label.Value {
-				match = true
-				break
-			}
-		}
-		if !match {
+		if !isStoreContainLabel(s.labels, targetLabel.Key, targetLabel.Value) {
 			return false
 		}
 	}
 	return true
+}
+
+func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
+	for _, label := range labels {
+		if label.GetKey() == key && label.GetValue() == val {
+			res = true
+			break
+		}
+	}
+	return res
+}
+
+// getLivenessState gets the cached liveness state of the store.
+// When it's not reachable, a goroutine will update the state in background.
+// To get the accurate liveness state, use checkLiveness instead.
+func (s *Store) getLivenessState() livenessState {
+	return livenessState(atomic.LoadUint32(&s.livenessState))
 }
 
 type livenessState uint32
@@ -2236,7 +2393,7 @@ type livenessState uint32
 var (
 	livenessSf singleflight.Group
 	// storeLivenessTimeout is the max duration of resolving liveness of a TiKV instance.
-	storeLivenessTimeout time.Duration
+	storeLivenessTimeout = time.Second
 )
 
 // SetStoreLivenessTimeout sets storeLivenessTimeout to t.
@@ -2250,12 +2407,12 @@ func GetStoreLivenessTimeout() time.Duration {
 }
 
 const (
-	unknown livenessState = iota
-	reachable
+	reachable livenessState = iota
 	unreachable
+	unknown
 )
 
-func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache) {
+func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
 	// This mechanism doesn't support non-TiKV stores currently.
 	if s.storeType != tikvrpc.TiKV {
 		logutil.BgLogger().Info("[health check] skip running health check loop for non-tikv store",
@@ -2264,24 +2421,21 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache) {
 	}
 
 	// It may be already started by another thread.
-	if atomic.CompareAndSwapInt32(&s.unreachable, 0, 1) {
+	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
 		go s.checkUntilHealth(c)
 	}
 }
 
 func (s *Store) checkUntilHealth(c *RegionCache) {
-	defer atomic.CompareAndSwapInt32(&s.unreachable, 1, 0)
+	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
 
 	ticker := time.NewTicker(time.Second)
 	lastCheckPDTime := time.Now()
 
-	// TODO(MyonKeminta): Set a more proper ctx here so that it can be interrupted immediately when the RegionCache is
-	// shutdown.
-	ctx := context.Background()
 	for {
 		select {
-		case <-c.closeCh:
+		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
 			if time.Since(lastCheckPDTime) > time.Second*30 {
@@ -2296,18 +2450,30 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 				}
 			}
 
-			bo := retry.NewNoopBackoff(ctx)
+			bo := retry.NewNoopBackoff(c.ctx)
 			l := s.requestLiveness(bo, c)
 			if l == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
 
 				return
 			}
+			atomic.StoreUint32(&s.livenessState, uint32(l))
 		}
 	}
 }
 
 func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l livenessState) {
+	// It's not convenient to mock liveness in integration tests. Use failpoint to achieve that instead.
+	if val, err := util.EvalFailpoint("injectLiveness"); err == nil {
+		switch val.(string) {
+		case "unreachable":
+			return unreachable
+		case "reachable":
+			return reachable
+		case "unknown":
+			return unknown
+		}
+	}
 	if c != nil && c.testingKnobs.mockRequestLiveness != nil {
 		return c.testingKnobs.mockRequestLiveness(s, bo)
 	}
@@ -2380,7 +2546,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	}
 
 	status := resp.GetStatus()
-	if status == healthpb.HealthCheckResponse_UNKNOWN {
+	if status == healthpb.HealthCheckResponse_UNKNOWN || status == healthpb.HealthCheckResponse_SERVICE_UNKNOWN {
 		logutil.BgLogger().Info("[health check] check health returns unknown", zap.String("store", addr))
 		l = unknown
 		return

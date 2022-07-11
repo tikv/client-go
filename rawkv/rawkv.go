@@ -50,6 +50,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -72,6 +73,16 @@ type rawOptions struct {
 
 	// This field is used for Scan()/ReverseScan().
 	KeyOnly bool
+}
+
+// RawChecksum represents the checksum result of raw kv pairs in TiKV cluster.
+type RawChecksum struct {
+	// Crc64Xor is the checksum result with crc64 algorithm
+	Crc64Xor uint64
+	// TotalKvs is the total number of kvpairs
+	TotalKvs uint64
+	// TotalBytes is the total bytes of kvpairs, including prefix in APIV2
+	TotalBytes uint64
 }
 
 // RawOption represents possible options that can be cotrolled by the user
@@ -110,12 +121,51 @@ func ScanKeyOnly() RawOption {
 // Client is a client of TiKV server which is used as a key-value storage,
 // only GET/PUT/DELETE commands are supported.
 type Client struct {
+	apiVersion  kvrpcpb.APIVersion
 	clusterID   uint64
 	regionCache *locate.RegionCache
 	pdClient    pd.Client
 	rpcClient   client.Client
 	cf          string
 	atomic      bool
+}
+
+type option struct {
+	apiVersion      kvrpcpb.APIVersion
+	security        config.Security
+	gRPCDialOptions []grpc.DialOption
+	pdOptions       []pd.ClientOption
+}
+
+// ClientOpt is factory to set the client options.
+type ClientOpt func(*option)
+
+// WithPDOptions is used to set the pd.ClientOption
+func WithPDOptions(opts ...pd.ClientOption) ClientOpt {
+	return func(o *option) {
+		o.pdOptions = append(o.pdOptions, opts...)
+	}
+}
+
+// WithSecurity is used to set the config.Security
+func WithSecurity(security config.Security) ClientOpt {
+	return func(o *option) {
+		o.security = security
+	}
+}
+
+// WithGRPCDialOptions is used to set the grpc.DialOption.
+func WithGRPCDialOptions(opts ...grpc.DialOption) ClientOpt {
+	return func(o *option) {
+		o.gRPCDialOptions = append(o.gRPCDialOptions, opts...)
+	}
+}
+
+// WithAPIVersion is used to set the api version.
+func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
+	return func(o *option) {
+		o.apiVersion = apiVersion
+	}
 }
 
 // SetAtomicForCAS sets atomic mode for CompareAndSwap
@@ -132,19 +182,36 @@ func (c *Client) SetColumnFamily(columnFamily string) *Client {
 
 // NewClient creates a client with PD cluster addrs.
 func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
+	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
+}
+
+// NewClientWithOpts creates a client with PD cluster addrs and client options.
+func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
+	opt := &option{}
+	for _, o := range opts {
+		o(opt)
+	}
+
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   security.ClusterSSLCA,
-		CertPath: security.ClusterSSLCert,
-		KeyPath:  security.ClusterSSLKey,
-	}, opts...)
+		CAPath:   opt.security.ClusterSSLCA,
+		CertPath: opt.security.ClusterSSLCert,
+		KeyPath:  opt.security.ClusterSSLKey,
+	}, opt.pdOptions...)
+
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	if opt.apiVersion == kvrpcpb.APIVersion_V2 {
+		pdCli = locate.NewCodecPDClientV2(pdCli, client.ModeRaw)
+	}
+
 	return &Client{
+		apiVersion:  opt.apiVersion,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
 		pdClient:    pdCli,
-		rpcClient:   client.NewRPCClient(client.WithSecurity(security)),
+		rpcClient:   client.NewRPCClient(client.WithSecurity(opt.security), client.WithGRPCDialOptions(opt.gRPCDialOptions...)),
 	}, nil
 }
 
@@ -504,6 +571,44 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 	return
 }
 
+// Checksum do checksum of continuous kv pairs in range [startKey, endKey).
+// If endKey is empty, it means unbounded.
+// If you want to exclude the startKey or include the endKey, push a '\0' to the key. For example, to scan
+// (startKey, endKey], you can write:
+// `Checksum(ctx, push(startKey, '\0'), push(endKey, '\0'))`.
+func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options ...RawOption,
+) (check RawChecksum, err error) {
+
+	start := time.Now()
+	defer func() { metrics.RawkvCmdHistogramWithRawChecksum.Observe(time.Since(start).Seconds()) }()
+
+	for len(endKey) == 0 || bytes.Compare(startKey, endKey) < 0 {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawChecksum, &kvrpcpb.RawChecksumRequest{
+			Algorithm: kvrpcpb.ChecksumAlgorithm_Crc64_Xor,
+			Ranges: []*kvrpcpb.KeyRange{{
+				StartKey: startKey,
+				EndKey:   endKey,
+			}},
+		})
+		resp, loc, err := c.sendReq(ctx, startKey, req, false)
+		if err != nil {
+			return RawChecksum{0, 0, 0}, err
+		}
+		if resp.Resp == nil {
+			return RawChecksum{0, 0, 0}, errors.WithStack(tikverr.ErrBodyMissing)
+		}
+		cmdResp := resp.Resp.(*kvrpcpb.RawChecksumResponse)
+		check.Crc64Xor ^= cmdResp.GetChecksum()
+		check.TotalKvs += cmdResp.GetTotalKvs()
+		check.TotalBytes += cmdResp.GetTotalBytes()
+		startKey = loc.EndKey
+		if len(startKey) == 0 {
+			break
+		}
+	}
+	return
+}
+
 // CompareAndSwap results in an atomic compare-and-set operation for the given key while SetAtomicForCAS(true)
 // If the value retrieved is equal to previousValue, newValue is written.
 // It returns the previous value and whether the value is successfully swapped.
@@ -742,11 +847,11 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 
 func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls []uint64, opts *rawOptions) error {
 	keyToValue := make(map[string][]byte, len(keys))
-	keyTottl := make(map[string]uint64, len(keys))
+	keyToTTL := make(map[string]uint64, len(keys))
 	for i, key := range keys {
 		keyToValue[string(key)] = values[i]
 		if len(ttls) > 0 {
-			keyTottl[string(key)] = ttls[i]
+			keyToTTL[string(key)] = ttls[i]
 		}
 	}
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys, nil)
@@ -756,7 +861,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 	var batches []kvrpc.Batch
 	// split the keys by size and RegionVerID
 	for regionID, groupKeys := range groups {
-		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyTottl, rawBatchPutSize)
+		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyToTTL, rawBatchPutSize)
 	}
 	bo, cancel := bo.Fork()
 	ch := make(chan error, len(batches))
@@ -802,6 +907,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOpt
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
+	req.ApiVersion = c.apiVersion
 	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 	if err != nil {
 		return err

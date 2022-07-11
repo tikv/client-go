@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -283,7 +284,8 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		})
 	}
 
-	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{TxnInfos: listTxnInfos})
+	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{TxnInfos: listTxnInfos},
+		kvrpcpb.Context{RequestSource: util.RequestSourceFromCtx(bo.GetCtx())})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	startTime = time.Now()
 	resp, err := lr.store.SendReq(bo, req, loc, client.ReadTimeoutShort)
@@ -318,6 +320,27 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	return true, nil
 }
 
+// ResolveLocksOptions is the options struct for calling resolving lock.
+type ResolveLocksOptions struct {
+	CallerStartTS uint64
+	Locks         []*Lock
+	Lite          bool
+	ForRead       bool
+	Detail        *util.ResolveLockDetail
+}
+
+// ResolveLockResult is the result struct for resolving lock.
+type ResolveLockResult struct {
+	TTL         int64
+	IgnoreLocks []uint64
+	AccessLocks []uint64
+}
+
+// ResolveLocksWithOpts wraps ResolveLocks and ResolveLocksForRead, which extract the parameters into structs for better extension.
+func (lr *LockResolver) ResolveLocksWithOpts(bo *retry.Backoffer, opts ResolveLocksOptions) (ResolveLockResult, error) {
+	return lr.resolveLocks(bo, opts)
+}
+
 // ResolveLocks tries to resolve Locks. The resolving process is in 3 steps:
 // 1) Use the `lockTTL` to pick up all expired locks. Only locks that are too
 //    old are considered orphan locks and will be handled later. If all locks
@@ -328,15 +351,26 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 // 3) Send `ResolveLock` cmd to the lock's region to resolve all locks belong to
 //    the same transaction.
 func (lr *LockResolver) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock) (int64, error) {
-	ttl, _, _, err := lr.resolveLocks(bo, callerStartTS, locks, false, false)
-	return ttl, err
+	opts := ResolveLocksOptions{
+		CallerStartTS: callerStartTS,
+		Locks:         locks,
+	}
+	res, err := lr.resolveLocks(bo, opts)
+	return res.TTL, err
 }
 
 // ResolveLocksForRead is essentially the same as ResolveLocks, except with some optimizations for read.
 // Read operations needn't wait for resolve secondary locks and can read through(the lock's transaction is committed
 // and its commitTS is less than or equal to callerStartTS) or ignore(the lock's transaction is rolled back or its minCommitTS is pushed) the lock .
 func (lr *LockResolver) ResolveLocksForRead(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock, lite bool) (int64, []uint64 /* canIgnore */, []uint64 /* canAccess */, error) {
-	return lr.resolveLocks(bo, callerStartTS, locks, true, lite)
+	opts := ResolveLocksOptions{
+		CallerStartTS: callerStartTS,
+		Locks:         locks,
+		Lite:          lite,
+		ForRead:       true,
+	}
+	res, err := lr.resolveLocks(bo, opts)
+	return res.TTL, res.IgnoreLocks, res.AccessLocks, err
 }
 
 // RecordResolvingLocks records a txn which startTS is callerStartTS tries to resolve locks
@@ -369,7 +403,7 @@ func (lr *LockResolver) UpdateResolvingLocks(locks []*Lock, callerStartTS uint64
 // ResolveLocksDone will remove resolving locks information related with callerStartTS
 func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 	lr.mu.Lock()
-	lr.mu.resolving[callerStartTS] = nil
+	lr.mu.resolving[callerStartTS][token] = nil
 	lr.mu.resolvingConcurrency[callerStartTS]--
 	if lr.mu.resolvingConcurrency[callerStartTS] == 0 {
 		delete(lr.mu.resolving, callerStartTS)
@@ -378,22 +412,33 @@ func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 	lr.mu.Unlock()
 }
 
-func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*Lock, forRead bool, lite bool) (int64, []uint64 /* canIgnore */, []uint64 /* canAccess */, error) {
+func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (ResolveLockResult, error) {
+	callerStartTS, locks, forRead, lite, detail := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail
 	if lr.testingKnobs.meetLock != nil {
 		lr.testingKnobs.meetLock(locks)
 	}
 	var msBeforeTxnExpired txnExpireTime
 	if len(locks) == 0 {
-		return msBeforeTxnExpired.value(), nil, nil, nil
+		return ResolveLockResult{
+			TTL: msBeforeTxnExpired.value(),
+		}, nil
 	}
 	metrics.LockResolverCountWithResolve.Inc()
+	// This is the origin resolve lock time.
+	// TODO(you06): record the more details and calculate the total time by calculating the sum of details.
+	if detail != nil {
+		startTime := time.Now()
+		defer func() {
+			atomic.AddInt64(&detail.ResolveLockTime, int64(time.Since(startTime)))
+		}()
+	}
 
 	// TxnID -> []Region, record resolved Regions.
 	// TODO: Maybe put it in LockResolver and share by all txns.
 	cleanTxns := make(map[uint64]map[locate.RegionVerID]struct{})
 	var resolve func(*Lock, bool) (TxnStatus, error)
 	resolve = func(l *Lock, forceSyncCommit bool) (TxnStatus, error) {
-		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit)
+		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
 		if err != nil {
 			return TxnStatus{}, err
 		}
@@ -426,7 +471,8 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 			err = lr.resolvePessimisticLock(bo, l)
 		} else {
 			if forRead {
-				asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
+				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
+				asyncBo := retry.NewBackoffer(asyncCtx, asyncResolveLockMaxBackoff)
 				go func() {
 					// Pass an empty cleanRegions here to avoid data race and
 					// let `reqCollapse` deduplicate identical resolve requests.
@@ -448,7 +494,9 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 		status, err := resolve(l, false)
 		if err != nil {
 			msBeforeTxnExpired.update(0)
-			return msBeforeTxnExpired.value(), nil, nil, err
+			return ResolveLockResult{
+				TTL: msBeforeTxnExpired.value(),
+			}, err
 		}
 		if !forRead {
 			if status.ttl != 0 {
@@ -478,7 +526,11 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, callerStartTS uint64, 
 	if msBeforeTxnExpired.value() > 0 {
 		metrics.LockResolverCountWithWaitExpired.Inc()
 	}
-	return msBeforeTxnExpired.value(), canIgnore, canAccess, nil
+	return ResolveLockResult{
+		TTL:         msBeforeTxnExpired.value(),
+		IgnoreLocks: canIgnore,
+		AccessLocks: canAccess,
+	}, nil
 }
 
 // Resolving returns the locks' information we are resolving currently.
@@ -541,7 +593,7 @@ func (lr *LockResolver) GetTxnStatus(txnID uint64, callerStartTS uint64, primary
 	return lr.getTxnStatus(bo, txnID, primary, callerStartTS, currentTS, true, false, nil)
 }
 
-func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, callerStartTS uint64, forceSyncCommit bool) (TxnStatus, error) {
+func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, callerStartTS uint64, forceSyncCommit bool, detail *util.ResolveLockDetail) (TxnStatus, error) {
 	var currentTS uint64
 	var err error
 	var status TxnStatus
@@ -649,6 +701,8 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		RollbackIfNotExist:       rollbackIfNotExist,
 		ForceSyncCommit:          forceSyncCommit,
 		ResolvingPessimisticLock: resolvingPessimisticLock,
+	}, kvrpcpb.Context{
+		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 	})
 	for {
 		loc, err := lr.store.GetRegionCache().LocateKey(bo, primary)
@@ -790,7 +844,9 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 		Keys:         curKeys,
 		StartVersion: txnID,
 	}
-	req := tikvrpc.NewRequest(tikvrpc.CmdCheckSecondaryLocks, checkReq)
+	req := tikvrpc.NewRequest(tikvrpc.CmdCheckSecondaryLocks, checkReq, kvrpcpb.Context{
+		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
+	})
 	metrics.LockResolverCountWithQueryCheckSecondaryLocks.Inc()
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := lr.store.SendReq(bo, req, curRegionID, client.ReadTimeoutShort)
@@ -1022,6 +1078,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq)
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
+		req.RequestSource = util.RequestSourceFromCtx(bo.GetCtx())
 		resp, err := lr.store.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return err

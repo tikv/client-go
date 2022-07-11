@@ -30,6 +30,10 @@ type SnapshotRuntimeStats = txnsnapshot.SnapshotRuntimeStats
 // IsoLevel is the transaction's isolation level.
 type IsoLevel = txnsnapshot.IsoLevel
 
+// ReplicaReadAdjuster is a function that adjust the StoreSelectorOption and ReplicaReadType
+// based on the keys count for BatchPointGet and PointGet
+type ReplicaReadAdjuster = txnsnapshot.ReplicaReadAdjuster
+
 // IsoLevel value for transaction priority.
 const (
 	SI        = txnsnapshot.SI

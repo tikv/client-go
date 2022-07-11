@@ -83,6 +83,7 @@ const (
 	CmdRawScan
 	CmdGetKeyTTL
 	CmdRawCompareAndSwap
+	CmdRawChecksum
 
 	CmdUnsafeDestroyRange
 
@@ -156,6 +157,8 @@ func (t CmdType) String() string {
 		return "RawDeleteRange"
 	case CmdRawScan:
 		return "RawScan"
+	case CmdRawChecksum:
+		return "RawChecksum"
 	case CmdUnsafeDestroyRange:
 		return "UnsafeDestroyRange"
 	case CmdRegisterLockObserver:
@@ -386,6 +389,11 @@ func (req *Request) RawGetKeyTTL() *kvrpcpb.RawGetKeyTTLRequest {
 // RawCompareAndSwap returns RawCASRequest in request.
 func (req *Request) RawCompareAndSwap() *kvrpcpb.RawCASRequest {
 	return req.Req.(*kvrpcpb.RawCASRequest)
+}
+
+// RawChecksum returns RawChecksumRequest in request.
+func (req *Request) RawChecksum() *kvrpcpb.RawChecksumRequest {
+	return req.Req.(*kvrpcpb.RawChecksumRequest)
 }
 
 // RegisterLockObserver returns RegisterLockObserverRequest in request.
@@ -707,12 +715,14 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.RawDeleteRange().Context = ctx
 	case CmdRawScan:
 		req.RawScan().Context = ctx
-	case CmdUnsafeDestroyRange:
-		req.UnsafeDestroyRange().Context = ctx
 	case CmdGetKeyTTL:
 		req.RawGetKeyTTL().Context = ctx
 	case CmdRawCompareAndSwap:
 		req.RawCompareAndSwap().Context = ctx
+	case CmdRawChecksum:
+		req.RawChecksum().Context = ctx
+	case CmdUnsafeDestroyRange:
+		req.UnsafeDestroyRange().Context = ctx
 	case CmdRegisterLockObserver:
 		req.RegisterLockObserver().Context = ctx
 	case CmdCheckLockObserver:
@@ -851,6 +861,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.RawCASResponse{
 			RegionError: e,
 		}
+	case CmdRawChecksum:
+		p = &kvrpcpb.RawChecksumResponse{
+			RegionError: e,
+		}
 	case CmdCop:
 		p = &coprocessor.Response{
 			RegionError: e,
@@ -967,6 +981,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.RawGetKeyTTL(ctx, req.RawGetKeyTTL())
 	case CmdRawCompareAndSwap:
 		resp.Resp, err = client.RawCompareAndSwap(ctx, req.RawCompareAndSwap())
+	case CmdRawChecksum:
+		resp.Resp, err = client.RawChecksum(ctx, req.RawChecksum())
 	case CmdRegisterLockObserver:
 		resp.Resp, err = client.RegisterLockObserver(ctx, req.RegisterLockObserver())
 	case CmdCheckLockObserver:
