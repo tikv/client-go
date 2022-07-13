@@ -926,6 +926,25 @@ func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 	return err.GetRegionError(), nil
 }
 
+type getExecDetailsV2 interface {
+	GetExecDetailsV2() *kvrpcpb.ExecDetailsV2
+}
+
+// GetExecDetailsV2 returns the ExecDetailsV2 of the underlying concrete response.
+func (resp *Response) GetExecDetailsV2() (*kvrpcpb.ExecDetailsV2, error) {
+	if resp == nil || resp.Resp == nil {
+		return nil, nil
+	}
+	details, ok := resp.Resp.(getExecDetailsV2)
+	if !ok {
+		if _, isEmpty := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); isEmpty {
+			return nil, nil
+		}
+		return nil, errors.Errorf("invalid response type %v", resp)
+	}
+	return details.GetExecDetailsV2(), nil
+}
+
 // CallRPC launches a rpc call.
 // ch is needed to implement timeout for coprocessor streaming, the stream object's
 // cancel function will be sent to the channel, together with a lease checked by a background goroutine.
