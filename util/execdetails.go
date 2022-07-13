@@ -94,9 +94,15 @@ func (ed *TiKVExecDetails) String() string {
 		buf.WriteString(ed.TimeDetail.String())
 	}
 	if ed.ScanDetail != nil {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
 		buf.WriteString(ed.ScanDetail.String())
 	}
 	if ed.WriteDetail != nil {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
 		buf.WriteString(ed.WriteDetail.String())
 	}
 	return buf.String()
@@ -365,20 +371,24 @@ func (sd *ScanDetail) String() string {
 	if sd.ProcessedKeys > 0 {
 		buf.WriteString("total_process_keys: ")
 		buf.WriteString(strconv.FormatInt(sd.ProcessedKeys, 10))
+		buf.WriteString(", ")
 	}
 	if sd.ProcessedKeysSize > 0 {
-		buf.WriteString(", total_process_keys_size: ")
+		buf.WriteString("total_process_keys_size: ")
 		buf.WriteString(strconv.FormatInt(sd.ProcessedKeysSize, 10))
+		buf.WriteString(", ")
 	}
 	if sd.TotalKeys > 0 {
-		buf.WriteString(", total_keys: ")
+		buf.WriteString("total_keys: ")
 		buf.WriteString(strconv.FormatInt(sd.TotalKeys, 10))
+		buf.WriteString(", ")
 	}
 	if sd.GetSnapshotDuration > 0 {
 		buf.WriteString("get_snapshot_time: ")
 		buf.WriteString(FormatDuration(sd.GetSnapshotDuration))
+		buf.WriteString(", ")
 	}
-	buf.WriteString(", rocksdb: {")
+	buf.WriteString("rocksdb: {")
 	if sd.RocksdbDeleteSkippedCount > 0 {
 		buf.WriteString("delete_skipped_count: ")
 		buf.WriteString(strconv.FormatUint(sd.RocksdbDeleteSkippedCount, 10))
@@ -393,18 +403,24 @@ func (sd *ScanDetail) String() string {
 	if sd.RocksdbBlockCacheHitCount > 0 {
 		buf.WriteString("cache_hit_count: ")
 		buf.WriteString(strconv.FormatUint(sd.RocksdbBlockCacheHitCount, 10))
+		buf.WriteString(", ")
 	}
 	if sd.RocksdbBlockReadCount > 0 {
-		buf.WriteString(", read_count: ")
+		buf.WriteString("read_count: ")
 		buf.WriteString(strconv.FormatUint(sd.RocksdbBlockReadCount, 10))
+		buf.WriteString(", ")
 	}
 	if sd.RocksdbBlockReadByte > 0 {
-		buf.WriteString(", read_byte: ")
+		buf.WriteString("read_byte: ")
 		buf.WriteString(FormatBytes(int64(sd.RocksdbBlockReadByte)))
+		buf.WriteString(", ")
 	}
 	if sd.RocksdbBlockReadDuration > 0 {
-		buf.WriteString(", read_time: ")
+		buf.WriteString("read_time: ")
 		buf.WriteString(FormatDuration(sd.RocksdbBlockReadDuration))
+	}
+	if buf.Bytes()[buf.Len()-2] == ',' {
+		buf.Truncate(buf.Len() - 2)
 	}
 	buf.WriteString("}}}")
 	return buf.String()
