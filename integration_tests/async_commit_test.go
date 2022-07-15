@@ -76,6 +76,10 @@ type unistoreClientWrapper struct {
 	*unistore.RPCClient
 }
 
+type MockClientWrapper struct {
+	*testutils.MockClient
+}
+
 func (c *unistoreClientWrapper) CloseAddr(addr string) error {
 	return nil
 }
@@ -85,6 +89,15 @@ func (s *testAsyncCommitCommon) setUpTest() {
 		s.store = NewTestStore(s.T())
 		return
 	}
+
+	// client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	// s.Require().Nil(err)
+	// testutils.BootstrapWithSingleStore(cluster)
+	// store, err := tikv.NewTestTiKVStore(fpClient{Client: &MockClientWrapper{client}}, pdClient, nil, nil, 0)
+	// s.Require().Nil(err)
+
+	// s.cluster = cluster
+	// s.store = store
 
 	client, pdClient, cluster, err := unistore.New("")
 	s.Require().Nil(err)
