@@ -90,24 +90,24 @@ func (s *testAsyncCommitCommon) setUpTest() {
 		return
 	}
 
-	// client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
-	// s.Require().Nil(err)
-	// testutils.BootstrapWithSingleStore(cluster)
-	// store, err := tikv.NewTestTiKVStore(fpClient{Client: &MockClientWrapper{client}}, pdClient, nil, nil, 0)
-	// s.Require().Nil(err)
-
-	// s.cluster = cluster
-	// s.store = store
-
-	client, pdClient, cluster, err := unistore.New("")
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	s.Require().Nil(err)
+	testutils.BootstrapWithSingleStore(cluster)
+	store, err := tikv.NewTestTiKVStore(fpClient{Client: &MockClientWrapper{client}}, pdClient, nil, nil, 0)
 	s.Require().Nil(err)
 
-	unistore.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
-	store, err := tikv.NewTestTiKVStore(fpClient{Client: &unistoreClientWrapper{client}}, pdClient, nil, nil, 0)
-	s.Require().Nil(err)
-
 	s.store = store
+
+	// client, pdClient, cluster, err := unistore.New("")
+	// s.Require().Nil(err)
+
+	// unistore.BootstrapWithSingleStore(cluster)
+	// s.cluster = cluster
+	// store, err := tikv.NewTestTiKVStore(fpClient{Client: &unistoreClientWrapper{client}}, pdClient, nil, nil, 0)
+	// s.Require().Nil(err)
+
+	// s.store = store
 }
 
 func (s *testAsyncCommitCommon) tearDownTest() {

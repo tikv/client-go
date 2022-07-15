@@ -228,6 +228,25 @@ func (h kvHandler) handleKvPrewrite(req *kvrpcpb.PrewriteRequest) *kvrpcpb.Prewr
 		}
 	}
 	errs := h.mvccStore.Prewrite(req)
+
+	var respMinCommitTs uint64
+
+	if req.UseAsyncCommit || req.TryOnePc {
+		pdclient := NewPDClient(h.cluster)
+		physical, logical, _ := pdclient.GetTS(context.Background())
+		minCommitTS := uint64(physical)<<18 + uint64(logical)
+		if req.MaxCommitTs > 0 && minCommitTS > req.MaxCommitTs {
+			req.UseAsyncCommit = false
+			req.TryOnePc = false
+		}
+		if req.UseAsyncCommit {
+			respMinCommitTs = minCommitTS
+		}
+		if req.UseAsyncCommit && minCommitTS > req.MinCommitTs {
+			req.MinCommitTs = minCommitTS
+		}
+	}
+
 	for i, e := range errs {
 		if e != nil {
 			if _, isLocked := errors.Cause(e).(*ErrLocked); !isLocked {
@@ -239,6 +258,8 @@ func (h kvHandler) handleKvPrewrite(req *kvrpcpb.PrewriteRequest) *kvrpcpb.Prewr
 	}
 	return &kvrpcpb.PrewriteResponse{
 		Errors: convertToKeyErrors(errs),
+		// MinCommitTs: respMinCommitTs,
+		MinCommitTs: req.MinCommitTs,
 	}
 }
 
