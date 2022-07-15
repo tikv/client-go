@@ -121,7 +121,8 @@ type connArray struct {
 	done chan struct{}
 }
 
-func newConnArray(maxSize uint, addr string, security config.Security, idleNotify *uint32, enableBatch bool, dialTimeout time.Duration) (*connArray, error) {
+func newConnArray(maxSize uint, addr string, security config.Security,
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, opts []grpc.DialOption) (*connArray, error) {
 	a := &connArray{
 		index:         0,
 		v:             make([]*grpc.ClientConn, maxSize),
@@ -129,13 +130,13 @@ func newConnArray(maxSize uint, addr string, security config.Security, idleNotif
 		done:          make(chan struct{}),
 		dialTimeout:   dialTimeout,
 	}
-	if err := a.Init(addr, security, idleNotify, enableBatch); err != nil {
+	if err := a.Init(addr, security, idleNotify, enableBatch, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
 }
 
-func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool) error {
+func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, opts ...grpc.DialOption) error {
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -172,9 +173,8 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
-		conn, err := grpc.DialContext(
-			ctx,
-			addr,
+
+		opts = append([]grpc.DialOption{
 			opt,
 			grpc.WithInitialWindowSize(GrpcInitialWindowSize),
 			grpc.WithInitialConnWindowSize(GrpcInitialConnWindowSize),
@@ -195,6 +195,12 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				Timeout:             time.Duration(keepAliveTimeout) * time.Second,
 				PermitWithoutStream: true,
 			}),
+		}, opts...)
+
+		conn, err := grpc.DialContext(
+			ctx,
+			addr,
+			opts...,
 		)
 		cancel()
 		if err != nil {
@@ -248,13 +254,26 @@ func (a *connArray) Close() {
 	close(a.done)
 }
 
+type option struct {
+	gRPCDialOptions []grpc.DialOption
+	security        config.Security
+	dialTimeout     time.Duration
+}
+
 // Opt is the option for the client.
-type Opt func(*RPCClient)
+type Opt func(*option)
 
 // WithSecurity is used to set the security config.
 func WithSecurity(security config.Security) Opt {
-	return func(c *RPCClient) {
+	return func(c *option) {
 		c.security = security
+	}
+}
+
+// WithGRPCDialOptions is used to set the grpc.DialOption.
+func WithGRPCDialOptions(grpcDialOptions ...grpc.DialOption) Opt {
+	return func(c *option) {
+		c.gRPCDialOptions = grpcDialOptions
 	}
 }
 
@@ -265,25 +284,26 @@ func WithSecurity(security config.Security) Opt {
 type RPCClient struct {
 	sync.RWMutex
 
-	conns    map[string]*connArray
-	security config.Security
+	conns  map[string]*connArray
+	option *option
 
 	idleNotify uint32
 
 	// Periodically check whether there is any connection that is idle and then close and remove these connections.
 	// Implement background cleanup.
-	isClosed    bool
-	dialTimeout time.Duration
+	isClosed bool
 }
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
-		conns:       make(map[string]*connArray),
-		dialTimeout: dialTimeout,
+		conns: make(map[string]*connArray),
+		option: &option{
+			dialTimeout: dialTimeout,
+		},
 	}
 	for _, opt := range opts {
-		opt(cli)
+		opt(cli.option)
 	}
 	return cli
 }
@@ -323,7 +343,16 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 		for _, opt := range opts {
 			opt(&client)
 		}
-		array, err = newConnArray(client.GrpcConnectionCount, addr, c.security, &c.idleNotify, enableBatch, c.dialTimeout)
+
+		array, err = newConnArray(
+			client.GrpcConnectionCount,
+			addr,
+			c.option.security,
+			&c.idleNotify,
+			enableBatch,
+			c.option.dialTimeout,
+			c.option.gRPCDialOptions)
+
 		if err != nil {
 			return nil, err
 		}
@@ -345,8 +374,9 @@ func (c *RPCClient) closeConns() {
 }
 
 var (
-	sendReqHistCache    sync.Map
-	sendReqCounterCache sync.Map
+	sendReqHistCache       sync.Map
+	sendReqCounterCache    sync.Map
+	rpcNetLatencyHistCache sync.Map
 )
 
 type sendReqHistCacheKey struct {
@@ -365,10 +395,14 @@ type sendReqCounterCacheValue struct {
 	timeCounter prometheus.Counter
 }
 
-func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time, staleRead bool) {
+func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time, staleRead bool) {
+	elapsed := time.Since(start)
+	secs := elapsed.Seconds()
+	storeID := req.Context.GetPeer().GetStoreId()
+
 	histKey := sendReqHistCacheKey{
 		req.Type,
-		req.Context.GetPeer().GetStoreId(),
+		storeID,
 		staleRead,
 	}
 	counterKey := sendReqCounterCacheKey{
@@ -376,32 +410,49 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.
 		req.GetRequestSource(),
 	}
 
+	reqType := req.Type.String()
+	var storeIDStr string
+
 	hist, ok := sendReqHistCache.Load(histKey)
 	if !ok {
-		reqType := req.Type.String()
-		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead))
+		if len(storeIDStr) == 0 {
+			storeIDStr = strconv.FormatUint(storeID, 10)
+		}
+		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead))
 		sendReqHistCache.Store(histKey, hist)
 	}
 	counter, ok := sendReqCounterCache.Load(counterKey)
 	if !ok {
-		reqType := req.Type.String()
-		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
+		if len(storeIDStr) == 0 {
+			storeIDStr = strconv.FormatUint(storeID, 10)
+		}
 		counter = sendReqCounterCacheValue{
-			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead), counterKey.requestSource),
-			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead), counterKey.requestSource),
+			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
+			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
 		}
 		sendReqCounterCache.Store(counterKey, counter)
 	}
 
-	secs := time.Since(start).Seconds()
 	hist.(prometheus.Observer).Observe(secs)
 	counter.(sendReqCounterCacheValue).counter.Inc()
 	counter.(sendReqCounterCacheValue).timeCounter.Add(secs)
+
+	if execDetail, err := resp.GetExecDetailsV2(); err == nil &&
+		execDetail != nil && execDetail.TimeDetail != nil && execDetail.TimeDetail.TotalRpcWallTimeNs > 0 {
+		latHist, ok := rpcNetLatencyHistCache.Load(storeID)
+		if !ok {
+			if len(storeIDStr) == 0 {
+				storeIDStr = strconv.FormatUint(storeID, 10)
+			}
+			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr)
+			sendReqHistCache.Store(storeID, latHist)
+		}
+		latency := elapsed - time.Duration(execDetail.TimeDetail.TotalRpcWallTimeNs)*time.Nanosecond
+		latHist.(prometheus.Observer).Observe(latency.Seconds())
+	}
 }
 
-// SendRequest sends a Request to server and receives Response.
-func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -428,7 +479,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			detail := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
-		c.updateTiKVSendReqHistogram(req, start, staleRead)
+		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
 	}()
 
 	// TiDB RPC server supports batch RPC, but batch connection will send heart beat, It's not necessary since
@@ -471,6 +522,19 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return tikvrpc.CallRPC(ctx1, client, req)
+}
+
+// SendRequest sends a Request to server and receives Response.
+func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	req, err := EncodeRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.sendRequest(ctx, addr, req, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeResponse(req, resp)
 }
 
 func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {

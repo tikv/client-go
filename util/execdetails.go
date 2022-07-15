@@ -60,6 +60,54 @@ var (
 	ExecDetailsKey = execDetailsCtxKeyType{}
 )
 
+// TiKVExecDetails is the detail execution information at TiKV side.
+type TiKVExecDetails struct {
+	TimeDetail  *TimeDetail
+	ScanDetail  *ScanDetail
+	WriteDetail *WriteDetail
+}
+
+// NewTiKVExecDetails creates a TiKVExecDetails from a kvproto ExecDetailsV2.
+func NewTiKVExecDetails(pb *kvrpcpb.ExecDetailsV2) TiKVExecDetails {
+	if pb == nil {
+		return TiKVExecDetails{}
+	}
+	td := &TimeDetail{}
+	td.MergeFromTimeDetail(pb.TimeDetail)
+	sd := &ScanDetail{}
+	sd.MergeFromScanDetailV2(pb.ScanDetailV2)
+	wd := &WriteDetail{}
+	wd.MergeFromWriteDetailPb(pb.WriteDetail)
+	return TiKVExecDetails{
+		TimeDetail:  td,
+		ScanDetail:  sd,
+		WriteDetail: wd,
+	}
+}
+
+func (ed *TiKVExecDetails) String() string {
+	if ed == nil {
+		return ""
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, 16))
+	if ed.TimeDetail != nil {
+		buf.WriteString(ed.TimeDetail.String())
+	}
+	if ed.ScanDetail != nil {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(ed.ScanDetail.String())
+	}
+	if ed.WriteDetail != nil {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(ed.WriteDetail.String())
+	}
+	return buf.String()
+}
+
 // CommitDetails contains commit detail information.
 type CommitDetails struct {
 	GetCommitTsTime        time.Duration
@@ -70,8 +118,12 @@ type CommitDetails struct {
 	LocalLatchTime         time.Duration
 	Mu                     struct {
 		sync.Mutex
-		CommitBackoffTime int64
-		BackoffTypes      []string
+		CommitBackoffTime   int64
+		BackoffTypes        []string
+		SlowestReqTotalTime time.Duration
+		SlowestRegion       uint64
+		SlowestStoreAddr    string
+		SlowestExecDetails  TiKVExecDetails
 	}
 	WriteKeys         int
 	WriteSize         int
@@ -83,6 +135,7 @@ type CommitDetails struct {
 // Merge merges commit details into itself.
 func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.GetCommitTsTime += other.GetCommitTsTime
+	cd.GetLatestTsTime += other.GetLatestTsTime
 	cd.PrewriteTime += other.PrewriteTime
 	cd.WaitPrewriteBinlogTime += other.WaitPrewriteBinlogTime
 	cd.CommitTime += other.CommitTime
@@ -94,12 +147,34 @@ func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.TxnRetry += other.TxnRetry
 	cd.Mu.CommitBackoffTime += other.Mu.CommitBackoffTime
 	cd.Mu.BackoffTypes = append(cd.Mu.BackoffTypes, other.Mu.BackoffTypes...)
+	if cd.Mu.SlowestReqTotalTime < other.Mu.SlowestReqTotalTime {
+		cd.Mu.SlowestReqTotalTime = other.Mu.SlowestReqTotalTime
+		cd.Mu.SlowestRegion = other.Mu.SlowestRegion
+		cd.Mu.SlowestStoreAddr = other.Mu.SlowestStoreAddr
+		cd.Mu.SlowestExecDetails = other.Mu.SlowestExecDetails
+	}
+}
+
+// MergeReqDetails merges ExecDetailsV2 into the current CommitDetails.
+func (cd *CommitDetails) MergeReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
+	if cd == nil {
+		return
+	}
+	cd.Mu.Lock()
+	defer cd.Mu.Unlock()
+	if reqDuration > cd.Mu.SlowestReqTotalTime {
+		cd.Mu.SlowestReqTotalTime = reqDuration
+		cd.Mu.SlowestRegion = regionID
+		cd.Mu.SlowestStoreAddr = addr
+		cd.Mu.SlowestExecDetails = NewTiKVExecDetails(execDetails)
+	}
 }
 
 // Clone returns a deep copy of itself.
 func (cd *CommitDetails) Clone() *CommitDetails {
 	commit := &CommitDetails{
 		GetCommitTsTime:        cd.GetCommitTsTime,
+		GetLatestTsTime:        cd.GetLatestTsTime,
 		PrewriteTime:           cd.PrewriteTime,
 		WaitPrewriteBinlogTime: cd.WaitPrewriteBinlogTime,
 		CommitTime:             cd.CommitTime,
@@ -112,6 +187,10 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 	}
 	commit.Mu.BackoffTypes = append([]string{}, cd.Mu.BackoffTypes...)
 	commit.Mu.CommitBackoffTime = cd.Mu.CommitBackoffTime
+	commit.Mu.SlowestReqTotalTime = cd.Mu.SlowestReqTotalTime
+	commit.Mu.SlowestRegion = cd.Mu.SlowestRegion
+	commit.Mu.SlowestStoreAddr = cd.Mu.SlowestStoreAddr
+	commit.Mu.SlowestExecDetails = cd.Mu.SlowestExecDetails
 	return commit
 }
 
@@ -124,7 +203,11 @@ type LockKeysDetails struct {
 	BackoffTime int64
 	Mu          struct {
 		sync.Mutex
-		BackoffTypes []string
+		BackoffTypes        []string
+		SlowestReqTotalTime time.Duration
+		SlowestRegion       uint64
+		SlowestStoreAddr    string
+		SlowestExecDetails  TiKVExecDetails
 	}
 	LockRPCTime  int64
 	LockRPCCount int64
@@ -142,6 +225,27 @@ func (ld *LockKeysDetails) Merge(lockKey *LockKeysDetails) {
 	ld.LockRPCCount += ld.LockRPCCount
 	ld.Mu.BackoffTypes = append(ld.Mu.BackoffTypes, lockKey.Mu.BackoffTypes...)
 	ld.RetryCount++
+	if ld.Mu.SlowestReqTotalTime < lockKey.Mu.SlowestReqTotalTime {
+		ld.Mu.SlowestReqTotalTime = lockKey.Mu.SlowestReqTotalTime
+		ld.Mu.SlowestRegion = lockKey.Mu.SlowestRegion
+		ld.Mu.SlowestStoreAddr = lockKey.Mu.SlowestStoreAddr
+		ld.Mu.SlowestExecDetails = lockKey.Mu.SlowestExecDetails
+	}
+}
+
+// MergeReqDetails merges ExecDetailsV2 into the current LockKeysDetails.
+func (ld *LockKeysDetails) MergeReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
+	if ld == nil {
+		return
+	}
+	ld.Mu.Lock()
+	defer ld.Mu.Unlock()
+	if reqDuration > ld.Mu.SlowestReqTotalTime {
+		ld.Mu.SlowestReqTotalTime = reqDuration
+		ld.Mu.SlowestRegion = regionID
+		ld.Mu.SlowestStoreAddr = addr
+		ld.Mu.SlowestExecDetails = NewTiKVExecDetails(execDetails)
+	}
 }
 
 // Clone returns a deep copy of itself.
@@ -157,6 +261,10 @@ func (ld *LockKeysDetails) Clone() *LockKeysDetails {
 		ResolveLock:  ld.ResolveLock,
 	}
 	lock.Mu.BackoffTypes = append([]string{}, ld.Mu.BackoffTypes...)
+	lock.Mu.SlowestReqTotalTime = ld.Mu.SlowestReqTotalTime
+	lock.Mu.SlowestRegion = ld.Mu.SlowestRegion
+	lock.Mu.SlowestStoreAddr = ld.Mu.SlowestStoreAddr
+	lock.Mu.SlowestExecDetails = ld.Mu.SlowestExecDetails
 	return lock
 }
 
@@ -229,7 +337,12 @@ type ScanDetail struct {
 	RocksdbBlockReadCount uint64
 	// RocksdbBlockReadByte is the total number of bytes from block reads.
 	RocksdbBlockReadByte uint64
-	ResolveLock          *ResolveLockDetail
+	// RocksdbBlockReadDuration is the total time used for block reads.
+	RocksdbBlockReadDuration time.Duration
+	// GetSnapshotDuration is the time spent getting an engine snapshot.
+	GetSnapshotDuration time.Duration
+
+	ResolveLock *ResolveLockDetail
 }
 
 // Merge merges scan detail execution details into self.
@@ -242,6 +355,8 @@ func (sd *ScanDetail) Merge(scanDetail *ScanDetail) {
 	atomic.AddUint64(&sd.RocksdbBlockCacheHitCount, scanDetail.RocksdbBlockCacheHitCount)
 	atomic.AddUint64(&sd.RocksdbBlockReadCount, scanDetail.RocksdbBlockReadCount)
 	atomic.AddUint64(&sd.RocksdbBlockReadByte, scanDetail.RocksdbBlockReadByte)
+	atomic.AddInt64((*int64)(&sd.RocksdbBlockReadDuration), int64(scanDetail.RocksdbBlockReadDuration))
+	atomic.AddInt64((*int64)(&sd.GetSnapshotDuration), int64(scanDetail.GetSnapshotDuration))
 }
 
 var zeroScanDetail = ScanDetail{}
@@ -253,24 +368,60 @@ func (sd *ScanDetail) String() string {
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 16))
 	buf.WriteString("scan_detail: {")
-	buf.WriteString("total_process_keys: ")
-	buf.WriteString(strconv.FormatInt(sd.ProcessedKeys, 10))
-	buf.WriteString(", total_process_keys_size: ")
-	buf.WriteString(strconv.FormatInt(sd.ProcessedKeysSize, 10))
-	buf.WriteString(", total_keys: ")
-	buf.WriteString(strconv.FormatInt(sd.TotalKeys, 10))
-	buf.WriteString(", rocksdb: {")
-	buf.WriteString("delete_skipped_count: ")
-	buf.WriteString(strconv.FormatUint(sd.RocksdbDeleteSkippedCount, 10))
-	buf.WriteString(", key_skipped_count: ")
-	buf.WriteString(strconv.FormatUint(sd.RocksdbKeySkippedCount, 10))
-	buf.WriteString(", block: {")
-	buf.WriteString("cache_hit_count: ")
-	buf.WriteString(strconv.FormatUint(sd.RocksdbBlockCacheHitCount, 10))
-	buf.WriteString(", read_count: ")
-	buf.WriteString(strconv.FormatUint(sd.RocksdbBlockReadCount, 10))
-	buf.WriteString(", read_byte: ")
-	buf.WriteString(FormatBytes(int64(sd.RocksdbBlockReadByte)))
+	if sd.ProcessedKeys > 0 {
+		buf.WriteString("total_process_keys: ")
+		buf.WriteString(strconv.FormatInt(sd.ProcessedKeys, 10))
+		buf.WriteString(", ")
+	}
+	if sd.ProcessedKeysSize > 0 {
+		buf.WriteString("total_process_keys_size: ")
+		buf.WriteString(strconv.FormatInt(sd.ProcessedKeysSize, 10))
+		buf.WriteString(", ")
+	}
+	if sd.TotalKeys > 0 {
+		buf.WriteString("total_keys: ")
+		buf.WriteString(strconv.FormatInt(sd.TotalKeys, 10))
+		buf.WriteString(", ")
+	}
+	if sd.GetSnapshotDuration > 0 {
+		buf.WriteString("get_snapshot_time: ")
+		buf.WriteString(FormatDuration(sd.GetSnapshotDuration))
+		buf.WriteString(", ")
+	}
+	buf.WriteString("rocksdb: {")
+	if sd.RocksdbDeleteSkippedCount > 0 {
+		buf.WriteString("delete_skipped_count: ")
+		buf.WriteString(strconv.FormatUint(sd.RocksdbDeleteSkippedCount, 10))
+		buf.WriteString(", ")
+	}
+	if sd.RocksdbKeySkippedCount > 0 {
+		buf.WriteString("key_skipped_count: ")
+		buf.WriteString(strconv.FormatUint(sd.RocksdbKeySkippedCount, 10))
+		buf.WriteString(", ")
+	}
+	buf.WriteString("block: {")
+	if sd.RocksdbBlockCacheHitCount > 0 {
+		buf.WriteString("cache_hit_count: ")
+		buf.WriteString(strconv.FormatUint(sd.RocksdbBlockCacheHitCount, 10))
+		buf.WriteString(", ")
+	}
+	if sd.RocksdbBlockReadCount > 0 {
+		buf.WriteString("read_count: ")
+		buf.WriteString(strconv.FormatUint(sd.RocksdbBlockReadCount, 10))
+		buf.WriteString(", ")
+	}
+	if sd.RocksdbBlockReadByte > 0 {
+		buf.WriteString("read_byte: ")
+		buf.WriteString(FormatBytes(int64(sd.RocksdbBlockReadByte)))
+		buf.WriteString(", ")
+	}
+	if sd.RocksdbBlockReadDuration > 0 {
+		buf.WriteString("read_time: ")
+		buf.WriteString(FormatDuration(sd.RocksdbBlockReadDuration))
+	}
+	if buf.Bytes()[buf.Len()-2] == ',' {
+		buf.Truncate(buf.Len() - 2)
+	}
 	buf.WriteString("}}}")
 	return buf.String()
 }
@@ -286,7 +437,113 @@ func (sd *ScanDetail) MergeFromScanDetailV2(scanDetail *kvrpcpb.ScanDetailV2) {
 		sd.RocksdbBlockCacheHitCount += scanDetail.RocksdbBlockCacheHitCount
 		sd.RocksdbBlockReadCount += scanDetail.RocksdbBlockReadCount
 		sd.RocksdbBlockReadByte += scanDetail.RocksdbBlockReadByte
+		sd.RocksdbBlockReadDuration += time.Duration(scanDetail.RocksdbBlockReadNanos) * time.Nanosecond
+		sd.GetSnapshotDuration += time.Duration(scanDetail.GetSnapshotNanos) * time.Nanosecond
 	}
+}
+
+// WriteDetail contains the detailed time breakdown of a write operation.
+type WriteDetail struct {
+	// StoreBatchWaitDuration is the wait duration in the store loop.
+	StoreBatchWaitDuration time.Duration
+	// ProposeSendWaitDuration is the duration before sending proposal to peers.
+	ProposeSendWaitDuration time.Duration
+	// PersistLogDuration is the total time spent on persisting the log.
+	PersistLogDuration time.Duration
+	// RaftDbWriteLeaderWaitDuration is the wait time until the Raft log write leader begins to write.
+	RaftDbWriteLeaderWaitDuration time.Duration
+	// RaftDbSyncLogDuration is the time spent on synchronizing the Raft log to the disk.
+	RaftDbSyncLogDuration time.Duration
+	// RaftDbWriteMemtableDuration is the time spent on writing the Raft log to the Raft memtable.
+	RaftDbWriteMemtableDuration time.Duration
+	// CommitLogDuration is the time waiting for peers to confirm the proposal (counting from the instant when the leader sends the proposal message).
+	CommitLogDuration time.Duration
+	// ApplyBatchWaitDuration is the wait duration in the apply loop.
+	ApplyBatchWaitDuration time.Duration
+	// ApplyLogDuration is the total time spend to applying the log.
+	ApplyLogDuration time.Duration
+	// ApplyMutexLockDuration is the wait time until the KV RocksDB lock is acquired.
+	ApplyMutexLockDuration time.Duration
+	// ApplyWriteLeaderWaitDuration is the wait time until becoming the KV RocksDB write leader.
+	ApplyWriteLeaderWaitDuration time.Duration
+	// ApplyWriteWalDuration is the time spent on writing the KV DB WAL to the disk.
+	ApplyWriteWalDuration time.Duration
+	// ApplyWriteMemtableNanos is the time spent on writing to the memtable of the KV RocksDB.
+	ApplyWriteMemtableDuration time.Duration
+}
+
+// MergeFromWriteDetailPb merges WriteDetail protobuf into the current WriteDetail
+func (wd *WriteDetail) MergeFromWriteDetailPb(pb *kvrpcpb.WriteDetail) {
+	if pb != nil {
+		wd.StoreBatchWaitDuration += time.Duration(pb.StoreBatchWaitNanos) * time.Nanosecond
+		wd.ProposeSendWaitDuration += time.Duration(pb.ProposeSendWaitNanos) * time.Nanosecond
+		wd.PersistLogDuration += time.Duration(pb.PersistLogNanos) * time.Nanosecond
+		wd.RaftDbWriteLeaderWaitDuration += time.Duration(pb.RaftDbWriteLeaderWaitNanos) * time.Nanosecond
+		wd.RaftDbSyncLogDuration += time.Duration(pb.RaftDbSyncLogNanos) * time.Nanosecond
+		wd.RaftDbWriteMemtableDuration += time.Duration(pb.RaftDbWriteMemtableNanos) * time.Nanosecond
+		wd.CommitLogDuration += time.Duration(pb.CommitLogNanos) * time.Nanosecond
+		wd.ApplyBatchWaitDuration += time.Duration(pb.ApplyBatchWaitNanos) * time.Nanosecond
+		wd.ApplyLogDuration += time.Duration(pb.ApplyLogNanos) * time.Nanosecond
+		wd.ApplyMutexLockDuration += time.Duration(pb.ApplyMutexLockNanos) * time.Nanosecond
+		wd.ApplyWriteLeaderWaitDuration += time.Duration(pb.ApplyWriteLeaderWaitNanos) * time.Nanosecond
+		wd.ApplyWriteWalDuration += time.Duration(pb.ApplyWriteWalNanos) * time.Nanosecond
+		wd.ApplyWriteMemtableDuration += time.Duration(pb.ApplyWriteMemtableNanos) * time.Nanosecond
+	}
+}
+
+// Merge merges another WriteDetail protobuf into self.
+func (wd *WriteDetail) Merge(writeDetail *WriteDetail) {
+	atomic.AddInt64((*int64)(&wd.StoreBatchWaitDuration), int64(writeDetail.StoreBatchWaitDuration))
+	atomic.AddInt64((*int64)(&wd.ProposeSendWaitDuration), int64(writeDetail.ProposeSendWaitDuration))
+	atomic.AddInt64((*int64)(&wd.PersistLogDuration), int64(writeDetail.PersistLogDuration))
+	atomic.AddInt64((*int64)(&wd.RaftDbWriteLeaderWaitDuration), int64(writeDetail.RaftDbWriteLeaderWaitDuration))
+	atomic.AddInt64((*int64)(&wd.RaftDbSyncLogDuration), int64(writeDetail.RaftDbSyncLogDuration))
+	atomic.AddInt64((*int64)(&wd.RaftDbWriteMemtableDuration), int64(writeDetail.RaftDbWriteMemtableDuration))
+	atomic.AddInt64((*int64)(&wd.CommitLogDuration), int64(writeDetail.CommitLogDuration))
+	atomic.AddInt64((*int64)(&wd.ApplyBatchWaitDuration), int64(writeDetail.ApplyBatchWaitDuration))
+	atomic.AddInt64((*int64)(&wd.ApplyLogDuration), int64(writeDetail.ApplyLogDuration))
+	atomic.AddInt64((*int64)(&wd.ApplyMutexLockDuration), int64(writeDetail.ApplyMutexLockDuration))
+	atomic.AddInt64((*int64)(&wd.ApplyWriteLeaderWaitDuration), int64(writeDetail.ApplyWriteLeaderWaitDuration))
+	atomic.AddInt64((*int64)(&wd.ApplyWriteWalDuration), int64(writeDetail.ApplyWriteWalDuration))
+	atomic.AddInt64((*int64)(&wd.ApplyWriteMemtableDuration), int64(writeDetail.ApplyWriteMemtableDuration))
+}
+
+var zeroWriteDetail = WriteDetail{}
+
+func (wd *WriteDetail) String() string {
+	if wd == nil || *wd == zeroWriteDetail {
+		return ""
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, 64))
+	buf.WriteString("write_detail: {")
+	buf.WriteString("store_batch_wait: ")
+	buf.WriteString(FormatDuration(wd.StoreBatchWaitDuration))
+	buf.WriteString(", propose_send_wait: ")
+	buf.WriteString(FormatDuration(wd.ProposeSendWaitDuration))
+	buf.WriteString(", persist_log: {total: ")
+	buf.WriteString(FormatDuration(wd.PersistLogDuration))
+	buf.WriteString(", write_leader_wait: ")
+	buf.WriteString(FormatDuration(wd.RaftDbWriteLeaderWaitDuration))
+	buf.WriteString(", sync_log: ")
+	buf.WriteString(FormatDuration(wd.RaftDbSyncLogDuration))
+	buf.WriteString(", write_memtable: ")
+	buf.WriteString(FormatDuration(wd.RaftDbWriteMemtableDuration))
+	buf.WriteString("}, commit_log: ")
+	buf.WriteString(FormatDuration(wd.CommitLogDuration))
+	buf.WriteString(", apply_batch_wait: ")
+	buf.WriteString(FormatDuration(wd.ApplyBatchWaitDuration))
+	buf.WriteString(", apply: {total:")
+	buf.WriteString(FormatDuration(wd.ApplyLogDuration))
+	buf.WriteString(", mutex_lock: ")
+	buf.WriteString(FormatDuration(wd.ApplyMutexLockDuration))
+	buf.WriteString(", write_leader_wait: ")
+	buf.WriteString(FormatDuration(wd.ApplyWriteLeaderWaitDuration))
+	buf.WriteString(", write_wal: ")
+	buf.WriteString(FormatDuration(wd.ApplyWriteWalDuration))
+	buf.WriteString(", write_memtable: ")
+	buf.WriteString(FormatDuration(wd.ApplyWriteMemtableDuration))
+	buf.WriteString("}}")
+	return buf.String()
 }
 
 // TimeDetail contains coprocessor time detail information.
@@ -302,6 +559,8 @@ type TimeDetail struct {
 	WaitTime time.Duration
 	// KvReadWallTimeMs is the time used in KV Scan/Get.
 	KvReadWallTimeMs time.Duration
+	// TotalRPCWallTime is Total wall clock time spent on this RPC in TiKV.
+	TotalRPCWallTime time.Duration
 }
 
 // String implements the fmt.Stringer interface.
@@ -321,6 +580,13 @@ func (td *TimeDetail) String() string {
 		buf.WriteString("total_wait_time: ")
 		buf.WriteString(FormatDuration(td.WaitTime))
 	}
+	if td.TotalRPCWallTime > 0 {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString("tikv_wall_time: ")
+		buf.WriteString(FormatDuration(td.TotalRPCWallTime))
+	}
 	return buf.String()
 }
 
@@ -330,6 +596,7 @@ func (td *TimeDetail) MergeFromTimeDetail(timeDetail *kvrpcpb.TimeDetail) {
 		td.WaitTime += time.Duration(timeDetail.WaitWallTimeMs) * time.Millisecond
 		td.ProcessTime += time.Duration(timeDetail.ProcessWallTimeMs) * time.Millisecond
 		td.KvReadWallTimeMs += time.Duration(timeDetail.KvReadWallTimeMs) * time.Millisecond
+		td.TotalRPCWallTime += time.Duration(timeDetail.TotalRpcWallTimeNs) * time.Nanosecond
 	}
 }
 

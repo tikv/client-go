@@ -60,7 +60,7 @@ func TestPanicInRecvLoop(t *testing.T) {
 
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
 	rpcClient := NewRPCClient()
-	rpcClient.dialTimeout = time.Second / 3
+	rpcClient.option.dialTimeout = time.Second / 3
 
 	// Start batchRecvLoop, and it should panic in `failPendingRequests`.
 	_, err := rpcClient.getConnArray(addr, true, func(cfg *config.TiKVClient) { cfg.GrpcConnectionCount = 1 })

@@ -715,14 +715,14 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.RawDeleteRange().Context = ctx
 	case CmdRawScan:
 		req.RawScan().Context = ctx
-	case CmdUnsafeDestroyRange:
-		req.UnsafeDestroyRange().Context = ctx
 	case CmdGetKeyTTL:
 		req.RawGetKeyTTL().Context = ctx
 	case CmdRawCompareAndSwap:
 		req.RawCompareAndSwap().Context = ctx
 	case CmdRawChecksum:
 		req.RawChecksum().Context = ctx
+	case CmdUnsafeDestroyRange:
+		req.UnsafeDestroyRange().Context = ctx
 	case CmdRegisterLockObserver:
 		req.RegisterLockObserver().Context = ctx
 	case CmdCheckLockObserver:
@@ -924,6 +924,25 @@ func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 		return nil, errors.Errorf("invalid response type %v", resp)
 	}
 	return err.GetRegionError(), nil
+}
+
+type getExecDetailsV2 interface {
+	GetExecDetailsV2() *kvrpcpb.ExecDetailsV2
+}
+
+// GetExecDetailsV2 returns the ExecDetailsV2 of the underlying concrete response.
+func (resp *Response) GetExecDetailsV2() (*kvrpcpb.ExecDetailsV2, error) {
+	if resp == nil || resp.Resp == nil {
+		return nil, nil
+	}
+	details, ok := resp.Resp.(getExecDetailsV2)
+	if !ok {
+		if _, isEmpty := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); isEmpty {
+			return nil, nil
+		}
+		return nil, errors.Errorf("invalid response type %v", resp)
+	}
+	return details.GetExecDetailsV2(), nil
 }
 
 // CallRPC launches a rpc call.
