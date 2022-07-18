@@ -409,7 +409,7 @@ func (s *apiTestSuite) TestRawChecksum() {
 		expectChecksum.TotalBytes += (uint64)(len(key) + len(value))
 	}
 	s.mustBatchPut(prefix, keys, values)
-	checksum := s.mustChecksum(prefix, "", "")
+	checksum := s.mustChecksum("", "", "")
 	s.Equal(checksum, expectChecksum)
 }
 
