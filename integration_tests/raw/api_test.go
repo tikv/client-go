@@ -154,7 +154,9 @@ func (s *apiTestSuite) mustReverseScan(prefix string, start string, end string, 
 }
 
 func (s *apiTestSuite) mustChecksum(prefix string, start string, end string) rawkv.RawChecksum {
-	checksum, err := s.client.Checksum(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)))
+	end = withPrefix(prefix, end)
+	end += string([]byte{127})
+	checksum, err := s.client.Checksum(context.Background(), []byte(withPrefix(prefix, start)), []byte(end))
 	s.Nil(err)
 	return checksum
 }
@@ -406,11 +408,11 @@ func (s *apiTestSuite) TestRawChecksum() {
 		digest.Write([]byte(value))
 		expectChecksum.Crc64Xor ^= digest.Sum64()
 		expectChecksum.TotalKvs++
-		expectChecksum.TotalBytes += (uint64)(len(key) + len(value))
+		expectChecksum.TotalBytes += (uint64)(len(prefix) + len(key) + len(value))
 	}
 	s.mustBatchPut(prefix, keys, values)
-	checksum := s.mustChecksum("", "", "")
-	s.Equal(checksum, expectChecksum)
+	checksum := s.mustChecksum(prefix, "", "")
+	s.Equal(expectChecksum, checksum)
 }
 
 func (s *apiTestSuite) TearDownTest() {
