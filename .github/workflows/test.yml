@@ -10,7 +10,7 @@ jobs:
   test:
     strategy:
       matrix:
-        version: [1.17, 1.18]
+        version: [1.16, 1.17, 1.18]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
