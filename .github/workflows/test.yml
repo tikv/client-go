@@ -7,10 +7,7 @@ on:
     branches: [ master ]
 
 jobs:
-  unit-test:
-    strategy:
-      matrix:
-        version: [1.16, 1.17, 1.18]
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
@@ -18,7 +15,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v2
       with:
-        go-version: ${{ matrix.version }}
+        go-version: 1.16
 
     - name: Test
       run: go test ./...
@@ -38,8 +35,6 @@ jobs:
 
   golangci:
     runs-on: ubuntu-latest
-    container:
-      image: golangci/golangci-lint:v1.46
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -50,5 +45,5 @@ jobs:
           go-version: 1.18
 
       - name: Lint
-        run: GO111MODULE=on CGO_ENABLED=0 golangci-lint run --config .golangci.yml --timeout 10m ./...
+        uses: golangci/golangci-lint-action@v2.5.2
 
