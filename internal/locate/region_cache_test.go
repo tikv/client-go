@@ -44,7 +44,6 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
@@ -98,7 +97,7 @@ func (s *testRegionCacheSuite) checkCache(len int) {
 	ts := time.Now().Unix()
 	s.Equal(validRegions(s.cache.mu.regions, ts), len)
 	s.Equal(validRegionsSearchedByVersions(s.cache.mu.latestVersions, s.cache.mu.regions, ts), len)
-	s.Equal(validRegionsInBtree(s.cache.mu.sorted, ts), len)
+	s.Equal(s.cache.mu.sorted.ValidRegionsInBtree(ts), len)
 }
 
 func validRegionsSearchedByVersions(
@@ -123,18 +122,6 @@ func validRegions(regions map[RegionVerID]*Region, ts int64) (len int) {
 		}
 		len++
 	}
-	return
-}
-
-func validRegionsInBtree(t *btree.BTree, ts int64) (len int) {
-	t.Descend(func(item btree.Item) bool {
-		r := item.(*btreeItem).cachedRegion
-		if !r.checkRegionCacheTTL(ts) {
-			return true
-		}
-		len++
-		return true
-	})
 	return
 }
 
