@@ -8,9 +8,6 @@ on:
 
 jobs:
   unit-test:
-    strategy:
-      matrix:
-        version: [1.16, 1.17, 1.18]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
@@ -18,7 +15,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v2
       with:
-        go-version: ${{ matrix.version }}
+        go-version: 1.18
 
     - name: Test
       run: go test ./...
