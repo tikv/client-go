@@ -7,7 +7,7 @@ on:
     branches: [ master ]
 
 jobs:
-  test:
+  unit-test:
     strategy:
       matrix:
         version: [1.16, 1.17, 1.18]
