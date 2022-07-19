@@ -52,10 +52,10 @@ func TestBackoffWithMax(t *testing.T) {
 
 func TestBackoffErrorType(t *testing.T) {
 	// the actual maxSleep is multiplied by weight, which is 480ms
-	b := NewBackofferWithVars(context.TODO(), 250, nil)
+	b := NewBackofferWithVars(context.TODO(), 210, nil)
 	err := b.Backoff(BoRegionMiss, errors.New("region miss")) // 2ms sleep
 	assert.Nil(t, err)
-	// 300ms sleep at most in total
+	// 6ms sleep at most in total
 	for i := 0; i < 2; i++ {
 		err = b.Backoff(BoMaxDataNotReady, errors.New("data not ready"))
 		assert.Nil(t, err)
@@ -72,7 +72,7 @@ func TestBackoffErrorType(t *testing.T) {
 		err = b.Backoff(BoTxnNotFound, errors.New("txn not found"))
 		if err != nil {
 			// Next backoff should return error of backoff that sleeps for longest time.
-			assert.ErrorIs(t, err, BoMaxDataNotReady.err)
+			assert.ErrorIs(t, err, BoTxnNotFound.err)
 			return
 		}
 	}
@@ -81,7 +81,7 @@ func TestBackoffErrorType(t *testing.T) {
 
 func TestBackoffDeepCopy(t *testing.T) {
 	var err error
-	b := NewBackofferWithVars(context.TODO(), 200, nil)
+	b := NewBackofferWithVars(context.TODO(), 4, nil)
 	// 700 ms sleep in total and the backoffer will return an error next time.
 	for i := 0; i < 3; i++ {
 		err = b.Backoff(BoMaxDataNotReady, errors.New("data not ready"))
