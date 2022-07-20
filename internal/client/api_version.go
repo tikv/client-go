@@ -69,17 +69,15 @@ func EncodeV2Range(mode Mode, start, end []byte) ([]byte, []byte) {
 	return EncodeV2Key(mode, start), b
 }
 
-// EncodeV2KeyRange encode a KeyRange into API V2 format.
-func EncodeV2KeyRange(mode Mode, keyRange *kvrpcpb.KeyRange) *kvrpcpb.KeyRange {
-	encodedRange := kvrpcpb.KeyRange{
-		StartKey: EncodeV2Key(mode, keyRange.StartKey),
+// EncodeV2KeyRanges encode KeyRange slice into API V2 formatted new slice.
+func EncodeV2KeyRanges(mode Mode, keyRanges []*kvrpcpb.KeyRange) []*kvrpcpb.KeyRange {
+	encodedRanges := make([]*kvrpcpb.KeyRange, 0, len(keyRanges))
+	for i := 0; i < len(keyRanges); i++ {
+		keyRange := kvrpcpb.KeyRange{}
+		keyRange.StartKey, keyRange.EndKey = EncodeV2Range(ModeRaw, keyRanges[i].StartKey, keyRanges[i].EndKey)
+		encodedRanges = append(encodedRanges, &keyRange)
 	}
-	if len(keyRange.EndKey) > 0 {
-		encodedRange.EndKey = EncodeV2Key(mode, keyRange.EndKey)
-	} else {
-		encodedRange.EndKey = getV2EndKey(mode)
-	}
-	return &encodedRange
+	return encodedRanges
 }
 
 // MapV2RangeToV1 maps a range in API V2 format into V1 range.
@@ -175,12 +173,8 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		newReq.Req = &r
 	case tikvrpc.CmdRawChecksum:
 		r := *req.RawChecksum()
-		ranges := r.Ranges
 		// ranges in req maybe reused when retry, alloc another slice to avoid changing the range.
-		r.Ranges = make([]*kvrpcpb.KeyRange, 0, len(ranges))
-		for i := 0; i < len(ranges); i++ {
-			r.Ranges = append(r.Ranges, EncodeV2KeyRange(ModeRaw, ranges[i]))
-		}
+		r.Ranges = EncodeV2KeyRanges(ModeRaw, r.Ranges)
 		newReq.Req = &r
 	}
 
