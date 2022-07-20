@@ -931,18 +931,15 @@ type getExecDetailsV2 interface {
 }
 
 // GetExecDetailsV2 returns the ExecDetailsV2 of the underlying concrete response.
-func (resp *Response) GetExecDetailsV2() (*kvrpcpb.ExecDetailsV2, error) {
+func (resp *Response) GetExecDetailsV2() *kvrpcpb.ExecDetailsV2 {
 	if resp == nil || resp.Resp == nil {
-		return nil, nil
+		return nil
 	}
 	details, ok := resp.Resp.(getExecDetailsV2)
 	if !ok {
-		if _, isEmpty := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); isEmpty {
-			return nil, nil
-		}
-		return nil, errors.Errorf("invalid response type %v", resp)
+		return nil
 	}
-	return details.GetExecDetailsV2(), nil
+	return details.GetExecDetailsV2()
 }
 
 // CallRPC launches a rpc call.

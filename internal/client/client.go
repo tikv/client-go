@@ -437,8 +437,8 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 	counter.(sendReqCounterCacheValue).counter.Inc()
 	counter.(sendReqCounterCacheValue).timeCounter.Add(secs)
 
-	if execDetail, err := resp.GetExecDetailsV2(); err == nil &&
-		execDetail != nil && execDetail.TimeDetail != nil && execDetail.TimeDetail.TotalRpcWallTimeNs > 0 {
+	if execDetail := resp.GetExecDetailsV2(); execDetail != nil &&
+		execDetail.TimeDetail != nil && execDetail.TimeDetail.TotalRpcWallTimeNs > 0 {
 		latHist, ok := rpcNetLatencyHistCache.Load(storeID)
 		if !ok {
 			if len(storeIDStr) == 0 {
