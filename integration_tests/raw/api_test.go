@@ -395,7 +395,7 @@ func (s *apiTestSuite) TestRawChecksum() {
 		keys   []string
 		values []string
 	)
-	expectChecksum := rawkv.RawChecksum{}
+	expect := rawkv.RawChecksum{}
 	digest := crc64.New(crc64.MakeTable(crc64.ECMA))
 	for i := 0; i < 20480; i++ {
 		key := fmt.Sprintf("key@%v", i)
@@ -406,13 +406,13 @@ func (s *apiTestSuite) TestRawChecksum() {
 		digest.Reset()
 		digest.Write([]byte(key))
 		digest.Write([]byte(value))
-		expectChecksum.Crc64Xor ^= digest.Sum64()
-		expectChecksum.TotalKvs++
-		expectChecksum.TotalBytes += (uint64)(len(prefix) + len(key) + len(value))
+		expect.Crc64Xor ^= digest.Sum64()
+		expect.TotalKvs++
+		expect.TotalBytes += (uint64)(len(prefix) + len(key) + len(value))
 	}
 	s.mustBatchPut(prefix, keys, values)
 	checksum := s.mustChecksum(prefix, "", "")
-	s.Equal(expectChecksum, checksum)
+	s.Equal(expect, checksum)
 }
 
 func (s *apiTestSuite) TearDownTest() {
