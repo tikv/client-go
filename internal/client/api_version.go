@@ -74,7 +74,7 @@ func EncodeV2KeyRanges(mode Mode, keyRanges []*kvrpcpb.KeyRange) []*kvrpcpb.KeyR
 	encodedRanges := make([]*kvrpcpb.KeyRange, 0, len(keyRanges))
 	for i := 0; i < len(keyRanges); i++ {
 		keyRange := kvrpcpb.KeyRange{}
-		keyRange.StartKey, keyRange.EndKey = EncodeV2Range(ModeRaw, keyRanges[i].StartKey, keyRanges[i].EndKey)
+		keyRange.StartKey, keyRange.EndKey = EncodeV2Range(mode, keyRanges[i].StartKey, keyRanges[i].EndKey)
 		encodedRanges = append(encodedRanges, &keyRange)
 	}
 	return encodedRanges
@@ -122,6 +122,7 @@ func EncodeV2Pairs(mode Mode, pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair {
 }
 
 // EncodeRequest encodes req into specified API version format.
+// NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	if req.GetApiVersion() == kvrpcpb.APIVersion_V1 {
 		return req, nil
@@ -173,7 +174,6 @@ func EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		newReq.Req = &r
 	case tikvrpc.CmdRawChecksum:
 		r := *req.RawChecksum()
-		// ranges in req maybe reused when retry, alloc another slice to avoid changing the range.
 		r.Ranges = EncodeV2KeyRanges(ModeRaw, r.Ranges)
 		newReq.Req = &r
 	}
