@@ -374,8 +374,9 @@ func (c *RPCClient) closeConns() {
 }
 
 var (
-	sendReqHistCache    sync.Map
-	sendReqCounterCache sync.Map
+	sendReqHistCache       sync.Map
+	sendReqCounterCache    sync.Map
+	rpcNetLatencyHistCache sync.Map
 )
 
 type sendReqHistCacheKey struct {
@@ -394,10 +395,14 @@ type sendReqCounterCacheValue struct {
 	timeCounter prometheus.Counter
 }
 
-func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time, staleRead bool) {
+func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time, staleRead bool) {
+	elapsed := time.Since(start)
+	secs := elapsed.Seconds()
+	storeID := req.Context.GetPeer().GetStoreId()
+
 	histKey := sendReqHistCacheKey{
 		req.Type,
-		req.Context.GetPeer().GetStoreId(),
+		storeID,
 		staleRead,
 	}
 	counterKey := sendReqCounterCacheKey{
@@ -405,31 +410,49 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.
 		req.GetRequestSource(),
 	}
 
+	reqType := req.Type.String()
+	var storeIDStr string
+
 	hist, ok := sendReqHistCache.Load(histKey)
 	if !ok {
-		reqType := req.Type.String()
-		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead))
+		if len(storeIDStr) == 0 {
+			storeIDStr = strconv.FormatUint(storeID, 10)
+		}
+		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead))
 		sendReqHistCache.Store(histKey, hist)
 	}
 	counter, ok := sendReqCounterCache.Load(counterKey)
 	if !ok {
-		reqType := req.Type.String()
-		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
+		if len(storeIDStr) == 0 {
+			storeIDStr = strconv.FormatUint(storeID, 10)
+		}
 		counter = sendReqCounterCacheValue{
-			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead), counterKey.requestSource),
-			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead), counterKey.requestSource),
+			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
+			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
 		}
 		sendReqCounterCache.Store(counterKey, counter)
 	}
 
-	secs := time.Since(start).Seconds()
 	hist.(prometheus.Observer).Observe(secs)
 	counter.(sendReqCounterCacheValue).counter.Inc()
 	counter.(sendReqCounterCacheValue).timeCounter.Add(secs)
+
+	if execDetail := resp.GetExecDetailsV2(); execDetail != nil &&
+		execDetail.TimeDetail != nil && execDetail.TimeDetail.TotalRpcWallTimeNs > 0 {
+		latHist, ok := rpcNetLatencyHistCache.Load(storeID)
+		if !ok {
+			if len(storeIDStr) == 0 {
+				storeIDStr = strconv.FormatUint(storeID, 10)
+			}
+			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr)
+			sendReqHistCache.Store(storeID, latHist)
+		}
+		latency := elapsed - time.Duration(execDetail.TimeDetail.TotalRpcWallTimeNs)*time.Nanosecond
+		latHist.(prometheus.Observer).Observe(latency.Seconds())
+	}
 }
 
-func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -456,7 +479,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			detail := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
-		c.updateTiKVSendReqHistogram(req, start, staleRead)
+		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
 	}()
 
 	// TiDB RPC server supports batch RPC, but batch connection will send heart beat, It's not necessary since

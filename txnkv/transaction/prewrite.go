@@ -247,7 +247,8 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 		if attempts > 1 || action.retry {
 			req.IsRetryRequest = true
 		}
-		if time.Since(tBegin) > slowRequestThreshold {
+		reqBegin := time.Now()
+		if reqBegin.Sub(tBegin) > slowRequestThreshold {
 			logutil.BgLogger().Warn("slow prewrite request", zap.Uint64("startTS", c.startTS), zap.Stringer("region", &batch.region), zap.Int("attempts", attempts))
 			tBegin = time.Now()
 		}
@@ -305,6 +306,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			// Clear the RPC Error since the request is evaluated successfully.
 			sender.SetRPCError(nil)
 
+			// Update CommitDetails
+			reqDuration := time.Since(reqBegin)
+			c.getDetail().MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), prewriteResp.ExecDetailsV2)
+
 			if batch.isPrimary {
 				// After writing the primary key, if the size of the transaction is larger than 32M,
 				// start the ttlManager. The ttlManager will be closed in tikvTxn.Commit().
@@ -358,6 +363,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					c.mu.Unlock()
 				}
 			}
+
 			return nil
 		}
 		var locks []*txnlock.Lock

@@ -371,7 +371,7 @@ type RegionCache struct {
 		sync.RWMutex                           // mutex protect cached region
 		regions        map[RegionVerID]*Region // cached regions are organized as regionVerID to region ref mapping
 		latestVersions map[uint64]RegionVerID  // cache the map from regionID to its latest RegionVerID
-		sorted         *btree.BTree            // cache regions are organized as sorted key to region ref mapping
+		sorted         *SortedRegions          // cache regions are organized as sorted key to region ref mapping
 	}
 	storeMu struct {
 		sync.RWMutex
@@ -410,7 +410,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 
 	c.mu.regions = make(map[RegionVerID]*Region)
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted = btree.New(btreeDegree)
+	c.mu.sorted = NewSortedRegions(btreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.tiflashMPPStoreMu.needReload = true
 	c.tiflashMPPStoreMu.stores = make([]*Store, 0)
@@ -427,7 +427,7 @@ func (c *RegionCache) clear() {
 	c.mu.Lock()
 	c.mu.regions = make(map[RegionVerID]*Region)
 	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted = btree.New(btreeDegree)
+	c.mu.sorted.Clear()
 	c.mu.Unlock()
 	c.storeMu.Lock()
 	c.storeMu.stores = make(map[uint64]*Store)
@@ -1284,10 +1284,9 @@ func (c *RegionCache) removeVersionFromCache(oldVer RegionVerID, regionID uint64
 // insertRegionToCache tries to insert the Region to cache.
 // It should be protected by c.mu.Lock().
 func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
-	old := c.mu.sorted.ReplaceOrInsert(newBtreeItem(cachedRegion))
-	if old != nil {
+	oldRegion := c.mu.sorted.ReplaceOrInsert(cachedRegion)
+	if oldRegion != nil {
 		store := cachedRegion.getStore()
-		oldRegion := old.(*btreeItem).cachedRegion
 		oldRegionStore := oldRegion.getStore()
 		// TODO(youjiali1995): remove this because the new retry logic can handle this issue.
 		//
@@ -1328,18 +1327,7 @@ func (c *RegionCache) searchCachedRegion(key []byte, isEndKey bool) *Region {
 	ts := time.Now().Unix()
 	var r *Region
 	c.mu.RLock()
-	c.mu.sorted.DescendLessOrEqual(newBtreeSearchItem(key), func(item btree.Item) bool {
-		r = item.(*btreeItem).cachedRegion
-		if isEndKey && bytes.Equal(r.StartKey(), key) {
-			r = nil     // clear result
-			return true // iterate next item
-		}
-		if !r.checkRegionCacheTTL(ts) {
-			r = nil
-			return true
-		}
-		return false
-	})
+	r = c.mu.sorted.DescendLessOrEqual(key, isEndKey, ts)
 	c.mu.RUnlock()
 	if r != nil && (!isEndKey && r.Contains(key) || isEndKey && r.ContainsByEnd(key)) {
 		return r
@@ -1532,14 +1520,7 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 	var regions []*Region
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	c.mu.sorted.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item btree.Item) bool {
-		region := item.(*btreeItem).cachedRegion
-		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
-			return false
-		}
-		regions = append(regions, region)
-		return len(regions) < limit
-	})
+	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
 
 	if len(regions) == 0 {
 		return nil, errors.New("no regions in the cache")

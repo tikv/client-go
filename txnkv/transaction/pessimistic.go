@@ -144,10 +144,12 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			time.Sleep(300 * time.Millisecond)
 			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})
 		}
+		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 		startTime := time.Now()
-		resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		reqDuration := time.Since(startTime)
 		if action.LockCtx.Stats != nil {
-			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(time.Since(startTime)))
+			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(reqDuration))
 			atomic.AddInt64(&action.LockCtx.Stats.LockRPCCount, 1)
 		}
 		if err != nil {
@@ -183,6 +185,8 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		lockResp := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
 		keyErrs := lockResp.GetErrors()
 		if len(keyErrs) == 0 {
+			action.LockCtx.Stats.MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+
 			if batch.isPrimary {
 				// After locking the primary key, we should protect the primary lock from expiring
 				// now in case locking the remaining keys take a long time.
