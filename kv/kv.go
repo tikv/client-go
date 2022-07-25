@@ -65,6 +65,7 @@ type LockCtx struct {
 	LockKeysCount         *int32
 	ReturnValues          bool
 	CheckExistence        bool
+	LockIfExists          bool
 	Values                map[string]ReturnedValue
 	ValuesLock            sync.Mutex
 	LockExpired           *uint32
