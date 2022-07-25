@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/crc64"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -150,6 +151,14 @@ func (s *apiTestSuite) mustReverseScan(prefix string, start string, end string, 
 	ks, vs, err := s.client.ReverseScan(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)), limit)
 	s.Nil(err)
 	return toStrings(ks), toStrings(vs)
+}
+
+func (s *apiTestSuite) mustChecksum(prefix string, start string, end string) rawkv.RawChecksum {
+	end = withPrefix(prefix, end)
+	end += string([]byte{127})
+	checksum, err := s.client.Checksum(context.Background(), []byte(withPrefix(prefix, start)), []byte(end))
+	s.Nil(err)
+	return checksum
 }
 
 func (s *apiTestSuite) mustDeleteRange(prefix string, start, end string) {
@@ -375,6 +384,35 @@ func (s *apiTestSuite) TestDeleteRange() {
 	s.mustNotExist(prefix, "key@0")
 	s.mustNotExist(prefix, "key@1")
 	s.mustNotExist(prefix, "key@2")
+}
+
+func (s *apiTestSuite) TestRawChecksum() {
+	prefix := "test_checksum"
+
+	s.cleanKeyPrefix(prefix)
+
+	var (
+		keys   []string
+		values []string
+	)
+	expect := rawkv.RawChecksum{}
+	digest := crc64.New(crc64.MakeTable(crc64.ECMA))
+	for i := 0; i < 20480; i++ {
+		key := fmt.Sprintf("key@%v", i)
+		value := fmt.Sprintf("value@%v", i)
+		keys = append(keys, key)
+		values = append(values, value)
+
+		digest.Reset()
+		digest.Write([]byte(key))
+		digest.Write([]byte(value))
+		expect.Crc64Xor ^= digest.Sum64()
+		expect.TotalKvs++
+		expect.TotalBytes += (uint64)(len(prefix) + len(key) + len(value))
+	}
+	s.mustBatchPut(prefix, keys, values)
+	checksum := s.mustChecksum(prefix, "", "")
+	s.Equal(expect, checksum)
 }
 
 func (s *apiTestSuite) TearDownTest() {
