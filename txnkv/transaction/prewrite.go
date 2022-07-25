@@ -74,7 +74,7 @@ func (actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize uint64) *tikvrpc.Request {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
-	isPessimisticLock := make([]bool, m.Len())
+	isPessimisticLock := make([]kvrpcpb.PessimisticLockType, m.Len())
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
 		if m.IsAssertExists(i) {
@@ -89,7 +89,11 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			Value:     m.GetValue(i),
 			Assertion: assertion,
 		}
-		isPessimisticLock[i] = m.IsPessimisticLock(i)
+		if m.IsPessimisticLock(i) {
+			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_PessimisticLocked
+		} else {
+			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_NonPessimisticLocked
+		}
 	}
 	c.mu.Lock()
 	minCommitTS := c.minCommitTS
