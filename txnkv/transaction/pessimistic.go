@@ -248,7 +248,9 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		resolveLockOpts := txnlock.ResolveLocksOptions{
 			CallerStartTS: 0,
 			Locks:         locks,
-			Detail:        &action.LockCtx.Stats.ResolveLock,
+		}
+		if action.LockCtx.Stats != nil {
+			resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
 		}
 		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
