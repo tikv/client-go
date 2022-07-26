@@ -679,7 +679,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			txn.committer.primaryKey = keys[0]
 			assignedPrimaryKey = true
 		}
-		if atomic.LoadUint32(&lockCtx.LockStatsOn) > 0 {
+		if lockCtx.LockStatsOn {
 			lockCtx.Stats = &util.LockKeysDetails{
 				LockKeys:    int32(len(keys)),
 				ResolveLock: util.ResolveLockDetail{},

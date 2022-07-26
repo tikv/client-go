@@ -71,7 +71,7 @@ type LockCtx struct {
 	LockExpired           *uint32
 	Stats                 *util.LockKeysDetails
 	// Whether stats lock keys info using the field `Stats`
-	LockStatsOn      uint32
+	LockStatsOn      bool
 	ResourceGroupTag []byte
 	// ResourceGroupTagger is a special tagger used only for PessimisticLockRequest.
 	// We did not use tikvrpc.ResourceGroupTagger here because the kv package is a
