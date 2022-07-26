@@ -91,6 +91,8 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 		if m.IsPessimisticLock(i) {
 			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_PessimisticLocked
+		} else if m.NeedConflictCheckInPrewrite(i) {
+			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_NeedConflictCheck
 		} else {
 			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_NonPessimisticLocked
 		}

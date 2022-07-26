@@ -62,6 +62,12 @@ const (
 	flagAssertExist
 	flagAssertNotExist
 
+	// It marks the conflict check of the key is postponed to prewrite. This is only used in pessimistic transactions.
+	// When the key gets locked (and the existence is checked), the flag should be removed.
+	// It should only be applied to keys with PresumeNotExist, so that an in-place constraint check becomes
+	// (a conflict check + a constraint check) in prewrite.
+	flagNeedConflictCheckInPrewrite
+
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist
 )
 
@@ -125,6 +131,11 @@ func (f KeyFlags) HasReadable() bool {
 	return f&flagReadable != 0
 }
 
+// HasNeedConflictCheckInPrewrite returns whether the key needs to check conflict in prewrite.
+func (f KeyFlags) HasNeedConflictCheckInPrewrite() bool {
+	return f&flagNeedConflictCheckInPrewrite != 0
+}
+
 // AndPersistent returns the value of current flags&persistentFlags
 func (f KeyFlags) AndPersistent() KeyFlags {
 	return f & persistentFlags
@@ -153,10 +164,12 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin &= ^flagNeedLocked
 		case SetKeyLockedValueExists:
 			origin |= flagKeyLockedValExist
+			origin &= ^flagNeedConflictCheckInPrewrite
 		case DelNeedCheckExists:
 			origin &= ^flagNeedCheckExists
 		case SetKeyLockedValueNotExists:
 			origin &= ^flagKeyLockedValExist
+			origin &= ^flagNeedConflictCheckInPrewrite
 		case SetPrewriteOnly:
 			origin |= flagPrewriteOnly
 		case SetIgnoredIn2PC:
@@ -177,6 +190,8 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 		case SetAssertNone:
 			origin &= ^flagAssertExist
 			origin &= ^flagAssertNotExist
+		case SetNeedConflictCheckInPrewrite:
+			origin |= flagNeedConflictCheckInPrewrite
 		}
 	}
 	return origin
@@ -221,4 +236,6 @@ const (
 	SetAssertUnknown
 	// SetAssertNone cleans up the key's assert.
 	SetAssertNone
+	// SetNeedConflictCheckInPrewrite marks the key needs to check conflict in prewrite.
+	SetNeedConflictCheckInPrewrite
 )

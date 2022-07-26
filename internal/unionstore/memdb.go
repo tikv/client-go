@@ -280,6 +280,11 @@ func (db *MemDB) GetKeyByHandle(handle MemKeyHandle) []byte {
 	return x.getKey()
 }
 
+func (db *MemDB) GetFlagsByHandle(handle MemKeyHandle) kv.KeyFlags {
+	x := db.getNode(handle.toAddr())
+	return x.getKeyFlags()
+}
+
 // GetValueByHandle returns value by handle.
 func (db *MemDB) GetValueByHandle(handle MemKeyHandle) ([]byte, bool) {
 	if db.vlogInvalid {
