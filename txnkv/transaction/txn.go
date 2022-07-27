@@ -887,7 +887,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		}
 
 		lockWaitMode := kvrpcpb.PessimisticWaitLockMode_RetryFirst
-		if txn.aggressiveLockingContext != nil {
+		if txn.aggressiveLockingContext != nil && len(keys) == 1 {
 			lockWaitMode = kvrpcpb.PessimisticWaitLockMode_LockFirst
 		}
 
