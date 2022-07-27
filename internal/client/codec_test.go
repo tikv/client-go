@@ -16,17 +16,18 @@ func TestEncodeRequest(t *testing.T) {
 		},
 	}
 	req.ApiVersion = kvrpcpb.APIVersion_V2
+	codec := NewCodecV2(ModeRaw)
 
-	r, err := EncodeRequest(req)
+	r, err := EncodeRequest(req, codec)
 	require.Nil(t, err)
 	require.Equal(t, append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
 
-	r, err = EncodeRequest(req)
+	r, err = EncodeRequest(req, codec)
 	require.Nil(t, err)
 	require.Equal(t, append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
 }
 
-func TestEncodeEncodeV2KeyRanges(t *testing.T) {
+func TestEncodeV2KeyRanges(t *testing.T) {
 	keyRanges := []*kvrpcpb.KeyRange{
 		{
 			StartKey: []byte{},
@@ -47,22 +48,23 @@ func TestEncodeEncodeV2KeyRanges(t *testing.T) {
 	}
 	expect := []*kvrpcpb.KeyRange{
 		{
-			StartKey: getV2Prefix(ModeRaw),
-			EndKey:   getV2EndKey(ModeRaw),
+			StartKey: APIV2RawKeyPrefix,
+			EndKey:   APIV2RawEndKey,
 		},
 		{
-			StartKey: getV2Prefix(ModeRaw),
-			EndKey:   append(getV2Prefix(ModeRaw), 'z'),
+			StartKey: APIV2RawKeyPrefix,
+			EndKey:   append(APIV2RawKeyPrefix, 'z'),
 		},
 		{
-			StartKey: append(getV2Prefix(ModeRaw), 'a'),
-			EndKey:   getV2EndKey(ModeRaw),
+			StartKey: append(APIV2RawKeyPrefix, 'a'),
+			EndKey:   APIV2RawEndKey,
 		},
 		{
-			StartKey: append(getV2Prefix(ModeRaw), 'a'),
-			EndKey:   append(getV2Prefix(ModeRaw), 'z'),
+			StartKey: append(APIV2RawKeyPrefix, 'a'),
+			EndKey:   append(APIV2RawKeyPrefix, 'z'),
 		},
 	}
-	encodedKeyRanges := EncodeV2KeyRanges(ModeRaw, keyRanges)
+	codec := NewCodecV2(ModeRaw)
+	encodedKeyRanges := codec.EncodeKeyRanges(keyRanges)
 	require.Equal(t, expect, encodedKeyRanges)
 }

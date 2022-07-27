@@ -258,6 +258,7 @@ type option struct {
 	gRPCDialOptions []grpc.DialOption
 	security        config.Security
 	dialTimeout     time.Duration
+	codec           Codec
 }
 
 // Opt is the option for the client.
@@ -274,6 +275,13 @@ func WithSecurity(security config.Security) Opt {
 func WithGRPCDialOptions(grpcDialOptions ...grpc.DialOption) Opt {
 	return func(c *option) {
 		c.gRPCDialOptions = grpcDialOptions
+	}
+}
+
+// WithCodec is used to set RPCClient's codec.
+func WithCodec(codec Codec) Opt {
+	return func(c *option) {
+		c.codec = codec
 	}
 }
 
@@ -526,7 +534,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 // SendRequest sends a Request to server and receives Response.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	req, err := EncodeRequest(req)
+	if c.option == nil || c.option.codec == nil {
+		return c.sendRequest(ctx, addr, req, timeout)
+	}
+
+	req, err := EncodeRequest(req, c.option.codec)
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +546,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if err != nil {
 		return nil, err
 	}
-	return DecodeResponse(req, resp)
+	return DecodeResponse(req, resp, c.option.codec)
 }
 
 func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {

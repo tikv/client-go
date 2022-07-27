@@ -606,7 +606,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, err
 	}
 
-	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
+	s, err := NewKVStore(uuid, locate.NewCodecPDClient(pdCli, client.NewCodecV1(client.ModeTxn)), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
 		return nil, err
 	}

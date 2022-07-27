@@ -36,10 +36,11 @@ package locate
 
 import (
 	"context"
+	"github.com/pingcap/kvproto/pkg/pdpb"
+	"github.com/tikv/client-go/v2/internal/client"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -48,51 +49,53 @@ var _ pd.Client = &CodecPDClient{}
 // CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
 type CodecPDClient struct {
 	pd.Client
+	codec client.Codec
 }
 
-// NewCodeCPDClient creates a CodecPDClient.
-func NewCodeCPDClient(client pd.Client) *CodecPDClient {
-	return &CodecPDClient{client}
+// NewCodecPDClient creates a CodecPDClient.
+func NewCodecPDClient(client pd.Client, codec client.Codec) *CodecPDClient {
+	return &CodecPDClient{client, codec}
+}
+
+// GetCodec returns CodecPDClient's codec.
+func (c *CodecPDClient) GetCodec() client.Codec {
+	return c.codec
 }
 
 // GetRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	encodedKey := codec.EncodeBytes([]byte(nil), key)
+	encodedKey := c.codec.EncodeRegionKey(key)
 	region, err := c.Client.GetRegion(ctx, encodedKey, opts...)
-	return processRegionResult(region, err)
+	return c.processRegionResult(region, err)
 }
 
 // GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	encodedKey := codec.EncodeBytes([]byte(nil), key)
+	encodedKey := c.codec.EncodeRegionKey(key)
 	region, err := c.Client.GetPrevRegion(ctx, encodedKey, opts...)
-	return processRegionResult(region, err)
+	return c.processRegionResult(region, err)
 }
 
 // GetRegionByID encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	region, err := c.Client.GetRegionByID(ctx, regionID, opts...)
-	return processRegionResult(region, err)
+	return c.processRegionResult(region, err)
 }
 
 // ScanRegions encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int) ([]*pd.Region, error) {
-	startKey = codec.EncodeBytes([]byte(nil), startKey)
-	if len(endKey) > 0 {
-		endKey = codec.EncodeBytes([]byte(nil), endKey)
-	}
-
+	startKey, endKey = c.codec.EncodeRegionRange(startKey, endKey)
 	regions, err := c.Client.ScanRegions(ctx, startKey, endKey, limit)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	for _, region := range regions {
 		if region != nil {
-			err = decodeRegionKeyInPlace(region)
+			err = c.decodeRegionKeyInPlace(region)
 			if err != nil {
 				return nil, err
 			}
@@ -101,58 +104,44 @@ func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey
 	return regions, nil
 }
 
-func processRegionResult(region *pd.Region, err error) (*pd.Region, error) {
+// SplitRegions split regions by given split keys
+func (c *CodecPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+	var keys [][]byte
+	for i := range splitKeys {
+		keys = append(keys, c.codec.EncodeRegionKey(splitKeys[i]))
+	}
+	return c.Client.SplitRegions(ctx, keys, opts...)
+}
+
+func (c *CodecPDClient) processRegionResult(region *pd.Region, err error) (*pd.Region, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	if region == nil || region.Meta == nil {
 		return nil, nil
 	}
-	err = decodeRegionKeyInPlace(region)
+	err = c.decodeRegionKeyInPlace(region)
 	if err != nil {
 		return nil, err
 	}
 	return region, nil
 }
 
-// decodeError happens if the region range key is not well-formed.
-// It indicates TiKV has bugs and the client can't handle such a case,
-// so it should report the error to users soon.
-type decodeError struct {
-	error
-}
-
-func isDecodeError(err error) bool {
-	_, ok := errors.Cause(err).(*decodeError)
-	if !ok {
-		_, ok = errors.Cause(err).(decodeError)
+func (c *CodecPDClient) decodeRegionKeyInPlace(r *pd.Region) error {
+	decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.Meta.StartKey, r.Meta.EndKey)
+	if err != nil {
+		return err
 	}
-	return ok
-}
-
-func decodeRegionKeyInPlace(r *pd.Region) error {
-	if len(r.Meta.StartKey) != 0 {
-		_, decoded, err := codec.DecodeBytes(r.Meta.StartKey, nil)
-		if err != nil {
-			return errors.WithStack(&decodeError{err})
-		}
-		r.Meta.StartKey = decoded
-	}
-	if len(r.Meta.EndKey) != 0 {
-		_, decoded, err := codec.DecodeBytes(r.Meta.EndKey, nil)
-		if err != nil {
-			return errors.WithStack(&decodeError{err})
-		}
-		r.Meta.EndKey = decoded
-	}
+	r.Meta.StartKey = decodedStart
+	r.Meta.EndKey = decodedEnd
 	if r.Buckets != nil {
 		for i, k := range r.Buckets.Keys {
 			if len(k) == 0 {
 				continue
 			}
-			_, decoded, err := codec.DecodeBytes(k, nil)
+			decoded, err := c.codec.DecodeRegionKey(k)
 			if err != nil {
-				return errors.WithStack(&decodeError{err})
+				return errors.WithStack(err)
 			}
 			r.Buckets.Keys[i] = decoded
 		}
@@ -160,21 +149,13 @@ func decodeRegionKeyInPlace(r *pd.Region) error {
 	return nil
 }
 
-func decodeRegionMetaKeyWithShallowCopy(r *metapb.Region) (*metapb.Region, error) {
+func (c *CodecPDClient) decodeRegionMetaKeyWithShallowCopy(r *metapb.Region) (*metapb.Region, error) {
 	nr := *r
-	if len(r.StartKey) != 0 {
-		_, decoded, err := codec.DecodeBytes(r.StartKey, nil)
-		if err != nil {
-			return nil, err
-		}
-		nr.StartKey = decoded
+	decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.StartKey, r.EndKey)
+	if err != nil {
+		return nil, err
 	}
-	if len(r.EndKey) != 0 {
-		_, decoded, err := codec.DecodeBytes(r.EndKey, nil)
-		if err != nil {
-			return nil, err
-		}
-		nr.EndKey = decoded
-	}
+	nr.StartKey = decodedStart
+	nr.EndKey = decodedEnd
 	return &nr, nil
 }

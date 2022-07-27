@@ -36,6 +36,7 @@ package tikv
 
 import (
 	"github.com/google/uuid"
+	cli "github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	pd "github.com/tikv/pd/client"
 )
@@ -46,7 +47,7 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 		client = clientHijack(client)
 	}
 
-	pdCli := pd.Client(locate.NewCodeCPDClient(pdClient))
+	pdCli := pd.Client(locate.NewCodecPDClient(pdClient, cli.NewCodecV1(cli.ModeRaw)))
 	if pdClientHijack != nil {
 		pdCli = pdClientHijack(pdCli)
 	}
