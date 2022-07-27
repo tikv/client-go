@@ -42,6 +42,7 @@ import (
 	"math"
 	"runtime/trace"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -453,10 +454,11 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 }
 
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
+	var spanRPC opentracing.Span
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		ctx = opentracing.ContextWithSpan(ctx, span1)
+		spanRPC = span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
+		defer spanRPC.Finish()
+		ctx = opentracing.ContextWithSpan(ctx, spanRPC)
 	}
 
 	if atomic.CompareAndSwapUint32(&c.idleNotify, 1, 0) {
@@ -480,6 +482,10 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
 		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
+
+		if spanRPC != nil && util.TraceExecEnabled(ctx) {
+			traceExecDetails(spanRPC, start, resp)
+		}
 	}()
 
 	// TiDB RPC server supports batch RPC, but batch connection will send heart beat, It's not necessary since
@@ -487,7 +493,8 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if config.GetGlobalConfig().TiKVClient.MaxBatchSize > 0 && enableBatch {
 		if batchReq := req.ToBatchCommandsRequest(); batchReq != nil {
 			defer trace.StartRegion(ctx, req.Type.String()).End()
-			return sendBatchRequest(ctx, addr, req.ForwardedHost, connArray.batchConn, batchReq, timeout)
+			resp, err = sendBatchRequest(ctx, addr, req.ForwardedHost, connArray.batchConn, batchReq, timeout)
+			return
 		}
 	}
 
@@ -501,7 +508,8 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		client := debugpb.NewDebugClient(clientConn)
 		ctx1, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		return tikvrpc.CallDebugRPC(ctx1, client, req)
+		resp, err = tikvrpc.CallDebugRPC(ctx1, client, req)
+		return
 	}
 
 	client := tikvpb.NewTikvClient(clientConn)
@@ -512,16 +520,20 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 	switch req.Type {
 	case tikvrpc.CmdBatchCop:
-		return c.getBatchCopStreamResponse(ctx, client, req, timeout, connArray)
+		resp, err = c.getBatchCopStreamResponse(ctx, client, req, timeout, connArray)
+		return
 	case tikvrpc.CmdCopStream:
-		return c.getCopStreamResponse(ctx, client, req, timeout, connArray)
+		resp, err = c.getCopStreamResponse(ctx, client, req, timeout, connArray)
+		return
 	case tikvrpc.CmdMPPConn:
-		return c.getMPPStreamResponse(ctx, client, req, timeout, connArray)
+		resp, err = c.getMPPStreamResponse(ctx, client, req, timeout, connArray)
+		return
 	}
 	// Or else it's a unary call.
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return tikvrpc.CallRPC(ctx1, client, req)
+	resp, err = tikvrpc.CallRPC(ctx1, client, req)
+	return
 }
 
 // SendRequest sends a Request to server and receives Response.
@@ -660,4 +672,128 @@ func (c *RPCClient) CloseAddr(addr string) error {
 		conn.Close()
 	}
 	return nil
+}
+
+type spanInfo struct {
+	name     string
+	dur      uint64
+	async    bool
+	children []spanInfo
+}
+
+func (si *spanInfo) calcDur() uint64 {
+	if si.dur <= 0 {
+		si.dur = 0
+		for _, child := range si.children {
+			if child.async {
+				continue
+			}
+			si.dur += child.calcDur()
+		}
+	}
+	return si.dur
+}
+
+func (si *spanInfo) addTo(parent opentracing.Span, start time.Time) time.Time {
+	if parent == nil {
+		return start
+	}
+	dur := si.calcDur()
+	if dur <= 0 {
+		return start
+	}
+	end := start.Add(time.Duration(dur) * time.Nanosecond)
+	tracer := parent.Tracer()
+	span := tracer.StartSpan(si.name, opentracing.ChildOf(parent.Context()), opentracing.StartTime(start))
+	t := start
+	for _, child := range si.children {
+		t = child.addTo(span, t)
+	}
+	span.FinishWithOptions(opentracing.FinishOptions{FinishTime: end})
+	if si.async {
+		span.SetTag("async", "true")
+		return start
+	}
+	return end
+}
+
+func (si *spanInfo) printTo(out io.StringWriter) {
+	out.WriteString(si.name)
+	if si.async {
+		out.WriteString("'")
+	}
+	if si.dur > 0 {
+		out.WriteString("[")
+		out.WriteString(time.Duration(si.dur).String())
+		out.WriteString("]")
+	}
+	if len(si.children) > 0 {
+		out.WriteString("{")
+		for _, child := range si.children {
+			out.WriteString(" ")
+			child.printTo(out)
+		}
+		out.WriteString(" }")
+	}
+}
+
+func (si *spanInfo) String() string {
+	buf := new(strings.Builder)
+	si.printTo(buf)
+	return buf.String()
+}
+
+func traceExecDetails(parent opentracing.Span, start time.Time, resp *tikvrpc.Response) {
+	details := resp.GetExecDetailsV2()
+	if details == nil || parent == nil {
+		return
+	}
+
+	td := details.TimeDetail
+	sd := details.ScanDetailV2
+	wd := details.WriteDetail
+
+	if td == nil {
+		return
+	}
+
+	spanRPC := spanInfo{name: "tikv.RPC", dur: td.TotalRpcWallTimeNs}
+	spanWait := spanInfo{name: "tikv.Wait", dur: td.WaitWallTimeMs * uint64(time.Millisecond)}
+	spanProcess := spanInfo{name: "tikv.Process", dur: td.ProcessWallTimeMs * uint64(time.Millisecond)}
+
+	if sd != nil {
+		spanWait.children = append(spanWait.children, spanInfo{name: "tikv.GetSnapshot", dur: sd.GetSnapshotNanos})
+		if wd == nil {
+			spanProcess.children = append(spanProcess.children, spanInfo{name: "tikv.RocksDBBlockRead", dur: sd.RocksdbBlockReadNanos})
+		}
+	}
+
+	spanRPC.children = append(spanRPC.children, spanWait, spanProcess)
+
+	if wd != nil {
+		spanAsyncWrite := spanInfo{
+			name: "tikv.AsyncWrite",
+			children: []spanInfo{
+				{name: "tikv.StoreBatchWait", dur: wd.StoreBatchWaitNanos},
+				{name: "tikv.ProposeSendWait", dur: wd.ProposeSendWaitNanos},
+				{name: "tikv.PersistLog", dur: wd.PersistLogNanos, async: true, children: []spanInfo{
+					{name: "tikv.RaftDBWriteWait", dur: wd.RaftDbWriteLeaderWaitNanos}, // MutexLock + WriteLeader
+					{name: "tikv.RaftDBWriteWAL", dur: wd.RaftDbSyncLogNanos},
+					{name: "tikv.RaftDBWriteMemtable", dur: wd.RaftDbWriteMemtableNanos},
+				}},
+				{name: "tikv.CommitLog", dur: wd.CommitLogNanos},
+				{name: "tikv.ApplyBatchWait", dur: wd.ApplyBatchWaitNanos},
+				{name: "tikv.ApplyLog", dur: wd.ApplyLogNanos, children: []spanInfo{
+					{name: "tikv.ApplyMutexLock", dur: wd.ApplyMutexLockNanos},
+					{name: "tikv.ApplyWriteLeaderWait", dur: wd.ApplyWriteLeaderWaitNanos},
+					{name: "tikv.ApplyWriteWAL", dur: wd.ApplyWriteWalNanos},
+					{name: "tikv.ApplyWriteMemtable", dur: wd.ApplyWriteMemtableNanos},
+				}},
+			},
+		}
+		spanRPC.children = append(spanRPC.children, spanAsyncWrite)
+	}
+
+	spanRPC.addTo(parent, start)
+
 }
