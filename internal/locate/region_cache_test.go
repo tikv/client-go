@@ -38,6 +38,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tikv/client-go/v2/internal/client"
 	"math/rand"
 	"reflect"
 	"testing"
@@ -79,7 +80,7 @@ func (s *testRegionCacheSuite) SetupTest() {
 	s.store2 = storeIDs[1]
 	s.peer1 = peerIDs[0]
 	s.peer2 = peerIDs[1]
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), client.NewCodecV1(client.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
@@ -956,7 +957,7 @@ func (s *testRegionCacheSuite) TestReconnect() {
 
 func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	// Create a separated region cache to do this test.
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), client.NewCodecV1(client.ModeTxn)}
 	cache := NewRegionCache(pdCli)
 	defer cache.Close()
 

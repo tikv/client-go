@@ -91,11 +91,11 @@ type RPCRuntimeStats = locate.RPCRuntimeStats
 // CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
 type CodecPDClient = locate.CodecPDClient
 
-// CodecPDClientV2 wraps a PD Client to decode the region meta in API v2 manner.
-type CodecPDClientV2 = locate.CodecPDClientV2
+// NewCodecPDClient is a constructor for CodecPDClient
+var NewCodecPDClient = locate.NewCodecPDClient
 
-// NewCodecPDClientV2 is a constructor for CodecPDClientV2
-var NewCodecPDClientV2 = locate.NewCodecPDClientV2
+// NewCodecV2 is a constructor for v2 Codec.
+var NewCodecV2 = client.NewCodecV2
 
 // Mode represents the operation mode of a request, export client.Mode
 type Mode = client.Mode

@@ -401,11 +401,9 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		pdClient: pdClient,
 	}
 
-	switch pdClient.(type) {
-	case *CodecPDClientV2:
-		c.apiVersion = kvrpcpb.APIVersion_V2
-	default:
-		c.apiVersion = kvrpcpb.APIVersion_V1
+	c.apiVersion = kvrpcpb.APIVersion_V1
+	if codecPDClient, ok := pdClient.(*CodecPDClient); ok {
+		c.apiVersion = codecPDClient.GetCodec().GetAPIVersion()
 	}
 
 	c.mu.regions = make(map[RegionVerID]*Region)
@@ -1450,7 +1448,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 			metrics.RegionCacheCounterWithGetCacheMissOK.Inc()
 		}
 		if err != nil {
-			if isDecodeError(err) {
+			if client.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v", util.HexRegionKeyStr(key), err)
 			}
 			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", util.HexRegionKeyStr(key), err)
@@ -1497,7 +1495,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			metrics.RegionCacheCounterWithGetRegionByIDOK.Inc()
 		}
 		if err != nil {
-			if isDecodeError(err) {
+			if client.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, regionID: %q, err: %v", regionID, err)
 			}
 			backoffErr = errors.Errorf("loadRegion from PD failed, regionID: %v, err: %v", regionID, err)
@@ -1558,7 +1556,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
-			if isDecodeError(err) {
+			if client.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", util.HexRegionKeyStr(startKey), limit, err)
 			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
@@ -1751,15 +1749,10 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	for _, meta := range currentRegions {
 		var err error
 		oldMeta := meta
-		switch c.pdClient.(type) {
-		case *CodecPDClient:
+		if codecPDClient, ok := c.pdClient.(*CodecPDClient); ok {
 			// Can't modify currentRegions in this function because it can be shared by
 			// multiple goroutines, refer to https://github.com/pingcap/tidb/pull/16962.
-			if meta, err = decodeRegionMetaKeyWithShallowCopy(meta); err != nil {
-				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
-			}
-		case *CodecPDClientV2:
-			if meta, err = c.pdClient.(*CodecPDClientV2).decodeRegionWithShallowCopy(meta); err != nil {
+			if meta, err = codecPDClient.decodeRegionMetaKeyWithShallowCopy(meta); err != nil {
 				return false, errors.Errorf("newRegion's range key is not encoded: %v, %v", oldMeta, err)
 			}
 		}

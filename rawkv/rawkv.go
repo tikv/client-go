@@ -124,6 +124,7 @@ type Client struct {
 	apiVersion  kvrpcpb.APIVersion
 	clusterID   uint64
 	regionCache *locate.RegionCache
+	codec       client.Codec
 	pdClient    pd.Client
 	rpcClient   client.Client
 	cf          string
@@ -192,6 +193,24 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		o(opt)
 	}
 
+	var codec client.Codec
+	switch opt.apiVersion {
+	case kvrpcpb.APIVersion_V1:
+		codec = client.NewCodecV1(client.ModeRaw)
+	case kvrpcpb.APIVersion_V1TTL:
+		codec = client.NewCodecV1(client.ModeRaw)
+	case kvrpcpb.APIVersion_V2:
+		codec = client.NewCodecV2(client.ModeRaw)
+	default:
+		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
+	}
+
+	rpcCli := client.NewRPCClient(
+		client.WithSecurity(opt.security),
+		client.WithGRPCDialOptions(opt.gRPCDialOptions...),
+		client.WithCodec(codec),
+	)
+
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
@@ -201,17 +220,15 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
-	if opt.apiVersion == kvrpcpb.APIVersion_V2 {
-		pdCli = locate.NewCodecPDClientV2(pdCli, client.ModeRaw)
-	}
+	pdCli = locate.NewCodecPDClient(pdCli, codec)
 
 	return &Client{
 		apiVersion:  opt.apiVersion,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
+		codec:       codec,
 		pdClient:    pdCli,
-		rpcClient:   client.NewRPCClient(client.WithSecurity(opt.security), client.WithGRPCDialOptions(opt.gRPCDialOptions...)),
+		rpcClient:   rpcCli,
 	}, nil
 }
 

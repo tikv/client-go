@@ -78,7 +78,7 @@ func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
 	s.mvccStore = mocktikv.MustNewMVCCStore()
 	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.store, s.peer, s.region = mocktikv.BootstrapWithSingleStore(s.cluster)
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), client.NewCodecV1(client.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
