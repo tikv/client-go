@@ -216,7 +216,7 @@ func (m *memBufferMutations) GetValue(i int) []byte {
 }
 
 func (m *memBufferMutations) GetOp(i int) kvrpcpb.Op {
-	return kvrpcpb.Op(m.handles[i].UserData >> 3)
+	return kvrpcpb.Op(m.handles[i].UserData >> 4)
 }
 
 func (m *memBufferMutations) IsPessimisticLock(i int) bool {
@@ -245,7 +245,7 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist, needConflictCheckInPrewrite bool,
 	handle unionstore.MemKeyHandle) {
 	// See comments of `m.handles` field about the format of the user data `aux`.
-	aux := uint16(op) << 3
+	aux := uint16(op) << 4
 	if isPessimisticLock {
 		aux |= 1
 	}
