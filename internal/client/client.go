@@ -493,8 +493,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if config.GetGlobalConfig().TiKVClient.MaxBatchSize > 0 && enableBatch {
 		if batchReq := req.ToBatchCommandsRequest(); batchReq != nil {
 			defer trace.StartRegion(ctx, req.Type.String()).End()
-			resp, err = sendBatchRequest(ctx, addr, req.ForwardedHost, connArray.batchConn, batchReq, timeout)
-			return
+			return sendBatchRequest(ctx, addr, req.ForwardedHost, connArray.batchConn, batchReq, timeout)
 		}
 	}
 
@@ -508,8 +507,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		client := debugpb.NewDebugClient(clientConn)
 		ctx1, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		resp, err = tikvrpc.CallDebugRPC(ctx1, client, req)
-		return
+		return tikvrpc.CallDebugRPC(ctx1, client, req)
 	}
 
 	client := tikvpb.NewTikvClient(clientConn)
@@ -520,20 +518,16 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 	switch req.Type {
 	case tikvrpc.CmdBatchCop:
-		resp, err = c.getBatchCopStreamResponse(ctx, client, req, timeout, connArray)
-		return
+		return c.getBatchCopStreamResponse(ctx, client, req, timeout, connArray)
 	case tikvrpc.CmdCopStream:
-		resp, err = c.getCopStreamResponse(ctx, client, req, timeout, connArray)
-		return
+		return c.getCopStreamResponse(ctx, client, req, timeout, connArray)
 	case tikvrpc.CmdMPPConn:
-		resp, err = c.getMPPStreamResponse(ctx, client, req, timeout, connArray)
-		return
+		return c.getMPPStreamResponse(ctx, client, req, timeout, connArray)
 	}
 	// Or else it's a unary call.
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	resp, err = tikvrpc.CallRPC(ctx1, client, req)
-	return
+	return tikvrpc.CallRPC(ctx1, client, req)
 }
 
 // SendRequest sends a Request to server and receives Response.
