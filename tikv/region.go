@@ -89,11 +89,11 @@ type RegionRequestRuntimeStats = locate.RegionRequestRuntimeStats
 // RPCRuntimeStats indicates the RPC request count and consume time.
 type RPCRuntimeStats = locate.RPCRuntimeStats
 
-// CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
-type CodecPDClient = locate.CodecPDClient
-
 // NewCodecPDClient is a constructor for CodecPDClient
 var NewCodecPDClient = locate.NewCodecPDClient
+
+// NewCodecV1 is a constructor for v1 Codec.
+var NewCodecV1 = apicodec.NewCodecV1
 
 // NewCodecV2 is a constructor for v2 Codec.
 var NewCodecV2 = apicodec.NewCodecV2

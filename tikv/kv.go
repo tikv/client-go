@@ -213,7 +213,7 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdClient := &CodecPDClient{Client: util.InterceptedPDClient{Client: pdCli}}
+	pdClient := locate.NewCodecPDClient(util.InterceptedPDClient{Client: pdCli}, apicodec.NewCodecV1(apicodec.ModeTxn))
 	return pdClient, nil
 }
 
