@@ -484,7 +484,9 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
-			traceExecDetails(spanRPC, start, resp)
+			if si := buildSpanInfoFromResp(resp); si != nil {
+				si.addTo(spanRPC, start)
+			}
 		}
 	}()
 
@@ -676,10 +678,13 @@ type spanInfo struct {
 }
 
 func (si *spanInfo) calcDur() uint64 {
-	if si.dur <= 0 {
-		si.dur = 0
+	if si.dur == 0 {
 		for _, child := range si.children {
 			if child.async {
+				// TODO: Here we just skip the duration of async process, however there might be a sync point before a
+				// specified span, in which case we should take the max(main_routine_duration, async_span_duration).
+				// It's OK for now, since only pesist-log is marked as async, whose duration is typically smaller than
+				// commit-log.
 				continue
 			}
 			si.dur += child.calcDur()
@@ -693,7 +698,7 @@ func (si *spanInfo) addTo(parent opentracing.Span, start time.Time) time.Time {
 		return start
 	}
 	dur := si.calcDur()
-	if dur <= 0 {
+	if dur == 0 {
 		return start
 	}
 	end := start.Add(time.Duration(dur) * time.Nanosecond)
@@ -737,10 +742,10 @@ func (si *spanInfo) String() string {
 	return buf.String()
 }
 
-func traceExecDetails(parent opentracing.Span, start time.Time, resp *tikvrpc.Response) {
+func buildSpanInfoFromResp(resp *tikvrpc.Response) *spanInfo {
 	details := resp.GetExecDetailsV2()
-	if details == nil || parent == nil {
-		return
+	if details == nil {
+		return nil
 	}
 
 	td := details.TimeDetail
@@ -748,7 +753,7 @@ func traceExecDetails(parent opentracing.Span, start time.Time, resp *tikvrpc.Re
 	wd := details.WriteDetail
 
 	if td == nil {
-		return
+		return nil
 	}
 
 	spanRPC := spanInfo{name: "tikv.RPC", dur: td.TotalRpcWallTimeNs}
@@ -788,6 +793,5 @@ func traceExecDetails(parent opentracing.Span, start time.Time, resp *tikvrpc.Re
 		spanRPC.children = append(spanRPC.children, spanAsyncWrite)
 	}
 
-	spanRPC.addTo(parent, start)
-
+	return &spanRPC
 }
