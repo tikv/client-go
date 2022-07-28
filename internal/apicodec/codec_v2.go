@@ -1,7 +1,8 @@
-package client
+package apicodec
 
 import (
 	"bytes"
+
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 )
@@ -20,6 +21,7 @@ var (
 	APIV2TxnEndKey = []byte{'x', 0, 0, 1}
 )
 
+// codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
 	prefix   []byte
 	endKey   []byte
@@ -27,7 +29,9 @@ type codecV2 struct {
 	memCodec memCodec
 }
 
-func NewCodecV2(mode Mode) *codecV2 {
+// NewCodecV2 returns a codec that can be used to encode/decode
+// keys and requests to and from APIv2 format.
+func NewCodecV2(mode Mode) Codec {
 	// Region keys in CodecV2 are always encoded in memory comparable form.
 	codec := &codecV2{
 		mode:     mode,
@@ -65,6 +69,9 @@ func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	return encodedKey[len(c.prefix):], nil
 }
 
+// EncodeRange encodes start and end to correct range in APIv2.
+// Note that if end is nil/ empty byte slice, it means no end.
+// So we use endKey of the keyspace directly.
 func (c *codecV2) EncodeRange(start, end []byte) ([]byte, []byte) {
 	var encodedEnd []byte
 	if len(end) > 0 {
@@ -75,6 +82,10 @@ func (c *codecV2) EncodeRange(start, end []byte) ([]byte, []byte) {
 	return c.EncodeKey(start), encodedEnd
 }
 
+// DecodeRange maps encodedStart and end back to normal start and
+// end without APIv2 prefixes.
+// Note that it uses empty byte slice to mark encoded start/end
+// that lies outside the prefix's range.
 func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) {
 	var start, end []byte
 	if bytes.Compare(start, c.prefix) < 0 {
@@ -146,7 +157,7 @@ func (c *codecV2) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
 }
 
 // EncodeRegionRange first append appropriate prefix to start and end,
-// then pass them to region codec to encode them to appropriate memory format.
+// then pass them to memCodec to encode them to appropriate memory format.
 func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 	encodedStart, encodedEnd := c.EncodeRange(start, end)
 	encodedStart = c.memCodec.encodeKey(encodedStart)
@@ -154,6 +165,9 @@ func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 	return encodedStart, encodedEnd
 }
 
+// DecodeRegionRange first decode key from memory compatible format,
+// then pass decode them with DecodeRange to map them to correct range.
+// Note that empty byte slice/ nil slice requires special treatment.
 func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
 	var err error
 	if len(encodedStart) != 0 {

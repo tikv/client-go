@@ -1,4 +1,4 @@
-package client
+package apicodec
 
 import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -9,7 +9,9 @@ type codecV1 struct {
 	memCodec memCodec
 }
 
-func NewCodecV1(mode Mode) *codecV1 {
+// NewCodecV1 returns a codec that can be used to encode/decode
+// keys and requests to and from APIv1 format.
+func NewCodecV1(mode Mode) Codec {
 	switch mode {
 	case ModeRaw:
 		return &codecV1{

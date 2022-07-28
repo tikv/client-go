@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -95,17 +96,17 @@ type CodecPDClient = locate.CodecPDClient
 var NewCodecPDClient = locate.NewCodecPDClient
 
 // NewCodecV2 is a constructor for v2 Codec.
-var NewCodecV2 = client.NewCodecV2
+var NewCodecV2 = apicodec.NewCodecV2
 
 // Mode represents the operation mode of a request, export client.Mode
-type Mode = client.Mode
+type Mode = apicodec.Mode
 
 var (
 	// ModeRaw represent a raw operation in TiKV, export client.ModeRaw
-	ModeRaw Mode = client.ModeRaw
+	ModeRaw Mode = apicodec.ModeRaw
 
 	// ModeTxn represent a transaction operation in TiKV, export client.ModeTxn
-	ModeTxn Mode = client.ModeTxn
+	ModeTxn Mode = apicodec.ModeTxn
 )
 
 // RecordRegionRequestRuntimeStats records request runtime stats.

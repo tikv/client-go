@@ -36,11 +36,11 @@ package locate
 
 import (
 	"context"
-	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/tikv/client-go/v2/internal/client"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -49,16 +49,16 @@ var _ pd.Client = &CodecPDClient{}
 // CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
 type CodecPDClient struct {
 	pd.Client
-	codec client.Codec
+	codec apicodec.Codec
 }
 
 // NewCodecPDClient creates a CodecPDClient.
-func NewCodecPDClient(client pd.Client, codec client.Codec) *CodecPDClient {
+func NewCodecPDClient(client pd.Client, codec apicodec.Codec) *CodecPDClient {
 	return &CodecPDClient{client, codec}
 }
 
 // GetCodec returns CodecPDClient's codec.
-func (c *CodecPDClient) GetCodec() client.Codec {
+func (c *CodecPDClient) GetCodec() apicodec.Codec {
 	return c.codec
 }
 
