@@ -53,6 +53,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
 	"github.com/stathat/consistent"
 	"github.com/tikv/client-go/v2/config"
@@ -121,11 +122,13 @@ const (
 
 // Region presents kv region
 type Region struct {
-	meta          *metapb.Region // raw region meta from PD, immutable after init
-	store         unsafe.Pointer // point to region store info, see RegionStore
-	syncFlag      int32          // region need be sync in next turn
-	lastAccess    int64          // last region access time, see checkRegionCacheTTL
-	invalidReason InvalidReason  // the reason why the region is invalidated
+	meta             *metapb.Region         // raw region meta from PD, immutable after init
+	store            unsafe.Pointer         // point to region store info, see RegionStore
+	syncFlag         int32                  // region need be sync in next turn
+	lastAccess       int64                  // last region access time, see checkRegionCacheTTL
+	invalidReason    InvalidReason          // the reason why the region is invalidated
+	closestReadStats regionLocalReadChecker // track the traffic percent that should read from closest replica
+	regionScores     unsafe.Pointer         // the region score
 }
 
 // AccessIndex represent the index for accessIndex array
@@ -150,6 +153,21 @@ type regionStore struct {
 	// buckets is not accurate and it can change even if the region is not changed.
 	// It can be stale and buckets keys can be out of the region range.
 	buckets *metapb.Buckets
+}
+
+type regionScores struct {
+	peerScores map[uint64]*pdpb.PeerScore
+	updatedAt  time.Time
+	refreshAt  int64
+}
+
+func (r *regionScores) ShouldRefresh(t time.Time) bool {
+	refreshAt := atomic.LoadInt64(&r.refreshAt)
+	ts := t.UnixNano()
+	if ts-refreshAt > 5*int64(time.Second) {
+		return atomic.CompareAndSwapInt64(&r.refreshAt, refreshAt, ts)
+	}
+	return false
 }
 
 func (r *regionStore) accessStore(mode accessMode, idx AccessIndex) (int, *Store) {
@@ -290,6 +308,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	r.meta.Peers = availablePeers
 
 	r.setStore(rs)
+	r.setRegionScores(nil)
 
 	// mark region has been init accessed.
 	r.lastAccess = time.Now().Unix()
@@ -307,6 +326,27 @@ func (r *Region) setStore(store *regionStore) {
 
 func (r *Region) compareAndSwapStore(oldStore, newStore *regionStore) bool {
 	return atomic.CompareAndSwapPointer(&r.store, unsafe.Pointer(oldStore), unsafe.Pointer(newStore))
+}
+
+func (r *Region) getRegionScores() *regionScores {
+	return (*regionScores)(atomic.LoadPointer(&r.regionScores))
+}
+
+func (r *Region) setRegionScores(rs *regionScores) {
+	if rs == nil {
+		// set a default value
+		peerScores := make(map[uint64]*pdpb.PeerScore)
+		for _, p := range r.meta.Peers {
+			peerScores[p.Id] = &pdpb.PeerScore{
+				PeerId:  p.Id,
+				StoreId: p.StoreId,
+			}
+		}
+		rs = &regionScores{
+			peerScores: peerScores,
+		}
+	}
+	atomic.StorePointer(&r.regionScores, unsafe.Pointer(rs))
 }
 
 func (r *Region) checkRegionCacheTTL(ts int64) bool {
@@ -393,12 +433,15 @@ type RegionCache struct {
 		// requestLiveness always returns unreachable.
 		mockRequestLiveness func(s *Store, bo *retry.Backoffer) livenessState
 	}
+
+	regionScoreTaskChan chan uint64
 }
 
 // NewRegionCache creates a RegionCache.
 func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c := &RegionCache{
-		pdClient: pdClient,
+		pdClient:            pdClient,
+		regionScoreTaskChan: make(chan uint64, 1024),
 	}
 
 	switch pdClient.(type) {
@@ -418,6 +461,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
+	go c.refreshRegionScoreLoop()
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	return c
 }
@@ -536,8 +580,9 @@ func (c *RPCContext) String() string {
 }
 
 type storeSelectorOp struct {
-	leaderOnly bool
-	labels     []*metapb.StoreLabel
+	leaderOnly      bool
+	labels          []*metapb.StoreLabel
+	preferredLabels []*metapb.StoreLabel
 }
 
 // StoreSelectorOption configures storeSelectorOp.
@@ -547,6 +592,11 @@ type StoreSelectorOption func(*storeSelectorOp)
 func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 	return func(op *storeSelectorOp) {
 		op.labels = append(op.labels, labels...)
+	}
+}
+func WithPreferredLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
+	return func(op *storeSelectorOp) {
+		op.preferredLabels = append(op.preferredLabels, labels...)
 	}
 }
 
@@ -1310,6 +1360,10 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 			store.buckets = oldRegionStore.buckets
 		}
 		c.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
+
+		if oldRegion.meta.RegionEpoch.ConfVer == cachedRegion.meta.RegionEpoch.ConfVer {
+			cachedRegion.setRegionScores(oldRegion.getRegionScores())
+		}
 	}
 	c.mu.regions[cachedRegion.VerID()] = cachedRegion
 	newVer := cachedRegion.VerID()
@@ -1368,7 +1422,7 @@ func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
 		return nil
 	}
 	if latestRegion != nil {
-		atomic.CompareAndSwapInt64(&latestRegion.lastAccess, atomic.LoadInt64(&latestRegion.lastAccess), ts)
+		atomic.CompareAndSwapInt64(&latestRegion.lastAccess, lastAccess, ts)
 	}
 	return latestRegion
 }
@@ -1921,6 +1975,68 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 	}
 }
 
+func (c *RegionCache) maybeRefreshRegionScore(regionId uint64) {
+	select {
+	case c.regionScoreTaskChan <- regionId:
+	default:
+	}
+}
+
+func (c *RegionCache) refreshRegionScoreLoop() {
+	regionIds := make([]uint64, 0, 1024)
+	timer := time.NewTimer(time.Second)
+	running := true
+	const duration = time.Second
+	for {
+		select {
+		case id, ok := <-c.regionScoreTaskChan:
+			if !ok {
+				return
+			}
+			regionIds = append(regionIds, id)
+			if !running {
+				running = true
+				timer.Reset(duration)
+			}
+
+		case <-timer.C:
+			running = false
+			if len(regionIds) == 0 {
+				continue
+			}
+			regions, err := c.pdClient.BatchGetRegionScore(c.ctx, regionIds)
+			regionIds = regionIds[:0]
+			if err != nil {
+				logutil.BgLogger().Warn("refresh region score failed", zap.Error(err))
+				continue
+			}
+
+			now := time.Now()
+			c.mu.RLock()
+			for _, r := range regions {
+				versionId := NewRegionVerID(r.RegionId, r.RegionEpoch.ConfVer, r.RegionEpoch.Version)
+				if region, ok := c.mu.regions[versionId]; ok {
+					peerScores := make(map[uint64]*pdpb.PeerScore, len(r.Peers))
+					scores := make([]int32, 0)
+					for _, p := range r.Peers {
+						peerScores[p.PeerId] = p
+						scores = append(scores, p.Score)
+					}
+					region.setRegionScores(&regionScores{peerScores, now, now.UnixNano()})
+					logutil.BgLogger().Info("refresh one region scores", zap.Uint64("region", r.RegionId),
+						zap.Any("scores", scores))
+
+				}
+			}
+			c.mu.RUnlock()
+
+			logutil.BgLogger().Info("batch refresh region scores end", zap.Int("regions", len(regions)))
+		case <-c.ctx.Done():
+			return
+		}
+	}
+}
+
 // btreeItem is BTree's Item that uses []byte to compare.
 type btreeItem struct {
 	key          []byte
@@ -2180,6 +2296,7 @@ type Store struct {
 	// this mechanism is currently only applicable for TiKV stores.
 	livenessState    uint32
 	unreachableSince time.Time
+	loadStats        storeLoadStats
 }
 
 type resolveState uint64

@@ -78,6 +78,7 @@ type Config struct {
 	TxnScope              string
 	EnableAsyncCommit     bool
 	Enable1PC             bool
+	TrackStoreLoad        bool
 }
 
 // DefaultConfig returns the default configuration.
@@ -95,6 +96,7 @@ func DefaultConfig() Config {
 		TxnScope:              "",
 		EnableAsyncCommit:     false,
 		Enable1PC:             false,
+		TrackStoreLoad:        false,
 	}
 }
 

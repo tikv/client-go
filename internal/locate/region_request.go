@@ -520,12 +520,46 @@ type accessFollower struct {
 	option            storeSelectorOp
 	leaderIdx         AccessIndex
 	lastIdx           AccessIndex
+	adaptive          bool
 }
+
+const closestReadLowCpuThreshold float64 = 0.7
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	if state.lastIdx < 0 {
 		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas)))
+			if !state.adaptive || len(selector.replicas) <= 1 {
+				state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas)))
+			} else {
+				regionScore := selector.region.getRegionScores()
+				rnd := int(util.Uint32N(100))
+				matched := false
+				now := time.Now()
+				peerScore := 0
+				for i, r := range selector.replicas {
+					if !state.isCandidate(AccessIndex(i), r) {
+						continue
+					}
+					if r.store.IsLabelsMatch(state.option.preferredLabels) {
+						if p, ok := regionScore.peerScores[r.peer.Id]; ok {
+							peerScore = int(p.Score)
+						}
+						if rnd >= peerScore {
+							state.lastIdx = AccessIndex(i)
+							matched = true
+							break
+						}
+					}
+				}
+				logutil.BgLogger().Info("check peer score", zap.Int("rnd", rnd), zap.Int("peer_score", peerScore),
+					zap.Bool("matched", matched))
+				if !matched {
+					state.lastIdx = state.leaderIdx
+				}
+				if regionScore.ShouldRefresh(now) {
+					selector.regionCache.maybeRefreshRegionScore(selector.region.GetID())
+				}
+			}
 		} else {
 			if len(selector.replicas) <= 1 {
 				state.lastIdx = state.leaderIdx
@@ -641,6 +675,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 			option:            option,
 			leaderIdx:         regionStore.workTiKVIdx,
 			lastIdx:           -1,
+			adaptive:          len(option.preferredLabels) > 0,
 		}
 	}
 
@@ -1012,6 +1047,14 @@ func (s *RegionRequestSender) SendReqCtx(
 				h(req)
 			}
 		}
+
+		//logutil.BgLogger().Info("track store load", zap.Bool("track", config.GetGlobalConfig().TrackStoreLoad))
+		// lastCheckTime := rpcCtx.Store.loadStats.GetLastCheckTime()
+		// now := time.Now()
+		// if now.Sub(lastCheckTime) >= 1*time.Second { // 500*time.Millisecond {
+		// 	req.RecordLoadStats = true
+		// 	rpcCtx.Store.loadStats.UpdateLastCheckTs(now)
+		// }
 
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)

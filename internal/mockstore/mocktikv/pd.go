@@ -154,6 +154,10 @@ func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...p
 	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets}, nil
 }
 
+func (c *pdClient) BatchGetRegionScore(ctx context.Context, regionIds []uint64) ([]*pdpb.RegionScore, error) {
+	return nil, nil
+}
+
 func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int) ([]*pd.Region, error) {
 	regions := c.cluster.ScanRegions(startKey, endKey, limit)
 	return regions, nil
@@ -231,6 +235,10 @@ func (c *pdClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts 
 }
 
 func (c *pdClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+	return nil, nil
+}
+
+func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
 	return nil, nil
 }
 

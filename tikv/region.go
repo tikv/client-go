@@ -157,6 +157,10 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 	return locate.WithMatchLabels(labels)
 }
 
+func WithPreferredLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
+	return locate.WithPreferredLabels(labels)
+}
+
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
 func NewRegionRequestRuntimeStats() RegionRequestRuntimeStats {
 	return locate.NewRegionRequestRuntimeStats()
