@@ -103,7 +103,12 @@ func newTiKVStore(t *testing.T) *tikv.KVStore {
 	require.Nil(t, err)
 	spKV, err := tikv.NewEtcdSafePointKV(addrs, tlsConfig)
 	require.Nil(t, err)
-	store, err := tikv.NewKVStore("test-store", &tikv.CodecPDClient{Client: pdClient}, spKV, tikv.NewRPCClient())
+	store, err := tikv.NewKVStore(
+		"test-store",
+		tikv.NewCodecPDClient(pdClient, tikv.NewCodecV1(tikv.ModeTxn)),
+		spKV,
+		tikv.NewRPCClient(),
+	)
 	require.Nil(t, err)
 	err = clearStorage(store)
 	require.Nil(t, err)
