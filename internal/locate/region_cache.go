@@ -57,6 +57,7 @@ import (
 	"github.com/stathat/consistent"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -1448,7 +1449,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 			metrics.RegionCacheCounterWithGetCacheMissOK.Inc()
 		}
 		if err != nil {
-			if client.IsDecodeError(err) {
+			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v", util.HexRegionKeyStr(key), err)
 			}
 			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", util.HexRegionKeyStr(key), err)
@@ -1495,7 +1496,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			metrics.RegionCacheCounterWithGetRegionByIDOK.Inc()
 		}
 		if err != nil {
-			if client.IsDecodeError(err) {
+			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, regionID: %q, err: %v", regionID, err)
 			}
 			backoffErr = errors.Errorf("loadRegion from PD failed, regionID: %v, err: %v", regionID, err)
@@ -1556,7 +1557,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
-			if client.IsDecodeError(err) {
+			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", util.HexRegionKeyStr(startKey), limit, err)
 			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()

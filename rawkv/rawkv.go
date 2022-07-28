@@ -43,6 +43,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/kvrpc"
 	"github.com/tikv/client-go/v2/internal/locate"
@@ -124,7 +125,7 @@ type Client struct {
 	apiVersion  kvrpcpb.APIVersion
 	clusterID   uint64
 	regionCache *locate.RegionCache
-	codec       client.Codec
+	codec       apicodec.Codec
 	pdClient    pd.Client
 	rpcClient   client.Client
 	cf          string
@@ -193,14 +194,15 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		o(opt)
 	}
 
-	var codec client.Codec
+	var codec apicodec.Codec
 	switch opt.apiVersion {
 	case kvrpcpb.APIVersion_V1:
-		codec = client.NewCodecV1(client.ModeRaw)
+		codec = apicodec.NewCodecV1(apicodec.ModeRaw)
 	case kvrpcpb.APIVersion_V1TTL:
-		codec = client.NewCodecV1(client.ModeRaw)
+		codec = apicodec.NewCodecV1(apicodec.ModeRaw)
 	case kvrpcpb.APIVersion_V2:
-		codec = client.NewCodecV2(client.ModeRaw)
+		// TODO: Get and set keyspace prefix here.
+		codec = apicodec.NewCodecV2(apicodec.ModeRaw)
 	default:
 		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
 	}

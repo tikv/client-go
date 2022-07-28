@@ -1,4 +1,4 @@
-package client
+package apicodec
 
 import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -15,20 +15,36 @@ const (
 	ModeTxn
 )
 
+// Codec is responsible for encode/decode request,
 type Codec interface {
+	// GetAPIVersion returns the api version of the codec.
 	GetAPIVersion() kvrpcpb.APIVersion
+	// GetMode returns the mode of the codec.
 	GetMode() Mode
+	// EncodeKey encode the given key to target api version format.
 	EncodeKey(key []byte) []byte
+	// EncodeKeys encode keys to target api version format.
 	EncodeKeys(keys [][]byte) [][]byte
+	// DecodeKey get the original key from api version encoded key.
+	// It returns error if encodedKey is not well formed.
 	DecodeKey(encodedKey []byte) ([]byte, error)
+	// EncodeRange encodes key range.
 	EncodeRange(start, end []byte) ([]byte, []byte)
+	// DecodeRange decodes key range.
 	DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte)
+	// EncodeKeyRanges encodes key ranges.
 	EncodeKeyRanges(keyRanges []*kvrpcpb.KeyRange) []*kvrpcpb.KeyRange
+	// EncodeParis encode KvPair's key.
 	EncodeParis(pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair
+	// DecodePairs decode KvPair's key.
 	DecodePairs(encodedPairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair, error)
+	// EncodeRegionKey encode region's key.
 	EncodeRegionKey(key []byte) []byte
+	// DecodeRegionKey decode region's key
 	DecodeRegionKey(encodedKey []byte) ([]byte, error)
+	// EncodeRegionRange encode region's start and end.
 	EncodeRegionRange(start, end []byte) ([]byte, []byte)
+	// DecodeRegionRange decode region's start and end.
 	DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error)
 }
 

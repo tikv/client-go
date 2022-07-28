@@ -51,6 +51,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
@@ -606,7 +607,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, err
 	}
 
-	s, err := NewKVStore(uuid, locate.NewCodecPDClient(pdCli, client.NewCodecV1(client.ModeTxn)), spkv, client.NewRPCClient(WithSecurity(security)))
+	s, err := NewKVStore(uuid, locate.NewCodecPDClient(pdCli, apicodec.NewCodecV1(apicodec.ModeTxn)), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
 		return nil, err
 	}

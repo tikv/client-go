@@ -1,4 +1,4 @@
-package client
+package apicodec
 
 import (
 	"testing"
