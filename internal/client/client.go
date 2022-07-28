@@ -483,7 +483,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		}
 		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
 
-		if spanRPC != nil && util.TraceExecEnabled(ctx) {
+		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			traceExecDetails(spanRPC, start, resp)
 		}
 	}()

@@ -70,8 +70,8 @@ func ContextWithTraceExecDetails(ctx context.Context) context.Context {
 	return context.WithValue(ctx, traceExecDetailsKey, struct{}{})
 }
 
-// TraceExecEnabled checks whether trace-exec-details enabled
-func TraceExecEnabled(ctx context.Context) bool {
+// TraceExecDetailsEnabled checks whether trace-exec-details enabled
+func TraceExecDetailsEnabled(ctx context.Context) bool {
 	return ctx.Value(traceExecDetailsKey) != nil
 }
 
