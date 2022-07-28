@@ -396,33 +396,32 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 		locks = append(locks, lock)
 	}
 
-	if failedMutations.Len() > 0 {
-		if regionErr != nil {
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return true, nil, err
-				}
-			}
-			same, err := batch.relocate(bo, c.store.GetRegionCache())
+	if regionErr != nil {
+		// For other region error and the fake region error, backoff because
+		// there's something wrong.
+		// For the real EpochNotMatch error, don't backoff.
+		if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
+			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
 				return true, nil, err
 			}
-			if same {
-				if len(lockResp.Results) > 0 {
-					// Maybe partially succeeded
-					return false, &failedMutations, nil
-				} else {
-					return false, nil, nil
-				}
-			}
-			err = c.pessimisticLockMutations(bo, action.LockCtx, action.lockWaitMode, &failedMutations)
+		}
+		same, err := batch.relocate(bo, c.store.GetRegionCache())
+		if err != nil {
 			return true, nil, err
 		}
+		retryMutations = &failedMutations
+		if len(lockResp.Results) == 0 {
+			retryMutations = batch.mutations
+		}
+		if same {
+			return false, retryMutations, nil
+		}
+		err = c.pessimisticLockMutations(bo, action.LockCtx, action.lockWaitMode, retryMutations)
+		return true, nil, err
+	}
 
+	if failedMutations.Len() > 0 {
 		if len(locks) > 0 {
 			// Because we already waited on tikv, no need to Backoff here.
 			// tikv default will wait 3s(also the maximum wait value) when lock error occurs
