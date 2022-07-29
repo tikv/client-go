@@ -36,6 +36,7 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"strconv"
 	"sync"
@@ -48,6 +49,7 @@ import (
 type commitDetailCtxKeyType struct{}
 type lockKeysDetailCtxKeyType struct{}
 type execDetailsCtxKeyType struct{}
+type traceExecDetailsCtxKeyType struct{}
 
 var (
 	// CommitDetailCtxKey presents CommitDetail info key in context.
@@ -58,7 +60,20 @@ var (
 
 	// ExecDetailsKey presents ExecDetail info key in context.
 	ExecDetailsKey = execDetailsCtxKeyType{}
+
+	// traceExecDetailsKey is a context key whose value indicates whether to add ExecDetails to trace.
+	traceExecDetailsKey = traceExecDetailsCtxKeyType{}
 )
+
+// ContextWithTraceExecDetails returns a context with trace-exec-details enabled
+func ContextWithTraceExecDetails(ctx context.Context) context.Context {
+	return context.WithValue(ctx, traceExecDetailsKey, struct{}{})
+}
+
+// TraceExecDetailsEnabled checks whether trace-exec-details enabled
+func TraceExecDetailsEnabled(ctx context.Context) bool {
+	return ctx.Value(traceExecDetailsKey) != nil
+}
 
 // TiKVExecDetails is the detail execution information at TiKV side.
 type TiKVExecDetails struct {
