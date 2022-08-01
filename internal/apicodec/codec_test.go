@@ -9,6 +9,7 @@ import (
 )
 
 func TestEncodeRequest(t *testing.T) {
+	re := require.New(t)
 	req := &tikvrpc.Request{
 		Type: tikvrpc.CmdRawGet,
 		Req: &kvrpcpb.RawGetRequest{
@@ -18,16 +19,17 @@ func TestEncodeRequest(t *testing.T) {
 	req.ApiVersion = kvrpcpb.APIVersion_V2
 	codec := NewCodecV2(ModeRaw)
 
-	r, err := EncodeRequest(req, codec)
-	require.Nil(t, err)
-	require.Equal(t, append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
+	r, err := codec.EncodeRequest(req)
+	re.NoError(err)
+	re.Equal(append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
 
-	r, err = EncodeRequest(req, codec)
-	require.Nil(t, err)
-	require.Equal(t, append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
+	r, err = codec.EncodeRequest(req)
+	re.NoError(err)
+	re.Equal(append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
 }
 
 func TestEncodeV2KeyRanges(t *testing.T) {
+	re := require.New(t)
 	keyRanges := []*kvrpcpb.KeyRange{
 		{
 			StartKey: []byte{},
@@ -65,6 +67,9 @@ func TestEncodeV2KeyRanges(t *testing.T) {
 		},
 	}
 	codec := NewCodecV2(ModeRaw)
-	encodedKeyRanges := codec.EncodeKeyRanges(keyRanges)
-	require.Equal(t, expect, encodedKeyRanges)
+	v2Codec, ok := codec.(*codecV2)
+	re.True(ok)
+
+	encodedKeyRanges := v2Codec.encodeKeyRanges(keyRanges)
+	re.Equal(expect, encodedKeyRanges)
 }

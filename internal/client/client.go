@@ -547,7 +547,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		return c.sendRequest(ctx, addr, req, timeout)
 	}
 
-	req, err := apicodec.EncodeRequest(req, c.option.codec)
+	req, err := c.option.codec.EncodeRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -555,7 +555,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if err != nil {
 		return nil, err
 	}
-	return apicodec.DecodeResponse(req, resp, c.option.codec)
+	return c.option.codec.DecodeResponse(req, resp)
 }
 
 func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {

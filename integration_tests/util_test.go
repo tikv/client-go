@@ -55,8 +55,9 @@ import (
 )
 
 var (
-	withTiKV = flag.Bool("with-tikv", false, "run tests with TiKV cluster started. (not use the mock server)")
-	pdAddrs  = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
+	withTiKV   = flag.Bool("with-tikv", false, "run tests with TiKV cluster started. (not use the mock server)")
+	pdAddrs    = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
+	apiVersion = flag.Int("api-version", 1, "api-version")
 )
 
 // NewTestStore creates a KVStore for testing purpose.
@@ -98,6 +99,14 @@ func newTiKVStore(t *testing.T) *tikv.KVStore {
 	addrs := strings.Split(*pdAddrs, ",")
 	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
 	require.Nil(t, err)
+	switch *apiVersion {
+	case 1:
+		pdClient = tikv.NewCodecPDClient(pdClient, tikv.NewCodecV1(tikv.ModeTxn))
+	case 2:
+		pdClient = tikv.NewCodecPDClient(pdClient, tikv.NewCodecV2(tikv.ModeTxn))
+	default:
+		require.Fail(t, "unknown api version")
+	}
 	var securityConfig config.Security
 	tlsConfig, err := securityConfig.ToTLSConfig()
 	require.Nil(t, err)
@@ -105,7 +114,7 @@ func newTiKVStore(t *testing.T) *tikv.KVStore {
 	require.Nil(t, err)
 	store, err := tikv.NewKVStore(
 		"test-store",
-		tikv.NewCodecPDClient(pdClient, tikv.NewCodecV1(tikv.ModeTxn)),
+		pdClient,
 		spKV,
 		tikv.NewRPCClient(),
 	)

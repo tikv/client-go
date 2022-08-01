@@ -37,7 +37,6 @@ package locate
 import (
 	"context"
 
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -147,15 +146,4 @@ func (c *CodecPDClient) decodeRegionKeyInPlace(r *pd.Region) error {
 		}
 	}
 	return nil
-}
-
-func (c *CodecPDClient) decodeRegionMetaKeyWithShallowCopy(r *metapb.Region) (*metapb.Region, error) {
-	nr := *r
-	decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.StartKey, r.EndKey)
-	if err != nil {
-		return nil, err
-	}
-	nr.StartKey = decodedStart
-	nr.EndKey = decodedEnd
-	return &nr, nil
 }
