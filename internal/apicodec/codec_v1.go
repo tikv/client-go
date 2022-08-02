@@ -158,9 +158,15 @@ func (c *codecV1) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []
 }
 
 func (c *codecV1) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
+	if regionError == nil {
+		return nil, nil
+	}
 	var err error
 	if errInfo := regionError.KeyNotInRegion; errInfo != nil {
 		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if errInfo := regionError.EpochNotMatch; errInfo != nil {
 		for _, meta := range errInfo.CurrentRegions {

@@ -2,11 +2,11 @@ package apicodec
 
 import (
 	"bytes"
-	"github.com/pingcap/kvproto/pkg/errorpb"
-	"github.com/tikv/client-go/v2/tikvrpc"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 var (
@@ -498,6 +498,9 @@ func (c *codecV2) decodePairs(encodedPairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair
 }
 
 func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
+	if regionError == nil {
+		return nil, nil
+	}
 	var err error
 	if errInfo := regionError.KeyNotInRegion; errInfo != nil {
 		errInfo.Key, err = c.decodeKey(errInfo.Key)
@@ -505,6 +508,9 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 			return nil, err
 		}
 		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if errInfo := regionError.EpochNotMatch; errInfo != nil {
@@ -520,6 +526,9 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 }
 
 func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError, error) {
+	if keyError == nil {
+		return nil, nil
+	}
 	var err error
 	if keyError.Locked != nil {
 		keyError.Locked, err = c.decodeLockInfo(keyError.Locked)
@@ -588,6 +597,9 @@ func (c *codecV2) decodeKeyErrors(keyErrors []*kvrpcpb.KeyError) ([]*kvrpcpb.Key
 }
 
 func (c *codecV2) decodeLockInfo(info *kvrpcpb.LockInfo) (*kvrpcpb.LockInfo, error) {
+	if info == nil {
+		return nil, nil
+	}
 	var err error
 	info.Key, err = c.decodeKey(info.Key)
 	if err != nil {
