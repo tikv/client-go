@@ -119,7 +119,9 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
 	}
 	lockWaitStartTime := action.WaitStartTime
+	attempt := 0
 	for {
+		attempt += 1
 		// if lockWaitTime set, refine the request `WaitTimeout` field based on timeout limit
 		if action.LockWaitTime() > 0 && action.LockWaitTime() != kv.LockAlwaysWait {
 			timeLeft := action.LockWaitTime() - (time.Since(lockWaitStartTime)).Milliseconds()
@@ -145,8 +147,15 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			time.Sleep(300 * time.Millisecond)
 			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})
 		}
+		keysStr := make([]string, 0, len(req.PessimisticLock().Mutations))
+		for _, m := range req.PessimisticLock().Mutations {
+			keysStr = append(keysStr, hex.EncodeToString(m.Key))
+		}
+		logutil.Logger(bo.GetCtx()).Info("pessimistic lock", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", c.forUpdateTS), zap.Strings("keys", keysStr))
 		startTime := time.Now()
 		resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		logutil.Logger(bo.GetCtx()).Info("pessimistic lock response", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", c.forUpdateTS), zap.Strings("keys", keysStr), zap.Stringer("resp", resp.Resp.(*kvrpcpb.PessimisticLockResponse)))
+
 		if action.LockCtx.Stats != nil {
 			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(time.Since(startTime)))
 			atomic.AddInt64(&action.LockCtx.Stats.LockRPCCount, 1)
@@ -477,7 +486,14 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 		Keys:         batch.mutations.GetKeys(),
 	})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
+	keysStr := make([]string, 0, batch.mutations.Len())
+	for _, k := range req.PessimisticRollback().Keys {
+		keysStr = append(keysStr, hex.EncodeToString(k))
+	}
+	logutil.Logger(bo.GetCtx()).Info("pessimistic rollback", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", c.forUpdateTS), zap.Strings("keys", keysStr))
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+	logutil.Logger(bo.GetCtx()).Info("pessimistic rollback finished", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", c.forUpdateTS), zap.Strings("keys", keysStr))
+
 	if err != nil {
 		return err
 	}
