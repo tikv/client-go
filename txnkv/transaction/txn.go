@@ -701,6 +701,7 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 		}
 		memBuffer.UpdateFlags([]byte(key), tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists)
 	}
+	txn.committer.maxLockedWithConflictTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 	txn.aggressiveLockingContext = nil
 }
 

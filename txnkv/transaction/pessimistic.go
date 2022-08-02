@@ -480,9 +480,13 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 }
 
 func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+	forUpdateTS := c.forUpdateTS
+	if c.maxLockedWithConflictTS > forUpdateTS {
+		forUpdateTS = c.maxLockedWithConflictTS
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
 		StartVersion: c.startTS,
-		ForUpdateTs:  c.forUpdateTS,
+		ForUpdateTs:  forUpdateTS,
 		Keys:         batch.mutations.GetKeys(),
 	})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -490,9 +494,9 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 	for _, k := range req.PessimisticRollback().Keys {
 		keysStr = append(keysStr, hex.EncodeToString(k))
 	}
-	logutil.Logger(bo.GetCtx()).Info("pessimistic rollback", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", c.forUpdateTS), zap.Strings("keys", keysStr))
+	logutil.Logger(bo.GetCtx()).Info("pessimistic rollback", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", forUpdateTS), zap.Strings("keys", keysStr))
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
-	logutil.Logger(bo.GetCtx()).Info("pessimistic rollback finished", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", c.forUpdateTS), zap.Strings("keys", keysStr))
+	logutil.Logger(bo.GetCtx()).Info("pessimistic rollback finished", zap.Uint64("startTS", c.startTS), zap.Uint64("forUpdateTS", forUpdateTS), zap.Strings("keys", keysStr))
 
 	if err != nil {
 		return err

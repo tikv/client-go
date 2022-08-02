@@ -135,6 +135,8 @@ type twoPhaseCommitter struct {
 	primaryKey  []byte
 	forUpdateTS uint64
 
+	maxLockedWithConflictTS uint64
+
 	mu struct {
 		sync.RWMutex
 		undeterminedErr error // undeterminedErr saves the rpc error we encounter when commit primary key.
