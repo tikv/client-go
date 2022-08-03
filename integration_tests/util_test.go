@@ -38,14 +38,18 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"strings"
 	"testing"
 	"unsafe"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/kv"
 	txndriver "github.com/pingcap/tidb/store/driver/txn"
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
@@ -55,9 +59,8 @@ import (
 )
 
 var (
-	withTiKV   = flag.Bool("with-tikv", false, "run tests with TiKV cluster started. (not use the mock server)")
-	pdAddrs    = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
-	apiVersion = flag.Int("api-version", 1, "api-version")
+	withTiKV = flag.Bool("with-tikv", false, "run tests with TiKV cluster started. (not use the mock server)")
+	pdAddrs  = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
 )
 
 // NewTestStore creates a KVStore for testing purpose.
@@ -96,32 +99,65 @@ func NewTestUniStore(t *testing.T) *tikv.KVStore {
 }
 
 func newTiKVStore(t *testing.T) *tikv.KVStore {
+	re := require.New(t)
 	addrs := strings.Split(*pdAddrs, ",")
 	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
-	require.Nil(t, err)
-	switch *apiVersion {
-	case 1:
+	re.Nil(err)
+	var opt tikv.ClientOpt
+	switch mustGetApiVersion(re, pdClient) {
+	case kvrpcpb.APIVersion_V1:
 		pdClient = tikv.NewCodecPDClient(pdClient, tikv.NewCodecV1(tikv.ModeTxn))
-	case 2:
+		opt = tikv.WithCodec(tikv.NewCodecV1(tikv.ModeTxn))
+	case kvrpcpb.APIVersion_V2:
 		pdClient = tikv.NewCodecPDClient(pdClient, tikv.NewCodecV2(tikv.ModeTxn))
+		opt = tikv.WithCodec(tikv.NewCodecV2(tikv.ModeTxn))
 	default:
-		require.Fail(t, "unknown api version")
+		re.Fail("unknown api version")
 	}
 	var securityConfig config.Security
 	tlsConfig, err := securityConfig.ToTLSConfig()
-	require.Nil(t, err)
+	re.Nil(err)
 	spKV, err := tikv.NewEtcdSafePointKV(addrs, tlsConfig)
-	require.Nil(t, err)
+	re.Nil(err)
 	store, err := tikv.NewKVStore(
 		"test-store",
 		pdClient,
 		spKV,
-		tikv.NewRPCClient(),
+		tikv.NewRPCClient(opt),
 	)
-	require.Nil(t, err)
+	re.Nil(err)
 	err = clearStorage(store)
-	require.Nil(t, err)
+	re.Nil(err)
 	return store
+}
+
+func mustGetApiVersion(re *require.Assertions, pdCli pd.Client) kvrpcpb.APIVersion {
+	stores, err := pdCli.GetAllStores(context.Background())
+	re.NoError(err)
+
+	for _, store := range stores {
+		resp := mustGetConfig(re, fmt.Sprintf("http://%s/config", store.StatusAddress))
+		v := gjson.Get(resp, "storage.api-version")
+		if v.Type == gjson.Null || v.Uint() != 2 {
+			return kvrpcpb.APIVersion_V1
+		}
+	}
+	return kvrpcpb.APIVersion_V2
+}
+
+func mustGetConfig(re *require.Assertions, url string) string {
+	transport := &http.Transport{}
+	client := http.Client{
+		Transport: transport,
+	}
+	defer transport.CloseIdleConnections()
+	resp, err := client.Get(url)
+	re.NoError(err)
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	re.NoError(err)
+	return string(body)
 }
 
 func clearStorage(store *tikv.KVStore) error {
