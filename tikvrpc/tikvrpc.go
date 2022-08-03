@@ -83,6 +83,7 @@ const (
 	CmdRawScan
 	CmdGetKeyTTL
 	CmdRawCompareAndSwap
+	CmdRawChecksum
 
 	CmdUnsafeDestroyRange
 
@@ -97,16 +98,17 @@ const (
 	CmdCop CmdType = 512 + iota
 	CmdCopStream
 	CmdBatchCop
-	CmdMPPTask
-	CmdMPPConn
-	CmdMPPCancel
-	CmdMPPAlive
+	CmdMPPTask   // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdMPPConn   // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdMPPCancel // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdMPPAlive  // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdMvccGetByKey CmdType = 1024 + iota
 	CmdMvccGetByStartTs
 	CmdSplitRegion
 
 	CmdDebugGetRegionProperties CmdType = 2048 + iota
+	CmdCompact                          // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
 )
@@ -155,6 +157,8 @@ func (t CmdType) String() string {
 		return "RawDeleteRange"
 	case CmdRawScan:
 		return "RawScan"
+	case CmdRawChecksum:
+		return "RawChecksum"
 	case CmdUnsafeDestroyRange:
 		return "UnsafeDestroyRange"
 	case CmdRegisterLockObserver:
@@ -191,6 +195,8 @@ func (t CmdType) String() string {
 		return "CheckSecondaryLocks"
 	case CmdDebugGetRegionProperties:
 		return "DebugGetRegionProperties"
+	case CmdCompact:
+		return "Compact"
 	case CmdTxnHeartBeat:
 		return "TxnHeartBeat"
 	case CmdStoreSafeTS:
@@ -385,6 +391,11 @@ func (req *Request) RawCompareAndSwap() *kvrpcpb.RawCASRequest {
 	return req.Req.(*kvrpcpb.RawCASRequest)
 }
 
+// RawChecksum returns RawChecksumRequest in request.
+func (req *Request) RawChecksum() *kvrpcpb.RawChecksumRequest {
+	return req.Req.(*kvrpcpb.RawChecksumRequest)
+}
+
 // RegisterLockObserver returns RegisterLockObserverRequest in request.
 func (req *Request) RegisterLockObserver() *kvrpcpb.RegisterLockObserverRequest {
 	return req.Req.(*kvrpcpb.RegisterLockObserverRequest)
@@ -463,6 +474,11 @@ func (req *Request) PessimisticRollback() *kvrpcpb.PessimisticRollbackRequest {
 // DebugGetRegionProperties returns GetRegionPropertiesRequest in request.
 func (req *Request) DebugGetRegionProperties() *debugpb.GetRegionPropertiesRequest {
 	return req.Req.(*debugpb.GetRegionPropertiesRequest)
+}
+
+// Compact returns CompactRequest in request.
+func (req *Request) Compact() *kvrpcpb.CompactRequest {
+	return req.Req.(*kvrpcpb.CompactRequest)
 }
 
 // Empty returns BatchCommandsEmptyRequest in request.
@@ -699,12 +715,14 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.RawDeleteRange().Context = ctx
 	case CmdRawScan:
 		req.RawScan().Context = ctx
-	case CmdUnsafeDestroyRange:
-		req.UnsafeDestroyRange().Context = ctx
 	case CmdGetKeyTTL:
 		req.RawGetKeyTTL().Context = ctx
 	case CmdRawCompareAndSwap:
 		req.RawCompareAndSwap().Context = ctx
+	case CmdRawChecksum:
+		req.RawChecksum().Context = ctx
+	case CmdUnsafeDestroyRange:
+		req.UnsafeDestroyRange().Context = ctx
 	case CmdRegisterLockObserver:
 		req.RegisterLockObserver().Context = ctx
 	case CmdCheckLockObserver:
@@ -843,6 +861,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.RawCASResponse{
 			RegionError: e,
 		}
+	case CmdRawChecksum:
+		p = &kvrpcpb.RawChecksumResponse{
+			RegionError: e,
+		}
 	case CmdCop:
 		p = &coprocessor.Response{
 			RegionError: e,
@@ -904,6 +926,22 @@ func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 	return err.GetRegionError(), nil
 }
 
+type getExecDetailsV2 interface {
+	GetExecDetailsV2() *kvrpcpb.ExecDetailsV2
+}
+
+// GetExecDetailsV2 returns the ExecDetailsV2 of the underlying concrete response.
+func (resp *Response) GetExecDetailsV2() *kvrpcpb.ExecDetailsV2 {
+	if resp == nil || resp.Resp == nil {
+		return nil
+	}
+	details, ok := resp.Resp.(getExecDetailsV2)
+	if !ok {
+		return nil
+	}
+	return details.GetExecDetailsV2()
+}
+
 // CallRPC launches a rpc call.
 // ch is needed to implement timeout for coprocessor streaming, the stream object's
 // cancel function will be sent to the channel, together with a lease checked by a background goroutine.
@@ -959,6 +997,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.RawGetKeyTTL(ctx, req.RawGetKeyTTL())
 	case CmdRawCompareAndSwap:
 		resp.Resp, err = client.RawCompareAndSwap(ctx, req.RawCompareAndSwap())
+	case CmdRawChecksum:
+		resp.Resp, err = client.RawChecksum(ctx, req.RawChecksum())
 	case CmdRegisterLockObserver:
 		resp.Resp, err = client.RegisterLockObserver(ctx, req.RegisterLockObserver())
 	case CmdCheckLockObserver:
@@ -1012,6 +1052,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.GetStoreSafeTS(ctx, req.StoreSafeTS())
 	case CmdLockWaitInfo:
 		resp.Resp, err = client.GetLockWaitInfo(ctx, req.LockWaitInfo())
+	case CmdCompact:
+		resp.Resp, err = client.Compact(ctx, req.Compact())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}

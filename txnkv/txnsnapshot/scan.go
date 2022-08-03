@@ -200,6 +200,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient())
 	var reqEndKey, reqStartKey []byte
 	var loc *locate.KeyLocation
+	var resolvingRecordToken *int
 	var err error
 	for {
 		if !s.reverse {
@@ -229,6 +230,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				NotFillCache:     s.snapshot.notFillCache,
 				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 				ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
+				RequestSource:    s.snapshot.GetRequestSource(),
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
@@ -249,6 +251,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
+			RequestSource:    s.snapshot.GetRequestSource(),
 		})
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)
@@ -293,7 +296,15 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			if err != nil {
 				return err
 			}
-			msBeforeExpired, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
+			locks := []*txnlock.Lock{lock}
+			if resolvingRecordToken == nil {
+				token := s.snapshot.store.GetLockResolver().RecordResolvingLocks(locks, s.snapshot.version)
+				resolvingRecordToken = &token
+				defer s.snapshot.store.GetLockResolver().ResolveLocksDone(s.snapshot.version, *resolvingRecordToken)
+			} else {
+				s.snapshot.store.GetLockResolver().UpdateResolvingLocks(locks, s.snapshot.version, *resolvingRecordToken)
+			}
+			msBeforeExpired, err := s.snapshot.store.GetLockResolver().ResolveLocks(bo, s.snapshot.version, locks)
 			if err != nil {
 				return err
 			}

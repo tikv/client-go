@@ -111,6 +111,14 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 	return true
 }
 
+// TxnOptions indicates the option when beginning a transaction.
+// TxnOptions are set by the TxnOption values passed to Begin
+type TxnOptions struct {
+	TxnScope                  string
+	StartTS                   *uint64
+	MemoryFootprintChangeHook func(uint64)
+}
+
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn struct {
 	snapshot  *txnsnapshot.KVSnapshot
@@ -151,13 +159,14 @@ type KVTxn struct {
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
+	*util.RequestSource
 
 	aggressiveLockingContext *aggressiveLockingContext
 	aggressiveLockingDirty   bool
 }
 
 // NewTiKVTxn creates a new KVTxn.
-func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, scope string) (*KVTxn, error) {
+func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
@@ -167,10 +176,11 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		startTime:         time.Now(),
 		valid:             true,
 		vars:              tikv.DefaultVars,
-		scope:             scope,
+		scope:             options.TxnScope,
 		enableAsyncCommit: cfg.EnableAsyncCommit,
 		enable1PC:         cfg.Enable1PC,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:     snapshot.RequestSource,
 	}
 	return newTiKVTxn, nil
 }
@@ -402,6 +412,8 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 	defer txn.close()
 
+	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
+
 	if txn.aggressiveLockingContext != nil {
 		if len(txn.aggressiveLockingContext.currentLockedKeys) != 0 {
 			return errors.New("trying to commit transaction when aggressive locking is pending")
@@ -551,7 +563,8 @@ func (txn *KVTxn) rollbackPessimisticLocks() error {
 	if txn.lockedCnt == 0 {
 		return nil
 	}
-	bo := retry.NewBackofferWithVars(context.Background(), cleanupMaxBackoff, txn.vars)
+	ctx := context.WithValue(context.Background(), util.RequestSourceKey, *txn.RequestSource)
+	bo := retry.NewBackofferWithVars(ctx, cleanupMaxBackoff, txn.vars)
 	if txn.interceptor != nil {
 		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
@@ -752,6 +765,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// it before initiating an RPC request.
 		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
+	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
 	// Exclude keys that are already locked.
 	var err error
 	keys := make([][]byte, 0, len(keysInput))
@@ -893,7 +907,8 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		}
 
 		lockCtx.Stats = &util.LockKeysDetails{
-			LockKeys: int32(len(keys)),
+			LockKeys:    int32(len(keys)),
+			ResolveLock: util.ResolveLockDetail{},
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
@@ -1182,4 +1197,24 @@ func (txn *KVTxn) SetBinlogExecutor(binlog BinlogExecutor) {
 // GetClusterID returns store's cluster id.
 func (txn *KVTxn) GetClusterID() uint64 {
 	return txn.store.GetClusterID()
+}
+
+// SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows
+func (txn *KVTxn) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	txn.us.GetMemBuffer().SetMemoryFootprintChangeHook(hook)
+}
+
+// Mem returns the current memory footprint
+func (txn *KVTxn) Mem() uint64 {
+	return txn.us.GetMemBuffer().Mem()
+}
+
+// SetRequestSourceInternal sets the scope of the request source.
+func (txn *KVTxn) SetRequestSourceInternal(internal bool) {
+	txn.RequestSource.SetRequestSourceInternal(internal)
+}
+
+// SetRequestSourceType sets the type of the request source.
+func (txn *KVTxn) SetRequestSourceType(tp string) {
+	txn.RequestSource.SetRequestSourceType(tp)
 }

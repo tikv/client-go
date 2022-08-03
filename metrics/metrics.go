@@ -44,6 +44,9 @@ var (
 	TiKVTxnCmdHistogram                      *prometheus.HistogramVec
 	TiKVBackoffHistogram                     *prometheus.HistogramVec
 	TiKVSendReqHistogram                     *prometheus.HistogramVec
+	TiKVSendReqCounter                       *prometheus.CounterVec
+	TiKVSendReqTimeCounter                   *prometheus.CounterVec
+	TiKVRPCNetLatencyHistogram               *prometheus.HistogramVec
 	TiKVCoprocessorHistogram                 *prometheus.HistogramVec
 	TiKVLockResolverCounter                  *prometheus.CounterVec
 	TiKVRegionErrorCounter                   *prometheus.CounterVec
@@ -55,6 +58,7 @@ var (
 	TiKVLoadSafepointCounter                 *prometheus.CounterVec
 	TiKVSecondaryLockCleanupFailureCounter   *prometheus.CounterVec
 	TiKVRegionCacheCounter                   *prometheus.CounterVec
+	TiKVLoadRegionCacheHistogram             *prometheus.HistogramVec
 	TiKVLocalLatchWaitTimeHistogram          prometheus.Histogram
 	TiKVStatusDuration                       *prometheus.HistogramVec
 	TiKVStatusCounter                        *prometheus.CounterVec
@@ -111,6 +115,7 @@ const (
 	LblFromStore       = "from_store"
 	LblToStore         = "to_store"
 	LblStaleRead       = "stale_read"
+	LblSource          = "source"
 )
 
 func initMetrics(namespace, subsystem string) {
@@ -140,6 +145,31 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Bucketed histogram of sending request duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
 		}, []string{LblType, LblStore, LblStaleRead})
+
+	TiKVSendReqCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "request_counter",
+			Help:      "Counter of sending request with multi dimensions.",
+		}, []string{LblType, LblStore, LblStaleRead, LblSource})
+
+	TiKVSendReqTimeCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "request_time_counter",
+			Help:      "Counter of request time with multi dimensions.",
+		}, []string{LblType, LblStore, LblStaleRead, LblSource})
+
+	TiKVRPCNetLatencyHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "rpc_net_latency_seconds",
+			Help:      "Bucketed histogram of time difference between TiDB and TiKV.",
+			Buckets:   prometheus.ExponentialBuckets(5e-5, 2, 18), // 50us ~ 6.5s
+		}, []string{LblStore})
 
 	TiKVCoprocessorHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -234,6 +264,15 @@ func initMetrics(namespace, subsystem string) {
 			Name:      "region_cache_operations_total",
 			Help:      "Counter of region cache.",
 		}, []string{LblType, LblResult})
+
+	TiKVLoadRegionCacheHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "load_region_cache_seconds",
+			Help:      "Load region information duration",
+			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 52s
+		}, []string{LblType})
 
 	TiKVLocalLatchWaitTimeHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -568,6 +607,9 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCmdHistogram)
 	prometheus.MustRegister(TiKVBackoffHistogram)
 	prometheus.MustRegister(TiKVSendReqHistogram)
+	prometheus.MustRegister(TiKVSendReqCounter)
+	prometheus.MustRegister(TiKVSendReqTimeCounter)
+	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
 	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVRegionErrorCounter)
@@ -579,6 +621,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVLoadSafepointCounter)
 	prometheus.MustRegister(TiKVSecondaryLockCleanupFailureCounter)
 	prometheus.MustRegister(TiKVRegionCacheCounter)
+	prometheus.MustRegister(TiKVLoadRegionCacheHistogram)
 	prometheus.MustRegister(TiKVLocalLatchWaitTimeHistogram)
 	prometheus.MustRegister(TiKVStatusDuration)
 	prometheus.MustRegister(TiKVStatusCounter)

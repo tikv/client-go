@@ -60,7 +60,7 @@ func (db *MemDB) SnapshotIter(start, end []byte) Iterator {
 	return it
 }
 
-func (db *MemDB) getSnapshot() memdbCheckpoint {
+func (db *MemDB) getSnapshot() MemDBCheckpoint {
 	if len(db.stages) > 0 {
 		return db.stages[0]
 	}
@@ -69,7 +69,7 @@ func (db *MemDB) getSnapshot() memdbCheckpoint {
 
 type memdbSnapGetter struct {
 	db *MemDB
-	cp memdbCheckpoint
+	cp MemDBCheckpoint
 }
 
 func (snap *memdbSnapGetter) Get(key []byte) ([]byte, error) {
@@ -91,7 +91,7 @@ func (snap *memdbSnapGetter) Get(key []byte) ([]byte, error) {
 type memdbSnapIter struct {
 	*MemdbIterator
 	value []byte
-	cp    memdbCheckpoint
+	cp    MemDBCheckpoint
 }
 
 func (i *memdbSnapIter) Value() []byte {

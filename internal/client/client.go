@@ -42,6 +42,7 @@ import (
 	"math"
 	"runtime/trace"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -121,7 +122,8 @@ type connArray struct {
 	done chan struct{}
 }
 
-func newConnArray(maxSize uint, addr string, security config.Security, idleNotify *uint32, enableBatch bool, dialTimeout time.Duration) (*connArray, error) {
+func newConnArray(maxSize uint, addr string, security config.Security,
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, opts []grpc.DialOption) (*connArray, error) {
 	a := &connArray{
 		index:         0,
 		v:             make([]*grpc.ClientConn, maxSize),
@@ -129,13 +131,13 @@ func newConnArray(maxSize uint, addr string, security config.Security, idleNotif
 		done:          make(chan struct{}),
 		dialTimeout:   dialTimeout,
 	}
-	if err := a.Init(addr, security, idleNotify, enableBatch); err != nil {
+	if err := a.Init(addr, security, idleNotify, enableBatch, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
 }
 
-func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool) error {
+func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, opts ...grpc.DialOption) error {
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -172,9 +174,8 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
 			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
 		}
-		conn, err := grpc.DialContext(
-			ctx,
-			addr,
+
+		opts = append([]grpc.DialOption{
 			opt,
 			grpc.WithInitialWindowSize(GrpcInitialWindowSize),
 			grpc.WithInitialConnWindowSize(GrpcInitialConnWindowSize),
@@ -195,6 +196,12 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				Timeout:             time.Duration(keepAliveTimeout) * time.Second,
 				PermitWithoutStream: true,
 			}),
+		}, opts...)
+
+		conn, err := grpc.DialContext(
+			ctx,
+			addr,
+			opts...,
 		)
 		cancel()
 		if err != nil {
@@ -239,20 +246,35 @@ func (a *connArray) Close() {
 	}
 
 	for _, c := range a.v {
-		err := c.Close()
-		tikverr.Log(err)
+		if c != nil {
+			err := c.Close()
+			tikverr.Log(err)
+		}
 	}
 
 	close(a.done)
 }
 
+type option struct {
+	gRPCDialOptions []grpc.DialOption
+	security        config.Security
+	dialTimeout     time.Duration
+}
+
 // Opt is the option for the client.
-type Opt func(*RPCClient)
+type Opt func(*option)
 
 // WithSecurity is used to set the security config.
 func WithSecurity(security config.Security) Opt {
-	return func(c *RPCClient) {
+	return func(c *option) {
 		c.security = security
+	}
+}
+
+// WithGRPCDialOptions is used to set the grpc.DialOption.
+func WithGRPCDialOptions(grpcDialOptions ...grpc.DialOption) Opt {
+	return func(c *option) {
+		c.gRPCDialOptions = grpcDialOptions
 	}
 }
 
@@ -263,25 +285,26 @@ func WithSecurity(security config.Security) Opt {
 type RPCClient struct {
 	sync.RWMutex
 
-	conns    map[string]*connArray
-	security config.Security
+	conns  map[string]*connArray
+	option *option
 
 	idleNotify uint32
 
 	// Periodically check whether there is any connection that is idle and then close and remove these connections.
 	// Implement background cleanup.
-	isClosed    bool
-	dialTimeout time.Duration
+	isClosed bool
 }
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
-		conns:       make(map[string]*connArray),
-		dialTimeout: dialTimeout,
+		conns: make(map[string]*connArray),
+		option: &option{
+			dialTimeout: dialTimeout,
+		},
 	}
 	for _, opt := range opts {
-		opt(cli)
+		opt(cli.option)
 	}
 	return cli
 }
@@ -321,7 +344,16 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 		for _, opt := range opts {
 			opt(&client)
 		}
-		array, err = newConnArray(client.GrpcConnectionCount, addr, c.security, &c.idleNotify, enableBatch, c.dialTimeout)
+
+		array, err = newConnArray(
+			client.GrpcConnectionCount,
+			addr,
+			c.option.security,
+			&c.idleNotify,
+			enableBatch,
+			c.option.dialTimeout,
+			c.option.gRPCDialOptions)
+
 		if err != nil {
 			return nil, err
 		}
@@ -342,7 +374,11 @@ func (c *RPCClient) closeConns() {
 	c.Unlock()
 }
 
-var sendReqHistCache sync.Map
+var (
+	sendReqHistCache       sync.Map
+	sendReqCounterCache    sync.Map
+	rpcNetLatencyHistCache sync.Map
+)
 
 type sendReqHistCacheKey struct {
 	tp       tikvrpc.CmdType
@@ -350,30 +386,79 @@ type sendReqHistCacheKey struct {
 	staleRad bool
 }
 
-func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, start time.Time, staleRead bool) {
-	key := sendReqHistCacheKey{
-		req.Type,
-		req.Context.GetPeer().GetStoreId(),
-		staleRead,
-	}
-
-	v, ok := sendReqHistCache.Load(key)
-	if !ok {
-		reqType := req.Type.String()
-		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
-		v = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeID, strconv.FormatBool(staleRead))
-		sendReqHistCache.Store(key, v)
-	}
-
-	v.(prometheus.Observer).Observe(time.Since(start).Seconds())
+type sendReqCounterCacheKey struct {
+	sendReqHistCacheKey
+	requestSource string
 }
 
-// SendRequest sends a Request to server and receives Response.
-func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+type sendReqCounterCacheValue struct {
+	counter     prometheus.Counter
+	timeCounter prometheus.Counter
+}
+
+func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time, staleRead bool) {
+	elapsed := time.Since(start)
+	secs := elapsed.Seconds()
+	storeID := req.Context.GetPeer().GetStoreId()
+
+	histKey := sendReqHistCacheKey{
+		req.Type,
+		storeID,
+		staleRead,
+	}
+	counterKey := sendReqCounterCacheKey{
+		histKey,
+		req.GetRequestSource(),
+	}
+
+	reqType := req.Type.String()
+	var storeIDStr string
+
+	hist, ok := sendReqHistCache.Load(histKey)
+	if !ok {
+		if len(storeIDStr) == 0 {
+			storeIDStr = strconv.FormatUint(storeID, 10)
+		}
+		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead))
+		sendReqHistCache.Store(histKey, hist)
+	}
+	counter, ok := sendReqCounterCache.Load(counterKey)
+	if !ok {
+		if len(storeIDStr) == 0 {
+			storeIDStr = strconv.FormatUint(storeID, 10)
+		}
+		counter = sendReqCounterCacheValue{
+			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
+			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
+		}
+		sendReqCounterCache.Store(counterKey, counter)
+	}
+
+	hist.(prometheus.Observer).Observe(secs)
+	counter.(sendReqCounterCacheValue).counter.Inc()
+	counter.(sendReqCounterCacheValue).timeCounter.Add(secs)
+
+	if execDetail := resp.GetExecDetailsV2(); execDetail != nil &&
+		execDetail.TimeDetail != nil && execDetail.TimeDetail.TotalRpcWallTimeNs > 0 {
+		latHist, ok := rpcNetLatencyHistCache.Load(storeID)
+		if !ok {
+			if len(storeIDStr) == 0 {
+				storeIDStr = strconv.FormatUint(storeID, 10)
+			}
+			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr)
+			sendReqHistCache.Store(storeID, latHist)
+		}
+		latency := elapsed - time.Duration(execDetail.TimeDetail.TotalRpcWallTimeNs)*time.Nanosecond
+		latHist.(prometheus.Observer).Observe(latency.Seconds())
+	}
+}
+
+func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
+	var spanRPC opentracing.Span
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		ctx = opentracing.ContextWithSpan(ctx, span1)
+		spanRPC = span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
+		defer spanRPC.Finish()
+		ctx = opentracing.ContextWithSpan(ctx, spanRPC)
 	}
 
 	if atomic.CompareAndSwapUint32(&c.idleNotify, 1, 0) {
@@ -381,7 +466,8 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
-	enableBatch := req.StoreTp != tikvrpc.TiDB && req.StoreTp != tikvrpc.TiFlash
+	// tiflash/tiflash_mpp/tidb don't use BatchCommand.
+	enableBatch := req.StoreTp == tikvrpc.TiKV
 	connArray, err := c.getConnArray(addr, enableBatch)
 	if err != nil {
 		return nil, err
@@ -395,7 +481,13 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 			detail := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
-		c.updateTiKVSendReqHistogram(req, start, staleRead)
+		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
+
+		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
+			if si := buildSpanInfoFromResp(resp); si != nil {
+				si.addTo(spanRPC, start)
+			}
+		}
 	}()
 
 	// TiDB RPC server supports batch RPC, but batch connection will send heart beat, It's not necessary since
@@ -438,6 +530,19 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return tikvrpc.CallRPC(ctx1, client, req)
+}
+
+// SendRequest sends a Request to server and receives Response.
+func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	req, err := EncodeRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.sendRequest(ctx, addr, req, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeResponse(req, resp)
 }
 
 func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {
@@ -563,4 +668,130 @@ func (c *RPCClient) CloseAddr(addr string) error {
 		conn.Close()
 	}
 	return nil
+}
+
+type spanInfo struct {
+	name     string
+	dur      uint64
+	async    bool
+	children []spanInfo
+}
+
+func (si *spanInfo) calcDur() uint64 {
+	if si.dur == 0 {
+		for _, child := range si.children {
+			if child.async {
+				// TODO: Here we just skip the duration of async process, however there might be a sync point before a
+				// specified span, in which case we should take the max(main_routine_duration, async_span_duration).
+				// It's OK for now, since only pesist-log is marked as async, whose duration is typically smaller than
+				// commit-log.
+				continue
+			}
+			si.dur += child.calcDur()
+		}
+	}
+	return si.dur
+}
+
+func (si *spanInfo) addTo(parent opentracing.Span, start time.Time) time.Time {
+	if parent == nil {
+		return start
+	}
+	dur := si.calcDur()
+	if dur == 0 {
+		return start
+	}
+	end := start.Add(time.Duration(dur) * time.Nanosecond)
+	tracer := parent.Tracer()
+	span := tracer.StartSpan(si.name, opentracing.ChildOf(parent.Context()), opentracing.StartTime(start))
+	t := start
+	for _, child := range si.children {
+		t = child.addTo(span, t)
+	}
+	span.FinishWithOptions(opentracing.FinishOptions{FinishTime: end})
+	if si.async {
+		span.SetTag("async", "true")
+		return start
+	}
+	return end
+}
+
+func (si *spanInfo) printTo(out io.StringWriter) {
+	out.WriteString(si.name)
+	if si.async {
+		out.WriteString("'")
+	}
+	if si.dur > 0 {
+		out.WriteString("[")
+		out.WriteString(time.Duration(si.dur).String())
+		out.WriteString("]")
+	}
+	if len(si.children) > 0 {
+		out.WriteString("{")
+		for _, child := range si.children {
+			out.WriteString(" ")
+			child.printTo(out)
+		}
+		out.WriteString(" }")
+	}
+}
+
+func (si *spanInfo) String() string {
+	buf := new(strings.Builder)
+	si.printTo(buf)
+	return buf.String()
+}
+
+func buildSpanInfoFromResp(resp *tikvrpc.Response) *spanInfo {
+	details := resp.GetExecDetailsV2()
+	if details == nil {
+		return nil
+	}
+
+	td := details.TimeDetail
+	sd := details.ScanDetailV2
+	wd := details.WriteDetail
+
+	if td == nil {
+		return nil
+	}
+
+	spanRPC := spanInfo{name: "tikv.RPC", dur: td.TotalRpcWallTimeNs}
+	spanWait := spanInfo{name: "tikv.Wait", dur: td.WaitWallTimeMs * uint64(time.Millisecond)}
+	spanProcess := spanInfo{name: "tikv.Process", dur: td.ProcessWallTimeMs * uint64(time.Millisecond)}
+
+	if sd != nil {
+		spanWait.children = append(spanWait.children, spanInfo{name: "tikv.GetSnapshot", dur: sd.GetSnapshotNanos})
+		if wd == nil {
+			spanProcess.children = append(spanProcess.children, spanInfo{name: "tikv.RocksDBBlockRead", dur: sd.RocksdbBlockReadNanos})
+		}
+	}
+
+	spanRPC.children = append(spanRPC.children, spanWait, spanProcess)
+
+	if wd != nil {
+		spanAsyncWrite := spanInfo{
+			name: "tikv.AsyncWrite",
+			children: []spanInfo{
+				{name: "tikv.StoreBatchWait", dur: wd.StoreBatchWaitNanos},
+				{name: "tikv.ProposeSendWait", dur: wd.ProposeSendWaitNanos},
+				{name: "tikv.PersistLog", dur: wd.PersistLogNanos, async: true, children: []spanInfo{
+					{name: "tikv.RaftDBWriteWait", dur: wd.RaftDbWriteLeaderWaitNanos}, // MutexLock + WriteLeader
+					{name: "tikv.RaftDBWriteWAL", dur: wd.RaftDbSyncLogNanos},
+					{name: "tikv.RaftDBWriteMemtable", dur: wd.RaftDbWriteMemtableNanos},
+				}},
+				{name: "tikv.CommitLog", dur: wd.CommitLogNanos},
+				{name: "tikv.ApplyBatchWait", dur: wd.ApplyBatchWaitNanos},
+				{name: "tikv.ApplyLog", dur: wd.ApplyLogNanos, children: []spanInfo{
+					{name: "tikv.ApplyMutexLock", dur: wd.ApplyMutexLockNanos},
+					{name: "tikv.ApplyWriteLeaderWait", dur: wd.ApplyWriteLeaderWaitNanos},
+					{name: "tikv.ApplyWriteWAL", dur: wd.ApplyWriteWalNanos},
+					{name: "tikv.ApplyWriteMemtable", dur: wd.ApplyWriteMemtableNanos},
+				}},
+			},
+		}
+		spanRPC.children = append(spanRPC.children, spanAsyncWrite)
+	}
+
+	return &spanRPC
 }

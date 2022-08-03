@@ -309,6 +309,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 			ProcessedVersions:         10,
 			ProcessedVersionsSize:     10,
 			TotalVersions:             15,
+			GetSnapshotNanos:          500,
 			RocksdbBlockReadCount:     20,
 			RocksdbBlockReadByte:      15,
 			RocksdbDeleteSkippedCount: 5,
@@ -322,6 +323,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"scan_detail: {total_process_keys: 10, " +
 		"total_process_keys_size: 10, " +
 		"total_keys: 15, " +
+		"get_snapshot_time: 500ns, " +
 		"rocksdb: {delete_skipped_count: 5, " +
 		"key_skipped_count: 1, " +
 		"block: {cache_hit_count: 10, read_count: 20, read_byte: 15 Bytes}}}"
@@ -332,6 +334,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"scan_detail: {total_process_keys: 20, " +
 		"total_process_keys_size: 20, " +
 		"total_keys: 30, " +
+		"get_snapshot_time: 1µs, " +
 		"rocksdb: {delete_skipped_count: 10, " +
 		"key_skipped_count: 2, " +
 		"block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"

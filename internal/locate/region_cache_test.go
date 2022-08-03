@@ -44,7 +44,6 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
@@ -98,7 +97,7 @@ func (s *testRegionCacheSuite) checkCache(len int) {
 	ts := time.Now().Unix()
 	s.Equal(validRegions(s.cache.mu.regions, ts), len)
 	s.Equal(validRegionsSearchedByVersions(s.cache.mu.latestVersions, s.cache.mu.regions, ts), len)
-	s.Equal(validRegionsInBtree(s.cache.mu.sorted, ts), len)
+	s.Equal(s.cache.mu.sorted.ValidRegionsInBtree(ts), len)
 }
 
 func validRegionsSearchedByVersions(
@@ -123,18 +122,6 @@ func validRegions(regions map[RegionVerID]*Region, ts int64) (len int) {
 		}
 		len++
 	}
-	return
-}
-
-func validRegionsInBtree(t *btree.BTree, ts int64) (len int) {
-	t.Descend(func(item btree.Item) bool {
-		r := item.(*btreeItem).cachedRegion
-		if !r.checkRegionCacheTTL(ts) {
-			return true
-		}
-		len++
-		return true
-	})
 	return
 }
 
@@ -1411,14 +1398,14 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	buckets := cachedRegion.getStore().buckets
 	s.Equal(defaultBuckets, buckets)
 
-	// test LocateBucket
+	// test locateBucket
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
 	s.NotNil(loc)
 	s.Nil(err)
 	s.Equal(buckets, loc.Buckets)
 	s.Equal(buckets.GetVersion(), loc.GetBucketVersion())
 	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}
@@ -1426,7 +1413,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	loc.Buckets = proto.Clone(loc.Buckets).(*metapb.Buckets)
 	loc.Buckets.Keys = [][]byte{[]byte("b"), []byte("c"), []byte("d")}
 	for _, key := range [][]byte{[]byte("a"), []byte("d"), []byte("e")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.Nil(b)
 	}
 
@@ -1506,7 +1493,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	waitUpdateBuckets(newBuckets, []byte("a"))
 }
 
-func (s *testRegionCacheSuite) TestLocateBucketV2() {
+func (s *testRegionCacheSuite) TestLocateBucket() {
 	// proto.Clone clones []byte{} to nil and [][]byte{nil or []byte{}} to [][]byte{[]byte{}}.
 	// nilToEmtpyBytes unifies it for tests.
 	nilToEmtpyBytes := func(s []byte) []byte {
@@ -1525,7 +1512,7 @@ func (s *testRegionCacheSuite) TestLocateBucketV2() {
 	s.NotNil(loc)
 	s.Nil(err)
 	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}
@@ -1542,9 +1529,9 @@ func (s *testRegionCacheSuite) TestLocateBucketV2() {
 	s.NotNil(loc)
 	s.Nil(err)
 	for _, key := range [][]byte{{'a' - 1}, []byte("c")} {
-		b := loc.LocateBucket(key)
+		b := loc.locateBucket(key)
 		s.Nil(b)
-		b = loc.LocateBucketV2(key)
+		b = loc.LocateBucket(key)
 		s.NotNil(b)
 		s.True(b.Contains(key))
 	}

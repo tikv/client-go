@@ -275,7 +275,7 @@ func (s *KVStore) listStoresForUnsafeDestory(ctx context.Context) ([]*metapb.Sto
 		if store.State == metapb.StoreState_Tombstone {
 			continue
 		}
-		if tikvrpc.GetStoreTypeByMeta(store) == tikvrpc.TiFlash {
+		if tikvrpc.GetStoreTypeByMeta(store).IsTiFlashRelatedType() {
 			continue
 		}
 		upStores = append(upStores, store)
