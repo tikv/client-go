@@ -131,6 +131,11 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 	}
 	lockWaitStartTime := action.WaitStartTime
 	diagCtx := diagnosticContext{}
+	defer func() {
+		if diagCtx.resolvingRecordToken != nil {
+			c.store.GetLockResolver().ResolveLocksDone(c.startTS, *diagCtx.resolvingRecordToken)
+		}
+	}()
 	for {
 		// if lockWaitTime set, refine the request `WaitTimeout` field based on timeout limit
 		if action.LockWaitTime() > 0 && action.LockWaitTime() != kv.LockAlwaysWait {
@@ -161,6 +166,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		startTime := time.Now()
 		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		diagCtx.reqDuration = time.Since(startTime)
+		diagCtx.sender = sender
 		if action.LockCtx.Stats != nil {
 			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(diagCtx.reqDuration))
 			atomic.AddInt64(&action.LockCtx.Stats.LockRPCCount, 1)
@@ -303,7 +309,6 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 	if diagCtx.resolvingRecordToken == nil {
 		token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
 		diagCtx.resolvingRecordToken = &token
-		defer c.store.GetLockResolver().ResolveLocksDone(c.startTS, *diagCtx.resolvingRecordToken)
 	} else {
 		c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *diagCtx.resolvingRecordToken)
 	}
@@ -457,7 +462,6 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 			if diagCtx.resolvingRecordToken == nil {
 				token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
 				diagCtx.resolvingRecordToken = &token
-				defer c.store.GetLockResolver().ResolveLocksDone(c.startTS, *diagCtx.resolvingRecordToken)
 			} else {
 				c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *diagCtx.resolvingRecordToken)
 			}
