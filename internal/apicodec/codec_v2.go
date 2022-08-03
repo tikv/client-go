@@ -579,12 +579,12 @@ func (c *codecV2) encodeRange(start, end []byte) ([]byte, []byte) {
 // that lies outside the prefix's range.
 func (c *codecV2) decodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) {
 	var start, end []byte
-	if bytes.Compare(start, c.prefix) < 0 {
+	if bytes.Compare(encodedStart, c.prefix) < 0 {
 		start = []byte{}
 	} else {
 		start = encodedStart[len(c.prefix):]
 	}
-	if len(end) == 0 || bytes.Compare(end, c.endKey) >= 0 {
+	if len(encodedEnd) == 0 || bytes.Compare(encodedEnd, c.endKey) >= 0 {
 		end = []byte{}
 	} else {
 		end = encodedEnd[len(c.endKey):]
