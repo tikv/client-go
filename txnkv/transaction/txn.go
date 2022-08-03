@@ -598,7 +598,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	}
 
 	if lockCtx.LockIfExists && !lockCtx.ReturnValues {
-		return errors.New("If LockIfExists flag was set in TiDB, ReturnValues must be set too")
+		return errors.New("If LockIfExists flag was set for LockKeys in TiDB, ReturnValues flag must be set too")
 	}
 
 	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
@@ -679,11 +679,9 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			txn.committer.primaryKey = keys[0]
 			assignedPrimaryKey = true
 		}
-		if lockCtx.LockStatsOn {
-			lockCtx.Stats = &util.LockKeysDetails{
-				LockKeys:    int32(len(keys)),
-				ResolveLock: util.ResolveLockDetail{},
-			}
+		lockCtx.Stats = &util.LockKeysDetails{
+			LockKeys:    int32(len(keys)),
+			ResolveLock: util.ResolveLockDetail{},
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
