@@ -69,6 +69,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdPrewrite:
 		r := *req.Prewrite()
+		r.Mutations = c.encodeMutations(r.Mutations)
 		r.PrimaryLock = c.encodeKey(r.PrimaryLock)
 		r.Secondaries = c.encodeKeys(r.Secondaries)
 		newReq.Req = &r
@@ -104,10 +105,8 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdPessimisticLock:
 		r := *req.PessimisticLock()
+		r.Mutations = c.encodeMutations(r.Mutations)
 		r.PrimaryLock = c.encodeKey(r.PrimaryLock)
-		for i := range r.Mutations {
-			r.Mutations[i].Key = c.encodeKey(r.Mutations[i].Key)
-		}
 		newReq.Req = &r
 	case tikvrpc.CmdPessimisticRollback:
 		r := *req.PessimisticRollback()
@@ -171,6 +170,40 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.RawChecksum()
 		r.Ranges = c.encodeKeyRanges(r.Ranges)
 		newReq.Req = &r
+
+	// Other requests.
+	case tikvrpc.CmdUnsafeDestroyRange:
+		r := *req.UnsafeDestroyRange()
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey)
+		newReq.Req = &r
+	case tikvrpc.CmdPhysicalScanLock:
+		r := *req.PhysicalScanLock()
+		r.StartKey = c.encodeKey(r.StartKey)
+		newReq.Req = &r
+	case tikvrpc.CmdStoreSafeTS:
+		r := *req.StoreSafeTS()
+		r.KeyRange = c.encodeKeyRange(r.KeyRange)
+		newReq.Req = &r
+	case tikvrpc.CmdCop:
+		r := *req.Cop()
+		// TODO: handle cop Request.
+		newReq.Req = &r
+	case tikvrpc.CmdCopStream:
+		r := *req.Cop()
+		// TODO: handle cop Request.
+		newReq.Req = &r
+	case tikvrpc.CmdBatchCop:
+		r := *req.BatchCop()
+		// TODO: handle cop Request.
+		newReq.Req = &r
+	case tikvrpc.CmdMvccGetByKey:
+		r := *req.MvccGetByKey()
+		r.Key = c.EncodeRegionKey(r.Key)
+		newReq.Req = &r
+	case tikvrpc.CmdSplitRegion:
+		r := *req.SplitRegion()
+		r.SplitKeys = c.encodeKeys(r.SplitKeys)
+		newReq.Req = &r
 	}
 
 	return &newReq, nil
@@ -178,28 +211,27 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 
 // DecodeResponse decode the resp with the given codec.
 func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
-	regionError, err := resp.GetRegionError()
-	if err != nil {
-		return nil, err
-	}
-	decodedRegionError, err := c.decodeRegionError(regionError)
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	// Decode response based on command type.
 	switch req.Type {
 	// Transaction KV responses.
 	// Keys that need to be decoded lies in RegionError, KeyError and LockInfo.
 	case tikvrpc.CmdGet:
 		r := resp.Resp.(*kvrpcpb.GetResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdScan:
 		r := resp.Resp.(*kvrpcpb.ScanResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Pairs, err = c.decodePairs(r.Pairs)
 		if err != nil {
 			return nil, err
@@ -210,28 +242,40 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 	case tikvrpc.CmdPrewrite:
 		r := resp.Resp.(*kvrpcpb.PrewriteResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Errors, err = c.decodeKeyErrors(r.Errors)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdCommit:
 		r := resp.Resp.(*kvrpcpb.CommitResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdCleanup:
 		r := resp.Resp.(*kvrpcpb.CleanupResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdBatchGet:
 		r := resp.Resp.(*kvrpcpb.BatchGetResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Pairs, err = c.decodePairs(r.Pairs)
 		if err != nil {
 			return nil, err
@@ -242,14 +286,20 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 	case tikvrpc.CmdBatchRollback:
 		r := resp.Resp.(*kvrpcpb.BatchRollbackResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdScanLock:
 		r := resp.Resp.(*kvrpcpb.ScanLockResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
@@ -260,7 +310,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 	case tikvrpc.CmdResolveLock:
 		r := resp.Resp.(*kvrpcpb.ResolveLockResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
@@ -268,38 +321,56 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 	case tikvrpc.CmdGC:
 		// TODO: Deprecate Central GC Mode.
 		r := resp.Resp.(*kvrpcpb.GCResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdDeleteRange:
 		r := resp.Resp.(*kvrpcpb.DeleteRangeResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdPessimisticLock:
 		r := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Errors, err = c.decodeKeyErrors(r.Errors)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdPessimisticRollback:
 		r := resp.Resp.(*kvrpcpb.PessimisticRollbackResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Errors, err = c.decodeKeyErrors(r.Errors)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdTxnHeartBeat:
 		r := resp.Resp.(*kvrpcpb.TxnHeartBeatResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdCheckTxnStatus:
 		r := resp.Resp.(*kvrpcpb.CheckTxnStatusResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
@@ -310,7 +381,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 	case tikvrpc.CmdCheckSecondaryLocks:
 		r := resp.Resp.(*kvrpcpb.CheckSecondaryLocksResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Error, err = c.decodeKeyError(r.Error)
 		if err != nil {
 			return nil, err
@@ -325,45 +399,108 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 	// which need have their keys decoded.
 	case tikvrpc.CmdRawGet:
 		r := resp.Resp.(*kvrpcpb.RawGetResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawBatchGet:
 		r := resp.Resp.(*kvrpcpb.RawBatchGetResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Pairs, err = c.decodePairs(r.Pairs)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdRawPut:
 		r := resp.Resp.(*kvrpcpb.RawPutResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawBatchPut:
 		r := resp.Resp.(*kvrpcpb.RawBatchPutResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawDelete:
 		r := resp.Resp.(*kvrpcpb.RawDeleteResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawBatchDelete:
 		r := resp.Resp.(*kvrpcpb.RawBatchDeleteResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawDeleteRange:
 		r := resp.Resp.(*kvrpcpb.RawDeleteRangeResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawScan:
 		r := resp.Resp.(*kvrpcpb.RawScanResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 		r.Kvs, err = c.decodePairs(r.Kvs)
 		if err != nil {
 			return nil, err
 		}
 	case tikvrpc.CmdGetKeyTTL:
 		r := resp.Resp.(*kvrpcpb.RawGetKeyTTLResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawCompareAndSwap:
 		r := resp.Resp.(*kvrpcpb.RawCASResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdRawChecksum:
 		r := resp.Resp.(*kvrpcpb.RawChecksumResponse)
-		r.RegionError = decodedRegionError
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+
+	// Other requests.
+	case tikvrpc.CmdUnsafeDestroyRange:
+		r := resp.Resp.(*kvrpcpb.UnsafeDestroyRangeResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdPhysicalScanLock:
+		r := resp.Resp.(*kvrpcpb.PhysicalScanLockResponse)
+		r.Locks, err = c.decodeLockInfos(r.Locks)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
+		// TODO: handle cop response.
+	case tikvrpc.CmdBatchCop:
+		// TODO: handle cop response.
+	case tikvrpc.CmdMvccGetByKey:
+		r := resp.Resp.(*kvrpcpb.MvccGetByKeyResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdSplitRegion:
+		r := resp.Resp.(*kvrpcpb.SplitRegionResponse)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return resp, nil
@@ -455,12 +592,16 @@ func (c *codecV2) decodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) 
 	return start, end
 }
 
+func (c *codecV2) encodeKeyRange(keyRange *kvrpcpb.KeyRange) *kvrpcpb.KeyRange {
+	encodedRange := &kvrpcpb.KeyRange{}
+	encodedRange.StartKey, encodedRange.EndKey = c.encodeRange(keyRange.StartKey, keyRange.EndKey)
+	return encodedRange
+}
+
 func (c *codecV2) encodeKeyRanges(keyRanges []*kvrpcpb.KeyRange) []*kvrpcpb.KeyRange {
 	encodedRanges := make([]*kvrpcpb.KeyRange, 0, len(keyRanges))
-	for i := 0; i < len(keyRanges); i++ {
-		encodedRange := kvrpcpb.KeyRange{}
-		encodedRange.StartKey, encodedRange.EndKey = c.encodeRange(keyRanges[i].StartKey, keyRanges[i].EndKey)
-		encodedRanges = append(encodedRanges, &encodedRange)
+	for _, keyRange := range keyRanges {
+		encodedRanges = append(encodedRanges, c.encodeKeyRange(keyRange))
 	}
 	return encodedRanges
 }
@@ -488,13 +629,31 @@ func (c *codecV2) decodePairs(encodedPairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair
 	for _, encodedPair := range encodedPairs {
 		var err error
 		p := *encodedPair
-		p.Key, err = c.decodeKey(p.Key)
-		if err != nil {
-			return nil, err
+		if p.Error != nil {
+			p.Error, err = c.decodeKeyError(p.Error)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if len(p.Key) > 0 {
+			p.Key, err = c.decodeKey(p.Key)
+			if err != nil {
+				return nil, err
+			}
 		}
 		pairs = append(pairs, &p)
 	}
 	return pairs, nil
+}
+
+func (c *codecV2) encodeMutations(mutations []*kvrpcpb.Mutation) []*kvrpcpb.Mutation {
+	var encodedMutations []*kvrpcpb.Mutation
+	for _, mutation := range mutations {
+		m := *mutation
+		m.Key = c.encodeKey(m.Key)
+		encodedMutations = append(encodedMutations, &m)
+	}
+	return encodedMutations
 }
 
 func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
