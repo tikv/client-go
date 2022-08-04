@@ -405,6 +405,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			}
 			req.ReplicaReadType = readType
 		}
+		logutil.BgLogger().Info("send req", zap.Uint64("txnStartTS", s.version))
 		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, client.ReadTimeoutMedium, tikvrpc.TiKV, "", ops...)
 		if err != nil {
 			return err
