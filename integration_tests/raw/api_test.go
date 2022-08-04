@@ -76,7 +76,9 @@ func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Cl
 
 func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
 	if s.getApiVersion(pdCli) == kvrpcpb.APIVersion_V2 {
-		return tikv.NewCodecPDClient(pdCli, tikv.NewCodecV2(tikv.ModeRaw))
+		codec, err := tikv.NewCodecV2(tikv.ModeRaw, tikv.DefaultKeyspaceID)
+		s.NoError(err)
+		return tikv.NewCodecPDClient(pdCli, codec)
 	}
 	return pdCli
 }

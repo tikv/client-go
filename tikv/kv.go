@@ -193,7 +193,12 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	return store, nil
 }
 
-// NewPDClient creates pd.Client with pdAddrs.
+// WrapPDClient wrap pd.Client with codec and interceptors.
+func WrapPDClient(pdCli pd.Client, codec apicodec.Codec) pd.Client {
+	return locate.NewCodecPDClient(util.InterceptedPDClient{Client: pdCli}, codec)
+}
+
+// NewPDClient returns an unwrapped pd client.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
@@ -213,8 +218,7 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdClient := locate.NewCodecPDClient(util.InterceptedPDClient{Client: pdCli}, apicodec.NewCodecV1(apicodec.ModeTxn))
-	return pdClient, nil
+	return pdCli, nil
 }
 
 // EnableTxnLocalLatches enables txn latch. It should be called before using
