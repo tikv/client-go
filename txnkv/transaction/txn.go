@@ -863,6 +863,8 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			txn.selectPrimaryForPessimisticLock(keys)
 		}
 
+		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
+
 		allKeys := keys
 		// If aggressive locking is enabled and we don't need to update the primary for all locks, we can avoid sending
 		// RPC to those already locked keys.
@@ -916,7 +918,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			ResolveLock: util.ResolveLockDetail{},
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
-		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
 		// If the number of keys greater than 1, it can be on different region,
 		// concurrently execute on multiple regions may lead to deadlock.
 		txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
