@@ -26,12 +26,8 @@ type codecV2 struct {
 
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
-func NewCodecV2(mode Mode, keyspaceID uint32) (*codecV2, error) {
+func NewCodecV2(mode Mode, keyspaceID uint32) (Codec, error) {
 	prefix, err := getIDByte(keyspaceID)
-	if err != nil {
-		return nil, err
-	}
-	end, err := getEnd(prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -43,32 +39,15 @@ func NewCodecV2(mode Mode, keyspaceID uint32) (*codecV2, error) {
 	switch mode {
 	case ModeRaw:
 		codec.prefix[0] = rawModePrefix
-		codec.endKey[0] = rawModePrefix
 	case ModeTxn:
 		codec.prefix[0] = txnModePrefix
-		codec.endKey[0] = txnModePrefix
 	default:
 		return nil, errors.Errorf("unknown mode")
 	}
 	copy(codec.prefix[1:], prefix)
-	copy(codec.endKey[1:], end)
-
+	prefixVal := binary.BigEndian.Uint32(codec.prefix)
+	binary.BigEndian.PutUint32(codec.endKey, prefixVal+1)
 	return codec, nil
-}
-
-// getEnd returns the endKey of the given keyspace with given prefix,
-// or an error if prefix is empty or contains only 0xFF bytes.
-// Ref: https://github.com/apple/foundationdb/blob/4f75f01882fc/bindings/go/src/fdb/range.go#L290
-func getEnd(prefix []byte) ([]byte, error) {
-	endKey := make([]byte, len(prefix))
-	for i := len(prefix) - 1; i >= 0; i-- {
-		if prefix[i] != 0xFF {
-			copy(endKey, prefix[:i+1])
-			endKey[i]++
-			return endKey, nil
-		}
-	}
-	return nil, errors.Errorf("maxium keyspace has been reached")
 }
 
 func getIDByte(keyspaceID uint32) ([]byte, error) {
@@ -77,7 +56,8 @@ func getIDByte(keyspaceID uint32) ([]byte, error) {
 	// Use BigEndian to put the least significant byte to last array position.
 	// For example, keyspaceID 1 should result in []byte{0, 0, 1}
 	binary.BigEndian.PutUint32(b, keyspaceID)
-	// When keyspaceID is too big, first byte of buffer will be non-zero.
+	// When keyspaceID can't fit in 3 bytes, first byte of buffer will be non-zero.
+	// So return error.
 	if b[0] != 0 {
 		return nil, errors.Errorf("illegal keyspaceID: %v, keyspaceID must be 3 byte", b)
 	}
