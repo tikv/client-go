@@ -1547,6 +1547,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if !c.txn.commitTSUpperBoundCheck(commitTS) {
 			err = errors.Errorf("session %d check commit ts upper bound fail, txnStartTS: %d, comm: %d",
 				c.sessionID, c.startTS, c.commitTS)
+			return err
 		}
 	}
 
