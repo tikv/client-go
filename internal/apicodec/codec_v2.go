@@ -65,7 +65,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdScan:
 		r := *req.Scan()
-		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey)
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, r.Reverse)
 		newReq.Req = &r
 	case tikvrpc.CmdPrewrite:
 		r := *req.Prewrite()
@@ -91,7 +91,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdScanLock:
 		r := *req.ScanLock()
-		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey)
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
 		newReq.Req = &r
 	case tikvrpc.CmdResolveLock:
 		r := *req.ResolveLock()
@@ -101,7 +101,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		// TODO: Deprecate Central GC Mode.
 	case tikvrpc.CmdDeleteRange:
 		r := *req.DeleteRange()
-		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey)
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
 		newReq.Req = &r
 	case tikvrpc.CmdPessimisticLock:
 		r := *req.PessimisticLock()
@@ -152,11 +152,11 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdRawDeleteRange:
 		r := *req.RawDeleteRange()
-		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey)
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
 		newReq.Req = &r
 	case tikvrpc.CmdRawScan:
 		r := *req.RawScan()
-		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey)
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, r.Reverse)
 		newReq.Req = &r
 	case tikvrpc.CmdGetKeyTTL:
 		r := *req.RawGetKeyTTL()
@@ -174,7 +174,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	// Other requests.
 	case tikvrpc.CmdUnsafeDestroyRange:
 		r := *req.UnsafeDestroyRange()
-		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey)
+		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
 		newReq.Req = &r
 	case tikvrpc.CmdPhysicalScanLock:
 		r := *req.PhysicalScanLock()
@@ -522,7 +522,7 @@ func (c *codecV2) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
 // EncodeRegionRange first append appropriate prefix to start and end,
 // then pass them to memCodec to encode them to appropriate memory format.
 func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
-	encodedStart, encodedEnd := c.encodeRange(start, end)
+	encodedStart, encodedEnd := c.encodeRange(start, end, false)
 	encodedStart = c.memCodec.encodeKey(encodedStart)
 	encodedEnd = c.memCodec.encodeKey(encodedEnd)
 	return encodedStart, encodedEnd
@@ -563,7 +563,13 @@ func (c *codecV2) decodeKey(encodedKey []byte) ([]byte, error) {
 // encodeRange encodes start and end to correct range in APIv2.
 // Note that if end is nil/ empty byte slice, it means no end.
 // So we use endKey of the keyspace directly.
-func (c *codecV2) encodeRange(start, end []byte) ([]byte, []byte) {
+func (c *codecV2) encodeRange(start, end []byte, reverse bool) ([]byte, []byte) {
+	// If reverse, scan from end to start.
+	// Corresponding start and end encode needs to be reversed.
+	if reverse {
+		end, start = c.encodeRange(end, start, false)
+		return start, end
+	}
 	var encodedEnd []byte
 	if len(end) > 0 {
 		encodedEnd = c.encodeKey(end)
@@ -594,7 +600,7 @@ func (c *codecV2) decodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) 
 
 func (c *codecV2) encodeKeyRange(keyRange *kvrpcpb.KeyRange) *kvrpcpb.KeyRange {
 	encodedRange := &kvrpcpb.KeyRange{}
-	encodedRange.StartKey, encodedRange.EndKey = c.encodeRange(keyRange.StartKey, keyRange.EndKey)
+	encodedRange.StartKey, encodedRange.EndKey = c.encodeRange(keyRange.StartKey, keyRange.EndKey, false)
 	return encodedRange
 }
 
