@@ -1,11 +1,17 @@
 package apicodec
 
 import (
+	"math"
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikvrpc"
+)
+
+var (
+	defaultRawPrefix = []byte{'r', 0, 0, 0}
+	defaultRawEnd    = []byte{'r', 0, 0, 1}
 )
 
 func TestEncodeRequest(t *testing.T) {
@@ -17,15 +23,16 @@ func TestEncodeRequest(t *testing.T) {
 		},
 	}
 	req.ApiVersion = kvrpcpb.APIVersion_V2
-	codec := NewCodecV2(ModeRaw)
+	codec, err := NewCodecV2(ModeRaw, DefaultKeyspaceID)
+	re.NoError(err)
 
 	r, err := codec.EncodeRequest(req)
 	re.NoError(err)
-	re.Equal(append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
+	re.Equal(append(defaultRawPrefix, []byte("key")...), r.RawGet().Key)
 
 	r, err = codec.EncodeRequest(req)
 	re.NoError(err)
-	re.Equal(append(APIV2RawKeyPrefix, []byte("key")...), r.RawGet().Key)
+	re.Equal(append(defaultRawPrefix, []byte("key")...), r.RawGet().Key)
 }
 
 func TestEncodeV2KeyRanges(t *testing.T) {
@@ -50,26 +57,89 @@ func TestEncodeV2KeyRanges(t *testing.T) {
 	}
 	expect := []*kvrpcpb.KeyRange{
 		{
-			StartKey: APIV2RawKeyPrefix,
-			EndKey:   APIV2RawEndKey,
+			StartKey: defaultRawPrefix,
+			EndKey:   defaultRawEnd,
 		},
 		{
-			StartKey: APIV2RawKeyPrefix,
-			EndKey:   append(APIV2RawKeyPrefix, 'z'),
+			StartKey: defaultRawPrefix,
+			EndKey:   append(defaultRawPrefix, 'z'),
 		},
 		{
-			StartKey: append(APIV2RawKeyPrefix, 'a'),
-			EndKey:   APIV2RawEndKey,
+			StartKey: append(defaultRawPrefix, 'a'),
+			EndKey:   defaultRawEnd,
 		},
 		{
-			StartKey: append(APIV2RawKeyPrefix, 'a'),
-			EndKey:   append(APIV2RawKeyPrefix, 'z'),
+			StartKey: append(defaultRawPrefix, 'a'),
+			EndKey:   append(defaultRawPrefix, 'z'),
 		},
 	}
-	codec := NewCodecV2(ModeRaw)
-	v2Codec, ok := codec.(*codecV2)
-	re.True(ok)
+	codec, err := NewCodecV2(ModeRaw, DefaultKeyspaceID)
+	re.NoError(err)
 
-	encodedKeyRanges := v2Codec.encodeKeyRanges(keyRanges)
+	encodedKeyRanges := codec.encodeKeyRanges(keyRanges)
 	re.Equal(expect, encodedKeyRanges)
+}
+
+func TestNewCodecV2(t *testing.T) {
+	re := require.New(t)
+	testCases := []struct {
+		mode           Mode
+		spaceID        uint32
+		shouldErr      bool
+		expectedPrefix []byte
+		expectedEnd    []byte
+	}{
+		{
+			mode: ModeRaw,
+			// A too large keyspaceID should result in error.
+			spaceID:   math.MaxUint32,
+			shouldErr: true,
+		},
+		{
+			// The last keyspace should also result in error,
+			// as it's endKey cannot be constructed.
+			mode:      ModeRaw,
+			spaceID:   1<<24 - 1,
+			shouldErr: true,
+		},
+		{
+			// Bad mode should result in error.
+			mode:      Mode(99),
+			spaceID:   DefaultKeyspaceID,
+			shouldErr: true,
+		},
+		{
+			mode:           ModeRaw,
+			spaceID:        1<<24 - 2,
+			expectedPrefix: []byte{'r', 255, 255, 254},
+			expectedEnd:    []byte{'r', 255, 255, 255},
+		},
+		{
+			// EndKey should be able to carry over increment from lower byte.
+			mode:           ModeTxn,
+			spaceID:        1<<8 - 1,
+			expectedPrefix: []byte{'x', 0, 0, 255},
+			expectedEnd:    []byte{'x', 0, 1, 0},
+		},
+		{
+			// EndKey should be able to carry over increment from lower byte.
+			mode:           ModeTxn,
+			spaceID:        1<<16 - 1,
+			expectedPrefix: []byte{'x', 0, 255, 255},
+			expectedEnd:    []byte{'x', 1, 0, 0},
+		},
+	}
+	var err error
+	var codec *codecV2
+	for _, testCase := range testCases {
+		if testCase.shouldErr {
+			_, err = NewCodecV2(testCase.mode, testCase.spaceID)
+			re.Error(err)
+			continue
+		}
+		codec, err = NewCodecV2(testCase.mode, testCase.spaceID)
+		re.NoError(err)
+		re.Equal(testCase.expectedPrefix, codec.prefix)
+		re.Equal(testCase.expectedEnd, codec.endKey)
+	}
 }

@@ -12,7 +12,7 @@ type codecV1 struct {
 
 // NewCodecV1 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv1 format.
-func NewCodecV1(mode Mode) Codec {
+func NewCodecV1(mode Mode) *codecV1 {
 	switch mode {
 	case ModeRaw:
 		return &codecV1{memCodec: &defaultMemCodec{}}

@@ -2,6 +2,7 @@ package apicodec
 
 import (
 	"bytes"
+	"encoding/binary"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -10,17 +11,10 @@ import (
 )
 
 var (
-	// APIV2RawKeyPrefix is prefix of raw key in API V2.
-	APIV2RawKeyPrefix = []byte{'r', 0, 0, 0}
-
-	// APIV2RawEndKey is max key of raw key in API V2.
-	APIV2RawEndKey = []byte{'r', 0, 0, 1}
-
-	// APIV2TxnKeyPrefix is prefix of txn key in API V2.
-	APIV2TxnKeyPrefix = []byte{'x', 0, 0, 0}
-
-	// APIV2TxnEndKey is max key of txn key in API V2.
-	APIV2TxnEndKey = []byte{'x', 0, 0, 1}
+	// DefaultKeyspaceID is the keyspaceID of the default keyspace.
+	DefaultKeyspaceID uint32 = 0
+	rawModePrefix     byte   = 'r'
+	txnModePrefix     byte   = 'x'
 )
 
 // codecV2 is used to encode/decode keys and request into APIv2 format.
@@ -32,20 +26,63 @@ type codecV2 struct {
 
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
-func NewCodecV2(mode Mode) Codec {
+func NewCodecV2(mode Mode, keyspaceID uint32) (*codecV2, error) {
+	prefix, err := getIDByte(keyspaceID)
+	if err != nil {
+		return nil, err
+	}
+	end, err := getEnd(prefix)
+	if err != nil {
+		return nil, err
+	}
+
 	// Region keys in CodecV2 are always encoded in memory comparable form.
 	codec := &codecV2{memCodec: &memComparableCodec{}}
+	codec.prefix = make([]byte, 4)
+	codec.endKey = make([]byte, 4)
 	switch mode {
 	case ModeRaw:
-		codec.prefix = APIV2RawKeyPrefix
-		codec.endKey = APIV2RawEndKey
+		codec.prefix[0] = rawModePrefix
+		codec.endKey[0] = rawModePrefix
 	case ModeTxn:
-		codec.prefix = APIV2TxnKeyPrefix
-		codec.endKey = APIV2TxnEndKey
+		codec.prefix[0] = txnModePrefix
+		codec.endKey[0] = txnModePrefix
 	default:
-		panic("unknown mode")
+		return nil, errors.Errorf("unknown mode")
 	}
-	return codec
+	copy(codec.prefix[1:], prefix)
+	copy(codec.endKey[1:], end)
+
+	return codec, nil
+}
+
+// getEnd returns the endKey of the given keyspace with given prefix,
+// or an error if prefix is empty or contains only 0xFF bytes.
+// Ref: https://github.com/apple/foundationdb/blob/4f75f01882fc/bindings/go/src/fdb/range.go#L290
+func getEnd(prefix []byte) ([]byte, error) {
+	endKey := make([]byte, len(prefix))
+	for i := len(prefix) - 1; i >= 0; i-- {
+		if prefix[i] != 0xFF {
+			copy(endKey, prefix[:i+1])
+			endKey[i]++
+			return endKey, nil
+		}
+	}
+	return nil, errors.Errorf("maxium keyspace has been reached")
+}
+
+func getIDByte(keyspaceID uint32) ([]byte, error) {
+	// PutUint32 requires 4 bytes to operate, so must use buffer with size 4 here.
+	b := make([]byte, 4)
+	// Use BigEndian to put the least significant byte to last array position.
+	// For example, keyspaceID 1 should result in []byte{0, 0, 1}
+	binary.BigEndian.PutUint32(b, keyspaceID)
+	// When keyspaceID is too big, first byte of buffer will be non-zero.
+	if b[0] != 0 {
+		return nil, errors.Errorf("illegal keyspaceID: %v, keyspaceID must be 3 byte", b)
+	}
+	// Remove the first byte to make keyspace ID 3 bytes.
+	return b[1:], nil
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {

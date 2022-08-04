@@ -39,6 +39,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
@@ -96,7 +97,6 @@ type RawOption interface {
 	apply(opts *rawOptions)
 }
 
-//
 type rawOptionFunc func(opts *rawOptions)
 
 func (f rawOptionFunc) apply(opts *rawOptions) {
@@ -137,6 +137,7 @@ type option struct {
 	security        config.Security
 	gRPCDialOptions []grpc.DialOption
 	pdOptions       []pd.ClientOption
+	keyspaceName    string
 }
 
 // ClientOpt is factory to set the client options.
@@ -170,6 +171,13 @@ func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 	}
 }
 
+// WithKeyspace is used to set the keyspace Name.
+func WithKeyspace(keyspaceName string) ClientOpt {
+	return func(o *option) {
+		o.keyspaceName = keyspaceName
+	}
+}
+
 // SetAtomicForCAS sets atomic mode for CompareAndSwap
 func (c *Client) SetAtomicForCAS(b bool) *Client {
 	c.atomic = b
@@ -187,6 +195,18 @@ func NewClient(ctx context.Context, pdAddrs []string, security config.Security, 
 	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
 }
 
+func getKeyspaceID(pdCli pd.Client, keyspaceName string) (uint32, error) {
+	meta, err := pdCli.LoadKeyspace(context.TODO(), keyspaceName)
+	if err != nil {
+		return 0, err
+	}
+	// If keyspace is not enabled, user should not be able to connect.
+	if meta.State != keyspacepb.KeyspaceState_ENABLED {
+		return 0, errors.Errorf("keyspace %s not enabled", keyspaceName)
+	}
+	return meta.Id, nil
+}
+
 // NewClientWithOpts creates a client with PD cluster addrs and client options.
 func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	opt := &option{}
@@ -194,6 +214,17 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		o(opt)
 	}
 
+	// Use an unwrapped PDClient to obtain keyspace meta.
+	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
+		CAPath:   opt.security.ClusterSSLCA,
+		CertPath: opt.security.ClusterSSLCert,
+		KeyPath:  opt.security.ClusterSSLKey,
+	}, opt.pdOptions...)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	// Construct codec from options.
 	var codec apicodec.Codec
 	switch opt.apiVersion {
 	case kvrpcpb.APIVersion_V1:
@@ -201,8 +232,21 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	case kvrpcpb.APIVersion_V1TTL:
 		codec = apicodec.NewCodecV1(apicodec.ModeRaw)
 	case kvrpcpb.APIVersion_V2:
-		// TODO: Get and set keyspace prefix here.
-		codec = apicodec.NewCodecV2(apicodec.ModeRaw)
+		var keyspaceID uint32
+		if len(opt.keyspaceName) != 0 {
+			// If keyspaceName is set, obtain keyspaceID from PD.
+			keyspaceID, err = getKeyspaceID(pdCli, opt.keyspaceName)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// If KeyspaceName is unset, use default keyspaceID.
+			keyspaceID = apicodec.DefaultKeyspaceID
+		}
+		codec, err = apicodec.NewCodecV2(apicodec.ModeRaw, keyspaceID)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
 	}
@@ -213,15 +257,6 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		client.WithCodec(codec),
 	)
 
-	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   opt.security.ClusterSSLCA,
-		CertPath: opt.security.ClusterSSLCert,
-		KeyPath:  opt.security.ClusterSSLKey,
-	}, opt.pdOptions...)
-
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
 	pdCli = locate.NewCodecPDClient(pdCli, codec)
 
 	return &Client{

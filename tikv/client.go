@@ -52,7 +52,7 @@ func WithSecurity(security config.Security) ClientOpt {
 	return client.WithSecurity(security)
 }
 
-// WithCodec is used ti set client codec.
+// WithCodec is used to set client codec.
 func WithCodec(codec apicodec.Codec) ClientOpt {
 	return client.WithCodec(codec)
 }

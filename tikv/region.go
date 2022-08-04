@@ -98,6 +98,9 @@ var NewCodecV1 = apicodec.NewCodecV1
 // NewCodecV2 is a constructor for v2 Codec.
 var NewCodecV2 = apicodec.NewCodecV2
 
+// DefaultKeyspaceID is the keyspaceID of the default keyspace.
+var DefaultKeyspaceID = apicodec.DefaultKeyspaceID
+
 // Mode represents the operation mode of a request, export client.Mode
 type Mode = apicodec.Mode
 
