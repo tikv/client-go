@@ -32,9 +32,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !go1.18
-// +build !go1.18
-
 package locate
 
 import (
@@ -43,31 +40,31 @@ import (
 	"github.com/google/btree"
 )
 
-// SortedRegionsRegions is a sorted btree.
+// SortedRegions is a sorted btree.
 type SortedRegions struct {
-	b *btree.BTree
+	b *btree.BTreeG[*btreeItem]
 }
 
 // NewSortedRegions returns a new SortedRegions.
 func NewSortedRegions(btreeDegree int) *SortedRegions {
 	return &SortedRegions{
-		b: btree.New(btreeDegree),
+		b: btree.NewG(btreeDegree, func(a, b *btreeItem) bool { return a.Less(b) }),
 	}
 }
 
 // ReplaceOrInsert inserts a new item into the btree.
 func (s *SortedRegions) ReplaceOrInsert(cachedRegion *Region) *Region {
-	old := s.b.ReplaceOrInsert(newBtreeItem(cachedRegion))
+	old, _ := s.b.ReplaceOrInsert(newBtreeItem(cachedRegion))
 	if old != nil {
-		return old.(*btreeItem).cachedRegion
+		return old.cachedRegion
 	}
 	return nil
 }
 
 // DescendLessOrEqual returns all items that are less than or equal to the key.
 func (s *SortedRegions) DescendLessOrEqual(key []byte, isEndKey bool, ts int64) (r *Region) {
-	s.b.DescendLessOrEqual(newBtreeSearchItem(key), func(item btree.Item) bool {
-		r = item.(*btreeItem).cachedRegion
+	s.b.DescendLessOrEqual(newBtreeSearchItem(key), func(item *btreeItem) bool {
+		r = item.cachedRegion
 		if isEndKey && bytes.Equal(r.StartKey(), key) {
 			r = nil     // clear result
 			return true // iterate next item
@@ -83,8 +80,8 @@ func (s *SortedRegions) DescendLessOrEqual(key []byte, isEndKey bool, ts int64) 
 
 // AscendGreaterOrEqual returns all items that are greater than or equal to the key.
 func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int) (regions []*Region) {
-	s.b.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item btree.Item) bool {
-		region := item.(*btreeItem).cachedRegion
+	s.b.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item *btreeItem) bool {
+		region := item.cachedRegion
 		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
 			return false
 		}
@@ -101,8 +98,8 @@ func (s *SortedRegions) Clear() {
 
 // ValidRegionsInBtree returns the number of valid regions in the btree.
 func (s *SortedRegions) ValidRegionsInBtree(ts int64) (len int) {
-	s.b.Descend(func(item btree.Item) bool {
-		r := item.(*btreeItem).cachedRegion
+	s.b.Descend(func(item *btreeItem) bool {
+		r := item.cachedRegion
 		if !r.checkRegionCacheTTL(ts) {
 			return true
 		}
