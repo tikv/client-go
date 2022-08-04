@@ -76,7 +76,9 @@ func TestEncodeV2KeyRanges(t *testing.T) {
 	codec, err := NewCodecV2(ModeRaw, DefaultKeyspaceID)
 	re.NoError(err)
 
-	encodedKeyRanges := codec.encodeKeyRanges(keyRanges)
+	v2Codec, ok := codec.(*codecV2)
+	re.True(ok)
+	encodedKeyRanges := v2Codec.encodeKeyRanges(keyRanges)
 	re.Equal(expect, encodedKeyRanges)
 }
 
@@ -93,13 +95,6 @@ func TestNewCodecV2(t *testing.T) {
 			mode: ModeRaw,
 			// A too large keyspaceID should result in error.
 			spaceID:   math.MaxUint32,
-			shouldErr: true,
-		},
-		{
-			// The last keyspace should also result in error,
-			// as it's endKey cannot be constructed.
-			mode:      ModeRaw,
-			spaceID:   1<<24 - 1,
 			shouldErr: true,
 		},
 		{
@@ -128,18 +123,26 @@ func TestNewCodecV2(t *testing.T) {
 			expectedPrefix: []byte{'x', 0, 255, 255},
 			expectedEnd:    []byte{'x', 1, 0, 0},
 		},
+		{
+			// If prefix is the last keyspace, then end should change the mode byte.
+			mode:           ModeRaw,
+			spaceID:        1<<24 - 1,
+			expectedPrefix: []byte{'r', 255, 255, 255},
+			expectedEnd:    []byte{'s', 255, 255, 255},
+		},
 	}
-	var err error
-	var codec *codecV2
 	for _, testCase := range testCases {
 		if testCase.shouldErr {
-			_, err = NewCodecV2(testCase.mode, testCase.spaceID)
+			_, err := NewCodecV2(testCase.mode, testCase.spaceID)
 			re.Error(err)
 			continue
 		}
-		codec, err = NewCodecV2(testCase.mode, testCase.spaceID)
+		codec, err := NewCodecV2(testCase.mode, testCase.spaceID)
 		re.NoError(err)
-		re.Equal(testCase.expectedPrefix, codec.prefix)
-		re.Equal(testCase.expectedEnd, codec.endKey)
+		
+		v2Codec, ok := codec.(*codecV2)
+		re.True(ok)
+		re.Equal(testCase.expectedPrefix, v2Codec.prefix)
+		re.Equal(testCase.expectedEnd, v2Codec.endKey)
 	}
 }
