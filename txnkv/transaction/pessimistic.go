@@ -287,6 +287,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 		return true, nil
 	}
 	var locks []*txnlock.Lock
+	skipResolvingLocks := true
 	for _, keyErr := range keyErrs {
 		// Check already exists error
 		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
@@ -303,7 +304,16 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 			return true, err1
 		}
 		locks = append(locks, lock)
+		if !keyErr.GetLocked().GetSkipResolvingLock() {
+			skipResolvingLocks = false
+		}
 	}
+
+	if skipResolvingLocks {
+		// Retry immediately.
+		return false, nil
+	}
+
 	// Because we already waited on tikv, no need to Backoff here.
 	// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 	if diagCtx.resolvingRecordToken == nil {
@@ -412,6 +422,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 	}
 
 	var locks []*txnlock.Lock
+	skipResolvingLocks := true
 	for _, keyErr := range keyErrs {
 		// Check already exists error
 		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
@@ -428,6 +439,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 			return true, nil, err1
 		}
 		locks = append(locks, lock)
+		if !keyErr.GetLocked().GetSkipResolvingLock() {
+			skipResolvingLocks = false
+		}
 	}
 
 	if regionErr != nil {
@@ -457,6 +471,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 
 	if failedMutations.Len() > 0 {
 		if len(locks) > 0 {
+			if skipResolvingLocks {
+				// Retry immediately.
+				return false, &failedMutations, nil
+			}
 			// Because we already waited on tikv, no need to Backoff here.
 			// tikv default will wait 3s(also the maximum wait value) when lock error occurs
 			if diagCtx.resolvingRecordToken == nil {
