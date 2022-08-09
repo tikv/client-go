@@ -13,9 +13,20 @@ import (
 var (
 	// DefaultKeyspaceID is the keyspaceID of the default keyspace.
 	DefaultKeyspaceID uint32 = 0
+	// DefaultKeyspaceName is the name of the default keyspace.
+	DefaultKeyspaceName = "DEFAULT"
+
 	rawModePrefix     byte   = 'r'
 	txnModePrefix     byte   = 'x'
 )
+
+// BuildKeyspaceName builds a keyspace name
+func BuildKeyspaceName(name string) string {
+	if name == "" {
+		return DefaultKeyspaceName
+	}
+	return name
+}
 
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {

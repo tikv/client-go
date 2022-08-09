@@ -36,7 +36,7 @@ package locate
 
 import (
 	"context"
-
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -51,9 +51,36 @@ type CodecPDClient struct {
 	codec apicodec.Codec
 }
 
-// NewCodecPDClient creates a CodecPDClient.
-func NewCodecPDClient(client pd.Client, codec apicodec.Codec) *CodecPDClient {
+// NewCodecPDClient creates a CodecPDClient in API v1.
+func NewCodecPDClient(mode apicodec.Mode, client pd.Client) *CodecPDClient {
+	codec := apicodec.NewCodecV1(mode)
 	return &CodecPDClient{client, codec}
+}
+
+// NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
+func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace string) (*CodecPDClient, error) {
+	id, err := GetKeyspaceID(client, keyspace)
+	if err != nil {
+		return nil, err
+	}
+	codec, err := apicodec.NewCodecV2(mode, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CodecPDClient{client, codec}, nil
+}
+
+func GetKeyspaceID(client pd.Client, name string) (uint32, error) {
+	meta, err := client.LoadKeyspace(context.Background(), apicodec.BuildKeyspaceName(name))
+	if err != nil {
+		return 0, err
+	}
+	// If keyspace is not enabled, user should not be able to connect.
+	if meta.State != keyspacepb.KeyspaceState_ENABLED {
+		return 0, errors.Errorf("keyspace %s not enabled", name)
+	}
+	return meta.Id, nil
 }
 
 // GetCodec returns CodecPDClient's codec.

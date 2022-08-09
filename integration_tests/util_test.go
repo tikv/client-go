@@ -106,13 +106,13 @@ func newTiKVStore(t *testing.T) *tikv.KVStore {
 	var opt tikv.ClientOpt
 	switch mustGetApiVersion(re, pdClient) {
 	case kvrpcpb.APIVersion_V1:
-		pdClient = tikv.NewCodecPDClient(pdClient, tikv.NewCodecV1(tikv.ModeTxn))
+		pdClient = tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 		opt = tikv.WithCodec(tikv.NewCodecV1(tikv.ModeTxn))
 	case kvrpcpb.APIVersion_V2:
-		apiCodec, err := tikv.NewCodecV2(tikv.ModeTxn, tikv.DefaultKeyspaceID)
-		re.NoError(err)
-		pdClient = tikv.NewCodecPDClient(pdClient, apiCodec)
-		opt = tikv.WithCodec(apiCodec)
+		codecCli, err := tikv.NewCodecPDClientWithKeyspace(tikv.ModeTxn, pdClient, tikv.DefaultKeyspaceName)
+		pdClient = codecCli
+		re.Nil(err)
+		opt = tikv.WithCodec(codecCli.GetCodec())
 	default:
 		re.Fail("unknown api version")
 	}

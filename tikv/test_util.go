@@ -71,7 +71,7 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 		Client: client,
 		codec:  codec,
 	}
-	pdCli := pd.Client(locate.NewCodecPDClient(pdClient, codec))
+	pdCli := pd.Client(locate.NewCodecPDClient(ModeTxn, pdClient))
 
 	if clientHijack != nil {
 		client = clientHijack(client)
