@@ -446,7 +446,7 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 				storeIDStr = strconv.FormatUint(storeID, 10)
 			}
 			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr)
-			sendReqHistCache.Store(storeID, latHist)
+			rpcNetLatencyHistCache.Store(storeID, latHist)
 		}
 		latency := elapsed - time.Duration(execDetail.TimeDetail.TotalRpcWallTimeNs)*time.Nanosecond
 		latHist.(prometheus.Observer).Observe(latency.Seconds())
