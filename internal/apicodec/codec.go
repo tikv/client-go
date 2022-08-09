@@ -15,7 +15,7 @@ const (
 	ModeTxn
 )
 
-// Codec is responsible for encode/decode request,
+// Codec is responsible for encode/decode requests.
 type Codec interface {
 	// GetAPIVersion returns the api version of the codec.
 	GetAPIVersion() kvrpcpb.APIVersion
