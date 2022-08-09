@@ -89,8 +89,14 @@ type RegionRequestRuntimeStats = locate.RegionRequestRuntimeStats
 // RPCRuntimeStats indicates the RPC request count and consume time.
 type RPCRuntimeStats = locate.RPCRuntimeStats
 
+// CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
+type CodecPDClient = locate.CodecPDClient
+
 // NewCodecPDClient is a constructor for CodecPDClient
 var NewCodecPDClient = locate.NewCodecPDClient
+
+// NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
+var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
 
 // NewCodecV1 is a constructor for v1 Codec.
 var NewCodecV1 = apicodec.NewCodecV1
@@ -103,6 +109,9 @@ type Codec = apicodec.Codec
 
 // DefaultKeyspaceID is the keyspaceID of the default keyspace.
 var DefaultKeyspaceID = apicodec.DefaultKeyspaceID
+
+// DefaultKeyspaceName is the name of the default keyspace.
+var DefaultKeyspaceName = apicodec.DefaultKeyspaceName
 
 // Mode represents the operation mode of a request, export client.Mode
 type Mode = apicodec.Mode

@@ -51,7 +51,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
@@ -191,11 +190,6 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	go store.safeTSUpdater()
 
 	return store, nil
-}
-
-// WrapPDClient wrap pd.Client with codec and interceptors.
-func WrapPDClient(pdCli pd.Client, codec apicodec.Codec) pd.Client {
-	return locate.NewCodecPDClient(util.InterceptedPDClient{Client: pdCli}, codec)
 }
 
 // NewPDClient returns an unwrapped pd client.
@@ -589,6 +583,7 @@ var _ = NewLockResolver
 // NewLockResolver creates a LockResolver.
 // It is exported for other pkg to use. For instance, binlog service needs
 // to determine a transaction's commit state.
+// TODO(iosmanthus): support api v2
 func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.ClientOption) (*txnlock.LockResolver, error) {
 	pdCli, err := pd.NewClient(etcdAddrs, pd.SecurityOption{
 		CAPath:   security.ClusterSSLCA,
@@ -611,7 +606,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, err
 	}
 
-	s, err := NewKVStore(uuid, locate.NewCodecPDClient(pdCli, apicodec.NewCodecV1(apicodec.ModeTxn)), spkv, client.NewRPCClient(WithSecurity(security)))
+	s, err := NewKVStore(uuid, locate.NewCodecPDClient(ModeTxn, pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
 		return nil, err
 	}

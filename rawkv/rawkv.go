@@ -37,6 +37,7 @@ package rawkv
 import (
 	"bytes"
 	"context"
+	"github.com/tikv/client-go/v2/tikv"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
@@ -137,7 +138,7 @@ type option struct {
 	security        config.Security
 	gRPCDialOptions []grpc.DialOption
 	pdOptions       []pd.ClientOption
-	keyspaceName    string
+	keyspace        string
 }
 
 // ClientOpt is factory to set the client options.
@@ -172,9 +173,9 @@ func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 }
 
 // WithKeyspace is used to set the keyspace Name.
-func WithKeyspace(keyspaceName string) ClientOpt {
+func WithKeyspace(name string) ClientOpt {
 	return func(o *option) {
-		o.keyspaceName = keyspaceName
+		o.keyspace = name
 	}
 }
 
@@ -224,26 +225,14 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		return nil, errors.WithStack(err)
 	}
 
-	// Construct codec from options.
-	var codec apicodec.Codec
+	// Build a CodecPDClient
+	var codecCli *tikv.CodecPDClient
+
 	switch opt.apiVersion {
-	case kvrpcpb.APIVersion_V1:
-		codec = apicodec.NewCodecV1(apicodec.ModeRaw)
-	case kvrpcpb.APIVersion_V1TTL:
-		codec = apicodec.NewCodecV1(apicodec.ModeRaw)
+	case kvrpcpb.APIVersion_V1, kvrpcpb.APIVersion_V1TTL:
+		codecCli = locate.NewCodecPDClient(tikv.ModeRaw, pdCli)
 	case kvrpcpb.APIVersion_V2:
-		var keyspaceID uint32
-		if len(opt.keyspaceName) != 0 {
-			// If keyspaceName is set, obtain keyspaceID from PD.
-			keyspaceID, err = getKeyspaceID(pdCli, opt.keyspaceName)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			// If KeyspaceName is unset, use default keyspaceID.
-			keyspaceID = apicodec.DefaultKeyspaceID
-		}
-		codec, err = apicodec.NewCodecV2(apicodec.ModeRaw, keyspaceID)
+		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdCli, opt.keyspace)
 		if err != nil {
 			return nil, err
 		}
@@ -251,19 +240,18 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
 	}
 
+	pdCli = codecCli
+
 	rpcCli := client.NewRPCClient(
 		client.WithSecurity(opt.security),
 		client.WithGRPCDialOptions(opt.gRPCDialOptions...),
-		client.WithCodec(codec),
+		client.WithCodec(codecCli.GetCodec()),
 	)
-
-	pdCli = locate.NewCodecPDClient(pdCli, codec)
 
 	return &Client{
 		apiVersion:  opt.apiVersion,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
-		codec:       codec,
 		pdClient:    pdCli,
 		rpcClient:   rpcCli,
 	}, nil

@@ -128,7 +128,7 @@ func TestNewCodecV2(t *testing.T) {
 			mode:           ModeRaw,
 			spaceID:        1<<24 - 1,
 			expectedPrefix: []byte{'r', 255, 255, 255},
-			expectedEnd:    []byte{'s', 255, 255, 255},
+			expectedEnd:    []byte{'s', 0, 0, 0},
 		},
 	}
 	for _, testCase := range testCases {
@@ -139,7 +139,7 @@ func TestNewCodecV2(t *testing.T) {
 		}
 		codec, err := NewCodecV2(testCase.mode, testCase.spaceID)
 		re.NoError(err)
-		
+
 		v2Codec, ok := codec.(*codecV2)
 		re.True(ok)
 		re.Equal(testCase.expectedPrefix, v2Codec.prefix)
