@@ -76,6 +76,10 @@ func getIDByte(keyspaceID uint32) ([]byte, error) {
 	return b[1:], nil
 }
 
+func (c *codecV2) GetKeyspaceID() []byte {
+	return c.prefix[1:]
+}
+
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
 	return kvrpcpb.APIVersion_V2
 }

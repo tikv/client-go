@@ -19,6 +19,8 @@ const (
 type Codec interface {
 	// GetAPIVersion returns the api version of the codec.
 	GetAPIVersion() kvrpcpb.APIVersion
+	// GetKeyspaceID return the keyspace id of the codec.
+	GetKeyspaceID() []byte
 	// EncodeRequest encodes with the given Codec.
 	// NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 	EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error)
