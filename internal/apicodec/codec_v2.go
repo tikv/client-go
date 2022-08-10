@@ -3,6 +3,7 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -218,15 +219,15 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdCop:
 		r := *req.Cop()
-		// TODO: handle cop Request.
+		r.Ranges = c.encodeCopRanges(r.Ranges)
 		newReq.Req = &r
 	case tikvrpc.CmdCopStream:
 		r := *req.Cop()
-		// TODO: handle cop Request.
+		r.Ranges = c.encodeCopRanges(r.Ranges)
 		newReq.Req = &r
 	case tikvrpc.CmdBatchCop:
 		r := *req.BatchCop()
-		// TODO: handle cop Request.
+		// TODO(iosmanthus): handle cop Request.
 		newReq.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
@@ -518,7 +519,16 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 			return nil, err
 		}
 	case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
-		// TODO: handle cop response.
+		r := resp.Resp.(*coprocessor.Response)
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		r.Locked, err = c.decodeLockInfo(r.Locked)
+		if err != nil {
+			return nil, err
+		}
+		r.Range = c.decodeCopRange(r.Range)
 	case tikvrpc.CmdBatchCop:
 		// TODO: handle cop response.
 	case tikvrpc.CmdMvccGetByKey:
@@ -642,6 +652,27 @@ func (c *codecV2) encodeKeyRanges(keyRanges []*kvrpcpb.KeyRange) []*kvrpcpb.KeyR
 		encodedRanges = append(encodedRanges, c.encodeKeyRange(keyRange))
 	}
 	return encodedRanges
+}
+
+func (c *codecV2) encodeCopRange(r *coprocessor.KeyRange) *coprocessor.KeyRange {
+	newRange := &coprocessor.KeyRange{}
+	newRange.Start, newRange.End = c.encodeRange(r.Start, r.End, false)
+	return newRange
+}
+
+func (c *codecV2) decodeCopRange(r *coprocessor.KeyRange) *coprocessor.KeyRange {
+	if r != nil {
+		r.Start, r.End = c.decodeRange(r.Start, r.End)
+	}
+	return r
+}
+
+func (c *codecV2) encodeCopRanges(ranges []*coprocessor.KeyRange) []*coprocessor.KeyRange {
+	newRanges := make([]*coprocessor.KeyRange, 0, len(ranges))
+	for _, r := range ranges {
+		newRanges = append(newRanges, c.encodeCopRange(r))
+	}
+	return newRanges
 }
 
 func (c *codecV2) encodeKeys(keys [][]byte) [][]byte {
