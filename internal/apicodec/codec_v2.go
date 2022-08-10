@@ -16,8 +16,8 @@ var (
 	// DefaultKeyspaceName is the name of the default keyspace.
 	DefaultKeyspaceName = "DEFAULT"
 
-	rawModePrefix     byte   = 'r'
-	txnModePrefix     byte   = 'x'
+	rawModePrefix byte = 'r'
+	txnModePrefix byte = 'x'
 )
 
 // BuildKeyspaceName builds a keyspace name
@@ -74,6 +74,10 @@ func getIDByte(keyspaceID uint32) ([]byte, error) {
 	}
 	// Remove the first byte to make keyspace ID 3 bytes.
 	return b[1:], nil
+}
+
+func (c *codecV2) GetKeyspaceID() []byte {
+	return c.prefix[1:]
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {

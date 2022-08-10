@@ -26,6 +26,10 @@ func (c *codecV1) GetAPIVersion() kvrpcpb.APIVersion {
 	return kvrpcpb.APIVersion_V1
 }
 
+func (c *codecV1) GetKeyspaceID() []byte {
+	return nil
+}
+
 func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	return req, nil
 }
