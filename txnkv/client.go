@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/tikv/client-go/v2/util"
 
-	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
@@ -27,7 +26,6 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
-	pd "github.com/tikv/pd/client"
 )
 
 // Client is a txn client.
@@ -55,18 +53,6 @@ func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 	return func(opt *option) {
 		opt.apiVersion = apiVersion
 	}
-}
-
-func getKeyspaceID(pdCli pd.Client, keyspaceName string) (uint32, error) {
-	meta, err := pdCli.LoadKeyspace(context.TODO(), keyspaceName)
-	if err != nil {
-		return 0, err
-	}
-	// If keyspace is not enabled, user should not be able to connect.
-	if meta.State != keyspacepb.KeyspaceState_ENABLED {
-		return 0, errors.Errorf("keyspace %s not enabled", keyspaceName)
-	}
-	return meta.Id, nil
 }
 
 // NewClient creates a txn client with pdAddrs.

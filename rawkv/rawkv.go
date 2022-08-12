@@ -197,18 +197,6 @@ func NewClient(ctx context.Context, pdAddrs []string, security config.Security, 
 	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
 }
 
-func getKeyspaceID(pdCli pd.Client, keyspaceName string) (uint32, error) {
-	meta, err := pdCli.LoadKeyspace(context.TODO(), keyspaceName)
-	if err != nil {
-		return 0, err
-	}
-	// If keyspace is not enabled, user should not be able to connect.
-	if meta.State != keyspacepb.KeyspaceState_ENABLED {
-		return 0, errors.Errorf("keyspace %s not enabled", keyspaceName)
-	}
-	return meta.Id, nil
-}
-
 // NewClientWithOpts creates a client with PD cluster addrs and client options.
 func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	opt := &option{}
