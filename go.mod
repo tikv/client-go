@@ -2,11 +2,7 @@ module github.com/tikv/client-go/v2
 
 go 1.18
 
-// TODO: Remove after pd keyspace management merge.
-replace (
-	github.com/pingcap/kvproto => github.com/AmoebaProtozoa/kvproto v0.0.0-20220803082543-12b7f4a3d205
-	github.com/tikv/pd/client => github.com/AmoebaProtozoa/pd/client v0.0.0-20220802034027-a6f2521278a5
-)
+replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20220816052849-114a18e85da5
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
