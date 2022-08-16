@@ -40,7 +40,6 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
