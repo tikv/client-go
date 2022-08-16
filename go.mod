@@ -2,11 +2,7 @@ module github.com/tikv/client-go/v2
 
 go 1.18
 
-// TODO: Remove after pd keyspace management merge.
-replace (
-	github.com/pingcap/kvproto => github.com/AmoebaProtozoa/kvproto v0.0.0-20220803082543-12b7f4a3d205
-	github.com/tikv/pd/client => github.com/AmoebaProtozoa/pd/client v0.0.0-20220802034027-a6f2521278a5
-)
+replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20220816052849-114a18e85da5
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
@@ -19,7 +15,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pingcap/failpoint v0.0.0-20210918120811-547c13e3eb00
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20220705053936-aa9c2d20cd2a
+	github.com/pingcap/kvproto v0.0.0-20220808072825-3692dfb0dad7
 	github.com/pingcap/log v0.0.0-20211215031037-e024ba4eb0ee
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.11.0
