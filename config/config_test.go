@@ -42,18 +42,20 @@ import (
 )
 
 func TestParsePath(t *testing.T) {
-	etcdAddrs, disableGC, err := ParsePath("tikv://node1:2379,node2:2379")
+	etcdAddrs, disableGC, keyspaceName, err := ParsePath("tikv://node1:2379,node2:2379")
 
 	assert.Nil(t, err)
 	assert.Equal(t, []string{"node1:2379", "node2:2379"}, etcdAddrs)
 	assert.False(t, disableGC)
+	assert.Empty(t, keyspaceName)
 
-	_, _, err = ParsePath("tikv://node1:2379")
+	_, _, _, err = ParsePath("tikv://node1:2379")
 	assert.Nil(t, err)
 
-	_, disableGC, err = ParsePath("tikv://node1:2379?disableGC=true")
+	_, disableGC, keyspaceName, err = ParsePath("tikv://node1:2379?disableGC=true&keyspaceName=DEFAULT")
 	assert.Nil(t, err)
 	assert.True(t, disableGC)
+	assert.Equal(t, "DEFAULT", keyspaceName)
 }
 
 func TestTxnScopeValue(t *testing.T) {
