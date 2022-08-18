@@ -97,16 +97,16 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		mutations[i] = mut
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
-		Mutations:      mutations,
-		PrimaryLock:    c.primary(),
-		StartVersion:   c.startTS,
-		ForUpdateTs:    c.forUpdateTS,
-		IsFirstLock:    c.isFirstLock,
-		WaitTimeout:    action.LockWaitTime(),
-		ReturnValues:   action.ReturnValues,
-		CheckExistence: action.CheckExistence,
-		MinCommitTs:    c.forUpdateTS + 1,
-		LockIfExists:   action.LockIfExists,
+		Mutations:        mutations,
+		PrimaryLock:      c.primary(),
+		StartVersion:     c.startTS,
+		ForUpdateTs:      c.forUpdateTS,
+		IsFirstLock:      c.isFirstLock,
+		WaitTimeout:      action.LockWaitTime(),
+		ReturnValues:     action.ReturnValues,
+		CheckExistence:   action.CheckExistence,
+		MinCommitTs:      c.forUpdateTS + 1,
+		LockOnlyIfExists: action.LockOnlyIfExists,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
