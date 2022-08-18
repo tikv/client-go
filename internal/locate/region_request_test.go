@@ -466,6 +466,11 @@ func (s *mockTikvGrpcServer) Compact(ctx context.Context, request *kvrpcpb.Compa
 	return nil, errors.New("unreachable")
 }
 
+// make test pass
+func (s *mockTikvGrpcServer) GetLockWaitHistory(context.Context, *kvrpcpb.GetLockWaitHistoryRequest) (*kvrpcpb.GetLockWaitHistoryResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCanceled() {
 	// prepare a mock tikv grpc server
 	addr := "localhost:56341"
