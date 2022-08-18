@@ -597,8 +597,8 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
 
-	if lockCtx.LockIfExists && !lockCtx.ReturnValues {
-		return errors.New("If LockIfExists flag was set for LockKeys in TiDB, ReturnValues flag must be set too")
+	if lockCtx.LockOnlyIfExists && !lockCtx.ReturnValues {
+		return errors.New("If LockOnlyIfExists flag was set for LockKeys in TiDB, ReturnValues flag must be set too")
 	}
 
 	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
@@ -759,10 +759,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
 				if !val.Exists {
 					valExists = tikv.SetKeyLockedValueNotExists
-					// lockCtx.LockIfExists = true means lockCtx.ReturnValues = true definitely
-					if lockCtx.LockIfExists {
-						continue
-					}
 				}
 			}
 		}
