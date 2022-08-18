@@ -308,7 +308,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 
 			// Update CommitDetails
 			reqDuration := time.Since(reqBegin)
-			c.getDetail().MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), prewriteResp.ExecDetailsV2)
+			c.getDetail().MergePrewriteReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), prewriteResp.ExecDetailsV2)
 
 			if batch.isPrimary {
 				// After writing the primary key, if the size of the transaction is larger than 32M,
