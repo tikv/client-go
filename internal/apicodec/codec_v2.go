@@ -595,6 +595,18 @@ func (c *codecV2) encodeKey(key []byte) []byte {
 	return append(c.prefix, key...)
 }
 
+func (c *codecV2) EncodeKey(key []byte) []byte {
+	return c.encodeKey(key)
+}
+
+func (c *codecV2) EncodeRange(start, end []byte) ([]byte, []byte) {
+	return c.encodeRange(start, end, false)
+}
+
+func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) {
+	return c.decodeRange(encodedStart, encodedEnd)
+}
+
 func (c *codecV2) decodeKey(encodedKey []byte) ([]byte, error) {
 	if !bytes.HasPrefix(encodedKey, c.prefix) {
 		return nil, errors.Errorf("invalid encoded key prefix: %q", encodedKey)
