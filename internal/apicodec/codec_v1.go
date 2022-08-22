@@ -182,3 +182,15 @@ func (c *codecV1) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 	}
 	return regionError, nil
 }
+
+func (c *codecV1) EncodeKey(key []byte) []byte {
+	return key
+}
+
+func (c *codecV1) EncodeRange(start, end []byte) ([]byte, []byte) {
+	return start, end
+}
+
+func (c *codecV1) DecodeRange(start, end []byte) ([]byte, []byte) {
+	return start, end
+}
