@@ -26,7 +26,7 @@ func (c *codecV1) GetAPIVersion() kvrpcpb.APIVersion {
 	return kvrpcpb.APIVersion_V1
 }
 
-func (c *codecV1) GetKeyspaceID() []byte {
+func (c *codecV1) GetKeyspace() []byte {
 	return nil
 }
 
@@ -193,4 +193,8 @@ func (c *codecV1) EncodeRange(start, end []byte) ([]byte, []byte) {
 
 func (c *codecV1) DecodeRange(start, end []byte) ([]byte, []byte) {
 	return start, end
+}
+
+func (c *codecV1) DecodeKey(key []byte) ([]byte, []byte, error) {
+	return nil, key, nil
 }
