@@ -347,9 +347,10 @@ func (l *memdbVlog) getValue(addr memdbArenaAddr) (value []byte) {
 
 	if hdr.valueLen == 0 {
 		value = tombstone
+	} else {
+		valueOff := hdrOffset - hdr.valueLen
+		value = block[valueOff:hdrOffset:hdrOffset]
 	}
-	valueOff := hdrOffset - hdr.valueLen
-	value = block[valueOff:hdrOffset:hdrOffset]
 
 	l.processFlagNeedConstraintCheckInPrewrite(addr, hdr.nodeAddr, value)
 
@@ -363,7 +364,7 @@ func (l *memdbVlog) processFlagNeedConstraintCheckInPrewrite(valueAddr memdbAren
 	// only process if current access is on the latest version, so that we do it at most once.
 	if flags.HasNeedConstraintCheckInPrewrite() && node.vptr == valueAddr {
 		flags = kv.ApplyFlagsOps(flags, kv.DelNeedConstraintCheckInPrewrite)
-		node.updateKeyFlags()
+		node.setKeyFlags(flags)
 
 		// if this is not in the latest stage, we need to copy the vlog entry to the latest stage, marking it as
 		// a modification (of flag) so that the locking phase could find it via `InspectStage` and acquire the lock.

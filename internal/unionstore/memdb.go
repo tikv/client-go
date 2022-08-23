@@ -281,11 +281,6 @@ func (db *MemDB) GetKeyByHandle(handle MemKeyHandle) []byte {
 	return x.getKey()
 }
 
-func (db *MemDB) GetFlagsByHandle(handle MemKeyHandle) kv.KeyFlags {
-	x := db.getNode(handle.toAddr())
-	return x.getKeyFlags()
-}
-
 // GetValueByHandle returns value by handle.
 func (db *MemDB) GetValueByHandle(handle MemKeyHandle) ([]byte, bool) {
 	if db.vlogInvalid {
@@ -857,10 +852,6 @@ func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 
 func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
 	n.flags = (^nodeFlagsMask & n.flags) | uint16(f)
-}
-
-func (n *memdbNode) updateKeyFlags(op ...kv.FlagsOp) {
-	n.setKeyFlags(kv.ApplyFlagsOps(n.getKeyFlags(), op...))
 }
 
 // RemoveFromBuffer removes a record from the mem buffer. It should be only used for test.

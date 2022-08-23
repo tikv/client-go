@@ -838,7 +838,7 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
 	h2 := db.Staging()
 
-	values := make([][]byte, 0, 0)
+	values := make([][]byte, 0)
 	db.InspectStage(h2, func(k []byte, flag kv.KeyFlags, v []byte) {
 		values = append(values, v)
 	})
