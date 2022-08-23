@@ -17,8 +17,9 @@ var (
 	// DefaultKeyspaceName is the name of the default keyspace.
 	DefaultKeyspaceName = "DEFAULT"
 
-	rawModePrefix byte = 'r'
-	txnModePrefix byte = 'x'
+	rawModePrefix     byte = 'r'
+	txnModePrefix     byte = 'x'
+	keyspacePrefixLen int  = 4
 )
 
 // BuildKeyspaceName builds a keyspace name
@@ -77,8 +78,8 @@ func getIDByte(keyspaceID uint32) ([]byte, error) {
 	return b[1:], nil
 }
 
-func (c *codecV2) GetKeyspaceID() []byte {
-	return c.prefix[1:]
+func (c *codecV2) GetKeyspace() []byte {
+	return c.prefix
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
@@ -608,7 +609,7 @@ func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) 
 }
 
 func (c *codecV2) decodeKey(encodedKey []byte) ([]byte, error) {
-	if !bytes.HasPrefix(encodedKey, c.prefix) {
+	if len(encodedKey) < len(c.prefix) {
 		return nil, errors.Errorf("invalid encoded key prefix: %q", encodedKey)
 	}
 	return encodedKey[len(c.prefix):], nil
@@ -867,4 +868,12 @@ func (c *codecV2) decodeLockInfos(locks []*kvrpcpb.LockInfo) ([]*kvrpcpb.LockInf
 		}
 	}
 	return locks, nil
+}
+
+func (c *codecV2) DecodeKey(key []byte) ([]byte, []byte, error) {
+	decode, err := c.decodeKey(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key[:len(key)-len(decode)], decode, nil
 }
