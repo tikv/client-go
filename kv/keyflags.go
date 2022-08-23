@@ -68,7 +68,7 @@ const (
 	// (a conflict check + a constraint check) in prewrite.
 	flagNeedConflictCheckInPrewrite
 
-	persistentFlags = flagKeyLocked | flagKeyLockedValExist
+	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConflictCheckInPrewrite
 )
 
 // HasAssertExist returns whether the key need ensure exists in 2pc.
@@ -192,6 +192,8 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin &= ^flagAssertNotExist
 		case SetNeedConflictCheckInPrewrite:
 			origin |= flagNeedConflictCheckInPrewrite
+		case DelNeedConflictCheckInPrewrite:
+			origin &= ^flagNeedConflictCheckInPrewrite
 		}
 	}
 	return origin
@@ -238,4 +240,7 @@ const (
 	SetAssertNone
 	// SetNeedConflictCheckInPrewrite marks the key needs to check conflict in prewrite.
 	SetNeedConflictCheckInPrewrite
+	// DelNeedConflictCheckInPrewrite reverts SetNeedConflictCheckInPrewrite. This is required when we decide to
+	// make up the pessimistic lock.
+	DelNeedConflictCheckInPrewrite
 )

@@ -280,6 +280,7 @@ func (a *nodeAllocator) reset() {
 
 type memdbVlog struct {
 	memdbArena
+	memdb *MemDB
 }
 
 const memdbVlogHdrSize = 8 + 8 + 4
@@ -320,7 +321,12 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	return addr
 }
 
-func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
+func (addr memdbArenaAddr) AfterCheckPoint(cp MemDBCheckpoint) bool {
+	return addr.idx > uint32(cp.blocks)-1 || (addr.idx == uint32(cp.blocks)-1 && addr.off > uint32(cp.offsetInBlock))
+}
+
+// A pure function that gets a value. It should be used where the read doesn't affect user's(upper level module's) view
+func (l *memdbVlog) pureGetValue(addr memdbArenaAddr) []byte {
 	lenOff := addr.off - memdbVlogHdrSize
 	block := l.blocks[addr.idx].buf
 	valueLen := endian.Uint32(block[lenOff:])
@@ -329,6 +335,43 @@ func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
 	}
 	valueOff := lenOff - valueLen
 	return block[valueOff:lenOff:lenOff]
+}
+
+// Get value, and possibly write a new vlog entry in the latest stage to let the locking phase be aware of it via InspectStage.
+// It should be used where the read result affect users or upper level modules. Temporary flags need to be unset in such cases.
+func (l *memdbVlog) getValue(addr memdbArenaAddr) (value []byte) {
+	hdrOffset := addr.off - memdbVlogHdrSize
+	block := l.blocks[addr.idx].buf
+	var hdr memdbVlogHdr
+	hdr.load(block[hdrOffset:])
+
+	if hdr.valueLen == 0 {
+		value = tombstone
+	}
+	valueOff := hdrOffset - hdr.valueLen
+	value = block[valueOff:hdrOffset:hdrOffset]
+
+	l.processFlagNeedConflictCheckInPrewrite(addr, hdr.nodeAddr, value)
+
+	return value
+}
+
+// remove the temporary flag NeedConflictCheckInPrewrite
+func (l *memdbVlog) processFlagNeedConflictCheckInPrewrite(valueAddr memdbArenaAddr, nodeAddr memdbArenaAddr, value []byte) {
+	node := l.memdb.getNode(nodeAddr)
+	flags := node.getKeyFlags()
+	// only process if current access is on the latest version, so that we do it at most once.
+	if flags.HasNeedConflictCheckInPrewrite() && node.vptr == valueAddr {
+		flags = kv.ApplyFlagsOps(flags, kv.DelNeedConflictCheckInPrewrite)
+		node.updateKeyFlags()
+
+		// if this is not in the latest stage, we need to copy the vlog entry to the latest stage, marking it as
+		// a modification (of flag) so that the locking phase could find it via `InspectStage` and acquire the lock.
+		latestStagingHandle := len(l.memdb.stages)
+		if latestStagingHandle > 0 && !valueAddr.AfterCheckPoint(l.memdb.stages[latestStagingHandle-1]) {
+			l.memdb.setValue(node, value)
+		}
+	}
 }
 
 func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint) ([]byte, bool) {
@@ -375,7 +418,7 @@ func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *MemDBCheckpoint) {
 				db.dirty = true
 			}
 		} else {
-			db.size += len(l.getValue(hdr.oldValue))
+			db.size += len(l.pureGetValue(hdr.oldValue))
 		}
 
 		l.moveBackCursor(&cursor, &hdr)

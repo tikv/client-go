@@ -95,6 +95,7 @@ func newMemDB() *MemDB {
 	db.stages = make([]MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
+	db.vlog.memdb = db
 	return db
 }
 
@@ -224,7 +225,7 @@ func (db *MemDB) SelectValueHistory(key []byte, predicate func(value []byte) boo
 		return nil, tikverr.ErrNotExist
 	}
 	result := db.vlog.selectValueHistory(x.vptr, func(addr memdbArenaAddr) bool {
-		return predicate(db.vlog.getValue(addr))
+		return predicate(db.vlog.pureGetValue(addr))
 	})
 	if result.isNull() {
 		return nil, nil
@@ -336,7 +337,12 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	x := db.traverse(key, true)
 
 	if len(ops) != 0 {
-		flags := kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
+		originalFlags := x.getKeyFlags()
+		// the NeedConflictCheckInPrewrite flag is temporary,
+		// every access to the node removes it unless it's explicitly set.
+		// This set must be in the latest stage so no special processing is needed.
+		flags := kv.ApplyFlagsOps(originalFlags, kv.DelNeedConflictCheckInPrewrite)
+		flags = kv.ApplyFlagsOps(flags, ops...)
 		if flags.AndPersistent() != 0 {
 			db.dirty = true
 		}
@@ -362,7 +368,7 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 
 	var oldVal []byte
 	if !x.vptr.isNull() {
-		oldVal = db.vlog.getValue(x.vptr)
+		oldVal = db.vlog.pureGetValue(x.vptr)
 	}
 
 	if len(oldVal) > 0 && db.vlog.canModify(activeCp, x.vptr) {
@@ -851,6 +857,10 @@ func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 
 func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
 	n.flags = (^nodeFlagsMask & n.flags) | uint16(f)
+}
+
+func (n *memdbNode) updateKeyFlags(op ...kv.FlagsOp) {
+	n.setKeyFlags(kv.ApplyFlagsOps(n.getKeyFlags(), op...))
 }
 
 // RemoveFromBuffer removes a record from the mem buffer. It should be only used for test.

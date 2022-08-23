@@ -828,3 +828,26 @@ func TestBufferLimit(t *testing.T) {
 	err = buffer.Delete(make([]byte, 500))
 	assert.NotNil(err)
 }
+
+func TestUnsetTemporaryFlag(t *testing.T) {
+	require := require.New(t)
+	db := newMemDB()
+	db.Staging()
+	key := []byte{1}
+	value := []byte{2}
+	db.SetWithFlags(key, value, kv.SetNeedConflictCheckInPrewrite)
+	h2 := db.Staging()
+
+	values := make([][]byte, 0, 0)
+	db.InspectStage(h2, func(k []byte, flag kv.KeyFlags, v []byte) {
+		values = append(values, v)
+	})
+	require.Equal(len(values), 0)
+
+	values = values[:0]
+	db.Get(key)
+	db.InspectStage(h2, func(k []byte, flag kv.KeyFlags, v []byte) {
+		values = append(values, v)
+	})
+	require.Equal(len(values), 1)
+}
