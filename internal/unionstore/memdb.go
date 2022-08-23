@@ -338,10 +338,10 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 
 	if len(ops) != 0 {
 		originalFlags := x.getKeyFlags()
-		// the NeedConflictCheckInPrewrite flag is temporary,
+		// the NeedConstraintCheckInPrewrite flag is temporary,
 		// every access to the node removes it unless it's explicitly set.
 		// This set must be in the latest stage so no special processing is needed.
-		flags := kv.ApplyFlagsOps(originalFlags, kv.DelNeedConflictCheckInPrewrite)
+		flags := kv.ApplyFlagsOps(originalFlags, kv.DelNeedConstraintCheckInPrewrite)
 		flags = kv.ApplyFlagsOps(flags, ops...)
 		if flags.AndPersistent() != 0 {
 			db.dirty = true

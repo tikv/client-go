@@ -74,7 +74,7 @@ func (actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize uint64) *tikvrpc.Request {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
-	isPessimisticLock := make([]kvrpcpb.PessimisticLockType, m.Len())
+	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
 		if m.IsAssertExists(i) {
@@ -90,11 +90,11 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			Assertion: assertion,
 		}
 		if m.IsPessimisticLock(i) {
-			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_PessimisticLocked
-		} else if m.NeedConflictCheckInPrewrite(i) {
-			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_NeedConflictCheck
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
+		} else if m.NeedConstraintCheckInPrewrite(i) {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
-			isPessimisticLock[i] = kvrpcpb.PessimisticLockType_NonPessimisticLocked
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
 		}
 	}
 	c.mu.Lock()
@@ -147,16 +147,16 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	}
 
 	req := &kvrpcpb.PrewriteRequest{
-		Mutations:         mutations,
-		PrimaryLock:       c.primary(),
-		StartVersion:      c.startTS,
-		LockTtl:           ttl,
-		IsPessimisticLock: isPessimisticLock,
-		ForUpdateTs:       c.forUpdateTS,
-		TxnSize:           txnSize,
-		MinCommitTs:       minCommitTS,
-		MaxCommitTs:       c.maxCommitTS,
-		AssertionLevel:    assertionLevel,
+		Mutations:          mutations,
+		PrimaryLock:        c.primary(),
+		StartVersion:       c.startTS,
+		LockTtl:            ttl,
+		PessimisticActions: pessimisticActions,
+		ForUpdateTs:        c.forUpdateTS,
+		TxnSize:            txnSize,
+		MinCommitTs:        minCommitTS,
+		MaxCommitTs:        c.maxCommitTS,
+		AssertionLevel:     assertionLevel,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {

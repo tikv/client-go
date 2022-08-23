@@ -351,18 +351,18 @@ func (l *memdbVlog) getValue(addr memdbArenaAddr) (value []byte) {
 	valueOff := hdrOffset - hdr.valueLen
 	value = block[valueOff:hdrOffset:hdrOffset]
 
-	l.processFlagNeedConflictCheckInPrewrite(addr, hdr.nodeAddr, value)
+	l.processFlagNeedConstraintCheckInPrewrite(addr, hdr.nodeAddr, value)
 
 	return value
 }
 
-// remove the temporary flag NeedConflictCheckInPrewrite
-func (l *memdbVlog) processFlagNeedConflictCheckInPrewrite(valueAddr memdbArenaAddr, nodeAddr memdbArenaAddr, value []byte) {
+// remove the temporary flag NeedConstraintCheckInPrewrite
+func (l *memdbVlog) processFlagNeedConstraintCheckInPrewrite(valueAddr memdbArenaAddr, nodeAddr memdbArenaAddr, value []byte) {
 	node := l.memdb.getNode(nodeAddr)
 	flags := node.getKeyFlags()
 	// only process if current access is on the latest version, so that we do it at most once.
-	if flags.HasNeedConflictCheckInPrewrite() && node.vptr == valueAddr {
-		flags = kv.ApplyFlagsOps(flags, kv.DelNeedConflictCheckInPrewrite)
+	if flags.HasNeedConstraintCheckInPrewrite() && node.vptr == valueAddr {
+		flags = kv.ApplyFlagsOps(flags, kv.DelNeedConstraintCheckInPrewrite)
 		node.updateKeyFlags()
 
 		// if this is not in the latest stage, we need to copy the vlog entry to the latest stage, marking it as

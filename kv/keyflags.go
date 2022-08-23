@@ -66,9 +66,9 @@ const (
 	// When the key gets locked (and the existence is checked), the flag should be removed.
 	// It should only be applied to keys with PresumeNotExist, so that an in-place constraint check becomes
 	// (a conflict check + a constraint check) in prewrite.
-	flagNeedConflictCheckInPrewrite
+	flagNeedConstraintCheckInPrewrite
 
-	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConflictCheckInPrewrite
+	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
 )
 
 // HasAssertExist returns whether the key need ensure exists in 2pc.
@@ -131,9 +131,9 @@ func (f KeyFlags) HasReadable() bool {
 	return f&flagReadable != 0
 }
 
-// HasNeedConflictCheckInPrewrite returns whether the key needs to check conflict in prewrite.
-func (f KeyFlags) HasNeedConflictCheckInPrewrite() bool {
-	return f&flagNeedConflictCheckInPrewrite != 0
+// HasNeedConstraintCheckInPrewrite returns whether the key needs to check conflict in prewrite.
+func (f KeyFlags) HasNeedConstraintCheckInPrewrite() bool {
+	return f&flagNeedConstraintCheckInPrewrite != 0
 }
 
 // AndPersistent returns the value of current flags&persistentFlags
@@ -164,12 +164,12 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin &= ^flagNeedLocked
 		case SetKeyLockedValueExists:
 			origin |= flagKeyLockedValExist
-			origin &= ^flagNeedConflictCheckInPrewrite
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		case DelNeedCheckExists:
 			origin &= ^flagNeedCheckExists
 		case SetKeyLockedValueNotExists:
 			origin &= ^flagKeyLockedValExist
-			origin &= ^flagNeedConflictCheckInPrewrite
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		case SetPrewriteOnly:
 			origin |= flagPrewriteOnly
 		case SetIgnoredIn2PC:
@@ -190,10 +190,10 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 		case SetAssertNone:
 			origin &= ^flagAssertExist
 			origin &= ^flagAssertNotExist
-		case SetNeedConflictCheckInPrewrite:
-			origin |= flagNeedConflictCheckInPrewrite
-		case DelNeedConflictCheckInPrewrite:
-			origin &= ^flagNeedConflictCheckInPrewrite
+		case SetNeedConstraintCheckInPrewrite:
+			origin |= flagNeedConstraintCheckInPrewrite
+		case DelNeedConstraintCheckInPrewrite:
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		}
 	}
 	return origin
@@ -238,9 +238,9 @@ const (
 	SetAssertUnknown
 	// SetAssertNone cleans up the key's assert.
 	SetAssertNone
-	// SetNeedConflictCheckInPrewrite marks the key needs to check conflict in prewrite.
-	SetNeedConflictCheckInPrewrite
-	// DelNeedConflictCheckInPrewrite reverts SetNeedConflictCheckInPrewrite. This is required when we decide to
+	// SetNeedConstraintCheckInPrewrite marks the key needs to check conflict in prewrite.
+	SetNeedConstraintCheckInPrewrite
+	// DelNeedConstraintCheckInPrewrite reverts SetNeedConstraintCheckInPrewrite. This is required when we decide to
 	// make up the pessimistic lock.
-	DelNeedConflictCheckInPrewrite
+	DelNeedConstraintCheckInPrewrite
 )

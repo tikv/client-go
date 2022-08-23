@@ -835,7 +835,7 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 	db.Staging()
 	key := []byte{1}
 	value := []byte{2}
-	db.SetWithFlags(key, value, kv.SetNeedConflictCheckInPrewrite)
+	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
 	h2 := db.Staging()
 
 	values := make([][]byte, 0, 0)
