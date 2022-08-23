@@ -6,18 +6,18 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20220423142525-ae43b7f4e5c3
-	github.com/pingcap/kvproto v0.0.0-20220711062932-08b02befd813
+	github.com/pingcap/kvproto v0.0.0-20220804022843-f006036b1277
 	github.com/pingcap/tidb v1.1.0-beta.0.20220724090709-5484002f1963
 	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.7.2-0.20220504104629-106ec21d14df
+	github.com/stretchr/testify v1.8.0
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.1-0.20220721031657-e38d2b07de3f
+	github.com/tikv/client-go/v2 v2.0.1-0.20220815094724-025596b7a20a
 	github.com/tikv/pd/client v0.0.0-20220725055910-7187a7ab72db
 	go.uber.org/goleak v1.1.12
 )
 
 require (
-	github.com/BurntSushi/toml v1.1.0 // indirect
+	github.com/BurntSushi/toml v1.2.0 // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
@@ -57,7 +57,7 @@ require (
 	github.com/prometheus/common v0.32.1 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
-	github.com/shirou/gopsutil/v3 v3.22.4 // indirect
+	github.com/shirou/gopsutil/v3 v3.22.6 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stathat/consistent v1.0.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -72,20 +72,20 @@ require (
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.8.0 // indirect
 	go.uber.org/zap v1.21.0 // indirect
-	golang.org/x/exp v0.0.0-20220428152302-39d4317da171 // indirect
-	golang.org/x/net v0.0.0-20220412020605-290c469a71a5 // indirect
-	golang.org/x/sync v0.0.0-20220513210516-0976fa681c29 // indirect
-	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
+	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
+	golang.org/x/net v0.0.0-20220722155237-a158d28d115b // indirect
+	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4 // indirect
+	golang.org/x/sys v0.0.0-20220728004956-3c1f35247d10 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/time v0.0.0-20220224211638-0e9765cccd65 // indirect
-	golang.org/x/tools v0.1.11 // indirect
+	golang.org/x/tools v0.1.12 // indirect
 	google.golang.org/genproto v0.0.0-20220324131243-acbaeb5b85eb // indirect
 	google.golang.org/grpc v1.45.0 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/defined2014/tidb v1.1.0-beta.0.20220725074011-ee134690c221
+replace github.com/pingcap/tidb => github.com/cfzjywxk/tidb v1.1.0-beta.0.20220818072433-0272d5dcb987

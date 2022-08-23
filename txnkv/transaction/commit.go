@@ -142,7 +142,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		if batch.isPrimary && !c.isAsyncCommit() {
 			c.setUndeterminedErr(nil)
 			reqDuration := time.Since(reqBegin)
-			c.getDetail().MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
+			c.getDetail().MergeCommitReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
 		}
 		if keyErr := commitResp.GetError(); keyErr != nil {
 			if rejected := keyErr.GetCommitTsExpired(); rejected != nil {

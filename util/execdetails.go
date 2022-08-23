@@ -36,6 +36,7 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"math"
 	"strconv"
 	"sync"
@@ -48,6 +49,7 @@ import (
 type commitDetailCtxKeyType struct{}
 type lockKeysDetailCtxKeyType struct{}
 type execDetailsCtxKeyType struct{}
+type traceExecDetailsCtxKeyType struct{}
 
 var (
 	// CommitDetailCtxKey presents CommitDetail info key in context.
@@ -58,7 +60,20 @@ var (
 
 	// ExecDetailsKey presents ExecDetail info key in context.
 	ExecDetailsKey = execDetailsCtxKeyType{}
+
+	// traceExecDetailsKey is a context key whose value indicates whether to add ExecDetails to trace.
+	traceExecDetailsKey = traceExecDetailsCtxKeyType{}
 )
+
+// ContextWithTraceExecDetails returns a context with trace-exec-details enabled
+func ContextWithTraceExecDetails(ctx context.Context) context.Context {
+	return context.WithValue(ctx, traceExecDetailsKey, struct{}{})
+}
+
+// TraceExecDetailsEnabled checks whether trace-exec-details enabled
+func TraceExecDetailsEnabled(ctx context.Context) bool {
+	return ctx.Value(traceExecDetailsKey) != nil
+}
 
 // TiKVExecDetails is the detail execution information at TiKV side.
 type TiKVExecDetails struct {
@@ -108,6 +123,14 @@ func (ed *TiKVExecDetails) String() string {
 	return buf.String()
 }
 
+// ReqDetailInfo contains diagnose information about `TiKVExecDetails`, region, store and backoff.
+type ReqDetailInfo struct {
+	ReqTotalTime time.Duration
+	Region       uint64
+	StoreAddr    string
+	ExecDetails  TiKVExecDetails
+}
+
 // CommitDetails contains commit detail information.
 type CommitDetails struct {
 	GetCommitTsTime        time.Duration
@@ -118,18 +141,21 @@ type CommitDetails struct {
 	LocalLatchTime         time.Duration
 	Mu                     struct {
 		sync.Mutex
-		CommitBackoffTime   int64
-		BackoffTypes        []string
-		SlowestReqTotalTime time.Duration
-		SlowestRegion       uint64
-		SlowestStoreAddr    string
-		SlowestExecDetails  TiKVExecDetails
+		// The total backoff time used in both the prewrite and commit phases.
+		CommitBackoffTime    int64
+		PrewriteBackoffTypes []string
+		CommitBackoffTypes   []string
+		// The prewrite requests are executed concurrently so the slowest request information would be recorded.
+		SlowestPrewrite ReqDetailInfo
+		// It's recorded only when the commit mode is 2pc.
+		CommitPrimary ReqDetailInfo
 	}
 	WriteKeys         int
 	WriteSize         int
 	PrewriteRegionNum int32
 	TxnRetry          int
 	ResolveLock       ResolveLockDetail
+	PrewriteReqNum    int
 }
 
 // Merge merges commit details into itself.
@@ -146,27 +172,45 @@ func (cd *CommitDetails) Merge(other *CommitDetails) {
 	cd.PrewriteRegionNum += other.PrewriteRegionNum
 	cd.TxnRetry += other.TxnRetry
 	cd.Mu.CommitBackoffTime += other.Mu.CommitBackoffTime
-	cd.Mu.BackoffTypes = append(cd.Mu.BackoffTypes, other.Mu.BackoffTypes...)
-	if cd.Mu.SlowestReqTotalTime < other.Mu.SlowestReqTotalTime {
-		cd.Mu.SlowestReqTotalTime = other.Mu.SlowestReqTotalTime
-		cd.Mu.SlowestRegion = other.Mu.SlowestRegion
-		cd.Mu.SlowestStoreAddr = other.Mu.SlowestStoreAddr
-		cd.Mu.SlowestExecDetails = other.Mu.SlowestExecDetails
+
+	cd.Mu.PrewriteBackoffTypes = append(cd.Mu.PrewriteBackoffTypes, other.Mu.PrewriteBackoffTypes...)
+	if cd.Mu.SlowestPrewrite.ReqTotalTime < other.Mu.SlowestPrewrite.ReqTotalTime {
+		cd.Mu.SlowestPrewrite = other.Mu.SlowestPrewrite
+	}
+
+	cd.Mu.CommitBackoffTypes = append(cd.Mu.CommitBackoffTypes, other.Mu.CommitBackoffTypes...)
+	if cd.Mu.CommitPrimary.ReqTotalTime < other.Mu.CommitPrimary.ReqTotalTime {
+		cd.Mu.CommitPrimary = other.Mu.CommitPrimary
 	}
 }
 
-// MergeReqDetails merges ExecDetailsV2 into the current CommitDetails.
-func (cd *CommitDetails) MergeReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
+// MergePrewriteReqDetails merges prewrite related ExecDetailsV2 into the current CommitDetails.
+func (cd *CommitDetails) MergePrewriteReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
 	if cd == nil {
 		return
 	}
 	cd.Mu.Lock()
 	defer cd.Mu.Unlock()
-	if reqDuration > cd.Mu.SlowestReqTotalTime {
-		cd.Mu.SlowestReqTotalTime = reqDuration
-		cd.Mu.SlowestRegion = regionID
-		cd.Mu.SlowestStoreAddr = addr
-		cd.Mu.SlowestExecDetails = NewTiKVExecDetails(execDetails)
+	if reqDuration > cd.Mu.SlowestPrewrite.ReqTotalTime {
+		cd.Mu.SlowestPrewrite.ReqTotalTime = reqDuration
+		cd.Mu.SlowestPrewrite.Region = regionID
+		cd.Mu.SlowestPrewrite.StoreAddr = addr
+		cd.Mu.SlowestPrewrite.ExecDetails = NewTiKVExecDetails(execDetails)
+	}
+}
+
+// MergeCommitReqDetails merges commit related ExecDetailsV2 into the current CommitDetails.
+func (cd *CommitDetails) MergeCommitReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
+	if cd == nil {
+		return
+	}
+	cd.Mu.Lock()
+	defer cd.Mu.Unlock()
+	if reqDuration > cd.Mu.CommitPrimary.ReqTotalTime {
+		cd.Mu.CommitPrimary.ReqTotalTime = reqDuration
+		cd.Mu.CommitPrimary.Region = regionID
+		cd.Mu.CommitPrimary.StoreAddr = addr
+		cd.Mu.CommitPrimary.ExecDetails = NewTiKVExecDetails(execDetails)
 	}
 }
 
@@ -185,12 +229,11 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 		TxnRetry:               cd.TxnRetry,
 		ResolveLock:            cd.ResolveLock,
 	}
-	commit.Mu.BackoffTypes = append([]string{}, cd.Mu.BackoffTypes...)
 	commit.Mu.CommitBackoffTime = cd.Mu.CommitBackoffTime
-	commit.Mu.SlowestReqTotalTime = cd.Mu.SlowestReqTotalTime
-	commit.Mu.SlowestRegion = cd.Mu.SlowestRegion
-	commit.Mu.SlowestStoreAddr = cd.Mu.SlowestStoreAddr
-	commit.Mu.SlowestExecDetails = cd.Mu.SlowestExecDetails
+	commit.Mu.PrewriteBackoffTypes = append([]string{}, cd.Mu.PrewriteBackoffTypes...)
+	commit.Mu.CommitBackoffTypes = append([]string{}, cd.Mu.CommitBackoffTypes...)
+	commit.Mu.SlowestPrewrite = cd.Mu.SlowestPrewrite
+	commit.Mu.CommitPrimary = cd.Mu.CommitPrimary
 	return commit
 }
 

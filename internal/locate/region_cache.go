@@ -1316,6 +1316,11 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 	if !ok || latest.GetVer() < newVer.GetVer() || latest.GetConfVer() < newVer.GetConfVer() {
 		c.mu.latestVersions[cachedRegion.VerID().id] = newVer
 	}
+	// The intersecting regions in the cache are probably stale, clear them.
+	deleted := c.mu.sorted.removeIntersecting(cachedRegion)
+	for _, r := range deleted {
+		c.removeVersionFromCache(r.cachedRegion.VerID(), r.cachedRegion.GetID())
+	}
 }
 
 // searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,

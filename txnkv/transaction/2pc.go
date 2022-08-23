@@ -176,6 +176,9 @@ type twoPhaseCommitter struct {
 
 	// allowed when tikv disk full happened.
 	diskFullOpt kvrpcpb.DiskFullOpt
+
+	// The total number of kv request after batch split.
+	prewriteTotalReqNum int
 }
 
 type memBufferMutations struct {
@@ -908,6 +911,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	actionCommit, actionIsCommit := action.(actionCommit)
 	_, actionIsCleanup := action.(actionCleanup)
 	_, actionIsPessimisticLock := action.(actionPessimisticLock)
+	_, actionIsPrewrite := action.(actionPrewrite)
 
 	c.checkOnePCFallBack(action, len(batchBuilder.allBatches()))
 
@@ -934,6 +938,10 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			logutil.Logger(bo.GetCtx()).Warn("pessimisticRollbackDoNth failpoint")
 			return nil
 		}
+	}
+
+	if actionIsPrewrite && c.prewriteTotalReqNum == 0 && len(batchBuilder.allBatches()) > 0 {
+		c.prewriteTotalReqNum = len(batchBuilder.allBatches())
 	}
 
 	if firstIsPrimary &&
@@ -1454,12 +1462,13 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 
 	commitDetail.PrewriteTime = time.Since(start)
+	commitDetail.PrewriteReqNum = c.prewriteTotalReqNum
 	if bo.GetTotalSleep() > 0 {
 		boSleep := int64(bo.GetTotalSleep()) * int64(time.Millisecond)
 		commitDetail.Mu.Lock()
 		if boSleep > commitDetail.Mu.CommitBackoffTime {
 			commitDetail.Mu.CommitBackoffTime = boSleep
-			commitDetail.Mu.BackoffTypes = bo.GetTypes()
+			commitDetail.Mu.PrewriteBackoffTypes = bo.GetTypes()
 		}
 		commitDetail.Mu.Unlock()
 	}
@@ -1568,6 +1577,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if !c.txn.commitTSUpperBoundCheck(commitTS) {
 			err = errors.Errorf("session %d check commit ts upper bound fail, txnStartTS: %d, comm: %d",
 				c.sessionID, c.startTS, c.commitTS)
+			return err
 		}
 	}
 
@@ -1633,7 +1643,7 @@ func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.Co
 	if commitBo.GetTotalSleep() > 0 {
 		commitDetail.Mu.Lock()
 		commitDetail.Mu.CommitBackoffTime += int64(commitBo.GetTotalSleep()) * int64(time.Millisecond)
-		commitDetail.Mu.BackoffTypes = append(commitDetail.Mu.BackoffTypes, commitBo.GetTypes()...)
+		commitDetail.Mu.CommitBackoffTypes = append(commitDetail.Mu.CommitBackoffTypes, commitBo.GetTypes()...)
 		commitDetail.Mu.Unlock()
 	}
 	if err != nil {
@@ -2026,7 +2036,7 @@ func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, 
 					boSleep := int64(singleBatchBackoffer.GetTotalSleep()) * int64(time.Millisecond)
 					if boSleep > commitDetail.Mu.CommitBackoffTime {
 						commitDetail.Mu.CommitBackoffTime = boSleep
-						commitDetail.Mu.BackoffTypes = singleBatchBackoffer.GetTypes()
+						commitDetail.Mu.PrewriteBackoffTypes = singleBatchBackoffer.GetTypes()
 					}
 					commitDetail.Mu.Unlock()
 				}
