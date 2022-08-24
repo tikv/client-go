@@ -361,6 +361,11 @@ func (c *Client) GetKeyTTL(ctx context.Context, key []byte, options ...RawOption
 	return &ttl, nil
 }
 
+// GetPDClient returns the PD client.
+func (c *Client) GetPDClient() pd.Client {
+	return c.pdClient
+}
+
 // Put stores a key-value pair to TiKV.
 func (c *Client) Put(ctx context.Context, key, value []byte, options ...RawOption) error {
 	return c.PutWithTTL(ctx, key, value, 0, options...)
