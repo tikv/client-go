@@ -83,10 +83,10 @@ type KVUnionStore struct {
 }
 
 // NewUnionStore builds a new unionStore.
-func NewUnionStore(snapshot uSnapshot) *KVUnionStore {
+func NewUnionStore(snapshot uSnapshot, enableTemporaryFlags bool) *KVUnionStore {
 	return &KVUnionStore{
 		snapshot:  snapshot,
-		memBuffer: newMemDB(),
+		memBuffer: newMemDB(enableTemporaryFlags),
 	}
 }
 

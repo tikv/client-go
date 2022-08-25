@@ -630,6 +630,12 @@ func WithStartTS(startTS uint64) TxnOption {
 	}
 }
 
+func WithEnableTemporaryFlags(enable bool) TxnOption {
+	return func(st *transaction.TxnOptions) {
+		st.EnableTemporaryFlags = enable
+	}
+}
+
 // TODO: remove once tidb and br are ready
 
 // KVTxn contains methods to interact with a TiKV transaction.

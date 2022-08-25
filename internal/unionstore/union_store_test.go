@@ -44,8 +44,8 @@ import (
 
 func TestUnionStoreGetSet(t *testing.T) {
 	assert := assert.New(t)
-	store := newMemDB()
-	us := NewUnionStore(&mockSnapshot{store})
+	store := newMemDB(false)
+	us := NewUnionStore(&mockSnapshot{store}, false)
 
 	err := store.Set([]byte("1"), []byte("1"))
 	assert.Nil(err)
@@ -63,8 +63,8 @@ func TestUnionStoreGetSet(t *testing.T) {
 
 func TestUnionStoreDelete(t *testing.T) {
 	assert := assert.New(t)
-	store := newMemDB()
-	us := NewUnionStore(&mockSnapshot{store})
+	store := newMemDB(false)
+	us := NewUnionStore(&mockSnapshot{store}, false)
 
 	err := store.Set([]byte("1"), []byte("1"))
 	assert.Nil(err)
@@ -82,8 +82,8 @@ func TestUnionStoreDelete(t *testing.T) {
 
 func TestUnionStoreSeek(t *testing.T) {
 	assert := assert.New(t)
-	store := newMemDB()
-	us := NewUnionStore(&mockSnapshot{store})
+	store := newMemDB(false)
+	us := NewUnionStore(&mockSnapshot{store}, false)
 
 	err := store.Set([]byte("1"), []byte("1"))
 	assert.Nil(err)
@@ -115,8 +115,8 @@ func TestUnionStoreSeek(t *testing.T) {
 
 func TestUnionStoreIterReverse(t *testing.T) {
 	assert := assert.New(t)
-	store := newMemDB()
-	us := NewUnionStore(&mockSnapshot{store})
+	store := newMemDB(false)
+	us := NewUnionStore(&mockSnapshot{store}, false)
 
 	err := store.Set([]byte("1"), []byte("1"))
 	assert.Nil(err)

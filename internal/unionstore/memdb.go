@@ -86,9 +86,12 @@ type MemDB struct {
 	vlogInvalid bool
 	dirty       bool
 	stages      []MemDBCheckpoint
+
+	// options
+	enableTemporaryFlags bool
 }
 
-func newMemDB() *MemDB {
+func newMemDB(enableTemporaryFlags bool) *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr
@@ -96,6 +99,7 @@ func newMemDB() *MemDB {
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
 	db.vlog.memdb = db
+	db.enableTemporaryFlags = enableTemporaryFlags
 	return db
 }
 
@@ -331,18 +335,14 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	}
 	x := db.traverse(key, true)
 
-	if len(ops) != 0 {
-		originalFlags := x.getKeyFlags()
-		// the NeedConstraintCheckInPrewrite flag is temporary,
-		// every access to the node removes it unless it's explicitly set.
-		// This set must be in the latest stage so no special processing is needed.
-		flags := kv.ApplyFlagsOps(originalFlags, kv.DelNeedConstraintCheckInPrewrite)
-		flags = kv.ApplyFlagsOps(flags, ops...)
-		if flags.AndPersistent() != 0 {
-			db.dirty = true
-		}
-		x.setKeyFlags(flags)
+	// the NeedConstraintCheckInPrewrite flag is temporary,
+	// every access to the node removes it unless it's explicitly set.
+	// This set must be in the latest stage so no special processing is needed.
+	flags := kv.ApplyFlagsOps(x.getKeyFlags(), append([]kv.FlagsOp{kv.DelNeedConstraintCheckInPrewrite}, ops...)...)
+	if flags.AndPersistent() != 0 {
+		db.dirty = true
 	}
+	x.setKeyFlags(flags)
 
 	if value == nil {
 		return nil

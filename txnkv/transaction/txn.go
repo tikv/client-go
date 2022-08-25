@@ -83,6 +83,7 @@ type TxnOptions struct {
 	TxnScope                  string
 	StartTS                   *uint64
 	MemoryFootprintChangeHook func(uint64)
+	EnableTemporaryFlags      bool
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -133,7 +134,7 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
 		snapshot:          snapshot,
-		us:                unionstore.NewUnionStore(snapshot),
+		us:                unionstore.NewUnionStore(snapshot, options.EnableTemporaryFlags),
 		store:             store,
 		startTS:           startTS,
 		startTime:         time.Now(),

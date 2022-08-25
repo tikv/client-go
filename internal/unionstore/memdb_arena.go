@@ -340,6 +340,9 @@ func (l *memdbVlog) pureGetValue(addr memdbArenaAddr) []byte {
 // Get value, and possibly write a new vlog entry in the latest stage to let the locking phase be aware of it via InspectStage.
 // It should be used where the read result affect users or upper level modules. Temporary flags need to be unset in such cases.
 func (l *memdbVlog) getValue(addr memdbArenaAddr) (value []byte) {
+	if !l.memdb.enableTemporaryFlags {
+		return l.pureGetValue(addr)
+	}
 	hdrOffset := addr.off - memdbVlogHdrSize
 	block := l.blocks[addr.idx].buf
 	var hdr memdbVlogHdr
