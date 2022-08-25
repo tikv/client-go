@@ -317,6 +317,8 @@ github.com/pingcap/log v0.0.0-20211215031037-e024ba4eb0ee/go.mod h1:DWQW5jICDR7U
 github.com/pingcap/log v1.1.0 h1:ELiPxACz7vdo1qAvvaWJg1NrYFoY6gqAh/+Uo6aXdD8=
 github.com/pingcap/log v1.1.0/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pingcap/sysutil v0.0.0-20220114020952-ea68d2dbf5b4 h1:HYbcxtnkN3s5tqrZ/z3eJS4j3Db8wMphEm1q10lY/TM=
+github.com/pingcap/tidb v1.1.0-beta.0.20220824151221-29b57e356929 h1:QDwyoUCZuIiw1mHDrmbOykbzS8/lkEzLGeDJsnsU0BY=
+github.com/pingcap/tidb v1.1.0-beta.0.20220824151221-29b57e356929/go.mod h1:ibrqg2O6i98YbT6al8tpoz824bcHQlQKyV7VxpC1RH0=
 github.com/pingcap/tidb/parser v0.0.0-20220724090709-5484002f1963 h1:tklVQTGqsCkx531sxFNUQ8sFWicgPSczpESZbF9uEwE=
 github.com/pingcap/tidb/parser v0.0.0-20220724090709-5484002f1963/go.mod h1:wjvp+T3/T9XYt0nKqGX3Kc1AKuyUcfno6LTc6b2A6ew=
 github.com/pingcap/tipb v0.0.0-20220718022156-3e2483c20a9e h1:FBaTXU8C3xgt/drM58VHxojHo/QoG1oPsgWTGvaSpO4=
