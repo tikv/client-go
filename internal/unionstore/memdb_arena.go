@@ -372,7 +372,7 @@ func (l *memdbVlog) processFlagNeedConstraintCheckInPrewrite(valueAddr memdbAren
 		// if this is not in the latest stage, we need to copy the vlog entry to the latest stage, marking it as
 		// a modification (of flag) so that the locking phase could find it via `InspectStage` and acquire the lock.
 		latestStagingHandle := len(l.memdb.stages)
-		if latestStagingHandle > 0 && !valueAddr.AfterCheckPoint(l.memdb.stages[latestStagingHandle-1]) {
+		if latestStagingHandle > 0 && !l.canModify(&l.memdb.stages[latestStagingHandle-1], valueAddr) {
 			l.memdb.setValue(node, value)
 		}
 	}

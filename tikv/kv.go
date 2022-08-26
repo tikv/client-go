@@ -630,6 +630,7 @@ func WithStartTS(startTS uint64) TxnOption {
 	}
 }
 
+// WithEnableTemporaryFlags sets whether to enable temporary flags
 func WithEnableTemporaryFlags(enable bool) TxnOption {
 	return func(st *transaction.TxnOptions) {
 		st.EnableTemporaryFlags = enable
