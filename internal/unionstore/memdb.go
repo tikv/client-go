@@ -338,7 +338,13 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	// the NeedConstraintCheckInPrewrite flag is temporary,
 	// every access to the node removes it unless it's explicitly set.
 	// This set must be in the latest stage so no special processing is needed.
-	flags := kv.ApplyFlagsOps(x.getKeyFlags(), append([]kv.FlagsOp{kv.DelNeedConstraintCheckInPrewrite}, ops...)...)
+	var flags kv.KeyFlags
+	if value != nil {
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), append([]kv.FlagsOp{kv.DelNeedConstraintCheckInPrewrite}, ops...)...)
+	} else {
+		// an UpdateFlag operation, do not delete the NeedConstraintCheckInPrewrite flag.
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
+	}
 	if flags.AndPersistent() != 0 {
 		db.dirty = true
 	}
