@@ -91,6 +91,7 @@ go mod download github.com/tikv/client-go/v2
 - [TiCDC](https://github.com/pingcap/ticdc): Change data capture for TiDB
 - [go-ycsb](https://github.com/pingcap/go-ycsb): A Go port of Yahoo! Cloud Serving Benchmark (YCSB)
 - [JuiceFS](https://github.com/juicedata/juicefs): JuiceFS is a distributed POSIX file system built on top of Redis and S3
+- [tcli](https://github.com/c4pt0r/tcli): A CLI tool for TiKV, for human being :)
 
 ## License
 
