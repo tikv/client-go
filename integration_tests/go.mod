@@ -6,7 +6,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20220423142525-ae43b7f4e5c3
-	github.com/pingcap/kvproto v0.0.0-20220804022843-f006036b1277
+	github.com/pingcap/kvproto v0.0.0-20220818023518-a0f02b6efcee
 	github.com/pingcap/tidb v1.1.0-beta.0.20220824151221-29b57e356929
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.0
@@ -49,7 +49,7 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.0 // indirect
 	github.com/pingcap/tidb/parser v0.0.0-20220724090709-5484002f1963 // indirect
-	github.com/pingcap/tipb v0.0.0-20220718022156-3e2483c20a9e // indirect
+	github.com/pingcap/tipb v0.0.0-20220824081009-0714a57aff1d // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_golang v1.12.2 // indirect
@@ -87,3 +87,5 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/pingcap/tidb => github.com/ekexium/tidb v1.1.0-beta.0.20220829081458-800f13bc77a4
