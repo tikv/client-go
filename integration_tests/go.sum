@@ -107,8 +107,8 @@ github.com/dgryski/go-farm v0.0.0-20200201041132-a6ae2369ad13/go.mod h1:SqUrOPUn
 github.com/docker/go-units v0.4.0 h1:3uh0PgVws3nIA0Q+MwDC8yjEPf9zjRfZZWXZYDct3Tw=
 github.com/dustin/go-humanize v1.0.0 h1:VSnTsYCnlFHaM2/igO1h6X3HA71jcobQuxemgkq4zYo=
 github.com/dustin/go-humanize v1.0.0/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
-github.com/ekexium/tidb v1.1.0-beta.0.20220829081458-800f13bc77a4 h1:hJvkxCQi0hVQZP8ObY3fk6MV4t+GZUNhuHvKAbECrQU=
-github.com/ekexium/tidb v1.1.0-beta.0.20220829081458-800f13bc77a4/go.mod h1:pvSTqQybxPbQqJ20YgSdpZjqzbZD1UCqxxoRYJZ/TlY=
+github.com/ekexium/tidb v1.1.0-beta.0.20220829095709-87c0a7d42fbd h1:mZyOX1kOYAh5iMdM1JndoUXzh7tVTwT2HxRBvAp2t6I=
+github.com/ekexium/tidb v1.1.0-beta.0.20220829095709-87c0a7d42fbd/go.mod h1:JmLv9+C4Kjxiudt+6HBcO5bBaequrermOpov2evReZ8=
 github.com/envoyproxy/go-control-plane v0.9.0/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=

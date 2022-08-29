@@ -88,4 +88,4 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/ekexium/tidb v1.1.0-beta.0.20220829081458-800f13bc77a4
+replace github.com/pingcap/tidb => github.com/ekexium/tidb v1.1.0-beta.0.20220829095709-87c0a7d42fbd
