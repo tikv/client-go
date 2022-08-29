@@ -3,7 +3,11 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
+
 	"github.com/pingcap/kvproto/pkg/coprocessor"
+	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -228,7 +232,8 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdBatchCop:
 		r := *req.BatchCop()
-		// TODO(iosmanthus): handle cop Request.
+		r.Regions = c.encodeCopRegions(r.Regions)
+		r.TableRegions = c.encodeTableRegions(r.TableRegions)
 		newReq.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
@@ -246,6 +251,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 // DecodeResponse decode the resp with the given codec.
 func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
 	var err error
+	log.Info("Decode request", zap.String("request type", req.Type.String()))
 	// Decode response based on command type.
 	switch req.Type {
 	// Transaction KV responses.
@@ -531,7 +537,11 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 		r.Range = c.decodeCopRange(r.Range)
 	case tikvrpc.CmdBatchCop:
-		// TODO: handle cop response.
+		r := resp.Resp.(*coprocessor.BatchResponse)
+		r.RetryRegions, err = c.decodeCopRegions(r.RetryRegions)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdMvccGetByKey:
 		r := resp.Resp.(*kvrpcpb.MvccGetByKeyResponse)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -544,6 +554,12 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+		r.Regions, err = c.decodeCopRegions(r.Regions)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		log.Warn("unknown request type to decode", zap.String("request type", req.Type.String()))
 	}
 
 	return resp, nil
@@ -686,6 +702,37 @@ func (c *codecV2) encodeCopRanges(ranges []*coprocessor.KeyRange) []*coprocessor
 		newRanges = append(newRanges, c.encodeCopRange(r))
 	}
 	return newRanges
+}
+
+func (c *codecV2) encodeCopRegions(regions []*coprocessor.RegionInfo) []*coprocessor.RegionInfo {
+	var encodedRegions []*coprocessor.RegionInfo
+	for _, region := range regions {
+		r := *region
+		r.Ranges = c.encodeCopRanges(r.Ranges)
+		encodedRegions = append(encodedRegions, &r)
+	}
+	return encodedRegions
+}
+
+func (c *codecV2) encodeTableRegions(tableRegions []*coprocessor.TableRegions) []*coprocessor.TableRegions {
+	var encodedRegions []*coprocessor.TableRegions
+	for _, region := range tableRegions {
+		r := *region
+		r.Regions = c.encodeCopRegions(r.Regions)
+		encodedRegions = append(encodedRegions, &r)
+	}
+	return encodedRegions
+}
+
+func (c *codecV2) decodeCopRegions(regions []*metapb.Region) ([]*metapb.Region, error) {
+	var err error
+	for _, region := range regions {
+		region.StartKey, region.EndKey, err = c.DecodeRegionRange(region.StartKey, region.EndKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return regions, nil
 }
 
 func (c *codecV2) encodeKeys(keys [][]byte) [][]byte {
