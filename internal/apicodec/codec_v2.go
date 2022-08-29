@@ -609,7 +609,7 @@ func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) 
 }
 
 func (c *codecV2) decodeKey(encodedKey []byte) ([]byte, error) {
-	if len(encodedKey) < len(c.prefix) {
+	if !bytes.HasPrefix(encodedKey, c.prefix) {
 		return nil, errors.Errorf("invalid encoded key prefix: %q", encodedKey)
 	}
 	return encodedKey[len(c.prefix):], nil
@@ -870,10 +870,6 @@ func (c *codecV2) decodeLockInfos(locks []*kvrpcpb.LockInfo) ([]*kvrpcpb.LockInf
 	return locks, nil
 }
 
-func (c *codecV2) DecodeKey(key []byte) ([]byte, []byte, error) {
-	decode, err := c.decodeKey(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key[:len(key)-len(decode)], decode, nil
+func (c *codecV2) DecodeKey(key []byte) ([]byte, error) {
+	return c.decodeKey(key)
 }
