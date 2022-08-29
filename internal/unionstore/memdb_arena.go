@@ -321,10 +321,6 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	return addr
 }
 
-func (addr memdbArenaAddr) AfterCheckPoint(cp MemDBCheckpoint) bool {
-	return addr.idx > uint32(cp.blocks)-1 || (addr.idx == uint32(cp.blocks)-1 && addr.off > uint32(cp.offsetInBlock))
-}
-
 // A pure function that gets a value. It should be used where the read doesn't affect user's(upper level module's) view
 func (l *memdbVlog) pureGetValue(addr memdbArenaAddr) []byte {
 	lenOff := addr.off - memdbVlogHdrSize
