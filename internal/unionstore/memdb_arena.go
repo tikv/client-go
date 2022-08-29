@@ -321,8 +321,8 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	return addr
 }
 
-// A pure function that gets a value. It should be used where the read doesn't affect user's(upper level module's) view
-func (l *memdbVlog) pureGetValue(addr memdbArenaAddr) []byte {
+// A pure function that gets a value.
+func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
 	lenOff := addr.off - memdbVlogHdrSize
 	block := l.blocks[addr.idx].buf
 	valueLen := endian.Uint32(block[lenOff:])
@@ -331,47 +331,6 @@ func (l *memdbVlog) pureGetValue(addr memdbArenaAddr) []byte {
 	}
 	valueOff := lenOff - valueLen
 	return block[valueOff:lenOff:lenOff]
-}
-
-// Get value, and possibly write a new vlog entry in the latest stage to let the locking phase be aware of it via InspectStage.
-// It should be used where the read result affect users or upper level modules. Temporary flags need to be unset in such cases.
-func (l *memdbVlog) getValue(addr memdbArenaAddr) (value []byte) {
-	if !l.memdb.enableTemporaryFlags {
-		return l.pureGetValue(addr)
-	}
-	hdrOffset := addr.off - memdbVlogHdrSize
-	block := l.blocks[addr.idx].buf
-	var hdr memdbVlogHdr
-	hdr.load(block[hdrOffset:])
-
-	if hdr.valueLen == 0 {
-		value = tombstone
-	} else {
-		valueOff := hdrOffset - hdr.valueLen
-		value = block[valueOff:hdrOffset:hdrOffset]
-	}
-
-	l.processFlagNeedConstraintCheckInPrewrite(addr, hdr.nodeAddr, value)
-
-	return value
-}
-
-// remove the temporary flag NeedConstraintCheckInPrewrite
-func (l *memdbVlog) processFlagNeedConstraintCheckInPrewrite(valueAddr memdbArenaAddr, nodeAddr memdbArenaAddr, value []byte) {
-	node := l.memdb.getNode(nodeAddr)
-	flags := node.getKeyFlags()
-	// only process if current access is on the latest version, so that we do it at most once.
-	if flags.HasNeedConstraintCheckInPrewrite() && node.vptr == valueAddr {
-		flags = kv.ApplyFlagsOps(flags, kv.DelNeedConstraintCheckInPrewrite)
-		node.setKeyFlags(flags)
-
-		// if this is not in the latest stage, we need to copy the vlog entry to the latest stage, marking it as
-		// a modification (of flag) so that the locking phase could find it via `InspectStage` and acquire the lock.
-		latestStagingHandle := len(l.memdb.stages)
-		if latestStagingHandle > 0 && !l.canModify(&l.memdb.stages[latestStagingHandle-1], valueAddr) {
-			l.memdb.setValue(node, value)
-		}
-	}
 }
 
 func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint) ([]byte, bool) {
@@ -418,7 +377,7 @@ func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *MemDBCheckpoint) {
 				db.dirty = true
 			}
 		} else {
-			db.size += len(l.pureGetValue(hdr.oldValue))
+			db.size += len(l.getValue(hdr.oldValue))
 		}
 
 		l.moveBackCursor(&cursor, &hdr)

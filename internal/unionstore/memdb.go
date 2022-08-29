@@ -86,12 +86,9 @@ type MemDB struct {
 	vlogInvalid bool
 	dirty       bool
 	stages      []MemDBCheckpoint
-
-	// options
-	enableTemporaryFlags bool
 }
 
-func newMemDB(enableTemporaryFlags bool) *MemDB {
+func newMemDB() *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr
@@ -99,7 +96,6 @@ func newMemDB(enableTemporaryFlags bool) *MemDB {
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
 	db.vlog.memdb = db
-	db.enableTemporaryFlags = enableTemporaryFlags
 	return db
 }
 
@@ -229,7 +225,7 @@ func (db *MemDB) SelectValueHistory(key []byte, predicate func(value []byte) boo
 		return nil, tikverr.ErrNotExist
 	}
 	result := db.vlog.selectValueHistory(x.vptr, func(addr memdbArenaAddr) bool {
-		return predicate(db.vlog.pureGetValue(addr))
+		return predicate(db.vlog.getValue(addr))
 	})
 	if result.isNull() {
 		return nil, nil
@@ -369,7 +365,7 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 
 	var oldVal []byte
 	if !x.vptr.isNull() {
-		oldVal = db.vlog.pureGetValue(x.vptr)
+		oldVal = db.vlog.getValue(x.vptr)
 	}
 
 	if len(oldVal) > 0 && db.vlog.canModify(activeCp, x.vptr) {
