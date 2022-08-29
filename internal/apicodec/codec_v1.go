@@ -195,6 +195,6 @@ func (c *codecV1) DecodeRange(start, end []byte) ([]byte, []byte) {
 	return start, end
 }
 
-func (c *codecV1) DecodeKey(key []byte) ([]byte, []byte, error) {
-	return nil, key, nil
+func (c *codecV1) DecodeKey(key []byte) ([]byte, error) {
+	return key, nil
 }
