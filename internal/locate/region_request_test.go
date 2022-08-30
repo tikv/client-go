@@ -466,8 +466,7 @@ func (s *mockTikvGrpcServer) Compact(ctx context.Context, request *kvrpcpb.Compa
 	return nil, errors.New("unreachable")
 }
 
-// make test pass
-func (s *mockTikvGrpcServer) GetLockWaitHistory(context.Context, *kvrpcpb.GetLockWaitHistoryRequest) (*kvrpcpb.GetLockWaitHistoryResponse, error) {
+func (s *mockTikvGrpcServer) GetLockWaitHistory(ctx context.Context, request *kvrpcpb.GetLockWaitHistoryRequest) (*kvrpcpb.GetLockWaitHistoryResponse, error) {
 	return nil, errors.New("unreachable")
 }
 

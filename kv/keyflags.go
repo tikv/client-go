@@ -62,7 +62,13 @@ const (
 	flagAssertExist
 	flagAssertNotExist
 
-	persistentFlags = flagKeyLocked | flagKeyLockedValExist
+	// It marks the conflict check of the key is postponed to prewrite. This is only used in pessimistic transactions.
+	// When the key gets locked (and the existence is checked), the flag should be removed.
+	// It should only be applied to keys with PresumeNotExist, so that an in-place constraint check becomes
+	// (a conflict check + a constraint check) in prewrite.
+	flagNeedConstraintCheckInPrewrite
+
+	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
 )
 
 // HasAssertExist returns whether the key need ensure exists in 2pc.
@@ -125,6 +131,11 @@ func (f KeyFlags) HasReadable() bool {
 	return f&flagReadable != 0
 }
 
+// HasNeedConstraintCheckInPrewrite returns whether the key needs to check conflict in prewrite.
+func (f KeyFlags) HasNeedConstraintCheckInPrewrite() bool {
+	return f&flagNeedConstraintCheckInPrewrite != 0
+}
+
 // AndPersistent returns the value of current flags&persistentFlags
 func (f KeyFlags) AndPersistent() KeyFlags {
 	return f & persistentFlags
@@ -153,10 +164,12 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin &= ^flagNeedLocked
 		case SetKeyLockedValueExists:
 			origin |= flagKeyLockedValExist
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		case DelNeedCheckExists:
 			origin &= ^flagNeedCheckExists
 		case SetKeyLockedValueNotExists:
 			origin &= ^flagKeyLockedValExist
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		case SetPrewriteOnly:
 			origin |= flagPrewriteOnly
 		case SetIgnoredIn2PC:
@@ -177,6 +190,10 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 		case SetAssertNone:
 			origin &= ^flagAssertExist
 			origin &= ^flagAssertNotExist
+		case SetNeedConstraintCheckInPrewrite:
+			origin |= flagNeedConstraintCheckInPrewrite
+		case DelNeedConstraintCheckInPrewrite:
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		}
 	}
 	return origin
@@ -221,4 +238,9 @@ const (
 	SetAssertUnknown
 	// SetAssertNone cleans up the key's assert.
 	SetAssertNone
+	// SetNeedConstraintCheckInPrewrite marks the key needs to check conflict in prewrite.
+	SetNeedConstraintCheckInPrewrite
+	// DelNeedConstraintCheckInPrewrite reverts SetNeedConstraintCheckInPrewrite. This is required when we decide to
+	// make up the pessimistic lock.
+	DelNeedConstraintCheckInPrewrite
 )

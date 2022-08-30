@@ -74,7 +74,7 @@ func (actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize uint64) *tikvrpc.Request {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
-	isPessimisticLock := make([]bool, m.Len())
+	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
 		if m.IsAssertExists(i) {
@@ -89,7 +89,13 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			Value:     m.GetValue(i),
 			Assertion: assertion,
 		}
-		isPessimisticLock[i] = m.IsPessimisticLock(i)
+		if m.IsPessimisticLock(i) {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
+		} else if m.NeedConstraintCheckInPrewrite(i) {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
+		} else {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
+		}
 	}
 	c.mu.Lock()
 	minCommitTS := c.minCommitTS
@@ -141,16 +147,16 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	}
 
 	req := &kvrpcpb.PrewriteRequest{
-		Mutations:         mutations,
-		PrimaryLock:       c.primary(),
-		StartVersion:      c.startTS,
-		LockTtl:           ttl,
-		IsPessimisticLock: isPessimisticLock,
-		ForUpdateTs:       c.forUpdateTS,
-		TxnSize:           txnSize,
-		MinCommitTs:       minCommitTS,
-		MaxCommitTs:       c.maxCommitTS,
-		AssertionLevel:    assertionLevel,
+		Mutations:          mutations,
+		PrimaryLock:        c.primary(),
+		StartVersion:       c.startTS,
+		LockTtl:            ttl,
+		PessimisticActions: pessimisticActions,
+		ForUpdateTs:        c.forUpdateTS,
+		TxnSize:            txnSize,
+		MinCommitTs:        minCommitTS,
+		MaxCommitTs:        c.maxCommitTS,
+		AssertionLevel:     assertionLevel,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {
