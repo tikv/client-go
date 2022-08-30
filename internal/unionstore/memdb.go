@@ -332,7 +332,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	x := db.traverse(key, true)
 
 	// the NeedConstraintCheckInPrewrite flag is temporary,
-	// every access to the node removes it unless it's explicitly set.
+	// every write to the node removes the flag unless it's explicitly set.
 	// This set must be in the latest stage so no special processing is needed.
 	var flags kv.KeyFlags
 	if value != nil {
