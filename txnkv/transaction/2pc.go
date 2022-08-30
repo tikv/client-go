@@ -185,8 +185,8 @@ type memBufferMutations struct {
 	storage *unionstore.MemDB
 
 	// The format to put to the UserData of the handles:
-	// MSB                                                                            LSB
-	// [13 bits: Op][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
+	// MSB									                                                                              LSB
+	// [12 bits: Op][1 bit: NeedConstraintCheckInPrewrite][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
 	handles []unionstore.MemKeyHandle
 }
 
@@ -219,7 +219,7 @@ func (m *memBufferMutations) GetValue(i int) []byte {
 }
 
 func (m *memBufferMutations) GetOp(i int) kvrpcpb.Op {
-	return kvrpcpb.Op(m.handles[i].UserData >> 3)
+	return kvrpcpb.Op(m.handles[i].UserData >> 4)
 }
 
 func (m *memBufferMutations) IsPessimisticLock(i int) bool {
@@ -234,6 +234,10 @@ func (m *memBufferMutations) IsAssertNotExist(i int) bool {
 	return m.handles[i].UserData&(1<<2) != 0
 }
 
+func (m *memBufferMutations) NeedConstraintCheckInPrewrite(i int) bool {
+	return m.handles[i].UserData&(1<<3) != 0
+}
+
 func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 	return &memBufferMutations{
 		handles: m.handles[from:to],
@@ -241,9 +245,10 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 	}
 }
 
-func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
+func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist, NeedConstraintCheckInPrewrite bool,
+	handle unionstore.MemKeyHandle) {
 	// See comments of `m.handles` field about the format of the user data `aux`.
-	aux := uint16(op) << 3
+	aux := uint16(op) << 4
 	if isPessimisticLock {
 		aux |= 1
 	}
@@ -252,6 +257,9 @@ func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist,
 	}
 	if assertNotExist {
 		aux |= 1 << 2
+	}
+	if NeedConstraintCheckInPrewrite {
+		aux |= 1 << 3
 	}
 	handle.UserData = aux
 	m.handles = append(m.handles, handle)
@@ -269,9 +277,12 @@ const (
 
 	// MutationFlagIsAssertNotExists is the flag that marks a mutation needs to be asserted to be not-existed when prewriting.
 	MutationFlagIsAssertNotExists
+
+	// MutationFlagNeedConstraintCheckInPrewrite is the flag that marks a mutation needs to be checked for conflicts in prewrite.
+	MutationFlagNeedConstraintCheckInPrewrite
 )
 
-func makeMutationFlags(isPessimisticLock, assertExist, assertNotExist bool) CommitterMutationFlags {
+func makeMutationFlags(isPessimisticLock, assertExist, assertNotExist, NeedConstraintCheckInPrewrite bool) CommitterMutationFlags {
 	var flags CommitterMutationFlags = 0
 	if isPessimisticLock {
 		flags |= MutationFlagIsPessimisticLock
@@ -281,6 +292,9 @@ func makeMutationFlags(isPessimisticLock, assertExist, assertNotExist bool) Comm
 	}
 	if assertNotExist {
 		flags |= MutationFlagIsAssertNotExists
+	}
+	if NeedConstraintCheckInPrewrite {
+		flags |= MutationFlagNeedConstraintCheckInPrewrite
 	}
 	return flags
 }
@@ -296,6 +310,7 @@ type CommitterMutations interface {
 	Slice(from, to int) CommitterMutations
 	IsAssertExists(i int) bool
 	IsAssertNotExist(i int) bool
+	NeedConstraintCheckInPrewrite(i int) bool
 }
 
 // PlainMutations contains transaction operations.
@@ -333,11 +348,12 @@ func (c *PlainMutations) Slice(from, to int) CommitterMutations {
 }
 
 // Push another mutation into mutations.
-func (c *PlainMutations) Push(op kvrpcpb.Op, key []byte, value []byte, isPessimisticLock, assertExist, assertNotExist bool) {
+func (c *PlainMutations) Push(op kvrpcpb.Op, key []byte, value []byte, isPessimisticLock, assertExist,
+	assertNotExist, NeedConstraintCheckInPrewrite bool) {
 	c.ops = append(c.ops, op)
 	c.keys = append(c.keys, key)
 	c.values = append(c.values, value)
-	c.flags = append(c.flags, makeMutationFlags(isPessimisticLock, assertExist, assertNotExist))
+	c.flags = append(c.flags, makeMutationFlags(isPessimisticLock, assertExist, assertNotExist, NeedConstraintCheckInPrewrite))
 }
 
 // Len returns the count of mutations.
@@ -378,6 +394,11 @@ func (c *PlainMutations) IsAssertExists(i int) bool {
 // IsAssertNotExist returns the key assertNotExist flag at index.
 func (c *PlainMutations) IsAssertNotExist(i int) bool {
 	return c.flags[i]&MutationFlagIsAssertNotExists != 0
+}
+
+// NeedConstraintCheckInPrewrite returns the key NeedConstraintCheckInPrewrite flag at index.
+func (c *PlainMutations) NeedConstraintCheckInPrewrite(i int) bool {
+	return c.flags[i]&MutationFlagNeedConstraintCheckInPrewrite != 0
 }
 
 // GetOp returns the key op at index.
@@ -584,7 +605,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		if c.txn.schemaAmender != nil || c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
 			mustExist, mustNotExist, hasAssertUnknown = false, false, false
 		}
-		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle())
+		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		size += len(key) + len(value)
 
 		if c.txn.assertionLevel != kvrpcpb.AssertionLevel_Off {
@@ -1690,7 +1711,7 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 	for i := 0; i < addMutations.Len(); i++ {
 		if addMutations.IsPessimisticLock(i) {
 			keysNeedToLock.Push(addMutations.GetOp(i), addMutations.GetKey(i), addMutations.GetValue(i), addMutations.IsPessimisticLock(i),
-				addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i))
+				addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i), addMutations.NeedConstraintCheckInPrewrite(i))
 		}
 	}
 	// For unique index amend, we need to pessimistic lock the generated new index keys first.
@@ -1774,7 +1795,8 @@ func (c *twoPhaseCommitter) tryAmendTxn(ctx context.Context, startInfoSchema Sch
 				return false, err
 			}
 			handle := c.txn.GetMemBuffer().IterWithFlags(key, nil).Handle()
-			c.mutations.Push(op, addMutations.IsPessimisticLock(i), addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i), handle)
+			c.mutations.Push(op, addMutations.IsPessimisticLock(i), addMutations.IsAssertExists(i),
+				addMutations.IsAssertNotExist(i), addMutations.NeedConstraintCheckInPrewrite(i), handle)
 		}
 	}
 	return false, nil
@@ -2128,7 +2150,7 @@ func (c *twoPhaseCommitter) mutationsOfKeys(keys [][]byte) CommitterMutations {
 		for _, key := range keys {
 			if bytes.Equal(c.mutations.GetKey(i), key) {
 				res.Push(c.mutations.GetOp(i), c.mutations.GetKey(i), c.mutations.GetValue(i), c.mutations.IsPessimisticLock(i),
-					c.mutations.IsAssertExists(i), c.mutations.IsAssertNotExist(i))
+					c.mutations.IsAssertExists(i), c.mutations.IsAssertNotExist(i), c.mutations.NeedConstraintCheckInPrewrite(i))
 				break
 			}
 		}

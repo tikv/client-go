@@ -653,7 +653,7 @@ func (s *testCommitterSuite) TestPessimisticPrewriteRequest() {
 	s.Nil(err)
 	committer.SetForUpdateTS(100)
 	req := committer.BuildPrewriteRequest(1, 1, 1, committer.GetMutations().Slice(0, 1), 1)
-	s.Greater(len(req.Prewrite().IsPessimisticLock), 0)
+	s.Greater(len(req.Prewrite().PessimisticActions), 0)
 	s.Equal(req.Prewrite().ForUpdateTs, uint64(100))
 }
 
@@ -1261,7 +1261,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	// stop txn ttl manager and remove primary key, make the other keys left behind
 	committer.CloseTTLManager()
 	muts := transaction.NewPlainMutations(1)
-	muts.Push(kvrpcpb.Op_Lock, pk, nil, true, false, false)
+	muts.Push(kvrpcpb.Op_Lock, pk, nil, true, false, false, false)
 	err = committer.PessimisticRollbackMutations(context.Background(), &muts)
 	s.Nil(err)
 
@@ -1731,7 +1731,7 @@ func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
 
 	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
 		handle := db.IterWithFlags(key, nil).Handle()
-		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, handle)
+		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, false, handle)
 	})
 
 	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
