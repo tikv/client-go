@@ -172,14 +172,6 @@ func (c *codecV1) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 			return nil, err
 		}
 	}
-	if errInfo := regionError.EpochNotMatch; errInfo != nil {
-		for _, meta := range errInfo.CurrentRegions {
-			_, meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
 	return regionError, nil
 }
 
