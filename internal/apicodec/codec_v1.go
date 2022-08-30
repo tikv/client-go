@@ -149,16 +149,16 @@ func (c *codecV1) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 	return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
 }
 
-func (c *codecV1) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
+func (c *codecV1) DecodeRegionRange(encodedStart, encodedEnd []byte) (bool, []byte, []byte, error) {
 	start, err := c.DecodeRegionKey(encodedStart)
 	if err != nil {
-		return nil, nil, err
+		return false, nil, nil, err
 	}
 	end, err := c.DecodeRegionKey(encodedEnd)
 	if err != nil {
-		return nil, nil, err
+		return false, nil, nil, err
 	}
-	return start, end, nil
+	return true, start, end, nil
 }
 
 func (c *codecV1) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
@@ -167,14 +167,14 @@ func (c *codecV1) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 	}
 	var err error
 	if errInfo := regionError.KeyNotInRegion; errInfo != nil {
-		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		_, errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if errInfo := regionError.EpochNotMatch; errInfo != nil {
 		for _, meta := range errInfo.CurrentRegions {
-			meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
+			_, meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
 			if err != nil {
 				return nil, err
 			}

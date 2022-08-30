@@ -51,7 +51,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stathat/consistent"
@@ -365,7 +364,7 @@ func (r *Region) isValid() bool {
 // purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
-	apiVersion       kvrpcpb.APIVersion
+	codec            apicodec.Codec
 	enableForwarding bool
 
 	mu struct {
@@ -402,9 +401,9 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		pdClient: pdClient,
 	}
 
-	c.apiVersion = kvrpcpb.APIVersion_V1
+	c.codec = apicodec.NewCodecV1(apicodec.ModeTxn)
 	if codecPDClient, ok := pdClient.(*CodecPDClient); ok {
-		c.apiVersion = codecPDClient.GetCodec().GetAPIVersion()
+		c.codec = codecPDClient.GetCodec()
 	}
 
 	c.mu.regions = make(map[RegionVerID]*Region)
@@ -1743,6 +1742,17 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	newRegions := make([]*Region, 0, len(currentRegions))
 	// If the region epoch is not ahead of TiKV's, replace region meta in region cache.
 	for _, meta := range currentRegions {
+		valid, start, end, err := c.codec.DecodeRegionRange(meta.GetStartKey(), meta.GetEndKey())
+		if err != nil {
+			logutil.BgLogger().Error("failed to decode region range", zap.Error(err))
+			return false, err
+		}
+		// If cachedRegion is not valid, skip inserting it to cache.
+		if !valid {
+			continue
+		}
+		meta.StartKey = start
+		meta.EndKey = end
 		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error
 		// carry buckets information. Can it bring much overhead?
 		region, err := newRegion(bo, c, &pd.Region{Meta: meta, Buckets: buckets})

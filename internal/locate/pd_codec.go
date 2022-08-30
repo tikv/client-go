@@ -36,6 +36,7 @@ package locate
 
 import (
 	"context"
+
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
@@ -154,7 +155,7 @@ func (c *CodecPDClient) processRegionResult(region *pd.Region, err error) (*pd.R
 }
 
 func (c *CodecPDClient) decodeRegionKeyInPlace(r *pd.Region) error {
-	decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.Meta.StartKey, r.Meta.EndKey)
+	_, decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.Meta.StartKey, r.Meta.EndKey)
 	if err != nil {
 		return err
 	}

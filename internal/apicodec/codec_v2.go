@@ -5,12 +5,9 @@ import (
 	"encoding/binary"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
-	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -21,9 +18,8 @@ var (
 	// DefaultKeyspaceName is the name of the default keyspace.
 	DefaultKeyspaceName = "DEFAULT"
 
-	rawModePrefix     byte = 'r'
-	txnModePrefix     byte = 'x'
-	keyspacePrefixLen int  = 4
+	rawModePrefix byte = 'r'
+	txnModePrefix byte = 'x'
 )
 
 // BuildKeyspaceName builds a keyspace name
@@ -251,7 +247,6 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 // DecodeResponse decode the resp with the given codec.
 func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
 	var err error
-	log.Info("Decode request", zap.String("request type", req.Type.String()))
 	// Decode response based on command type.
 	switch req.Type {
 	// Transaction KV responses.
@@ -558,8 +553,6 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
-	default:
-		log.Warn("unknown request type to decode", zap.String("request type", req.Type.String()))
 	}
 
 	return resp, nil
@@ -590,22 +583,25 @@ func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 // DecodeRegionRange first decode key from memory compatible format,
 // then pass decode them with decodeRange to map them to correct range.
 // Note that empty byte slice/ nil slice requires special treatment.
-func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
+// It also returns validRegionRange as it's first return val. It indicates
+// whether the given range overlaps with the given keyspace's range
+func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) (bool, []byte, []byte, error) {
 	var err error
 	if len(encodedStart) != 0 {
 		encodedStart, err = c.memCodec.decodeKey(encodedStart)
 		if err != nil {
-			return nil, nil, err
+			return false, nil, nil, err
 		}
 	}
 	if len(encodedEnd) != 0 {
 		encodedEnd, err = c.memCodec.decodeKey(encodedEnd)
 		if err != nil {
-			return nil, nil, err
+			return false, nil, nil, err
 		}
 	}
+	validRegionRange := bytes.Compare(encodedStart, c.endKey) < 0 && bytes.Compare(encodedEnd, c.prefix) > 0
 	start, end := c.decodeRange(encodedStart, encodedEnd)
-	return start, end, nil
+	return validRegionRange, start, end, nil
 }
 
 func (c *codecV2) encodeKey(key []byte) []byte {
@@ -727,7 +723,7 @@ func (c *codecV2) encodeTableRegions(tableRegions []*coprocessor.TableRegions) [
 func (c *codecV2) decodeCopRegions(regions []*metapb.Region) ([]*metapb.Region, error) {
 	var err error
 	for _, region := range regions {
-		region.StartKey, region.EndKey, err = c.DecodeRegionRange(region.StartKey, region.EndKey)
+		_, region.StartKey, region.EndKey, err = c.DecodeRegionRange(region.StartKey, region.EndKey)
 		if err != nil {
 			return nil, err
 		}
@@ -795,20 +791,13 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 		if err != nil {
 			return nil, err
 		}
-		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		_, errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if errInfo := regionError.EpochNotMatch; errInfo != nil {
-		for _, meta := range errInfo.CurrentRegions {
-			meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
+	// Epoch not match error is handled in region cache.
 
 	return regionError, nil
 }
