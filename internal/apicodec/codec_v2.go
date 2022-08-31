@@ -20,6 +20,10 @@ var (
 
 	rawModePrefix byte = 'r'
 	txnModePrefix byte = 'x'
+
+	// errInvalidRegion happens when region to be decoded does not overlap
+	// with the range specified by keyspace.
+	errInvalidRegion = errors.New("encoded region range does not overlap with the current keyspace")
 )
 
 // BuildKeyspaceName builds a keyspace name
@@ -576,7 +580,7 @@ func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 // DecodeRegionRange first decode key from memory compatible format,
 // then pass decode them with decodeRange to map them to correct range.
 // Note that empty byte slice/ nil slice requires special treatment.
-// It returns invalid region error if encoded region range does not overlap with
+// It returns invalid region error if region range does not overlap with
 // the range of current keyspace.
 func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
 	var err error
@@ -592,8 +596,9 @@ func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []
 			return nil, nil, err
 		}
 	}
+	// If the region range does not overlap with the range of current keyspace, return ErrInvalidRegion.
 	if bytes.Compare(encodedStart, c.endKey) >= 0 || bytes.Compare(encodedEnd, c.prefix) <= 0 {
-		return nil, nil, errors.New("encoded region range does not overlap with the current keyspace")
+		return nil, nil, errInvalidRegion
 	}
 	start, end := c.decodeRange(encodedStart, encodedEnd)
 	return start, end, nil
@@ -772,7 +777,22 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 		}
 	}
 
-	// Epoch not match error is handled in region cache.
+	if errInfo := regionError.EpochNotMatch; errInfo != nil {
+		var decodedRegions []*metapb.Region
+		for _, meta := range errInfo.CurrentRegions {
+			r := *meta
+			r.StartKey, r.EndKey, err = c.DecodeRegionRange(r.StartKey, r.EndKey)
+			if err != nil {
+				// If invalidRegion happens, skip appending it to result instead of return an error.
+				if errors.Is(err, errInvalidRegion) {
+					continue
+				}
+				return nil, err
+			}
+			decodedRegions = append(decodedRegions, &r)
+		}
+		errInfo.CurrentRegions = decodedRegions
+	}
 
 	return regionError, nil
 }

@@ -401,7 +401,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		pdClient: pdClient,
 	}
 
-	c.codec = apicodec.NewCodecV1(apicodec.ModeTxn)
+	c.codec = apicodec.NewCodecV1(apicodec.ModeRaw)
 	if codecPDClient, ok := pdClient.(*CodecPDClient); ok {
 		c.codec = codecPDClient.GetCodec()
 	}
@@ -1742,13 +1742,6 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	newRegions := make([]*Region, 0, len(currentRegions))
 	// If the region epoch is not ahead of TiKV's, replace region meta in region cache.
 	for _, meta := range currentRegions {
-		start, end, err := c.codec.DecodeRegionRange(meta.GetStartKey(), meta.GetEndKey())
-		if err != nil {
-			logutil.BgLogger().Warn("failed to decode region range, skip updating region cache", zap.Error(err))
-			continue
-		}
-		meta.StartKey = start
-		meta.EndKey = end
 		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error
 		// carry buckets information. Can it bring much overhead?
 		region, err := newRegion(bo, c, &pd.Region{Meta: meta, Buckets: buckets})
