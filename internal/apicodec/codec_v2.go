@@ -227,10 +227,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r.Ranges = c.encodeCopRanges(r.Ranges)
 		newReq.Req = &r
 	case tikvrpc.CmdBatchCop:
-		r := *req.BatchCop()
-		r.Regions = c.encodeCopRegions(r.Regions)
-		r.TableRegions = c.encodeTableRegions(r.TableRegions)
-		newReq.Req = &r
+		// TODO(iosmanthus): handle cop Request.
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
 		r.Key = c.EncodeRegionKey(r.Key)
@@ -532,11 +529,7 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 		r.Range = c.decodeCopRange(r.Range)
 	case tikvrpc.CmdBatchCop:
-		r := resp.Resp.(*coprocessor.BatchResponse)
-		r.RetryRegions, err = c.decodeCopRegions(r.RetryRegions)
-		if err != nil {
-			return nil, err
-		}
+		// TODO: handle cop response.
 	case tikvrpc.CmdMvccGetByKey:
 		r := resp.Resp.(*kvrpcpb.MvccGetByKeyResponse)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -549,7 +542,7 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
-		r.Regions, err = c.decodeCopRegions(r.Regions)
+		r.Regions, err = c.decodeRegions(r.Regions)
 		if err != nil {
 			return nil, err
 		}
@@ -583,25 +576,27 @@ func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 // DecodeRegionRange first decode key from memory compatible format,
 // then pass decode them with decodeRange to map them to correct range.
 // Note that empty byte slice/ nil slice requires special treatment.
-// It also returns validRegionRange as it's first return val. It indicates
-// whether the given range overlaps with the given keyspace's range
-func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) (bool, []byte, []byte, error) {
+// It returns invalid region error if encoded region range does not overlap with
+// the range of current keyspace.
+func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
 	var err error
 	if len(encodedStart) != 0 {
 		encodedStart, err = c.memCodec.decodeKey(encodedStart)
 		if err != nil {
-			return false, nil, nil, err
+			return nil, nil, err
 		}
 	}
 	if len(encodedEnd) != 0 {
 		encodedEnd, err = c.memCodec.decodeKey(encodedEnd)
 		if err != nil {
-			return false, nil, nil, err
+			return nil, nil, err
 		}
 	}
-	validRegionRange := bytes.Compare(encodedStart, c.endKey) < 0 && bytes.Compare(encodedEnd, c.prefix) > 0
+	if bytes.Compare(encodedStart, c.endKey) >= 0 || bytes.Compare(encodedEnd, c.prefix) <= 0 {
+		return nil, nil, errors.New("encoded region range does not overlap with the current keyspace")
+	}
 	start, end := c.decodeRange(encodedStart, encodedEnd)
-	return validRegionRange, start, end, nil
+	return start, end, nil
 }
 
 func (c *codecV2) encodeKey(key []byte) []byte {
@@ -700,30 +695,10 @@ func (c *codecV2) encodeCopRanges(ranges []*coprocessor.KeyRange) []*coprocessor
 	return newRanges
 }
 
-func (c *codecV2) encodeCopRegions(regions []*coprocessor.RegionInfo) []*coprocessor.RegionInfo {
-	var encodedRegions []*coprocessor.RegionInfo
-	for _, region := range regions {
-		r := *region
-		r.Ranges = c.encodeCopRanges(r.Ranges)
-		encodedRegions = append(encodedRegions, &r)
-	}
-	return encodedRegions
-}
-
-func (c *codecV2) encodeTableRegions(tableRegions []*coprocessor.TableRegions) []*coprocessor.TableRegions {
-	var encodedRegions []*coprocessor.TableRegions
-	for _, region := range tableRegions {
-		r := *region
-		r.Regions = c.encodeCopRegions(r.Regions)
-		encodedRegions = append(encodedRegions, &r)
-	}
-	return encodedRegions
-}
-
-func (c *codecV2) decodeCopRegions(regions []*metapb.Region) ([]*metapb.Region, error) {
+func (c *codecV2) decodeRegions(regions []*metapb.Region) ([]*metapb.Region, error) {
 	var err error
 	for _, region := range regions {
-		_, region.StartKey, region.EndKey, err = c.DecodeRegionRange(region.StartKey, region.EndKey)
+		region.StartKey, region.EndKey, err = c.DecodeRegionRange(region.StartKey, region.EndKey)
 		if err != nil {
 			return nil, err
 		}
@@ -791,7 +766,7 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 		if err != nil {
 			return nil, err
 		}
-		_, errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
 		if err != nil {
 			return nil, err
 		}

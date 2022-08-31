@@ -149,16 +149,16 @@ func (c *codecV1) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 	return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
 }
 
-func (c *codecV1) DecodeRegionRange(encodedStart, encodedEnd []byte) (bool, []byte, []byte, error) {
+func (c *codecV1) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
 	start, err := c.DecodeRegionKey(encodedStart)
 	if err != nil {
-		return false, nil, nil, err
+		return nil, nil, err
 	}
 	end, err := c.DecodeRegionKey(encodedEnd)
 	if err != nil {
-		return false, nil, nil, err
+		return nil, nil, err
 	}
-	return true, start, end, nil
+	return start, end, nil
 }
 
 func (c *codecV1) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
@@ -167,7 +167,7 @@ func (c *codecV1) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 	}
 	var err error
 	if errInfo := regionError.KeyNotInRegion; errInfo != nil {
-		_, errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
+		errInfo.StartKey, errInfo.EndKey, err = c.DecodeRegionRange(errInfo.StartKey, errInfo.EndKey)
 		if err != nil {
 			return nil, err
 		}

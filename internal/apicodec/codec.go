@@ -33,7 +33,7 @@ type Codec interface {
 	// EncodeRegionRange encode region's start and end.
 	EncodeRegionRange(start, end []byte) ([]byte, []byte)
 	// DecodeRegionRange decode region's start and end.
-	DecodeRegionRange(encodedStart, encodedEnd []byte) (bool, []byte, []byte, error)
+	DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error)
 	// EncodeRange encode a key range.
 	EncodeRange(start, end []byte) ([]byte, []byte)
 	// DecodeRange decode a key range.

@@ -1742,13 +1742,9 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	newRegions := make([]*Region, 0, len(currentRegions))
 	// If the region epoch is not ahead of TiKV's, replace region meta in region cache.
 	for _, meta := range currentRegions {
-		valid, start, end, err := c.codec.DecodeRegionRange(meta.GetStartKey(), meta.GetEndKey())
+		start, end, err := c.codec.DecodeRegionRange(meta.GetStartKey(), meta.GetEndKey())
 		if err != nil {
-			logutil.BgLogger().Error("failed to decode region range", zap.Error(err))
-			return false, err
-		}
-		// If cachedRegion is not valid, skip inserting it to cache.
-		if !valid {
+			logutil.BgLogger().Warn("failed to decode region range, skip updating region cache", zap.Error(err))
 			continue
 		}
 		meta.StartKey = start

@@ -155,7 +155,7 @@ func (c *CodecPDClient) processRegionResult(region *pd.Region, err error) (*pd.R
 }
 
 func (c *CodecPDClient) decodeRegionKeyInPlace(r *pd.Region) error {
-	_, decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.Meta.StartKey, r.Meta.EndKey)
+	decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.Meta.StartKey, r.Meta.EndKey)
 	if err != nil {
 		return err
 	}
