@@ -778,10 +778,9 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 	}
 
 	if errInfo := regionError.EpochNotMatch; errInfo != nil {
-		var decodedRegions []*metapb.Region
+		decodedRegions := make([]*metapb.Region, 0, len(errInfo.CurrentRegions))
 		for _, meta := range errInfo.CurrentRegions {
-			r := *meta
-			r.StartKey, r.EndKey, err = c.DecodeRegionRange(r.StartKey, r.EndKey)
+			meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
 			if err != nil {
 				// If invalidRegion happens, skip appending it to result instead of return an error.
 				if errors.Is(err, errInvalidRegion) {
@@ -789,7 +788,7 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 				}
 				return nil, err
 			}
-			decodedRegions = append(decodedRegions, &r)
+			decodedRegions = append(decodedRegions, meta)
 		}
 		errInfo.CurrentRegions = decodedRegions
 	}
