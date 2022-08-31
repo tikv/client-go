@@ -598,7 +598,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	}
 
 	if lockCtx.LockOnlyIfExists && !lockCtx.ReturnValues {
-		return errors.New("If LockOnlyIfExists flag was set for LockKeys in TiDB, ReturnValues flag must be set too")
+		return errors.New("LockOnlyIfExists is set for LockKeys but ReturnValues is not set")
 	}
 
 	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
