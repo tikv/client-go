@@ -750,9 +750,13 @@ func (s *testCommitterSuite) TestPessimisticLockReturnValues() {
 
 func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	key := []byte("key")
+	key2 := []byte("key2")
+	key3 := []byte("key3")
 	txn := s.begin()
 	s.Nil(txn.Set(key, key))
+	s.Nil(txn.Set(key3, key3))
 	s.Nil(txn.Commit(context.Background()))
+
 	txn = s.begin()
 	txn.SetPessimistic(true)
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
@@ -765,6 +769,50 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	flags, err := memBuf.GetFlags(key)
 	s.Nil(err)
 	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLcokedCount(), 1)
+	s.Nil(txn.Rollback())
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitReturnValues(1)
+	lockCtx.LockOnlyIfExists = true
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	s.Equal(lockCtx.Values[string(key2)].Exists, false)
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key2)
+	s.Equal(err.Error(), "not exist")
+	s.Equal(txn.GetLcokedCount(), 0)
+	s.Nil(txn.Rollback())
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitReturnValues(3)
+	lockCtx.LockOnlyIfExists = true
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2, key3))
+	s.Len(lockCtx.Values, 3)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	s.Equal(lockCtx.Values[string(key2)].Exists, false)
+	s.Equal(lockCtx.Values[string(key3)].Value, key3)
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key)
+	s.Equal(flags.HasLockedValueExists(), true)
+	flags, err = memBuf.GetFlags(key2)
+	s.Equal(err.Error(), "not exist")
+	flags, err = memBuf.GetFlags(key3)
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLcokedCount(), 2)
+	s.Nil(txn.Rollback())
+
+	// When LockOnlyIfExists is true, ReturnValue must be true too.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.LockOnlyIfExists = true
+	err = txn.LockKeys(context.Background(), lockCtx, key2)
+	s.Equal(err.Error(), "LockOnlyIfExists is set for LockKeys but ReturnValues is not set")
+	s.Nil(txn.Rollback())
 }
 
 func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {

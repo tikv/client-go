@@ -748,6 +748,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			checkedExistence = true
 		}
 	}
+	skipedLockKeys := 0
 	for _, key := range keys {
 		valExists := tikv.SetKeyLockedValueExists
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
@@ -762,10 +763,19 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				}
 			}
 		}
+		if lockCtx.LockOnlyIfExists && valExists == tikv.SetKeyLockedValueNotExists {
+			skipedLockKeys++
+			continue
+		}
 		memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, valExists)
 	}
-	txn.lockedCnt += len(keys)
+	txn.lockedCnt += len(keys) - skipedLockKeys
 	return nil
+}
+
+// GetLcokedCount is used for testcase
+func (txn *KVTxn) GetLcokedCount() int {
+	return txn.lockedCnt
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.

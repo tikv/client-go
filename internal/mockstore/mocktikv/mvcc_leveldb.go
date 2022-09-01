@@ -645,7 +645,7 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
 	}
 
-	if lctx.LockOnlyIfExists && len(val) != 0 {
+	if lctx.LockOnlyIfExists && len(val) == 0 {
 		return nil
 	}
 
