@@ -21,9 +21,8 @@ var (
 	rawModePrefix byte = 'r'
 	txnModePrefix byte = 'x'
 
-	// errInvalidRegion happens when region to be decoded does not overlap
-	// with the range specified by keyspace.
-	errInvalidRegion = errors.New("encoded region range does not overlap with the current keyspace")
+	// errKeyOutOfBound happens when key to be decoded lies outside the keyspace's range.
+	errKeyOutOfBound = errors.New("given key does not belong to the keyspace.")
 )
 
 // BuildKeyspaceName builds a keyspace name
@@ -99,7 +98,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	// Transaction Request Types.
 	case tikvrpc.CmdGet:
 		r := *req.Get()
-		r.Key = c.encodeKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		newReq.Req = &r
 	case tikvrpc.CmdScan:
 		r := *req.Scan()
@@ -108,7 +107,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdPrewrite:
 		r := *req.Prewrite()
 		r.Mutations = c.encodeMutations(r.Mutations)
-		r.PrimaryLock = c.encodeKey(r.PrimaryLock)
+		r.PrimaryLock = c.EncodeKey(r.PrimaryLock)
 		r.Secondaries = c.encodeKeys(r.Secondaries)
 		newReq.Req = &r
 	case tikvrpc.CmdCommit:
@@ -117,7 +116,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdCleanup:
 		r := *req.Cleanup()
-		r.Key = c.encodeKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		newReq.Req = &r
 	case tikvrpc.CmdBatchGet:
 		r := *req.BatchGet()
@@ -144,7 +143,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdPessimisticLock:
 		r := *req.PessimisticLock()
 		r.Mutations = c.encodeMutations(r.Mutations)
-		r.PrimaryLock = c.encodeKey(r.PrimaryLock)
+		r.PrimaryLock = c.EncodeKey(r.PrimaryLock)
 		newReq.Req = &r
 	case tikvrpc.CmdPessimisticRollback:
 		r := *req.PessimisticRollback()
@@ -152,11 +151,11 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdTxnHeartBeat:
 		r := *req.TxnHeartBeat()
-		r.PrimaryLock = c.encodeKey(r.PrimaryLock)
+		r.PrimaryLock = c.EncodeKey(r.PrimaryLock)
 		newReq.Req = &r
 	case tikvrpc.CmdCheckTxnStatus:
 		r := *req.CheckTxnStatus()
-		r.PrimaryKey = c.encodeKey(r.PrimaryKey)
+		r.PrimaryKey = c.EncodeKey(r.PrimaryKey)
 		newReq.Req = &r
 	case tikvrpc.CmdCheckSecondaryLocks:
 		r := *req.CheckSecondaryLocks()
@@ -166,7 +165,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	// Raw Request Types.
 	case tikvrpc.CmdRawGet:
 		r := *req.RawGet()
-		r.Key = c.encodeKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		newReq.Req = &r
 	case tikvrpc.CmdRawBatchGet:
 		r := *req.RawBatchGet()
@@ -174,7 +173,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdRawPut:
 		r := *req.RawPut()
-		r.Key = c.encodeKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		newReq.Req = &r
 	case tikvrpc.CmdRawBatchPut:
 		r := *req.RawBatchPut()
@@ -182,7 +181,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdRawDelete:
 		r := *req.RawDelete()
-		r.Key = c.encodeKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		newReq.Req = &r
 	case tikvrpc.CmdRawBatchDelete:
 		r := *req.RawBatchDelete()
@@ -198,11 +197,11 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdGetKeyTTL:
 		r := *req.RawGetKeyTTL()
-		r.Key = c.encodeKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		newReq.Req = &r
 	case tikvrpc.CmdRawCompareAndSwap:
 		r := *req.RawCompareAndSwap()
-		r.Key = c.encodeKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		newReq.Req = &r
 	case tikvrpc.CmdRawChecksum:
 		r := *req.RawChecksum()
@@ -216,7 +215,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdPhysicalScanLock:
 		r := *req.PhysicalScanLock()
-		r.StartKey = c.encodeKey(r.StartKey)
+		r.StartKey = c.EncodeKey(r.StartKey)
 		newReq.Req = &r
 	case tikvrpc.CmdStoreSafeTS:
 		r := *req.StoreSafeTS()
@@ -531,7 +530,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
-		r.Range = c.decodeCopRange(r.Range)
+		r.Range, err = c.decodeCopRange(r.Range)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdBatchCop:
 		// TODO: handle cop response.
 	case tikvrpc.CmdMvccGetByKey:
@@ -556,7 +558,7 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 }
 
 func (c *codecV2) EncodeRegionKey(key []byte) []byte {
-	encodeKey := c.encodeKey(key)
+	encodeKey := c.EncodeKey(key)
 	return c.memCodec.encodeKey(encodeKey)
 }
 
@@ -578,7 +580,7 @@ func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 }
 
 // DecodeRegionRange first decode key from memory compatible format,
-// then pass decode them with decodeRange to map them to correct range.
+// then pass decode them with DecodeRange to map them to correct range.
 // Note that empty byte slice/ nil slice requires special treatment.
 // It returns invalid region error if region range does not overlap with
 // the range of current keyspace.
@@ -596,35 +598,12 @@ func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []
 			return nil, nil, err
 		}
 	}
-	// If the region range does not overlap with the range of current keyspace, return ErrInvalidRegion.
-	if bytes.Compare(encodedStart, c.endKey) >= 0 || bytes.Compare(encodedEnd, c.prefix) <= 0 {
-		return nil, nil, errInvalidRegion
-	}
-	start, end := c.decodeRange(encodedStart, encodedEnd)
-	return start, end, nil
-}
 
-func (c *codecV2) encodeKey(key []byte) []byte {
-	return append(c.prefix, key...)
-}
-
-func (c *codecV2) EncodeKey(key []byte) []byte {
-	return c.encodeKey(key)
+	return c.DecodeRange(encodedStart, encodedEnd)
 }
 
 func (c *codecV2) EncodeRange(start, end []byte) ([]byte, []byte) {
 	return c.encodeRange(start, end, false)
-}
-
-func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) {
-	return c.decodeRange(encodedStart, encodedEnd)
-}
-
-func (c *codecV2) decodeKey(encodedKey []byte) ([]byte, error) {
-	if len(encodedKey) < len(c.prefix) {
-		return nil, errors.Errorf("invalid encoded key prefix: %q", encodedKey)
-	}
-	return encodedKey[len(c.prefix):], nil
 }
 
 // encodeRange encodes start and end to correct range in APIv2.
@@ -639,30 +618,50 @@ func (c *codecV2) encodeRange(start, end []byte, reverse bool) ([]byte, []byte) 
 	}
 	var encodedEnd []byte
 	if len(end) > 0 {
-		encodedEnd = c.encodeKey(end)
+		encodedEnd = c.EncodeKey(end)
 	} else {
 		encodedEnd = c.endKey
 	}
-	return c.encodeKey(start), encodedEnd
+	return c.EncodeKey(start), encodedEnd
 }
 
-// decodeRange maps encodedStart and end back to normal start and
+// DecodeRange maps encodedStart and end back to normal start and
 // end without APIv2 prefixes.
-// Note that it uses empty byte slice to mark encoded start/end
-// that lies outside the prefix's range.
-func (c *codecV2) decodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte) {
+func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
 	var start, end []byte
-	if bytes.Compare(encodedStart, c.prefix) < 0 {
-		start = []byte{}
-	} else {
-		start = encodedStart[len(c.prefix):]
+	var err error
+	start, err = c.decodeKey(encodedStart)
+	if err != nil {
+		return nil, nil, err
 	}
-	if len(encodedEnd) == 0 || bytes.Compare(encodedEnd, c.endKey) >= 0 {
-		end = []byte{}
-	} else {
-		end = encodedEnd[len(c.endKey):]
+	end, err = c.decodeKey(encodedEnd)
+	if err != nil {
+		return nil, nil, err
 	}
-	return start, end
+	return start, end, nil
+}
+
+func (c *codecV2) EncodeKey(key []byte) []byte {
+	return append(c.prefix, key...)
+}
+
+func (c *codecV2) DecodeKey(key []byte) ([]byte, []byte, error) {
+	decode, err := c.decodeKey(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key[:len(key)-len(decode)], decode, nil
+}
+
+func (c *codecV2) decodeKey(encodedKey []byte) ([]byte, error) {
+	if len(encodedKey) < len(c.prefix) {
+		return nil, errors.Errorf("invalid encoded key prefix: %q", encodedKey)
+	}
+	// If the encodedKey does not belong to the keyspace, return error.
+	if bytes.Compare(encodedKey, c.endKey) > 0 || bytes.Compare(encodedKey, c.prefix) < 0 {
+		return nil, errKeyOutOfBound
+	}
+	return encodedKey[len(c.prefix):], nil
 }
 
 func (c *codecV2) encodeKeyRange(keyRange *kvrpcpb.KeyRange) *kvrpcpb.KeyRange {
@@ -685,11 +684,15 @@ func (c *codecV2) encodeCopRange(r *coprocessor.KeyRange) *coprocessor.KeyRange 
 	return newRange
 }
 
-func (c *codecV2) decodeCopRange(r *coprocessor.KeyRange) *coprocessor.KeyRange {
+func (c *codecV2) decodeCopRange(r *coprocessor.KeyRange) (*coprocessor.KeyRange, error) {
+	var err error
 	if r != nil {
-		r.Start, r.End = c.decodeRange(r.Start, r.End)
+		r.Start, r.End, err = c.DecodeRange(r.Start, r.End)
 	}
-	return r
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 func (c *codecV2) encodeCopRanges(ranges []*coprocessor.KeyRange) []*coprocessor.KeyRange {
@@ -714,7 +717,7 @@ func (c *codecV2) decodeRegions(regions []*metapb.Region) ([]*metapb.Region, err
 func (c *codecV2) encodeKeys(keys [][]byte) [][]byte {
 	var encodedKeys [][]byte
 	for _, key := range keys {
-		encodedKeys = append(encodedKeys, c.encodeKey(key))
+		encodedKeys = append(encodedKeys, c.EncodeKey(key))
 	}
 	return encodedKeys
 }
@@ -723,7 +726,7 @@ func (c *codecV2) encodeParis(pairs []*kvrpcpb.KvPair) []*kvrpcpb.KvPair {
 	var encodedPairs []*kvrpcpb.KvPair
 	for _, pair := range pairs {
 		p := *pair
-		p.Key = c.encodeKey(p.Key)
+		p.Key = c.EncodeKey(p.Key)
 		encodedPairs = append(encodedPairs, &p)
 	}
 	return encodedPairs
@@ -755,7 +758,7 @@ func (c *codecV2) encodeMutations(mutations []*kvrpcpb.Mutation) []*kvrpcpb.Muta
 	var encodedMutations []*kvrpcpb.Mutation
 	for _, mutation := range mutations {
 		m := *mutation
-		m.Key = c.encodeKey(m.Key)
+		m.Key = c.EncodeKey(m.Key)
 		encodedMutations = append(encodedMutations, &m)
 	}
 	return encodedMutations
@@ -783,7 +786,7 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 			meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
 			if err != nil {
 				// If invalidRegion happens, skip appending it to result instead of return an error.
-				if errors.Is(err, errInvalidRegion) {
+				if errors.Is(err, errKeyOutOfBound) {
 					continue
 				}
 				return nil, err
@@ -898,12 +901,4 @@ func (c *codecV2) decodeLockInfos(locks []*kvrpcpb.LockInfo) ([]*kvrpcpb.LockInf
 		}
 	}
 	return locks, nil
-}
-
-func (c *codecV2) DecodeKey(key []byte) ([]byte, []byte, error) {
-	decode, err := c.decodeKey(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key[:len(key)-len(decode)], decode, nil
 }

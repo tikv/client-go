@@ -191,8 +191,8 @@ func (c *codecV1) EncodeRange(start, end []byte) ([]byte, []byte) {
 	return start, end
 }
 
-func (c *codecV1) DecodeRange(start, end []byte) ([]byte, []byte) {
-	return start, end
+func (c *codecV1) DecodeRange(start, end []byte) ([]byte, []byte, error) {
+	return start, end, nil
 }
 
 func (c *codecV1) DecodeKey(key []byte) ([]byte, []byte, error) {

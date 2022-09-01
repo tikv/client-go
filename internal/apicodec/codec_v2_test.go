@@ -1,7 +1,6 @@
 package apicodec
 
 import (
-	"fmt"
 	"math"
 	"testing"
 
@@ -53,7 +52,6 @@ func (suite *testCodecV2Suite) TestEncodeRequest() {
 
 	r, err := suite.codec.EncodeRequest(req)
 	re.NoError(err)
-	fmt.Printf("key: %s", r.RawGet().Key)
 	re.Equal(append(keyspacePrefix, []byte("key")...), r.RawGet().Key)
 
 	r, err = suite.codec.EncodeRequest(req)
@@ -188,7 +186,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					// Region 2:
 					// keyspace range:	------[------)------
 					// region range:	---[-------------)--
-					// after decode:	      [------)
+					// after decode:	Key out of bound, should be removed.
 					Id:       2,
 					StartKey: codec.memCodec.encodeKey(beforePrefix),
 					EndKey:   codec.memCodec.encodeKey(afterEndKey),
@@ -197,7 +195,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					// Region 3:
 					// keyspace range:	------[------)------
 					// region range:	---[----)-----------
-					// after decode:	      [-)-----
+					// after decode:	Key out of bound, should be removed.
 					Id:       3,
 					StartKey: codec.memCodec.encodeKey(beforePrefix),
 					EndKey:   codec.memCodec.encodeKey(insideLeft),
@@ -215,7 +213,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					// Region 5:
 					// keyspace range:	------[------)------
 					// region range:	---[--)-------------
-					// after decode:	No overlap, should be removed.
+					// after decode:	StartKey out of bound, should be removed.
 					Id:       5,
 					StartKey: codec.memCodec.encodeKey(beforePrefix),
 					EndKey:   codec.memCodec.encodeKey(keyspacePrefix),
@@ -224,7 +222,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					// Region 6:
 					// keyspace range:	------[------)------
 					// region range:	-------------[--)---
-					// after decode:	No overlap, should be removed.
+					// after decode:	EndKey out of bound, should be removed.
 					Id:       6,
 					StartKey: codec.memCodec.encodeKey(keyspaceEndKey),
 					EndKey:   codec.memCodec.encodeKey(afterEndKey),
@@ -241,16 +239,8 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					StartKey: []byte{},
 					EndKey:   []byte{},
 				},
-				{
-					Id:       2,
-					StartKey: []byte{},
-					EndKey:   []byte{},
-				},
-				{
-					Id:       3,
-					StartKey: []byte{},
-					EndKey:   insideLeft[len(keyspacePrefix):],
-				},
+				// Region 2 should be removed.
+				// Region 3 should be removed.
 				{
 					Id:       4,
 					StartKey: insideLeft[len(keyspacePrefix):],
