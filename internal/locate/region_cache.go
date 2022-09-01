@@ -51,7 +51,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stathat/consistent"
@@ -365,7 +364,7 @@ func (r *Region) isValid() bool {
 // purposes only.
 type RegionCache struct {
 	pdClient         pd.Client
-	apiVersion       kvrpcpb.APIVersion
+	codec            apicodec.Codec
 	enableForwarding bool
 
 	mu struct {
@@ -402,9 +401,9 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		pdClient: pdClient,
 	}
 
-	c.apiVersion = kvrpcpb.APIVersion_V1
+	c.codec = apicodec.NewCodecV1(apicodec.ModeRaw)
 	if codecPDClient, ok := pdClient.(*CodecPDClient); ok {
-		c.apiVersion = codecPDClient.GetCodec().GetAPIVersion()
+		c.codec = codecPDClient.GetCodec()
 	}
 
 	c.mu.regions = make(map[RegionVerID]*Region)

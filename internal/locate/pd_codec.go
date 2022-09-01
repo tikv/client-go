@@ -36,6 +36,7 @@ package locate
 
 import (
 	"context"
+
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
