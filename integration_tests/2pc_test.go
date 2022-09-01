@@ -748,6 +748,25 @@ func (s *testCommitterSuite) TestPessimisticLockReturnValues() {
 	s.Equal(lockCtx.Values[string(key2)].Value, key2)
 }
 
+func (s *testCommitterSuite) TestPessimisticLockIfExists() {
+	key := []byte("key")
+	txn := s.begin()
+	s.Nil(txn.Set(key, key))
+	s.Nil(txn.Commit(context.Background()))
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitReturnValues(1)
+	lockCtx.LockOnlyIfExists = true
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+	s.Len(lockCtx.Values, 1)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	memBuf := txn.GetMemBuffer()
+	flags, err := memBuf.GetFlags(key)
+	s.Nil(err)
+	s.Equal(flags.HasLockedValueExists(), true)
+}
+
 func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {
 	key := []byte("key")
 	key2 := []byte("key2")
