@@ -192,7 +192,7 @@ func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats,
 func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
 	return &RegionRequestSender{
 		regionCache: regionCache,
-		apiVersion:  regionCache.apiVersion,
+		apiVersion:  regionCache.codec.GetAPIVersion(),
 		client:      client,
 	}
 }
