@@ -18,8 +18,9 @@ var (
 	// DefaultKeyspaceName is the name of the default keyspace.
 	DefaultKeyspaceName = "DEFAULT"
 
-	rawModePrefix byte = 'r'
-	txnModePrefix byte = 'x'
+	rawModePrefix     byte = 'r'
+	txnModePrefix     byte = 'x'
+	keyspacePrefixLen int  = 4
 
 	// errKeyOutOfBound happens when key to be decoded lies outside the keyspace's range.
 	errKeyOutOfBound = errors.New("given key does not belong to the keyspace.")
@@ -230,7 +231,9 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r.Ranges = c.encodeCopRanges(r.Ranges)
 		newReq.Req = &r
 	case tikvrpc.CmdBatchCop:
+		r := *req.BatchCop()
 		// TODO(iosmanthus): handle cop Request.
+		newReq.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
 		r.Key = c.EncodeRegionKey(r.Key)
@@ -567,7 +570,7 @@ func (c *codecV2) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.decodeKey(memDecoded)
+	return c.DecodeKey(memDecoded)
 }
 
 // EncodeRegionRange first append appropriate prefix to start and end,
@@ -582,8 +585,6 @@ func (c *codecV2) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
 // DecodeRegionRange first decode key from memory compatible format,
 // then pass decode them with DecodeRange to map them to correct range.
 // Note that empty byte slice/ nil slice requires special treatment.
-// It returns invalid region error if region range does not overlap with
-// the range of current keyspace.
 func (c *codecV2) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
 	var err error
 	if len(encodedStart) != 0 {
@@ -627,14 +628,19 @@ func (c *codecV2) encodeRange(start, end []byte, reverse bool) ([]byte, []byte) 
 
 // DecodeRange maps encodedStart and end back to normal start and
 // end without APIv2 prefixes.
-func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
-	var start, end []byte
-	var err error
-	start, err = c.decodeKey(encodedStart)
+func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) (start, end []byte, err error) {
+	start, err = c.DecodeKey(encodedStart)
 	if err != nil {
 		return nil, nil, err
 	}
-	end, err = c.decodeKey(encodedEnd)
+
+	// In the case where range's end is keyspace's EndKey,
+	// return empty bytes directly, skipping decode.
+	if bytes.Equal(encodedEnd, c.endKey) {
+		return start, []byte{}, nil
+	}
+
+	end, err = c.DecodeKey(encodedEnd)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -645,20 +651,10 @@ func (c *codecV2) EncodeKey(key []byte) []byte {
 	return append(c.prefix, key...)
 }
 
-func (c *codecV2) DecodeKey(key []byte) ([]byte, []byte, error) {
-	decode, err := c.decodeKey(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key[:len(key)-len(decode)], decode, nil
-}
-
-func (c *codecV2) decodeKey(encodedKey []byte) ([]byte, error) {
-	if len(encodedKey) < len(c.prefix) {
-		return nil, errors.Errorf("invalid encoded key prefix: %q", encodedKey)
-	}
-	// If the encodedKey does not belong to the keyspace, return error.
-	if bytes.Compare(encodedKey, c.endKey) > 0 || bytes.Compare(encodedKey, c.prefix) < 0 {
+func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
+	// If the given key does not start with the correct prefix,
+	// return out of bound error.
+	if !bytes.HasPrefix(encodedKey, c.prefix) {
 		return nil, errKeyOutOfBound
 	}
 	return encodedKey[len(c.prefix):], nil
@@ -744,7 +740,7 @@ func (c *codecV2) decodePairs(encodedPairs []*kvrpcpb.KvPair) ([]*kvrpcpb.KvPair
 			}
 		}
 		if len(p.Key) > 0 {
-			p.Key, err = c.decodeKey(p.Key)
+			p.Key, err = c.DecodeKey(p.Key)
 			if err != nil {
 				return nil, err
 			}
@@ -770,7 +766,7 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 	}
 	var err error
 	if errInfo := regionError.KeyNotInRegion; errInfo != nil {
-		errInfo.Key, err = c.decodeKey(errInfo.Key)
+		errInfo.Key, err = c.DecodeKey(errInfo.Key)
 		if err != nil {
 			return nil, err
 		}
@@ -811,47 +807,47 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 		}
 	}
 	if keyError.Conflict != nil {
-		keyError.Conflict.Key, err = c.decodeKey(keyError.Conflict.Key)
+		keyError.Conflict.Key, err = c.DecodeKey(keyError.Conflict.Key)
 		if err != nil {
 			return nil, err
 		}
-		keyError.Conflict.Primary, err = c.decodeKey(keyError.Conflict.Primary)
+		keyError.Conflict.Primary, err = c.DecodeKey(keyError.Conflict.Primary)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if keyError.AlreadyExist != nil {
-		keyError.AlreadyExist.Key, err = c.decodeKey(keyError.AlreadyExist.Key)
+		keyError.AlreadyExist.Key, err = c.DecodeKey(keyError.AlreadyExist.Key)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if keyError.Deadlock != nil {
-		keyError.Deadlock.LockKey, err = c.decodeKey(keyError.Deadlock.LockKey)
+		keyError.Deadlock.LockKey, err = c.DecodeKey(keyError.Deadlock.LockKey)
 		if err != nil {
 			return nil, err
 		}
 		for _, wait := range keyError.Deadlock.WaitChain {
-			wait.Key, err = c.decodeKey(wait.Key)
+			wait.Key, err = c.DecodeKey(wait.Key)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
 	if keyError.CommitTsExpired != nil {
-		keyError.CommitTsExpired.Key, err = c.decodeKey(keyError.CommitTsExpired.Key)
+		keyError.CommitTsExpired.Key, err = c.DecodeKey(keyError.CommitTsExpired.Key)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if keyError.TxnNotFound != nil {
-		keyError.TxnNotFound.PrimaryKey, err = c.decodeKey(keyError.TxnNotFound.PrimaryKey)
+		keyError.TxnNotFound.PrimaryKey, err = c.DecodeKey(keyError.TxnNotFound.PrimaryKey)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if keyError.AssertionFailed != nil {
-		keyError.AssertionFailed.Key, err = c.decodeKey(keyError.AssertionFailed.Key)
+		keyError.AssertionFailed.Key, err = c.DecodeKey(keyError.AssertionFailed.Key)
 		if err != nil {
 			return nil, err
 		}
@@ -875,16 +871,16 @@ func (c *codecV2) decodeLockInfo(info *kvrpcpb.LockInfo) (*kvrpcpb.LockInfo, err
 		return nil, nil
 	}
 	var err error
-	info.Key, err = c.decodeKey(info.Key)
+	info.Key, err = c.DecodeKey(info.Key)
 	if err != nil {
 		return nil, err
 	}
-	info.PrimaryLock, err = c.decodeKey(info.PrimaryLock)
+	info.PrimaryLock, err = c.DecodeKey(info.PrimaryLock)
 	if err != nil {
 		return nil, err
 	}
 	for i := range info.Secondaries {
-		info.Secondaries[i], err = c.decodeKey(info.Secondaries[i])
+		info.Secondaries[i], err = c.DecodeKey(info.Secondaries[i])
 		if err != nil {
 			return nil, err
 		}

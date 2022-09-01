@@ -107,6 +107,8 @@ var NewCodecV2 = apicodec.NewCodecV2
 // Codec is responsible for encode/decode requests.
 type Codec = apicodec.Codec
 
+var DecodeKey = apicodec.DecodeKey
+
 // DefaultKeyspaceID is the keyspaceID of the default keyspace.
 var DefaultKeyspaceID = apicodec.DefaultKeyspaceID
 

@@ -1,6 +1,7 @@
 package apicodec
 
 import (
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -41,5 +42,18 @@ type Codec interface {
 	// EncodeKey encode a key.
 	EncodeKey(key []byte) []byte
 	// DecodeKey decode a key.
-	DecodeKey(encoded []byte) (prefix []byte, key []byte, err error)
+	DecodeKey(encoded []byte) ([]byte, error)
+}
+
+func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, error) {
+	switch version {
+	case kvrpcpb.APIVersion_V1:
+		return nil, encoded, nil
+	case kvrpcpb.APIVersion_V2:
+		if len(encoded) < keyspacePrefixLen {
+			return nil, nil, errors.Errorf("invalid V2 key: %s", encoded)
+		}
+		return encoded[:keyspacePrefixLen], encoded[keyspacePrefixLen:], nil
+	}
+	return nil, nil, errors.Errorf("unsupported api version %s", version.String())
 }
