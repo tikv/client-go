@@ -786,7 +786,7 @@ func (txn *KVTxn) GetLcokedCount() int {
 	return txn.lockedCnt
 }
 
-// // GetPrimaryKey is used for testcase
+// GetPrimaryKey is used for testcase
 func (txn *KVTxn) GetPrimaryKey() []byte {
 	return txn.committer.primaryKey
 }
