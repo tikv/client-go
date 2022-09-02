@@ -597,8 +597,16 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		ctx = interceptor.WithRPCInterceptor(ctx, txn.interceptor)
 	}
 
-	if lockCtx.LockOnlyIfExists && !lockCtx.ReturnValues {
-		return errors.New("LockOnlyIfExists is set for LockKeys but ReturnValues is not set")
+	if lockCtx.LockOnlyIfExists {
+		if !lockCtx.ReturnValues {
+			return errors.New("LockOnlyIfExists is set for Lock Context, but ReturnValues is not set")
+		}
+		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
+		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
+		// a LockOnlyIfExists pessmistic lock request.
+		if txn.committer == nil || txn.committer.primaryKey == nil {
+			return errors.New("LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set")
+		}
 	}
 
 	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
@@ -658,7 +666,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	if len(keys) == 0 {
 		return nil
 	}
-	var assignedPrimaryKey bool
 	keys = deduplicateKeys(keys)
 	checkedExistence := false
 	if txn.IsPessimistic() && lockCtx.ForUpdateTS > 0 {
@@ -675,6 +682,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				return err
 			}
 		}
+		var assignedPrimaryKey bool
 		if txn.committer.primaryKey == nil {
 			txn.committer.primaryKey = keys[0]
 			assignedPrimaryKey = true
@@ -765,13 +773,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		}
 
 		if lockCtx.LockOnlyIfExists && valExists == tikv.SetKeyLockedValueNotExists {
-			// If the key is primary and not locked because there is no value on tikv, we should reset primary key.
-			if assignedPrimaryKey &&
-				txn.committer.primaryKey != nil &&
-				bytes.Equal(key, txn.committer.primaryKey) {
-				txn.committer.primaryKey = nil
-				txn.committer.ttlManager.reset()
-			}
 			skipedLockKeys++
 			continue
 		}
