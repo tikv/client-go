@@ -155,14 +155,3 @@ func (e *ErrAssertionFailed) Error() string {
 	return fmt.Sprintf("AssertionFailed { StartTS: %v, Key: %v, Assertion: %v, ExistingStartTS: %v, ExistingCommitTS: %v }",
 		e.StartTS, hex.EncodeToString(e.Key), e.Assertion.String(), e.ExistingStartTS, e.ExistingCommitTS)
 }
-
-// ErrAssertionFailed is returned if any assertion fails on a transaction request.
-type LockIfExistsFailed struct {
-	StartTS uint64
-	Key     []byte
-}
-
-func (e *LockIfExistsFailed) Error() string {
-	return fmt.Sprintf("LockIfExistsFailed {Lock_only_if_exists of a pessimistic lock request is set to true, but return_value is not, start_ts: %v, key: %v}",
-		e.StartTS, hex.EncodeToString(e.Key))
-}

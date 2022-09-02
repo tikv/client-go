@@ -598,10 +598,7 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 	forUpdateTS := lctx.forUpdateTS
 
 	if lctx.LockOnlyIfExists && !lctx.returnValues {
-		return &LockIfExistsFailed{
-			StartTS: startTS,
-			Key:     mutation.Key,
-		}
+		return errors.New("LockOnlyIfExists is set for LockKeys but ReturnValues is not set")
 	}
 
 	startKey := mvccEncode(mutation.Key, lockVer)

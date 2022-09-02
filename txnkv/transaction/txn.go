@@ -658,6 +658,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	if len(keys) == 0 {
 		return nil
 	}
+	var assignedPrimaryKey bool
 	keys = deduplicateKeys(keys)
 	checkedExistence := false
 	if txn.IsPessimistic() && lockCtx.ForUpdateTS > 0 {
@@ -674,7 +675,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				return err
 			}
 		}
-		var assignedPrimaryKey bool
 		if txn.committer.primaryKey == nil {
 			txn.committer.primaryKey = keys[0]
 			assignedPrimaryKey = true
@@ -763,7 +763,15 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				}
 			}
 		}
+
 		if lockCtx.LockOnlyIfExists && valExists == tikv.SetKeyLockedValueNotExists {
+			// If the key is primary and not locked because there is no value on tikv, we should reset primary key.
+			if assignedPrimaryKey &&
+				txn.committer.primaryKey != nil &&
+				bytes.Equal(key, txn.committer.primaryKey) {
+				txn.committer.primaryKey = nil
+				txn.committer.ttlManager.reset()
+			}
 			skipedLockKeys++
 			continue
 		}
@@ -776,6 +784,11 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 // GetLcokedCount is used for testcase
 func (txn *KVTxn) GetLcokedCount() int {
 	return txn.lockedCnt
+}
+
+// // GetPrimaryKey is used for testcase
+func (txn *KVTxn) GetPrimaryKey() []byte {
+	return txn.committer.primaryKey
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
