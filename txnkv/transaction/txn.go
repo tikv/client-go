@@ -599,13 +599,19 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 
 	if lockCtx.LockOnlyIfExists {
 		if !lockCtx.ReturnValues {
-			return errors.New("LockOnlyIfExists is set for Lock Context, but ReturnValues is not set")
+			return &tikverr.ErrLockOnlyIfExistsNoReturnValue{
+				ForUpdateTs: lockCtx.ForUpdateTS,
+				LockKey:     keysInput[0],
+			}
 		}
 		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
 		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
 		// a LockOnlyIfExists pessmistic lock request.
 		if txn.committer == nil || txn.committer.primaryKey == nil {
-			return errors.New("LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set")
+			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
+				ForUpdateTs: lockCtx.ForUpdateTS,
+				LockKey:     keysInput[0],
+			}
 		}
 	}
 

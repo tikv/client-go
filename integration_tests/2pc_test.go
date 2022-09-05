@@ -907,7 +907,8 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn.SetPessimistic(true)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
 	err = txn.LockKeys(context.Background(), lockCtx, key)
-	s.Equal(err.Error(), "LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set")
+	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoPrimaryKey)
+	s.Equal(ok, true)
 	s.Nil(txn.Rollback())
 
 	// When LockOnlyIfExists is true, ReturnValue must be true too.
@@ -917,7 +918,8 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.LockOnlyIfExists = true
 	err = txn.LockKeys(context.Background(), lockCtx, key2)
-	s.Equal(err.Error(), "LockOnlyIfExists is set for Lock Context, but ReturnValues is not set")
+	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoReturnValue)
+	s.Equal(ok, true)
 	s.Nil(txn.Rollback())
 }
 
