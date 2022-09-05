@@ -600,6 +600,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	if lockCtx.LockOnlyIfExists {
 		if !lockCtx.ReturnValues {
 			return &tikverr.ErrLockOnlyIfExistsNoReturnValue{
+				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
 				LockKey:     keysInput[0],
 			}
@@ -609,6 +610,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// a LockOnlyIfExists pessmistic lock request.
 		if txn.committer == nil || txn.committer.primaryKey == nil {
 			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
+				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
 				LockKey:     keysInput[0],
 			}
