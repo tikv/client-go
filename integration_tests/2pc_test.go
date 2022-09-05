@@ -927,9 +927,9 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	lockOneKey(s, txn, key)
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.LockOnlyIfExists = true
-	err = txn.LockKeys(context.Background(), lockCtx, nil)
+	err = txn.LockKeys(context.Background(), lockCtx)
 	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoReturnValue)
-	s.Equal(ok, true)
+	s.Equal(ok, false)
 	s.Nil(txn.Rollback())
 }
 
