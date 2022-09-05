@@ -782,16 +782,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	return nil
 }
 
-// GetLcokedCount is used for testcase
-func (txn *KVTxn) GetLcokedCount() int {
-	return txn.lockedCnt
-}
-
-// GetPrimaryKey is used for testcase
-func (txn *KVTxn) GetPrimaryKey() []byte {
-	return txn.committer.primaryKey
-}
-
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
 func deduplicateKeys(keys [][]byte) [][]byte {
 	if len(keys) == 1 {

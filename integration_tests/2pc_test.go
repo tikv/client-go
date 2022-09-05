@@ -768,7 +768,7 @@ func checkLockKeyResult(s *testCommitterSuite, txn transaction.TxnProbe, lockCtx
 	} else {
 		s.Equal(lockCtx.Values[string(key)].Exists, false)
 	}
-	s.Equal(txn.GetPrimaryKey(), primaryKey)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), primaryKey)
 }
 
 func getMembufferFlags(s *testCommitterSuite, txn transaction.TxnProbe, key []byte, errStr string) kv.KeyFlags {
@@ -825,7 +825,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(lockCtx.Values[string(key)].Value, key)
 	s.Equal(lockCtx.Values[string(key2)].Exists, false)
 	s.Equal(lockCtx.Values[string(key3)].Value, key3)
-	s.Equal(txn.GetPrimaryKey(), key0)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0)
 	memBuf := txn.GetMemBuffer()
 	flags, err := memBuf.GetFlags(key)
 	s.Equal(flags.HasLockedValueExists(), true)
@@ -846,7 +846,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(lockCtx.Values[string(key2)].Exists, false)
 	s.Equal(lockCtx.Values[string(key)].Value, key)
 	s.Equal(lockCtx.Values[string(key3)].Value, key3)
-	s.Equal(txn.GetPrimaryKey(), key0) // key is sorted in LockKeys()
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0) // key is sorted in LockKeys()
 	memBuf = txn.GetMemBuffer()
 	flags, err = memBuf.GetFlags(key)
 	s.Equal(flags.HasLockedValueExists(), true)
@@ -866,7 +866,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	lockCtx = getLockOnlyIfExistsCtx(txn, 2)
 	s.Nil(txn.LockKeys(context.Background(), lockCtx, key3, key))
 	s.Equal(lockCtx.Values[string(key3)].Value, key3)
-	s.Equal(txn.GetPrimaryKey(), key0)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0)
 	memBuf = txn.GetMemBuffer()
 	flags, err = memBuf.GetFlags(key)
 	s.Equal(flags.HasLockedValueExists(), true)
@@ -890,7 +890,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(key0Val.Exists, false)
 	s.Equal(lockCtx.Values[string(key)].Value, key)
 	s.Equal(lockCtx.Values[string(key3)].Value, key3)
-	s.Equal(txn.GetPrimaryKey(), key0)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0)
 	memBuf = txn.GetMemBuffer()
 	flags, err = memBuf.GetFlags(key)
 	s.Equal(flags.HasLockedValueExists(), true)
