@@ -2,6 +2,8 @@ module github.com/tikv/client-go/v2
 
 go 1.18
 
+replace github.com/pingcap/kvproto v0.0.0-20220902075447-f95ac338b331 => github.com/JmPotato/kvproto v0.0.0-20220905025808-aba1e95a84bc
+
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2

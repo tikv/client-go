@@ -2,6 +2,8 @@ module integration_tests
 
 go 1.18
 
+replace github.com/pingcap/kvproto v0.0.0-20220902075447-f95ac338b331 => github.com/JmPotato/kvproto v0.0.0-20220905025808-aba1e95a84bc
+
 require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
