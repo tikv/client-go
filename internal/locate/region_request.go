@@ -1389,6 +1389,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "disk_full"
 	} else if e.GetRecoveryInProgress() != nil {
 		return "recovery_in_progress"
+	} else if e.GetFlashbackInProgress() != nil {
+		return "flashback_in_progress"
 	}
 	return "unknown"
 }
@@ -1444,6 +1446,14 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			return false, err
 		}
 		return false, nil
+	}
+
+	// Since we expect that the workload should be stopped during the flashback progress,
+	// if a request meets the FlashbackInProgress error, it should stop retrying immediately
+	// to avoid unnecessary backoff and potential unexpected data status to the user.
+	if regionErr.GetFlashbackInProgress() != nil {
+		logutil.BgLogger().Debug("tikv reports `FlashbackInProgress`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
+		return false, errors.Errorf("region %d is in flashback progress", regionErr.GetFlashbackInProgress().GetRegionId())
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.
