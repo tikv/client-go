@@ -68,6 +68,15 @@ const (
 	// (a conflict check + a constraint check) in prewrite.
 	flagNeedConstraintCheckInPrewrite
 
+	// A PresumeKNE that should not be unset. It's used by lazy uniqueness checks. So that PresumeKNE flags in previous
+	// statement should not be mistakenly unset.
+	// It's only set when a stmt that sets PresumeKNE finishes.
+	// It's only read together with PresumeKNE
+	// It doesn't have to be persistent, since the only place where it is used is in statement retry where it helps set
+	// the correct assert_not_exist option. The life of the flag begins after stmt which sets the PresumeKNE flag, and
+	// ends when the lock is acquired.
+	flagPreviousPresumeKNE
+
 	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
 )
 
@@ -93,7 +102,7 @@ func (f KeyFlags) HasAssertionFlags() bool {
 
 // HasPresumeKeyNotExists returns whether the associated key use lazy check.
 func (f KeyFlags) HasPresumeKeyNotExists() bool {
-	return f&flagPresumeKNE != 0
+	return f&(flagPresumeKNE|flagPreviousPresumeKNE) != 0
 }
 
 // HasLocked returns whether the associated key has acquired pessimistic lock.
@@ -194,6 +203,8 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin |= flagNeedConstraintCheckInPrewrite
 		case DelNeedConstraintCheckInPrewrite:
 			origin &= ^flagNeedConstraintCheckInPrewrite
+		case SetPreviousPresumeKNE:
+			origin |= flagPreviousPresumeKNE
 		}
 	}
 	return origin
@@ -243,4 +254,6 @@ const (
 	// DelNeedConstraintCheckInPrewrite reverts SetNeedConstraintCheckInPrewrite. This is required when we decide to
 	// make up the pessimistic lock.
 	DelNeedConstraintCheckInPrewrite
+	// SetPreviousPresumeKNE sets flagPreviousPresumeKNE.
+	SetPreviousPresumeKNE
 )
