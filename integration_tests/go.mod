@@ -2,13 +2,11 @@ module integration_tests
 
 go 1.18
 
-replace github.com/pingcap/kvproto v0.0.0-20220902075447-f95ac338b331 => github.com/JmPotato/kvproto v0.0.0-20220905025808-aba1e95a84bc
-
 require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20220423142525-ae43b7f4e5c3
-	github.com/pingcap/kvproto v0.0.0-20220902075447-f95ac338b331
+	github.com/pingcap/kvproto v0.0.0-20220906053631-2e37953b2b43
 	github.com/pingcap/tidb v1.1.0-beta.0.20220902042024-0482b2e83ed2
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.0

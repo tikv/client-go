@@ -2,8 +2,6 @@ module github.com/tikv/client-go/v2
 
 go 1.18
 
-replace github.com/pingcap/kvproto v0.0.0-20220902075447-f95ac338b331 => github.com/JmPotato/kvproto v0.0.0-20220905025808-aba1e95a84bc
-
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
@@ -15,7 +13,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pingcap/failpoint v0.0.0-20210918120811-547c13e3eb00
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20220902075447-f95ac338b331
+	github.com/pingcap/kvproto v0.0.0-20220906053631-2e37953b2b43
 	github.com/pingcap/log v0.0.0-20211215031037-e024ba4eb0ee
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.11.0
