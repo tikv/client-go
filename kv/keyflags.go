@@ -77,7 +77,7 @@ const (
 	// ends when the lock is acquired.
 	flagPreviousPresumeKNE
 
-	persistentFlags = flagKeyLocked | flagKeyLockedValExist
+	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
 )
 
 // HasAssertExist returns whether the key need ensure exists in 2pc.
