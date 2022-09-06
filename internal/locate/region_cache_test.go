@@ -1602,6 +1602,6 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashbackInProgress() {
 	s.NoError(err)
 	reqSend := NewRegionRequestSender(s.cache, nil)
 	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
-	s.NoError(err)
+	s.Error(err)
 	s.False(shouldRetry)
 }

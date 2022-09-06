@@ -1453,7 +1453,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	// to avoid unnecessary backoff and potential unexpected data status to the user.
 	if regionErr.GetFlashbackInProgress() != nil {
 		logutil.BgLogger().Debug("tikv reports `FlashbackInProgress`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
-		return false, nil
+		return false, errors.Errorf("region %d is in flashback progress", regionErr.GetFlashbackInProgress().GetRegionId())
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.
