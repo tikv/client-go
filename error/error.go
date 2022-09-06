@@ -35,6 +35,7 @@
 package error
 
 import (
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -238,8 +239,34 @@ type ErrAssertionFailed struct {
 	*kvrpcpb.AssertionFailed
 }
 
+// ErrLockOnlyIfExistsNoReturnValue is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but `ReturnValues`` is not.
+type ErrLockOnlyIfExistsNoReturnValue struct {
+	StartTS     uint64
+	ForUpdateTs uint64
+	LockKey     []byte
+}
+
+// ErrLockOnlyIfExistsNoPrimaryKey is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but primary key of current transaction is not.
+type ErrLockOnlyIfExistsNoPrimaryKey struct {
+	StartTS     uint64
+	ForUpdateTs uint64
+	LockKey     []byte
+}
+
 func (e *ErrAssertionFailed) Error() string {
 	return fmt.Sprintf("assertion failed { %s }", e.AssertionFailed.String())
+}
+
+func (e *ErrLockOnlyIfExistsNoReturnValue) Error() string {
+	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but ReturnValues is not set, "+
+		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%v}.",
+		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
+}
+
+func (e *ErrLockOnlyIfExistsNoPrimaryKey) Error() string {
+	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set, "+
+		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%s}",
+		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
 }
 
 // ExtractKeyErr extracts a KeyError.
