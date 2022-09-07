@@ -902,11 +902,23 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(txn.GetLcokedCount(), 3)
 	s.Nil(txn.Commit(context.Background()))
 
+	// Primary key is not selected, but here is only one key.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key)
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key)
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLcokedCount(), 1)
+	s.Nil(txn.Commit(context.Background()))
+
 	// When the primary key is not selected, it can't send a lock request with LockOnlyIfExists mode
 	txn = s.begin()
 	txn.SetPessimistic(true)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
-	err = txn.LockKeys(context.Background(), lockCtx, key)
+	err = txn.LockKeys(context.Background(), lockCtx, key, key2)
 	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoPrimaryKey)
 	s.Equal(ok, true)
 	s.Nil(txn.Rollback())
