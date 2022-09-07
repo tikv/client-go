@@ -765,8 +765,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	}
 	if assignedPrimaryKey && lockCtx.LockOnlyIfExists {
 		if len(keys) != 1 {
-			panic("When using the LockOnlyIfExists mode to lock keys, if one of the keys is selected as " +
-				"the primary key, the number of input keys must be one.")
+			panic("LockOnlyIfExists only assigns the primary key when locking only one key")
 		}
 		txn.unsetPrimaryKeyIfNeeded(lockCtx)
 	}
@@ -802,7 +801,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 // locked, in which case we should unset the primary of the transaction.
 // The caller must ensure the conditions below:
 // (1) only one key to be locked (2) primary is not selected before (2) with LockOnlyIfExists
-// Returns true if the primary has been unset.
 func (txn *KVTxn) unsetPrimaryKeyIfNeeded(lockCtx *tikv.LockCtx) {
 	if val, ok := lockCtx.Values[string(txn.committer.primaryKey)]; ok {
 		if !val.Exists {
