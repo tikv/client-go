@@ -2073,6 +2073,7 @@ retry:
 	}
 	newRegionStore := oldRegionStore.clone()
 	newRegionStore.workTiKVIdx = leaderIdx
+	newRegionStore.storeEpochs[leaderIdx] = atomic.LoadUint32(&newRegionStore.stores[leaderIdx].epoch)
 	if !r.compareAndSwapStore(oldRegionStore, newRegionStore) {
 		goto retry
 	}
