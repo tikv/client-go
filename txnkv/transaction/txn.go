@@ -764,11 +764,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		}
 	}
 	if assignedPrimaryKey && lockCtx.LockOnlyIfExists && len(keys) == 1 {
-		if !txn.unsetPrimaryKeyIfNeed(lockCtx) {
-			memBuf.UpdateFlags(keys[0], tikv.SetKeyLocked, tikv.DelNeedCheckExists, tikv.SetKeyLockedValueExists)
-			txn.lockedCnt++
-		}
-		return nil
+		txn.unsetPrimaryKeyIfNeed(lockCtx)
 	}
 	skipedLockKeys := 0
 	for _, key := range keys {

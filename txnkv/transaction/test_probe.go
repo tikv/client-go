@@ -92,7 +92,7 @@ func (txn TxnProbe) GetStartTime() time.Time {
 	return txn.startTime
 }
 
-// GetLockedCount is used for testcase
+// GetLockedCount returns the count of locks acquired by the transaction
 func (txn TxnProbe) GetLockedCount() int {
 	return txn.lockedCnt
 }
