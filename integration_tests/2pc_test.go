@@ -801,7 +801,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	checkLockKeyResult(s, txn, lockCtx, key, key, 1, key0)
 	flags := getMembufferFlags(s, txn, key, "")
 	s.Equal(flags.HasLockedValueExists(), true)
-	s.Equal(txn.GetLcokedCount(), 2)
+	s.Equal(txn.GetLockedCount(), 2)
 	s.Nil(txn.Rollback())
 
 	// Locked "key2" unsuccessfully.
@@ -812,7 +812,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
 	checkLockKeyResult(s, txn, lockCtx, key2, nil, 1, key0)
 	flags = getMembufferFlags(s, txn, key, "not exist")
-	s.Equal(txn.GetLcokedCount(), 1)
+	s.Equal(txn.GetLockedCount(), 1)
 	s.Nil(txn.Rollback())
 
 	// Lock order is key, key2, key3.
@@ -833,7 +833,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(err.Error(), "not exist")
 	flags, err = memBuf.GetFlags(key3)
 	s.Equal(flags.HasLockedValueExists(), true)
-	s.Equal(txn.GetLcokedCount(), 3)
+	s.Equal(txn.GetLockedCount(), 3)
 	s.Nil(txn.Rollback())
 
 	// Lock order is key2, key, key3.
@@ -854,7 +854,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(err.Error(), "not exist")
 	flags, err = memBuf.GetFlags(key3)
 	s.Equal(flags.HasLockedValueExists(), true)
-	s.Equal(txn.GetLcokedCount(), 3)
+	s.Equal(txn.GetLockedCount(), 3)
 	s.Nil(txn.Commit(context.Background()))
 
 	// LockKeys(key2), LockKeys(key3, key).
@@ -874,7 +874,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(err.Error(), "not exist")
 	flags, err = memBuf.GetFlags(key3)
 	s.Equal(flags.HasLockedValueExists(), true)
-	s.Equal(txn.GetLcokedCount(), 3)
+	s.Equal(txn.GetLockedCount(), 3)
 	s.Nil(txn.Commit(context.Background()))
 
 	// Lock order is key0, key, key3.
@@ -899,7 +899,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	s.Equal(flags.HasLocked(), true)
 	flags, err = memBuf.GetFlags(key3)
 	s.Equal(flags.HasLockedValueExists(), true)
-	s.Equal(txn.GetLcokedCount(), 3)
+	s.Equal(txn.GetLockedCount(), 3)
 	s.Nil(txn.Commit(context.Background()))
 
 	// Primary key is not selected, but here is only one key.
@@ -911,7 +911,21 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	memBuf = txn.GetMemBuffer()
 	flags, err = memBuf.GetFlags(key)
 	s.Equal(flags.HasLockedValueExists(), true)
-	s.Equal(txn.GetLcokedCount(), 1)
+	s.Equal(txn.GetLockedCount(), 1)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key)
+	s.Nil(txn.Commit(context.Background()))
+
+	// Primary key is not selected, here is only one key to be locked, and the key doesn't exist.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key2)
+	s.Equal(flags.HasLockedValueExists(), false)
+	s.Equal(txn.GetLockedCount(), 0)
+	s.Nil(txn.GetCommitter().GetPrimaryKey())
+	s.Equal(err.Error(), "not exist")
 	s.Nil(txn.Commit(context.Background()))
 
 	// When the primary key is not selected, it can't send a lock request with LockOnlyIfExists mode

@@ -93,7 +93,7 @@ func (txn TxnProbe) GetStartTime() time.Time {
 }
 
 // GetLcokedCount is used for testcase
-func (txn TxnProbe) GetLcokedCount() int {
+func (txn TxnProbe) GetLockedCount() int {
 	return txn.lockedCnt
 }
 

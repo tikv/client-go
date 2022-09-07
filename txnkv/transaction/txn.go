@@ -665,7 +665,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
 		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
 		// a LockOnlyIfExists pessmistic lock request.
-		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys) != 1 {
+		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys) > 1 {
 			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
 				StartTS:     txn.startTS,
 				ForUpdateTs: lockCtx.ForUpdateTS,
@@ -675,6 +675,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	}
 	keys = deduplicateKeys(keys)
 	checkedExistence := false
+	var assignedPrimaryKey bool
 	if txn.IsPessimistic() && lockCtx.ForUpdateTS > 0 {
 		if txn.committer == nil {
 			// sessionID is used for log.
@@ -689,7 +690,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				return err
 			}
 		}
-		var assignedPrimaryKey bool
 		if txn.committer.primaryKey == nil {
 			txn.committer.primaryKey = keys[0]
 			assignedPrimaryKey = true
@@ -763,6 +763,13 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			checkedExistence = true
 		}
 	}
+	if assignedPrimaryKey && lockCtx.LockOnlyIfExists && len(keys) == 1 {
+		if !txn.unsetPrimaryKeyIfNeed(lockCtx) {
+			memBuf.UpdateFlags(keys[0], tikv.SetKeyLocked, tikv.DelNeedCheckExists, tikv.SetKeyLockedValueExists)
+			txn.lockedCnt += 1
+		}
+		return nil
+	}
 	skipedLockKeys := 0
 	for _, key := range keys {
 		valExists := tikv.SetKeyLockedValueExists
@@ -787,6 +794,23 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	}
 	txn.lockedCnt += len(keys) - skipedLockKeys
 	return nil
+}
+
+// unsetPrimaryKeyIfNeed is used to unset pk of current transaction.
+// When lock only one key with LockOnlyIfExists flag, this key is selected as pk, if the key doesn't
+// exist on TiKV, it doesn't generate a lock for this key, we should unset this pk for this scene.
+// The caller should ensure bellow conditions.
+// (1) only one key to be locked (2) pk is not selected before (2) with LockOnlyIfExists
+// retun true means the pk has been unseted
+func (txn *KVTxn) unsetPrimaryKeyIfNeed(lockCtx *tikv.LockCtx) bool {
+	if val, ok := lockCtx.Values[string(txn.committer.primaryKey)]; ok {
+		if !val.Exists {
+			txn.committer.primaryKey = nil
+			txn.committer.ttlManager.reset()
+			return true
+		}
+	}
+	return false
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
