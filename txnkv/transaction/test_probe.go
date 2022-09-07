@@ -92,6 +92,11 @@ func (txn TxnProbe) GetStartTime() time.Time {
 	return txn.startTime
 }
 
+// GetLcokedCount is used for testcase
+func (txn TxnProbe) GetLcokedCount() int {
+	return txn.lockedCnt
+}
+
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	c, err := newTwoPhaseCommitter(txn, sessionID)
 	if err != nil {
