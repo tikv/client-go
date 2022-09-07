@@ -800,7 +800,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 // When locking only one key with LockOnlyIfExists flag, the key will be selected as primary if
 // it's the first lock of the transaction. If the key doesn't exist on TiKV, the key won't be
 // locked, in which case we should unset the primary of the transaction.
-// The caller must ensure the conditions bellow:
+// The caller must ensure the conditions below:
 // (1) only one key to be locked (2) primary is not selected before (2) with LockOnlyIfExists
 // Returns true if the primary has been unset.
 func (txn *KVTxn) unsetPrimaryKeyIfNeeded(lockCtx *tikv.LockCtx) {
