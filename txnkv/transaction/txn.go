@@ -763,8 +763,12 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			checkedExistence = true
 		}
 	}
-	if assignedPrimaryKey && lockCtx.LockOnlyIfExists && len(keys) == 1 {
-		txn.unsetPrimaryKeyIfNeed(lockCtx)
+	if assignedPrimaryKey && lockCtx.LockOnlyIfExists {
+		if len(keys) != 1 {
+			panic("When using the LockOnlyIfExists mode to lock keys, if one of the keys is selected as " +
+				"the primary key, the number of input keys must be one.")
+		}
+		txn.unsetPrimaryKeyIfNeeded(lockCtx)
 	}
 	skipedLockKeys := 0
 	for _, key := range keys {
@@ -792,22 +796,20 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	return nil
 }
 
-// unsetPrimaryKeyIfNeed is used to unset pk of the transaction after performing LockOnlyIfExists.
+// unsetPrimaryKeyIfNeed is used to unset primary key of the transaction after performing LockOnlyIfExists.
 // When locking only one key with LockOnlyIfExists flag, the key will be selected as primary if
 // it's the first lock of the transaction. If the key doesn't exist on TiKV, the key won't be
 // locked, in which case we should unset the primary of the transaction.
-// The caller must ensure bellow conditions:
+// The caller must ensure the conditions bellow:
 // (1) only one key to be locked (2) primary is not selected before (2) with LockOnlyIfExists
 // Returns true if the primary has been unset.
-func (txn *KVTxn) unsetPrimaryKeyIfNeed(lockCtx *tikv.LockCtx) bool {
+func (txn *KVTxn) unsetPrimaryKeyIfNeeded(lockCtx *tikv.LockCtx) {
 	if val, ok := lockCtx.Values[string(txn.committer.primaryKey)]; ok {
 		if !val.Exists {
 			txn.committer.primaryKey = nil
 			txn.committer.ttlManager.reset()
-			return true
 		}
 	}
-	return false
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.
