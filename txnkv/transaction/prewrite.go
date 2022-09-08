@@ -395,7 +395,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if lock.TxnID > c.startTS && !c.isPessimistic {
-				return tikverr.NewErrWriteConfictWithArgs(c.startTS, lock.TxnID, 0, lock.Key)
+				return tikverr.NewErrWriteConflictWithArgs(c.startTS, lock.TxnID, 0, lock.Key, kvrpcpb.WriteConflict_Optimistic)
 			}
 			locks = append(locks, lock)
 		}

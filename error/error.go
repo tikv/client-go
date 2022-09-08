@@ -155,13 +155,14 @@ func IsErrWriteConflict(err error) bool {
 	return errors.As(err, &e)
 }
 
-//NewErrWriteConfictWithArgs generates an ErrWriteConflict with args.
-func NewErrWriteConfictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte) *ErrWriteConflict {
+// NewErrWriteConflictWithArgs generates an ErrWriteConflict with args.
+func NewErrWriteConflictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte, reason kvrpcpb.WriteConflict_Reason) *ErrWriteConflict {
 	conflict := kvrpcpb.WriteConflict{
 		StartTs:          startTs,
 		ConflictTs:       conflictTs,
 		Key:              key,
 		ConflictCommitTs: conflictCommitTs,
+		Reason:           reason,
 	}
 	return &ErrWriteConflict{WriteConflict: &conflict}
 }
