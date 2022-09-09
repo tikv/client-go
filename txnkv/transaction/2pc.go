@@ -1400,6 +1400,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	// if lazy uniqueness check is enabled in TiDB (@@constraint_check_in_place_pessimistic=0), for_update_ts might be
 	// zero for a pessimistic transaction. We set it to the start_ts to force the PrewritePessimistic path in TiKV.
+	// TODO: can we simply set for_update_ts = start_ts for all pessimistic transactions whose for_update_ts=0?
 	if c.forUpdateTS == 0 {
 		for i := 0; i < c.mutations.Len(); i++ {
 			if c.mutations.NeedConstraintCheckInPrewrite(i) {
