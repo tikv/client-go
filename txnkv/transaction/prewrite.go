@@ -75,6 +75,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
+
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
 		if m.IsAssertExists(i) {

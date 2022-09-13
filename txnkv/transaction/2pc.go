@@ -1398,6 +1398,18 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		c.hasTriedOnePC = true
 	}
 
+	// if lazy uniqueness check is enabled in TiDB (@@constraint_check_in_place_pessimistic=0), for_update_ts might be
+	// zero for a pessimistic transaction. We set it to the start_ts to force the PrewritePessimistic path in TiKV.
+	// TODO: can we simply set for_update_ts = start_ts for all pessimistic transactions whose for_update_ts=0?
+	if c.forUpdateTS == 0 {
+		for i := 0; i < c.mutations.Len(); i++ {
+			if c.mutations.NeedConstraintCheckInPrewrite(i) {
+				c.forUpdateTS = c.startTS
+				break
+			}
+		}
+	}
+
 	// TODO(youjiali1995): It's better to use different maxSleep for different operations
 	// and distinguish permanent errors from temporary errors, for example:
 	//   - If all PDs are down, all requests to PD will fail due to network error.
@@ -1442,6 +1454,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 
 	start := time.Now()
+
 	err = c.prewriteMutations(bo, c.mutations)
 
 	if err != nil {
