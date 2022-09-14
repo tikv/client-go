@@ -86,6 +86,7 @@ func (actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observe
 func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
+	c.txn.GetMemBuffer().RLock()
 	for i := 0; i < m.Len(); i++ {
 		mut := &kvrpcpb.Mutation{
 			Op:  kvrpcpb.Op_PessimisticLock,
@@ -96,6 +97,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		}
 		mutations[i] = mut
 	}
+	c.txn.GetMemBuffer().RUnlock()
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
 		Mutations:        mutations,
 		PrimaryLock:      c.primary(),

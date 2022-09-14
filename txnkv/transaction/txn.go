@@ -627,7 +627,10 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			}
 		}
 	}()
+
 	memBuf := txn.us.GetMemBuffer()
+	// Avoid data race with concurrent updates to the memBuf
+	memBuf.RLock()
 	for _, key := range keysInput {
 		// The value of lockedMap is only used by pessimistic transactions.
 		var valueExist, locked, checkKeyExists bool
@@ -642,6 +645,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			if checkKeyExists && valueExist {
 				alreadyExist := kvrpcpb.AlreadyExist{Key: key}
 				e := &tikverr.ErrKeyExist{AlreadyExist: &alreadyExist}
+				memBuf.RUnlock()
 				return txn.committer.extractKeyExistsErr(e)
 			}
 		}
@@ -651,6 +655,8 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			lockCtx.Values[string(key)] = tikv.ReturnedValue{AlreadyLocked: true}
 		}
 	}
+	memBuf.RUnlock()
+
 	if len(keys) == 0 {
 		return nil
 	}
@@ -717,10 +723,17 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			atomic.CompareAndSwapUint32(lockCtx.Killed, 1, 0)
 		}
 		if err != nil {
+			var unmarkKeys [][]byte
+			// Avoid data race with concurrent updates to the memBuf
+			memBuf.RLock()
 			for _, key := range keys {
 				if txn.us.HasPresumeKeyNotExists(key) {
-					txn.us.UnmarkPresumeKeyNotExists(key)
+					unmarkKeys = append(unmarkKeys, key)
 				}
+			}
+			memBuf.RUnlock()
+			for _, key := range unmarkKeys {
+				txn.us.UnmarkPresumeKeyNotExists(key)
 			}
 			keyMayBeLocked := !(tikverr.IsErrWriteConflict(err) || tikverr.IsErrKeyExist(err))
 			// If there is only 1 key and lock fails, no need to do pessimistic rollback.
