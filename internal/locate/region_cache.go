@@ -146,7 +146,7 @@ type regionStore struct {
 	// accessIndex[tiKVOnly][proxyTiKVIdx] is the index of TiKV that can forward requests to the leader in stores, -1 means not using proxy.
 	proxyTiKVIdx AccessIndex
 	// accessIndex[tiFlashOnly][workTiFlashIdx] is the index of the current working TiFlash in stores.
-	workTiFlashIdx int32
+	workTiFlashIdx atomic2.Int32
 	// buckets is not accurate and it can change even if the region is not changed.
 	// It can be stale and buckets keys can be out of the region range.
 	buckets *metapb.Buckets
@@ -175,13 +175,13 @@ func (r *regionStore) clone() *regionStore {
 	storeEpochs := make([]uint32, len(r.stores))
 	copy(storeEpochs, r.storeEpochs)
 	rs := &regionStore{
-		workTiFlashIdx: r.workTiFlashIdx,
-		proxyTiKVIdx:   r.proxyTiKVIdx,
-		workTiKVIdx:    r.workTiKVIdx,
-		stores:         r.stores,
-		storeEpochs:    storeEpochs,
-		buckets:        r.buckets,
+		proxyTiKVIdx: r.proxyTiKVIdx,
+		workTiKVIdx:  r.workTiKVIdx,
+		stores:       r.stores,
+		storeEpochs:  storeEpochs,
+		buckets:      r.buckets,
 	}
+	rs.workTiFlashIdx.Store(r.workTiFlashIdx.Load())
 	for i := 0; i < int(numAccessMode); i++ {
 		rs.accessIndex[i] = make([]int, len(r.accessIndex[i]))
 		copy(rs.accessIndex[i], r.accessIndex[i])
@@ -242,12 +242,11 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	// regionStore pull used store from global store map
 	// to avoid acquire storeMu in later access.
 	rs := &regionStore{
-		workTiKVIdx:    0,
-		proxyTiKVIdx:   -1,
-		workTiFlashIdx: 0,
-		stores:         make([]*Store, 0, len(r.meta.Peers)),
-		storeEpochs:    make([]uint32, 0, len(r.meta.Peers)),
-		buckets:        pdRegion.Buckets,
+		workTiKVIdx:  0,
+		proxyTiKVIdx: -1,
+		stores:       make([]*Store, 0, len(r.meta.Peers)),
+		storeEpochs:  make([]uint32, 0, len(r.meta.Peers)),
+		buckets:      pdRegion.Buckets,
 	}
 
 	leader := pdRegion.Leader
@@ -706,9 +705,9 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	// sIdx is for load balance of TiFlash store.
 	var sIdx int
 	if loadBalance {
-		sIdx = int(atomic.AddInt32(&regionStore.workTiFlashIdx, 1))
+		sIdx = int(regionStore.workTiFlashIdx.Add(1))
 	} else {
-		sIdx = int(atomic.LoadInt32(&regionStore.workTiFlashIdx))
+		sIdx = int(regionStore.workTiFlashIdx.Load())
 	}
 	for i := 0; i < regionStore.accessStoreNum(tiFlashOnly); i++ {
 		accessIdx := AccessIndex((sIdx + i) % regionStore.accessStoreNum(tiFlashOnly))
@@ -725,7 +724,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			_, err := store.reResolve(c)
 			tikverr.Log(err)
 		}
-		atomic.StoreInt32(&regionStore.workTiFlashIdx, int32(accessIdx))
+		regionStore.workTiFlashIdx.Store(int32(accessIdx))
 		peer := cachedRegion.meta.Peers[storeIdx]
 		storeFailEpoch := atomic.LoadUint32(&store.epoch)
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
@@ -1302,7 +1301,7 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 		oldRegion.invalidate(Other)
 		// Don't refresh TiFlash work idx for region. Otherwise, it will always goto a invalid store which
 		// is under transferring regions.
-		store.workTiFlashIdx = atomic.LoadInt32(&oldRegionStore.workTiFlashIdx)
+		store.workTiFlashIdx.Store(oldRegionStore.workTiFlashIdx.Load())
 
 		// Keep the buckets information if needed.
 		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
@@ -2073,6 +2072,7 @@ retry:
 	}
 	newRegionStore := oldRegionStore.clone()
 	newRegionStore.workTiKVIdx = leaderIdx
+	newRegionStore.storeEpochs[leaderIdx] = atomic.LoadUint32(&newRegionStore.stores[leaderIdx].epoch)
 	if !r.compareAndSwapStore(oldRegionStore, newRegionStore) {
 		goto retry
 	}
@@ -2082,7 +2082,7 @@ retry:
 func (r *regionStore) switchNextFlashPeer(rr *Region, currentPeerIdx AccessIndex) {
 	nextIdx := (currentPeerIdx + 1) % AccessIndex(r.accessStoreNum(tiFlashOnly))
 	newRegionStore := r.clone()
-	newRegionStore.workTiFlashIdx = int32(nextIdx)
+	newRegionStore.workTiFlashIdx.Store(int32(nextIdx))
 	rr.compareAndSwapStore(r, newRegionStore)
 }
 

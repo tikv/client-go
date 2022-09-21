@@ -63,7 +63,7 @@ type ConfigProbe struct{}
 
 // GetScanBatchSize returns the batch size to scan ranges.
 func (c ConfigProbe) GetScanBatchSize() int {
-	return defaultScanBatchSize
+	return DefaultScanBatchSize
 }
 
 // GetGetMaxBackoff returns the max sleep for get command.

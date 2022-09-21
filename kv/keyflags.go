@@ -62,7 +62,22 @@ const (
 	flagAssertExist
 	flagAssertNotExist
 
-	persistentFlags = flagKeyLocked | flagKeyLockedValExist
+	// It marks the conflict check of the key is postponed to prewrite. This is only used in pessimistic transactions.
+	// When the key gets locked (and the existence is checked), the flag should be removed.
+	// It should only be applied to keys with PresumeNotExist, so that an in-place constraint check becomes
+	// (a conflict check + a constraint check) in prewrite.
+	flagNeedConstraintCheckInPrewrite
+
+	// A PresumeKNE that should not be unset. It's used by lazy uniqueness checks. So that PresumeKNE flags in previous
+	// statement should not be mistakenly unset.
+	// It's only set when a stmt that sets PresumeKNE finishes.
+	// It's only read together with PresumeKNE
+	// It doesn't have to be persistent, since the only place where it is used is in statement retry where it helps set
+	// the correct assert_not_exist option. The life of the flag begins after stmt which sets the PresumeKNE flag, and
+	// ends when the lock is acquired.
+	flagPreviousPresumeKNE
+
+	persistentFlags = flagKeyLocked | flagKeyLockedValExist | flagNeedConstraintCheckInPrewrite
 )
 
 // HasAssertExist returns whether the key need ensure exists in 2pc.
@@ -87,7 +102,7 @@ func (f KeyFlags) HasAssertionFlags() bool {
 
 // HasPresumeKeyNotExists returns whether the associated key use lazy check.
 func (f KeyFlags) HasPresumeKeyNotExists() bool {
-	return f&flagPresumeKNE != 0
+	return f&(flagPresumeKNE|flagPreviousPresumeKNE) != 0
 }
 
 // HasLocked returns whether the associated key has acquired pessimistic lock.
@@ -125,6 +140,11 @@ func (f KeyFlags) HasReadable() bool {
 	return f&flagReadable != 0
 }
 
+// HasNeedConstraintCheckInPrewrite returns whether the key needs to check conflict in prewrite.
+func (f KeyFlags) HasNeedConstraintCheckInPrewrite() bool {
+	return f&flagNeedConstraintCheckInPrewrite != 0
+}
+
 // AndPersistent returns the value of current flags&persistentFlags
 func (f KeyFlags) AndPersistent() KeyFlags {
 	return f & persistentFlags
@@ -153,10 +173,12 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 			origin &= ^flagNeedLocked
 		case SetKeyLockedValueExists:
 			origin |= flagKeyLockedValExist
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		case DelNeedCheckExists:
 			origin &= ^flagNeedCheckExists
 		case SetKeyLockedValueNotExists:
 			origin &= ^flagKeyLockedValExist
+			origin &= ^flagNeedConstraintCheckInPrewrite
 		case SetPrewriteOnly:
 			origin |= flagPrewriteOnly
 		case SetIgnoredIn2PC:
@@ -177,6 +199,12 @@ func ApplyFlagsOps(origin KeyFlags, ops ...FlagsOp) KeyFlags {
 		case SetAssertNone:
 			origin &= ^flagAssertExist
 			origin &= ^flagAssertNotExist
+		case SetNeedConstraintCheckInPrewrite:
+			origin |= flagNeedConstraintCheckInPrewrite
+		case DelNeedConstraintCheckInPrewrite:
+			origin &= ^flagNeedConstraintCheckInPrewrite
+		case SetPreviousPresumeKNE:
+			origin |= flagPreviousPresumeKNE
 		}
 	}
 	return origin
@@ -221,4 +249,11 @@ const (
 	SetAssertUnknown
 	// SetAssertNone cleans up the key's assert.
 	SetAssertNone
+	// SetNeedConstraintCheckInPrewrite marks the key needs to check conflict in prewrite.
+	SetNeedConstraintCheckInPrewrite
+	// DelNeedConstraintCheckInPrewrite reverts SetNeedConstraintCheckInPrewrite. This is required when we decide to
+	// make up the pessimistic lock.
+	DelNeedConstraintCheckInPrewrite
+	// SetPreviousPresumeKNE sets flagPreviousPresumeKNE.
+	SetPreviousPresumeKNE
 )

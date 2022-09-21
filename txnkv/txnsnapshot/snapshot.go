@@ -65,7 +65,8 @@ import (
 )
 
 const (
-	defaultScanBatchSize = 256
+	// DefaultScanBatchSize is the default scan batch size.
+	DefaultScanBatchSize = 256
 	batchGetSize         = 5120
 	maxTimestamp         = math.MaxUint64
 )
@@ -160,7 +161,7 @@ func NewTiKVSnapshot(store kvstore, ts uint64, replicaReadSeed uint32) *KVSnapsh
 	return &KVSnapshot{
 		store:           store,
 		version:         ts,
-		scanBatchSize:   defaultScanBatchSize,
+		scanBatchSize:   DefaultScanBatchSize,
 		priority:        txnutil.PriorityNormal,
 		vars:            kv.DefaultVars,
 		replicaReadSeed: replicaReadSeed,
