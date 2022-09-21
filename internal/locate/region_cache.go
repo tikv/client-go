@@ -2449,9 +2449,8 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 			MinConnectTimeout: 5 * time.Second,
 		}),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                time.Duration(keepAlive) * time.Second,
-			Timeout:             time.Duration(keepAliveTimeout) * time.Second,
-			PermitWithoutStream: true,
+			Time:    time.Duration(keepAlive) * time.Second,
+			Timeout: time.Duration(keepAliveTimeout) * time.Second,
 		}),
 	)
 	if err != nil {
