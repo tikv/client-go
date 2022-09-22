@@ -230,10 +230,6 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.Cop()
 		r.Ranges = c.encodeCopRanges(r.Ranges)
 		newReq.Req = &r
-	case tikvrpc.CmdBatchCop:
-		r := *req.BatchCop()
-		// TODO(iosmanthus): handle cop Request.
-		newReq.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
 		r.Key = c.EncodeRegionKey(r.Key)
