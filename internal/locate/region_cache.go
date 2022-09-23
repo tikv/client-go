@@ -688,7 +688,7 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 
 // GetTiFlashRPCContext returns RPCContext for a region must access flash store. If it returns nil, the region
 // must be out of date and already dropped from cache or not flash store found.
-// `loadBalance` is an option. For MPP and batch cop, it is pointless and might cause try the failed store repeatly.
+// `loadBalance` is an option. For batch cop, it is pointless and might cause try the failed store repeatly.
 func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool) (*RPCContext, error) {
 	ts := time.Now().Unix()
 
