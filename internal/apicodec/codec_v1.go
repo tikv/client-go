@@ -130,11 +130,6 @@ func (c *codecV1) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 }
 
 func (c *codecV1) EncodeRegionKey(key []byte) []byte {
-	// In the context of region key, nil or empty slice has the special meaning of no bound,
-	// so we skip encoding if given key is empty.
-	if len(key) == 0 {
-		return key
-	}
 	return c.memCodec.encodeKey(key)
 }
 
