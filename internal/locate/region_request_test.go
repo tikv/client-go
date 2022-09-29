@@ -474,6 +474,10 @@ func (s *mockTikvGrpcServer) KvFlashbackToVersion(context.Context, *kvrpcpb.Flas
 	return nil, errors.New("unreachable")
 }
 
+func (s *mockTikvGrpcServer) KvPrepareFlashbackToVersion(context.Context, *kvrpcpb.PrepareFlashbackToVersionRequest) (*kvrpcpb.PrepareFlashbackToVersionResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCanceled() {
 	// prepare a mock tikv grpc server
 	addr := "localhost:56341"
