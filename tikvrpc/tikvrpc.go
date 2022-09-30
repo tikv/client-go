@@ -73,6 +73,7 @@ const (
 	CmdCheckTxnStatus
 	CmdCheckSecondaryLocks
 	CmdFlashbackToVersion
+	CmdPrepareFlashbackToVersion
 
 	CmdRawGet CmdType = 256 + iota
 	CmdRawBatchGet
@@ -206,6 +207,8 @@ func (t CmdType) String() string {
 		return "LockWaitInfo"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
+	case CmdPrepareFlashbackToVersion:
+		return "PrepareFlashbackToVersion"
 	}
 	return "Unknown"
 }
@@ -519,6 +522,11 @@ func (req *Request) FlashbackToVersion() *kvrpcpb.FlashbackToVersionRequest {
 	return req.Req.(*kvrpcpb.FlashbackToVersionRequest)
 }
 
+// PrepareFlashbackToVersion returns PrepareFlashbackToVersion in request.
+func (req *Request) PrepareFlashbackToVersion() *kvrpcpb.PrepareFlashbackToVersionRequest {
+	return req.Req.(*kvrpcpb.PrepareFlashbackToVersionRequest)
+}
+
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
 func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Request {
 	switch req.Type {
@@ -576,6 +584,8 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_TxnHeartBeat{TxnHeartBeat: req.TxnHeartBeat()}}
 	case CmdFlashbackToVersion:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_FlashbackToVersion{FlashbackToVersion: req.FlashbackToVersion()}}
+	case CmdPrepareFlashbackToVersion:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_PrepareFlashbackToVersion{PrepareFlashbackToVersion: req.PrepareFlashbackToVersion()}}
 	}
 	return nil
 }
@@ -615,6 +625,8 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 		return &Response{Resp: res.DeleteRange}, nil
 	case *tikvpb.BatchCommandsResponse_Response_FlashbackToVersion:
 		return &Response{Resp: res.FlashbackToVersion}, nil
+	case *tikvpb.BatchCommandsResponse_Response_PrepareFlashbackToVersion:
+		return &Response{Resp: res.PrepareFlashbackToVersion}, nil
 	case *tikvpb.BatchCommandsResponse_Response_RawGet:
 		return &Response{Resp: res.RawGet}, nil
 	case *tikvpb.BatchCommandsResponse_Response_RawBatchGet:
@@ -767,6 +779,8 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.CheckSecondaryLocks().Context = ctx
 	case CmdFlashbackToVersion:
 		req.FlashbackToVersion().Context = ctx
+	case CmdPrepareFlashbackToVersion:
+		req.PrepareFlashbackToVersion().Context = ctx
 	default:
 		return errors.Errorf("invalid request type %v", req.Type)
 	}
@@ -916,6 +930,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		}
 	case CmdFlashbackToVersion:
 		p = &kvrpcpb.FlashbackToVersionResponse{
+			RegionError: e,
+		}
+	case CmdPrepareFlashbackToVersion:
+		p = &kvrpcpb.PrepareFlashbackToVersionResponse{
 			RegionError: e,
 		}
 	default:
@@ -1074,6 +1092,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.Compact(ctx, req.Compact())
 	case CmdFlashbackToVersion:
 		resp.Resp, err = client.KvFlashbackToVersion(ctx, req.FlashbackToVersion())
+	case CmdPrepareFlashbackToVersion:
+		resp.Resp, err = client.KvPrepareFlashbackToVersion(ctx, req.PrepareFlashbackToVersion())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1236,7 +1256,8 @@ func (req *Request) IsTxnWriteRequest() bool {
 		req.Type == CmdCleanup ||
 		req.Type == CmdTxnHeartBeat ||
 		req.Type == CmdResolveLock ||
-		req.Type == CmdFlashbackToVersion {
+		req.Type == CmdFlashbackToVersion ||
+		req.Type == CmdPrepareFlashbackToVersion {
 		return true
 	}
 	return false
