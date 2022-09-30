@@ -191,9 +191,8 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				MinConnectTimeout: a.dialTimeout,
 			}),
 			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:                time.Duration(keepAlive) * time.Second,
-				Timeout:             time.Duration(keepAliveTimeout) * time.Second,
-				PermitWithoutStream: true,
+				Time:    time.Duration(keepAlive) * time.Second,
+				Timeout: time.Duration(keepAliveTimeout) * time.Second,
 			}),
 		)
 		cancel()
