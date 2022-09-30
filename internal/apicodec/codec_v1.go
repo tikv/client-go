@@ -36,8 +36,10 @@ func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 
 func (c *codecV1) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
 	regionError, err := resp.GetRegionError()
+	// If GetRegionError returns error, it means the response does not contain region error to decode,
+	// therefore we skip decoding and return the response as is.
 	if err != nil {
-		return nil, err
+		return resp, nil
 	}
 	decodeRegionError, err := c.decodeRegionError(regionError)
 	if err != nil {
