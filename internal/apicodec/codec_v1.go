@@ -141,7 +141,10 @@ func (c *codecV1) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
 }
 
 func (c *codecV1) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
-	return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
+	if len(end) > 0 {
+		return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
+	}
+	return c.EncodeRegionKey(start), end
 }
 
 func (c *codecV1) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
