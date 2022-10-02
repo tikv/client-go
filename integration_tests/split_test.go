@@ -39,6 +39,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
@@ -138,6 +139,18 @@ type mockPDClient struct {
 	sync.RWMutex
 	client pd.Client
 	stop   bool
+}
+
+func (c *mockPDClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
 }
 
 func (c *mockPDClient) LoadGlobalConfig(ctx context.Context, names []string) ([]pd.GlobalConfigItem, error) {
