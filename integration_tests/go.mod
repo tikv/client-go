@@ -87,3 +87,9 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/pingcap/tidb => github.com/tidbcloud/tidb-cse v0.0.0-20220930022629-9267a2d8d1ce
+
+replace github.com/pingcap/tidb/parser => github.com/tidbcloud/tidb-cse/parser v0.0.0-20220930022629-9267a2d8d1ce
+
+replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20220927084729-b21b9fd75149
