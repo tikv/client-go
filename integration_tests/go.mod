@@ -11,8 +11,8 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.7.2-0.20220504104629-106ec21d14df
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.1-0.20220627063500-947d923945fd
-	github.com/tikv/pd/client v0.0.0-20220307081149-841fa61e9710
+	github.com/tikv/client-go/v2 v2.0.1-0.20220809034808-2ed2113d1090
+	github.com/tikv/pd/client v0.0.0-20220725055910-7187a7ab72db
 	go.uber.org/goleak v1.1.12
 )
 
@@ -35,7 +35,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/btree v1.1.2 // indirect
-	github.com/google/uuid v1.1.2 // indirect
+	github.com/google/uuid v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/klauspost/compress v1.15.4 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
@@ -49,7 +49,7 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.0 // indirect
 	github.com/pingcap/tidb/parser v0.0.0-20220706093502-562b03368993 // indirect
-	github.com/pingcap/tipb v0.0.0-20220706024432-7be3cc83a7d5 // indirect
+	github.com/pingcap/tipb v0.0.0-20220718022156-3e2483c20a9e // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_golang v1.12.2 // indirect
@@ -58,6 +58,7 @@ require (
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
 	github.com/shirou/gopsutil/v3 v3.22.4 // indirect
+	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stathat/consistent v1.0.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
@@ -72,14 +73,14 @@ require (
 	go.uber.org/multierr v1.8.0 // indirect
 	go.uber.org/zap v1.21.0 // indirect
 	golang.org/x/exp v0.0.0-20220428152302-39d4317da171 // indirect
-	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd // indirect
+	golang.org/x/net v0.0.0-20220412020605-290c469a71a5 // indirect
 	golang.org/x/sync v0.0.0-20220513210516-0976fa681c29 // indirect
 	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/time v0.0.0-20220224211638-0e9765cccd65 // indirect
 	golang.org/x/tools v0.1.11 // indirect
-	google.golang.org/genproto v0.0.0-20220216160803-4663080d8bc8 // indirect
-	google.golang.org/grpc v1.44.0 // indirect
+	google.golang.org/genproto v0.0.0-20220324131243-acbaeb5b85eb // indirect
+	google.golang.org/grpc v1.45.0 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
@@ -87,4 +88,8 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/glorv/tidb v1.1.0-beta.0.20220706085636-88fb3fa642bb
+replace github.com/pingcap/tidb => github.com/tidbcloud/tidb-cse v0.0.0-20220930022629-9267a2d8d1ce
+
+replace github.com/pingcap/tidb/parser => github.com/tidbcloud/tidb-cse/parser v0.0.0-20220930022629-9267a2d8d1ce
+
+replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20220927084729-b21b9fd75149

@@ -36,8 +36,10 @@ func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 
 func (c *codecV1) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
 	regionError, err := resp.GetRegionError()
+	// If GetRegionError returns error, it means the response does not contain region error to decode,
+	// therefore we skip decoding and return the response as is.
 	if err != nil {
-		return nil, err
+		return resp, nil
 	}
 	decodeRegionError, err := c.decodeRegionError(regionError)
 	if err != nil {
@@ -130,11 +132,6 @@ func (c *codecV1) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 }
 
 func (c *codecV1) EncodeRegionKey(key []byte) []byte {
-	// In the context of region key, nil or empty slice has the special meaning of no bound,
-	// so we skip encoding if given key is empty.
-	if len(key) == 0 {
-		return key
-	}
 	return c.memCodec.encodeKey(key)
 }
 
@@ -146,7 +143,10 @@ func (c *codecV1) DecodeRegionKey(encodedKey []byte) ([]byte, error) {
 }
 
 func (c *codecV1) EncodeRegionRange(start, end []byte) ([]byte, []byte) {
-	return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
+	if len(end) > 0 {
+		return c.EncodeRegionKey(start), c.EncodeRegionKey(end)
+	}
+	return c.EncodeRegionKey(start), end
 }
 
 func (c *codecV1) DecodeRegionRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error) {
