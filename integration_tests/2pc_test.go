@@ -1742,3 +1742,24 @@ func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
 		s.Equal(assertNotExist, mutations.IsAssertNotExist(i))
 	})
 }
+
+func (s *testCommitterSuite) TestExtractKeyExistsErr() {
+	txn := s.begin()
+	err := txn.Set([]byte("de"), []byte("ef"))
+	s.Nil(err)
+	err = txn.Commit(context.Background())
+	s.Nil(err)
+
+	txn = s.begin()
+	err = txn.GetMemBuffer().SetWithFlags([]byte("de"), []byte("fg"), kv.SetPresumeKeyNotExists)
+	s.Nil(err)
+	committer, err := txn.NewCommitter(0)
+	s.Nil(err)
+	// Forcibly construct a case when Op_Insert is prewritten while not having KeyNotExists flag.
+	// In real use cases, it should only happen when enabling amending transactions.
+	txn.GetMemBuffer().UpdateFlags([]byte("de"), kv.DelPresumeKeyNotExists)
+	err = committer.PrewriteAllMutations(context.Background())
+	s.ErrorContains(err, "existErr")
+	s.True(txn.GetMemBuffer().TryLock())
+	txn.GetMemBuffer().Unlock()
+}
