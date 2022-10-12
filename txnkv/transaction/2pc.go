@@ -181,7 +181,7 @@ type twoPhaseCommitter struct {
 	prewriteTotalReqNum int
 
 	// assertion error happened when initializing mutations, could be false positive if pessimistic lock is lost
-	assertionErr error
+	stashedAssertionError error
 }
 
 type memBufferMutations struct {
@@ -633,7 +633,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 				// from the prewrite phase.
 				if err1 != nil && assertionError == nil {
 					assertionError = errors.WithStack(err1)
-					c.assertionErr = assertionError
+					c.stashedAssertionError = assertionError
 					c.txn.enableAsyncCommit = false
 					c.txn.enable1PC = false
 				}
@@ -1517,8 +1517,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	// return assertion error found in TiDB after prewrite succeeds to prevent false positive. Note this is only visible
 	// when async commit or 1PC is disabled.
-	if c.assertionErr != nil {
-		return c.assertionErr
+	if c.stashedAssertionError != nil {
+		if c.isAsyncCommit() || c.isOnePC() {
+			// should be unreachable
+			panic("tidb-side assertion error should forbids async commit or 1PC")
+		}
+		return c.stashedAssertionError
 	}
 
 	// strip check_not_exists keys that no need to commit.
