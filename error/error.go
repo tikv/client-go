@@ -91,6 +91,8 @@ var (
 	ErrRegionRecoveryInProgress = errors.New("region is being online unsafe recovered")
 	// ErrRegionFlashbackInProgress is the error when a region in the flashback progress receive any other request.
 	ErrRegionFlashbackInProgress = errors.New("region is in the flashback progress")
+	// ErrRegionFlashbackNotPrepared is the error when a region is not prepared for the flashback first.
+	ErrRegionFlashbackNotPrepared = errors.New("region is not prepared for the flashback")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
 	// ErrResultUndetermined is the error when execution result is unknown.

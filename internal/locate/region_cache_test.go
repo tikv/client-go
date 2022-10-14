@@ -1593,7 +1593,7 @@ func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	s.checkCache(1)
 }
 
-func (s *testRegionCacheSuite) TestShouldNotRetryFlashbackInProgress() {
+func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
 	s.NotNil(loc)
 	s.NoError(err)
@@ -1602,6 +1602,9 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashbackInProgress() {
 	s.NoError(err)
 	reqSend := NewRegionRequestSender(s.cache, nil)
 	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
+	s.Error(err)
+	s.False(shouldRetry)
+	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
 	s.Error(err)
 	s.False(shouldRetry)
 }
