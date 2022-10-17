@@ -1454,7 +1454,6 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	// if a request meets the FlashbackInProgress error, it should stop retrying immediately
 	// to avoid unnecessary backoff and potential unexpected data status to the user.
 	if regionErr.GetFlashbackInProgress() != nil {
-		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		logutil.BgLogger().Debug("tikv reports `FlashbackInProgress`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
 		return false, errors.Errorf("region %d is in flashback progress", regionErr.GetFlashbackInProgress().GetRegionId())
 	}
@@ -1462,7 +1461,6 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	// prepared for the flashback before, it should stop retrying immediately to avoid
 	// unnecessary backoff.
 	if regionErr.GetFlashbackNotPrepared() != nil {
-		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		logutil.BgLogger().Debug("tikv reports `FlashbackNotPrepared`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
 		return false, errors.Errorf("region %d is not prepared for the flashback", regionErr.GetFlashbackNotPrepared().GetRegionId())
 	}
