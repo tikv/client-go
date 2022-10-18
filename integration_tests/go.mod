@@ -88,8 +88,9 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/tidbcloud/tidb-cse v0.0.0-20220930022629-9267a2d8d1ce
-
-replace github.com/pingcap/tidb/parser => github.com/tidbcloud/tidb-cse/parser v0.0.0-20220930022629-9267a2d8d1ce
-
-replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20220927084729-b21b9fd75149
+replace (
+	github.com/pingcap/kvproto => github.com/tidbcloud/kvproto v0.0.0-20221018045400-47903232f74e
+	github.com/pingcap/tidb => github.com/tidbcloud/tidb-cse v0.0.0-20220930022629-9267a2d8d1ce
+	github.com/pingcap/tidb/parser => github.com/tidbcloud/tidb-cse/parser v0.0.0-20220930022629-9267a2d8d1ce
+	github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20221018055136-9079f75dcde6
+)

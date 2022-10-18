@@ -253,10 +253,6 @@ func (c *pdClient) UpdateOption(option pd.DynamicOption, value interface{}) erro
 	return nil
 }
 
-func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
-	return nil, nil
-}
-
 func (c *pdClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
 	return nil, nil
 }

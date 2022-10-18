@@ -2,7 +2,10 @@ module github.com/tikv/client-go/v2
 
 go 1.18
 
-replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20220816052849-114a18e85da5
+replace (
+	github.com/pingcap/kvproto => github.com/tidbcloud/kvproto v0.0.0-20221018045400-47903232f74e
+	github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20221018055136-9079f75dcde6
+)
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
