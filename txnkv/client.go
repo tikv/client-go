@@ -17,7 +17,6 @@ package txnkv
 import (
 	"context"
 	"fmt"
-	"github.com/tikv/client-go/v2/util"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
@@ -26,6 +25,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/util"
 )
 
 // Client is a txn client.
