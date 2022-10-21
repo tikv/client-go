@@ -3,6 +3,7 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pingcap/kvproto/pkg/mpp"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -207,6 +208,18 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdRawChecksum:
 		r := *req.RawChecksum()
 		r.Ranges = c.encodeKeyRanges(r.Ranges)
+		newReq.Req = &r
+
+	// TiFlash Requests
+	case tikvrpc.CmdBatchCop:
+		r := *req.BatchCop()
+		r.Regions = c.encodeRegionInfos(r.Regions)
+		r.TableRegions = c.encodeTableRegions(r.TableRegions)
+		newReq.Req = &r
+	case tikvrpc.CmdMPPTask:
+		r := *req.DispatchMPPTask()
+		r.Regions = c.encodeRegionInfos(r.Regions)
+		r.TableRegions = c.encodeTableRegions(r.TableRegions)
 		newReq.Req = &r
 
 	// Other requests.
@@ -534,7 +547,17 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 			return nil, err
 		}
 	case tikvrpc.CmdBatchCop:
-		// TODO: handle cop response.
+		r := resp.Resp.(*coprocessor.BatchResponse)
+		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
+		if err != nil {
+			return nil, err
+		}
+	case tikvrpc.CmdMPPTask:
+		r := resp.Resp.(*mpp.DispatchTaskResponse)
+		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdMvccGetByKey:
 		r := resp.Resp.(*kvrpcpb.MvccGetByKeyResponse)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -754,6 +777,30 @@ func (c *codecV2) encodeMutations(mutations []*kvrpcpb.Mutation) []*kvrpcpb.Muta
 		encodedMutations = append(encodedMutations, &m)
 	}
 	return encodedMutations
+}
+
+func (c *codecV2) encodeRegionInfo(info *coprocessor.RegionInfo) *coprocessor.RegionInfo {
+	i := *info
+	i.Ranges = c.encodeCopRanges(info.Ranges)
+	return &i
+}
+
+func (c *codecV2) encodeRegionInfos(infos []*coprocessor.RegionInfo) []*coprocessor.RegionInfo {
+	var encodedInfos []*coprocessor.RegionInfo
+	for _, info := range infos {
+		encodedInfos = append(encodedInfos, c.encodeRegionInfo(info))
+	}
+	return encodedInfos
+}
+
+func (c *codecV2) encodeTableRegions(infos []*coprocessor.TableRegions) []*coprocessor.TableRegions {
+	var encodedInfos []*coprocessor.TableRegions
+	for _, info := range infos {
+		i := *info
+		i.Regions = c.encodeRegionInfos(info.Regions)
+		encodedInfos = append(encodedInfos, &i)
+	}
+	return encodedInfos
 }
 
 func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
