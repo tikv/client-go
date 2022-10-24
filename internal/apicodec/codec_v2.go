@@ -549,10 +549,14 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 	case tikvrpc.CmdCopStream:
 		return nil, errors.New("streaming coprocessor is not supported yet")
 	case tikvrpc.CmdBatchCop:
-		r := resp.Resp.(*tikvrpc.BatchCopStreamResponse).BatchResponse
+		r := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
 		if err != nil {
 			return nil, err
+		}
+		resp.Resp = &BatchCopStreamResponse{
+			BatchCopStreamResponse: r,
+			codecV2:                c,
 		}
 	case tikvrpc.CmdMPPTask:
 		r := resp.Resp.(*mpp.DispatchTaskResponse)
@@ -579,6 +583,20 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 	}
 
 	return resp, nil
+}
+
+type BatchCopStreamResponse struct {
+	*tikvrpc.BatchCopStreamResponse
+	*codecV2
+}
+
+func (r *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
+	resp, err := r.BatchCopStreamResponse.Recv()
+	if err != nil {
+		return nil, err
+	}
+	resp.RetryRegions, err = r.decodeRegions(resp.RetryRegions)
+	return resp, err
 }
 
 func (c *codecV2) EncodeRegionKey(key []byte) []byte {
