@@ -532,7 +532,7 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
-	case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
+	case tikvrpc.CmdCop:
 		r := resp.Resp.(*coprocessor.Response)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
 		if err != nil {
@@ -546,8 +546,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+	case tikvrpc.CmdCopStream:
+		return nil, errors.New("streaming coprocessor is not supported yet")
 	case tikvrpc.CmdBatchCop:
-		r := resp.Resp.(*coprocessor.BatchResponse)
+		r := resp.Resp.(*tikvrpc.BatchCopStreamResponse).BatchResponse
 		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
 		if err != nil {
 			return nil, err
