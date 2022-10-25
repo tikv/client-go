@@ -192,9 +192,8 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				MinConnectTimeout: a.dialTimeout,
 			}),
 			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:                time.Duration(keepAlive) * time.Second,
-				Timeout:             time.Duration(keepAliveTimeout) * time.Second,
-				PermitWithoutStream: true,
+				Time:    time.Duration(keepAlive) * time.Second,
+				Timeout: time.Duration(keepAliveTimeout) * time.Second,
 			}),
 		}, opts...)
 
@@ -446,7 +445,7 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 				storeIDStr = strconv.FormatUint(storeID, 10)
 			}
 			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr)
-			sendReqHistCache.Store(storeID, latHist)
+			rpcNetLatencyHistCache.Store(storeID, latHist)
 		}
 		latency := elapsed - time.Duration(execDetail.TimeDetail.TotalRpcWallTimeNs)*time.Nanosecond
 		latHist.(prometheus.Observer).Observe(latency.Seconds())

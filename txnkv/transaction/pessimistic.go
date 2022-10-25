@@ -59,7 +59,7 @@ import (
 
 type actionPessimisticLock struct {
 	*kv.LockCtx
-	lockWaitMode kvrpcpb.PessimisticWaitLockMode
+	lockWaitMode kvrpcpb.PessimisticLockWaitingMode
 }
 type actionPessimisticRollback struct{}
 
@@ -93,6 +93,7 @@ type diagnosticContext struct {
 func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	convertMutationsToPb := func(committerMutations CommitterMutations) []*kvrpcpb.Mutation {
 		mutations := make([]*kvrpcpb.Mutation, committerMutations.Len())
+		c.txn.GetMemBuffer().RLock()
 		for i := 0; i < committerMutations.Len(); i++ {
 			mut := &kvrpcpb.Mutation{
 				Op:  kvrpcpb.Op_PessimisticLock,
@@ -103,22 +104,24 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			}
 			mutations[i] = mut
 		}
+		c.txn.GetMemBuffer().RUnlock()
 		return mutations
 	}
 
 	m := batch.mutations
 	mutations := convertMutationsToPb(m)
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
-		Mutations:      mutations,
-		PrimaryLock:    c.primary(),
-		StartVersion:   c.startTS,
-		ForUpdateTs:    c.forUpdateTS,
-		IsFirstLock:    c.isFirstLock,
-		WaitTimeout:    action.LockWaitTime(),
-		ReturnValues:   action.ReturnValues,
-		CheckExistence: action.CheckExistence,
-		MinCommitTs:    c.forUpdateTS + 1,
-		WaitLockMode:   action.lockWaitMode,
+		Mutations:        mutations,
+		PrimaryLock:      c.primary(),
+		StartVersion:     c.startTS,
+		ForUpdateTs:      c.forUpdateTS,
+		IsFirstLock:      c.isFirstLock,
+		WaitTimeout:      action.LockWaitTime(),
+		ReturnValues:     action.ReturnValues,
+		CheckExistence:   action.CheckExistence,
+		MinCommitTs:      c.forUpdateTS + 1,
+		LockWaitingMode:  action.lockWaitMode,
+		LockOnlyIfExists: action.LockOnlyIfExists,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
@@ -175,7 +178,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			return err
 		}
 
-		if action.lockWaitMode == kvrpcpb.PessimisticWaitLockMode_RetryFirst {
+		if action.lockWaitMode == kvrpcpb.PessimisticLockWaitingMode_RetryAfterWait {
 			finished, err := action.handlePessimisticLockResponseRetryFirstMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -183,7 +186,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			if finished {
 				return nil
 			}
-		} else if action.lockWaitMode == kvrpcpb.PessimisticWaitLockMode_LockFirst {
+		} else if action.lockWaitMode == kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait {
 			finished, retryMutations, err := action.handlePessimisticLockResponseLockFirstMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -256,7 +259,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 	}
 	keyErrs := lockResp.GetErrors()
 	if len(keyErrs) == 0 {
-		action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+
+		if action.LockCtx.Stats != nil {
+			action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+		}
 
 		if batch.isPrimary {
 			// After locking the primary key, we should protect the primary lock from expiring
@@ -325,7 +331,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 	resolveLockOpts := txnlock.ResolveLocksOptions{
 		CallerStartTS: 0,
 		Locks:         locks,
-		Detail:        &action.LockCtx.Stats.ResolveLock,
+	}
+	if action.LockCtx.Stats != nil {
+		resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
 	}
 	resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 	if err != nil {
@@ -413,7 +421,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 
 	if len(lockResp.Results) > 0 && failedMutations.Len() < len(lockResp.Results) {
 		// Can we do it like this?
-		action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+
+		if action.LockCtx.Stats != nil {
+			action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+		}
 	}
 
 	// The primary must be locked first, otherwise there should be some bug in the implementation.
@@ -486,7 +497,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 			resolveLockOpts := txnlock.ResolveLocksOptions{
 				CallerStartTS: 0,
 				Locks:         locks,
-				Detail:        &action.LockCtx.Stats.ResolveLock,
+			}
+			if action.LockCtx.Stats != nil {
+				resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
 			}
 			resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 			if err != nil {
@@ -560,7 +573,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 	return nil
 }
 
-func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticWaitLockMode, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticLockWaitingMode, mutations CommitterMutations) error {
 	if c.sessionID > 0 {
 		if val, err := util.EvalFailpoint("beforePessimisticLock"); err == nil {
 			// Pass multiple instructions in one string, delimited by commas, to trigger multiple behaviors, like

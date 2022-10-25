@@ -92,6 +92,11 @@ func (txn TxnProbe) GetStartTime() time.Time {
 	return txn.startTime
 }
 
+// GetLockedCount returns the count of locks acquired by the transaction
+func (txn TxnProbe) GetLockedCount() int {
+	return txn.lockedCnt
+}
+
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	c, err := newTwoPhaseCommitter(txn, sessionID)
 	if err != nil {

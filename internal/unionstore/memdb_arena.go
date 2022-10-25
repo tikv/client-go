@@ -280,6 +280,7 @@ func (a *nodeAllocator) reset() {
 
 type memdbVlog struct {
 	memdbArena
+	memdb *MemDB
 }
 
 const memdbVlogHdrSize = 8 + 8 + 4
@@ -320,6 +321,7 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	return addr
 }
 
+// A pure function that gets a value.
 func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
 	lenOff := addr.off - memdbVlogHdrSize
 	block := l.blocks[addr.idx].buf
