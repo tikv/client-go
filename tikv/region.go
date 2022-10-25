@@ -107,6 +107,9 @@ var NewCodecV2 = apicodec.NewCodecV2
 // Codec is responsible for encode/decode requests.
 type Codec = apicodec.Codec
 
+// BatchCopStreamResponse is the wrapped response of a batch coprocessor stream request.
+type BatchCopStreamResponse = apicodec.BatchCopStreamResponse
+
 var DecodeKey = apicodec.DecodeKey
 
 // DefaultKeyspaceID is the keyspaceID of the default keyspace.
