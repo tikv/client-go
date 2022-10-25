@@ -11,7 +11,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -551,34 +550,8 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 	case tikvrpc.CmdCopStream:
 		return nil, errors.New("streaming coprocessor is not supported yet")
-	case tikvrpc.CmdBatchCop:
-		r := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
-		for _, region := range r.RetryRegions {
-			logutil.BgLogger().Info("batch cop retry region",
-				zap.Uint64("regionID", region.Id),
-				zap.String("startKey", hex.EncodeToString(region.StartKey)),
-				zap.String("endKey", hex.EncodeToString(region.EndKey)))
-		}
-		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
-		if err != nil {
-			return nil, err
-		}
-		resp.Resp = &BatchCopStreamResponse{
-			BatchCopStreamResponse: r,
-			codecV2:                c,
-		}
-	case tikvrpc.CmdMPPTask:
-		r := resp.Resp.(*mpp.DispatchTaskResponse)
-		for _, region := range r.RetryRegions {
-			logutil.BgLogger().Info("mpp retry region",
-				zap.Uint64("regionID", region.Id),
-				zap.String("startKey", hex.EncodeToString(region.StartKey)),
-				zap.String("endKey", hex.EncodeToString(region.EndKey)))
-		}
-		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
-		if err != nil {
-			return nil, err
-		}
+	case tikvrpc.CmdBatchCop, tikvrpc.CmdMPPTask:
+		// There aren't range infos in BatchCop and MPPTask responses.
 	case tikvrpc.CmdMvccGetByKey:
 		r := resp.Resp.(*kvrpcpb.MvccGetByKeyResponse)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -598,20 +571,6 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 	}
 
 	return resp, nil
-}
-
-type BatchCopStreamResponse struct {
-	*tikvrpc.BatchCopStreamResponse
-	*codecV2
-}
-
-func (r *BatchCopStreamResponse) Recv() (*coprocessor.BatchResponse, error) {
-	resp, err := r.BatchCopStreamResponse.Recv()
-	if err != nil {
-		return nil, err
-	}
-	resp.RetryRegions, err = r.decodeRegions(resp.RetryRegions)
-	return resp, err
 }
 
 func (c *codecV2) EncodeRegionKey(key []byte) []byte {
