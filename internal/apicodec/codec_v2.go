@@ -3,6 +3,9 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -694,6 +697,7 @@ func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	// If the given key does not start with the correct prefix,
 	// return out of bound error.
 	if !bytes.HasPrefix(encodedKey, c.prefix) {
+		logutil.BgLogger().Warn("key not in keyspace", zap.String("keyspacePrefix", hex.EncodeToString(c.prefix)), zap.String("key", hex.EncodeToString(encodedKey)))
 		return nil, errKeyOutOfBound
 	}
 	return encodedKey[len(c.prefix):], nil
