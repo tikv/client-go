@@ -553,6 +553,12 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		return nil, errors.New("streaming coprocessor is not supported yet")
 	case tikvrpc.CmdBatchCop:
 		r := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
+		for _, region := range r.RetryRegions {
+			logutil.BgLogger().Info("batch cop retry region",
+				zap.Uint64("regionID", region.Id),
+				zap.String("startKey", hex.EncodeToString(region.StartKey)),
+				zap.String("endKey", hex.EncodeToString(region.EndKey)))
+		}
 		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
 		if err != nil {
 			return nil, err
@@ -563,6 +569,12 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		}
 	case tikvrpc.CmdMPPTask:
 		r := resp.Resp.(*mpp.DispatchTaskResponse)
+		for _, region := range r.RetryRegions {
+			logutil.BgLogger().Info("mpp retry region",
+				zap.Uint64("regionID", region.Id),
+				zap.String("startKey", hex.EncodeToString(region.StartKey)),
+				zap.String("endKey", hex.EncodeToString(region.EndKey)))
+		}
 		r.RetryRegions, err = c.decodeRegions(r.RetryRegions)
 		if err != nil {
 			return nil, err
