@@ -44,7 +44,7 @@ const (
 	TiKV EndpointType = iota
 	TiFlash
 	TiDB
-	TiFlashMPP
+	TiFlashCompute
 )
 
 // Name returns the name of endpoint type.
@@ -56,23 +56,23 @@ func (t EndpointType) Name() string {
 		return "tiflash"
 	case TiDB:
 		return "tidb"
-	case TiFlashMPP:
-		return "tiflash_mpp"
+	case TiFlashCompute:
+		return "tiflash_compute"
 	}
 	return "unspecified"
 }
 
-// IsTiFlashRelatedType return true if it's tiflash or tiflash_mpp.
+// IsTiFlashRelatedType return true if it's tiflash or tiflash_compute.
 func (t EndpointType) IsTiFlashRelatedType() bool {
-	return t == TiFlash || t == TiFlashMPP
+	return t == TiFlash || t == TiFlashCompute
 }
 
 // Constants to determine engine type.
 // They should be synced with PD.
 const (
-	EngineLabelKey        = "engine"
-	EngineLabelTiFlash    = "tiflash"
-	EngineLabelTiFlashMPP = "tiflash_mpp"
+	EngineLabelKey            = "engine"
+	EngineLabelTiFlash        = "tiflash"
+	EngineLabelTiFlashCompute = "tiflash_compute"
 )
 
 // GetStoreTypeByMeta gets store type by store meta pb.
@@ -81,8 +81,8 @@ func GetStoreTypeByMeta(store *metapb.Store) EndpointType {
 		if label.Key == EngineLabelKey && label.Value == EngineLabelTiFlash {
 			return TiFlash
 		}
-		if label.Key == EngineLabelKey && label.Value == EngineLabelTiFlashMPP {
-			return TiFlashMPP
+		if label.Key == EngineLabelKey && label.Value == EngineLabelTiFlashCompute {
+			return TiFlashCompute
 		}
 	}
 	return TiKV
