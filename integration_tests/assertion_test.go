@@ -17,6 +17,7 @@ package tikv_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,7 +277,7 @@ func (s *testAssertionSuite) TestAssertionErrorLessPriorToOtherError() {
 
 		err = tx.Commit(ctx)
 		s.NotNil(err)
-		s.IsType(&tikverr.ErrAssertionFailed{}, errors.Cause(err))
+		s.NotContains(strings.ToLower(err.Error()), "assertion")
 	}
 
 	testOnce([]byte("kr1"), []byte("ki1"), false, false, false)
