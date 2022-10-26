@@ -535,7 +535,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 // SendRequest sends a Request to server and receives Response.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	if c.option == nil || c.option.codec == nil || req.StoreTp == tikvrpc.TiFlash {
+	if c.option == nil || c.option.codec == nil {
 		return c.sendRequest(ctx, addr, req, timeout)
 	}
 

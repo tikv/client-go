@@ -3,6 +3,9 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -207,6 +210,18 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdRawChecksum:
 		r := *req.RawChecksum()
 		r.Ranges = c.encodeKeyRanges(r.Ranges)
+		newReq.Req = &r
+
+	// TiFlash Requests
+	case tikvrpc.CmdBatchCop:
+		r := *req.BatchCop()
+		r.Regions = c.encodeRegionInfos(r.Regions)
+		r.TableRegions = c.encodeTableRegions(r.TableRegions)
+		newReq.Req = &r
+	case tikvrpc.CmdMPPTask:
+		r := *req.DispatchMPPTask()
+		r.Regions = c.encodeRegionInfos(r.Regions)
+		r.TableRegions = c.encodeTableRegions(r.TableRegions)
 		newReq.Req = &r
 
 	// Other requests.
@@ -519,7 +534,7 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
-	case tikvrpc.CmdCop, tikvrpc.CmdCopStream:
+	case tikvrpc.CmdCop:
 		r := resp.Resp.(*coprocessor.Response)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
 		if err != nil {
@@ -533,8 +548,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
-	case tikvrpc.CmdBatchCop:
-		// TODO: handle cop response.
+	case tikvrpc.CmdCopStream:
+		return nil, errors.New("streaming coprocessor is not supported yet")
+	case tikvrpc.CmdBatchCop, tikvrpc.CmdMPPTask:
+		// There aren't range infos in BatchCop and MPPTask responses.
 	case tikvrpc.CmdMvccGetByKey:
 		r := resp.Resp.(*kvrpcpb.MvccGetByKeyResponse)
 		r.RegionError, err = c.decodeRegionError(r.RegionError)
@@ -651,6 +668,7 @@ func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	// If the given key does not start with the correct prefix,
 	// return out of bound error.
 	if !bytes.HasPrefix(encodedKey, c.prefix) {
+		logutil.BgLogger().Warn("key not in keyspace", zap.String("keyspacePrefix", hex.EncodeToString(c.prefix)), zap.String("key", hex.EncodeToString(encodedKey)))
 		return nil, errKeyOutOfBound
 	}
 	return encodedKey[len(c.prefix):], nil
@@ -754,6 +772,30 @@ func (c *codecV2) encodeMutations(mutations []*kvrpcpb.Mutation) []*kvrpcpb.Muta
 		encodedMutations = append(encodedMutations, &m)
 	}
 	return encodedMutations
+}
+
+func (c *codecV2) encodeRegionInfo(info *coprocessor.RegionInfo) *coprocessor.RegionInfo {
+	i := *info
+	i.Ranges = c.encodeCopRanges(info.Ranges)
+	return &i
+}
+
+func (c *codecV2) encodeRegionInfos(infos []*coprocessor.RegionInfo) []*coprocessor.RegionInfo {
+	var encodedInfos []*coprocessor.RegionInfo
+	for _, info := range infos {
+		encodedInfos = append(encodedInfos, c.encodeRegionInfo(info))
+	}
+	return encodedInfos
+}
+
+func (c *codecV2) encodeTableRegions(infos []*coprocessor.TableRegions) []*coprocessor.TableRegions {
+	var encodedInfos []*coprocessor.TableRegions
+	for _, info := range infos {
+		i := *info
+		i.Regions = c.encodeRegionInfos(info.Regions)
+		encodedInfos = append(encodedInfos, &i)
+	}
+	return encodedInfos
 }
 
 func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
