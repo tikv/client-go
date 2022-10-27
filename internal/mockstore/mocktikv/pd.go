@@ -45,7 +45,9 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 )
 
 // Use global variables to prevent pdClients from creating duplicate timestamps.
@@ -63,6 +65,8 @@ type pdClient struct {
 	// in GC.
 	serviceSafePoints map[string]uint64
 	gcSafePointMu     sync.Mutex
+
+	externalTimestamp atomic.Uint64
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
@@ -114,6 +118,34 @@ func (c *pdClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 
 func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
 	return c.GetTSAsync(ctx)
+}
+
+func (c *pdClient) SetExternalTimestamp(ctx context.Context, newTimestamp uint64) error {
+	p, l, err := c.GetTS(ctx)
+	if err != nil {
+		return err
+	}
+
+	currentTSO := oracle.ComposeTS(p, l)
+	if newTimestamp > currentTSO {
+		return errors.New("external timestamp is greater than global tso")
+	}
+	for {
+		externalTimestamp := c.externalTimestamp.Load()
+		if externalTimestamp > newTimestamp {
+			return errors.New("cannot decrease the external timestamp")
+		} else if externalTimestamp == newTimestamp {
+			return nil
+		}
+
+		if c.externalTimestamp.CAS(externalTimestamp, newTimestamp) {
+			return nil
+		}
+	}
+}
+
+func (c *pdClient) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	return c.externalTimestamp.Load(), nil
 }
 
 type mockTSFuture struct {
