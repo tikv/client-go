@@ -1592,3 +1592,19 @@ func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	s.Equal(loc.Region.GetID(), regions[0])
 	s.checkCache(1)
 }
+
+func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.NoError(err)
+	ctx, err := s.cache.GetTiKVRPCContext(retry.NewBackofferWithVars(context.Background(), 100, nil), loc.Region, kv.ReplicaReadLeader, 0)
+	s.NotNil(ctx)
+	s.NoError(err)
+	reqSend := NewRegionRequestSender(s.cache, nil)
+	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
+	s.Error(err)
+	s.False(shouldRetry)
+	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
+	s.Error(err)
+	s.False(shouldRetry)
+}

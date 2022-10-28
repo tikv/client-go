@@ -532,10 +532,11 @@ type lockCtx struct {
 	ttl         uint64
 	minCommitTs uint64
 
-	returnValues   bool
-	checkExistence bool
-	values         [][]byte
-	keyNotFound    []bool
+	returnValues     bool
+	checkExistence   bool
+	values           [][]byte
+	keyNotFound      []bool
+	LockOnlyIfExists bool
 }
 
 // PessimisticLock writes the pessimistic lock.
@@ -545,13 +546,14 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 	defer mvcc.mu.Unlock()
 	mutations := req.Mutations
 	lCtx := &lockCtx{
-		startTS:        req.StartVersion,
-		forUpdateTS:    req.ForUpdateTs,
-		primary:        req.PrimaryLock,
-		ttl:            req.LockTtl,
-		minCommitTs:    req.MinCommitTs,
-		returnValues:   req.ReturnValues,
-		checkExistence: req.CheckExistence,
+		startTS:          req.StartVersion,
+		forUpdateTS:      req.ForUpdateTs,
+		primary:          req.PrimaryLock,
+		ttl:              req.LockTtl,
+		minCommitTs:      req.MinCommitTs,
+		returnValues:     req.ReturnValues,
+		checkExistence:   req.CheckExistence,
+		LockOnlyIfExists: req.LockOnlyIfExists,
 	}
 	lockWaitTime := req.WaitTimeout
 
@@ -594,6 +596,11 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation *kvrpcpb.Mutation, lctx *lockCtx) error {
 	startTS := lctx.startTS
 	forUpdateTS := lctx.forUpdateTS
+
+	if lctx.LockOnlyIfExists && !lctx.returnValues {
+		return errors.New("LockOnlyIfExists is set for LockKeys but ReturnValues is not set")
+	}
+
 	startKey := mvccEncode(mutation.Key, lockVer)
 	iter := newIterator(mvcc.getDB(""), &util.Range{
 		Start: startKey,
@@ -633,6 +640,10 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
 	} else if lctx.checkExistence {
 		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
+	}
+
+	if lctx.LockOnlyIfExists && len(val) == 0 {
+		return nil
 	}
 
 	lock := mvccLock{
@@ -739,8 +750,12 @@ func (mvcc *MVCCLevelDB) Prewrite(req *kvrpcpb.PrewriteRequest) []error {
 		if op == kvrpcpb.Op_CheckNotExists {
 			continue
 		}
-		isPessimisticLock := len(req.IsPessimisticLock) > 0 && req.IsPessimisticLock[i]
-		err = prewriteMutation(mvcc.getDB(""), batch, m, startTS, primary, ttl, txnSize, isPessimisticLock, minCommitTS, req.AssertionLevel)
+
+		pessimisticAction := kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
+		if len(req.PessimisticActions) > 0 {
+			pessimisticAction = req.PessimisticActions[i]
+		}
+		err = prewriteMutation(mvcc.getDB(""), batch, m, startTS, primary, ttl, txnSize, pessimisticAction, minCommitTS, req.AssertionLevel)
 		errs = append(errs, err)
 		if err != nil {
 			anyError = true
@@ -871,7 +886,7 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 	mutation *kvrpcpb.Mutation, startTS uint64,
 	primary []byte, ttl uint64, txnSize uint64,
-	isPessimisticLock bool, minCommitTS uint64,
+	pessimisticAction kvrpcpb.PrewriteRequest_PessimisticAction, minCommitTS uint64,
 	assertionLevel kvrpcpb.AssertionLevel) error {
 	startKey := mvccEncode(mutation.Key, lockVer)
 	iter := newIterator(db, &util.Range{
@@ -888,7 +903,7 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 	}
 	if ok {
 		if dec.lock.startTS != startTS {
-			if isPessimisticLock {
+			if pessimisticAction == kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK {
 				// NOTE: A special handling.
 				// When pessimistic txn prewrite meets lock, set the TTL = 0 means
 				// telling TiDB to rollback the transaction **unconditionly**.
@@ -913,7 +928,7 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 			return err
 		}
 	} else {
-		if isPessimisticLock {
+		if pessimisticAction == kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK {
 			return ErrAbort("pessimistic lock not found")
 		}
 		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel)

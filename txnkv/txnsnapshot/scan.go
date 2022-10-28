@@ -72,7 +72,7 @@ type Scanner struct {
 func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize int, reverse bool) (*Scanner, error) {
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
-		batchSize = defaultScanBatchSize
+		batchSize = DefaultScanBatchSize
 	}
 	scanner := &Scanner{
 		snapshot:     snapshot,
