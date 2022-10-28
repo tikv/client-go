@@ -1660,6 +1660,9 @@ func (mvcc *MVCCLevelDB) RawGet(cf string, key []byte) []byte {
 	}
 
 	ret, err := db.Get(key, nil)
+	if err == leveldb.ErrNotFound {
+		return nil
+	}
 	tikverr.Log(err)
 	return ret
 }

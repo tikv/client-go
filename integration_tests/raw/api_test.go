@@ -229,8 +229,15 @@ func (s *apiTestSuite) mustGetKeyTTL(prefix, key string) *uint64 {
 }
 
 func (s *apiTestSuite) mustNotExist(prefix string, key string) {
-	v := s.mustGet(prefix, key)
-	s.Empty(v)
+	v, err := s.client.Get(context.Background(), []byte(withPrefix(prefix, key)))
+	s.Nil(err)
+	s.Nil(v)
+}
+
+func (s *apiTestSuite) mustExist(prefix string, key string) {
+	v, err := s.client.Get(context.Background(), []byte(withPrefix(prefix, key)))
+	s.Nil(err)
+	s.NotNil(v)
 }
 
 func (s *apiTestSuite) mustSplitRegion(prefix string, splitKeys []string) {
@@ -413,6 +420,23 @@ func (s *apiTestSuite) TestRawChecksum() {
 	s.mustBatchPut(prefix, keys, values)
 	checksum := s.mustChecksum(prefix, "", "")
 	s.Equal(expect, checksum)
+}
+
+func (s *apiTestSuite) TestEmptyValue() {
+	prefix := "test_empty_value"
+	s.cleanKeyPrefix(prefix)
+
+	s.mustNotExist(prefix, "key")
+
+	s.mustPut(prefix, "key", "")
+	s.mustExist(prefix, "key")
+	v := s.mustGet(prefix, "key")
+	s.Empty(v)
+
+	// TODO: test scan
+
+	s.mustDelete(prefix, "key")
+	s.mustNotExist(prefix, "key")
 }
 
 func (s *apiTestSuite) TearDownTest() {

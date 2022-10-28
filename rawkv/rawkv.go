@@ -257,8 +257,11 @@ func (c *Client) Get(ctx context.Context, key []byte, options ...RawOption) ([]b
 	if cmdResp.GetError() != "" {
 		return nil, errors.New(cmdResp.GetError())
 	}
-	if len(cmdResp.Value) == 0 {
+	if cmdResp.NotFound {
 		return nil, nil
+	}
+	if len(cmdResp.Value) == 0 {
+		return []byte{}, nil // Return `[]byte{}`` to indicate an empty value, and distinguish from not found
 	}
 	return cmdResp.Value, nil
 }
