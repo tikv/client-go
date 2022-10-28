@@ -303,10 +303,6 @@ func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64, 
 	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
 	metrics.RawkvSizeHistogramWithValue.Observe(float64(len(value)))
 
-	if len(value) == 0 {
-		return errors.New("empty value is not supported")
-	}
-
 	opts := c.getRawKVOptions(options...)
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:    key,
@@ -383,11 +379,6 @@ func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttl
 	}
 	if len(ttls) > 0 && len(keys) != len(ttls) {
 		return errors.New("the len of ttls is not equal to the len of values")
-	}
-	for _, value := range values {
-		if len(value) == 0 {
-			return errors.New("empty value is not supported")
-		}
 	}
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
 	opts := c.getRawKVOptions(options...)
@@ -622,10 +613,6 @@ func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options 
 func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValue []byte, options ...RawOption) ([]byte, bool, error) {
 	if !c.atomic {
 		return nil, false, errors.New("using CompareAndSwap without enable atomic mode")
-	}
-
-	if len(newValue) == 0 {
-		return nil, false, errors.New("empty value is not supported")
 	}
 
 	opts := c.getRawKVOptions(options...)
