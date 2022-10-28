@@ -134,7 +134,7 @@ func (s *apiTestSuite) mustDelete(prefix string, key string) {
 	s.Nil(err)
 }
 
-func (s *apiTestSuite) mustScan(prefix string, start string, end string, limit int) ([]string, []string) {
+func (s *apiTestSuite) mustScanBytes(prefix string, start string, end string, limit int) ([][]byte, [][]byte) {
 	end = withPrefix(prefix, end)
 	end += string([]byte{127})
 	ks, vs, err := s.client.Scan(context.Background(), []byte(withPrefix(prefix, start)), []byte(end), limit)
@@ -143,13 +143,26 @@ func (s *apiTestSuite) mustScan(prefix string, start string, end string, limit i
 	for i := range ks {
 		ks[i] = bytes.TrimPrefix(ks[i], []byte(prefix))
 	}
+	return ks, vs
+}
 
+func (s *apiTestSuite) mustScan(prefix string, start string, end string, limit int) ([]string, []string) {
+	ks, vs := s.mustScanBytes(prefix, start, end, limit)
 	return toStrings(ks), toStrings(vs)
 }
 
-func (s *apiTestSuite) mustReverseScan(prefix string, start string, end string, limit int) ([]string, []string) {
+func (s *apiTestSuite) mustReverseScanBytes(prefix string, start string, end string, limit int) ([][]byte, [][]byte) {
 	ks, vs, err := s.client.ReverseScan(context.Background(), []byte(withPrefix(prefix, start)), []byte(withPrefix(prefix, end)), limit)
 	s.Nil(err)
+
+	for i := range ks {
+		ks[i] = bytes.TrimPrefix(ks[i], []byte(prefix))
+	}
+	return ks, vs
+}
+
+func (s *apiTestSuite) mustReverseScan(prefix string, start string, end string, limit int) ([]string, []string) {
+	ks, vs := s.mustReverseScanBytes(prefix, start, end, limit)
 	return toStrings(ks), toStrings(vs)
 }
 
@@ -194,11 +207,15 @@ func (s *apiTestSuite) mustBatchPut(prefix string, keys []string, values []strin
 }
 
 func (s *apiTestSuite) mustBatchGet(prefix string, keys []string) []string {
+	return toStrings(s.mustBatchGetBytes(prefix, keys))
+}
+
+func (s *apiTestSuite) mustBatchGetBytes(prefix string, keys []string) [][]byte {
 	keys = withPrefixes(prefix, keys)
 	vs, err := s.client.BatchGet(context.Background(), toBytes(keys))
 	s.Nil(err)
 
-	return toStrings(vs)
+	return vs
 }
 
 func (s *apiTestSuite) mustBatchDelete(prefix string, keys []string) {
@@ -207,13 +224,19 @@ func (s *apiTestSuite) mustBatchDelete(prefix string, keys []string) {
 	s.Nil(err)
 }
 
+// `old == ""` means "not exist"
+func (s *apiTestSuite) mustCASBytes(prefix, key string, old, new []byte) (bool, []byte) {
+	oldValue, success, err := s.clientForCas.CompareAndSwap(context.Background(), []byte(withPrefix(prefix, key)), old, new)
+	s.Nil(err)
+	return success, oldValue
+}
+
 func (s *apiTestSuite) mustCAS(prefix, key, old, new string) (bool, string) {
 	var oldValue []byte
 	if old != "" {
 		oldValue = []byte(old)
 	}
-	oldValue, success, err := s.clientForCas.CompareAndSwap(context.Background(), []byte(withPrefix(prefix, key)), oldValue, []byte(new))
-	s.Nil(err)
+	success, oldValue := s.mustCASBytes(prefix, key, oldValue, []byte(new))
 	return success, string(oldValue)
 }
 
@@ -428,15 +451,62 @@ func (s *apiTestSuite) TestEmptyValue() {
 
 	s.mustNotExist(prefix, "key")
 
+	verifyEmptyValue := func() {
+		s.mustExist(prefix, "key")
+		// get
+		v := s.mustGet(prefix, "key")
+		s.Empty(v)
+		// batch_get
+		vs := s.mustBatchGetBytes(prefix, []string{"key", "key1"})
+		s.Equal([][]byte{[]byte{}, nil}, vs)
+		// scan
+		keys, values := s.mustScanBytes(prefix, "key", "keyz", 10)
+		s.Equal([][]byte{[]byte("key")}, keys)
+		s.Equal([][]byte{[]byte{}}, values)
+		// reverse scan
+		keys, values = s.mustReverseScanBytes(prefix, "keyz", "key", 10)
+		s.Equal([][]byte{[]byte("key")}, keys)
+		s.Equal([][]byte{[]byte{}}, values)
+	}
+
+	verifyNotExist := func() {
+		s.mustNotExist(prefix, "key")
+		// batch_get
+		vs := s.mustBatchGetBytes(prefix, []string{"key", "key1"})
+		s.Equal([][]byte{nil, nil}, vs)
+		// scan
+		keys, values := s.mustScanBytes(prefix, "key", "keyz", 10)
+		s.Nil(keys)
+		s.Nil(values)
+		// reverse scan
+		keys, values = s.mustReverseScanBytes(prefix, "keyz", "key", 10)
+		s.Nil(keys)
+		s.Nil(values)
+	}
+
+	// put
 	s.mustPut(prefix, "key", "")
-	s.mustExist(prefix, "key")
-	v := s.mustGet(prefix, "key")
-	s.Empty(v)
+	verifyEmptyValue()
 
-	// TODO: test scan
-
+	// delete
 	s.mustDelete(prefix, "key")
-	s.mustNotExist(prefix, "key")
+	verifyNotExist()
+
+	// batch_put
+	s.mustBatchPut(prefix, []string{"key"}, []string{""})
+	verifyEmptyValue()
+	
+	// compare_and_swap, not-exist -> ""
+	s.mustDelete(prefix, "key")
+	ok, oldVal := s.mustCASBytes(prefix, "key", nil, []byte(""))
+	s.True(ok)
+	s.Nil(oldVal)
+	verifyEmptyValue()
+
+	// compare_and_swap, "" -> "val"
+	ok, oldVal = s.mustCASBytes(prefix, "key", []byte(""), []byte("val"))
+	s.True(ok)
+	s.Equal([]byte{}, oldVal)
 }
 
 func (s *apiTestSuite) TearDownTest() {

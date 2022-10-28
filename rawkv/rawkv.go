@@ -260,10 +260,8 @@ func (c *Client) Get(ctx context.Context, key []byte, options ...RawOption) ([]b
 	if cmdResp.NotFound {
 		return nil, nil
 	}
-	if len(cmdResp.Value) == 0 {
-		return []byte{}, nil // Return `[]byte{}`` to indicate an empty value, and distinguish from not found
-	}
-	return cmdResp.Value, nil
+	// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
+	return convertNilToEmptySlice(cmdResp.Value), nil
 }
 
 const rawkvMaxBackoff = 20000
@@ -294,7 +292,12 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, options ...RawOpti
 
 	values := make([][]byte, len(keys))
 	for i, key := range keys {
-		values[i] = keyToValue[string(key)]
+		v, ok := keyToValue[string(key)]
+		if ok {
+			// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
+			v = convertNilToEmptySlice(v)
+		}
+		values[i] = v
 	}
 	return values, nil
 }
@@ -507,7 +510,8 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			values = append(values, pair.Value)
+			// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
+			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
 		startKey = loc.EndKey
 		if len(startKey) == 0 {
@@ -555,7 +559,8 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			values = append(values, pair.Value)
+			// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
+			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
 		startKey = loc.StartKey
 		if len(startKey) == 0 {
@@ -648,7 +653,8 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 	if cmdResp.PreviousNotExist {
 		return nil, cmdResp.Succeed, nil
 	}
-	return cmdResp.PreviousValue, cmdResp.Succeed, nil
+	// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
+	return convertNilToEmptySlice(cmdResp.PreviousValue), cmdResp.Succeed, nil
 }
 
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
@@ -938,4 +944,11 @@ func (c *Client) getRawKVOptions(options ...RawOption) *rawOptions {
 		op.apply(&opts)
 	}
 	return &opts
+}
+
+func convertNilToEmptySlice(value []byte) []byte {
+	if value == nil {
+		return []byte{}
+	}
+	return value
 }
