@@ -31,6 +31,7 @@ type apiTestSuite struct {
 	client       *rawkv.Client
 	clientForCas *rawkv.Client
 	pdClient     pd.Client
+	apiVersion   kvrpcpb.APIVersion
 }
 
 func getConfig(url string) (string, error) {
@@ -68,14 +69,13 @@ func (s *apiTestSuite) getApiVersion(pdCli pd.Client) kvrpcpb.APIVersion {
 }
 
 func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Client {
-	version := s.getApiVersion(pdCli)
-	cli, err := rawkv.NewClientWithOpts(context.Background(), addrs, rawkv.WithAPIVersion(version))
+	cli, err := rawkv.NewClientWithOpts(context.Background(), addrs, rawkv.WithAPIVersion(s.apiVersion))
 	s.Nil(err)
 	return cli
 }
 
 func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
-	if s.getApiVersion(pdCli) == kvrpcpb.APIVersion_V2 {
+	if s.apiVersion == kvrpcpb.APIVersion_V2 {
 		return tikv.NewCodecPDClientV2(pdCli, tikv.ModeRaw)
 	}
 	return pdCli
@@ -86,6 +86,7 @@ func (s *apiTestSuite) SetupTest() {
 
 	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
 	s.Nil(err)
+	s.apiVersion = s.getApiVersion(pdClient)
 
 	s.pdClient = s.wrapPDClient(pdClient, addrs)
 
@@ -206,10 +207,6 @@ func (s *apiTestSuite) mustBatchPut(prefix string, keys []string, values []strin
 	s.Nil(err)
 }
 
-func (s *apiTestSuite) mustBatchGet(prefix string, keys []string) []string {
-	return toStrings(s.mustBatchGetBytes(prefix, keys))
-}
-
 func (s *apiTestSuite) mustBatchGetBytes(prefix string, keys []string) [][]byte {
 	keys = withPrefixes(prefix, keys)
 	vs, err := s.client.BatchGet(context.Background(), toBytes(keys))
@@ -218,19 +215,23 @@ func (s *apiTestSuite) mustBatchGetBytes(prefix string, keys []string) [][]byte 
 	return vs
 }
 
+func (s *apiTestSuite) mustBatchGet(prefix string, keys []string) []string {
+	return toStrings(s.mustBatchGetBytes(prefix, keys))
+}
+
 func (s *apiTestSuite) mustBatchDelete(prefix string, keys []string) {
 	keys = withPrefixes(prefix, keys)
 	err := s.client.BatchDelete(context.Background(), toBytes(keys))
 	s.Nil(err)
 }
 
-// `old == ""` means "not exist"
 func (s *apiTestSuite) mustCASBytes(prefix, key string, old, new []byte) (bool, []byte) {
 	oldValue, success, err := s.clientForCas.CompareAndSwap(context.Background(), []byte(withPrefix(prefix, key)), old, new)
 	s.Nil(err)
 	return success, oldValue
 }
 
+// `old == ""` means "not exist"
 func (s *apiTestSuite) mustCAS(prefix, key, old, new string) (bool, string) {
 	var oldValue []byte
 	if old != "" {
@@ -439,6 +440,9 @@ func (s *apiTestSuite) TestRawChecksum() {
 		expect.Crc64Xor ^= digest.Sum64()
 		expect.TotalKvs++
 		expect.TotalBytes += (uint64)(len(prefix) + len(key) + len(value))
+		if s.apiVersion == kvrpcpb.APIVersion_V2 {
+			expect.TotalBytes += 4 // 4 bytes key prefix of API v2
+		}
 	}
 	s.mustBatchPut(prefix, keys, values)
 	checksum := s.mustChecksum(prefix, "", "")
@@ -495,8 +499,8 @@ func (s *apiTestSuite) TestEmptyValue() {
 	// batch_put
 	s.mustBatchPut(prefix, []string{"key"}, []string{""})
 	verifyEmptyValue()
-	
-	// compare_and_swap, not-exist -> ""
+
+	// compare_and_swap, nil -> ""
 	s.mustDelete(prefix, "key")
 	ok, oldVal := s.mustCASBytes(prefix, "key", nil, []byte(""))
 	s.True(ok)
