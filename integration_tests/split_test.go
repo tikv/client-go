@@ -36,6 +36,7 @@ package tikv_test
 
 import (
 	"context"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"sync"
 	"testing"
 
@@ -286,4 +287,20 @@ func (c *mockPDClient) GetLeaderAddr() string { return "mockpd" }
 
 func (c *mockPDClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
 	return nil
+}
+
+func (c *mockPDClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) SetExternalTimestamp(ctx context.Context, tso uint64) error {
+	panic("unimplemented")
 }

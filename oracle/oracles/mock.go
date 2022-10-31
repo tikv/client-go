@@ -51,6 +51,8 @@ type MockOracle struct {
 	stop   bool
 	offset time.Duration
 	lastTS uint64
+
+	localExternalTimestamp
 }
 
 // Enable enables the Oracle
@@ -139,4 +141,14 @@ func (o *MockOracle) UntilExpired(lockTimeStamp, TTL uint64, _ *oracle.Option) i
 // Close implements oracle.Oracle interface.
 func (o *MockOracle) Close() {
 
+}
+
+// GetExternalTimestamp implement oracle.Oracle interface.
+func (o *MockOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	return o.getExternalTimestamp(ctx)
+}
+
+// SetExternalTimestamp implement oracle.Oracle interface.
+func (o *MockOracle) SetExternalTimestamp(ctx context.Context, newTimestamp uint64) error {
+	return o.setExternalTimestamp(ctx, o, newTimestamp)
 }
