@@ -1680,7 +1680,9 @@ func (mvcc *MVCCLevelDB) RawBatchGet(cf string, keys [][]byte) [][]byte {
 	values := make([][]byte, 0, len(keys))
 	for _, key := range keys {
 		value, err := db.Get(key, nil)
-		tikverr.Log(err)
+		if err != leveldb.ErrNotFound {
+			tikverr.Log(err)
+		}
 		values = append(values, value)
 	}
 	return values
