@@ -95,7 +95,6 @@ type RawOption interface {
 	apply(opts *rawOptions)
 }
 
-//
 type rawOptionFunc func(opts *rawOptions)
 
 func (f rawOptionFunc) apply(opts *rawOptions) {
@@ -257,10 +256,10 @@ func (c *Client) Get(ctx context.Context, key []byte, options ...RawOption) ([]b
 	if cmdResp.GetError() != "" {
 		return nil, errors.New(cmdResp.GetError())
 	}
-	if len(cmdResp.Value) == 0 {
+	if cmdResp.NotFound {
 		return nil, nil
 	}
-	return cmdResp.Value, nil
+	return convertNilToEmptySlice(cmdResp.Value), nil
 }
 
 const rawkvMaxBackoff = 20000
@@ -291,7 +290,11 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, options ...RawOpti
 
 	values := make([][]byte, len(keys))
 	for i, key := range keys {
-		values[i] = keyToValue[string(key)]
+		v, ok := keyToValue[string(key)]
+		if ok {
+			v = convertNilToEmptySlice(v)
+		}
+		values[i] = v
 	}
 	return values, nil
 }
@@ -302,10 +305,6 @@ func (c *Client) PutWithTTL(ctx context.Context, key, value []byte, ttl uint64, 
 	defer func() { metrics.RawkvCmdHistogramWithBatchPut.Observe(time.Since(start).Seconds()) }()
 	metrics.RawkvSizeHistogramWithKey.Observe(float64(len(key)))
 	metrics.RawkvSizeHistogramWithValue.Observe(float64(len(value)))
-
-	if len(value) == 0 {
-		return errors.New("empty value is not supported")
-	}
 
 	opts := c.getRawKVOptions(options...)
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
@@ -388,11 +387,6 @@ func (c *Client) BatchPutWithTTL(ctx context.Context, keys, values [][]byte, ttl
 	}
 	if len(ttls) > 0 && len(keys) != len(ttls) {
 		return errors.New("the len of ttls is not equal to the len of values")
-	}
-	for _, value := range values {
-		if len(value) == 0 {
-			return errors.New("empty value is not supported")
-		}
 	}
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
 	opts := c.getRawKVOptions(options...)
@@ -518,7 +512,7 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			values = append(values, pair.Value)
+			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
 		startKey = loc.EndKey
 		if len(startKey) == 0 {
@@ -566,7 +560,7 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			values = append(values, pair.Value)
+			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
 		startKey = loc.StartKey
 		if len(startKey) == 0 {
@@ -629,10 +623,6 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 		return nil, false, errors.New("using CompareAndSwap without enable atomic mode")
 	}
 
-	if len(newValue) == 0 {
-		return nil, false, errors.New("empty value is not supported")
-	}
-
 	opts := c.getRawKVOptions(options...)
 	reqArgs := kvrpcpb.RawCASRequest{
 		Key:   key,
@@ -663,7 +653,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 	if cmdResp.PreviousNotExist {
 		return nil, cmdResp.Succeed, nil
 	}
-	return cmdResp.PreviousValue, cmdResp.Succeed, nil
+	return convertNilToEmptySlice(cmdResp.PreviousValue), cmdResp.Succeed, nil
 }
 
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
@@ -953,4 +943,15 @@ func (c *Client) getRawKVOptions(options ...RawOption) *rawOptions {
 		op.apply(&opts)
 	}
 	return &opts
+}
+
+// convertNilToEmptySlice is used to convert value of existed key return from TiKV.
+// Convert nil to `[]byte{}` for indicating an empty value, and distinguishing from "not found",
+// which is necessary when putting empty value is permitted.
+// Also note that gRPC will always transfer empty byte slice as nil.
+func convertNilToEmptySlice(value []byte) []byte {
+	if value == nil {
+		return []byte{}
+	}
+	return value
 }
