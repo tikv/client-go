@@ -487,12 +487,12 @@ func (s *KVStore) GetClusterID() uint64 {
 	return s.clusterID
 }
 
-func (s *KVStore) getSafeTS(storeID uint64) uint64 {
+func (s *KVStore) getSafeTS(storeID uint64) (bool, uint64) {
 	safeTS, ok := s.safeTSMap.Load(storeID)
 	if !ok {
-		return 0
+		return false, 0
 	}
-	return safeTS.(uint64)
+	return true, safeTS.(uint64)
 }
 
 // setSafeTS sets safeTs for store storeID, export for testing
@@ -511,9 +511,13 @@ func (s *KVStore) getMinSafeTSByStores(stores []*locate.Store) uint64 {
 		return 0
 	}
 	for _, store := range stores {
-		safeTS := s.getSafeTS(store.StoreID())
-		if safeTS < minSafeTS {
-			minSafeTS = safeTS
+		ok, safeTS := s.getSafeTS(store.StoreID())
+		if ok {
+			if safeTS != 0 && safeTS < minSafeTS {
+				minSafeTS = safeTS
+			}
+		} else {
+			minSafeTS = 0
 		}
 	}
 	return minSafeTS
@@ -559,7 +563,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 				return
 			}
 			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
-			preSafeTS := s.getSafeTS(storeID)
+			_, preSafeTS := s.getSafeTS(storeID)
 			if preSafeTS > safeTS {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()
 				preSafeTSTime := oracle.GetTimeFromTS(preSafeTS)
