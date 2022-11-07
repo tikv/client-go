@@ -52,24 +52,21 @@ import (
 // GCTimeFormat is the format that gc_worker used to store times.
 const GCTimeFormat = "20060102-15:04:05.000 -0700"
 
-// GCTimeFormatOld is the format that gc_worker used to store times before, for compatibility we should keep it.
-const GCTimeFormatOld = "20060102-15:04:05 -0700"
+// gcTimeFormatOld is the format that gc_worker used to store times before, for compatibility we keep it.
+const gcTimeFormatOld = "20060102-15:04:05 -0700"
 
 // CompatibleParseGCTime parses a string with `GCTimeFormat` and returns a time.Time. If `value` can't be parsed as that
 // format, truncate to last space and try again. This function is only useful when loading times that saved by
 // gc_worker. We have changed the format that gc_worker saves time (removed the last field), but when loading times it
 // should be compatible with the old format.
 func CompatibleParseGCTime(value string) (time.Time, error) {
-	t, err := time.Parse(GCTimeFormat, value)
-
+	// The old format could parse the value with new format, the `GCTimeFormat` only be used when store.
+	t, err := time.Parse(gcTimeFormatOld, value)
 	if err != nil {
-		t, err = time.Parse(GCTimeFormatOld, value)
-		if err != nil {
-			// Remove the last field that separated by space
-			parts := strings.Split(value, " ")
-			prefix := strings.Join(parts[:len(parts)-1], " ")
-			t, err = time.Parse(GCTimeFormatOld, prefix)
-		}
+		// Remove the last field that separated by space
+		parts := strings.Split(value, " ")
+		prefix := strings.Join(parts[:len(parts)-1], " ")
+		t, err = time.Parse(gcTimeFormatOld, prefix)
 	}
 
 	if err != nil {
