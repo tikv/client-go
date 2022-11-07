@@ -50,7 +50,10 @@ import (
 )
 
 // GCTimeFormat is the format that gc_worker used to store times.
-const GCTimeFormat = "20060102-15:04:05 -0700"
+const GCTimeFormat = "20060102-15:04:05.000 -0700"
+
+// GCTimeFormatOld is the format that gc_worker used to store times before, for compatibility we should keep it.
+const GCTimeFormatOld = "20060102-15:04:05 -0700"
 
 // CompatibleParseGCTime parses a string with `GCTimeFormat` and returns a time.Time. If `value` can't be parsed as that
 // format, truncate to last space and try again. This function is only useful when loading times that saved by
@@ -60,10 +63,13 @@ func CompatibleParseGCTime(value string) (time.Time, error) {
 	t, err := time.Parse(GCTimeFormat, value)
 
 	if err != nil {
-		// Remove the last field that separated by space
-		parts := strings.Split(value, " ")
-		prefix := strings.Join(parts[:len(parts)-1], " ")
-		t, err = time.Parse(GCTimeFormat, prefix)
+		t, err = time.Parse(GCTimeFormatOld, value)
+		if err != nil {
+			// Remove the last field that separated by space
+			parts := strings.Split(value, " ")
+			prefix := strings.Join(parts[:len(parts)-1], " ")
+			t, err = time.Parse(GCTimeFormatOld, prefix)
+		}
 	}
 
 	if err != nil {
@@ -74,8 +80,9 @@ func CompatibleParseGCTime(value string) (time.Time, error) {
 
 // WithRecovery wraps goroutine startup call with force recovery.
 // it will dump current goroutine stack into log if catch any recover result.
-//   exec:      execute logic function.
-//   recoverFn: handler will be called after recover and before dump stack, passing `nil` means noop.
+//
+//	exec:      execute logic function.
+//	recoverFn: handler will be called after recover and before dump stack, passing `nil` means noop.
 func WithRecovery(exec func(), recoverFn func(r interface{})) {
 	defer func() {
 		r := recover()
