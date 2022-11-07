@@ -60,7 +60,8 @@ const gcTimeFormatOld = "20060102-15:04:05 -0700"
 // gc_worker. We have changed the format that gc_worker saves time (removed the last field), but when loading times it
 // should be compatible with the old format.
 func CompatibleParseGCTime(value string) (time.Time, error) {
-	// The old format could parse the value with new format, the `GCTimeFormat` only be used when store.
+	// The old format could parse the value with new format,
+	// let `GCTimeFormat` only be used when store the time.
 	t, err := time.Parse(gcTimeFormatOld, value)
 	if err != nil {
 		// Remove the last field that separated by space
