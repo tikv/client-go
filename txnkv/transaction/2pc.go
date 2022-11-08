@@ -177,6 +177,7 @@ type twoPhaseCommitter struct {
 	// allowed when tikv disk full happened.
 	diskFullOpt kvrpcpb.DiskFullOpt
 
+	cdc uint8
 	// The total number of kv request after batch split.
 	prewriteTotalReqNum int
 
@@ -1058,6 +1059,10 @@ func (c *twoPhaseCommitter) keySize(key, value []byte) int {
 
 func (c *twoPhaseCommitter) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	c.diskFullOpt = level
+}
+
+func (c *twoPhaseCommitter) SetCDC(cdc uint8) {
+	c.cdc = cdc
 }
 
 type ttlManagerState uint32

@@ -121,6 +121,7 @@ type KVTxn struct {
 	resourceGroupTag        []byte
 	resourceGroupTagger     tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt             kvrpcpb.DiskFullOpt
+	cdc                     uint8
 	commitTSUpperBoundCheck func(uint64) bool
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor    interceptor.RPCInterceptor
@@ -326,6 +327,10 @@ func (txn *KVTxn) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	txn.diskFullOpt = level
 }
 
+func (txn *KVTxn) SetCDC(cdc uint8) {
+	txn.cdc = cdc
+}
+
 // GetDiskFullOpt gets the options of current operation in each TiKV disk usage level.
 func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
 	return txn.diskFullOpt
@@ -409,6 +414,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 
 	txn.committer.SetDiskFullOpt(txn.diskFullOpt)
+	txn.committer.SetCDC(txn.cdc)
 
 	defer committer.ttlManager.close()
 

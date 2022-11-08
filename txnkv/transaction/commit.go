@@ -75,6 +75,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,
 		DiskFullOpt:            c.diskFullOpt,
+		MvccMeta:               uint32(c.cdc),
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
 	})
