@@ -178,7 +178,7 @@ type twoPhaseCommitter struct {
 	diskFullOpt kvrpcpb.DiskFullOpt
 
 	// txnSource is used to record the source of the transaction.
-	txnSource uint8
+	txnSource uint64
 
 	// The total number of kv request after batch split.
 	prewriteTotalReqNum int
@@ -1063,7 +1063,7 @@ func (c *twoPhaseCommitter) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	c.diskFullOpt = level
 }
 
-func (c *twoPhaseCommitter) SetTxnSource(txnSource uint8) {
+func (c *twoPhaseCommitter) SetTxnSource(txnSource uint64) {
 	c.txnSource = txnSource
 }
 
