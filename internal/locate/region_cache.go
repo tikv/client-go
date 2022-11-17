@@ -2576,14 +2576,14 @@ func (ss *SlowScoreStat) updSlowScore(timecost time.Duration, timeout time.Durat
 	ss.updCount++
 	if ss.avgTimeCost == 0 {
 		ss.avgScore = float64(slowScoreInitVal)
-		ss.avgTimeCost = uint64(timecost.Abs().Milliseconds())
+		ss.avgTimeCost = uint64(timecost.Abs().Microseconds())
 		return true
 	}
-	curTimeCost := timecost.Abs().Milliseconds() * 10
-	if ss.avgTimeCost*10 <= uint64(curTimeCost) {
+	curTimeCost := timecost.Abs().Microseconds()
+	if ss.avgTimeCost*1000 <= uint64(curTimeCost) {
 		ss.avgScore = float64(slowScoreThreshold)
 	} else {
-		costScore := float64(curTimeCost) / float64(timeout.Abs().Milliseconds())
+		costScore := float64(curTimeCost) / float64(timeout.Abs().Microseconds())
 		if uint64(curTimeCost) > ss.avgTimeCost {
 			ss.avgScore += costScore
 		} else {
