@@ -364,14 +364,6 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	return selector.buildRPCContext(bo)
 }
 
-// @TODO: supply extra strategy to determine whether it's necessary to forward following
-// requests to followers, if the leader is busy.
-func (state *accessKnownLeader) onSendSuccess(selector *replicaSelector) {
-	if !selector.region.switchWorkLeaderToPeer(selector.targetReplica().peer) {
-		panic("the store must exist")
-	}
-}
-
 func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
 	liveness := selector.checkLiveness(bo, selector.targetReplica())
 	// Only enable forwarding when unreachable to avoid using proxy to access a TiKV that cannot serve.
