@@ -197,6 +197,29 @@ func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *Reg
 	}
 }
 
+// RecordStoreRequestRuntimeStats records request runtime stats to each Store.
+func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, cmd tikvrpc.CmdType, duration time.Duration, timeout time.Duration) {
+	regionCache.storeMu.RLock()
+	defer regionCache.storeMu.RUnlock()
+	store, exists := regionCache.storeMu.stores[storeID]
+	if !exists {
+		store = regionCache.getStoreByStoreID(storeID)
+	}
+	// Update store slowScore
+	store.updateSlowScore(duration, timeout)
+}
+
+// MarkStoreAlreadySlow marks the given Store already slow.
+func MarkStoreAlreadySlow(regionCache *RegionCache, storeID uint64) {
+	regionCache.storeMu.RLock()
+	defer regionCache.storeMu.RUnlock()
+	store, exists := regionCache.storeMu.stores[storeID]
+	if !exists {
+		store = regionCache.getStoreByStoreID(storeID)
+	}
+	store.markAlreadySlow()
+}
+
 // GetRegionCache returns the region cache.
 func (s *RegionRequestSender) GetRegionCache() *RegionCache {
 	return s.regionCache
@@ -333,12 +356,20 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	// will not be wakened up and re-elect the leader until the follower receives
 	// a request. So, before the new leader is elected, we should not send requests
 	// to the unreachable old leader to avoid unnecessary timeout.
-	if liveness != reachable || leader.isExhausted(maxReplicaAttempt) {
+	if liveness != reachable || leader.isExhausted(maxReplicaAttempt) || leader.store.isSlow() {
 		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
 		return nil, stateChanged{}
 	}
 	selector.targetIdx = state.leaderIdx
 	return selector.buildRPCContext(bo)
+}
+
+// @TODO: supply extra strategy to determine whether it's necessary to forward following
+// requests to followers, if the leader is busy.
+func (state *accessKnownLeader) onSendSuccess(selector *replicaSelector) {
+	if !selector.region.switchWorkLeaderToPeer(selector.targetReplica().peer) {
+		panic("the store must exist")
+	}
 }
 
 func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -623,14 +654,18 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 			attempts: 0,
 		})
 	}
+	// @TODO: Add strategy to make judgement whether the leader is accessible or not. If the leader is abnormal
+	// to be accessed, we should force update the `replicaRead = true`.
+
 	var state selectorState
-	if !req.ReplicaReadType.IsFollowerRead() {
-		if regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0 {
-			state = &accessByKnownProxy{leaderIdx: regionStore.workTiKVIdx}
-		} else {
-			state = &accessKnownLeader{leaderIdx: regionStore.workTiKVIdx}
-		}
-	} else {
+	canFollower := req.Type.IsReadCmd() && regionStore.stores[regionStore.workTiKVIdx].isSlow()
+	canProxy := regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0
+
+	// All request default with req.ReplicaReadType == ReadFromLeader. That is,
+	// write & read reqs are both initialized with `ReadFromLeader`, for sending
+	// requests to leaders by default. Only if is `tidb_replica_read` set by
+	// tidb, all read reqs will be marked with ReplicaReadType == Follower || Leader_and_Follower.
+	if req.ReplicaReadType.IsFollowerRead() || (canFollower && !canProxy) {
 		option := storeSelectorOp{}
 		for _, op := range opts {
 			op(&option)
@@ -642,7 +677,34 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 			leaderIdx:         regionStore.workTiKVIdx,
 			lastIdx:           -1,
 		}
+	} else {
+		if canProxy {
+			state = &accessByKnownProxy{leaderIdx: regionStore.workTiKVIdx}
+		} else {
+			state = &accessKnownLeader{leaderIdx: regionStore.workTiKVIdx}
+		}
 	}
+	/*
+		if !req.ReplicaReadType.IsFollowerRead() {
+			if regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0 {
+				state = &accessByKnownProxy{leaderIdx: regionStore.workTiKVIdx}
+			} else {
+				state = &accessKnownLeader{leaderIdx: regionStore.workTiKVIdx}
+			}
+			// @TODO: need to make sure the given request is a READ request.
+		} else {
+			option := storeSelectorOp{}
+			for _, op := range opts {
+				op(&option)
+			}
+			state = &accessFollower{
+				tryLeader:         req.ReplicaReadType == kv.ReplicaReadMixed,
+				isGlobalStaleRead: req.IsGlobalStaleRead(),
+				option:            option,
+				leaderIdx:         regionStore.workTiKVIdx,
+				lastIdx:           -1,
+			}
+		}*/
 
 	return &replicaSelector{
 		regionCache,
@@ -1037,9 +1099,11 @@ func (s *RegionRequestSender) SendReqCtx(
 		var regionErr *errorpb.Error
 		regionErr, err = resp.GetRegionError()
 		if err != nil {
+			// TODO: Update slowScore of this Store. [Severity: High, or weight: high]
 			return nil, nil, err
 		}
 		if regionErr != nil {
+			// TODO: Update slowScore of this Store. [Severity: Middle, or weight: middle]
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
 				return nil, nil, err
@@ -1050,7 +1114,9 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		} else {
 			if s.replicaSelector != nil {
+				// Here, we should update the latency of statistics on each Store.
 				s.replicaSelector.onSendSuccess()
+				// TODO: Update slowScore of this Store. [Severity: Low, or weight: low]
 			}
 		}
 		return resp, rpcCtx, nil
@@ -1182,6 +1248,8 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 	if !injectFailOnSend {
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
+		// TODO: Update slowScore of this Store. [Severity: High, weight: high]
+		RecordStoreRequestRuntimeStats(s.regionCache, rpcCtx.Store.storeID, req.Type, time.Since(start), timeout)
 		if s.Stats != nil {
 			RecordRegionRequestRuntimeStats(s.Stats, req.Type, time.Since(start))
 			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
@@ -1489,6 +1557,12 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	if regionErr.GetServerIsBusy() != nil {
+		// Mark the server is busy (the next incoming READs could be redirect
+		// to expected followers. )
+		if ctx != nil && ctx.Store != nil {
+			MarkStoreAlreadySlow(s.regionCache, ctx.Store.storeID)
+		}
+
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx))

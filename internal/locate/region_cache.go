@@ -586,6 +586,11 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 		op(options)
 	}
 	isLeaderReq := false
+	// @TODO: Add strategy to make judgement whether the leader is accessible or not. If the leader is abnormal
+	// to be accessed, we should force update the `replicaRead = true`.
+
+	//
+	// if (...) { replicaRead = kv.ReplicaReadFollower }
 	switch replicaRead {
 	case kv.ReplicaReadFollower:
 		store, peer, accessIdx, storeIdx = cachedRegion.FollowerStorePeer(regionStore, followerStoreSeed, options)
@@ -2166,6 +2171,9 @@ type Store struct {
 	// this mechanism is currently only applicable for TiKV stores.
 	livenessState    uint32
 	unreachableSince time.Time
+
+	// TODO: set a statistics for counting the request latency to this store
+	slowScore SlowScoreStat
 }
 
 type resolveState uint64
@@ -2473,6 +2481,10 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 		return
 	}
 	addr := s.addr
+	// @TODO: Add strategy to collect the ping / pong state (time-cost to nodes).
+	// This strategy should make a judgement whether the remote node is busy or
+	// abnormal. And if this node is not accessible temporarily, we should mark
+	// this node with not accessible state.
 	rsCh := livenessSf.DoChan(addr, func() (interface{}, error) {
 		return invokeKVStatusAPI(addr, storeLivenessTimeout), nil
 	})
@@ -2546,6 +2558,66 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 
 	l = reachable
 	return
+}
+
+const (
+	slowScoreInitVal   = 1
+	slowScoreThreshold = 80
+)
+
+// SlowScoreStat represents the statistics on busyness of Store.
+type SlowScoreStat struct {
+	avgScore    float64
+	avgTimeCost uint64
+	updCount    uint64
+}
+
+func (ss *SlowScoreStat) updSlowScore(timecost time.Duration, timeout time.Duration) bool {
+	ss.updCount++
+	if ss.avgTimeCost == 0 {
+		ss.avgScore = float64(slowScoreInitVal)
+		ss.avgTimeCost = uint64(timecost.Abs().Milliseconds())
+		return true
+	}
+	curTimeCost := timecost.Abs().Milliseconds() * 10
+	if ss.avgTimeCost*10 <= uint64(curTimeCost) {
+		ss.avgScore = float64(slowScoreThreshold)
+	} else {
+		costScore := float64(curTimeCost) / float64(timeout.Abs().Milliseconds())
+		if uint64(curTimeCost) > ss.avgTimeCost {
+			ss.avgScore += costScore
+		} else {
+			if ss.avgScore-costScore <= float64(slowScoreInitVal) {
+				ss.avgScore = float64(slowScoreInitVal)
+			} else {
+				ss.avgScore -= costScore
+			}
+		}
+		ss.avgTimeCost = (ss.avgTimeCost*(ss.updCount-1) + uint64(curTimeCost)) / ss.updCount
+	}
+	return true
+}
+
+func (ss *SlowScoreStat) markAlreadySlow() {
+	ss.avgScore = float64(slowScoreThreshold)
+	ss.avgTimeCost *= 10
+}
+
+func (ss *SlowScoreStat) isSlow() bool {
+	return uint64(ss.avgScore) >= slowScoreThreshold
+}
+
+// isSlow returns whether current Store is slow or not.
+func (s *Store) isSlow() bool {
+	return s.slowScore.isSlow()
+}
+
+func (s *Store) updateSlowScore(timecost time.Duration, timeout time.Duration) bool {
+	return s.slowScore.updSlowScore(timecost, timeout)
+}
+
+func (s *Store) markAlreadySlow() {
+	s.slowScore.markAlreadySlow()
 }
 
 func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
