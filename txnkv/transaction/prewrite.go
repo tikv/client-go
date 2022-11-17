@@ -182,6 +182,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,
 		DiskFullOpt:            c.diskFullOpt,
+		TxnSource:              uint32(c.txnSource),
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
 	})

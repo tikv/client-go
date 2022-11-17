@@ -177,6 +177,9 @@ type twoPhaseCommitter struct {
 	// allowed when tikv disk full happened.
 	diskFullOpt kvrpcpb.DiskFullOpt
 
+	// txnSource is used to record the source of the transaction.
+	txnSource uint8
+
 	// The total number of kv request after batch split.
 	prewriteTotalReqNum int
 
@@ -1058,6 +1061,10 @@ func (c *twoPhaseCommitter) keySize(key, value []byte) int {
 
 func (c *twoPhaseCommitter) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	c.diskFullOpt = level
+}
+
+func (c *twoPhaseCommitter) SetTxnSource(txnSource uint8) {
+	c.txnSource = txnSource
 }
 
 type ttlManagerState uint32
