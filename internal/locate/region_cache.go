@@ -1385,9 +1385,10 @@ func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
 				})
 			}
 			stores = append(stores, &Store{
-				addr:    store.addr,
-				storeID: store.storeID,
-				labels:  storeLabel,
+				addr:     store.addr,
+				peerAddr: store.peerAddr,
+				storeID:  store.storeID,
+				labels:   storeLabel,
 			})
 		}
 	}
@@ -1834,6 +1835,7 @@ func (c *RegionCache) reloadTiFlashComputeStores(bo *retry.Backoffer) (res []*St
 			res = append(res, &Store{
 				storeID:   s.GetId(),
 				addr:      s.GetAddress(),
+				peerAddr:  s.GetPeerAddress(),
 				saddr:     s.GetStatusAddress(),
 				storeType: tikvrpc.GetStoreTypeByMeta(s),
 				labels:    s.GetLabels(),
@@ -2152,6 +2154,7 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 // Store contains a kv process's address.
 type Store struct {
 	addr         string               // loaded store address
+	peerAddr     string               // TiFlash Proxy use peerAddr
 	saddr        string               // loaded store status address
 	storeID      uint64               // store's id
 	state        uint64               // unsafe store storeState
@@ -2239,6 +2242,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 			return "", errors.Errorf("empty store(%d) address", s.storeID)
 		}
 		s.addr = addr
+		s.peerAddr = store.GetPeerAddress()
 		s.saddr = store.GetStatusAddress()
 		s.storeType = tikvrpc.GetStoreTypeByMeta(store)
 		s.labels = store.GetLabels()
@@ -2285,7 +2289,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
-		newStore := &Store{storeID: s.storeID, addr: addr, saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		c.storeMu.Lock()
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
@@ -2505,6 +2509,11 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 // GetAddr returns the address of the store
 func (s *Store) GetAddr() string {
 	return s.addr
+}
+
+// GetPeerAddr returns the peer address of the store
+func (s *Store) GetPeerAddr() string {
+	return s.peerAddr
 }
 
 func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
