@@ -2561,30 +2561,42 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 }
 
 const (
-	slowScoreInitVal   = 1
-	slowScoreThreshold = 80
+	slowScoreInitVal     = 1
+	slowScoreThreshold   = 80
+	slowScoreInitTimeout = 500  // unit: ms
+	slowScoreUpdInterval = 1000 // 1000 / one update
 )
 
 // SlowScoreStat represents the statistics on busyness of Store.
 type SlowScoreStat struct {
-	avgScore    float64
-	avgTimeCost uint64
-	updCount    uint64
+	avgScore         float64
+	avgTimeCost      uint64
+	intervalTimeCost uint64
+	updCount         uint64
+	slowCount        uint64
 }
 
 func (ss *SlowScoreStat) updSlowScore(timecost time.Duration, timeout time.Duration) bool {
 	ss.updCount++
 	if ss.avgTimeCost == 0 {
 		ss.avgScore = float64(slowScoreInitVal)
-		ss.avgTimeCost = uint64(timecost.Abs().Microseconds())
+		ss.avgTimeCost = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
+		ss.intervalTimeCost = uint64((timecost * time.Microsecond).Abs().Microseconds())
 		return true
 	}
-	curTimeCost := timecost.Abs().Microseconds()
-	if ss.avgTimeCost*1000 <= uint64(curTimeCost) {
-		ss.avgScore = float64(slowScoreThreshold)
-	} else {
-		costScore := float64(curTimeCost) / float64(timeout.Abs().Microseconds())
-		if uint64(curTimeCost) > ss.avgTimeCost {
+	curTimeCost := uint64(timecost.Abs().Microseconds())
+	if ss.avgTimeCost*1000 <= curTimeCost {
+		ss.slowCount++
+		if ss.slowCount >= slowScoreUpdInterval/2 {
+			ss.slowCount = 0
+			ss.avgScore = float64(slowScoreThreshold)
+			return false
+		}
+	}
+	if ss.updCount%slowScoreUpdInterval == 0 {
+		intervalAvgTimeCost := ss.intervalTimeCost / slowScoreUpdInterval
+		costScore := float64(intervalAvgTimeCost) / float64(timeout.Abs().Microseconds())
+		if intervalAvgTimeCost > ss.avgTimeCost {
 			ss.avgScore += costScore
 		} else {
 			if ss.avgScore-costScore <= float64(slowScoreInitVal) {
@@ -2593,7 +2605,12 @@ func (ss *SlowScoreStat) updSlowScore(timecost time.Duration, timeout time.Durat
 				ss.avgScore -= costScore
 			}
 		}
-		ss.avgTimeCost = (ss.avgTimeCost*(ss.updCount-1) + uint64(curTimeCost)) / ss.updCount
+		ss.avgTimeCost = (ss.avgTimeCost*(ss.updCount-slowScoreUpdInterval) + ss.intervalTimeCost) / ss.updCount
+		// Resets the counter of inteval timecost
+		ss.intervalTimeCost = 0
+		ss.slowCount = 0
+	} else {
+		ss.intervalTimeCost += curTimeCost
 	}
 	return true
 }
