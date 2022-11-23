@@ -97,6 +97,7 @@ func (txn TxnProbe) GetLockedCount() int {
 	return txn.lockedCnt
 }
 
+// GetAggressiveLockingKeys returns the keys that are in the current aggressive locking stage.
 func (txn TxnProbe) GetAggressiveLockingKeys() []string {
 	keys := make([]string, 0, len(txn.aggressiveLockingContext.currentLockedKeys))
 	for key := range txn.aggressiveLockingContext.currentLockedKeys {
@@ -105,6 +106,7 @@ func (txn TxnProbe) GetAggressiveLockingKeys() []string {
 	return keys
 }
 
+// GetAggressiveLockingPreviousKeys returns the keys that were locked in the previous aggressive locking stage.
 func (txn TxnProbe) GetAggressiveLockingPreviousKeys() []string {
 	keys := make([]string, 0, len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks))
 	for key := range txn.aggressiveLockingContext.lastRetryUnnecessaryLocks {
