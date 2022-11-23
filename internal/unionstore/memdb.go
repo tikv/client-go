@@ -39,6 +39,7 @@ import (
 	"math"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -868,14 +869,11 @@ func (db *MemDB) RemoveFromBuffer(key []byte) {
 
 // SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows.
 func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
-	if db.allocator.memChangeHook == nil {
-		// always set together
-		innerHook := func() {
-			hook(db.allocator.capacity + db.vlog.capacity)
-		}
-		db.allocator.memChangeHook = innerHook
-		db.vlog.memChangeHook = innerHook
+	innerHook := func() {
+		hook(db.allocator.capacity + db.vlog.capacity)
 	}
+	atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&db.allocator.memChangeHook)), nil, unsafe.Pointer(&innerHook))
+	atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&db.vlog.memChangeHook)), nil, unsafe.Pointer(&innerHook))
 }
 
 // Mem returns the current memory footprint
