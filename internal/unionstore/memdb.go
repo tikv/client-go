@@ -872,8 +872,8 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
 		hook(db.allocator.capacity + db.vlog.capacity)
 	}
-	atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&db.allocator.memChangeHook)), nil, unsafe.Pointer(&innerHook))
-	atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&db.vlog.memChangeHook)), nil, unsafe.Pointer(&innerHook))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&db.allocator.memChangeHook)), unsafe.Pointer(&innerHook))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&db.vlog.memChangeHook)), unsafe.Pointer(&innerHook))
 }
 
 // Mem returns the current memory footprint
