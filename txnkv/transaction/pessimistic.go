@@ -398,6 +398,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 			action.ValuesLock.Unlock()
 		case kvrpcpb.PessimisticLockKeyResultType_LockedWithConflict:
 			action.ValuesLock.Lock()
+			if action.Values == nil {
+				action.Values = make(map[string]kv.ReturnedValue, 1)
+			}
 			action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
 				Value:                res.Value,
 				Exists:               res.Existence,
@@ -408,11 +411,11 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 			}
 			action.ValuesLock.Unlock()
 		case kvrpcpb.PessimisticLockKeyResultType_Failed:
-			action.ValuesLock.Lock()
-			action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
-				LockStatusUncertain: true,
-			}
-			action.ValuesLock.Unlock()
+			//action.ValuesLock.Lock()
+			//action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
+			//	LockStatusUncertain: true,
+			//}
+			//action.ValuesLock.Unlock()
 			failedMutations.AppendMutation(batch.mutations.GetMutation(i))
 		default:
 			panic("unreachable")

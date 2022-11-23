@@ -97,6 +97,22 @@ func (txn TxnProbe) GetLockedCount() int {
 	return txn.lockedCnt
 }
 
+func (txn TxnProbe) GetAggressiveLockingKeys() []string {
+	keys := make([]string, 0, len(txn.aggressiveLockingContext.currentLockedKeys))
+	for key := range txn.aggressiveLockingContext.currentLockedKeys {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func (txn TxnProbe) GetAggressiveLockingPreviousKeys() []string {
+	keys := make([]string, 0, len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks))
+	for key := range txn.aggressiveLockingContext.lastRetryUnnecessaryLocks {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	c, err := newTwoPhaseCommitter(txn, sessionID)
 	if err != nil {
