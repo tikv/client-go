@@ -869,9 +869,8 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 		}
 		if !allowLockWithConflict {
 			return nil, writeConflictErr
-		} else {
-			assertionLevel = kvrpcpb.AssertionLevel_Off
 		}
+		assertionLevel = kvrpcpb.AssertionLevel_Off
 	}
 
 	needGetVal := getVal

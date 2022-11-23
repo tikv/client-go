@@ -651,6 +651,17 @@ func (txn *KVTxn) LockKeysWithWaitTime(ctx context.Context, lockWaitTime int64, 
 	return txn.LockKeys(ctx, lockCtx, keysInput...)
 }
 
+// StartAggressiveLocking makes the transaction enters aggressive locking state.
+//
+// Aggressive locking refers to the behavior that when a DML in a pessimistic transaction encounters write conflict,
+// do not pessimistic-rollback them immediately; instead, keep the already-acquired locks and retry the statement.
+// In this way, during retry, if it needs to acquire the same locks that was acquired in the previous execution, the
+// lock RPC can be skipped. After finishing the execution, if some of the locks that were acquired in the previous
+// execution but not needed in the current retried execution, they will be released.
+//
+// In aggressive locking state, keys locked by `LockKeys` will be recorded to a separated buffer. For `LockKeys`
+// invocations that involves only one key, the pessimistic lock request will be performed in ForceLock mode
+// (kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock).
 func (txn *KVTxn) StartAggressiveLocking() {
 	if txn.aggressiveLockingContext != nil {
 		panic("Trying to start aggressive locking while it's already started")
@@ -662,6 +673,12 @@ func (txn *KVTxn) StartAggressiveLocking() {
 	}
 }
 
+// RetryAggressiveLocking tells the transaction that the current statement will be retried (ends the current attempt
+// and starts the next attempt).
+// If some keys are already locked during the aggressive locking, after calling this function, these locks will then be
+// regarded as being acquired in the previous attempt.
+// If some locks is acquired in the previous attempt but not needed in the current attempt, after calling this function,
+// these locks will then be released.
 func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to retry aggressive locking while it's not started")
@@ -682,6 +699,8 @@ func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 	txn.aggressiveLockingContext.currentLockedKeys = make(map[string]tempLockBufferEntry)
 }
 
+// CancelAggressiveLocking cancels the current aggressive locking state. All pessimistic locks that were acquired
+// during the aggressive locking state will be rolled back by PessimisticRollback.
 func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to cancel aggressive locking while it's not started")
@@ -708,6 +727,8 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	txn.aggressiveLockingContext = nil
 }
 
+// DoneAggressiveLocking finishes the current aggressive locking. The locked keys will be moved to the membuffer as if
+// these keys are locked in nomral way. If there's any unneeded locks, they will be released.
 func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
@@ -730,10 +751,12 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	txn.aggressiveLockingContext = nil
 }
 
+// IsInAggressiveLockingMode checks if the transaction is currently in aggressive locking mode.
 func (txn *KVTxn) IsInAggressiveLockingMode() bool {
 	return txn.aggressiveLockingContext != nil
 }
 
+// IsInAggressiveLockingStage checks if a key is locked during the current aggressive locking stage.
 func (txn *KVTxn) IsInAggressiveLockingStage(key []byte) bool {
 	if txn.aggressiveLockingContext != nil {
 		_, ok := txn.aggressiveLockingContext.currentLockedKeys[string(key)]
