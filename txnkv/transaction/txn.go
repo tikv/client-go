@@ -121,7 +121,7 @@ type KVTxn struct {
 	resourceGroupTag        []byte
 	resourceGroupTagger     tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt             kvrpcpb.DiskFullOpt
-	txnSource               uint8
+	txnSource               uint64
 	commitTSUpperBoundCheck func(uint64) bool
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor    interceptor.RPCInterceptor
@@ -328,7 +328,7 @@ func (txn *KVTxn) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 }
 
 // SetTxnSource sets the source of the transaction.
-func (txn *KVTxn) SetTxnSource(txnSource uint8) {
+func (txn *KVTxn) SetTxnSource(txnSource uint64) {
 	txn.txnSource = txnSource
 }
 
