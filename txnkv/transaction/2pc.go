@@ -179,8 +179,14 @@ type twoPhaseCommitter struct {
 	// allowed when tikv disk full happened.
 	diskFullOpt kvrpcpb.DiskFullOpt
 
+	// txnSource is used to record the source of the transaction.
+	txnSource uint64
+
 	// The total number of kv request after batch split.
 	prewriteTotalReqNum int
+
+	// assertion error happened when initializing mutations, could be false positive if pessimistic lock is lost
+	stashedAssertionError error
 }
 
 type memBufferMutations struct {
@@ -655,8 +661,17 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 				// Do not exit immediately here. To rollback the pessimistic locks (if any), we need to finish
 				// collecting all the keys.
 				// Keep only the first assertion error.
+
+				// assertion errors is treated differently from other errors. If there is an assertion error,
+				// it's probably cause by loss of pessimistic locks, so we can't directly return the assertion error.
+				// Instead, we stash the error, forbid async commit and 1PC, then let the prewrite continue.
+				// If the prewrite requests all succeed, the assertion error is returned, otherwise return the error
+				// from the prewrite phase.
 				if err1 != nil && assertionError == nil {
 					assertionError = errors.WithStack(err1)
+					c.stashedAssertionError = assertionError
+					c.txn.enableAsyncCommit = false
+					c.txn.enable1PC = false
 				}
 			}
 
@@ -720,10 +735,6 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	c.resourceGroupTag = txn.resourceGroupTag
 	c.resourceGroupTagger = txn.resourceGroupTagger
 	c.setDetail(commitDetail)
-
-	if assertionError != nil {
-		return assertionError
-	}
 
 	return nil
 }
@@ -1086,6 +1097,10 @@ func (c *twoPhaseCommitter) keySize(key, value []byte) int {
 
 func (c *twoPhaseCommitter) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	c.diskFullOpt = level
+}
+
+func (c *twoPhaseCommitter) SetTxnSource(txnSource uint64) {
+	c.txnSource = txnSource
 }
 
 type ttlManagerState uint32
@@ -1543,6 +1558,16 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		return err
 	}
 
+	// return assertion error found in TiDB after prewrite succeeds to prevent false positive. Note this is only visible
+	// when async commit or 1PC is disabled.
+	if c.stashedAssertionError != nil {
+		if c.isAsyncCommit() || c.isOnePC() {
+			// should be unreachable
+			panic("tidb-side assertion error should forbids async commit or 1PC")
+		}
+		return c.stashedAssertionError
+	}
+
 	// strip check_not_exists keys that no need to commit.
 	c.stripNoNeedCommitKeys()
 
@@ -1777,7 +1802,7 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 		var err error
 		for tryTimes < retryLimit {
 			pessimisticLockBo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, c.txn.vars)
-			err = c.pessimisticLockMutations(pessimisticLockBo, lCtx, kvrpcpb.PessimisticLockWaitingMode_RetryAfterWait, &keysNeedToLock)
+			err = c.pessimisticLockMutations(pessimisticLockBo, lCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &keysNeedToLock)
 			if err != nil {
 				// KeysNeedToLock won't change, so don't async rollback pessimistic locks here for write conflict.
 				if _, ok := errors.Cause(err).(*tikverr.ErrWriteConflict); ok {

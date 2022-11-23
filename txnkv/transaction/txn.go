@@ -155,6 +155,7 @@ type KVTxn struct {
 	resourceGroupTag        []byte
 	resourceGroupTagger     tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt             kvrpcpb.DiskFullOpt
+	txnSource               uint64
 	commitTSUpperBoundCheck func(uint64) bool
 	// interceptor is used to decorate the RPC request logic related to the txn.
 	interceptor    interceptor.RPCInterceptor
@@ -367,6 +368,11 @@ func (txn *KVTxn) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
 	txn.diskFullOpt = level
 }
 
+// SetTxnSource sets the source of the transaction.
+func (txn *KVTxn) SetTxnSource(txnSource uint64) {
+	txn.txnSource = txnSource
+}
+
 // GetDiskFullOpt gets the options of current operation in each TiKV disk usage level.
 func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
 	return txn.diskFullOpt
@@ -457,6 +463,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 
 	txn.committer.SetDiskFullOpt(txn.diskFullOpt)
+	txn.committer.SetTxnSource(txn.txnSource)
 
 	defer committer.ttlManager.close()
 
@@ -933,9 +940,9 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			}
 		}
 
-		lockWaitMode := kvrpcpb.PessimisticLockWaitingMode_RetryAfterWait
+		lockWaitMode := kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal
 		if txn.aggressiveLockingContext != nil && len(keys) == 1 {
-			lockWaitMode = kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait
+			lockWaitMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
 		}
 		lockCtx.Stats = &util.LockKeysDetails{
 			LockKeys:    int32(len(keys)),

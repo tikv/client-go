@@ -59,7 +59,7 @@ import (
 
 type actionPessimisticLock struct {
 	*kv.LockCtx
-	lockWaitMode kvrpcpb.PessimisticLockWaitingMode
+	wakeUpMode kvrpcpb.PessimisticLockWakeUpMode
 }
 type actionPessimisticRollback struct{}
 
@@ -120,7 +120,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		ReturnValues:     action.ReturnValues,
 		CheckExistence:   action.CheckExistence,
 		MinCommitTs:      c.forUpdateTS + 1,
-		LockWaitingMode:  action.lockWaitMode,
+		WakeUpMode:       action.wakeUpMode,
 		LockOnlyIfExists: action.LockOnlyIfExists,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
@@ -178,7 +178,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			return err
 		}
 
-		if action.lockWaitMode == kvrpcpb.PessimisticLockWaitingMode_RetryAfterWait {
+		if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
 			finished, err := action.handlePessimisticLockResponseRetryFirstMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -186,7 +186,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			if finished {
 				return nil
 			}
-		} else if action.lockWaitMode == kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait {
+		} else if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
 			finished, retryMutations, err := action.handlePessimisticLockResponseLockFirstMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -246,7 +246,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 		if same {
 			return false, nil
 		}
-		err = c.pessimisticLockMutations(bo, action.LockCtx, action.lockWaitMode, batch.mutations)
+		err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, batch.mutations)
 		return true, err
 	}
 	if resp.Resp == nil {
@@ -373,7 +373,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 	failedMutations := NewPlainMutations(0)
 	keyErrs := lockResp.GetErrors()
 
-	if batch.isPrimary && len(lockResp.Results) > 0 && lockResp.Results[batch.primaryIndex].Type != kvrpcpb.PessimisticLockKeyResultType_Failed {
+	if batch.isPrimary && len(lockResp.Results) > 0 && lockResp.Results[batch.primaryIndex].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
 		// After locking the primary key, we should protect the primary lock from expiring
 		// now in case locking the remaining keys take a long time.
 		c.run(c, action.LockCtx)
@@ -381,22 +381,22 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 
 	for i, res := range lockResp.Results {
 		switch res.Type {
-		case kvrpcpb.PessimisticLockKeyResultType_Empty:
-			// Do nothing
-		case kvrpcpb.PessimisticLockKeyResultType_Value:
-			action.ValuesLock.Lock()
-			action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
-				Value:  res.Value,
-				Exists: res.Existence,
+		case kvrpcpb.PessimisticLockKeyResultType_LockResultNormal:
+			if action.ReturnValues {
+				action.ValuesLock.Lock()
+				action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
+					Value:  res.Value,
+					Exists: res.Existence,
+				}
+				action.ValuesLock.Unlock()
+			} else if action.CheckExistence {
+				action.ValuesLock.Lock()
+				action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
+					Exists: res.Existence,
+				}
+				action.ValuesLock.Unlock()
 			}
-			action.ValuesLock.Unlock()
-		case kvrpcpb.PessimisticLockKeyResultType_Existence:
-			action.ValuesLock.Lock()
-			action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
-				Exists: res.Existence,
-			}
-			action.ValuesLock.Unlock()
-		case kvrpcpb.PessimisticLockKeyResultType_LockedWithConflict:
+		case kvrpcpb.PessimisticLockKeyResultType_LockResultLockedWithConflict:
 			action.ValuesLock.Lock()
 			if action.Values == nil {
 				action.Values = make(map[string]kv.ReturnedValue, 1)
@@ -410,7 +410,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 				action.MaxLockedWithConflictTS = res.LockedWithConflictTs
 			}
 			action.ValuesLock.Unlock()
-		case kvrpcpb.PessimisticLockKeyResultType_Failed:
+		case kvrpcpb.PessimisticLockKeyResultType_LockResultFailed:
 			//action.ValuesLock.Lock()
 			//action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
 			//	LockStatusUncertain: true,
@@ -431,7 +431,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 	}
 
 	// The primary must be locked first, otherwise there should be some bug in the implementation.
-	if batch.isPrimary && failedMutations.Len() < len(lockResp.Results) && lockResp.Results[batch.primaryIndex].Type == kvrpcpb.PessimisticLockKeyResultType_Failed {
+	if batch.isPrimary && failedMutations.Len() < len(lockResp.Results) && lockResp.Results[batch.primaryIndex].Type == kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
 		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 
@@ -479,7 +479,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 		if same {
 			return false, retryMutations, nil
 		}
-		err = c.pessimisticLockMutations(bo, action.LockCtx, action.lockWaitMode, retryMutations)
+		err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, retryMutations)
 		return true, nil, err
 	}
 
@@ -576,7 +576,7 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 	return nil
 }
 
-func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticLockWaitingMode, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticLockWakeUpMode, mutations CommitterMutations) error {
 	if c.sessionID > 0 {
 		if val, err := util.EvalFailpoint("beforePessimisticLock"); err == nil {
 			// Pass multiple instructions in one string, delimited by commas, to trigger multiple behaviors, like
@@ -597,7 +597,7 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCt
 			}
 		}
 	}
-	return c.doActionOnMutations(bo, actionPessimisticLock{LockCtx: lockCtx, lockWaitMode: lockWaitMode}, mutations)
+	return c.doActionOnMutations(bo, actionPessimisticLock{LockCtx: lockCtx, wakeUpMode: lockWaitMode}, mutations)
 }
 
 func (c *twoPhaseCommitter) pessimisticRollbackMutations(bo *retry.Backoffer, mutations CommitterMutations) error {

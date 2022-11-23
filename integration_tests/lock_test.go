@@ -453,7 +453,7 @@ func (s *testLockSuite) ttlEquals(x, y uint64) {
 	if x < y {
 		x, y = y, x
 	}
-	s.LessOrEqual(x-y, uint64(5))
+	s.LessOrEqual(x-y, uint64(50))
 }
 
 func (s *testLockSuite) TestLockTTL() {

@@ -51,6 +51,8 @@ type localOracle struct {
 	hook            *struct {
 		currentTime time.Time
 	}
+
+	localExternalTimestamp
 }
 
 // NewLocalOracle creates an Oracle that uses local time as data source.
@@ -123,4 +125,12 @@ func (l *localOracle) UntilExpired(lockTimeStamp, TTL uint64, opt *oracle.Option
 }
 
 func (l *localOracle) Close() {
+}
+
+func (l *localOracle) SetExternalTimestamp(ctx context.Context, newTimestamp uint64) error {
+	return l.setExternalTimestamp(ctx, l, newTimestamp)
+}
+
+func (l *localOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	return l.getExternalTimestamp(ctx)
 }

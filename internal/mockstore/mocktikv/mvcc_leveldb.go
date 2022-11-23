@@ -541,7 +541,7 @@ type lockCtx struct {
 	LockOnlyIfExists bool
 
 	// Lock waiting is not supported in mocktikv. This only controls whether locking with conflict is allowed.
-	LockWaitingMode kvrpcpb.PessimisticLockWaitingMode
+	WakeUpMode kvrpcpb.PessimisticLockWakeUpMode
 }
 
 // PessimisticLock writes the pessimistic lock.
@@ -559,7 +559,7 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 		returnValues:     req.ReturnValues,
 		checkExistence:   req.CheckExistence,
 		LockOnlyIfExists: req.LockOnlyIfExists,
-		LockWaitingMode:  req.LockWaitingMode,
+		WakeUpMode:       req.WakeUpMode,
 	}
 	lockWaitTime := req.WaitTimeout
 
@@ -571,9 +571,9 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 		errs = append(errs, err)
 		if err != nil {
 			anyError = true
-			if lCtx.LockWaitingMode == kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait {
+			if lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
 				lCtx.results = append(lCtx.results, &kvrpcpb.PessimisticLockKeyResult{
-					Type: kvrpcpb.PessimisticLockKeyResultType_Failed,
+					Type: kvrpcpb.PessimisticLockKeyResultType_LockResultFailed,
 				})
 			}
 		}
@@ -583,10 +583,10 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 			}
 		}
 	}
-	if lCtx.LockWaitingMode == kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait {
+	if lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
 		resp.Results = lCtx.results
 	}
-	if !anyError || lCtx.LockWaitingMode == kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait {
+	if !anyError || lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
 		if len(lCtx.results) != len(mutations) {
 			panic("pessimistic lock result count not match")
 		}
@@ -603,12 +603,12 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 		resp.Errors = convertToKeyErrors([]error{err})
 		return resp
 	}
-	if lCtx.LockWaitingMode == kvrpcpb.PessimisticLockWaitingMode_RetryAfterWait {
+	if lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
 		if req.ReturnValues {
 			resp.Values = make([][]byte, 0, len(lCtx.results))
 			resp.NotFounds = make([]bool, 0, len(lCtx.results))
 			for _, res := range lCtx.results {
-				if res.Type == kvrpcpb.PessimisticLockKeyResultType_Value {
+				if res.Type == kvrpcpb.PessimisticLockKeyResultType_LockResultNormal {
 					resp.Values = append(resp.Values, res.Value)
 					resp.NotFounds = append(resp.NotFounds, !res.Existence)
 				} else {
@@ -618,7 +618,7 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 		} else if req.CheckExistence {
 			resp.NotFounds = make([]bool, 0, len(lCtx.results))
 			for _, res := range lCtx.results {
-				if res.Type == kvrpcpb.PessimisticLockKeyResultType_Existence {
+				if res.Type == kvrpcpb.PessimisticLockKeyResultType_LockResultNormal {
 					resp.NotFounds = append(resp.NotFounds, !res.Existence)
 				} else {
 					panic("unreachable")
@@ -626,7 +626,7 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 			}
 		} else {
 			for _, res := range lCtx.results {
-				if res.Type != kvrpcpb.PessimisticLockKeyResultType_Empty {
+				if res.Type != kvrpcpb.PessimisticLockKeyResultType_LockResultNormal {
 					panic("unreachable")
 				}
 			}
@@ -673,11 +673,11 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 
 	// For pessimisticLockMutation, check the correspond rollback record, there may be rollbackLock
 	// operation between startTS and forUpdateTS
-	val, err := checkConflictValue(iter, mutation, forUpdateTS, startTS, true, kvrpcpb.AssertionLevel_Off, lctx.LockWaitingMode == kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait)
+	val, err := checkConflictValue(iter, mutation, forUpdateTS, startTS, true, kvrpcpb.AssertionLevel_Off, lctx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock)
 	if err != nil {
-		if conflict, ok := err.(*ErrConflict); lctx.LockWaitingMode == kvrpcpb.PessimisticLockWaitingMode_ResumeAfterWait && ok {
+		if conflict, ok := err.(*ErrConflict); lctx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock && ok {
 			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
-				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockedWithConflict,
+				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockResultLockedWithConflict,
 				Value:                val,
 				Existence:            len(val) != 0,
 				LockedWithConflictTs: conflict.ConflictCommitTS,
@@ -688,21 +688,21 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 	} else {
 		if lctx.returnValues {
 			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
-				Type:                 kvrpcpb.PessimisticLockKeyResultType_Value,
+				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockResultNormal,
 				Value:                val,
 				Existence:            len(val) != 0,
 				LockedWithConflictTs: 0,
 			})
 		} else if lctx.checkExistence {
 			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
-				Type:                 kvrpcpb.PessimisticLockKeyResultType_Existence,
+				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockResultNormal,
 				Value:                nil,
 				Existence:            len(val) != 0,
 				LockedWithConflictTs: 0,
 			})
 		} else {
 			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
-				Type: kvrpcpb.PessimisticLockKeyResultType_Empty,
+				Type: kvrpcpb.PessimisticLockKeyResultType_LockResultNormal,
 			})
 		}
 	}
@@ -1748,6 +1748,9 @@ func (mvcc *MVCCLevelDB) RawGet(cf string, key []byte) []byte {
 	}
 
 	ret, err := db.Get(key, nil)
+	if err == leveldb.ErrNotFound {
+		return nil
+	}
 	tikverr.Log(err)
 	return ret
 }
@@ -1765,7 +1768,9 @@ func (mvcc *MVCCLevelDB) RawBatchGet(cf string, keys [][]byte) [][]byte {
 	values := make([][]byte, 0, len(keys))
 	for _, key := range keys {
 		value, err := db.Get(key, nil)
-		tikverr.Log(err)
+		if err != leveldb.ErrNotFound {
+			tikverr.Log(err)
+		}
 		values = append(values, value)
 	}
 	return values
