@@ -2367,6 +2367,16 @@ func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (r
 	return res
 }
 
+// GetLabelValue returns the value of the label
+func (s *Store) GetLabelValue(key string) (string, bool) {
+	for _, label := range s.labels {
+		if label.Key == key {
+			return label.Value, true
+		}
+	}
+	return "", false
+}
+
 // getLivenessState gets the cached liveness state of the store.
 // When it's not reachable, a goroutine will update the state in background.
 // To get the accurate liveness state, use checkLiveness instead.
