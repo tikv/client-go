@@ -199,10 +199,9 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				// The request may be partially succeeded. Replace the request with remaining mutations.
 				// The primary lock (if it's in this request) must have been succeeded.
 				batch = batchMutations{
-					region:       batch.region,
-					mutations:    retryMutations,
-					isPrimary:    false,
-					primaryIndex: -1,
+					region:    batch.region,
+					mutations: retryMutations,
+					isPrimary: false,
 				}
 				m = batch.mutations
 				mutations = convertMutationsToPb(m)
@@ -364,25 +363,29 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 	failedMutations := NewPlainMutations(0)
 	keyErrs := lockResp.GetErrors()
 
-	if batch.isPrimary && len(lockResp.Results) > 0 && lockResp.Results[batch.primaryIndex].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
-		// After locking the primary key, we should protect the primary lock from expiring
-		// now in case locking the remaining keys take a long time.
+	// We only allow single key in ForceLock mode now.
+	if len(mutationsPb) > 1 || len(lockResp.Results) > 1 {
+		panic("unreachable")
+	}
+	if batch.isPrimary && len(lockResp.Results) > 0 && lockResp.Results[0].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
+		// After locking the primary key, we should protect the primary lock from expiring.
 		c.run(c, action.LockCtx)
 	}
 
-	for i, res := range lockResp.Results {
+	if len(lockResp.Results) > 0 {
+		res := lockResp.Results[0]
 		switch res.Type {
 		case kvrpcpb.PessimisticLockKeyResultType_LockResultNormal:
 			if action.ReturnValues {
 				action.ValuesLock.Lock()
-				action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
+				action.Values[string(mutationsPb[0].Key)] = kv.ReturnedValue{
 					Value:  res.Value,
 					Exists: res.Existence,
 				}
 				action.ValuesLock.Unlock()
 			} else if action.CheckExistence {
 				action.ValuesLock.Lock()
-				action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
+				action.Values[string(mutationsPb[0].Key)] = kv.ReturnedValue{
 					Exists: res.Existence,
 				}
 				action.ValuesLock.Unlock()
@@ -392,7 +395,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 			if action.Values == nil {
 				action.Values = make(map[string]kv.ReturnedValue, 1)
 			}
-			action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
+			action.Values[string(mutationsPb[0].Key)] = kv.ReturnedValue{
 				Value:                res.Value,
 				Exists:               res.Existence,
 				LockedWithConflictTS: res.LockedWithConflictTs,
@@ -402,7 +405,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 			}
 			action.ValuesLock.Unlock()
 		case kvrpcpb.PessimisticLockKeyResultType_LockResultFailed:
-			failedMutations.AppendMutation(batch.mutations.GetMutation(i))
+			failedMutations.AppendMutation(batch.mutations.GetMutation(0))
 		default:
 			panic("unreachable")
 		}
@@ -417,7 +420,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 	}
 
 	// The primary must be locked first, otherwise there should be some bug in the implementation.
-	if batch.isPrimary && failedMutations.Len() < len(lockResp.Results) && lockResp.Results[batch.primaryIndex].Type == kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
+	if batch.isPrimary && failedMutations.Len() < len(lockResp.Results) && lockResp.Results[0].Type == kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
 		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 

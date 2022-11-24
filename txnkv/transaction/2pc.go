@@ -1968,10 +1968,9 @@ func (c *twoPhaseCommitter) shouldWriteBinlog() bool {
 }
 
 type batchMutations struct {
-	region       locate.RegionVerID
-	mutations    CommitterMutations
-	isPrimary    bool
-	primaryIndex int
+	region    locate.RegionVerID
+	mutations CommitterMutations
+	isPrimary bool
 }
 
 func (b *batchMutations) relocate(bo *retry.Backoffer, c *locate.RegionCache) (bool, error) {
@@ -2010,7 +2009,6 @@ func (b *batched) appendBatchMutationsBySize(region locate.RegionVerID, mutation
 	var start, end int
 	for start = 0; start < mutations.Len(); start = end {
 		isPrimary := false
-		primaryIndexInBatch := -1
 		var size int
 		for end = start; end < mutations.Len() && size < limit; end++ {
 			var k, v []byte
@@ -2020,14 +2018,12 @@ func (b *batched) appendBatchMutationsBySize(region locate.RegionVerID, mutation
 			if b.primaryIdx < 0 && bytes.Equal(k, b.primaryKey) {
 				b.primaryIdx = len(b.batches)
 				isPrimary = true
-				primaryIndexInBatch = end - start
 			}
 		}
 		b.batches = append(b.batches, batchMutations{
-			region:       region,
-			mutations:    mutations.Slice(start, end),
-			isPrimary:    isPrimary,
-			primaryIndex: primaryIndexInBatch,
+			region:    region,
+			mutations: mutations.Slice(start, end),
+			isPrimary: isPrimary,
 		})
 	}
 }
