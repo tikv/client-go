@@ -642,22 +642,19 @@ func (c *codecV2) encodeRange(start, end []byte, reverse bool) ([]byte, []byte) 
 // DecodeRange maps encodedStart and end back to normal start and
 // end without APIv2 prefixes.
 func (c *codecV2) DecodeRange(encodedStart, encodedEnd []byte) (start, end []byte, err error) {
-	start, err = c.DecodeKey(encodedStart)
-	if err != nil {
-		return nil, nil, err
+	if bytes.Compare(encodedStart, c.endKey) >= 0 || bytes.Compare(encodedEnd, c.prefix) <= 0 {
+		return nil, nil, errors.WithStack(errKeyOutOfBound)
 	}
 
-	// In the case where range's end is keyspace's EndKey,
-	// return empty bytes directly, skipping decode.
-	if bytes.Equal(encodedEnd, c.endKey) {
-		return start, []byte{}, nil
+	if bytes.HasPrefix(encodedStart, c.prefix) {
+		start = encodedStart[len(c.prefix):]
 	}
 
-	end, err = c.DecodeKey(encodedEnd)
-	if err != nil {
-		return nil, nil, err
+	if bytes.HasPrefix(encodedEnd, c.prefix) {
+		end = encodedEnd[len(c.prefix):]
 	}
-	return start, end, nil
+
+	return
 }
 
 func (c *codecV2) EncodeKey(key []byte) []byte {
@@ -668,7 +665,10 @@ func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	// If the given key does not start with the correct prefix,
 	// return out of bound error.
 	if !bytes.HasPrefix(encodedKey, c.prefix) {
-		logutil.BgLogger().Warn("key not in keyspace", zap.String("keyspacePrefix", hex.EncodeToString(c.prefix)), zap.String("key", hex.EncodeToString(encodedKey)))
+		logutil.BgLogger().Warn("key not in keyspace",
+			zap.String("keyspacePrefix", hex.EncodeToString(c.prefix)),
+			zap.String("key", hex.EncodeToString(encodedKey)),
+			zap.Stack("stack"))
 		return nil, errKeyOutOfBound
 	}
 	return encodedKey[len(c.prefix):], nil
@@ -819,7 +819,7 @@ func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error,
 		for _, meta := range errInfo.CurrentRegions {
 			meta.StartKey, meta.EndKey, err = c.DecodeRegionRange(meta.StartKey, meta.EndKey)
 			if err != nil {
-				// If invalidRegion happens, skip appending it to result instead of return an error.
+				// skip out of keyspace range's region
 				if errors.Is(err, errKeyOutOfBound) {
 					continue
 				}
