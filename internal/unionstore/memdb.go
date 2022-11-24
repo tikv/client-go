@@ -39,6 +39,7 @@ import (
 	"math"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -871,8 +872,8 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
 		hook(db.allocator.capacity + db.vlog.capacity)
 	}
-	db.allocator.memChangeHook = innerHook
-	db.vlog.memChangeHook = innerHook
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&db.allocator.memChangeHook)), unsafe.Pointer(&innerHook))
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&db.vlog.memChangeHook)), unsafe.Pointer(&innerHook))
 }
 
 // Mem returns the current memory footprint

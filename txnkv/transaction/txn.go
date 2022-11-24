@@ -80,9 +80,8 @@ type SchemaAmender interface {
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope                  string
-	StartTS                   *uint64
-	MemoryFootprintChangeHook func(uint64)
+	TxnScope string
+	StartTS  *uint64
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
