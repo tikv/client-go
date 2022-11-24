@@ -402,11 +402,6 @@ func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c
 			}
 			action.ValuesLock.Unlock()
 		case kvrpcpb.PessimisticLockKeyResultType_LockResultFailed:
-			//action.ValuesLock.Lock()
-			//action.Values[string(mutationsPb[i].Key)] = kv.ReturnedValue{
-			//	LockStatusUncertain: true,
-			//}
-			//action.ValuesLock.Unlock()
 			failedMutations.AppendMutation(batch.mutations.GetMutation(i))
 		default:
 			panic("unreachable")

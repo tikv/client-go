@@ -85,10 +85,6 @@ type tempLockBufferEntry struct {
 }
 
 func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExistence bool) bool {
-	if e.Value.LockStatusUncertain {
-		// We are not sure if this key is successfully locked.
-		return false
-	}
 	if e.Value.LockedWithConflictTS != 0 {
 		e.Value.LockedWithConflictTS = 0
 	} else {

@@ -36,7 +36,6 @@ type ReturnedValue struct {
 	Exists               bool
 	LockedWithConflictTS uint64
 	AlreadyLocked        bool
-	LockStatusUncertain  bool
 }
 
 // Used for pessimistic lock wait time
