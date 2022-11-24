@@ -179,7 +179,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		}
 
 		if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
-			finished, err := action.handlePessimisticLockResponseRetryFirstMode(c, bo, &batch, mutations, resp, &diagCtx)
+			finished, err := action.handlePessimisticLockResponseNormalMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
 			}
@@ -187,7 +187,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				return nil
 			}
 		} else if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
-			finished, retryMutations, err := action.handlePessimisticLockResponseLockFirstMode(c, bo, &batch, mutations, resp, &diagCtx)
+			finished, retryMutations, err := action.handlePessimisticLockResponseForceLockMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
 			}
@@ -224,7 +224,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 	}
 }
 
-func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, err error) {
+func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, err error) {
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
 		return true, err
@@ -352,7 +352,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseRetryFirstMode(
 	return false, nil
 }
 
-func (action actionPessimisticLock) handlePessimisticLockResponseLockFirstMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, retryMutations CommitterMutations, err error) {
+func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, retryMutations CommitterMutations, err error) {
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
 		return true, nil, err
