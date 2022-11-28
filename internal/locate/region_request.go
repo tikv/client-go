@@ -207,6 +207,7 @@ func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, cm
 	}
 	// Update store slowScore
 	store.updateSlowScore(duration, timeout)
+	metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store.saddr).Set(store.getSlowScore())
 }
 
 // MarkStoreAlreadySlow marks the given Store already slow.

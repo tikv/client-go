@@ -96,6 +96,7 @@ var (
 	TiKVReadThroughput                       prometheus.Histogram
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
+	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 )
 
 // Label constants.
@@ -589,6 +590,14 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of assertions used in prewrite requests",
 		}, []string{LblType})
 
+	TiKVStoreSlowScoreGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "store_slow_score",
+			Help:      "Slow scores of each tikv node based on RPC timecosts",
+		}, []string{LblStore})
+
 	initShortcuts()
 }
 
@@ -659,6 +668,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadThroughput)
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
+	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 }
 
 // readCounter reads the value of a prometheus.Counter.

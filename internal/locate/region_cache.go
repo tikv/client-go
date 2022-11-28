@@ -2576,6 +2576,10 @@ type SlowScoreStat struct {
 	slowCount        uint64
 }
 
+func (ss *SlowScoreStat) getSlowScore() float64 {
+	return ss.avgScore
+}
+
 func (ss *SlowScoreStat) updSlowScore(timecost time.Duration, timeout time.Duration) bool {
 	ss.updCount++
 	if ss.avgTimeCost == 0 {
@@ -2624,11 +2628,17 @@ func (ss *SlowScoreStat) isSlow() bool {
 	return uint64(ss.avgScore) >= slowScoreThreshold
 }
 
+// getSlowScore returns the slow score of store.
+func (s *Store) getSlowScore() float64 {
+	return s.slowScore.getSlowScore()
+}
+
 // isSlow returns whether current Store is slow or not.
 func (s *Store) isSlow() bool {
 	return s.slowScore.isSlow()
 }
 
+// updateSlowScore updates the slow score of this store according to the timecost of current request.
 func (s *Store) updateSlowScore(timecost time.Duration, timeout time.Duration) bool {
 	return s.slowScore.updSlowScore(timecost, timeout)
 }
