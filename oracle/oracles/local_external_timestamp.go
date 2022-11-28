@@ -43,7 +43,7 @@ func (l *localExternalTimestamp) setExternalTimestamp(ctx context.Context, o ora
 			return nil
 		}
 
-		if l.externalTimestamp.CAS(externalTimestamp, newTimestamp) {
+		if l.externalTimestamp.CompareAndSwap(externalTimestamp, newTimestamp) {
 			return nil
 		}
 	}
