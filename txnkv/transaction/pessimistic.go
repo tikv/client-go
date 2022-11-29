@@ -412,16 +412,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 	}
 
 	if len(lockResp.Results) > 0 && failedMutations.Len() < len(lockResp.Results) {
-		// Can we do it like this?
-
 		if action.LockCtx.Stats != nil {
 			action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
 		}
-	}
-
-	// The primary must be locked first, otherwise there should be some bug in the implementation.
-	if batch.isPrimary && failedMutations.Len() < len(lockResp.Results) && lockResp.Results[0].Type == kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
-		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 
 	var locks []*txnlock.Lock
@@ -510,16 +503,20 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 			return false, &failedMutations, nil
 		}
 
+		// If the failedMutations is not empty and the error is not KeyIsLocked, the function should have already
+		// returned before. So this is an unreachable path.
 		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 
-	if regionErr != nil || len(locks) != 0 {
+	if len(locks) != 0 {
+		// If the key error is KeyIsLocked, we assume the server must have set resp.Results.
 		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 
-	// If the Results in response, there must be either some unretryable error in keyErrs or some region error, therefore
-	// the function must have returned.
 	if len(lockResp.Results) == 0 {
+		// If the `Results` field is missing in response, there must be either some unretryable error in keyErrs or some
+		// region error, therefore the function must have returned in above logic. This is supposed to be an unreachable
+		// path if TiKV is implemented correctly.
 		return true, nil, errors.New("Pessimistic lock response corrupted")
 	}
 

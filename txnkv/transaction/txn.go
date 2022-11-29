@@ -84,11 +84,14 @@ type tempLockBufferEntry struct {
 	Value             tikv.ReturnedValue
 }
 
+// trySkipLockingOnRetry checks if the key can be skipped in an aggressive locking context, and performs necessary
+// changes to the entry. Returns whether the key can be skipped.
 func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExistence bool) bool {
 	if e.Value.LockedWithConflictTS != 0 {
+		// Clear its LockedWithConflictTS field as if it's locked in normal way.
 		e.Value.LockedWithConflictTS = 0
 	} else {
-		// If we need require more information than those we already got during last attempt, we need to lock it again.
+		// If we require more information than those we already got during last attempt, we need to lock it again.
 		if !e.HasReturnValue && returnValue {
 			return false
 		}
@@ -787,6 +790,45 @@ func (txn *KVTxn) cleanupAggressiveLockingRedundantLocks(ctx context.Context) {
 	}
 }
 
+func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]byte) ([][]byte, error) {
+	// In aggressive locking mode, we can skip locking if all of these conditions are met:
+	// * The primary is unchanged during the current aggressive locking (which means primary is already set
+	//   before the current aggressive locking or the selected primary is the same as that selected during the
+	//   previous attempt).
+	// * The key is already locked in the previous attempt.
+	// * The time since last attempt is short enough so that the locks we acquired during last attempt is
+	//   unlikely to be resolved by other transactions.
+
+	// In case primary is not assigned in this phase, or primary is already set but unchanged, we don't need
+	// to update the locks.
+	canTrySkip := !txn.aggressiveLockingContext.assignedPrimaryKey || bytes.Equal(txn.aggressiveLockingContext.lastPrimaryKey, txn.aggressiveLockingContext.primaryKey)
+
+	// Do not preallocate since in most cases the keys need to lock doesn't change during pessimistic-retry.
+	keys := make([][]byte, 0)
+	for _, k := range allKeys {
+		keyStr := string(k)
+		if lastResult, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[keyStr]; ok {
+			if lockCtx.ForUpdateTS < lastResult.Value.LockedWithConflictTS {
+				// This should be an unreachable path.
+				return nil, errors.Errorf("Txn %v Retrying aggressive locking with ForUpdateTS (%v) less than previous LockedWithConflictTS (%v)", txn.StartTS(), lockCtx.ForUpdateTS, lastResult.Value.LockedWithConflictTS)
+			}
+			delete(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks, keyStr)
+			if canTrySkip &&
+				lastResult.trySkipLockingOnRetry(lockCtx.ReturnValues, lockCtx.CheckExistence) &&
+				!txn.mayAggressiveLockingLastLockedKeysExpire() {
+				// We can skip locking it since it's already locked during last attempt to aggressive locking, and
+				// we already have the information that we need.
+				lockCtx.Values[keyStr] = lastResult.Value
+				txn.aggressiveLockingContext.currentLockedKeys[keyStr] = lastResult
+				continue
+			}
+		}
+		keys = append(keys, k)
+	}
+
+	return keys, nil
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
@@ -861,8 +903,8 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 				return txn.committer.extractKeyExistsErr(e)
 			}
 		}
-		keyStr := string(key)
 		if lockCtx.ReturnValues && locked {
+			keyStr := string(key)
 			// An already locked key can not return values, we add an entry to let the caller get the value
 			// in other ways.
 			lockCtx.Values[keyStr] = tikv.ReturnedValue{AlreadyLocked: true}
@@ -917,41 +959,13 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
 
 		allKeys := keys
+
 		// If aggressive locking is enabled and we don't need to update the primary for all locks, we can avoid sending
 		// RPC to those already locked keys.
 		if txn.aggressiveLockingContext != nil {
-			// In aggressive locking mode, we can skip locking if all of these conditions are met:
-			// * The primary is unchanged during the current aggressive locking (which means primary is already set
-			//   before the current aggressive locking or the selected primary is the same as that selected during the
-			//   previous attempt).
-			// * The key is already locked in the previous attempt.
-			// * The time since last attempt is short enough so that the locks we acquired during last attempt is
-			//   unlikely to be resolved by other transactions.
-
-			// In case primary is not assigned in this phase, or primary is set but unchanged, we don't need to update
-			// the locks.
-			canTrySkip := !txn.aggressiveLockingContext.assignedPrimaryKey || bytes.Equal(txn.aggressiveLockingContext.lastPrimaryKey, txn.aggressiveLockingContext.primaryKey)
-
-			// Do not preallocate since in most cases the keys need to lock doesn't change during pessimistic-retry.
-			keys = make([][]byte, 0)
-			for _, k := range allKeys {
-				keyStr := string(k)
-				if lastResult, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[keyStr]; ok {
-					if lockCtx.ForUpdateTS < lastResult.Value.LockedWithConflictTS {
-						return errors.Errorf("Txn %v Retrying aggressive locking with ForUpdateTS (%v) less than previous LockedWithConflictTS (%v)", txn.StartTS(), lockCtx.ForUpdateTS, lastResult.Value.LockedWithConflictTS)
-					}
-					delete(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks, keyStr)
-					if canTrySkip &&
-						lastResult.trySkipLockingOnRetry(lockCtx.ReturnValues, lockCtx.CheckExistence) &&
-						!txn.mayAggressiveLockingLastLockedKeysExpire() {
-						// We can skip locking it since it's already locked during last attempt to aggressive locking, and
-						// we already have the information that we need.
-						lockCtx.Values[keyStr] = lastResult.Value
-						txn.aggressiveLockingContext.currentLockedKeys[keyStr] = lastResult
-						continue
-					}
-				}
-				keys = append(keys, k)
+			keys, err = txn.filterAggressiveLockedKeys(lockCtx, allKeys)
+			if err != nil {
+				return err
 			}
 
 			if len(keys) == 0 {
@@ -1066,9 +1080,6 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		valExists := true // tikv.SetKeyLockedValueExists
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
 		// For other lock modes, the locked key values always exist.
-		//if lockCtx.ReturnValues || checkedExistence {
-		// If ReturnValue is disabled and CheckExistence is requested, it's still possible that the TiKV's version
-		// is too old and CheckExistence is not supported.
 		keyStr := string(key)
 		var val tikv.ReturnedValue
 		var ok bool
@@ -1076,11 +1087,10 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
 			if lockCtx.ReturnValues || checkedExistence || val.LockedWithConflictTS != 0 {
 				if !val.Exists {
-					valExists = false // tikv.SetKeyLockedValueNotExists
+					valExists = false
 				}
 			}
 		}
-		//}
 		if txn.aggressiveLockingContext != nil {
 			txn.aggressiveLockingContext.currentLockedKeys[keyStr] = tempLockBufferEntry{
 				HasReturnValue:    lockCtx.ReturnValues,
@@ -1113,7 +1123,7 @@ func (txn *KVTxn) resetPrimary() {
 func (txn *KVTxn) selectPrimaryForPessimisticLock(sortedKeys [][]byte) {
 	if txn.aggressiveLockingContext != nil {
 		lastPrimaryKey := txn.aggressiveLockingContext.lastPrimaryKey
-		if txn.aggressiveLockingContext.lastPrimaryKey != nil {
+		if lastPrimaryKey != nil {
 			foundIdx := sort.Search(len(sortedKeys), func(i int) bool {
 				return bytes.Compare(sortedKeys[i], lastPrimaryKey) >= 0
 			})
@@ -1185,6 +1195,9 @@ func deduplicateKeys(keys [][]byte) [][]byte {
 
 const pessimisticRollbackMaxBackoff = 20000
 
+// asyncPessimisticRollback rollbacks pessimistic locks of the current transaction on the specified keys asynchronously.
+// Pessimistic locks on specified keys with its forUpdateTS <= specifiedForUpdateTS will be unlocked. If 0 is passed
+// to specifiedForUpdateTS, the current forUpdateTS of the current transaction will be used.
 func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, specifiedForUpdateTS uint64) *sync.WaitGroup {
 	// Clone a new committer for execute in background.
 	committer := &twoPhaseCommitter{
