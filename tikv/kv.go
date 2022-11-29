@@ -257,11 +257,6 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 		opt(options)
 	}
 
-	defer func() {
-		if err == nil && txn != nil && options.MemoryFootprintChangeHook != nil {
-			txn.SetMemoryFootprintChangeHook(options.MemoryFootprintChangeHook)
-		}
-	}()
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}

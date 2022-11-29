@@ -64,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
+	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -113,9 +114,8 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope                  string
-	StartTS                   *uint64
-	MemoryFootprintChangeHook func(uint64)
+	TxnScope string
+	StartTS  *uint64
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -186,7 +186,7 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 }
 
 // SetSuccess is used to probe if kv variables are set or not. It is ONLY used in test cases.
-var SetSuccess = false
+var SetSuccess = *atomicutil.NewBool(false)
 
 // SetVars sets variables to the transaction.
 func (txn *KVTxn) SetVars(vars *tikv.Variables) {
@@ -194,7 +194,7 @@ func (txn *KVTxn) SetVars(vars *tikv.Variables) {
 	txn.snapshot.SetVars(vars)
 	if val, err := util.EvalFailpoint("probeSetVars"); err == nil {
 		if val.(bool) {
-			SetSuccess = true
+			SetSuccess.Store(true)
 		}
 	}
 }

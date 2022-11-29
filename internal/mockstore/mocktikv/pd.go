@@ -138,7 +138,7 @@ func (c *pdClient) SetExternalTimestamp(ctx context.Context, newTimestamp uint64
 			return nil
 		}
 
-		if c.externalTimestamp.CAS(externalTimestamp, newTimestamp) {
+		if c.externalTimestamp.CompareAndSwap(externalTimestamp, newTimestamp) {
 			return nil
 		}
 	}
