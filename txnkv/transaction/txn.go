@@ -974,7 +974,7 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 		}
 
 		lockWaitMode := kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal
-		if txn.aggressiveLockingContext != nil && len(keys) == 1 {
+		if txn.aggressiveLockingContext != nil && len(keys) == 1 && !lockCtx.LockOnlyIfExists {
 			lockWaitMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
 		}
 		lockCtx.Stats = &util.LockKeysDetails{
