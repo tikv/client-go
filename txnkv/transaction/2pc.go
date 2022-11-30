@@ -253,16 +253,6 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 	}
 }
 
-func (m *memBufferMutations) GetMutation(i int) PlainMutation {
-	mutation := PlainMutation{
-		KeyOp: m.GetOp(i),
-		Key:   m.GetKey(i),
-		Value: m.GetValue(i),
-		Flags: makeMutationFlags(m.IsPessimisticLock(i), m.IsAssertExists(i), m.IsAssertNotExist(i), m.NeedConstraintCheckInPrewrite(i)),
-	}
-	return mutation
-}
-
 func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist, NeedConstraintCheckInPrewrite bool,
 	handle unionstore.MemKeyHandle) {
 	// See comments of `m.handles` field about the format of the user data `aux`.
@@ -329,7 +319,6 @@ type CommitterMutations interface {
 	IsAssertExists(i int) bool
 	IsAssertNotExist(i int) bool
 	NeedConstraintCheckInPrewrite(i int) bool
-	GetMutation(i int) PlainMutation
 }
 
 // PlainMutations contains transaction operations.
@@ -460,26 +449,6 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 	c.keys = append(c.keys, mutation.Key)
 	c.values = append(c.values, mutation.Value)
 	c.flags = append(c.flags, mutation.Flags)
-}
-
-// GetMutation returns the mutation at the specified index.
-func (c *PlainMutations) GetMutation(i int) PlainMutation {
-	mutation := PlainMutation{
-		// When a PlainMutations is created for pessimistic locks, it may not set `c.ops`. So for PlainMutations with
-		// no `ops` field, return `Op_PessimisticLock` as the op.
-		KeyOp: kvrpcpb.Op_PessimisticLock,
-		Key:   c.keys[i],
-	}
-	if c.ops != nil {
-		mutation.KeyOp = c.ops[i]
-	}
-	if c.values != nil {
-		mutation.Value = c.values[i]
-	}
-	if c.flags != nil {
-		mutation.Flags = c.flags[i]
-	}
-	return mutation
 }
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.

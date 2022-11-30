@@ -187,25 +187,12 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				return nil
 			}
 		} else if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
-			finished, retryMutations, err := action.handlePessimisticLockResponseForceLockMode(c, bo, &batch, mutations, resp, &diagCtx)
+			finished, err := action.handlePessimisticLockResponseForceLockMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
 			}
 			if finished {
 				return nil
-			}
-
-			if retryMutations != nil && retryMutations.Len() < batch.mutations.Len() {
-				// The request may be partially succeeded. Replace the request with remaining mutations.
-				// The primary lock (if it's in this request) must have been succeeded.
-				batch = batchMutations{
-					region:    batch.region,
-					mutations: retryMutations,
-					isPrimary: false,
-				}
-				m = batch.mutations
-				mutations = convertMutationsToPb(m)
-				req.PessimisticLock().Mutations = mutations
 			}
 		}
 
@@ -351,16 +338,16 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *t
 	return false, nil
 }
 
-func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, retryMutations CommitterMutations, err error) {
+func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, err error) {
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
-		return true, nil, err
+		return true, err
 	}
 	if resp.Resp == nil {
-		return true, nil, errors.WithStack(tikverr.ErrBodyMissing)
+		return true, errors.WithStack(tikverr.ErrBodyMissing)
 	}
 	lockResp := resp.Resp.(*kvrpcpb.PessimisticLockResponse)
-	failedMutations := NewPlainMutations(0)
+	isMutationFailed := false
 	keyErrs := lockResp.GetErrors()
 
 	// We only allow single key in ForceLock mode now.
@@ -405,13 +392,13 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 			}
 			action.ValuesLock.Unlock()
 		case kvrpcpb.PessimisticLockKeyResultType_LockResultFailed:
-			failedMutations.AppendMutation(batch.mutations.GetMutation(0))
+			isMutationFailed = true
 		default:
 			panic("unreachable")
 		}
 	}
 
-	if len(lockResp.Results) > 0 && failedMutations.Len() < len(lockResp.Results) {
+	if len(lockResp.Results) > 0 && !isMutationFailed {
 		if action.LockCtx.Stats != nil {
 			action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
 		}
@@ -422,16 +409,16 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 		// Check already exists error
 		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
 			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
-			return true, nil, c.extractKeyExistsErr(e)
+			return true, c.extractKeyExistsErr(e)
 		}
 		if deadlock := keyErr.Deadlock; deadlock != nil {
-			return true, nil, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
+			return true, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
 		}
 
 		// Extract lock from key error
 		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 		if err1 != nil {
-			return true, nil, err1
+			return true, err1
 		}
 		locks = append(locks, lock)
 	}
@@ -443,25 +430,21 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 		if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
 			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
 			if err != nil {
-				return true, nil, err
+				return true, err
 			}
 		}
 		same, err := batch.relocate(bo, c.store.GetRegionCache())
 		if err != nil {
-			return true, nil, err
-		}
-		retryMutations = &failedMutations
-		if len(lockResp.Results) == 0 {
-			retryMutations = batch.mutations
+			return true, err
 		}
 		if same {
-			return false, retryMutations, nil
+			return false, nil
 		}
-		err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, retryMutations)
-		return true, nil, err
+		err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, batch.mutations)
+		return true, err
 	}
 
-	if failedMutations.Len() > 0 {
+	if isMutationFailed {
 		if len(locks) > 0 {
 			// Because we already waited on tikv, no need to Backoff here.
 			// tikv default will wait 3s(also the maximum wait value) when lock error occurs
@@ -480,47 +463,47 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 			}
 			resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 			if err != nil {
-				return true, nil, err
+				return true, err
 			}
 
 			// If msBeforeTxnExpired is not zero, it means there are still locks blocking us acquiring
 			// the pessimistic lock. We should return acquire fail with nowait set or timeout error if necessary.
 			if resolveLockRes.TTL > 0 {
 				if action.LockWaitTime() == kv.LockNoWait {
-					return true, nil, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
+					return true, errors.WithStack(tikverr.ErrLockAcquireFailAndNoWaitSet)
 				} else if action.LockWaitTime() == kv.LockAlwaysWait {
 					// do nothing but keep wait
 				} else {
 					// the lockWaitTime is set, we should return wait timeout if we are still blocked by a lock
 					if time.Since(action.WaitStartTime).Milliseconds() >= action.LockWaitTime() {
-						return true, nil, errors.WithStack(tikverr.ErrLockWaitTimeout)
+						return true, errors.WithStack(tikverr.ErrLockWaitTimeout)
 					}
 				}
 				if action.LockCtx.PessimisticLockWaited != nil {
 					atomic.StoreInt32(action.LockCtx.PessimisticLockWaited, 1)
 				}
 			}
-			return false, &failedMutations, nil
+			return false, nil
 		}
 
 		// If the failedMutations is not empty and the error is not KeyIsLocked, the function should have already
 		// returned before. So this is an unreachable path.
-		return true, nil, errors.New("Pessimistic lock response corrupted")
+		return true, errors.New("Pessimistic lock response corrupted")
 	}
 
 	if len(locks) != 0 {
 		// If the key error is KeyIsLocked, we assume the server must have set resp.Results.
-		return true, nil, errors.New("Pessimistic lock response corrupted")
+		return true, errors.New("Pessimistic lock response corrupted")
 	}
 
 	if len(lockResp.Results) == 0 {
 		// If the `Results` field is missing in response, there must be either some unretryable error in keyErrs or some
 		// region error, therefore the function must have returned in above logic. This is supposed to be an unreachable
 		// path if TiKV is implemented correctly.
-		return true, nil, errors.New("Pessimistic lock response corrupted")
+		return true, errors.New("Pessimistic lock response corrupted")
 	}
 
-	return true, nil, nil
+	return true, nil
 }
 
 func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
