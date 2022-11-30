@@ -319,7 +319,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Verify that the store matches the peer and epoch.
 	for _, replica := range replicaSelector.replicas {
 		s.Equal(replica.store.storeID, replica.peer.GetStoreId())
-		s.Equal(replica.peer, region.getPeerOnStore(replica.store.storeID))
+		s.Equal(replica.peer, region.GetPeerOnStore(replica.store.storeID))
 		s.True(replica.attempts == 0)
 
 		for i, store := range regionStore.stores {

@@ -806,10 +806,11 @@ func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Back
 
 // KeyLocation is the region and range that a key is located.
 type KeyLocation struct {
-	Region   RegionVerID
-	StartKey []byte
-	EndKey   []byte
-	Buckets  *metapb.Buckets
+	Region    RegionVerID
+	StartKey  []byte
+	EndKey    []byte
+	Buckets   *metapb.Buckets
+	RawRegion *Region
 }
 
 // Contains checks if key is in [StartKey, EndKey).
@@ -915,10 +916,11 @@ func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, 
 		return nil, err
 	}
 	return &KeyLocation{
-		Region:   r.VerID(),
-		StartKey: r.StartKey(),
-		EndKey:   r.EndKey(),
-		Buckets:  r.getStore().buckets,
+		Region:    r.VerID(),
+		StartKey:  r.StartKey(),
+		EndKey:    r.EndKey(),
+		Buckets:   r.getStore().buckets,
+		RawRegion: r,
 	}, nil
 }
 
@@ -930,10 +932,11 @@ func (c *RegionCache) LocateEndKey(bo *retry.Backoffer, key []byte) (*KeyLocatio
 		return nil, err
 	}
 	return &KeyLocation{
-		Region:   r.VerID(),
-		StartKey: r.StartKey(),
-		EndKey:   r.EndKey(),
-		Buckets:  r.getStore().buckets,
+		Region:    r.VerID(),
+		StartKey:  r.StartKey(),
+		EndKey:    r.EndKey(),
+		Buckets:   r.getStore().buckets,
+		RawRegion: r,
 	}, nil
 }
 
@@ -1100,10 +1103,11 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 			}
 		}
 		loc := &KeyLocation{
-			Region:   r.VerID(),
-			StartKey: r.StartKey(),
-			EndKey:   r.EndKey(),
-			Buckets:  r.getStore().buckets,
+			Region:    r.VerID(),
+			StartKey:  r.StartKey(),
+			EndKey:    r.EndKey(),
+			Buckets:   r.getStore().buckets,
+			RawRegion: r,
 		}
 		return loc, nil
 	}
@@ -1117,10 +1121,11 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 	c.insertRegionToCache(r)
 	c.mu.Unlock()
 	return &KeyLocation{
-		Region:   r.VerID(),
-		StartKey: r.StartKey(),
-		EndKey:   r.EndKey(),
-		Buckets:  r.getStore().buckets,
+		Region:    r.VerID(),
+		StartKey:  r.StartKey(),
+		EndKey:    r.EndKey(),
+		Buckets:   r.getStore().buckets,
+		RawRegion: r,
 	}, nil
 }
 
@@ -1774,7 +1779,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 		} else {
 			initLeaderStoreID = ctx.Store.storeID
 		}
-		region.switchWorkLeaderToPeer(region.getPeerOnStore(initLeaderStoreID))
+		region.switchWorkLeaderToPeer(region.GetPeerOnStore(initLeaderStoreID))
 		newRegions = append(newRegions, region)
 		if ctx.Region == region.VerID() {
 			needInvalidateOld = false
@@ -2126,7 +2131,7 @@ func (r *Region) findElectableStoreID() uint64 {
 	return 0
 }
 
-func (r *Region) getPeerOnStore(storeID uint64) *metapb.Peer {
+func (r *Region) GetPeerOnStore(storeID uint64) *metapb.Peer {
 	for _, p := range r.meta.Peers {
 		if p.StoreId == storeID {
 			return p
