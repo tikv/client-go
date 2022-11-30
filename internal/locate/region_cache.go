@@ -2131,6 +2131,7 @@ func (r *Region) findElectableStoreID() uint64 {
 	return 0
 }
 
+// GetPeerOnStore get the peer in the given store id.
 func (r *Region) GetPeerOnStore(storeID uint64) *metapb.Peer {
 	for _, p := range r.meta.Peers {
 		if p.StoreId == storeID {
