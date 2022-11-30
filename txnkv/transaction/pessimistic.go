@@ -36,12 +36,12 @@ package transaction
 
 import (
 	"encoding/hex"
-	"github.com/pingcap/kvproto/pkg/errorpb"
 	"math/rand"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
