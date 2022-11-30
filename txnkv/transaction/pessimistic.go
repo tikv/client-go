@@ -36,6 +36,7 @@ package transaction
 
 import (
 	"encoding/hex"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"math/rand"
 	"strings"
 	"sync/atomic"
@@ -210,30 +211,55 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 	}
 }
 
+func (action actionPessimisticLock) handleRegionError(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, regionErr *errorpb.Error) (finished bool, err error) {
+	// For other region error and the fake region error, backoff because
+	// there's something wrong.
+	// For the real EpochNotMatch error, don't backoff.
+	if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
+		err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
+		if err != nil {
+			return true, err
+		}
+	}
+	same, err := batch.relocate(bo, c.store.GetRegionCache())
+	if err != nil {
+		return true, err
+	}
+	if same {
+		return false, nil
+	}
+	err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, batch.mutations)
+	return true, err
+}
+
+func (action actionPessimisticLock) handleKeyError(c *twoPhaseCommitter, keyErrs []*kvrpcpb.KeyError) (locks []*txnlock.Lock, finished bool, err error) {
+	for _, keyErr := range keyErrs {
+		// Check already exists error
+		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
+			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
+			return nil, true, c.extractKeyExistsErr(e)
+		}
+		if deadlock := keyErr.Deadlock; deadlock != nil {
+			return nil, true, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
+		}
+
+		// Extract lock from key error
+		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
+		if err1 != nil {
+			return nil, true, err1
+		}
+		locks = append(locks, lock)
+	}
+	return locks, false, nil
+}
+
 func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, err error) {
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
 		return true, err
 	}
 	if regionErr != nil {
-		// For other region error and the fake region error, backoff because
-		// there's something wrong.
-		// For the real EpochNotMatch error, don't backoff.
-		if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-			if err != nil {
-				return true, err
-			}
-		}
-		same, err := batch.relocate(bo, c.store.GetRegionCache())
-		if err != nil {
-			return true, err
-		}
-		if same {
-			return false, nil
-		}
-		err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, batch.mutations)
-		return true, err
+		return action.handleRegionError(c, bo, batch, regionErr)
 	}
 	if resp.Resp == nil {
 		return true, errors.WithStack(tikverr.ErrBodyMissing)
@@ -278,23 +304,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *t
 		}
 		return true, nil
 	}
-	var locks []*txnlock.Lock
-	for _, keyErr := range keyErrs {
-		// Check already exists error
-		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
-			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
-			return true, c.extractKeyExistsErr(e)
-		}
-		if deadlock := keyErr.Deadlock; deadlock != nil {
-			return true, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
-		}
-
-		// Extract lock from key error
-		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
-		if err1 != nil {
-			return true, err1
-		}
-		locks = append(locks, lock)
+	locks, finished, err := action.handleKeyError(c, keyErrs)
+	if err != nil {
+		return finished, err
 	}
 
 	// Because we already waited on tikv, no need to Backoff here.
@@ -404,44 +416,13 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 		}
 	}
 
-	var locks []*txnlock.Lock
-	for _, keyErr := range keyErrs {
-		// Check already exists error
-		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
-			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
-			return true, c.extractKeyExistsErr(e)
-		}
-		if deadlock := keyErr.Deadlock; deadlock != nil {
-			return true, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
-		}
-
-		// Extract lock from key error
-		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
-		if err1 != nil {
-			return true, err1
-		}
-		locks = append(locks, lock)
+	locks, finished, err := action.handleKeyError(c, keyErrs)
+	if err != nil {
+		return finished, err
 	}
 
 	if regionErr != nil {
-		// For other region error and the fake region error, backoff because
-		// there's something wrong.
-		// For the real EpochNotMatch error, don't backoff.
-		if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-			err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-			if err != nil {
-				return true, err
-			}
-		}
-		same, err := batch.relocate(bo, c.store.GetRegionCache())
-		if err != nil {
-			return true, err
-		}
-		if same {
-			return false, nil
-		}
-		err = c.pessimisticLockMutations(bo, action.LockCtx, action.wakeUpMode, batch.mutations)
-		return true, err
+		return action.handleRegionError(c, bo, batch, regionErr)
 	}
 
 	if isMutationFailed {
