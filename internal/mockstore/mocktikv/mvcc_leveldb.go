@@ -534,9 +534,7 @@ type lockCtx struct {
 
 	returnValues   bool
 	checkExistence bool
-	//values         [][]byte
-	//keyNotFound    []bool
-	results []*kvrpcpb.PessimisticLockKeyResult
+	results        []*kvrpcpb.PessimisticLockKeyResult
 
 	LockOnlyIfExists bool
 
