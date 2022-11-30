@@ -1077,14 +1077,13 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 	}
 	skipedLockKeys := 0
 	for _, key := range keys {
-		valExists := true // tikv.SetKeyLockedValueExists
+		valExists := true
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
 		// For other lock modes, the locked key values always exist.
 		keyStr := string(key)
 		var val tikv.ReturnedValue
 		var ok bool
 		if val, ok = lockCtx.Values[keyStr]; ok {
-			// TODO: Check if it's safe to use `val.Exists` instead of assuming empty value.
 			if lockCtx.ReturnValues || checkedExistence || val.LockedWithConflictTS != 0 {
 				if !val.Exists {
 					valExists = false
