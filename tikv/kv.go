@@ -564,18 +564,10 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 
 	txnScopeMap := make(map[string][]uint64)
 	for _, store := range stores {
-		storeIDs, ok := txnScopeMap[oracle.GlobalTxnScope]
-		if !ok {
-			storeIDs = make([]uint64, 0)
-		}
-		txnScopeMap[oracle.GlobalTxnScope] = append(storeIDs, store.StoreID())
+		txnScopeMap[oracle.GlobalTxnScope] = append(txnScopeMap[oracle.GlobalTxnScope], store.StoreID())
 
 		if label, ok := store.GetLabelValue(DCLabelKey); ok {
-			storeIDs, ok = txnScopeMap[label]
-			if !ok {
-				storeIDs = make([]uint64, 0)
-			}
-			txnScopeMap[label] = append(storeIDs, store.StoreID())
+			txnScopeMap[label] = append(txnScopeMap[label], store.StoreID())
 		}
 	}
 	for txnScope, storeIDs := range txnScopeMap {
