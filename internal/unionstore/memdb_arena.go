@@ -376,7 +376,7 @@ func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *MemDBCheckpoint) {
 				db.deleteNode(node)
 			} else {
 				node.setKeyFlags(keptFlags)
-				db.dirty = true
+				db.dirty.Store(true)
 			}
 		} else {
 			db.size += len(l.getValue(hdr.oldValue))

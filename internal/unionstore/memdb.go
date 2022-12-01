@@ -43,6 +43,7 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
+	"go.uber.org/atomic"
 )
 
 var tombstone = []byte{}
@@ -84,7 +85,7 @@ type MemDB struct {
 	size            int
 
 	vlogInvalid bool
-	dirty       bool
+	dirty       atomic.Bool
 	stages      []MemDBCheckpoint
 }
 
@@ -124,7 +125,7 @@ func (db *MemDB) Release(h int) {
 	if h == 1 {
 		tail := db.vlog.checkpoint()
 		if !db.stages[0].isSamePosition(&tail) {
-			db.dirty = true
+			db.dirty.Store(true)
 		}
 	}
 	db.stages = db.stages[:h-1]
@@ -172,7 +173,7 @@ func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
 func (db *MemDB) Reset() {
 	db.root = nullAddr
 	db.stages = db.stages[:0]
-	db.dirty = false
+	db.dirty.Store(false)
 	db.vlogInvalid = false
 	db.size = 0
 	db.count = 0
@@ -305,7 +306,7 @@ func (db *MemDB) Size() int {
 
 // Dirty returns whether the root staging buffer is updated.
 func (db *MemDB) Dirty() bool {
-	return db.dirty
+	return db.dirty.Load()
 }
 
 func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
@@ -327,7 +328,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	}
 
 	if len(db.stages) == 0 {
-		db.dirty = true
+		db.dirty.Store(true)
 	}
 	x := db.traverse(key, true)
 
@@ -342,7 +343,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 		flags = kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
 	}
 	if flags.AndPersistent() != 0 {
-		db.dirty = true
+		db.dirty.Store(true)
 	}
 	x.setKeyFlags(flags)
 
