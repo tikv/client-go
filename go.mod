@@ -13,7 +13,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pingcap/failpoint v0.0.0-20210918120811-547c13e3eb00
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20221129094810-e53d558bc6d7
+	github.com/pingcap/kvproto v0.0.0-20221130022225-6c56ac56fe5f
 	github.com/pingcap/log v1.1.1-0.20221015072633-39906604fb81
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.11.0
