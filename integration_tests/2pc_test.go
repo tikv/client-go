@@ -992,6 +992,126 @@ func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {
 	s.Nil(txn.Rollback())
 }
 
+func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflict() {
+	key := []byte("key")
+
+	txn0 := s.begin()
+	txn0.SetPessimistic(true)
+	s.Nil(txn0.Set(key, key))
+	s.Nil(txn0.Commit(context.Background()))
+
+	// No conflict cases
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			txn := s.begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+			if checkExistence || returnValues {
+				s.Len(lockCtx.Values, 1)
+				s.True(lockCtx.Values[string(key)].Exists)
+			} else {
+				s.Len(lockCtx.Values, 0)
+			}
+			if returnValues {
+				s.Equal(key, lockCtx.Values[string(key)].Value)
+			} else {
+				s.Len(lockCtx.Values[string(key)].Value, 0)
+			}
+			s.Equal(uint64(0), lockCtx.Values[string(key)].LockedWithConflictTS)
+			s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
+
+			txn.DoneAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+
+	// Conflicting cases
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			// Make different values
+			value := []byte(fmt.Sprintf("value-%v-%v", returnValues, checkExistence))
+			txn0 := s.begin()
+			txn0.SetPessimistic(true)
+			s.Nil(txn0.Set(key, value))
+
+			txn := s.begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+
+			s.Nil(txn0.Commit(context.Background()))
+			s.Greater(txn0.GetCommitTS(), txn.StartTS())
+
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+
+			s.Equal(txn0.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+			v := lockCtx.Values[string(key)]
+			s.Equal(txn0.GetCommitTS(), v.LockedWithConflictTS)
+			s.True(v.Exists)
+			s.Equal(value, v.Value)
+
+			txn.CancelAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+}
+
+func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflictError() {
+	key := []byte("key")
+
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			// Another transaction locked the key.
+			txn0 := s.begin()
+			txn0.SetPessimistic(true)
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn0.StartTS(), WaitStartTime: time.Now()}
+			s.Nil(txn0.LockKeys(context.Background(), lockCtx, key))
+
+			// Test key is locked
+			txn := s.begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+			lockCtx = kv.NewLockCtx(txn.StartTS(), 10, time.Now())
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			err := txn.LockKeys(context.Background(), lockCtx, key)
+			s.NotNil(err)
+			s.Equal(tikverr.ErrLockWaitTimeout.Error(), err.Error())
+			s.Equal([]string{}, txn.GetAggressiveLockingKeys())
+
+			// Abort the blocking transaction.
+			s.Nil(txn0.Rollback())
+
+			// Test region error
+			s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("PessimisticLockNotLeader")`))
+			err = txn.LockKeys(context.Background(), lockCtx, key)
+			s.Nil(err)
+			s.Nil(failpoint.Disable("tikvclient/tikvStoreSendReqResult"))
+			s.Equal([]string{"key"}, txn.GetAggressiveLockingKeys())
+			txn.CancelAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+}
+
 // TestElapsedTTL tests that elapsed time is correct even if ts physical time is greater than local time.
 func (s *testCommitterSuite) TestElapsedTTL() {
 	key := []byte("key")
