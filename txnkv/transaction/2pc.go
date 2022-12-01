@@ -135,6 +135,8 @@ type twoPhaseCommitter struct {
 	primaryKey  []byte
 	forUpdateTS uint64
 
+	maxLockedWithConflictTS uint64
+
 	mu struct {
 		sync.RWMutex
 		undeterminedErr error // undeterminedErr saves the rpc error we encounter when commit primary key.
@@ -708,7 +710,10 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 func (c *twoPhaseCommitter) primary() []byte {
 	if len(c.primaryKey) == 0 {
-		return c.mutations.GetKey(0)
+		if c.mutations != nil {
+			return c.mutations.GetKey(0)
+		}
+		return nil
 	}
 	return c.primaryKey
 }
@@ -1766,7 +1771,7 @@ func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutatio
 		var err error
 		for tryTimes < retryLimit {
 			pessimisticLockBo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, c.txn.vars)
-			err = c.pessimisticLockMutations(pessimisticLockBo, lCtx, &keysNeedToLock)
+			err = c.pessimisticLockMutations(pessimisticLockBo, lCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &keysNeedToLock)
 			if err != nil {
 				// KeysNeedToLock won't change, so don't async rollback pessimistic locks here for write conflict.
 				if _, ok := errors.Cause(err).(*tikverr.ErrWriteConflict); ok {
@@ -1972,6 +1977,7 @@ func (b *batched) appendBatchMutationsBySize(region locate.RegionVerID, mutation
 
 	var start, end int
 	for start = 0; start < mutations.Len(); start = end {
+		isPrimary := false
 		var size int
 		for end = start; end < mutations.Len() && size < limit; end++ {
 			var k, v []byte
@@ -1980,11 +1986,13 @@ func (b *batched) appendBatchMutationsBySize(region locate.RegionVerID, mutation
 			size += sizeFn(k, v)
 			if b.primaryIdx < 0 && bytes.Equal(k, b.primaryKey) {
 				b.primaryIdx = len(b.batches)
+				isPrimary = true
 			}
 		}
 		b.batches = append(b.batches, batchMutations{
 			region:    region,
 			mutations: mutations.Slice(start, end),
+			isPrimary: isPrimary,
 		})
 	}
 }
