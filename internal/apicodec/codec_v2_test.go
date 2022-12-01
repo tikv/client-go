@@ -177,7 +177,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					// Region 1:
 					// keyspace range:	------[------)------
 					// region range:	------[------)------
-					// after decode:	      [------)
+					// after decode:	------[------)------
 					Id:       1,
 					StartKey: codec.memCodec.encodeKey(keyspacePrefix),
 					EndKey:   codec.memCodec.encodeKey(keyspaceEndKey),
@@ -186,7 +186,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					// Region 2:
 					// keyspace range:	------[------)------
 					// region range:	---[-------------)--
-					// after decode:	Key out of bound, should be removed.
+					// after decode:	------[------)------
 					Id:       2,
 					StartKey: codec.memCodec.encodeKey(beforePrefix),
 					EndKey:   codec.memCodec.encodeKey(afterEndKey),
@@ -195,7 +195,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					// Region 3:
 					// keyspace range:	------[------)------
 					// region range:	---[----)-----------
-					// after decode:	Key out of bound, should be removed.
+					// after decode:	------[-)-----------
 					Id:       3,
 					StartKey: codec.memCodec.encodeKey(beforePrefix),
 					EndKey:   codec.memCodec.encodeKey(insideLeft),
@@ -239,8 +239,16 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 					StartKey: []byte{},
 					EndKey:   []byte{},
 				},
-				// Region 2 should be removed.
-				// Region 3 should be removed.
+				{
+					Id:       2,
+					StartKey: []byte{},
+					EndKey:   []byte{},
+				},
+				{
+					Id:       3,
+					StartKey: []byte{},
+					EndKey:   insideLeft[len(keyspacePrefix):],
+				},
 				{
 					Id:       4,
 					StartKey: insideLeft[len(keyspacePrefix):],
@@ -254,5 +262,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 
 	result, err := codec.decodeRegionError(regionErr)
 	re.NoError(err)
-	re.Equal(expected, result)
+	for i := range result.EpochNotMatch.CurrentRegions {
+		re.Equal(expected.EpochNotMatch.CurrentRegions[i], result.EpochNotMatch.CurrentRegions[i], "index: %d", i)
+	}
 }
