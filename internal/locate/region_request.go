@@ -935,6 +935,12 @@ func (s *RegionRequestSender) SendReqCtx(
 						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
 					}, nil, nil
 				}
+			case "PessimisticLockNotLeader":
+				if req.Type == tikvrpc.CmdPessimisticLock {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+					}, nil, nil
+				}
 			case "GCServerIsBusy":
 				if req.Type == tikvrpc.CmdGC {
 					return &tikvrpc.Response{

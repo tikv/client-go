@@ -462,15 +462,15 @@ func (s *apiTestSuite) TestEmptyValue() {
 		s.Empty(v)
 		// batch_get
 		vs := s.mustBatchGetBytes(prefix, []string{"key", "key1"})
-		s.Equal([][]byte{[]byte{}, nil}, vs)
+		s.Equal([][]byte{{}, nil}, vs)
 		// scan
 		keys, values := s.mustScanBytes(prefix, "key", "keyz", 10)
 		s.Equal([][]byte{[]byte("key")}, keys)
-		s.Equal([][]byte{[]byte{}}, values)
+		s.Equal([][]byte{{}}, values)
 		// reverse scan
 		keys, values = s.mustReverseScanBytes(prefix, "keyz", "key", 10)
 		s.Equal([][]byte{[]byte("key")}, keys)
-		s.Equal([][]byte{[]byte{}}, values)
+		s.Equal([][]byte{{}}, values)
 	}
 
 	verifyNotExist := func() {
