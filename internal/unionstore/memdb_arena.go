@@ -129,7 +129,8 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 		buf: make([]byte, a.blockSize),
 	})
 	a.capacity += uint64(a.blockSize)
-	a.onMemChange()
+	// We shall not call a.onMemChange() here, since it will make the latest block empty, which breaks a precondition
+	// for some operations (e.g. revertToCheckpoint)
 }
 
 func (a *memdbArena) onMemChange() {
@@ -250,11 +251,15 @@ func (a *nodeAllocator) getNode(addr memdbArenaAddr) *memdbNode {
 
 func (a *nodeAllocator) allocNode(key []byte) (memdbArenaAddr, *memdbNode) {
 	nodeSize := 8*4 + 2 + kv.FlagBytes + len(key)
+	prevBlocks := len(a.blocks)
 	addr, mem := a.alloc(nodeSize, true)
 	n := (*memdbNode)(unsafe.Pointer(&mem[0]))
 	n.vptr = nullAddr
 	n.klen = uint16(len(key))
 	copy(n.getKey(), key)
+	if prevBlocks != len(a.blocks) {
+		a.onMemChange()
+	}
 	return addr, n
 }
 
@@ -313,6 +318,7 @@ func (hdr *memdbVlogHdr) load(src []byte) {
 
 func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr, value []byte) memdbArenaAddr {
 	size := memdbVlogHdrSize + len(value)
+	prevBlocks := len(l.blocks)
 	addr, mem := l.alloc(size, false)
 
 	copy(mem, value)
@@ -320,6 +326,9 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	hdr.store(mem[len(value):])
 
 	addr.off += uint32(size)
+	if prevBlocks != len(l.blocks) {
+		l.onMemChange()
+	}
 	return addr
 }
 
