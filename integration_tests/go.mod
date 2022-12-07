@@ -96,3 +96,5 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20220927084729-b21b9fd75149
