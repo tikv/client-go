@@ -878,8 +878,8 @@ func (s *RegionRequestSender) getRPCContext(
 		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true)
 	case tikvrpc.TiDB:
 		return &RPCContext{Addr: s.storeAddr}, nil
-	case tikvrpc.TiFlashMPP:
-		rpcCtxs, err := s.regionCache.GetTiFlashMPPRPCContextByConsistentHash(bo, []RegionVerID{regionID})
+	case tikvrpc.TiFlashCompute:
+		rpcCtxs, err := s.regionCache.GetTiFlashComputeRPCContextByConsistentHash(bo, []RegionVerID{regionID})
 		if err != nil {
 			return nil, err
 		}
@@ -933,6 +933,12 @@ func (s *RegionRequestSender) SendReqCtx(
 				if req.Type == tikvrpc.CmdGC {
 					return &tikvrpc.Response{
 						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+					}, nil, nil
+				}
+			case "PessimisticLockNotLeader":
+				if req.Type == tikvrpc.CmdPessimisticLock {
+					return &tikvrpc.Response{
+						Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
 					}, nil, nil
 				}
 			case "GCServerIsBusy":
@@ -1308,8 +1314,8 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		}
 	}
 
-	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashMPP {
-		s.regionCache.InvalidateTiFlashMPPStoresIfGRPCError(err)
+	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
+		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
 	} else if ctx.Meta != nil {
 		if s.replicaSelector != nil {
 			s.replicaSelector.onSendFailure(bo, err)
@@ -1389,6 +1395,10 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "disk_full"
 	} else if e.GetRecoveryInProgress() != nil {
 		return "recovery_in_progress"
+	} else if e.GetFlashbackInProgress() != nil {
+		return "flashback_in_progress"
+	} else if e.GetFlashbackNotPrepared() != nil {
+		return "flashback_not_prepared"
 	}
 	return "unknown"
 }
@@ -1444,6 +1454,21 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			return false, err
 		}
 		return false, nil
+	}
+
+	// Since we expect that the workload should be stopped during the flashback progress,
+	// if a request meets the FlashbackInProgress error, it should stop retrying immediately
+	// to avoid unnecessary backoff and potential unexpected data status to the user.
+	if regionErr.GetFlashbackInProgress() != nil {
+		logutil.BgLogger().Debug("tikv reports `FlashbackInProgress`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
+		return false, errors.Errorf("region %d is in flashback progress", regionErr.GetFlashbackInProgress().GetRegionId())
+	}
+	// This error means a second-phase flashback request is sent to a region that is not
+	// prepared for the flashback before, it should stop retrying immediately to avoid
+	// unnecessary backoff.
+	if regionErr.GetFlashbackNotPrepared() != nil {
+		logutil.BgLogger().Debug("tikv reports `FlashbackNotPrepared`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
+		return false, errors.Errorf("region %d is not prepared for the flashback", regionErr.GetFlashbackNotPrepared().GetRegionId())
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.

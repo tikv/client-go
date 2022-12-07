@@ -209,7 +209,7 @@ func (s *testRawKVSuite) TestSimple() {
 	s.mustDelete([]byte("key"))
 	s.mustNotExist([]byte("key"))
 	err := s.client.Put(context.Background(), []byte("key"), []byte(""))
-	s.NotNil(err)
+	s.Nil(err) // empty value is legal
 }
 
 func (s *testRawKVSuite) TestRawBatch() {

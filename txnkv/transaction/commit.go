@@ -75,6 +75,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,
 		DiskFullOpt:            c.diskFullOpt,
+		TxnSource:              c.txnSource,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
 	})
@@ -142,7 +143,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		if batch.isPrimary && !c.isAsyncCommit() {
 			c.setUndeterminedErr(nil)
 			reqDuration := time.Since(reqBegin)
-			c.getDetail().MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
+			c.getDetail().MergeCommitReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
 		}
 		if keyErr := commitResp.GetError(); keyErr != nil {
 			if rejected := keyErr.GetCommitTsExpired(); rejected != nil {

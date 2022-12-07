@@ -95,6 +95,7 @@ func newMemDB() *MemDB {
 	db.stages = make([]MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
+	db.vlog.memdb = db
 	return db
 }
 
@@ -330,13 +331,20 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	}
 	x := db.traverse(key, true)
 
-	if len(ops) != 0 {
-		flags := kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
-		if flags.AndPersistent() != 0 {
-			db.dirty = true
-		}
-		x.setKeyFlags(flags)
+	// the NeedConstraintCheckInPrewrite flag is temporary,
+	// every write to the node removes the flag unless it's explicitly set.
+	// This set must be in the latest stage so no special processing is needed.
+	var flags kv.KeyFlags
+	if value != nil {
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), append([]kv.FlagsOp{kv.DelNeedConstraintCheckInPrewrite}, ops...)...)
+	} else {
+		// an UpdateFlag operation, do not delete the NeedConstraintCheckInPrewrite flag.
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
 	}
+	if flags.AndPersistent() != 0 {
+		db.dirty = true
+	}
+	x.setKeyFlags(flags)
 
 	if value == nil {
 		return nil
@@ -863,8 +871,8 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
 		hook(db.allocator.capacity + db.vlog.capacity)
 	}
-	db.allocator.memChangeHook = innerHook
-	db.vlog.memChangeHook = innerHook
+	db.allocator.memChangeHook.Store(&innerHook)
+	db.vlog.memChangeHook.Store(&innerHook)
 }
 
 // Mem returns the current memory footprint

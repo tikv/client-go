@@ -439,8 +439,10 @@ func (h kvHandler) handleKvRawGet(req *kvrpcpb.RawGetRequest) *kvrpcpb.RawGetRes
 			Error: "not implemented",
 		}
 	}
+	v := rawKV.RawGet(req.Cf, req.GetKey())
 	return &kvrpcpb.RawGetResponse{
-		Value: rawKV.RawGet(req.Cf, req.GetKey()),
+		NotFound: v == nil,
+		Value:    v,
 	}
 }
 

@@ -17,7 +17,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.18
+          go-version: 1.19
 
       - name: Test
         run: go test ./...
@@ -32,7 +32,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.18
+          go-version: 1.19
 
       - name: Test
         run: go test ./... -race
@@ -47,7 +47,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.18
+          go-version: 1.19
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
@@ -79,6 +79,9 @@ jobs:
 
   integration-raw-tikv:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        api_version: [v1ttl, v2]
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -86,7 +89,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.18
+          go-version: 1.19
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
@@ -108,7 +111,7 @@ jobs:
           mv ../../${{steps.extract-tikv.outputs.destination}}/tikv-server .
           ./pd-server > pd.log 2>&1 &
           sleep 5
-          ./tikv-server -C tikv.toml > tikv.log 2>&1 &
+          ./tikv-server -C tikv-${{ matrix.api_version }}.toml > tikv.log 2>&1 &
           sleep 15
         working-directory: integration_tests/raw
 

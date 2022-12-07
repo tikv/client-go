@@ -74,7 +74,8 @@ func (actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize uint64) *tikvrpc.Request {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
-	isPessimisticLock := make([]bool, m.Len())
+	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
+
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
 		if m.IsAssertExists(i) {
@@ -89,7 +90,13 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			Value:     m.GetValue(i),
 			Assertion: assertion,
 		}
-		isPessimisticLock[i] = m.IsPessimisticLock(i)
+		if m.IsPessimisticLock(i) {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
+		} else if m.NeedConstraintCheckInPrewrite(i) {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
+		} else {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
+		}
 	}
 	c.mu.Lock()
 	minCommitTS := c.minCommitTS
@@ -141,16 +148,16 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	}
 
 	req := &kvrpcpb.PrewriteRequest{
-		Mutations:         mutations,
-		PrimaryLock:       c.primary(),
-		StartVersion:      c.startTS,
-		LockTtl:           ttl,
-		IsPessimisticLock: isPessimisticLock,
-		ForUpdateTs:       c.forUpdateTS,
-		TxnSize:           txnSize,
-		MinCommitTs:       minCommitTS,
-		MaxCommitTs:       c.maxCommitTS,
-		AssertionLevel:    assertionLevel,
+		Mutations:          mutations,
+		PrimaryLock:        c.primary(),
+		StartVersion:       c.startTS,
+		LockTtl:            ttl,
+		PessimisticActions: pessimisticActions,
+		ForUpdateTs:        c.forUpdateTS,
+		TxnSize:            txnSize,
+		MinCommitTs:        minCommitTS,
+		MaxCommitTs:        c.maxCommitTS,
+		AssertionLevel:     assertionLevel,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {
@@ -175,6 +182,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,
 		DiskFullOpt:            c.diskFullOpt,
+		TxnSource:              c.txnSource,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
 	})
@@ -308,7 +316,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 
 			// Update CommitDetails
 			reqDuration := time.Since(reqBegin)
-			c.getDetail().MergeReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), prewriteResp.ExecDetailsV2)
+			c.getDetail().MergePrewriteReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), prewriteResp.ExecDetailsV2)
 
 			if batch.isPrimary {
 				// After writing the primary key, if the size of the transaction is larger than 32M,
@@ -389,7 +397,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if lock.TxnID > c.startTS && !c.isPessimistic {
-				return tikverr.NewErrWriteConfictWithArgs(c.startTS, lock.TxnID, 0, lock.Key)
+				return tikverr.NewErrWriteConflictWithArgs(c.startTS, lock.TxnID, 0, lock.Key, kvrpcpb.WriteConflict_Optimistic)
 			}
 			locks = append(locks, lock)
 		}
