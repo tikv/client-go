@@ -58,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -87,6 +88,8 @@ var (
 	// CommitMaxBackoff is max sleep time of the 'commit' command
 	CommitMaxBackoff = uint64(40000)
 )
+
+var gP = gp.New(128, 10 * time.Second)
 
 type kvstore interface {
 	// GetRegionCache gets the RegionCache.
@@ -987,7 +990,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
-		go func() {
+		gP.Go(func() {
 			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
@@ -1011,7 +1014,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 					zap.Error(e))
 				metrics.SecondaryLockCleanupFailureCounterCommit.Inc()
 			}
-		}()
+		})
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}
