@@ -203,6 +203,8 @@ github.com/stretchr/testify v1.7.0 h1:nwc3DEeHmmLAfoZucVR881uASk0Mfjw8xYJ99tb5Cc
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/tiancaiamao/gp v0.0.0-20221208031941-7ca47846b60c h1:NHGY/VnWuaRg7EPkYz0eIDm+2BgvJhyL9Jwoq5N64U4=
 github.com/tiancaiamao/gp v0.0.0-20221208031941-7ca47846b60c/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
+github.com/tiancaiamao/gp v0.0.0-20221208073724-7c59693b66d9 h1:mSZWAwxF1yvLRNKzEzs2tNuZmtTotUjvwdt3/xbb/Lc=
+github.com/tiancaiamao/gp v0.0.0-20221208073724-7c59693b66d9/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
 github.com/tikv/pd/client v0.0.0-20221031025758-80f0d8ca4d07 h1:ckPpxKcl75mO2N6a4cJXiZH43hvcHPpqc9dh1TmH1nc=
 github.com/tikv/pd/client v0.0.0-20221031025758-80f0d8ca4d07/go.mod h1:CipBxPfxPUME+BImx9MUYXCnAVLS3VJUr3mnSJwh40A=
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
