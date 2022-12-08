@@ -49,6 +49,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -58,7 +59,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -89,7 +89,7 @@ var (
 	CommitMaxBackoff = uint64(40000)
 )
 
-var gP = gp.New(128, 10 * time.Second)
+var gP = gp.New(128, 10*time.Second)
 
 type kvstore interface {
 	// GetRegionCache gets the RegionCache.
