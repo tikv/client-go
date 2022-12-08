@@ -20,6 +20,7 @@ require (
 	github.com/prometheus/client_model v0.2.0
 	github.com/stathat/consistent v1.0.0
 	github.com/stretchr/testify v1.7.0
+	github.com/tiancaiamao/gp v0.0.0-20221208073724-7c59693b66d9
 	github.com/tikv/pd/client v0.0.0-20221031025758-80f0d8ca4d07
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
@@ -47,7 +48,6 @@ require (
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
-	github.com/tiancaiamao/gp v0.0.0-20221208073724-7c59693b66d9 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.2 // indirect
 	go.uber.org/multierr v1.7.0 // indirect
 	golang.org/x/net v0.0.0-20210428140749-89ef3d95e781 // indirect
