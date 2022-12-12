@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -418,6 +419,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
+	go c.asyncUpdateStoreSlowScore(10 * time.Second)
 	return c
 }
 
@@ -478,6 +480,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 	c.storeMu.RLock()
 	for _, store := range c.storeMu.stores {
+		// TODO: Update slowScore and report to Metrics
 		if needCheck(store) {
 			needCheckStores = append(needCheckStores, store)
 		}
@@ -2563,65 +2566,95 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 const (
 	slowScoreInitVal     = 1
 	slowScoreThreshold   = 80
+	slowScoreMax         = 100
 	slowScoreInitTimeout = 500  // unit: ms
-	slowScoreUpdInterval = 1000 // 1000 / one update
+	slowScoreUpdInterval = 1000 // 1000 / one update tick
 )
 
 // SlowScoreStat represents the statistics on busyness of Store.
 type SlowScoreStat struct {
-	avgScore         float64
-	avgTimeCost      uint64
-	intervalTimeCost uint64
-	updCount         uint64
-	slowCount        uint64
+	updCount          uint64 // count of update.
+	avgScore          float64
+	avgTimecost       uint64
+	intervalTimecost  uint64 // sum of the timecost in one counting interval. Unit: us
+	intervalTimeout   uint64 // sum of the timeout in one counting interval. Unit: us
+	intervalSlowCount uint64 // count of slow query in one counting interval.
 }
 
 func (ss *SlowScoreStat) getSlowScore() float64 {
 	return ss.avgScore
 }
 
-func (ss *SlowScoreStat) updSlowScore(timecost time.Duration, timeout time.Duration) bool {
-	ss.updCount++
-	if ss.avgTimeCost == 0 {
+// Update the statistics on SlowScore periodically.
+func (ss *SlowScoreStat) updateSlowScore() bool {
+	if ss.avgTimecost == 0 {
+		// Init the whole statistics.
 		ss.avgScore = float64(slowScoreInitVal)
-		ss.avgTimeCost = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
-		ss.intervalTimeCost = uint64((timecost * time.Microsecond).Abs().Microseconds())
+		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
+		ss.intervalTimecost = 0
+		ss.intervalTimeout = ss.avgTimecost
 		return true
 	}
-	curTimeCost := uint64(timecost.Abs().Microseconds())
-	if ss.avgTimeCost*1000 <= curTimeCost {
-		ss.slowCount++
-		if ss.slowCount >= slowScoreUpdInterval/2 {
-			ss.slowCount = 0
-			ss.avgScore = float64(slowScoreThreshold)
-			return false
+	if ss.updCount == 0 {
+		return true
+	}
+	if ss.intervalSlowCount > 0 {
+		nearThresh := float64(ss.intervalSlowCount) / float64(slowScoreUpdInterval)
+		costScore := math.Min(nearThresh, float64(0.1)) / float64(0.1)
+		ss.avgScore = ss.avgScore * (float64(1.0) + costScore)
+		ss.avgScore = math.Min(ss.avgScore, float64(slowScoreMax))
+	} else {
+		costScore := float64(ss.intervalTimecost) / float64(ss.intervalTimeout)
+		if ss.avgScore-costScore <= float64(slowScoreInitVal) {
+			ss.avgScore = float64(slowScoreInitVal)
+		} else {
+			ss.avgScore -= costScore
 		}
 	}
-	if ss.updCount%slowScoreUpdInterval == 0 {
-		intervalAvgTimeCost := ss.intervalTimeCost / slowScoreUpdInterval
-		costScore := float64(intervalAvgTimeCost) / float64(timeout.Abs().Microseconds())
-		if intervalAvgTimeCost > ss.avgTimeCost {
-			ss.avgScore += costScore
-		} else {
-			if ss.avgScore-costScore <= float64(slowScoreInitVal) {
-				ss.avgScore = float64(slowScoreInitVal)
-			} else {
-				ss.avgScore -= costScore
-			}
+
+	ss.avgTimecost = (ss.avgTimecost*(ss.updCount-slowScoreUpdInterval) + ss.intervalTimecost) / ss.updCount
+	// Resets the counter of inteval timecost
+	ss.intervalTimecost = 0
+	ss.intervalTimeout = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
+	ss.intervalSlowCount = 0
+	return true
+}
+
+// recordSlowScoreStat records the timecost of each request.
+func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration, timeout time.Duration) bool {
+	ss.updCount++
+	if ss.avgTimecost == 0 {
+		// Init the whole statistics with the original one.
+		ss.avgScore = float64(slowScoreInitVal)
+		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
+		ss.intervalTimecost = uint64(timecost.Abs().Microseconds())
+		ss.intervalTimeout = uint64(timeout.Abs().Microseconds())
+		return true
+	}
+	curTimecost := uint64(timecost.Abs().Microseconds())
+	curTimeout := uint64(timeout.Abs().Microseconds())
+	// Here, we simplistically introduce the standard on whether current query is a
+	// slow query -- "avgTimecost <= curTimecost". It's a empirical rule right now,
+	// can be optimized in later work.
+	if ss.avgTimecost*1000 <= curTimecost {
+		ss.intervalSlowCount++
+		if ss.intervalSlowCount >= slowScoreUpdInterval/2 {
+			ss.intervalSlowCount = 0
+			ss.avgScore = float64(slowScoreThreshold)
 		}
-		ss.avgTimeCost = (ss.avgTimeCost*(ss.updCount-slowScoreUpdInterval) + ss.intervalTimeCost) / ss.updCount
-		// Resets the counter of inteval timecost
-		ss.intervalTimeCost = 0
-		ss.slowCount = 0
-	} else {
-		ss.intervalTimeCost += curTimeCost
+		return false
+	}
+	ss.intervalTimecost += curTimecost
+	ss.intervalTimeout += curTimeout
+	if curTimeout == 0 {
+		ss.intervalTimeout += curTimecost * 10
 	}
 	return true
 }
 
 func (ss *SlowScoreStat) markAlreadySlow() {
 	ss.avgScore = float64(slowScoreThreshold)
-	ss.avgTimeCost *= 10
+	ss.avgTimecost *= 10
 }
 
 func (ss *SlowScoreStat) isSlow() bool {
@@ -2639,12 +2672,53 @@ func (s *Store) isSlow() bool {
 }
 
 // updateSlowScore updates the slow score of this store according to the timecost of current request.
-func (s *Store) updateSlowScore(timecost time.Duration, timeout time.Duration) bool {
-	return s.slowScore.updSlowScore(timecost, timeout)
+func (s *Store) updateSlowScoreStat() bool {
+	return s.slowScore.updateSlowScore()
+}
+
+// recordSlowScoreStat records timecost of each request.
+func (s *Store) recordSlowScoreStat(timecost time.Duration, timeout time.Duration) bool {
+	return s.slowScore.recordSlowScoreStat(timecost, timeout)
 }
 
 func (s *Store) markAlreadySlow() {
 	s.slowScore.markAlreadySlow()
+}
+
+// asyncUpdateStoreSlowScore updates the slow score of each store periodically.
+func (c *RegionCache) asyncUpdateStoreSlowScore(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			// update store slowScores
+			c.checkAndUpdateStoreSlowScores()
+		}
+	}
+}
+
+func (c *RegionCache) checkAndUpdateStoreSlowScores() {
+	defer func() {
+		r := recover()
+		if r != nil {
+			logutil.BgLogger().Error("panic in the checkAndUpdateStoreSlowScores goroutine",
+				zap.Reflect("r", r),
+				zap.Stack("stack trace"))
+		}
+	}()
+	slowScoreMetrics := make(map[string]float64)
+	c.storeMu.Lock()
+	for _, store := range c.storeMu.stores {
+		store.updateSlowScoreStat()
+		slowScoreMetrics[store.addr] = store.getSlowScore()
+	}
+	c.storeMu.Unlock()
+	for store, score := range slowScoreMetrics {
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+	}
 }
 
 func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {

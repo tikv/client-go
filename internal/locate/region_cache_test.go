@@ -1608,3 +1608,30 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	s.Error(err)
 	s.False(shouldRetry)
 }
+
+func (s *testRegionCacheSuite) TestSlowScoreStat() {
+	slowScore := SlowScoreStat{
+		avgScore: 1,
+	}
+	s.False(slowScore.isSlow())
+	timeout := time.Second * 5
+	slowScore.recordSlowScoreStat(time.Millisecond*1, timeout)
+	slowScore.updateSlowScore()
+	s.False(slowScore.isSlow())
+	for i := 2; i <= 100; i++ {
+		slowScore.recordSlowScoreStat(time.Millisecond*time.Duration(i), timeout)
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	for i := 100; i >= 2; i-- {
+		slowScore.recordSlowScoreStat(time.Millisecond*time.Duration(i), timeout)
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	slowScore.markAlreadySlow()
+	s.True(slowScore.isSlow())
+}
