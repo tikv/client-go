@@ -878,8 +878,8 @@ func (s *RegionRequestSender) getRPCContext(
 		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true)
 	case tikvrpc.TiDB:
 		return &RPCContext{Addr: s.storeAddr}, nil
-	case tikvrpc.TiFlashMPP:
-		rpcCtxs, err := s.regionCache.GetTiFlashMPPRPCContextByConsistentHash(bo, []RegionVerID{regionID})
+	case tikvrpc.TiFlashCompute:
+		rpcCtxs, err := s.regionCache.GetTiFlashComputeRPCContextByConsistentHash(bo, []RegionVerID{regionID})
 		if err != nil {
 			return nil, err
 		}
@@ -1308,8 +1308,8 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		}
 	}
 
-	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashMPP {
-		s.regionCache.InvalidateTiFlashMPPStoresIfGRPCError(err)
+	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
+		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
 	} else if ctx.Meta != nil {
 		if s.replicaSelector != nil {
 			s.replicaSelector.onSendFailure(bo, err)
