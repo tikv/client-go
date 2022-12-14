@@ -879,7 +879,11 @@ func (s *RegionRequestSender) getRPCContext(
 	case tikvrpc.TiDB:
 		return &RPCContext{Addr: s.storeAddr}, nil
 	case tikvrpc.TiFlashCompute:
-		rpcCtxs, err := s.regionCache.GetTiFlashComputeRPCContextByConsistentHash(bo, []RegionVerID{regionID})
+		stores, err := s.regionCache.GetTiFlashComputeStores(bo)
+		if err != nil {
+			return nil, err
+		}
+		rpcCtxs, err := s.regionCache.GetTiFlashComputeRPCContextByConsistentHash(bo, []RegionVerID{regionID}, stores)
 		if err != nil {
 			return nil, err
 		}
