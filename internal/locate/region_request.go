@@ -264,8 +264,9 @@ type replicaSelector struct {
 // selectorState is the interface of states of the replicaSelector.
 // Here is the main state transition diagram:
 //
-//                                    exceeding maxReplicaAttempt
-//           +-------------------+   || RPC failure && unreachable && no forwarding
+//	                         exceeding maxReplicaAttempt
+//	+-------------------+   || RPC failure && unreachable && no forwarding
+//
 // +-------->+ accessKnownLeader +----------------+
 // |         +------+------------+                |
 // |                |                             |
@@ -282,7 +283,8 @@ type replicaSelector struct {
 // | leader becomes   v                           +---+---+
 // | reachable  +-----+-----+ all proxies are tried   ^
 // +------------+tryNewProxy+-------------------------+
-//              +-----------+
+//
+//	+-----------+
 type selectorState interface {
 	next(*retry.Backoffer, *replicaSelector) (*RPCContext, error)
 	onSendSuccess(*replicaSelector)
@@ -520,6 +522,7 @@ type accessFollower struct {
 	option            storeSelectorOp
 	leaderIdx         AccessIndex
 	lastIdx           AccessIndex
+	learnerOnly       bool
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -583,7 +586,7 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels)))
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)))
 }
 
 type invalidStore struct {
@@ -641,6 +644,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 			option:            option,
 			leaderIdx:         regionStore.workTiKVIdx,
 			lastIdx:           -1,
+			learnerOnly:       req.ReplicaReadType == kv.ReplicaReadLearner,
 		}
 	}
 
