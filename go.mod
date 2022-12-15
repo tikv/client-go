@@ -20,6 +20,7 @@ require (
 	github.com/prometheus/client_model v0.2.0
 	github.com/stathat/consistent v1.0.0
 	github.com/stretchr/testify v1.7.0
+	github.com/tiancaiamao/gp v0.0.0-20221214071713-abacb15f16f1
 	github.com/tikv/pd/client v0.0.0-20221031025758-80f0d8ca4d07
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
