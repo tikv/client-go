@@ -954,19 +954,15 @@ func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
 	}
 
 	if rs.scanDetail != nil {
-		newRs.scanDetail = &util.ScanDetail{}
-		*newRs.scanDetail = *rs.scanDetail
+		newRs.scanDetail = rs.scanDetail
 	}
 
 	if rs.timeDetail != nil {
-		newRs.timeDetail = &util.TimeDetail{}
-		*newRs.timeDetail = *rs.timeDetail
+		newRs.timeDetail = rs.timeDetail
 	}
 
 	if rs.resolveLockDetail != nil {
-		newRs.resolveLockDetail = &util.ResolveLockDetail{
-			ResolveLockTime: rs.resolveLockDetail.ResolveLockTime,
-		}
+		newRs.resolveLockDetail = rs.resolveLockDetail
 	}
 
 	return &newRs
