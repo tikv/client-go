@@ -1395,6 +1395,12 @@ func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
 	return stores
 }
 
+func (c *RegionCache) GetAllStores() []*Store {
+	stores := c.GetStoresByType(tikvrpc.TiKV)
+	tiflashStores := c.GetStoresByType(tikvrpc.TiFlash)
+	return append(stores, tiflashStores...)
+}
+
 func filterUnavailablePeers(region *pd.Region) {
 	if len(region.DownPeers) == 0 {
 		return

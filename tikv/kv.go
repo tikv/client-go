@@ -521,9 +521,7 @@ func (s *KVStore) safeTSUpdater() {
 }
 
 func (s *KVStore) updateSafeTS(ctx context.Context) {
-	stores := s.regionCache.GetStoresByType(tikvrpc.TiKV)
-	tiflashStores := s.regionCache.GetStoresByType(tikvrpc.TiFlash)
-	stores = append(stores, tiflashStores...)
+	stores := s.regionCache.GetAllStores()
 	tikvClient := s.GetTiKVClient()
 	wg := &sync.WaitGroup{}
 	wg.Add(len(stores))
