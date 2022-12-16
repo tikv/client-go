@@ -491,7 +491,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 }
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
-func (c *RegionCache) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
+func (c *RegionCache) SetRegionCacheStore(id uint64, addr string, peerAddr string, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
 	c.storeMu.Lock()
 	defer c.storeMu.Unlock()
 	c.storeMu.stores[id] = &Store{
@@ -499,6 +499,8 @@ func (c *RegionCache) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointT
 		storeType: storeType,
 		state:     state,
 		labels:    labels,
+		addr:      addr,
+		peerAddr:  peerAddr,
 	}
 }
 
