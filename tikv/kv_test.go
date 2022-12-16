@@ -35,10 +35,11 @@ func TestKV(t *testing.T) {
 
 type testKVSuite struct {
 	suite.Suite
-	store          *KVStore
-	cluster        *mocktikv.Cluster
-	tikvStoreId    uint64 // store1 is TiKV
-	tiflashStoreId uint64 // store2 is TiFlash
+	store              *KVStore
+	cluster            *mocktikv.Cluster
+	tikvStoreId        uint64
+	tiflashStoreId     uint64
+	tiflashPeerStoreId uint64
 }
 
 func (s *testKVSuite) SetupTest() {
@@ -54,11 +55,14 @@ func (s *testKVSuite) SetupTest() {
 	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 2)
 	s.tikvStoreId = storeIDs[0]
 	s.tiflashStoreId = storeIDs[1]
-	s.cluster.UpdateStorePeerAddr(s.tiflashStoreId, s.storeAddr(s.tiflashStoreId), &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
+	tiflashPeerAddrId := cluster.AllocIDs(1)
+	s.tiflashPeerStoreId = tiflashPeerAddrId[0]
+
+	s.cluster.UpdateStorePeerAddr(s.tiflashStoreId, s.storeAddr(s.tiflashPeerStoreId), &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
 	s.store.regionCache.SetRegionCacheStore(s.tikvStoreId, s.storeAddr(s.tikvStoreId), s.storeAddr(s.tikvStoreId), tikvrpc.TiKV, 1, nil)
 	var labels []*metapb.StoreLabel
 	labels = append(labels, &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
-	s.store.regionCache.SetRegionCacheStore(s.tiflashStoreId, s.storeAddr(s.tiflashStoreId), s.storeAddr(s.tiflashStoreId), tikvrpc.TiFlash, 1, labels)
+	s.store.regionCache.SetRegionCacheStore(s.tiflashStoreId, s.storeAddr(s.tiflashStoreId), s.storeAddr(s.tiflashPeerStoreId), tikvrpc.TiFlash, 1, labels)
 
 }
 
@@ -82,7 +86,7 @@ func (c *storeSafeTsMockClient) SendRequest(ctx context.Context, addr string, re
 	}
 	c.requestCount++
 	resp := &tikvrpc.Response{}
-	if addr == c.testSuite.storeAddr(c.testSuite.tiflashStoreId) {
+	if addr == c.testSuite.storeAddr(c.testSuite.tiflashPeerStoreId) {
 		resp.Resp = &kvrpcpb.StoreSafeTSResponse{SafeTs: 80}
 	} else {
 		resp.Resp = &kvrpcpb.StoreSafeTSResponse{SafeTs: 100}

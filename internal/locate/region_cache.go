@@ -1387,10 +1387,11 @@ func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
 				})
 			}
 			stores = append(stores, &Store{
-				addr:     store.addr,
-				peerAddr: store.peerAddr,
-				storeID:  store.storeID,
-				labels:   storeLabel,
+				addr:      store.addr,
+				peerAddr:  store.peerAddr,
+				storeID:   store.storeID,
+				labels:    storeLabel,
+				storeType: typ,
 			})
 		}
 	}
