@@ -108,8 +108,16 @@ func (s *testKVSuite) TestMinSafeTs() {
 		testSuite: s,
 	}
 	s.store.SetTiKVClient(&mockClient)
-	// wait for updateSafeTS
-	time.Sleep(4 * time.Second)
-	s.Require().Equal(2, mockClient.requestCount)
+
+	// wait for updateMinSafeTS
+	var retryCount int
+	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) != 80 {
+		time.Sleep(2 * time.Second)
+		if retryCount > 5 {
+			break
+		}
+		retryCount++
+	}
+	s.Require().GreaterOrEqual(mockClient.requestCount, 2)
 	s.Require().Equal(uint64(80), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
