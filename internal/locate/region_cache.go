@@ -777,7 +777,7 @@ func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Back
 			return nil, err
 		}
 		if rpcCtx == nil {
-			return nil, errors.Errorf("rpcCtx is nil", zap.Any("region", id))
+			return nil, errors.Errorf("rpcCtx is nil, region: %v", id)
 		}
 
 		var store *Store
