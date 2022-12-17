@@ -758,17 +758,12 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 // 3. Compute which tiflash_compute node should handle this region by consistent hash.
 // 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
 // NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
-func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID) (res []*RPCContext, err error) {
-	stores, err := c.GetTiFlashComputeStores(bo)
-	if err != nil {
-		return nil, err
-	}
-	if len(stores) == 0 {
-		return nil, errors.New("number of tiflash_compute node is zero")
-	}
-
+func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID, stores []*Store) (res []*RPCContext, err error) {
 	hasher := consistent.New()
 	for _, store := range stores {
+		if !isStoreContainLabel(store.labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) {
+			return nil, errors.New("expect store should be tiflash_compute")
+		}
 		hasher.Add(store.GetAddr())
 	}
 
@@ -777,12 +772,12 @@ func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Back
 		if err != nil {
 			return nil, err
 		}
-		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, true)
+		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, false)
 		if err != nil {
 			return nil, err
 		}
 		if rpcCtx == nil {
-			return nil, nil
+			return nil, errors.Errorf("rpcCtx is nil", zap.Any("region", id))
 		}
 
 		var store *Store
