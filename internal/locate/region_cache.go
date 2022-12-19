@@ -1398,6 +1398,7 @@ func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
 	return stores
 }
 
+// GetAllStores gets TiKV and TiFlash stores.
 func (c *RegionCache) GetAllStores() []*Store {
 	stores := c.GetStoresByType(tikvrpc.TiKV)
 	tiflashStores := c.GetStoresByType(tikvrpc.TiFlash)

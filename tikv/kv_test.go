@@ -17,6 +17,7 @@ package tikv
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,9 +38,9 @@ type testKVSuite struct {
 	suite.Suite
 	store              *KVStore
 	cluster            *mocktikv.Cluster
-	tikvStoreId        uint64
-	tiflashStoreId     uint64
-	tiflashPeerStoreId uint64
+	tikvStoreID        uint64
+	tiflashStoreID     uint64
+	tiflashPeerStoreID uint64
 }
 
 func (s *testKVSuite) SetupTest() {
@@ -53,16 +54,16 @@ func (s *testKVSuite) SetupTest() {
 	s.cluster = cluster
 
 	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 2)
-	s.tikvStoreId = storeIDs[0]
-	s.tiflashStoreId = storeIDs[1]
-	tiflashPeerAddrId := cluster.AllocIDs(1)
-	s.tiflashPeerStoreId = tiflashPeerAddrId[0]
+	s.tikvStoreID = storeIDs[0]
+	s.tiflashStoreID = storeIDs[1]
+	tiflashPeerAddrID := cluster.AllocIDs(1)
+	s.tiflashPeerStoreID = tiflashPeerAddrID[0]
 
-	s.cluster.UpdateStorePeerAddr(s.tiflashStoreId, s.storeAddr(s.tiflashPeerStoreId), &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
-	s.store.regionCache.SetRegionCacheStore(s.tikvStoreId, s.storeAddr(s.tikvStoreId), s.storeAddr(s.tikvStoreId), tikvrpc.TiKV, 1, nil)
+	s.cluster.UpdateStorePeerAddr(s.tiflashStoreID, s.storeAddr(s.tiflashPeerStoreID), &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
+	s.store.regionCache.SetRegionCacheStore(s.tikvStoreID, s.storeAddr(s.tikvStoreID), s.storeAddr(s.tikvStoreID), tikvrpc.TiKV, 1, nil)
 	var labels []*metapb.StoreLabel
 	labels = append(labels, &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
-	s.store.regionCache.SetRegionCacheStore(s.tiflashStoreId, s.storeAddr(s.tiflashStoreId), s.storeAddr(s.tiflashPeerStoreId), tikvrpc.TiFlash, 1, labels)
+	s.store.regionCache.SetRegionCacheStore(s.tiflashStoreID, s.storeAddr(s.tiflashStoreID), s.storeAddr(s.tiflashPeerStoreID), tikvrpc.TiFlash, 1, labels)
 
 }
 
@@ -76,7 +77,7 @@ func (s *testKVSuite) storeAddr(id uint64) string {
 
 type storeSafeTsMockClient struct {
 	Client
-	requestCount int
+	requestCount int32
 	testSuite    *testKVSuite
 }
 
@@ -84,9 +85,9 @@ func (c *storeSafeTsMockClient) SendRequest(ctx context.Context, addr string, re
 	if req.Type != tikvrpc.CmdStoreSafeTS {
 		return c.Client.SendRequest(ctx, addr, req, timeout)
 	}
-	c.requestCount++
+	atomic.AddInt32(&c.requestCount, 1)
 	resp := &tikvrpc.Response{}
-	if addr == c.testSuite.storeAddr(c.testSuite.tiflashPeerStoreId) {
+	if addr == c.testSuite.storeAddr(c.testSuite.tiflashPeerStoreID) {
 		resp.Resp = &kvrpcpb.StoreSafeTSResponse{SafeTs: 80}
 	} else {
 		resp.Resp = &kvrpcpb.StoreSafeTSResponse{SafeTs: 100}
@@ -118,6 +119,6 @@ func (s *testKVSuite) TestMinSafeTs() {
 		}
 		retryCount++
 	}
-	s.Require().GreaterOrEqual(mockClient.requestCount, 2)
+	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(2))
 	s.Require().Equal(uint64(80), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
