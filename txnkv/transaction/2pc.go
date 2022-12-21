@@ -49,7 +49,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -88,8 +87,6 @@ var (
 	// CommitMaxBackoff is max sleep time of the 'commit' command
 	CommitMaxBackoff = uint64(40000)
 )
-
-var gP = gp.New(128, 10*time.Second)
 
 type kvstore interface {
 	// GetRegionCache gets the RegionCache.
@@ -990,7 +987,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
-		gP.Go(func() {
+		f := func() {
 			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
@@ -1014,7 +1011,12 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 					zap.Error(e))
 				metrics.SecondaryLockCleanupFailureCounterCommit.Inc()
 			}
-		})
+		}
+		if gP, ok := c.store.(interface{ Go(func()) }); ok {
+			gP.Go(f)
+		} else {
+			go f()
+		}
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}
