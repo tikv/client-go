@@ -134,7 +134,7 @@ type KVStore struct {
 	gP     *gp.Pool
 }
 
-// Go run the function in a seperate goroutine.
+// Go run the function in a separate goroutine.
 func (s *KVStore) Go(f func()) {
 	s.gP.Go(f)
 }
