@@ -515,7 +515,7 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 	s.Nil(err)
 	committer.SetUseAsyncCommit()
 	committer.SetLockTTL(20000)
-	committer.PrewriteAllMutations(context.Background())
+	err = committer.PrewriteAllMutations(context.Background())
 	s.Nil(err)
 
 	var locks []*txnkv.Lock
