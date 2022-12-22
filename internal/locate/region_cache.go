@@ -363,9 +363,10 @@ func (r *Region) isValid() bool {
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
 type RegionCache struct {
-	pdClient         pd.Client
-	apiVersion       kvrpcpb.APIVersion
-	enableForwarding bool
+	pdClient               pd.Client
+	apiVersion             kvrpcpb.APIVersion
+	enableForwarding       bool
+	enableAutoFollowerRead bool
 
 	mu struct {
 		sync.RWMutex                           // mutex protect cached region
@@ -419,7 +420,9 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
-	go c.asyncUpdateStoreSlowScore(10 * time.Second)
+	c.enableAutoFollowerRead = config.GetGlobalConfig().TiKVClient.AutoFollowerRead
+	// Default use 15s as the update inerval.
+	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
 	return c
 }
 
@@ -2601,10 +2604,13 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 	if ss.intervalSlowCount > 0 {
 		nearThresh := float64(ss.intervalSlowCount) / float64(slowScoreUpdInterval)
 		costScore := math.Min(nearThresh, float64(0.1)) / float64(0.1)
-		ss.avgScore = ss.avgScore * (float64(1.0) + costScore)
+		ss.avgScore = ss.avgScore * (float64(slowScoreInitVal) + costScore)
 		ss.avgScore = math.Min(ss.avgScore, float64(slowScoreMax))
 	} else {
-		costScore := float64(ss.intervalTimecost) / float64(ss.intervalTimeout)
+		costScore := float64(slowScoreInitVal)
+		if ss.intervalTimecost > 0 {
+			costScore = float64(ss.intervalTimecost) / float64(ss.intervalTimeout)
+		}
 		if ss.avgScore-costScore <= float64(slowScoreInitVal) {
 			ss.avgScore = float64(slowScoreInitVal)
 		} else {

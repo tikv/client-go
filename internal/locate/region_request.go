@@ -357,7 +357,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	// request to follower to avoid hanging on Leader node when Reading.
 	canRedirectToFollower := false
 	if req != nil {
-		canRedirectToFollower = req.Type.IsReadCmd() && leader.store.isSlow()
+		canRedirectToFollower = selector.regionCache.enableAutoFollowerRead && req.Type.IsReadCmd() && leader.store.isSlow()
 	}
 	// If hibernate region is enabled and the leader is not reachable, the raft group
 	// will not be wakened up and re-elect the leader until the follower receives
@@ -663,7 +663,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 	// If the leader was abnormal to be accessed, we might choose followers as candidates
 	// to serve the request when Request.Type.isReadCmd().
 	_, leaderStore := regionStore.accessStore(tiKVOnly, regionStore.workTiKVIdx)
-	canReadReplica:= req.Type.IsReadCmd() && leaderStore != nil && leaderStore.isSlow()
+	canReadReplica:= regionCache.enableAutoFollowerRead && req.Type.IsReadCmd() && leaderStore != nil && leaderStore.isSlow()
 	canProxy := regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0
 
 	// All request default with req.ReplicaReadType == ReadFromLeader. That is,
