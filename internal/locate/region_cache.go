@@ -234,8 +234,8 @@ func (r *regionStore) kvPeer(seed uint32, op *storeSelectorOp) AccessIndex {
 
 func (r *regionStore) filterStoreCandidate(aidx AccessIndex, op *storeSelectorOp) bool {
 	_, s := r.accessStore(tiKVOnly, aidx)
-	// filter label unmatched store
-	return s.IsLabelsMatch(op.labels)
+	// filter label unmatched store and slow stores
+	return s.IsLabelsMatch(op.labels) && !s.isSlow()
 }
 
 func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Region, error) {
@@ -363,10 +363,9 @@ func (r *Region) isValid() bool {
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
 type RegionCache struct {
-	pdClient               pd.Client
-	apiVersion             kvrpcpb.APIVersion
-	enableForwarding       bool
-	enableAutoFollowerRead bool
+	pdClient         pd.Client
+	apiVersion       kvrpcpb.APIVersion
+	enableForwarding bool
 
 	mu struct {
 		sync.RWMutex                           // mutex protect cached region
@@ -420,7 +419,6 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
-	c.enableAutoFollowerRead = config.GetGlobalConfig().TiKVClient.AutoFollowerRead
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
 	return c
@@ -483,7 +481,6 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 	c.storeMu.RLock()
 	for _, store := range c.storeMu.stores {
-		// TODO: Update slowScore and report to Metrics
 		if needCheck(store) {
 			needCheckStores = append(needCheckStores, store)
 		}
@@ -592,11 +589,6 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 		op(options)
 	}
 	isLeaderReq := false
-	// @TODO: Add strategy to make judgement whether the leader is accessible or not. If the leader is abnormal
-	// to be accessed, we should force update the `replicaRead = true`.
-
-	//
-	// if (...) { replicaRead = kv.ReplicaReadFollower }
 	switch replicaRead {
 	case kv.ReplicaReadFollower:
 		store, peer, accessIdx, storeIdx = cachedRegion.FollowerStorePeer(regionStore, followerStoreSeed, options)
@@ -2178,7 +2170,7 @@ type Store struct {
 	livenessState    uint32
 	unreachableSince time.Time
 
-	// TODO: set a statistics for counting the request latency to this store
+	// A statistic for counting the request latency to this store
 	slowScore SlowScoreStat
 }
 
@@ -2487,10 +2479,6 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 		return
 	}
 	addr := s.addr
-	// @TODO: Add strategy to collect the ping / pong state (time-cost to nodes).
-	// This strategy should make a judgement whether the remote node is busy or
-	// abnormal. And if this node is not accessible temporarily, we should mark
-	// this node with not accessible state.
 	rsCh := livenessSf.DoChan(addr, func() (interface{}, error) {
 		return invokeKVStatusAPI(addr, storeLivenessTimeout), nil
 	})
@@ -2607,10 +2595,7 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 		ss.avgScore = ss.avgScore * (float64(slowScoreInitVal) + costScore)
 		ss.avgScore = math.Min(ss.avgScore, float64(slowScoreMax))
 	} else {
-		costScore := float64(slowScoreInitVal)
-		if ss.intervalTimecost > 0 {
-			costScore = float64(ss.intervalTimecost) / float64(ss.intervalTimeout)
-		}
+		costScore := math.Max(float64(slowScoreInitVal), float64(ss.intervalTimecost)/float64(ss.intervalTimeout))
 		if ss.avgScore-costScore <= float64(slowScoreInitVal) {
 			ss.avgScore = float64(slowScoreInitVal)
 		} else {
@@ -2659,7 +2644,7 @@ func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration, timeout tim
 }
 
 func (ss *SlowScoreStat) markAlreadySlow() {
-	ss.avgScore = float64(slowScoreThreshold)
+	ss.avgScore = float64(slowScoreMax)
 	ss.avgTimecost *= 10
 }
 

@@ -84,8 +84,6 @@ type TiKVClient struct {
 	// TTLRefreshedTxnSize controls whether a transaction should update its TTL or not.
 	TTLRefreshedTxnSize      int64  `toml:"ttl-refreshed-txn-size" json:"ttl-refreshed-txn-size"`
 	ResolveLockLiteThreshold uint64 `toml:"resolve-lock-lite-threshold" json:"resolve-lock-lite-threshold"`
-	// AutoFollowerRead controls whether automatically trigger follower read or not.
-	AutoFollowerRead bool `toml:"enable-auto-follower-read" json:"enable-auto-follower-read"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -154,7 +152,6 @@ func DefaultTiKVClient() TiKVClient {
 		},
 
 		ResolveLockLiteThreshold: 16,
-		AutoFollowerRead:         false,
 	}
 }
 
