@@ -49,7 +49,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -89,8 +88,6 @@ var (
 	CommitMaxBackoff = uint64(40000)
 )
 
-var gP = gp.New(128, 10*time.Second)
-
 type kvstore interface {
 	// GetRegionCache gets the RegionCache.
 	GetRegionCache() *locate.RegionCache
@@ -118,6 +115,8 @@ type kvstore interface {
 	GetClusterID() uint64
 	// IsClose checks whether the store is closed.
 	IsClose() bool
+	// Go run the function in a separate goroutine.
+	Go(f func())
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -990,7 +989,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
-		gP.Go(func() {
+		c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
@@ -1015,6 +1014,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 				metrics.SecondaryLockCleanupFailureCounterCommit.Inc()
 			}
 		})
+
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}
