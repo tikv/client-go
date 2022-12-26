@@ -115,6 +115,8 @@ type kvstore interface {
 	GetClusterID() uint64
 	// IsClose checks whether the store is closed.
 	IsClose() bool
+	// Go run the function in a separate goroutine.
+	Go(f func())
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -987,7 +989,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
-		f := func() {
+		c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
@@ -1011,12 +1013,8 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 					zap.Error(e))
 				metrics.SecondaryLockCleanupFailureCounterCommit.Inc()
 			}
-		}
-		if gP, ok := c.store.(interface{ Go(func()) }); ok {
-			gP.Go(f)
-		} else {
-			go f()
-		}
+		})
+
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}
