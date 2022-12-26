@@ -2589,8 +2589,9 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 		ss.intervalTimeout = ss.avgTimecost
 		return true
 	}
-	if ss.intervalUpdCount == 0 {
-		return true
+
+	if ss.intervalUpdCount > 0 {
+		ss.avgTimecost = (ss.avgTimecost + ss.intervalTimecost/ss.intervalUpdCount) / 2
 	}
 	if ss.intervalSlowCount > 0 {
 		nearThresh := float64(ss.intervalSlowCount) / float64(ss.intervalUpdCount)
