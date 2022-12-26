@@ -2607,7 +2607,6 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 		}
 	}
 
-	ss.avgTimecost = (ss.avgTimecost + ss.intervalTimecost/ss.intervalUpdCount) / 2
 	// Resets the counter of inteval timecost
 	ss.intervalTimecost = 0
 	ss.intervalTimeout = uint64((slowScoreInitTimeout * time.Millisecond).Abs())
