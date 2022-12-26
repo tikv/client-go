@@ -2558,17 +2558,17 @@ const (
 	slowScoreInitVal     = 1
 	slowScoreThreshold   = 80
 	slowScoreMax         = 100
-	slowScoreInitTimeout = 500  // unit: ms
-	slowScoreUpdInterval = 1000 // 1000 / one update tick
+	slowScoreInitTimeout = 500   // unit: ms
+	slowScoreMaxTimeout  = 30000 // max timeout of one txn, unit: ms
 )
 
 // SlowScoreStat represents the statistics on busyness of Store.
 type SlowScoreStat struct {
-	updCount          uint64 // count of update.
 	avgScore          float64
 	avgTimecost       uint64
 	intervalTimecost  uint64 // sum of the timecost in one counting interval. Unit: us
 	intervalTimeout   uint64 // sum of the timeout in one counting interval. Unit: us
+	intervalUpdCount  uint64 // count of update in one counting interval.
 	intervalSlowCount uint64 // count of slow query in one counting interval.
 }
 
@@ -2581,16 +2581,16 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 	if ss.avgTimecost == 0 {
 		// Init the whole statistics.
 		ss.avgScore = float64(slowScoreInitVal)
-		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
+		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs())
 		ss.intervalTimecost = 0
 		ss.intervalTimeout = ss.avgTimecost
 		return true
 	}
-	if ss.updCount == 0 {
+	if ss.intervalUpdCount == 0 {
 		return true
 	}
 	if ss.intervalSlowCount > 0 {
-		nearThresh := float64(ss.intervalSlowCount) / float64(slowScoreUpdInterval)
+		nearThresh := float64(ss.intervalSlowCount) / float64(ss.intervalUpdCount)
 		costScore := math.Min(nearThresh, float64(0.1)) / float64(0.1)
 		ss.avgScore = ss.avgScore * (float64(slowScoreInitVal) + costScore)
 		ss.avgScore = math.Min(ss.avgScore, float64(slowScoreMax))
@@ -2603,36 +2603,38 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 		}
 	}
 
-	ss.avgTimecost = (ss.avgTimecost*(ss.updCount-slowScoreUpdInterval) + ss.intervalTimecost) / ss.updCount
+	ss.avgTimecost = (ss.avgTimecost + ss.intervalTimecost/ss.intervalUpdCount) / 2
 	// Resets the counter of inteval timecost
 	ss.intervalTimecost = 0
-	ss.intervalTimeout = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
+	ss.intervalTimeout = uint64((slowScoreInitTimeout * time.Millisecond).Abs())
 	ss.intervalSlowCount = 0
+	ss.intervalUpdCount = 0
 	return true
 }
 
 // recordSlowScoreStat records the timecost of each request.
 func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration, timeout time.Duration) bool {
-	ss.updCount++
+	ss.intervalUpdCount++
 	if ss.avgTimecost == 0 {
 		// Init the whole statistics with the original one.
 		ss.avgScore = float64(slowScoreInitVal)
-		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs().Microseconds())
-		ss.intervalTimecost = uint64(timecost.Abs().Microseconds())
-		ss.intervalTimeout = uint64(timeout.Abs().Microseconds())
+		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs())
+		ss.intervalTimecost = uint64(timecost.Abs().Milliseconds())
+		ss.intervalTimeout = uint64(timeout.Abs().Milliseconds())
 		return true
 	}
-	curTimecost := uint64(timecost.Abs().Microseconds())
-	curTimeout := uint64(timeout.Abs().Microseconds())
-	// Here, we simplistically introduce the standard on whether current query is a
-	// slow query -- "avgTimecost <= curTimecost". It's a empirical rule right now,
-	// can be optimized in later work.
-	if ss.avgTimecost*1000 <= curTimecost {
+	curTimecost := uint64(timecost.Abs().Milliseconds())
+	curTimeout := uint64(timeout.Abs().Milliseconds())
+	if curTimecost >= slowScoreMaxTimeout {
+		// Current query is too slow to serve (>= 30s, double timecost of ticking) in this tick.
+		ss.intervalSlowCount = 0
+		ss.avgScore = float64(slowScoreMax)
+		return false
+	} else if curTimecost >= ss.avgTimecost*10 {
+		// Here, we simplistically introduce the standard on whether current query is a
+		// slow query -- "avgTimecost*10 <= curTimecost". It's a empirical rule right now,
+		// can be optimized in later work.
 		ss.intervalSlowCount++
-		if ss.intervalSlowCount >= slowScoreUpdInterval/2 {
-			ss.intervalSlowCount = 0
-			ss.avgScore = float64(slowScoreThreshold)
-		}
 		return false
 	}
 	ss.intervalTimecost += curTimecost
@@ -2645,7 +2647,6 @@ func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration, timeout tim
 
 func (ss *SlowScoreStat) markAlreadySlow() {
 	ss.avgScore = float64(slowScoreMax)
-	ss.avgTimecost *= 10
 }
 
 func (ss *SlowScoreStat) isSlow() bool {
