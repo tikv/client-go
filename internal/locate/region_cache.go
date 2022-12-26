@@ -2293,6 +2293,9 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		c.storeMu.Lock()
+		if s.addr == addr {
+			newStore.slowScore = s.slowScore
+		}
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
 		s.setResolveState(deleted)
