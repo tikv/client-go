@@ -607,9 +607,11 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			// And If the leader was abnormal to be accessed under `ReplicaReadMixed` mode, we should choose followers
-			// as candidates to serve the Read request.
-			(!state.option.leaderOnly && ((state.tryLeader && !replica.store.isSlow()) || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels)))
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) &&
+				// And If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
+				// as candidates to serve the Read request.
+				(!state.tryLeader || (state.tryLeader && !replica.store.isSlow()))))
+
 }
 
 type invalidStore struct {

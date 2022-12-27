@@ -2638,12 +2638,11 @@ func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration, timeout tim
 		// slow query -- "avgTimecost*10 <= curTimecost". It's a empirical rule right now,
 		// can be optimized in later work.
 		ss.intervalSlowCount++
-		return false
 	}
 	ss.intervalTimecost += curTimecost
 	ss.intervalTimeout += curTimeout
 	if curTimeout == 0 {
-		ss.intervalTimeout += curTimecost * 10
+		ss.intervalTimeout += curTimecost
 	}
 	return true
 }
