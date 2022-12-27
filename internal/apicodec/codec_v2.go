@@ -26,7 +26,7 @@ var (
 	keyspacePrefixLen int  = 4
 
 	// errKeyOutOfBound happens when key to be decoded lies outside the keyspace's range.
-	errKeyOutOfBound = errors.New("given key does not belong to the keyspace.")
+	errKeyOutOfBound = errors.New("given key does not belong to the keyspace")
 )
 
 // BuildKeyspaceName builds a keyspace name

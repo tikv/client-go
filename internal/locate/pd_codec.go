@@ -72,6 +72,7 @@ func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace
 	return &CodecPDClient{client, codec}, nil
 }
 
+// GetKeyspaceID attempts to retrieve keyspace ID corresponding to the given keyspace name from PD.
 func GetKeyspaceID(client pd.Client, name string) (uint32, error) {
 	meta, err := client.LoadKeyspace(context.Background(), apicodec.BuildKeyspaceName(name))
 	if err != nil {

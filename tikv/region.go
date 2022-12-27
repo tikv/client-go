@@ -107,6 +107,7 @@ var NewCodecV2 = apicodec.NewCodecV2
 // Codec is responsible for encode/decode requests.
 type Codec = apicodec.Codec
 
+// DecodeKey is used to split a given key to it's APIv2 prefix and actual key.
 var DecodeKey = apicodec.DecodeKey
 
 // DefaultKeyspaceID is the keyspaceID of the default keyspace.

@@ -45,6 +45,7 @@ type Codec interface {
 	DecodeKey(encoded []byte) ([]byte, error)
 }
 
+// DecodeKey split a key to it's keyspace prefix and actual key.
 func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, error) {
 	switch version {
 	case kvrpcpb.APIVersion_V1:
