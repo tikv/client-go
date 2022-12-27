@@ -192,7 +192,7 @@ func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats,
 func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
 	return &RegionRequestSender{
 		regionCache: regionCache,
-		apiVersion:  regionCache.apiVersion,
+		apiVersion:  regionCache.codec.GetAPIVersion(),
 		client:      client,
 	}
 }
@@ -1482,7 +1482,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	if regionErr.GetKeyNotInRegion() != nil {
-		logutil.BgLogger().Debug("tikv reports `KeyNotInRegion`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
+		logutil.BgLogger().Error("tikv reports `KeyNotInRegion`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return false, nil
 	}

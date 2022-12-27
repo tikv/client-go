@@ -51,6 +51,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -78,7 +79,7 @@ func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
 	s.mvccStore = mocktikv.MustNewMVCCStore()
 	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.store, s.peer, s.region = mocktikv.BootstrapWithSingleStore(s.cluster)
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)

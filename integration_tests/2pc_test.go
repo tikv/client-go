@@ -95,7 +95,7 @@ func (s *testCommitterSuite) SetupTest() {
 	s.Require().Nil(err)
 	testutils.BootstrapWithMultiRegions(cluster, []byte("a"), []byte("b"), []byte("c"))
 	s.cluster = cluster
-	pdCli := &tikv.CodecPDClient{Client: pdClient}
+	pdCli := tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 	spkv := tikv.NewMockSafePointKV()
 	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client)
 	store.EnableTxnLocalLatches(8096)
