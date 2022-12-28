@@ -1226,6 +1226,7 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 	txn.SetPessimistic(true)
 
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitReturnValues(2)
 	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
 	s.NoError(txn.Set([]byte("k5"), []byte("v5")))
 	s.NoError(txn.Delete([]byte("k6")))
@@ -1282,6 +1283,7 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 
 func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	txn := s.begin()
+	txn.SetPessimistic(true)
 	checkPrimary := func(key string, expectedPrimary string) {
 		lockInfo := s.getLockInfo([]byte(key))
 		s.Equal(kvrpcpb.Op_PessimisticLock, lockInfo.LockType)
@@ -1352,6 +1354,7 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	// Also test the primary-switching logic won't misbehave when the primary is already selected before entering
 	// aggressive locking.
 	txn = s.begin()
+	txn.SetPessimistic(true)
 	forUpdateTS = txn.StartTS()
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
 	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
@@ -1389,9 +1392,10 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 	s.NoError(txn0.Set([]byte("k2"), []byte("v2")))
 	s.NoError(txn0.Commit(context.Background()))
 
-	txn := s.begin()
-
 	for _, firstAttemptLockedWithConflict := range []bool{false, true} {
+		txn := s.begin()
+		txn.SetPessimistic(true)
+
 		forUpdateTS := txn.StartTS()
 		txn.StartAggressiveLocking()
 		lockCtx := &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
@@ -1400,7 +1404,7 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 		if firstAttemptLockedWithConflict {
 			txn2 = s.begin()
 			s.NoError(txn2.Delete([]byte("k1")))
-			s.NoError(txn2.Set([]byte("k1"), []byte("v1")))
+			s.NoError(txn2.Set([]byte("k2"), []byte("v2")))
 			s.NoError(txn2.Commit(context.Background()))
 		}
 
@@ -1423,7 +1427,7 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 		txn.RetryAggressiveLocking(context.Background())
 		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
 		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
-		s.Equal(0, lockCtx.MaxLockedWithConflictTS)
+		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
 		s.Equal(false, lockCtx.Values["k1"].Exists)
 		s.Equal(true, lockCtx.Values["k2"].Exists)
 
@@ -1433,7 +1437,7 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 		txn.RetryAggressiveLocking(context.Background())
 		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
 		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
-		s.Equal(0, lockCtx.MaxLockedWithConflictTS)
+		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
 		s.Equal(false, lockCtx.Values["k1"].Exists)
 		s.Equal(true, lockCtx.Values["k2"].Exists)
 		s.Equal([]byte("v2"), lockCtx.Values["k2"].Value)

@@ -818,7 +818,9 @@ func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]
 				!txn.mayAggressiveLockingLastLockedKeysExpire() {
 				// We can skip locking it since it's already locked during last attempt to aggressive locking, and
 				// we already have the information that we need.
-				lockCtx.Values[keyStr] = lastResult.Value
+				if lockCtx.Values != nil {
+					lockCtx.Values[keyStr] = lastResult.Value
+				}
 				txn.aggressiveLockingContext.currentLockedKeys[keyStr] = lastResult
 				continue
 			}
