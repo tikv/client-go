@@ -1398,9 +1398,13 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 		txn := s.begin()
 		txn.SetPessimistic(true)
 
+		// Make the primary deterministic to avoid the following test code involves primary re-selecting logic.
+		lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k0")))
+
 		forUpdateTS := txn.StartTS()
 		txn.StartAggressiveLocking()
-		lockCtx := &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
 
 		var txn2 transaction.TxnProbe
 		if firstAttemptLockedWithConflict {
