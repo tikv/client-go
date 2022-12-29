@@ -675,7 +675,7 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 	// provide an idempotent result.
 	val, err := checkConflictValue(iter, mutation, forUpdateTS, startTS, true, kvrpcpb.AssertionLevel_Off, lctx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock)
 	if err != nil {
-		if conflict, ok := err.(*ErrConflict); lctx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock && ok {
+		if conflict, ok := err.(*ErrConflict); lctx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock && ok && conflict.CanForceLock {
 			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
 				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockResultLockedWithConflict,
 				Value:                val,
@@ -903,6 +903,9 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 
 		if dec.value.valueType == typePut || dec.value.valueType == typeLock {
 			if needCheckShouldNotExistForPessimisticLock {
+				if writeConflictErr != nil {
+					return nil, writeConflictErr
+				}
 				return nil, &ErrKeyAlreadyExist{
 					Key: m.Key,
 				}
@@ -947,6 +950,9 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 	}
 
 	// writeConflictErr is not nil only when write conflict is found and `allowLockWithConflict is set to true.
+	if writeConflictErr != nil {
+		writeConflictErr.(*ErrConflict).CanForceLock = true
+	}
 	if getVal {
 		return retVal, writeConflictErr
 	}
