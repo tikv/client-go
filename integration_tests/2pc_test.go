@@ -1231,7 +1231,7 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 	s.NoError(txn.Set([]byte("k5"), []byte("v5")))
 	s.NoError(txn.Delete([]byte("k6")))
 
-	insert := func(lockCtx *kv.LockCtx, key string) error {
+	insertPessimisticLock := func(lockCtx *kv.LockCtx, key string) error {
 		txn.GetMemBuffer().UpdateFlags([]byte(key), kv.SetPresumeKeyNotExists)
 		if lockCtx == nil {
 			lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
@@ -1247,17 +1247,17 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 
 	txn.StartAggressiveLocking()
 	// Already-locked before aggressive locking.
-	mustAlreadyExist(insert(nil, "k1"))
-	s.NoError(insert(nil, "k2"))
+	mustAlreadyExist(insertPessimisticLock(nil, "k1"))
+	s.NoError(insertPessimisticLock(nil, "k2"))
 	// Acquiring new locks normally.
-	mustAlreadyExist(insert(nil, "k3"))
-	s.NoError(insert(nil, "k4"))
+	mustAlreadyExist(insertPessimisticLock(nil, "k3"))
+	s.NoError(insertPessimisticLock(nil, "k4"))
 	// The key added or deleted in the same transaction before entering aggressive locking.
 	// Since TiDB can detect it before invoking LockKeys, client-go actually didn't handle this case for now (no matter
 	// if in aggressive locking or not). So skip this test case here, and it can be uncommented if someday client-go
 	// supports such check.
-	// mustAlreadyExist(insert(nil, "k5"))
-	// s.NoError(insert(nil, "k6"))
+	// mustAlreadyExist(insertPessimisticLock(nil, "k5"))
+	// s.NoError(insertPessimisticLock(nil, "k6"))
 
 	// Locked with conflict and then do pessimistic retry.
 	txn2 := s.begin()
@@ -1265,10 +1265,10 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 	s.NoError(txn2.Delete([]byte("k8")))
 	s.NoError(txn2.Commit(context.Background()))
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	err := insert(lockCtx, "k7")
+	err := insertPessimisticLock(lockCtx, "k7")
 	s.IsType(errors.Cause(err), &tikverr.ErrWriteConflict{})
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	s.NoError(insert(lockCtx, "k8"))
+	s.NoError(insertPessimisticLock(lockCtx, "k8"))
 	s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
 	s.Equal(txn2.GetCommitTS(), lockCtx.Values["k8"].LockedWithConflictTS)
 	// Update forUpdateTS to simulate a pessimistic retry.
@@ -1276,8 +1276,8 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 	s.Nil(err)
 	s.GreaterOrEqual(newForUpdateTS, txn2.GetCommitTS())
 	lockCtx = &kv.LockCtx{ForUpdateTS: newForUpdateTS, WaitStartTime: time.Now()}
-	mustAlreadyExist(insert(lockCtx, "k7"))
-	s.NoError(insert(lockCtx, "k8"))
+	mustAlreadyExist(insertPessimisticLock(lockCtx, "k7"))
+	s.NoError(insertPessimisticLock(lockCtx, "k8"))
 
 	txn.CancelAggressiveLocking(context.Background())
 	s.NoError(txn.Rollback())
