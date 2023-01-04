@@ -266,3 +266,7 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 		re.Equal(expected.EpochNotMatch.CurrentRegions[i], result.EpochNotMatch.CurrentRegions[i], "index: %d", i)
 	}
 }
+
+func (suite *testCodecV2Suite) TestGetKeyspaceID() {
+	suite.Equal(KeyspaceID(testKeyspaceID), suite.codec.GetKeyspaceID())
+}
