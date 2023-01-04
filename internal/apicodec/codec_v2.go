@@ -23,7 +23,7 @@ var (
 
 	rawModePrefix     byte = 'r'
 	txnModePrefix     byte = 'x'
-	keyspacePrefixLen int  = 4
+	keyspacePrefixLen      = 4
 
 	// errKeyOutOfBound happens when key to be decoded lies outside the keyspace's range.
 	errKeyOutOfBound = errors.New("given key does not belong to the keyspace")
@@ -87,6 +87,12 @@ func getIDByte(keyspaceID uint32) ([]byte, error) {
 
 func (c *codecV2) GetKeyspace() []byte {
 	return c.prefix
+}
+
+func (c *codecV2) GetKeyspaceID() KeyspaceID {
+	prefix := append([]byte{}, c.prefix...)
+	prefix[0] = 0
+	return KeyspaceID(binary.BigEndian.Uint32(prefix))
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
