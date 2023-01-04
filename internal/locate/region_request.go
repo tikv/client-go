@@ -593,6 +593,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx = state.leaderIdx
 		selector.targetIdx = state.leaderIdx
 	}
+	if selector.targetIdx != state.leaderIdx {
+		metrics.TiKVFollowerReadReqCounter.WithLabelValues("to_follower", selector.replicas[selector.targetIdx].store.addr).Inc()
+	} else {
+		metrics.TiKVFollowerReadReqCounter.WithLabelValues("to_leader", selector.replicas[selector.targetIdx].store.addr).Inc()
+	}
 	return selector.buildRPCContext(bo)
 }
 
@@ -824,6 +829,7 @@ func (s *replicaSelector) invalidateReplicaStore(replica *replica, cause error) 
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
 		store.markNeedCheck(s.regionCache.notifyCheckCh)
+		store.markAlreadySlow()
 	}
 }
 
@@ -901,6 +907,9 @@ func (s *RegionRequestSender) getRPCContext(
 				return nil, err
 			}
 			s.replicaSelector = selector
+		}
+		if req.Type.IsReadCmd() {
+			req.Context.ReplicaRead = true
 		}
 		return s.replicaSelector.next(bo)
 	case tikvrpc.TiFlash:

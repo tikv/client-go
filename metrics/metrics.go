@@ -97,6 +97,7 @@ var (
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
+	TiKVFollowerReadReqCounter               *prometheus.CounterVec
 )
 
 // Label constants.
@@ -117,6 +118,8 @@ const (
 	LblToStore         = "to_store"
 	LblStaleRead       = "stale_read"
 	LblSource          = "source"
+	LblToFollower      = "to_follower"
+	LblToLeader        = "to_leader"
 )
 
 func initMetrics(namespace, subsystem string) {
@@ -598,6 +601,14 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Slow scores of each tikv node based on RPC timecosts",
 		}, []string{LblStore})
 
+	TiKVFollowerReadReqCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "follower_read_request_counter",
+			Help:      "Counter of FollowerRead request.",
+		}, []string{LblType, LblStore})
+
 	initShortcuts()
 }
 
@@ -669,6 +680,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
+	prometheus.MustRegister(TiKVFollowerReadReqCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.

@@ -2569,6 +2569,7 @@ const (
 type SlowScoreStat struct {
 	avgScore          float64
 	avgTimecost       uint64
+	updCount          uint64 // sum of update count
 	intervalTimecost  uint64 // sum of the timecost in one counting interval. Unit: us
 	intervalTimeout   uint64 // sum of the timeout in one counting interval. Unit: us
 	intervalUpdCount  uint64 // count of update in one counting interval.
@@ -2591,7 +2592,9 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 	}
 
 	if ss.intervalUpdCount > 0 {
-		ss.avgTimecost = (ss.avgTimecost + ss.intervalTimecost/ss.intervalUpdCount) / 2
+		ss.updCount += ss.intervalSlowCount
+		updRatio := math.Min(float64(ss.intervalSlowCount)/float64(ss.updCount), float64(0.1))
+		ss.avgTimecost = uint64(float64(ss.avgTimecost)*(float64(1.0)-updRatio) + float64(ss.intervalTimecost/ss.intervalUpdCount)*updRatio)
 	}
 	if ss.intervalSlowCount > 0 {
 		nearThresh := float64(ss.intervalSlowCount) / float64(ss.intervalUpdCount)
@@ -2599,7 +2602,7 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 		ss.avgScore = ss.avgScore * (float64(slowScoreInitVal) + costScore)
 		ss.avgScore = math.Min(ss.avgScore, float64(slowScoreMax))
 	} else {
-		costScore := math.Max(float64(slowScoreInitVal), float64(ss.intervalTimecost)/float64(ss.intervalTimeout))
+		costScore := math.Max(float64(slowScoreInitVal), 100.0*float64(ss.intervalTimecost)/float64(ss.intervalTimeout))
 		if ss.avgScore-costScore <= float64(slowScoreInitVal) {
 			ss.avgScore = float64(slowScoreInitVal)
 		} else {
