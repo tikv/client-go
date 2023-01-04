@@ -27,11 +27,7 @@ const (
 )
 
 func ParseKeyspaceID(b []byte) (KeyspaceID, error) {
-	if len(b) < keyspacePrefixLen {
-		return NulSpaceID, nil
-	}
-
-	if b[0] != rawModePrefix && b[0] != txnModePrefix {
+	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
 		return 0, errors.Errorf("unsupported key %s", b)
 	}
 
