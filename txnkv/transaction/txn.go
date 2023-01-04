@@ -826,7 +826,9 @@ func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]
 				!txn.mayAggressiveLockingLastLockedKeysExpire() {
 				// We can skip locking it since it's already locked during last attempt to aggressive locking, and
 				// we already have the information that we need.
-				lockCtx.Values[keyStr] = lastResult.Value
+				if lockCtx.Values != nil {
+					lockCtx.Values[keyStr] = lastResult.Value
+				}
 				txn.aggressiveLockingContext.currentLockedKeys[keyStr] = lastResult
 				continue
 			}
@@ -894,16 +896,24 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			checkKeyExists = flags.HasNeedCheckExists()
 		}
 		// If the key is locked in the current aggressive locking stage, override the information in memBuf.
+		isInLastAggressiveLockingStage := false
 		if txn.aggressiveLockingContext != nil {
 			if entry, ok := txn.aggressiveLockingContext.currentLockedKeys[string(key)]; ok {
 				locked = true
 				valueExist = entry.Value.Exists
+			} else if entry, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[string(key)]; ok {
+				locked = true
+				valueExist = entry.Value.Exists
+				isInLastAggressiveLockingStage = true
 			}
 		}
 
-		if !locked {
+		if !locked || isInLastAggressiveLockingStage {
+			// Locks acquired in the previous aggressive locking stage might need to be updated later in
+			// `filterAggressiveLockedKeys`.
 			keys = append(keys, key)
-		} else if txn.IsPessimistic() {
+		}
+		if locked && txn.IsPessimistic() {
 			if checkKeyExists && valueExist {
 				alreadyExist := kvrpcpb.AlreadyExist{Key: key}
 				e := &tikverr.ErrKeyExist{AlreadyExist: &alreadyExist}
