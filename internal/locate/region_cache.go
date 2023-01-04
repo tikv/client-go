@@ -267,6 +267,14 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		if addr == "" {
 			continue
 		}
+
+		// Since the witness is read-write prohibited, it does not make sense to send requests to it
+		// unless it is the leader. When it is the leader and transfer leader encounters a problem,
+		// the backoff timeout will be triggered, and the client can give a more accurate error message.
+		if p.IsWitness && !isSamePeer(p, leader) {
+			continue
+		}
+
 		if isSamePeer(p, leader) {
 			leaderAccessIdx = AccessIndex(len(rs.accessIndex[tiKVOnly]))
 		}
@@ -501,6 +509,23 @@ func (c *RegionCache) SetRegionCacheStore(id uint64, addr string, peerAddr strin
 		labels:    labels,
 		addr:      addr,
 		peerAddr:  peerAddr,
+	}
+}
+
+// ChangeFollowersToWitness is used to change followers to witness, for testing only
+func (c *RegionCache) ChangeFollowersToWitness(regionID RegionVerID, leaderStoreIdx int) {
+	cachedRegion := c.GetCachedRegionWithRLock(regionID)
+	if cachedRegion == nil || !cachedRegion.isValid() {
+		return
+	}
+	regionStore := cachedRegion.getStore()
+	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
+		if storeIdx != leaderStoreIdx {
+			peer := cachedRegion.meta.Peers[storeIdx]
+			if peer.GetRole() != metapb.PeerRole_Learner {
+				peer.IsWitness = true
+			}
+		}
 	}
 }
 

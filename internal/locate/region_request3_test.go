@@ -290,7 +290,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	regionStore.stores[sidx].epoch++
 	regionStore.storeEpochs[sidx]++
 	// Add a TiFlash peer to the region.
-	peer := &metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID()}
+	peer := &metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID(), Role: metapb.PeerRole_Learner}
 	regionStore.accessIndex[tiFlashOnly] = append(regionStore.accessIndex[tiFlashOnly], len(regionStore.stores))
 	regionStore.stores = append(regionStore.stores, &Store{storeID: peer.StoreId, storeType: tikvrpc.TiFlash})
 	regionStore.storeEpochs = append(regionStore.storeEpochs, 0)
@@ -597,6 +597,22 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
+
+	// Test accessFollower state filtering witness peer.
+	region.lastAccess = time.Now().Unix()
+	// Change all followers as witness.
+	cache.ChangeFollowersToWitness(regionLoc.Region, sidx)
+	refreshEpochs(regionStore)
+	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
+	s.NotNil(replicaSelector)
+	s.Nil(err)
+	state3 = replicaSelector.state.(*accessFollower)
+	// Should fallback to the leader immediately.
+	rpcCtx, err = replicaSelector.next(s.bo)
+	s.Nil(err)
+	s.Equal(regionStore.workTiKVIdx, state3.lastIdx)
+	s.Equal(replicaSelector.targetIdx, state3.lastIdx)
+	assertRPCCtxEqual(rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
 
 	// Invalidate the region if the leader is not in the region.
 	region.lastAccess = time.Now().Unix()

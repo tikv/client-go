@@ -51,8 +51,8 @@ func TestBackoffWithMax(t *testing.T) {
 }
 
 func TestBackoffErrorType(t *testing.T) {
-	// the actual maxSleep is multiplied by weight, which is 480ms
-	b := NewBackofferWithVars(context.TODO(), 210, nil)
+	// the actual maxSleep is multiplied by weight, which is 1600ms
+	b := NewBackofferWithVars(context.TODO(), 800, nil)
 	err := b.Backoff(BoRegionMiss, errors.New("region miss")) // 2ms sleep
 	assert.Nil(t, err)
 	// 6ms sleep at most in total
@@ -66,6 +66,9 @@ func TestBackoffErrorType(t *testing.T) {
 
 	// sleep from ServerIsBusy is not counted
 	err = b.Backoff(BoTiKVServerBusy, errors.New("server is busy"))
+	assert.Nil(t, err)
+	// 1000ms sleep at most in total
+	err = b.Backoff(BoIsWitness, errors.New("peer is witness"))
 	assert.Nil(t, err)
 	// wait it exceed max sleep
 	for i := 0; i < 10; i++ {

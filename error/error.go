@@ -93,6 +93,8 @@ var (
 	ErrRegionFlashbackInProgress = errors.New("region is in the flashback progress")
 	// ErrRegionFlashbackNotPrepared is the error when a region is not prepared for the flashback first.
 	ErrRegionFlashbackNotPrepared = errors.New("region is not prepared for the flashback")
+	// ErrIsWitness is the error when a request is send to a witness.
+	ErrIsWitness = errors.New("peer is witness")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
 	// ErrResultUndetermined is the error when execution result is unknown.
