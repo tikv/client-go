@@ -395,7 +395,7 @@ func (s *testCommitterSuite) checkIsKeyLocked(key []byte, expectedLocked bool) {
 		txn.SetPessimistic(true)
 
 		lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
-		err := txn.LockKeys(context.Background(), lockCtx, key)
+		err := txn.LockKeys(context.Background(), lockCtx, nil, key)
 
 		var isCheckSuccess bool
 		if err != nil && stderrs.Is(err, tikverr.ErrLockAcquireFailAndNoWaitSet) {
@@ -698,7 +698,7 @@ func (s *testCommitterSuite) TestUnsetPrimaryKey() {
 	_, _ = txn.GetUnionStore().Get(context.TODO(), key)
 	s.Nil(txn.GetMemBuffer().SetWithFlags(key, key, kv.SetPresumeKeyNotExists))
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	err := txn.LockKeys(context.Background(), lockCtx, key)
+	err := txn.LockKeys(context.Background(), lockCtx, nil, key)
 	s.NotNil(err)
 	s.Nil(txn.Delete(key))
 	key2 := []byte("key2")
@@ -711,10 +711,10 @@ func (s *testCommitterSuite) TestPessimisticLockedKeysDedup() {
 	txn := s.begin()
 	txn.SetPessimistic(true)
 	lockCtx := &kv.LockCtx{ForUpdateTS: 100, WaitStartTime: time.Now()}
-	err := txn.LockKeys(context.Background(), lockCtx, []byte("abc"), []byte("def"))
+	err := txn.LockKeys(context.Background(), lockCtx, nil, []byte("abc"), []byte("def"))
 	s.Nil(err)
 	lockCtx = &kv.LockCtx{ForUpdateTS: 100, WaitStartTime: time.Now()}
-	err = txn.LockKeys(context.Background(), lockCtx, []byte("abc"), []byte("def"))
+	err = txn.LockKeys(context.Background(), lockCtx, nil, []byte("abc"), []byte("def"))
 	s.Nil(err)
 	s.Len(txn.CollectLockedKeys(), 2)
 }
@@ -725,12 +725,12 @@ func (s *testCommitterSuite) TestPessimisticTTL() {
 	txn.SetPessimistic(true)
 	time.Sleep(time.Millisecond * 100)
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	err := txn.LockKeys(context.Background(), lockCtx, key)
+	err := txn.LockKeys(context.Background(), lockCtx, nil, key)
 	s.Nil(err)
 	time.Sleep(time.Millisecond * 100)
 	key2 := []byte("key2")
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	err = txn.LockKeys(context.Background(), lockCtx, key2)
+	err = txn.LockKeys(context.Background(), lockCtx, nil, key2)
 	s.Nil(err)
 	lockInfo := s.getLockInfo(key)
 	msBeforeLockExpired := s.store.GetOracle().UntilExpired(txn.StartTS(), lockInfo.LockTtl, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
@@ -771,7 +771,7 @@ func (s *testCommitterSuite) TestPessimisticLockReturnValues() {
 	txn.SetPessimistic(true)
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.InitReturnValues(2)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key, key2))
 	s.Len(lockCtx.Values, 2)
 	s.Equal(lockCtx.Values[string(key)].Value, key)
 	s.Equal(lockCtx.Values[string(key2)].Value, key2)
@@ -779,7 +779,7 @@ func (s *testCommitterSuite) TestPessimisticLockReturnValues() {
 
 func lockOneKey(s *testCommitterSuite, txn transaction.TxnProbe, key []byte) {
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key))
 }
 
 func getLockOnlyIfExistsCtx(txn transaction.TxnProbe, keyCount int) *kv.LockCtx {
@@ -826,7 +826,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn.SetPessimistic(true)
 	lockOneKey(s, txn, key0)
 	lockCtx := getLockOnlyIfExistsCtx(txn, 1)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key))
 	checkLockKeyResult(s, txn, lockCtx, key, key, 1, key0)
 	flags := getMembufferFlags(s, txn, key, "")
 	s.Equal(flags.HasLockedValueExists(), true)
@@ -838,7 +838,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn.SetPessimistic(true)
 	lockOneKey(s, txn, key0)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key2))
 	checkLockKeyResult(s, txn, lockCtx, key2, nil, 1, key0)
 	flags = getMembufferFlags(s, txn, key, "not exist")
 	s.Equal(txn.GetLockedCount(), 1)
@@ -849,7 +849,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn.SetPessimistic(true)
 	lockOneKey(s, txn, key0)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 3)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2, key3))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key, key2, key3))
 	s.Len(lockCtx.Values, 3)
 	s.Equal(lockCtx.Values[string(key)].Value, key)
 	s.Equal(lockCtx.Values[string(key2)].Exists, false)
@@ -870,7 +870,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn.SetPessimistic(true)
 	lockOneKey(s, txn, key0)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 3)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2, key, key3))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key2, key, key3))
 	s.Len(lockCtx.Values, 3)
 	s.Equal(lockCtx.Values[string(key2)].Exists, false)
 	s.Equal(lockCtx.Values[string(key)].Value, key)
@@ -891,9 +891,9 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn.SetPessimistic(true)
 	lockOneKey(s, txn, key0)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key2))
 	lockCtx = getLockOnlyIfExistsCtx(txn, 2)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key3, key))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key3, key))
 	s.Equal(lockCtx.Values[string(key3)].Value, key3)
 	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0)
 	memBuf = txn.GetMemBuffer()
@@ -911,7 +911,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn.SetPessimistic(true)
 	lockOneKey(s, txn, key0)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 3)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key0, key, key3))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key0, key, key3))
 	s.Len(lockCtx.Values, 3)
 	key0Val, ok := lockCtx.Values[string(key0)]
 	s.Equal(ok, true)
@@ -935,7 +935,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn = s.begin()
 	txn.SetPessimistic(true)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key))
 	s.Equal(txn.GetCommitter().GetPrimaryKey(), key)
 	memBuf = txn.GetMemBuffer()
 	flags, err = memBuf.GetFlags(key)
@@ -948,7 +948,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn = s.begin()
 	txn.SetPessimistic(true)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key2))
 	memBuf = txn.GetMemBuffer()
 	flags, err = memBuf.GetFlags(key2)
 	s.Equal(flags.HasLockedValueExists(), false)
@@ -961,7 +961,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	txn = s.begin()
 	txn.SetPessimistic(true)
 	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
-	err = txn.LockKeys(context.Background(), lockCtx, key, key2)
+	err = txn.LockKeys(context.Background(), lockCtx, nil, key, key2)
 	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoPrimaryKey)
 	s.Equal(ok, true)
 	s.Nil(txn.Rollback())
@@ -972,7 +972,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	lockOneKey(s, txn, key)
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.LockOnlyIfExists = true
-	err = txn.LockKeys(context.Background(), lockCtx, key2)
+	err = txn.LockKeys(context.Background(), lockCtx, nil, key2)
 	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoReturnValue)
 	s.Equal(ok, true)
 	s.Nil(txn.Rollback())
@@ -982,7 +982,7 @@ func (s *testCommitterSuite) TestPessimisticLockIfExists() {
 	lockOneKey(s, txn, key)
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.LockOnlyIfExists = true
-	err = txn.LockKeys(context.Background(), lockCtx)
+	err = txn.LockKeys(context.Background(), lockCtx, nil)
 	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoReturnValue)
 	s.Equal(ok, false)
 	s.Nil(txn.Rollback())
@@ -999,7 +999,7 @@ func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {
 	txn.SetPessimistic(true)
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.InitCheckExistence(2)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key, key2))
 	s.Len(lockCtx.Values, 2)
 	s.Empty(lockCtx.Values[string(key)].Value)
 	s.True(lockCtx.Values[string(key)].Exists)
@@ -1012,7 +1012,7 @@ func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.InitCheckExistence(2)
 	lockCtx.InitReturnValues(2)
-	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key, key2))
 	s.Len(lockCtx.Values, 2)
 	s.Equal(lockCtx.Values[string(key)].Value, key)
 	s.True(lockCtx.Values[string(key)].Exists)
@@ -1042,7 +1042,7 @@ func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflict() {
 			if returnValues {
 				lockCtx.InitReturnValues(1)
 			}
-			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key))
 			if checkExistence || returnValues {
 				s.Len(lockCtx.Values, 1)
 				s.True(lockCtx.Values[string(key)].Exists)
@@ -1085,7 +1085,7 @@ func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflict() {
 			if returnValues {
 				lockCtx.InitReturnValues(1)
 			}
-			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, nil, key))
 
 			s.Equal(txn0.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
 			v := lockCtx.Values[string(key)]
@@ -1108,7 +1108,7 @@ func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflictError() {
 			txn0 := s.begin()
 			txn0.SetPessimistic(true)
 			lockCtx := &kv.LockCtx{ForUpdateTS: txn0.StartTS(), WaitStartTime: time.Now()}
-			s.Nil(txn0.LockKeys(context.Background(), lockCtx, key))
+			s.Nil(txn0.LockKeys(context.Background(), lockCtx, nil, key))
 
 			// Test key is locked
 			txn := s.begin()
@@ -1121,7 +1121,7 @@ func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflictError() {
 			if returnValues {
 				lockCtx.InitReturnValues(1)
 			}
-			err := txn.LockKeys(context.Background(), lockCtx, key)
+			err := txn.LockKeys(context.Background(), lockCtx, nil, key)
 			s.NotNil(err)
 			s.Equal(tikverr.ErrLockWaitTimeout.Error(), err.Error())
 			s.Equal([]string{}, txn.GetAggressiveLockingKeys())
@@ -1131,7 +1131,7 @@ func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflictError() {
 
 			// Test region error
 			s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("PessimisticLockNotLeader")`))
-			err = txn.LockKeys(context.Background(), lockCtx, key)
+			err = txn.LockKeys(context.Background(), lockCtx, nil, key)
 			s.Nil(err)
 			s.Nil(failpoint.Disable("tikvclient/tikvStoreSendReqResult"))
 			s.Equal([]string{"key"}, txn.GetAggressiveLockingKeys())
@@ -1149,7 +1149,7 @@ func (s *testCommitterSuite) TestAggressiveLocking() {
 
 		// Lock some keys in normal way.
 		lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1"), []byte("k2")))
 		s.checkIsKeyLocked([]byte("k1"), true)
 		s.checkIsKeyLocked([]byte("k2"), true)
 
@@ -1157,7 +1157,7 @@ func (s *testCommitterSuite) TestAggressiveLocking() {
 		txn.StartAggressiveLocking()
 		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 		for _, key := range []string{"k2", "k3", "k4"} {
-			s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte(key)))
+			s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte(key)))
 			s.checkIsKeyLocked([]byte(key), true)
 		}
 		s.True(!txn.IsInAggressiveLockingStage([]byte("k2")))
@@ -1171,8 +1171,8 @@ func (s *testCommitterSuite) TestAggressiveLocking() {
 		s.checkIsKeyLocked([]byte("k3"), true)
 		s.checkIsKeyLocked([]byte("k4"), true)
 		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k4")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k5")))
 		s.checkIsKeyLocked([]byte("k4"), true)
 		s.checkIsKeyLocked([]byte("k5"), true)
 
@@ -1186,9 +1186,9 @@ func (s *testCommitterSuite) TestAggressiveLocking() {
 
 		// Lock some different keys again and then done or cancel.
 		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k2")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k5")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k6")))
 
 		if finalIsDone {
 			txn.DoneAggressiveLocking(context.Background())
@@ -1227,7 +1227,7 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	lockCtx.InitReturnValues(2)
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1"), []byte("k2")))
 	s.NoError(txn.Set([]byte("k5"), []byte("v5")))
 	s.NoError(txn.Delete([]byte("k6")))
 
@@ -1236,7 +1236,7 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 		if lockCtx == nil {
 			lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 		}
-		return txn.LockKeys(context.Background(), lockCtx, []byte(key))
+		return txn.LockKeys(context.Background(), lockCtx, nil, []byte(key))
 	}
 
 	mustAlreadyExist := func(err error) {
@@ -1295,8 +1295,8 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	forUpdateTS := txn.StartTS()
 	txn.StartAggressiveLocking()
 	lockCtx := &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k2")))
 	checkPrimary("k1", "k1")
 	checkPrimary("k2", "k1")
 
@@ -1304,8 +1304,8 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	forUpdateTS++
 	txn.RetryAggressiveLocking(context.Background())
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k3")))
 	checkPrimary("k1", "k1")
 	checkPrimary("k3", "k1")
 
@@ -1313,8 +1313,8 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	forUpdateTS++
 	txn.RetryAggressiveLocking(context.Background())
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k4")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k5")))
 	checkPrimary("k4", "k4")
 	checkPrimary("k5", "k4")
 	// Previously locked keys that are not in the most recent aggressive locking stage will be released.
@@ -1324,8 +1324,8 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	forUpdateTS++
 	txn.RetryAggressiveLocking(context.Background())
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k5")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k6")))
 	checkPrimary("k5", "k5")
 	checkPrimary("k6", "k5")
 	s.checkIsKeyLocked([]byte("k1"), false)
@@ -1336,12 +1336,12 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	forUpdateTS++
 	txn.RetryAggressiveLocking(context.Background())
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k7")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k7")))
 	forUpdateTS++
 	txn.RetryAggressiveLocking(context.Background())
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k6")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k5")))
 	checkPrimary("k5", "k6")
 	checkPrimary("k6", "k6")
 
@@ -1359,22 +1359,22 @@ func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	txn.SetPessimistic(true)
 	forUpdateTS = txn.StartTS()
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1"), []byte("k2")))
 	checkPrimary("k1", "k1")
 	checkPrimary("k2", "k1")
 
 	txn.StartAggressiveLocking()
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k2")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k3")))
 	checkPrimary("k2", "k1")
 	checkPrimary("k3", "k1")
 
 	forUpdateTS++
 	txn.RetryAggressiveLocking(context.Background())
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
-	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k3")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k4")))
 	checkPrimary("k3", "k1")
 	checkPrimary("k4", "k1")
 
@@ -1400,7 +1400,7 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 
 		// Make the primary deterministic to avoid the following test code involves primary re-selecting logic.
 		lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k0")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k0")))
 
 		forUpdateTS := txn.StartTS()
 		txn.StartAggressiveLocking()
@@ -1414,8 +1414,8 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 			s.NoError(txn2.Commit(context.Background()))
 		}
 
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k2")))
 
 		if firstAttemptLockedWithConflict {
 			s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
@@ -1431,8 +1431,8 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
 		lockCtx.InitCheckExistence(2)
 		txn.RetryAggressiveLocking(context.Background())
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k2")))
 		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
 		s.Equal(false, lockCtx.Values["k1"].Exists)
 		s.Equal(true, lockCtx.Values["k2"].Exists)
@@ -1441,8 +1441,8 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
 		lockCtx.InitReturnValues(2)
 		txn.RetryAggressiveLocking(context.Background())
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, nil, []byte("k2")))
 		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
 		s.Equal(false, lockCtx.Values["k1"].Exists)
 		s.Equal(true, lockCtx.Values["k2"].Exists)
@@ -1464,7 +1464,7 @@ func (s *testCommitterSuite) TestElapsedTTL() {
 		ForUpdateTS:   oracle.ComposeTS(oracle.ExtractPhysical(txn.StartTS())+100, 1),
 		WaitStartTime: time.Now(),
 	}
-	err := txn.LockKeys(context.Background(), lockCtx, key)
+	err := txn.LockKeys(context.Background(), lockCtx, nil, key)
 	s.Nil(err)
 	lockInfo := s.getLockInfo(key)
 	s.GreaterOrEqual(lockInfo.LockTtl-atomic.LoadUint64(&transaction.ManagedLockTTL), uint64(100))
@@ -1545,7 +1545,7 @@ func (s *testCommitterSuite) TestDeleteAllYourWritesWithSFU() {
 	s.store.ClearTxnLatches()
 	txn1.GetMemBuffer().SetWithFlags(k1, []byte{0}, kv.SetPresumeKeyNotExists)
 	txn1.Delete(k1)
-	err := txn1.LockKeys(context.Background(), &kv.LockCtx{}, k2, k3) // select * from t where x in (k2, k3) for update
+	err := txn1.LockKeys(context.Background(), &kv.LockCtx{}, nil, k2, k3) // select * from t where x in (k2, k3) for update
 	s.Nil(err)
 
 	committer1, err := txn1.NewCommitter(0)
@@ -1596,11 +1596,11 @@ func (s *testCommitterSuite) TestAcquireFalseTimeoutLock() {
 	txn1.SetPessimistic(true)
 	// lock the primary key
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err := txn1.LockKeys(context.Background(), lockCtx, k1)
+	err := txn1.LockKeys(context.Background(), lockCtx, nil, k1)
 	s.Nil(err)
 	// lock the secondary key
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err = txn1.LockKeys(context.Background(), lockCtx, k2)
+	err = txn1.LockKeys(context.Background(), lockCtx, nil, k2)
 	s.Nil(err)
 
 	// Heartbeats will increase the TTL of the primary key
@@ -1612,13 +1612,13 @@ func (s *testCommitterSuite) TestAcquireFalseTimeoutLock() {
 
 	// test no wait
 	lockCtx = kv.NewLockCtx(txn2.StartTS(), kv.LockNoWait, time.Now())
-	err = txn2.LockKeys(context.Background(), lockCtx, k2)
+	err = txn2.LockKeys(context.Background(), lockCtx, nil, k2)
 	// cannot acquire lock immediately thus error
 	s.Equal(err.Error(), tikverr.ErrLockAcquireFailAndNoWaitSet.Error())
 
 	// test for wait limited time (200ms)
 	lockCtx = kv.NewLockCtx(txn2.StartTS(), 200, time.Now())
-	err = txn2.LockKeys(context.Background(), lockCtx, k2)
+	err = txn2.LockKeys(context.Background(), lockCtx, nil, k2)
 	// cannot acquire lock in time thus error
 	s.Equal(err.Error(), tikverr.ErrLockWaitTimeout.Error())
 }
@@ -1657,11 +1657,11 @@ func (s *testCommitterSuite) TestPkNotFound() {
 	txn1.SetPessimistic(true)
 	// lock the primary key.
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err := txn1.LockKeys(ctx, lockCtx, k1)
+	err := txn1.LockKeys(ctx, lockCtx, nil, k1)
 	s.Nil(err)
 	// lock the secondary key.
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err = txn1.LockKeys(ctx, lockCtx, k2, k3)
+	err = txn1.LockKeys(ctx, lockCtx, nil, k2, k3)
 	s.Nil(err)
 	// Stop txn ttl manager and remove primary key, like tidb server crashes and the priamry key lock does not exists actually,
 	// while the secondary lock operation succeeded.
@@ -1693,7 +1693,7 @@ func (s *testCommitterSuite) TestPkNotFound() {
 	txn2 := s.begin()
 	txn2.SetPessimistic(true)
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn2.StartTS(), WaitStartTime: time.Now()}
-	err = txn2.LockKeys(ctx, lockCtx, k2)
+	err = txn2.LockKeys(ctx, lockCtx, nil, k2)
 	s.Nil(err)
 
 	// Pessimistic rollback using smaller forUpdateTS does not take effect.
@@ -1709,7 +1709,7 @@ func (s *testCommitterSuite) TestPkNotFound() {
 	err = resolver.ResolvePessimisticLock(ctx, lockKey3)
 	s.Nil(err)
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err = txn1.LockKeys(ctx, lockCtx, k3)
+	err = txn1.LockKeys(ctx, lockCtx, nil, k3)
 	s.Nil(err)
 
 	// After disable fail point, the rollbackIfNotExist flag will be set, and the resolve should succeed. In this
@@ -1717,7 +1717,7 @@ func (s *testCommitterSuite) TestPkNotFound() {
 	txn3 := s.begin()
 	txn3.SetPessimistic(true)
 	lockCtx = kv.NewLockCtx(txn3.StartTS(), kv.LockNoWait, time.Now())
-	err = txn3.LockKeys(ctx, lockCtx, k3)
+	err = txn3.LockKeys(ctx, lockCtx, nil, k3)
 	s.Nil(err)
 	status, err = resolver.GetTxnStatusFromLock(bo, lockKey3, oracle.GoTimeToTS(time.Now().Add(200*time.Millisecond)), false)
 	s.Nil(err)
@@ -1734,7 +1734,7 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	txn1.SetPessimistic(true)
 	// txn1 lock k1
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err := txn1.LockKeys(context.Background(), lockCtx, k1)
+	err := txn1.LockKeys(context.Background(), lockCtx, nil, k1)
 	s.Nil(err)
 
 	// txn2 wants to lock k1, k2, k1(pk) is blocked by txn1, pessimisticLockKeys has been changed to
@@ -1744,7 +1744,7 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 		txn2 := s.begin()
 		txn2.SetPessimistic(true)
 		lockCtx2 := kv.NewLockCtx(txn2.StartTS(), 200, time.Now())
-		waitErr := txn2.LockKeys(context.Background(), lockCtx2, k1, k2)
+		waitErr := txn2.LockKeys(context.Background(), lockCtx2, nil, k1, k2)
 		doneCh <- waitErr
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -1754,7 +1754,7 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	txn3.SetPessimistic(true)
 	lockCtx3 := kv.NewLockCtx(txn3.StartTS(), kv.LockNoWait, time.Now())
 	s.Nil(failpoint.Enable("tikvclient/txnNotFoundRetTTL", "return"))
-	err = txn3.LockKeys(context.Background(), lockCtx3, k2)
+	err = txn3.LockKeys(context.Background(), lockCtx3, nil, k2)
 	s.Nil(failpoint.Disable("tikvclient/txnNotFoundRetTTL"))
 	s.Nil(err)
 	waitErr := <-doneCh
@@ -1781,7 +1781,7 @@ func (s *testCommitterSuite) TestResolvePessimisticLock() {
 	err := txn.Set(untouchedIndexKey, untouchedIndexValue)
 	s.Nil(err)
 	lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
-	err = txn.LockKeys(context.Background(), lockCtx, untouchedIndexKey, noValueIndexKey)
+	err = txn.LockKeys(context.Background(), lockCtx, nil, untouchedIndexKey, noValueIndexKey)
 	s.Nil(err)
 	commit, err := txn.NewCommitter(1)
 	s.Nil(err)
@@ -1855,7 +1855,7 @@ func (s *testCommitterSuite) TestPushPessimisticLock() {
 	txn1 := s.begin()
 	txn1.SetPessimistic(true)
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err := txn1.LockKeys(context.Background(), lockCtx, k1, k2)
+	err := txn1.LockKeys(context.Background(), lockCtx, nil, k1, k2)
 	s.Nil(err)
 
 	txn1.Set(k2, []byte("v2"))
@@ -1908,7 +1908,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	txn1.SetPessimistic(true)
 	// lock the primary key
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err := txn1.LockKeys(context.Background(), lockCtx, pk)
+	err := txn1.LockKeys(context.Background(), lockCtx, nil, pk)
 	s.Nil(err)
 	// lock the optimistic keys
 	for i := 0; i < bigTxnThreshold; i++ {
@@ -1920,7 +1920,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	err = committer.PrewriteAllMutations(ctx)
 	s.Nil(err)
 	// lock the pessimistic keys
-	err = txn1.LockKeys(context.Background(), lockCtx, pessimisticLockKey)
+	err = txn1.LockKeys(context.Background(), lockCtx, nil, pessimisticLockKey)
 	s.Nil(err)
 	lock1 := s.getLockInfo(pessimisticLockKey)
 	s.Equal(lock1.LockType, kvrpcpb.Op_PessimisticLock)
@@ -1949,7 +1949,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	txn2 := s.begin()
 	txn2.SetPessimistic(true)
 	lockCtx = kv.NewLockCtx(txn2.StartTS(), kv.LockNoWait, time.Now())
-	err = txn2.LockKeys(context.Background(), lockCtx, pessimisticLockKey)
+	err = txn2.LockKeys(context.Background(), lockCtx, nil, pessimisticLockKey)
 	s.Nil(err)
 
 	err = txn1.Rollback()
@@ -2026,7 +2026,7 @@ func (s *testCommitterSuite) TestRetryPushTTL() {
 	txn1.SetPessimistic(true)
 	// txn1 lock k
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
-	err := txn1.LockKeys(ctx, lockCtx, k)
+	err := txn1.LockKeys(ctx, lockCtx, nil, k)
 	s.Nil(err)
 	txn2 := s.begin()
 	txn2.SetPessimistic(true)
@@ -2037,7 +2037,7 @@ func (s *testCommitterSuite) TestRetryPushTTL() {
 		lockCtx := &kv.LockCtx{ForUpdateTS: txn2.StartTS(), WaitStartTime: time.Now()}
 		// after txn1 rolled back, txn2 should acquire its lock successfully
 		// with the **latest** ttl
-		err := txn2.LockKeys(ctx, lockCtx, k)
+		err := txn2.LockKeys(ctx, lockCtx, nil, k)
 		s.Nil(err)
 		txn2GotLock <- struct{}{}
 	}()
@@ -2051,7 +2051,7 @@ func (s *testCommitterSuite) TestRetryPushTTL() {
 	go func() {
 		// if txn2 use the old ttl calculation method, here txn3 can resolve its lock and
 		// get lock successfully here, which is not expected behavior
-		txn3.LockKeys(ctx, lockCtx, k)
+		txn3.LockKeys(ctx, lockCtx, nil, k)
 		txn3GotLock <- struct{}{}
 		txn3.Rollback()
 		done <- struct{}{}
@@ -2336,7 +2336,7 @@ func (s *testCommitterSuite) TestNewlyInsertedMemDBFlag() {
 
 	// Lock then insert, the newly inserted flag should exist.
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
-	err = txn.LockKeys(context.Background(), lockCtx, k1)
+	err = txn.LockKeys(context.Background(), lockCtx, nil, k1)
 	s.Nil(err)
 	err = txn.GetMemBuffer().SetWithFlags(k1, v1, kv.SetNewlyInserted)
 	s.Nil(err)
@@ -2345,7 +2345,7 @@ func (s *testCommitterSuite) TestNewlyInsertedMemDBFlag() {
 	s.True(flags.HasNewlyInserted())
 
 	// Lock then delete and insert, the newly inserted flag should not exist.
-	err = txn.LockKeys(ctx, lockCtx, k2)
+	err = txn.LockKeys(ctx, lockCtx, nil, k2)
 	s.Nil(err)
 	err = txn.Delete(k2)
 	s.Nil(err)
