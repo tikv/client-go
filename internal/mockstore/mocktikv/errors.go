@@ -107,6 +107,7 @@ type ErrConflict struct {
 	ConflictTS       uint64
 	ConflictCommitTS uint64
 	Key              []byte
+	CanForceLock     bool
 }
 
 func (e *ErrConflict) Error() string {

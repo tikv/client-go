@@ -1,13 +1,18 @@
 package apicodec
 
 import (
+	"encoding/binary"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 // Mode represents the operation mode of a request.
-type Mode int
+type (
+	Mode       int
+	KeyspaceID uint32
+)
 
 const (
 	// ModeRaw represent a raw operation in TiKV
@@ -16,12 +21,30 @@ const (
 	ModeTxn
 )
 
+const (
+	// NulSpaceID is a special keyspace id that represents no keyspace exist.
+	NulSpaceID KeyspaceID = 0xffffffff
+)
+
+func ParseKeyspaceID(b []byte) (KeyspaceID, error) {
+	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
+		return 0, errors.Errorf("unsupported key %s", b)
+	}
+
+	buf := append([]byte{}, b[:keyspacePrefixLen]...)
+	buf[0] = 0
+
+	return KeyspaceID(binary.BigEndian.Uint32(buf)), nil
+}
+
 // Codec is responsible for encode/decode requests.
 type Codec interface {
 	// GetAPIVersion returns the api version of the codec.
 	GetAPIVersion() kvrpcpb.APIVersion
-	// GetKeyspace return the keyspace id of the codec.
+	// GetKeyspace return the keyspace id of the codec in bytes.
 	GetKeyspace() []byte
+	// GetKeyspaceID return the keyspace id of the codec.
+	GetKeyspaceID() KeyspaceID
 	// EncodeRequest encodes with the given Codec.
 	// NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 	EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error)
