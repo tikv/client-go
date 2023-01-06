@@ -8,16 +8,17 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
-// Mode represents the operation mode of a request.
 type (
-	Mode       int
+	// Mode represents the operation mode of a request.
+	Mode int
+	// KeyspaceID denotes the target keyspace of the request.
 	KeyspaceID uint32
 )
 
 const (
-	// ModeRaw represent a raw operation in TiKV
+	// ModeRaw represent a raw operation in TiKV.
 	ModeRaw = iota
-	// ModeTxn represent a transaction operation in TiKV
+	// ModeTxn represent a transaction operation in TiKV.
 	ModeTxn
 )
 
@@ -26,6 +27,8 @@ const (
 	NulSpaceID KeyspaceID = 0xffffffff
 )
 
+// ParseKeyspaceID retrieves the keyspaceID from the given keyspace-encoded key.
+// It returns error if the given key is not in proper api-v2 format.
 func ParseKeyspaceID(b []byte) (KeyspaceID, error) {
 	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
 		return 0, errors.Errorf("unsupported key %s", b)
