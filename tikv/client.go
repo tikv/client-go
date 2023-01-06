@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
+	"google.golang.org/grpc"
 )
 
 // Client is a client that sends RPC.
@@ -55,6 +56,11 @@ func WithSecurity(security config.Security) ClientOpt {
 // WithCodec is used to set client codec.
 func WithCodec(codec apicodec.Codec) ClientOpt {
 	return client.WithCodec(codec)
+}
+
+// WithCodec is used to set client codec.
+func WithGRPCDialOptions(grpcDialOptions ...grpc.DialOption) ClientOpt {
+	return client.WithGRPCDialOptions(grpcDialOptions...)
 }
 
 // Timeout durations.

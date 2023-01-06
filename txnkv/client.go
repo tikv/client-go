@@ -17,7 +17,9 @@ package txnkv
 import (
 	"context"
 	"fmt"
+
 	"github.com/tikv/client-go/v2/util"
+	"google.golang.org/grpc"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
@@ -34,8 +36,9 @@ type Client struct {
 }
 
 type option struct {
-	apiVersion   kvrpcpb.APIVersion
-	keyspaceName string
+	apiVersion      kvrpcpb.APIVersion
+	keyspaceName    string
+	gRPCDialOptions []grpc.DialOption
 }
 
 // ClientOpt is factory to set the client options.
@@ -52,6 +55,13 @@ func WithKeyspace(keyspaceName string) ClientOpt {
 func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 	return func(opt *option) {
 		opt.apiVersion = apiVersion
+	}
+}
+
+// WithGRPCDialOptions is used to set the grpc.DialOption.
+func WithGRPCDialOptions(opts ...grpc.DialOption) ClientOpt {
+	return func(o *option) {
+		o.gRPCDialOptions = append(o.gRPCDialOptions, opts...)
 	}
 }
 
@@ -99,7 +109,10 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		return nil, err
 	}
 
-	rpcClient := tikv.NewRPCClient(tikv.WithSecurity(cfg.Security), tikv.WithCodec(codecCli.GetCodec()))
+	rpcClient := tikv.NewRPCClient(
+		tikv.WithSecurity(cfg.Security),
+		tikv.WithGRPCDialOptions(opt.gRPCDialOptions...),
+		tikv.WithCodec(codecCli.GetCodec()))
 
 	s, err := tikv.NewKVStore(uuid, pdClient, spkv, rpcClient)
 	if err != nil {
