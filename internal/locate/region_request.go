@@ -199,8 +199,8 @@ func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *Reg
 
 // RecordStoreRequestRuntimeStats records request runtime stats to each Store.
 func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, duration time.Duration, timeout time.Duration) {
-	regionCache.storeMu.Lock()
-	defer regionCache.storeMu.Unlock()
+	regionCache.storeMu.RLock()
+	defer regionCache.storeMu.RUnlock()
 	store, exists := regionCache.storeMu.stores[storeID]
 	if !exists {
 		return
@@ -211,8 +211,8 @@ func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, du
 
 // MarkStoreAlreadySlow marks the given Store already slow.
 func MarkStoreAlreadySlow(regionCache *RegionCache, storeID uint64) {
-	regionCache.storeMu.Lock()
-	defer regionCache.storeMu.Unlock()
+	regionCache.storeMu.RLock()
+	defer regionCache.storeMu.RUnlock()
 	store, exists := regionCache.storeMu.stores[storeID]
 	if !exists {
 		return

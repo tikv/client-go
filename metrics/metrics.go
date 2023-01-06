@@ -97,6 +97,7 @@ var (
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
+	TiKVStoreSlowScoreAvgTimecostGauge       *prometheus.GaugeVec
 	TiKVFollowerReadReqCounter               *prometheus.CounterVec
 )
 
@@ -601,6 +602,14 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Slow scores of each tikv node based on RPC timecosts",
 		}, []string{LblStore})
 
+	TiKVStoreSlowScoreAvgTimecostGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "store_slow_score_timecost",
+			Help:      "avgTimecost on Slow scores of each tikv node",
+		}, []string{LblStore})
+
 	TiKVFollowerReadReqCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -680,6 +689,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
+	prometheus.MustRegister(TiKVStoreSlowScoreAvgTimecostGauge)
 	prometheus.MustRegister(TiKVFollowerReadReqCounter)
 }
 

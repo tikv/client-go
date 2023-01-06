@@ -2561,106 +2561,109 @@ const (
 	slowScoreInitVal     = 1
 	slowScoreThreshold   = 80
 	slowScoreMax         = 100
-	slowScoreInitTimeout = 500   // unit: ms
-	slowScoreMaxTimeout  = 30000 // max timeout of one txn, unit: ms
+	slowScoreInitTimeout = 500000   // unit: us
+	slowScoreMaxTimeout  = 30000000 // max timeout of one txn, unit: us
 )
 
 // SlowScoreStat represents the statistics on busyness of Store.
 type SlowScoreStat struct {
-	avgScore          float64
-	avgTimecost       uint64
-	updCount          uint64 // sum of update count
-	intervalTimecost  uint64 // sum of the timecost in one counting interval. Unit: us
-	intervalTimeout   uint64 // sum of the timeout in one counting interval. Unit: us
-	intervalUpdCount  uint64 // count of update in one counting interval.
-	intervalSlowCount uint64 // count of slow query in one counting interval.
+	avgScore         uint64
+	avgTimecost      uint64 // unit: us
+	updCount         uint64 // sum of update count
+	intervalTimecost uint64 // sum of the timecost in one counting interval. Unit: us
+	intervalUpdCount uint64 // count of update in one counting interval.
 }
 
-func (ss *SlowScoreStat) getSlowScore() float64 {
-	return ss.avgScore
+func (ss *SlowScoreStat) getSlowScore() uint64 {
+	return atomic.LoadUint64(&ss.avgScore)
+}
+
+func (ss *SlowScoreStat) getAvgTimecost() uint64 {
+	return atomic.LoadUint64(&ss.avgTimecost)
 }
 
 // Update the statistics on SlowScore periodically.
 func (ss *SlowScoreStat) updateSlowScore() bool {
-	if ss.avgTimecost == 0 {
+	if atomic.LoadUint64(&ss.avgTimecost) == 0 {
 		// Init the whole statistics.
-		ss.avgScore = float64(slowScoreInitVal)
-		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs())
-		ss.intervalTimecost = 0
-		ss.intervalTimeout = ss.avgTimecost
+		atomic.StoreUint64(&ss.avgScore, slowScoreInitVal)
+		atomic.StoreUint64(&ss.avgTimecost, slowScoreInitTimeout)
 		return true
 	}
 
-	if ss.intervalUpdCount > 0 {
-		ss.updCount += ss.intervalSlowCount
-		updRatio := math.Min(float64(ss.intervalSlowCount)/float64(ss.updCount), float64(0.1))
-		ss.avgTimecost = uint64(float64(ss.avgTimecost)*(float64(1.0)-updRatio) + float64(ss.intervalTimecost/ss.intervalUpdCount)*updRatio)
+	intervalUpdCount := atomic.LoadUint64(&ss.intervalUpdCount)
+	intervalTimecost := atomic.LoadUint64(&ss.intervalTimecost)
+	avgTimecost := atomic.LoadUint64(&ss.avgTimecost)
+	avgScore := atomic.LoadUint64(&ss.avgScore)
+	// Update avgTimecost
+	intervalAvgTimecost := uint64(0)
+	gradient := float64(1.0)
+	if intervalUpdCount > 0 {
+		intervalAvgTimecost = intervalTimecost / intervalUpdCount
+		gradient = float64(intervalAvgTimecost) / float64(avgTimecost)
+
+		updCount := atomic.AddUint64(&ss.updCount, intervalUpdCount)
+		updRatio := math.Min(float64(intervalUpdCount)/math.Max(float64(updCount), float64(1.0)), float64(0.1))
+		updAvgTimecost := math.Max(float64(avgTimecost)*(float64(1.0)-updRatio)+float64(intervalAvgTimecost)*updRatio, float64(1.0))
+		atomic.CompareAndSwapUint64(&ss.avgTimecost, avgTimecost, uint64(updAvgTimecost))
 	}
-	if ss.intervalSlowCount > 0 {
-		nearThresh := float64(ss.intervalSlowCount) / float64(ss.intervalUpdCount)
-		costScore := math.Min(nearThresh, float64(0.1)) / float64(0.1)
-		ss.avgScore = ss.avgScore * (float64(slowScoreInitVal) + costScore)
-		ss.avgScore = math.Min(ss.avgScore, float64(slowScoreMax))
+	// Update slowScore, using 2e(that is, 2.71828 * 2 => ~5.43) as the default thresholds of ratio.
+	if intervalAvgTimecost > avgTimecost {
+		risenRatio := math.Min(float64(5.43), gradient)
+		curAvgScore := math.Ceil(math.Min(float64(avgScore)*risenRatio+float64(1.0), float64(slowScoreMax)))
+		atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, uint64(curAvgScore))
 	} else {
-		costScore := math.Max(float64(slowScoreInitVal), 100.0*float64(ss.intervalTimecost)/float64(ss.intervalTimeout))
-		if ss.avgScore-costScore <= float64(slowScoreInitVal) {
-			ss.avgScore = float64(slowScoreInitVal)
+		costScore := uint64(math.Max(float64(slowScoreInitVal), math.Min(float64(5.43), float64(1.0)/gradient)))
+		if avgScore <= slowScoreInitVal+costScore {
+			atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, slowScoreInitVal)
 		} else {
-			ss.avgScore -= costScore
+			atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, avgScore-costScore)
 		}
 	}
 
 	// Resets the counter of inteval timecost
-	ss.intervalTimecost = 0
-	ss.intervalTimeout = uint64((slowScoreInitTimeout * time.Millisecond).Abs())
-	ss.intervalSlowCount = 0
-	ss.intervalUpdCount = 0
+	atomic.StoreUint64(&ss.intervalTimecost, 0)
+	atomic.StoreUint64(&ss.intervalUpdCount, 0)
 	return true
 }
 
 // recordSlowScoreStat records the timecost of each request.
 func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration, timeout time.Duration) bool {
-	ss.intervalUpdCount++
-	if ss.avgTimecost == 0 {
+	atomic.AddUint64(&ss.intervalUpdCount, 1)
+	avgTimecost := atomic.LoadUint64(&ss.avgTimecost)
+	if avgTimecost == 0 {
 		// Init the whole statistics with the original one.
-		ss.avgScore = float64(slowScoreInitVal)
-		ss.avgTimecost = uint64((slowScoreInitTimeout * time.Millisecond).Abs())
-		ss.intervalTimecost = uint64(timecost.Abs().Milliseconds())
-		ss.intervalTimeout = uint64(timeout.Abs().Milliseconds())
+		atomic.StoreUint64(&ss.avgScore, slowScoreInitVal)
+		atomic.StoreUint64(&ss.avgTimecost, slowScoreInitTimeout)
+		atomic.StoreUint64(&ss.intervalTimecost, uint64(timecost.Abs().Microseconds()))
 		return true
 	}
-	curTimecost := uint64(timecost.Abs().Milliseconds())
-	curTimeout := uint64(timeout.Abs().Milliseconds())
+	curTimecost := uint64(timecost.Abs().Microseconds())
 	if curTimecost >= slowScoreMaxTimeout {
 		// Current query is too slow to serve (>= 30s, double timecost of ticking) in this tick.
-		ss.intervalSlowCount = 0
-		ss.avgScore = float64(slowScoreMax)
+		atomic.StoreUint64(&ss.avgScore, slowScoreMax)
 		return false
-	} else if curTimecost >= ss.avgTimecost*10 {
-		// Here, we simplistically introduce the standard on whether current query is a
-		// slow query -- "avgTimecost*10 <= curTimecost". It's a empirical rule right now,
-		// can be optimized in later work.
-		ss.intervalSlowCount++
 	}
-	ss.intervalTimecost += curTimecost
-	ss.intervalTimeout += curTimeout
-	if curTimeout == 0 {
-		ss.intervalTimeout += curTimecost
-	}
+	atomic.AddUint64(&ss.intervalTimecost, curTimecost)
 	return true
 }
 
 func (ss *SlowScoreStat) markAlreadySlow() {
-	ss.avgScore = float64(slowScoreMax)
+	atomic.StoreUint64(&ss.avgScore, slowScoreMax)
 }
 
 func (ss *SlowScoreStat) isSlow() bool {
-	return uint64(ss.avgScore) >= slowScoreThreshold
+	return ss.getSlowScore() >= slowScoreThreshold
 }
 
 // getSlowScore returns the slow score of store.
-func (s *Store) getSlowScore() float64 {
+func (s *Store) getSlowScore() uint64 {
 	return s.slowScore.getSlowScore()
+}
+
+// getAvgTimecost returns the avg timecost of store.
+func (s *Store) getAvgTimecost() uint64 {
+	return s.slowScore.getAvgTimecost()
 }
 
 // isSlow returns whether current Store is slow or not.
@@ -2706,15 +2709,23 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 				zap.Stack("stack trace"))
 		}
 	}()
-	slowScoreMetrics := make(map[string]float64)
-	c.storeMu.Lock()
+	type statSlice struct {
+		slowScore   float64
+		avgTimecost float64
+	}
+	slowScoreMetrics := make(map[string]statSlice)
+	c.storeMu.RLock()
 	for _, store := range c.storeMu.stores {
 		store.updateSlowScoreStat()
-		slowScoreMetrics[store.addr] = store.getSlowScore()
+		slowScoreMetrics[store.addr] = statSlice{
+			slowScore:   float64(store.getSlowScore()),
+			avgTimecost: float64(store.getAvgTimecost()),
+		}
 	}
-	c.storeMu.Unlock()
+	c.storeMu.RUnlock()
 	for store, score := range slowScoreMetrics {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score.slowScore)
+		metrics.TiKVStoreSlowScoreAvgTimecostGauge.WithLabelValues(store).Set(score.avgTimecost / 1000.0)
 	}
 }
 
