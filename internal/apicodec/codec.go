@@ -31,7 +31,7 @@ const (
 // It returns error if the given key is not in proper api-v2 format.
 func ParseKeyspaceID(b []byte) (KeyspaceID, error) {
 	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
-		return 0, errors.Errorf("unsupported key %s", b)
+		return NulSpaceID, errors.Errorf("unsupported key %s", b)
 	}
 
 	buf := append([]byte{}, b[:keyspacePrefixLen]...)
