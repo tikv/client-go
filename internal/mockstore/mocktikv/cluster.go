@@ -53,14 +53,14 @@ var _ cluster.Cluster = &Cluster{}
 
 // Cluster simulates a TiKV cluster. It focuses on management and the change of
 // meta data. A Cluster mainly includes following 3 kinds of meta data:
-// 1) Region: A Region is a fragment of TiKV's data whose range is [start, end).
-//    The data of a Region is duplicated to multiple Peers and distributed in
-//    multiple Stores.
-// 2) Peer: A Peer is a replica of a Region's data. All peers of a Region form
-//    a group, each group elects a Leader to provide services.
-// 3) Store: A Store is a storage/service node. Try to think it as a TiKV server
-//    process. Only the store with request's Region's leader Peer could respond
-//    to client's request.
+//  1. Region: A Region is a fragment of TiKV's data whose range is [start, end).
+//     The data of a Region is duplicated to multiple Peers and distributed in
+//     multiple Stores.
+//  2. Peer: A Peer is a replica of a Region's data. All peers of a Region form
+//     a group, each group elects a Leader to provide services.
+//  3. Store: A Store is a storage/service node. Try to think it as a TiKV server
+//     process. Only the store with request's Region's leader Peer could respond
+//     to client's request.
 type Cluster struct {
 	sync.RWMutex
 	id      uint64
@@ -224,7 +224,7 @@ func (c *Cluster) AddStore(storeID uint64, addr string, labels ...*metapb.StoreL
 	c.Lock()
 	defer c.Unlock()
 
-	c.stores[storeID] = newStore(storeID, addr, labels...)
+	c.stores[storeID] = newStore(storeID, addr, addr, labels...)
 }
 
 // RemoveStore removes a Store from the cluster.
@@ -248,7 +248,15 @@ func (c *Cluster) MarkTombstone(storeID uint64) {
 func (c *Cluster) UpdateStoreAddr(storeID uint64, addr string, labels ...*metapb.StoreLabel) {
 	c.Lock()
 	defer c.Unlock()
-	c.stores[storeID] = newStore(storeID, addr, labels...)
+	c.stores[storeID] = newStore(storeID, addr, addr, labels...)
+}
+
+// UpdateStorePeerAddr updates store peer address for cluster.
+func (c *Cluster) UpdateStorePeerAddr(storeID uint64, peerAddr string, labels ...*metapb.StoreLabel) {
+	c.Lock()
+	defer c.Unlock()
+	addr := c.stores[storeID].meta.Address
+	c.stores[storeID] = newStore(storeID, addr, peerAddr, labels...)
 }
 
 // GetRegion returns a Region's meta and leader ID.
@@ -691,12 +699,13 @@ type Store struct {
 	cancel bool // return context.Cancelled error when cancel is true.
 }
 
-func newStore(storeID uint64, addr string, labels ...*metapb.StoreLabel) *Store {
+func newStore(storeID uint64, addr string, peerAddr string, labels ...*metapb.StoreLabel) *Store {
 	return &Store{
 		meta: &metapb.Store{
-			Id:      storeID,
-			Address: addr,
-			Labels:  labels,
+			Id:          storeID,
+			Address:     addr,
+			PeerAddress: peerAddr,
+			Labels:      labels,
 		},
 	}
 }

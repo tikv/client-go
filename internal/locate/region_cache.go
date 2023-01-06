@@ -491,7 +491,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 }
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
-func (c *RegionCache) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
+func (c *RegionCache) SetRegionCacheStore(id uint64, addr string, peerAddr string, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
 	c.storeMu.Lock()
 	defer c.storeMu.Unlock()
 	c.storeMu.stores[id] = &Store{
@@ -499,6 +499,8 @@ func (c *RegionCache) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointT
 		storeType: storeType,
 		state:     state,
 		labels:    labels,
+		addr:      addr,
+		peerAddr:  peerAddr,
 	}
 }
 
@@ -758,17 +760,12 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 // 3. Compute which tiflash_compute node should handle this region by consistent hash.
 // 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
 // NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
-func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID) (res []*RPCContext, err error) {
-	stores, err := c.GetTiFlashComputeStores(bo)
-	if err != nil {
-		return nil, err
-	}
-	if len(stores) == 0 {
-		return nil, errors.New("number of tiflash_compute node is zero")
-	}
-
+func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID, stores []*Store) (res []*RPCContext, err error) {
 	hasher := consistent.New()
 	for _, store := range stores {
+		if !isStoreContainLabel(store.labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) {
+			return nil, errors.New("expect store should be tiflash_compute")
+		}
 		hasher.Add(store.GetAddr())
 	}
 
@@ -777,11 +774,12 @@ func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Back
 		if err != nil {
 			return nil, err
 		}
-		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, true)
+		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, false)
 		if err != nil {
 			return nil, err
 		}
 		if rpcCtx == nil {
+			logutil.Logger(context.Background()).Info("rpcCtx is nil", zap.Any("region", id.String()))
 			return nil, nil
 		}
 
@@ -1385,13 +1383,22 @@ func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
 				})
 			}
 			stores = append(stores, &Store{
-				addr:    store.addr,
-				storeID: store.storeID,
-				labels:  storeLabel,
+				addr:      store.addr,
+				peerAddr:  store.peerAddr,
+				storeID:   store.storeID,
+				labels:    storeLabel,
+				storeType: typ,
 			})
 		}
 	}
 	return stores
+}
+
+// GetAllStores gets TiKV and TiFlash stores.
+func (c *RegionCache) GetAllStores() []*Store {
+	stores := c.GetStoresByType(tikvrpc.TiKV)
+	tiflashStores := c.GetStoresByType(tikvrpc.TiFlash)
+	return append(stores, tiflashStores...)
 }
 
 func filterUnavailablePeers(region *pd.Region) {
@@ -1834,6 +1841,7 @@ func (c *RegionCache) reloadTiFlashComputeStores(bo *retry.Backoffer) (res []*St
 			res = append(res, &Store{
 				storeID:   s.GetId(),
 				addr:      s.GetAddress(),
+				peerAddr:  s.GetPeerAddress(),
 				saddr:     s.GetStatusAddress(),
 				storeType: tikvrpc.GetStoreTypeByMeta(s),
 				labels:    s.GetLabels(),
@@ -2152,6 +2160,7 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 // Store contains a kv process's address.
 type Store struct {
 	addr         string               // loaded store address
+	peerAddr     string               // TiFlash Proxy use peerAddr
 	saddr        string               // loaded store status address
 	storeID      uint64               // store's id
 	state        uint64               // unsafe store storeState
@@ -2239,6 +2248,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 			return "", errors.Errorf("empty store(%d) address", s.storeID)
 		}
 		s.addr = addr
+		s.peerAddr = store.GetPeerAddress()
 		s.saddr = store.GetStatusAddress()
 		s.storeType = tikvrpc.GetStoreTypeByMeta(store)
 		s.labels = store.GetLabels()
@@ -2285,7 +2295,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
-		newStore := &Store{storeID: s.storeID, addr: addr, saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		c.storeMu.Lock()
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
@@ -2505,6 +2515,11 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 // GetAddr returns the address of the store
 func (s *Store) GetAddr() string {
 	return s.addr
+}
+
+// GetPeerAddr returns the peer address of the store
+func (s *Store) GetPeerAddr() string {
+	return s.peerAddr
 }
 
 func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {

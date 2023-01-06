@@ -952,6 +952,19 @@ func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
 			newRs.backoffTimes[k] += v
 		}
 	}
+
+	if rs.scanDetail != nil {
+		newRs.scanDetail = rs.scanDetail
+	}
+
+	if rs.timeDetail != nil {
+		newRs.timeDetail = rs.timeDetail
+	}
+
+	if rs.resolveLockDetail != nil {
+		newRs.resolveLockDetail = rs.resolveLockDetail
+	}
+
 	return &newRs
 }
 

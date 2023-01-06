@@ -133,6 +133,8 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 	// for some operations (e.g. revertToCheckpoint)
 }
 
+// onMemChange should only be called right before exiting memdb.
+// This is because the hook can lead to a panic, and leave memdb in an inconsistent state.
 func (a *memdbArena) onMemChange() {
 	hook := a.memChangeHook.Load()
 	if hook != nil {
@@ -220,7 +222,7 @@ func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 	for _, block := range a.blocks {
 		a.capacity += uint64(block.length)
 	}
-	a.onMemChange()
+	// We shall not call a.onMemChange() here, since it may cause a panic and leave memdb in an inconsistent state
 }
 
 type nodeAllocator struct {
