@@ -1724,30 +1724,6 @@ type RelatedSchemaChange struct {
 	LatestInfoSchema SchemaVer
 }
 
-func (c *twoPhaseCommitter) getCommitTS(ctx context.Context, commitDetail *util.CommitDetails) (uint64, error) {
-	start := time.Now()
-	logutil.Event(ctx, "start get commit ts")
-	commitTS, err := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
-	if err != nil {
-		logutil.Logger(ctx).Warn("2PC get commitTS failed",
-			zap.Error(err),
-			zap.Uint64("txnStartTS", c.startTS))
-		return 0, err
-	}
-	commitDetail.GetCommitTsTime = time.Since(start)
-	logutil.Event(ctx, "finish get commit ts")
-	logutil.SetTag(ctx, "commitTS", commitTS)
-
-	// Check commitTS.
-	if commitTS <= c.startTS {
-		err = errors.Errorf("session %d invalid transaction tso with txnStartTS=%v while txnCommitTS=%v",
-			c.sessionID, c.startTS, commitTS)
-		logutil.BgLogger().Error("invalid transaction", zap.Error(err))
-		return 0, err
-	}
-	return commitTS, nil
-}
-
 // checkSchemaValid checks if the schema has changed.
 func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64, startInfoSchema SchemaVer) error {
 	if _, err := util.EvalFailpoint("failCheckSchemaValid"); err == nil {
