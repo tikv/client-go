@@ -88,7 +88,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 	doTxn := func(lastAssertion kv.FlagsOp, keys ...[]byte) (uint64, error) {
 		txn, err := s.store.Begin()
 		s.Nil(err)
-		txn.SetAssertionLevel(assertionLevel)
+		txn.SetAssertionLevel(assertionLevel.(kvrpcpb.AssertionLevel))
 		txn.SetPessimistic(pessimistic)
 		if lockKeys {
 			lockCtx := kv.NewLockCtx(txn.StartTS(), 1000, time.Now())
