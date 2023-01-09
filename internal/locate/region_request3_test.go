@@ -290,7 +290,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	regionStore.stores[sidx].epoch++
 	regionStore.storeEpochs[sidx]++
 	// Add a TiFlash peer to the region.
-	peer := &metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID(), Role: metapb.PeerRole_Learner}
+	peer := &metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID()}
 	regionStore.accessIndex[tiFlashOnly] = append(regionStore.accessIndex[tiFlashOnly], len(regionStore.stores))
 	regionStore.stores = append(regionStore.stores, &Store{storeID: peer.StoreId, storeType: tikvrpc.TiFlash})
 	regionStore.storeEpochs = append(regionStore.storeEpochs, 0)
