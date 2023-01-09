@@ -30,7 +30,6 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
 
 func TestAssertion(t *testing.T) {
@@ -51,13 +50,7 @@ func (s *testAssertionSuite) TearDownTest() {
 	s.store.Close()
 }
 
-type mockAmender struct{}
-
-func (*mockAmender) AmendTxn(ctx context.Context, startInfoSchema transaction.SchemaVer, change *transaction.RelatedSchemaChange, mutations transaction.CommitterMutations) (transaction.CommitterMutations, error) {
-	return nil, nil
-}
-
-func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic bool, lockKeys bool, assertionLevel kvrpcpb.AssertionLevel, enableAmend bool) {
+func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic bool, lockKeys bool, assertionLevel kvrpcpb.AssertionLevel) {
 	if assertionLevel != kvrpcpb.AssertionLevel_Strict {
 		s.Nil(failpoint.Enable("tikvclient/assertionSkipCheckFromPrewrite", "return"))
 		defer func() {
@@ -97,9 +90,6 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 		s.Nil(err)
 		txn.SetAssertionLevel(assertionLevel)
 		txn.SetPessimistic(pessimistic)
-		if enableAmend {
-			txn.SetSchemaAmender(&mockAmender{})
-		}
 		if lockKeys {
 			lockCtx := kv.NewLockCtx(txn.StartTS(), 1000, time.Now())
 			lockCtx.InitCheckExistence(1)
@@ -130,7 +120,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 		s.Equal(existingCommitTS, assertionFailed.ExistingCommitTs)
 	}
 
-	if assertionLevel == kvrpcpb.AssertionLevel_Strict && !enableAmend {
+	if assertionLevel == kvrpcpb.AssertionLevel_Strict {
 		// Single key.
 		_, err = doTxn(kv.SetAssertExist, k(1))
 		s.Nil(err)
@@ -150,7 +140,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 		startTS, err = doTxn(kv.SetAssertExist, k(8), k(9), k(10))
 		s.NotNil(err)
 		checkAssertionFailError(err, startTS, k(10), kvrpcpb.Assertion_Exist, 0, 0)
-	} else if assertionLevel == kvrpcpb.AssertionLevel_Fast && pessimistic && lockKeys && !enableAmend {
+	} else if assertionLevel == kvrpcpb.AssertionLevel_Fast && pessimistic && lockKeys {
 		// Different from STRICT level, the already-existing version's startTS and commitTS cannot be fetched.
 
 		// Single key.
@@ -200,12 +190,9 @@ func (s *testAssertionSuite) TestPrewriteAssertion() {
 	ts, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.Nil(err)
 	prefix := fmt.Sprintf("test-prewrite-assertion-%d-", ts)
-	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Strict, false)
-	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Strict, false)
-	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Strict, false)
-	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Strict, true)
-	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Strict, true)
-	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Strict, true)
+	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Strict)
+	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Strict)
+	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Strict)
 }
 
 func (s *testAssertionSuite) TestFastAssertion() {
@@ -215,12 +202,9 @@ func (s *testAssertionSuite) TestFastAssertion() {
 	ts, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.Nil(err)
 	prefix := fmt.Sprintf("test-fast-assertion-%d-", ts)
-	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Fast, false)
-	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Fast, false)
-	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Fast, false)
-	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Fast, true)
-	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Fast, true)
-	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Fast, true)
+	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Fast)
+	s.testAssertionImpl(prefix+"b", true, false, kvrpcpb.AssertionLevel_Fast)
+	s.testAssertionImpl(prefix+"c", true, true, kvrpcpb.AssertionLevel_Fast)
 }
 
 func (s *testAssertionSuite) TestAssertionErrorLessPriorToOtherError() {

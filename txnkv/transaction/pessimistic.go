@@ -100,7 +100,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				Op:  kvrpcpb.Op_PessimisticLock,
 				Key: committerMutations.GetKey(i),
 			}
-			if c.txn.us.HasPresumeKeyNotExists(committerMutations.GetKey(i)) || (c.doingAmend && committerMutations.GetOp(i) == kvrpcpb.Op_Insert) {
+			if c.txn.us.HasPresumeKeyNotExists(committerMutations.GetKey(i)) {
 				mut.Assertion = kvrpcpb.Assertion_NotExist
 			}
 			mutations[i] = mut

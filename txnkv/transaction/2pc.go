@@ -171,9 +171,6 @@ type twoPhaseCommitter struct {
 	hasTriedAsyncCommit bool
 	hasTriedOnePC       bool
 
-	// doingAmend means the amend prewrite is ongoing.
-	doingAmend bool
-
 	binlog BinlogExecutor
 
 	resourceGroupTag    []byte
@@ -521,7 +518,7 @@ func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, asse
 	if err != nil {
 		return err
 	}
-	_, _, err = c.checkSchemaValid(ctx, ts, c.txn.schemaVer, false)
+	err = c.checkSchemaValid(ctx, ts, c.txn.schemaVer)
 	if err != nil {
 		return err
 	}
@@ -615,7 +612,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			isPessimistic = c.isPessimistic
 		}
 		mustExist, mustNotExist, hasAssertUnknown := flags.HasAssertExist(), flags.HasAssertNotExist(), flags.HasAssertUnknown()
-		if c.txn.schemaAmender != nil || c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
+		if c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
 			mustExist, mustNotExist, hasAssertUnknown = false, false, false
 		}
 		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
@@ -1585,35 +1582,9 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 
 	if !c.isAsyncCommit() {
-		tryAmend := c.isPessimistic && c.sessionID > 0 && c.txn.schemaAmender != nil
-		if !tryAmend {
-			_, _, err = c.checkSchemaValid(ctx, commitTS, c.txn.schemaVer, false)
-			if err != nil {
-				return err
-			}
-		} else {
-			relatedSchemaChange, memAmended, err := c.checkSchemaValid(ctx, commitTS, c.txn.schemaVer, true)
-			if err != nil {
-				return err
-			}
-			if memAmended {
-				// Get new commitTS and check schema valid again.
-				newCommitTS, err := c.getCommitTS(ctx, commitDetail)
-				if err != nil {
-					return err
-				}
-				// If schema check failed between commitTS and newCommitTs, report schema change error.
-				_, _, err = c.checkSchemaValid(ctx, newCommitTS, relatedSchemaChange.LatestInfoSchema, false)
-				if err != nil {
-					logutil.Logger(ctx).Info("schema check after amend failed, it means the schema version changed again",
-						zap.Uint64("startTS", c.startTS),
-						zap.Uint64("amendTS", commitTS),
-						zap.Int64("amendedSchemaVersion", relatedSchemaChange.LatestInfoSchema.SchemaMetaVersion()),
-						zap.Uint64("newCommitTS", newCommitTS))
-					return err
-				}
-				commitTS = newCommitTS
-			}
+		err = c.checkSchemaValid(ctx, commitTS, c.txn.schemaVer)
+		if err != nil {
+			return err
 		}
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
@@ -1753,137 +1724,14 @@ type RelatedSchemaChange struct {
 	PhyTblIDS        []int64
 	ActionTypes      []uint64
 	LatestInfoSchema SchemaVer
-	Amendable        bool
 }
 
-func (c *twoPhaseCommitter) amendPessimisticLock(ctx context.Context, addMutations CommitterMutations) error {
-	keysNeedToLock := NewPlainMutations(addMutations.Len())
-	for i := 0; i < addMutations.Len(); i++ {
-		if addMutations.IsPessimisticLock(i) {
-			keysNeedToLock.Push(addMutations.GetOp(i), addMutations.GetKey(i), addMutations.GetValue(i), addMutations.IsPessimisticLock(i),
-				addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i), addMutations.NeedConstraintCheckInPrewrite(i))
-		}
-	}
-	// For unique index amend, we need to pessimistic lock the generated new index keys first.
-	// Set doingAmend to true to force the pessimistic lock do the exist check for these keys.
-	c.doingAmend = true
-	defer func() { c.doingAmend = false }()
-	if keysNeedToLock.Len() > 0 {
-		lCtx := kv.NewLockCtx(c.forUpdateTS, c.lockCtx.LockWaitTime(), time.Now())
-		lCtx.Killed = c.lockCtx.Killed
-		tryTimes := uint(0)
-		retryLimit := config.GetGlobalConfig().PessimisticTxn.MaxRetryCount
-		var err error
-		for tryTimes < retryLimit {
-			pessimisticLockBo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, c.txn.vars)
-			err = c.pessimisticLockMutations(pessimisticLockBo, lCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal, &keysNeedToLock)
-			if err != nil {
-				// KeysNeedToLock won't change, so don't async rollback pessimistic locks here for write conflict.
-				if _, ok := errors.Cause(err).(*tikverr.ErrWriteConflict); ok {
-					newForUpdateTSVer, err := c.store.CurrentTimestamp(oracle.GlobalTxnScope)
-					if err != nil {
-						return err
-					}
-					lCtx.ForUpdateTS = newForUpdateTSVer
-					c.forUpdateTS = newForUpdateTSVer
-					logutil.Logger(ctx).Info("amend pessimistic lock pessimistic retry lock",
-						zap.Uint("tryTimes", tryTimes), zap.Uint64("startTS", c.startTS),
-						zap.Uint64("newForUpdateTS", c.forUpdateTS))
-					tryTimes++
-					continue
-				}
-				logutil.Logger(ctx).Warn("amend pessimistic lock has failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS))
-				return err
-			}
-			logutil.Logger(ctx).Info("amend pessimistic lock finished", zap.Uint64("startTS", c.startTS),
-				zap.Uint64("forUpdateTS", c.forUpdateTS), zap.Int("keys", keysNeedToLock.Len()))
-			break
-		}
-		if err != nil {
-			logutil.Logger(ctx).Warn("amend pessimistic lock failed after retry",
-				zap.Uint("tryTimes", tryTimes), zap.Uint64("startTS", c.startTS))
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *twoPhaseCommitter) tryAmendTxn(ctx context.Context, startInfoSchema SchemaVer, change *RelatedSchemaChange) (bool, error) {
-	addMutations, err := c.txn.schemaAmender.AmendTxn(ctx, startInfoSchema, change, c.mutations)
-	if err != nil {
-		return false, err
-	}
-	// Add new mutations to the mutation list or prewrite them if prewrite already starts.
-	if addMutations != nil && addMutations.Len() > 0 {
-		err = c.amendPessimisticLock(ctx, addMutations)
-		if err != nil {
-			logutil.Logger(ctx).Info("amendPessimisticLock has failed", zap.Error(err))
-			return false, err
-		}
-		if c.prewriteStarted {
-			prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
-			err = c.prewriteMutations(prewriteBo, addMutations)
-			if err != nil {
-				logutil.Logger(ctx).Warn("amend prewrite has failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS))
-				return false, err
-			}
-			logutil.Logger(ctx).Info("amend prewrite finished", zap.Uint64("txnStartTS", c.startTS))
-			return true, nil
-		}
-		memBuf := c.txn.GetMemBuffer()
-		for i := 0; i < addMutations.Len(); i++ {
-			key := addMutations.GetKey(i)
-			op := addMutations.GetOp(i)
-			var err error
-			if op == kvrpcpb.Op_Del {
-				err = memBuf.Delete(key)
-			} else {
-				err = memBuf.Set(key, addMutations.GetValue(i))
-			}
-			if err != nil {
-				logutil.Logger(ctx).Warn("amend mutations has failed", zap.Error(err), zap.Uint64("txnStartTS", c.startTS))
-				return false, err
-			}
-			handle := c.txn.GetMemBuffer().IterWithFlags(key, nil).Handle()
-			c.mutations.Push(op, addMutations.IsPessimisticLock(i), addMutations.IsAssertExists(i),
-				addMutations.IsAssertNotExist(i), addMutations.NeedConstraintCheckInPrewrite(i), handle)
-		}
-	}
-	return false, nil
-}
-
-func (c *twoPhaseCommitter) getCommitTS(ctx context.Context, commitDetail *util.CommitDetails) (uint64, error) {
-	start := time.Now()
-	logutil.Event(ctx, "start get commit ts")
-	commitTS, err := c.store.GetTimestampWithRetry(retry.NewBackofferWithVars(ctx, TsoMaxBackoff, c.txn.vars), c.txn.GetScope())
-	if err != nil {
-		logutil.Logger(ctx).Warn("2PC get commitTS failed",
-			zap.Error(err),
-			zap.Uint64("txnStartTS", c.startTS))
-		return 0, err
-	}
-	commitDetail.GetCommitTsTime = time.Since(start)
-	logutil.Event(ctx, "finish get commit ts")
-	logutil.SetTag(ctx, "commitTS", commitTS)
-
-	// Check commitTS.
-	if commitTS <= c.startTS {
-		err = errors.Errorf("session %d invalid transaction tso with txnStartTS=%v while txnCommitTS=%v",
-			c.sessionID, c.startTS, commitTS)
-		logutil.BgLogger().Error("invalid transaction", zap.Error(err))
-		return 0, err
-	}
-	return commitTS, nil
-}
-
-// checkSchemaValid checks if the schema has changed, if tryAmend is set to true, committer will try to amend
-// this transaction using the related schema changes.
-func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64, startInfoSchema SchemaVer,
-	tryAmend bool) (*RelatedSchemaChange, bool, error) {
+// checkSchemaValid checks if the schema has changed.
+func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64, startInfoSchema SchemaVer) error {
 	if _, err := util.EvalFailpoint("failCheckSchemaValid"); err == nil {
 		logutil.Logger(ctx).Info("[failpoint] injected fail schema check",
 			zap.Uint64("txnStartTS", c.startTS))
-		return nil, false, errors.Errorf("mock check schema valid failure")
+		return errors.Errorf("mock check schema valid failure")
 	}
 	if c.txn.schemaLeaseChecker == nil {
 		if c.sessionID > 0 {
@@ -1892,32 +1740,15 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 				zap.Uint64("startTS", c.startTS),
 				zap.Uint64("checkTS", checkTS))
 		}
-		return nil, false, nil
+		return nil
 	}
-	relatedChanges, err := c.txn.schemaLeaseChecker.CheckBySchemaVer(checkTS, startInfoSchema)
-	if err != nil {
-		if tryAmend && relatedChanges != nil && relatedChanges.Amendable && c.txn.schemaAmender != nil {
-			memAmended, amendErr := c.tryAmendTxn(ctx, startInfoSchema, relatedChanges)
-			if amendErr != nil {
-				logutil.BgLogger().Info("txn amend has failed", zap.Uint64("sessionID", c.sessionID),
-					zap.Uint64("startTS", c.startTS), zap.Error(amendErr))
-				return nil, false, errors.WithStack(err)
-			}
-			logutil.Logger(ctx).Info("amend txn successfully",
-				zap.Uint64("sessionID", c.sessionID), zap.Uint64("txn startTS", c.startTS), zap.Bool("memAmended", memAmended),
-				zap.Uint64("checkTS", checkTS), zap.Int64("startInfoSchemaVer", startInfoSchema.SchemaMetaVersion()),
-				zap.Int64s("table ids", relatedChanges.PhyTblIDS), zap.Uint64s("action types", relatedChanges.ActionTypes))
-			return relatedChanges, memAmended, nil
-		}
-		return nil, false, errors.WithStack(err)
-	}
-	return nil, false, nil
+	_, err := c.txn.schemaLeaseChecker.CheckBySchemaVer(checkTS, startInfoSchema)
+	return errors.WithStack(err)
 }
 
 func (c *twoPhaseCommitter) calculateMaxCommitTS(ctx context.Context) error {
-	// Amend txn with current time first, then we can make sure we have another SafeWindow time to commit
 	currentTS := oracle.ComposeTS(int64(time.Since(c.txn.startTime)/time.Millisecond), 0) + c.startTS
-	_, _, err := c.checkSchemaValid(ctx, currentTS, c.txn.schemaVer, true)
+	err := c.checkSchemaValid(ctx, currentTS, c.txn.schemaVer)
 	if err != nil {
 		logutil.Logger(ctx).Info("Schema changed for async commit txn",
 			zap.Error(err),
