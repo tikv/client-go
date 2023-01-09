@@ -192,8 +192,9 @@ Loop:
 		if err != nil {
 			logutil.Logger(ctx).Info("range task try to get range end key failure",
 				zap.String("name", s.name),
-				zap.String("startKey", kv.StrKey(key)),
+				zap.String("startKey", kv.StrKey(startKey)),
 				zap.String("endKey", kv.StrKey(endKey)),
+				zap.String("loadRegionKey", kv.StrKey(key)),
 				zap.Duration("cost time", time.Since(startTime)),
 				zap.Error(err))
 			return err
