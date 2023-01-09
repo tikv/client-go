@@ -50,7 +50,7 @@ func (s *testAssertionSuite) TearDownTest() {
 	s.store.Close()
 }
 
-func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic bool, lockKeys bool, assertionLevel interface{}) {
+func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic bool, lockKeys bool, assertionLevel kvrpcpb.AssertionLevel) {
 	if assertionLevel != kvrpcpb.AssertionLevel_Strict {
 		s.Nil(failpoint.Enable("tikvclient/assertionSkipCheckFromPrewrite", "return"))
 		defer func() {
@@ -88,7 +88,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 	doTxn := func(lastAssertion kv.FlagsOp, keys ...[]byte) (uint64, error) {
 		txn, err := s.store.Begin()
 		s.Nil(err)
-		txn.SetAssertionLevel(assertionLevel.(kvrpcpb.AssertionLevel))
+		txn.SetAssertionLevel(assertionLevel)
 		txn.SetPessimistic(pessimistic)
 		if lockKeys {
 			lockCtx := kv.NewLockCtx(txn.StartTS(), 1000, time.Now())
