@@ -512,23 +512,6 @@ func (c *RegionCache) SetRegionCacheStore(id uint64, addr string, peerAddr strin
 	}
 }
 
-// ChangeFollowersToWitness is used to change followers to witness, for testing only
-func (c *RegionCache) ChangeFollowersToWitness(regionID RegionVerID, leaderStoreIdx int) {
-	cachedRegion := c.GetCachedRegionWithRLock(regionID)
-	if cachedRegion == nil || !cachedRegion.isValid() {
-		return
-	}
-	regionStore := cachedRegion.getStore()
-	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
-		if storeIdx != leaderStoreIdx {
-			peer := cachedRegion.meta.Peers[storeIdx]
-			if peer.GetRole() != metapb.PeerRole_Learner {
-				peer.IsWitness = true
-			}
-		}
-	}
-}
-
 // SetPDClient replaces pd client,for testing only
 func (c *RegionCache) SetPDClient(client pd.Client) {
 	c.pdClient = client

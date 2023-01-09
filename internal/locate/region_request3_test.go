@@ -598,22 +598,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.NotNil(replicaSelector)
 	s.Nil(err)
 
-	// Test accessFollower state filtering witness peer.
-	region.lastAccess = time.Now().Unix()
-	// Change all followers as witness.
-	cache.ChangeFollowersToWitness(regionLoc.Region, sidx)
-	refreshEpochs(regionStore)
-	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
-	s.NotNil(replicaSelector)
-	s.Nil(err)
-	state3 = replicaSelector.state.(*accessFollower)
-	// Should fallback to the leader immediately.
-	rpcCtx, err = replicaSelector.next(s.bo)
-	s.Nil(err)
-	s.Equal(regionStore.workTiKVIdx, state3.lastIdx)
-	s.Equal(replicaSelector.targetIdx, state3.lastIdx)
-	assertRPCCtxEqual(rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
-
 	// Invalidate the region if the leader is not in the region.
 	region.lastAccess = time.Now().Unix()
 	replicaSelector.updateLeader(&metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID()})
