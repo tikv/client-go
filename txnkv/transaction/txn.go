@@ -151,6 +151,8 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
+	// resourceGroupName is the name of tenent resource group.
+	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
 	aggressiveLockingDirty   bool
@@ -287,6 +289,12 @@ func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
 func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.resourceGroupTagger = tagger
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
+}
+
+// SetResourceGroupName set resource group name for both read and write.
+func (txn *KVTxn) SetResourceGroupName(name string) {
+	txn.resourceGroupName = name
+	txn.GetSnapshot().SetResourceGroupName(name)
 }
 
 // SetRPCInterceptor sets interceptor.RPCInterceptor for the transaction and its related snapshot.

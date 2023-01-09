@@ -146,6 +146,8 @@ type KVSnapshot struct {
 		resourceGroupTagger tikvrpc.ResourceGroupTagger
 		// interceptor is used to decorate the RPC request logic related to the snapshot.
 		interceptor interceptor.RPCInterceptor
+		// resourceGroupName is used to bind the request to specified resource group.
+		resourceGroupName string
 	}
 	sampleStep uint32
 	*util.RequestSource
@@ -375,12 +377,13 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			Keys:    pending,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
-			Priority:         s.priority.ToPB(),
-			NotFillCache:     s.notFillCache,
-			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.mu.resourceGroupTag,
-			IsolationLevel:   s.isolationLevel.ToPB(),
-			RequestSource:    s.GetRequestSource(),
+			Priority:          s.priority.ToPB(),
+			NotFillCache:      s.notFillCache,
+			TaskId:            s.mu.taskID,
+			ResourceGroupTag:  s.mu.resourceGroupTag,
+			IsolationLevel:    s.isolationLevel.ToPB(),
+			RequestSource:     s.GetRequestSource(),
+			ResourceGroupName: s.mu.resourceGroupName,
 		})
 		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 			s.mu.resourceGroupTagger(req)
@@ -578,12 +581,13 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			Key:     k,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
-			Priority:         s.priority.ToPB(),
-			NotFillCache:     s.notFillCache,
-			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.mu.resourceGroupTag,
-			IsolationLevel:   s.isolationLevel.ToPB(),
-			RequestSource:    s.GetRequestSource(),
+			Priority:          s.priority.ToPB(),
+			NotFillCache:      s.notFillCache,
+			TaskId:            s.mu.taskID,
+			ResourceGroupTag:  s.mu.resourceGroupTag,
+			IsolationLevel:    s.isolationLevel.ToPB(),
+			RequestSource:     s.GetRequestSource(),
+			ResourceGroupName: s.mu.resourceGroupName,
 		})
 	if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 		s.mu.resourceGroupTagger(req)
@@ -850,6 +854,13 @@ func (s *KVSnapshot) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 		return
 	}
 	s.mu.interceptor = interceptor.ChainRPCInterceptors(s.mu.interceptor, it)
+}
+
+// SetResourceGroupName set resource group name of the kv request.
+func (s *KVSnapshot) SetResourceGroupName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.resourceGroupName = name
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.

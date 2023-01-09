@@ -133,6 +133,7 @@ type twoPhaseCommitter struct {
 	detail              unsafe.Pointer
 	txnSize             int
 	hasNoNeedCommitKeys bool
+	resourceGroupName   string
 
 	primaryKey  []byte
 	forUpdateTS uint64
@@ -702,6 +703,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	c.syncLog = txn.syncLog
 	c.resourceGroupTag = txn.resourceGroupTag
 	c.resourceGroupTagger = txn.resourceGroupTagger
+	c.resourceGroupName = txn.resourceGroupName
 	c.setDetail(commitDetail)
 
 	return nil
