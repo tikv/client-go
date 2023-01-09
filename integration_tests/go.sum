@@ -347,11 +347,14 @@ github.com/pingcap/kvproto v0.0.0-20221026112947-f8d61344b172/go.mod h1:OYtxs078
 github.com/pingcap/kvproto v0.0.0-20230104090009-7c5d757b6e12 h1:ZgPcRwsrzcuYcgrsGB+2I9w0n6JIT+GEptLUZ1kWKZA=
 github.com/pingcap/kvproto v0.0.0-20230104090009-7c5d757b6e12/go.mod h1:OYtxs0786qojVTmkVeufx93xe+jUgm56GUYRIKnmaGI=
 github.com/pingcap/log v0.0.0-20200511115504-543df19646ad/go.mod h1:4rbK1p9ILyIfb6hU7OG2CiWSqMXnp3JMbiaVJ6mvoY8=
+github.com/pingcap/log v1.1.0/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pingcap/log v1.1.1-0.20221015072633-39906604fb81 h1:URLoJ61DmmY++Sa/yyPEQHG2s/ZBeV1FbIswHEMrdoY=
 github.com/pingcap/log v1.1.1-0.20221015072633-39906604fb81/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c h1:crhkw6DD+07Bg1wYhW5Piw+kYNKZqFQqfC2puUf6gMI=
 github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pingcap/sysutil v0.0.0-20220114020952-ea68d2dbf5b4 h1:HYbcxtnkN3s5tqrZ/z3eJS4j3Db8wMphEm1q10lY/TM=
+github.com/pingcap/tidb v1.1.0-beta.0.20221101102559-97add26c8f84 h1:qAougMzGGYDQ00UfIVs+M0LBaQQrL8yXdmLQEqqR8HY=
+github.com/pingcap/tidb v1.1.0-beta.0.20221101102559-97add26c8f84/go.mod h1:lhtdZBXqJGbk2/Fr8JnT9KhXxEKy8h0vrDwdna/ou3g=
 github.com/pingcap/tidb v1.1.0-beta.0.20230109054422-b477b1c94620 h1:153psGlYCgPaDYc3AtlDG5ePNPVE4T1c8iJGHFZInZw=
 github.com/pingcap/tidb v1.1.0-beta.0.20230109054422-b477b1c94620/go.mod h1:Rounl3rQhnhOBh8e7pxAr6BhnNJh0nGvomRCRE6W98U=
 github.com/pingcap/tidb/parser v0.0.0-20230109054422-b477b1c94620 h1:cEP+A7ylw8sGGOCHe8F8gto+vlkGQaYt09DHgHd2xmg=
