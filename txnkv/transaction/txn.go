@@ -72,13 +72,6 @@ import (
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = 24 * 60 * 60 * 1000
 
-// SchemaAmender is used by pessimistic transactions to amend commit mutations for schema change during 2pc.
-type SchemaAmender interface {
-	// AmendTxn is the amend entry, new mutations will be generated based on input mutations using schema change info.
-	// The returned results are mutations need to prewrite and mutations need to cleanup.
-	AmendTxn(ctx context.Context, startInfoSchema SchemaVer, change *RelatedSchemaChange, mutations CommitterMutations) (CommitterMutations, error)
-}
-
 type tempLockBufferEntry struct {
 	HasReturnValue    bool
 	HasCheckExistence bool
@@ -136,8 +129,6 @@ type KVTxn struct {
 
 	// schemaVer is the infoSchema fetched at startTS.
 	schemaVer SchemaVer
-	// SchemaAmender is used amend pessimistic txn commit mutations for schema change
-	schemaAmender SchemaAmender
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
@@ -160,6 +151,8 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
+	// resourceGroupName is the name of tenent resource group.
+	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
 	aggressiveLockingDirty   bool
@@ -298,6 +291,12 @@ func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
+// SetResourceGroupName set resource group name for both read and write.
+func (txn *KVTxn) SetResourceGroupName(name string) {
+	txn.resourceGroupName = name
+	txn.GetSnapshot().SetResourceGroupName(name)
+}
+
 // SetRPCInterceptor sets interceptor.RPCInterceptor for the transaction and its related snapshot.
 // interceptor.RPCInterceptor will be executed before each RPC request is initiated.
 // Note that SetRPCInterceptor will replace the previously set interceptor.
@@ -314,11 +313,6 @@ func (txn *KVTxn) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 	}
 	txn.interceptor = interceptor.ChainRPCInterceptors(txn.interceptor, it)
 	txn.GetSnapshot().AddRPCInterceptor(it)
-}
-
-// SetSchemaAmender sets an amender to update mutations after schema change.
-func (txn *KVTxn) SetSchemaAmender(sa SchemaAmender) {
-	txn.schemaAmender = sa
 }
 
 // SetCommitCallback sets up a function that will be called when the transaction
@@ -818,7 +812,9 @@ func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]
 				!txn.mayAggressiveLockingLastLockedKeysExpire() {
 				// We can skip locking it since it's already locked during last attempt to aggressive locking, and
 				// we already have the information that we need.
-				lockCtx.Values[keyStr] = lastResult.Value
+				if lockCtx.Values != nil {
+					lockCtx.Values[keyStr] = lastResult.Value
+				}
 				txn.aggressiveLockingContext.currentLockedKeys[keyStr] = lastResult
 				continue
 			}
@@ -832,6 +828,17 @@ func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
+	return txn.lockKeys(ctx, lockCtx, nil, keysInput...)
+}
+
+// LockKeysFunc tries to lock the entries with the keys in KV store.
+// lockCtx is the context for lock, lockCtx.lockWaitTime in ms
+// fn is a function which run before the lock is released.
+func (txn *KVTxn) LockKeysFunc(ctx context.Context, lockCtx *tikv.LockCtx, fn func(), keysInput ...[]byte) error {
+	return txn.lockKeys(ctx, lockCtx, fn, keysInput...)
+}
+
+func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func(), keysInput ...[]byte) error {
 	if txn.interceptor != nil {
 		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
@@ -869,6 +876,11 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			}
 		}
 	}()
+	defer func() {
+		if fn != nil {
+			fn()
+		}
+	}()
 
 	if !txn.IsPessimistic() && txn.aggressiveLockingContext != nil {
 		return errors.New("trying to perform aggressive locking in optimistic transaction")
@@ -886,16 +898,24 @@ func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput
 			checkKeyExists = flags.HasNeedCheckExists()
 		}
 		// If the key is locked in the current aggressive locking stage, override the information in memBuf.
+		isInLastAggressiveLockingStage := false
 		if txn.aggressiveLockingContext != nil {
 			if entry, ok := txn.aggressiveLockingContext.currentLockedKeys[string(key)]; ok {
 				locked = true
 				valueExist = entry.Value.Exists
+			} else if entry, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[string(key)]; ok {
+				locked = true
+				valueExist = entry.Value.Exists
+				isInLastAggressiveLockingStage = true
 			}
 		}
 
-		if !locked {
+		if !locked || isInLastAggressiveLockingStage {
+			// Locks acquired in the previous aggressive locking stage might need to be updated later in
+			// `filterAggressiveLockedKeys`.
 			keys = append(keys, key)
-		} else if txn.IsPessimistic() {
+		}
+		if locked && txn.IsPessimistic() {
 			if checkKeyExists && valueExist {
 				alreadyExist := kvrpcpb.AlreadyExist{Key: key}
 				e := &tikverr.ErrKeyExist{AlreadyExist: &alreadyExist}
