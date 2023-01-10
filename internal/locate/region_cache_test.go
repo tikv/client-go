@@ -1614,19 +1614,18 @@ func (s *testRegionCacheSuite) TestSlowScoreStat() {
 		avgScore: 1,
 	}
 	s.False(slowScore.isSlow())
-	timeout := time.Second * 5
-	slowScore.recordSlowScoreStat(time.Millisecond*1, timeout)
+	slowScore.recordSlowScoreStat(time.Millisecond * 1)
 	slowScore.updateSlowScore()
 	s.False(slowScore.isSlow())
 	for i := 2; i <= 100; i++ {
-		slowScore.recordSlowScoreStat(time.Millisecond*time.Duration(i), timeout)
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
 		if i%5 == 0 {
 			slowScore.updateSlowScore()
 			s.False(slowScore.isSlow())
 		}
 	}
 	for i := 100; i >= 2; i-- {
-		slowScore.recordSlowScoreStat(time.Millisecond*time.Duration(i), timeout)
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
 		if i%5 == 0 {
 			slowScore.updateSlowScore()
 			s.False(slowScore.isSlow())

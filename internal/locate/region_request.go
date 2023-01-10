@@ -198,7 +198,7 @@ func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *Reg
 }
 
 // RecordStoreRequestRuntimeStats records request runtime stats to each Store.
-func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, duration time.Duration, timeout time.Duration) {
+func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, duration time.Duration) {
 	regionCache.storeMu.RLock()
 	defer regionCache.storeMu.RUnlock()
 	store, exists := regionCache.storeMu.stores[storeID]
@@ -206,7 +206,7 @@ func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, du
 		return
 	}
 	// Records store slowScore
-	store.recordSlowScoreStat(duration, timeout)
+	store.recordSlowScoreStat(duration)
 }
 
 // MarkStoreAlreadySlow marks the given Store already slow.
@@ -547,15 +547,16 @@ type accessFollower struct {
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	replicaSize := len(selector.replicas)
 	if state.lastIdx < 0 {
 		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas)))
+			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
 		} else {
-			if len(selector.replicas) <= 1 {
+			if replicaSize <= 1 {
 				state.lastIdx = state.leaderIdx
 			} else {
 				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas) - 1))
+				state.lastIdx = AccessIndex(rand.Intn(replicaSize - 1))
 				if state.lastIdx >= state.leaderIdx {
 					state.lastIdx++
 				}
@@ -571,8 +572,13 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx++
 	}
 
-	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
+		idx := AccessIndex((int(state.lastIdx) + i) % replicaSize)
+		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
+		// as candidates to serve the Read request. Meanwhile, we should make sure the choice of next() meets uniform distribution.
+		for cnt := 0; cnt < replicaSize && !state.isCandidate(idx, selector.replicas[idx]); cnt++ {
+			idx = AccessIndex((int(idx) + rand.Intn(replicaSize)) % replicaSize)
+		}
 		if state.isCandidate(idx, selector.replicas[idx]) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
@@ -616,7 +622,6 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 				// And If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
 				// as candidates to serve the Read request.
 				(!state.tryLeader || (state.tryLeader && !replica.store.isSlow()))))
-
 }
 
 type invalidStore struct {
@@ -1221,7 +1226,9 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		// Record timecost of this request into the related Store.
-		RecordStoreRequestRuntimeStats(s.regionCache, rpcCtx.Store.storeID, time.Since(start), timeout)
+		if !util.IsInternalRequest(req.RequestSource) {
+			RecordStoreRequestRuntimeStats(s.regionCache, rpcCtx.Store.storeID, time.Since(start))
+		}
 		if s.Stats != nil {
 			RecordRegionRequestRuntimeStats(s.Stats, req.Type, time.Since(start))
 			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {

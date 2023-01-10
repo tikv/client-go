@@ -2628,7 +2628,7 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 }
 
 // recordSlowScoreStat records the timecost of each request.
-func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration, timeout time.Duration) bool {
+func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration) bool {
 	atomic.AddUint64(&ss.intervalUpdCount, 1)
 	avgTimecost := atomic.LoadUint64(&ss.avgTimecost)
 	if avgTimecost == 0 {
@@ -2677,8 +2677,8 @@ func (s *Store) updateSlowScoreStat() bool {
 }
 
 // recordSlowScoreStat records timecost of each request.
-func (s *Store) recordSlowScoreStat(timecost time.Duration, timeout time.Duration) bool {
-	return s.slowScore.recordSlowScoreStat(timecost, timeout)
+func (s *Store) recordSlowScoreStat(timecost time.Duration) bool {
+	return s.slowScore.recordSlowScoreStat(timecost)
 }
 
 func (s *Store) markAlreadySlow() {
