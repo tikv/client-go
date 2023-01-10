@@ -1403,6 +1403,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "flashback_in_progress"
 	} else if e.GetFlashbackNotPrepared() != nil {
 		return "flashback_not_prepared"
+	} else if e.GetIsWitness() != nil {
+		return "peer_is_witness"
 	}
 	return "unknown"
 }
@@ -1454,6 +1456,16 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		logutil.BgLogger().Debug("tikv reports `RecoveryInProgress`", zap.Stringer("ctx", ctx))
 		err = bo.Backoff(retry.BoRegionRecoveryInProgress, errors.Errorf("region recovery in progress, ctx: %v", ctx))
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	if regionErr.GetIsWitness() != nil {
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		logutil.BgLogger().Debug("tikv reports `IsWitness`", zap.Stringer("ctx", ctx))
+		err = bo.Backoff(retry.BoIsWitness, errors.Errorf("is witness, ctx: %v", ctx))
 		if err != nil {
 			return false, err
 		}

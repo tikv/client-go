@@ -68,6 +68,7 @@ func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer
 		ResourceGroupTag:       c.resourceGroupTag,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
+		ResourceGroupName:      c.resourceGroupName,
 	})
 	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
 		c.resourceGroupTagger(req)

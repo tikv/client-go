@@ -66,6 +66,7 @@ var (
 	BackoffHistogramRegionRecoveryInProgress prometheus.Observer
 	BackoffHistogramStaleCmd                 prometheus.Observer
 	BackoffHistogramDataNotReady             prometheus.Observer
+	BackoffHistogramIsWitness                prometheus.Observer
 	BackoffHistogramEmpty                    prometheus.Observer
 
 	TxnRegionsNumHistogramWithSnapshot         prometheus.Observer
@@ -166,6 +167,7 @@ func initShortcuts() {
 	BackoffHistogramRegionRecoveryInProgress = TiKVBackoffHistogram.WithLabelValues("regionRecoveryInProgress")
 	BackoffHistogramStaleCmd = TiKVBackoffHistogram.WithLabelValues("staleCommand")
 	BackoffHistogramDataNotReady = TiKVBackoffHistogram.WithLabelValues("dataNotReady")
+	BackoffHistogramIsWitness = TiKVBackoffHistogram.WithLabelValues("isWitness")
 	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")
 
 	TxnRegionsNumHistogramWithSnapshot = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot")
