@@ -179,8 +179,8 @@ func GetTxnScopeFromConfig() string {
 }
 
 // ParsePath parses this path.
-// Path example: tikv://etcd-node1:port,etcd-node2:port?cluster=1&disableGC=false
-func ParsePath(path string) (etcdAddrs []string, disableGC bool, err error) {
+// Path example: tikv://etcd-node1:port,etcd-node2:port?cluster=1&disableGC=false&keyspaceName=SomeKeyspace
+func ParsePath(path string) (etcdAddrs []string, disableGC bool, keyspaceName string, err error) {
 	var u *url.URL
 	u, err = url.Parse(path)
 	if err != nil {
@@ -192,7 +192,10 @@ func ParsePath(path string) (etcdAddrs []string, disableGC bool, err error) {
 		logutil.BgLogger().Error("parsePath error", zap.Error(err))
 		return
 	}
-	switch strings.ToLower(u.Query().Get("disableGC")) {
+
+	query := u.Query()
+	keyspaceName = query.Get("keyspaceName")
+	switch strings.ToLower(query.Get("disableGC")) {
 	case "true":
 		disableGC = true
 	case "false", "":

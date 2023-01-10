@@ -36,6 +36,7 @@ package tikv
 
 import (
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 )
 
@@ -49,6 +50,11 @@ type ClientOpt = client.Opt
 // WithSecurity is used to set security config.
 func WithSecurity(security config.Security) ClientOpt {
 	return client.WithSecurity(security)
+}
+
+// WithCodec is used to set client codec.
+func WithCodec(codec apicodec.Codec) ClientOpt {
+	return client.WithCodec(codec)
 }
 
 // Timeout durations.

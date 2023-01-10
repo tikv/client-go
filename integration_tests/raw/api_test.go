@@ -75,9 +75,11 @@ func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Cl
 }
 
 func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
-	if s.apiVersion == kvrpcpb.APIVersion_V2 {
-		return tikv.NewCodecPDClientV2(pdCli, tikv.ModeRaw)
+	var err error
+	if s.getApiVersion(pdCli) == kvrpcpb.APIVersion_V2 {
+		pdCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdCli, tikv.DefaultKeyspaceName)
 	}
+	s.Nil(err)
 	return pdCli
 }
 

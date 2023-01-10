@@ -214,7 +214,8 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 
 		if !s.reverse {
 			reqEndKey = s.endKey
-			if len(reqEndKey) > 0 && len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, reqEndKey) < 0 {
+			if len(reqEndKey) == 0 ||
+				(len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, reqEndKey) < 0) {
 				reqEndKey = loc.EndKey
 			}
 		} else {

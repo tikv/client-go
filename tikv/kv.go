@@ -202,7 +202,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	return store, nil
 }
 
-// NewPDClient creates pd.Client with pdAddrs.
+// NewPDClient returns an unwrapped pd client.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
@@ -222,8 +222,7 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdClient := &CodecPDClient{Client: util.InterceptedPDClient{Client: pdCli}}
-	return pdClient, nil
+	return pdCli, nil
 }
 
 // EnableTxnLocalLatches enables txn latch. It should be called before using
@@ -592,6 +591,7 @@ var _ = NewLockResolver
 // NewLockResolver creates a LockResolver.
 // It is exported for other pkg to use. For instance, binlog service needs
 // to determine a transaction's commit state.
+// TODO(iosmanthus): support api v2
 func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.ClientOption) (*txnlock.LockResolver, error) {
 	pdCli, err := pd.NewClient(etcdAddrs, pd.SecurityOption{
 		CAPath:   security.ClusterSSLCA,
@@ -614,7 +614,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, err
 	}
 
-	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
+	s, err := NewKVStore(uuid, locate.NewCodecPDClient(ModeTxn, pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
 		return nil, err
 	}
