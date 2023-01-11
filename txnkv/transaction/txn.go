@@ -72,13 +72,6 @@ import (
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = 24 * 60 * 60 * 1000
 
-// SchemaAmender is used by pessimistic transactions to amend commit mutations for schema change during 2pc.
-type SchemaAmender interface {
-	// AmendTxn is the amend entry, new mutations will be generated based on input mutations using schema change info.
-	// The returned results are mutations need to prewrite and mutations need to cleanup.
-	AmendTxn(ctx context.Context, startInfoSchema SchemaVer, change *RelatedSchemaChange, mutations CommitterMutations) (CommitterMutations, error)
-}
-
 type tempLockBufferEntry struct {
 	HasReturnValue    bool
 	HasCheckExistence bool
@@ -136,8 +129,6 @@ type KVTxn struct {
 
 	// schemaVer is the infoSchema fetched at startTS.
 	schemaVer SchemaVer
-	// SchemaAmender is used amend pessimistic txn commit mutations for schema change
-	schemaAmender SchemaAmender
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
@@ -160,6 +151,8 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
+	// resourceGroupName is the name of tenent resource group.
+	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
 	aggressiveLockingDirty   bool
@@ -298,6 +291,12 @@ func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
+// SetResourceGroupName set resource group name for both read and write.
+func (txn *KVTxn) SetResourceGroupName(name string) {
+	txn.resourceGroupName = name
+	txn.GetSnapshot().SetResourceGroupName(name)
+}
+
 // SetRPCInterceptor sets interceptor.RPCInterceptor for the transaction and its related snapshot.
 // interceptor.RPCInterceptor will be executed before each RPC request is initiated.
 // Note that SetRPCInterceptor will replace the previously set interceptor.
@@ -314,11 +313,6 @@ func (txn *KVTxn) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 	}
 	txn.interceptor = interceptor.ChainRPCInterceptors(txn.interceptor, it)
 	txn.GetSnapshot().AddRPCInterceptor(it)
-}
-
-// SetSchemaAmender sets an amender to update mutations after schema change.
-func (txn *KVTxn) SetSchemaAmender(sa SchemaAmender) {
-	txn.schemaAmender = sa
 }
 
 // SetCommitCallback sets up a function that will be called when the transaction

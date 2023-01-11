@@ -100,7 +100,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 				Op:  kvrpcpb.Op_PessimisticLock,
 				Key: committerMutations.GetKey(i),
 			}
-			if c.txn.us.HasPresumeKeyNotExists(committerMutations.GetKey(i)) || (c.doingAmend && committerMutations.GetOp(i) == kvrpcpb.Op_Insert) {
+			if c.txn.us.HasPresumeKeyNotExists(committerMutations.GetKey(i)) {
 				mut.Assertion = kvrpcpb.Assertion_NotExist
 			}
 			mutations[i] = mut
@@ -129,6 +129,7 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
+		ResourceGroupName:      c.resourceGroupName,
 	})
 	if action.LockCtx.ResourceGroupTag == nil && action.LockCtx.ResourceGroupTagger != nil {
 		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))

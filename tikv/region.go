@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -91,21 +92,39 @@ type RPCRuntimeStats = locate.RPCRuntimeStats
 // CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
 type CodecPDClient = locate.CodecPDClient
 
-// CodecPDClientV2 wraps a PD Client to decode the region meta in API v2 manner.
-type CodecPDClientV2 = locate.CodecPDClientV2
+// NewCodecPDClient is a constructor for CodecPDClient
+var NewCodecPDClient = locate.NewCodecPDClient
 
-// NewCodecPDClientV2 is a constructor for CodecPDClientV2
-var NewCodecPDClientV2 = locate.NewCodecPDClientV2
+// NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
+var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
+
+// NewCodecV1 is a constructor for v1 Codec.
+var NewCodecV1 = apicodec.NewCodecV1
+
+// NewCodecV2 is a constructor for v2 Codec.
+var NewCodecV2 = apicodec.NewCodecV2
+
+// Codec is responsible for encode/decode requests.
+type Codec = apicodec.Codec
+
+// DecodeKey is used to split a given key to it's APIv2 prefix and actual key.
+var DecodeKey = apicodec.DecodeKey
+
+// DefaultKeyspaceID is the keyspaceID of the default keyspace.
+var DefaultKeyspaceID = apicodec.DefaultKeyspaceID
+
+// DefaultKeyspaceName is the name of the default keyspace.
+var DefaultKeyspaceName = apicodec.DefaultKeyspaceName
 
 // Mode represents the operation mode of a request, export client.Mode
-type Mode = client.Mode
+type Mode = apicodec.Mode
 
 var (
 	// ModeRaw represent a raw operation in TiKV, export client.ModeRaw
-	ModeRaw Mode = client.ModeRaw
+	ModeRaw Mode = apicodec.ModeRaw
 
 	// ModeTxn represent a transaction operation in TiKV, export client.ModeTxn
-	ModeTxn Mode = client.ModeTxn
+	ModeTxn Mode = apicodec.ModeTxn
 )
 
 // RecordRegionRequestRuntimeStats records request runtime stats.

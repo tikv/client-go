@@ -192,7 +192,7 @@ func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats,
 func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
 	return &RegionRequestSender{
 		regionCache: regionCache,
-		apiVersion:  regionCache.apiVersion,
+		apiVersion:  regionCache.codec.GetAPIVersion(),
 		client:      client,
 	}
 }
@@ -523,15 +523,16 @@ type accessFollower struct {
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	replicaSize := len(selector.replicas)
 	if state.lastIdx < 0 {
 		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas)))
+			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
 		} else {
-			if len(selector.replicas) <= 1 {
+			if replicaSize <= 1 {
 				state.lastIdx = state.leaderIdx
 			} else {
 				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas) - 1))
+				state.lastIdx = AccessIndex(rand.Intn(replicaSize - 1))
 				if state.lastIdx >= state.leaderIdx {
 					state.lastIdx++
 				}
@@ -547,8 +548,13 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx++
 	}
 
-	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
+		idx := AccessIndex((int(state.lastIdx) + i) % replicaSize)
+		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
+		// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
+		for cnt := 0; cnt < replicaSize && !state.isCandidate(idx, selector.replicas[idx]); cnt++ {
+			idx = AccessIndex((int(idx) + rand.Intn(replicaSize)) % replicaSize)
+		}
 		if state.isCandidate(idx, selector.replicas[idx]) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
@@ -1403,6 +1409,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "flashback_in_progress"
 	} else if e.GetFlashbackNotPrepared() != nil {
 		return "flashback_not_prepared"
+	} else if e.GetIsWitness() != nil {
+		return "peer_is_witness"
 	}
 	return "unknown"
 }
@@ -1460,6 +1468,16 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		return false, nil
 	}
 
+	if regionErr.GetIsWitness() != nil {
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
+		logutil.BgLogger().Debug("tikv reports `IsWitness`", zap.Stringer("ctx", ctx))
+		err = bo.Backoff(retry.BoIsWitness, errors.Errorf("is witness, ctx: %v", ctx))
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
 	// Since we expect that the workload should be stopped during the flashback progress,
 	// if a request meets the FlashbackInProgress error, it should stop retrying immediately
 	// to avoid unnecessary backoff and potential unexpected data status to the user.
@@ -1482,7 +1500,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	if regionErr.GetKeyNotInRegion() != nil {
-		logutil.BgLogger().Debug("tikv reports `KeyNotInRegion`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
+		logutil.BgLogger().Error("tikv reports `KeyNotInRegion`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return false, nil
 	}

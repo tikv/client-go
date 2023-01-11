@@ -47,6 +47,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
@@ -79,7 +80,7 @@ func (s *testRegionCacheSuite) SetupTest() {
 	s.store2 = storeIDs[1]
 	s.peer1 = peerIDs[0]
 	s.peer2 = peerIDs[1]
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
@@ -956,7 +957,7 @@ func (s *testRegionCacheSuite) TestReconnect() {
 
 func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	// Create a separated region cache to do this test.
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	cache := NewRegionCache(pdCli)
 	defer cache.Close()
 
@@ -1252,6 +1253,42 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 		DownPeers: []*metapb.Peer{{Id: s.peer1, StoreId: s.store1}},
 	}
 	filterUnavailablePeers(cpRegion)
+	region, err := newRegion(s.bo, s.cache, cpRegion)
+	s.Nil(err)
+	s.cache.insertRegionToCache(region)
+
+	// OnSendFail should not panic
+	s.cache.OnSendFail(retry.NewNoopBackoff(context.Background()), ctx, false, errors.New("send fail"))
+}
+
+func (s *testRegionCacheSuite) TestPeersLenChangedByWitness() {
+	// 2 peers [peer1, peer2] and let peer2 become leader
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, 0)
+
+	// current leader is peer2 in [peer1, peer2]
+	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
+	s.Nil(err)
+	s.Equal(ctx.Peer.StoreId, s.store2)
+
+	// simulate peer1 become witness in kv heartbeat and loaded before response back.
+	cpMeta := &metapb.Region{
+		Id:          ctx.Meta.Id,
+		StartKey:    ctx.Meta.StartKey,
+		EndKey:      ctx.Meta.EndKey,
+		RegionEpoch: ctx.Meta.RegionEpoch,
+		Peers:       make([]*metapb.Peer, len(ctx.Meta.Peers)),
+	}
+	copy(cpMeta.Peers, ctx.Meta.Peers)
+	for _, peer := range cpMeta.Peers {
+		if peer.Id == s.peer1 {
+			peer.IsWitness = true
+		}
+	}
+	cpRegion := &pd.Region{Meta: cpMeta}
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
 	s.cache.insertRegionToCache(region)
