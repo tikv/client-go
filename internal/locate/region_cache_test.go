@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1607,4 +1608,40 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
 	s.Error(err)
 	s.False(shouldRetry)
+}
+
+func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
+	// Prepare 50 regions
+	regionCnt := 50
+	regions := s.cluster.AllocIDs(regionCnt)
+	regions = append([]uint64{s.region1}, regions...)
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < regionCnt; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+	for i := 0; i < regionCnt; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte(fmt.Sprintf(regionSplitKeyFormat, i)), peers[i+1], peers[i+1][0])
+	}
+	loadRegionsToCache(s.cache, regionCnt)
+	s.checkCache(regionCnt)
+
+	// Make parts of the regions stale
+	remaining := 0
+	s.cache.mu.Lock()
+	now := time.Now().Unix()
+	for verID, r := range s.cache.mu.regions {
+		if verID.id%3 == 0 {
+			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+		} else {
+			remaining++
+		}
+	}
+	s.cache.mu.Unlock()
+
+	s.Eventually(func() bool {
+		s.cache.mu.RLock()
+		defer s.cache.mu.RUnlock()
+		return len(s.cache.mu.regions) == remaining
+	}, 2*time.Second, 200*time.Millisecond)
+	s.checkCache(remaining)
 }
