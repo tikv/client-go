@@ -1912,8 +1912,8 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 	}
 }
 
-const cleanCacheInterval = 100 * time.Millisecond
-const cleanRegionNumPerRound = 10
+const cleanCacheInterval = time.Second
+const cleanRegionNumPerRound = 50
 
 // This function is expected to run in a background goroutine.
 // It keeps iterating over the whole region cache, searching for stale region
