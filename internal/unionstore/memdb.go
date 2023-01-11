@@ -36,6 +36,7 @@ package unionstore
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"reflect"
 	"sync"
@@ -142,7 +143,7 @@ func (db *MemDB) Cleanup(h int) {
 	if h < len(db.stages) {
 		// This should never happens in production environment.
 		// Use panic to make debug easier.
-		panic("cannot cleanup staging buffer")
+		panic(fmt.Sprintf("cannot cleanup staging buffer, h=%v, len(db.stages)=%v", h, len(db.stages)))
 	}
 
 	cp := &db.stages[h-1]
@@ -154,6 +155,7 @@ func (db *MemDB) Cleanup(h int) {
 		}
 	}
 	db.stages = db.stages[:h-1]
+	db.vlog.onMemChange()
 }
 
 // Checkpoint returns a checkpoint of MemDB.
@@ -166,6 +168,7 @@ func (db *MemDB) Checkpoint() *MemDBCheckpoint {
 func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
 	db.vlog.revertToCheckpoint(db, cp)
 	db.vlog.truncate(cp)
+	db.vlog.onMemChange()
 }
 
 // Reset resets the MemBuffer to initial states.
@@ -871,8 +874,8 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
 		hook(db.allocator.capacity + db.vlog.capacity)
 	}
-	db.allocator.memChangeHook = innerHook
-	db.vlog.memChangeHook = innerHook
+	db.allocator.memChangeHook.Store(&innerHook)
+	db.vlog.memChangeHook.Store(&innerHook)
 }
 
 // Mem returns the current memory footprint

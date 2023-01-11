@@ -41,6 +41,7 @@ import (
 
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -94,7 +95,7 @@ type memdbArena struct {
 	// the total size of all blocks, also the approximate memory footprint of the arena.
 	capacity uint64
 	// when it enlarges or shrinks, call this function with the current memory footprint (in bytes)
-	memChangeHook func()
+	memChangeHook atomic.Pointer[func()]
 }
 
 func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
@@ -128,12 +129,16 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 		buf: make([]byte, a.blockSize),
 	})
 	a.capacity += uint64(a.blockSize)
-	a.onMemChange()
+	// We shall not call a.onMemChange() here, since it will make the latest block empty, which breaks a precondition
+	// for some operations (e.g. revertToCheckpoint)
 }
 
+// onMemChange should only be called right before exiting memdb.
+// This is because the hook can lead to a panic, and leave memdb in an inconsistent state.
 func (a *memdbArena) onMemChange() {
-	if a.memChangeHook != nil {
-		a.memChangeHook()
+	hook := a.memChangeHook.Load()
+	if hook != nil {
+		(*hook)()
 	}
 }
 
@@ -217,7 +222,7 @@ func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 	for _, block := range a.blocks {
 		a.capacity += uint64(block.length)
 	}
-	a.onMemChange()
+	// We shall not call a.onMemChange() here, since it may cause a panic and leave memdb in an inconsistent state
 }
 
 type nodeAllocator struct {
@@ -248,11 +253,15 @@ func (a *nodeAllocator) getNode(addr memdbArenaAddr) *memdbNode {
 
 func (a *nodeAllocator) allocNode(key []byte) (memdbArenaAddr, *memdbNode) {
 	nodeSize := 8*4 + 2 + kv.FlagBytes + len(key)
+	prevBlocks := len(a.blocks)
 	addr, mem := a.alloc(nodeSize, true)
 	n := (*memdbNode)(unsafe.Pointer(&mem[0]))
 	n.vptr = nullAddr
 	n.klen = uint16(len(key))
 	copy(n.getKey(), key)
+	if prevBlocks != len(a.blocks) {
+		a.onMemChange()
+	}
 	return addr, n
 }
 
@@ -311,6 +320,7 @@ func (hdr *memdbVlogHdr) load(src []byte) {
 
 func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr, value []byte) memdbArenaAddr {
 	size := memdbVlogHdrSize + len(value)
+	prevBlocks := len(l.blocks)
 	addr, mem := l.alloc(size, false)
 
 	copy(mem, value)
@@ -318,6 +328,9 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	hdr.store(mem[len(value):])
 
 	addr.off += uint32(size)
+	if prevBlocks != len(l.blocks) {
+		l.onMemChange()
+	}
 	return addr
 }
 

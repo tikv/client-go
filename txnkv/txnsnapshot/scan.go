@@ -214,7 +214,8 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 
 		if !s.reverse {
 			reqEndKey = s.endKey
-			if len(reqEndKey) > 0 && len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, reqEndKey) < 0 {
+			if len(reqEndKey) == 0 ||
+				(len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, reqEndKey) < 0) {
 				reqEndKey = loc.EndKey
 			}
 		} else {
@@ -226,11 +227,12 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		}
 		sreq := &kvrpcpb.ScanRequest{
 			Context: &kvrpcpb.Context{
-				Priority:         s.snapshot.priority.ToPB(),
-				NotFillCache:     s.snapshot.notFillCache,
-				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
-				ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
-				RequestSource:    s.snapshot.GetRequestSource(),
+				Priority:          s.snapshot.priority.ToPB(),
+				NotFillCache:      s.snapshot.notFillCache,
+				IsolationLevel:    s.snapshot.isolationLevel.ToPB(),
+				ResourceGroupTag:  s.snapshot.mu.resourceGroupTag,
+				RequestSource:     s.snapshot.GetRequestSource(),
+				ResourceGroupName: s.snapshot.mu.resourceGroupName,
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
@@ -246,12 +248,13 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		}
 		s.snapshot.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdScan, sreq, s.snapshot.mu.replicaRead, &s.snapshot.replicaReadSeed, kvrpcpb.Context{
-			Priority:         s.snapshot.priority.ToPB(),
-			NotFillCache:     s.snapshot.notFillCache,
-			TaskId:           s.snapshot.mu.taskID,
-			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
-			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
-			RequestSource:    s.snapshot.GetRequestSource(),
+			Priority:          s.snapshot.priority.ToPB(),
+			NotFillCache:      s.snapshot.notFillCache,
+			TaskId:            s.snapshot.mu.taskID,
+			ResourceGroupTag:  s.snapshot.mu.resourceGroupTag,
+			IsolationLevel:    s.snapshot.isolationLevel.ToPB(),
+			RequestSource:     s.snapshot.GetRequestSource(),
+			ResourceGroupName: s.snapshot.mu.resourceGroupName,
 		})
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)

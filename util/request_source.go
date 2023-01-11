@@ -86,3 +86,24 @@ func RequestSourceFromCtx(ctx context.Context) string {
 func IsInternalRequest(source string) bool {
 	return strings.HasPrefix(source, InternalRequest)
 }
+
+// ResourceGroupNameKeyType is the context key type of resource group name.
+type resourceGroupNameKeyType struct{}
+
+// ResourceGroupNameKey is used as the key of request source type in context.
+var resourceGroupNameKey = resourceGroupNameKeyType{}
+
+// WithResouceGroupName return a copy of the given context with a associated
+// reosurce group name.
+func WithResouceGroupName(ctx context.Context, groupName string) context.Context {
+	return context.WithValue(ctx, resourceGroupNameKey, groupName)
+}
+
+// ResourceGroupNameFromCtx extract resource group name from passed context,
+// empty string is returned is the key is not set.
+func ResourceGroupNameFromCtx(ctx context.Context) string {
+	if val := ctx.Value(resourceGroupNameKey); val != nil {
+		return val.(string)
+	}
+	return ""
+}

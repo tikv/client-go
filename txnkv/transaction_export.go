@@ -31,9 +31,6 @@ type SchemaLeaseChecker = transaction.SchemaLeaseChecker
 // SchemaVer is the infoSchema which will return the schema version.
 type SchemaVer = transaction.SchemaVer
 
-// SchemaAmender is used by pessimistic transactions to amend commit mutations for schema change during 2pc.
-type SchemaAmender = transaction.SchemaAmender
-
 // MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = transaction.MaxTxnTimeUse

@@ -532,11 +532,14 @@ type lockCtx struct {
 	ttl         uint64
 	minCommitTs uint64
 
-	returnValues     bool
-	checkExistence   bool
-	values           [][]byte
-	keyNotFound      []bool
+	returnValues   bool
+	checkExistence bool
+	results        []*kvrpcpb.PessimisticLockKeyResult
+
 	LockOnlyIfExists bool
+
+	// Lock waiting is not supported in mocktikv. This only controls whether locking with conflict is allowed.
+	WakeUpMode kvrpcpb.PessimisticLockWakeUpMode
 }
 
 // PessimisticLock writes the pessimistic lock.
@@ -554,6 +557,7 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 		returnValues:     req.ReturnValues,
 		checkExistence:   req.CheckExistence,
 		LockOnlyIfExists: req.LockOnlyIfExists,
+		WakeUpMode:       req.WakeUpMode,
 	}
 	lockWaitTime := req.WaitTimeout
 
@@ -565,11 +569,24 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 		errs = append(errs, err)
 		if err != nil {
 			anyError = true
+			if lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
+				lCtx.results = append(lCtx.results, &kvrpcpb.PessimisticLockKeyResult{
+					Type: kvrpcpb.PessimisticLockKeyResultType_LockResultFailed,
+				})
+			}
 		}
 		if lockWaitTime == LockNoWait {
 			if _, ok := err.(*ErrLocked); ok {
 				break
 			}
+		}
+	}
+	if lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
+		resp.Results = lCtx.results
+	}
+	if !anyError || lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
+		if len(lCtx.results) != len(mutations) {
+			panic("pessimistic lock result count not match")
 		}
 	}
 	if anyError {
@@ -584,11 +601,34 @@ func (mvcc *MVCCLevelDB) PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *k
 		resp.Errors = convertToKeyErrors([]error{err})
 		return resp
 	}
-	if req.ReturnValues {
-		resp.Values = lCtx.values
-		resp.NotFounds = lCtx.keyNotFound
-	} else if req.CheckExistence {
-		resp.NotFounds = lCtx.keyNotFound
+	if lCtx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
+		if req.ReturnValues {
+			resp.Values = make([][]byte, 0, len(lCtx.results))
+			resp.NotFounds = make([]bool, 0, len(lCtx.results))
+			for _, res := range lCtx.results {
+				if res.Type == kvrpcpb.PessimisticLockKeyResultType_LockResultNormal {
+					resp.Values = append(resp.Values, res.Value)
+					resp.NotFounds = append(resp.NotFounds, !res.Existence)
+				} else {
+					panic("unreachable")
+				}
+			}
+		} else if req.CheckExistence {
+			resp.NotFounds = make([]bool, 0, len(lCtx.results))
+			for _, res := range lCtx.results {
+				if res.Type == kvrpcpb.PessimisticLockKeyResultType_LockResultNormal {
+					resp.NotFounds = append(resp.NotFounds, !res.Existence)
+				} else {
+					panic("unreachable")
+				}
+			}
+		} else {
+			for _, res := range lCtx.results {
+				if res.Type != kvrpcpb.PessimisticLockKeyResultType_LockResultNormal {
+					panic("unreachable")
+				}
+			}
+		}
 	}
 	return resp
 }
@@ -610,12 +650,13 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 	dec := lockDecoder{
 		expectKey: mutation.Key,
 	}
-	ok, err := dec.Decode(iter)
+	alreadyLocked, err := dec.Decode(iter)
 	if err != nil {
 		return err
 	}
-	if ok {
+	if alreadyLocked {
 		if dec.lock.startTS != startTS {
+			// Locked by another transaction.
 			errDeadlock := mvcc.deadlockDetector.Detect(startTS, dec.lock.startTS, farm.Fingerprint64(mutation.Key))
 			if errDeadlock != nil {
 				return &ErrDeadlock{
@@ -626,41 +667,67 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 			}
 			return dec.lock.lockErr(mutation.Key)
 		}
-		return nil
 	}
 
-	// For pessimisticLockMutation, check the correspond rollback record, there may be rollbackLock
+	// For pessimisticLockMutation, check the corresponding rollback record, there may be rollbackLock
 	// operation between startTS and forUpdateTS
-	val, err := checkConflictValue(iter, mutation, forUpdateTS, startTS, true, kvrpcpb.AssertionLevel_Off)
+	// It's also possible that the key is already locked by the same transaction. Also do the conflict check to
+	// provide an idempotent result.
+	val, err := checkConflictValue(iter, mutation, forUpdateTS, startTS, true, kvrpcpb.AssertionLevel_Off, lctx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock)
 	if err != nil {
-		return err
-	}
-	if lctx.returnValues {
-		lctx.values = append(lctx.values, val)
-		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
-	} else if lctx.checkExistence {
-		lctx.keyNotFound = append(lctx.keyNotFound, len(val) == 0)
+		if conflict, ok := err.(*ErrConflict); lctx.WakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock && ok && conflict.CanForceLock {
+			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
+				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockResultLockedWithConflict,
+				Value:                val,
+				Existence:            len(val) != 0,
+				LockedWithConflictTs: conflict.ConflictCommitTS,
+			})
+		} else {
+			return err
+		}
+	} else {
+		if lctx.returnValues {
+			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
+				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockResultNormal,
+				Value:                val,
+				Existence:            len(val) != 0,
+				LockedWithConflictTs: 0,
+			})
+		} else if lctx.checkExistence {
+			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
+				Type:                 kvrpcpb.PessimisticLockKeyResultType_LockResultNormal,
+				Value:                nil,
+				Existence:            len(val) != 0,
+				LockedWithConflictTs: 0,
+			})
+		} else {
+			lctx.results = append(lctx.results, &kvrpcpb.PessimisticLockKeyResult{
+				Type: kvrpcpb.PessimisticLockKeyResultType_LockResultNormal,
+			})
+		}
 	}
 
 	if lctx.LockOnlyIfExists && len(val) == 0 {
 		return nil
 	}
 
-	lock := mvccLock{
-		startTS:     startTS,
-		primary:     lctx.primary,
-		op:          kvrpcpb.Op_PessimisticLock,
-		ttl:         lctx.ttl,
-		forUpdateTS: forUpdateTS,
-		minCommitTS: lctx.minCommitTs,
-	}
-	writeKey := mvccEncode(mutation.Key, lockVer)
-	writeValue, err := lock.MarshalBinary()
-	if err != nil {
-		return err
+	if !alreadyLocked || dec.lock.forUpdateTS < forUpdateTS {
+		lock := mvccLock{
+			startTS:     startTS,
+			primary:     lctx.primary,
+			op:          kvrpcpb.Op_PessimisticLock,
+			ttl:         lctx.ttl,
+			forUpdateTS: forUpdateTS,
+			minCommitTS: lctx.minCommitTs,
+		}
+		writeKey := mvccEncode(mutation.Key, lockVer)
+		writeValue, err := lock.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		batch.Put(writeKey, writeValue)
 	}
 
-	batch.Put(writeKey, writeValue)
 	return nil
 }
 
@@ -771,7 +838,7 @@ func (mvcc *MVCCLevelDB) Prewrite(req *kvrpcpb.PrewriteRequest) []error {
 	return errs
 }
 
-func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64, startTS uint64, getVal bool, assertionLevel kvrpcpb.AssertionLevel) ([]byte, error) {
+func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64, startTS uint64, getVal bool, assertionLevel kvrpcpb.AssertionLevel, allowLockWithConflict bool) ([]byte, error) {
 	dec := &valueDecoder{
 		expectKey: m.Key,
 	}
@@ -794,13 +861,18 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 	}
 
 	// Note that it's a write conflict here, even if the value is a rollback one, or a op_lock record
+	var writeConflictErr error = nil
 	if dec.value.commitTS > forUpdateTS {
-		return nil, &ErrConflict{
+		writeConflictErr = &ErrConflict{
 			StartTS:          forUpdateTS,
 			ConflictTS:       dec.value.startTS,
 			ConflictCommitTS: dec.value.commitTS,
 			Key:              m.Key,
 		}
+		if !allowLockWithConflict {
+			return nil, writeConflictErr
+		}
+		assertionLevel = kvrpcpb.AssertionLevel_Off
 	}
 
 	needGetVal := getVal
@@ -831,12 +903,11 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 
 		if dec.value.valueType == typePut || dec.value.valueType == typeLock {
 			if needCheckShouldNotExistForPessimisticLock {
-				return nil, &ErrAssertionFailed{
-					StartTS:          startTS,
-					Key:              m.Key,
-					Assertion:        m.Assertion,
-					ExistingStartTS:  dec.value.startTS,
-					ExistingCommitTS: dec.value.commitTS,
+				if writeConflictErr != nil {
+					return nil, writeConflictErr
+				}
+				return nil, &ErrKeyAlreadyExist{
+					Key: m.Key,
 				}
 			}
 			if needCheckAssertionForPrewerite && m.Assertion == kvrpcpb.Assertion_NotExist {
@@ -877,10 +948,15 @@ func checkConflictValue(iter *Iterator, m *kvrpcpb.Mutation, forUpdateTS uint64,
 			}
 		}
 	}
-	if getVal {
-		return retVal, nil
+
+	// writeConflictErr is not nil only when write conflict is found and `allowLockWithConflict is set to true.
+	if writeConflictErr != nil {
+		writeConflictErr.(*ErrConflict).CanForceLock = true
 	}
-	return nil, nil
+	if getVal {
+		return retVal, writeConflictErr
+	}
+	return nil, writeConflictErr
 }
 
 func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
@@ -923,7 +999,7 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 			// The minCommitTS has been pushed forward.
 			minCommitTS = dec.lock.minCommitTS
 		}
-		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel)
+		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel, false)
 		if err != nil {
 			return err
 		}
@@ -931,7 +1007,7 @@ func prewriteMutation(db *leveldb.DB, batch *leveldb.Batch,
 		if pessimisticAction == kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK {
 			return ErrAbort("pessimistic lock not found")
 		}
-		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel)
+		_, err = checkConflictValue(iter, mutation, startTS, startTS, false, assertionLevel, false)
 		if err != nil {
 			return err
 		}

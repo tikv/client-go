@@ -75,9 +75,11 @@ func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Cl
 }
 
 func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
-	if s.apiVersion == kvrpcpb.APIVersion_V2 {
-		return tikv.NewCodecPDClientV2(pdCli, tikv.ModeRaw)
+	var err error
+	if s.getApiVersion(pdCli) == kvrpcpb.APIVersion_V2 {
+		pdCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdCli, tikv.DefaultKeyspaceName)
 	}
+	s.Nil(err)
 	return pdCli
 }
 
@@ -462,15 +464,15 @@ func (s *apiTestSuite) TestEmptyValue() {
 		s.Empty(v)
 		// batch_get
 		vs := s.mustBatchGetBytes(prefix, []string{"key", "key1"})
-		s.Equal([][]byte{[]byte{}, nil}, vs)
+		s.Equal([][]byte{{}, nil}, vs)
 		// scan
 		keys, values := s.mustScanBytes(prefix, "key", "keyz", 10)
 		s.Equal([][]byte{[]byte("key")}, keys)
-		s.Equal([][]byte{[]byte{}}, values)
+		s.Equal([][]byte{{}}, values)
 		// reverse scan
 		keys, values = s.mustReverseScanBytes(prefix, "keyz", "key", 10)
 		s.Equal([][]byte{[]byte("key")}, keys)
-		s.Equal([][]byte{[]byte{}}, values)
+		s.Equal([][]byte{{}}, values)
 	}
 
 	verifyNotExist := func() {

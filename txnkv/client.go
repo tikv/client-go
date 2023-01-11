@@ -18,11 +18,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/util"
 )
 
 // Client is a txn client.
@@ -30,13 +33,60 @@ type Client struct {
 	*tikv.KVStore
 }
 
+type option struct {
+	apiVersion   kvrpcpb.APIVersion
+	keyspaceName string
+}
+
+// ClientOpt is factory to set the client options.
+type ClientOpt func(*option)
+
+// WithKeyspace is used to set client's keyspace.
+func WithKeyspace(keyspaceName string) ClientOpt {
+	return func(opt *option) {
+		opt.keyspaceName = keyspaceName
+	}
+}
+
+// WithAPIVersion is used to set client's apiVersion.
+func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
+	return func(opt *option) {
+		opt.apiVersion = apiVersion
+	}
+}
+
 // NewClient creates a txn client with pdAddrs.
-func NewClient(pdAddrs []string) (*Client, error) {
-	cfg := config.GetGlobalConfig()
+func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
+	// Apply options.
+	opt := &option{}
+	for _, o := range opts {
+		o(opt)
+	}
+	// Use an unwrapped PDClient to obtain keyspace meta.
 	pdClient, err := tikv.NewPDClient(pdAddrs)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
+
+	pdClient = util.InterceptedPDClient{Client: pdClient}
+
+	// Construct codec from options.
+	var codecCli *tikv.CodecPDClient
+	switch opt.apiVersion {
+	case kvrpcpb.APIVersion_V1:
+		codecCli = tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
+	case kvrpcpb.APIVersion_V2:
+		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeTxn, pdClient, opt.keyspaceName)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
+	}
+
+	pdClient = codecCli
+
+	cfg := config.GetGlobalConfig()
 	// init uuid
 	uuid := fmt.Sprintf("tikv-%v", pdClient.GetClusterID(context.TODO()))
 	tlsConfig, err := cfg.Security.ToTLSConfig()
@@ -49,7 +99,9 @@ func NewClient(pdAddrs []string) (*Client, error) {
 		return nil, err
 	}
 
-	s, err := tikv.NewKVStore(uuid, pdClient, spkv, tikv.NewRPCClient(tikv.WithSecurity(cfg.Security)))
+	rpcClient := tikv.NewRPCClient(tikv.WithSecurity(cfg.Security), tikv.WithCodec(codecCli.GetCodec()))
+
+	s, err := tikv.NewKVStore(uuid, pdClient, spkv, rpcClient)
 	if err != nil {
 		return nil, err
 	}

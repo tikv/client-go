@@ -32,9 +32,10 @@ import (
 
 // ReturnedValue pairs the Value and AlreadyLocked flag for PessimisticLock return values result.
 type ReturnedValue struct {
-	Value         []byte
-	Exists        bool
-	AlreadyLocked bool
+	Value                []byte
+	Exists               bool
+	LockedWithConflictTS uint64
+	AlreadyLocked        bool
 }
 
 // Used for pessimistic lock wait time
@@ -56,21 +57,22 @@ func defaultLockWaitTime() *lockWaitTimeInMs {
 
 // LockCtx contains information for LockKeys method.
 type LockCtx struct {
-	Killed                *uint32
-	ForUpdateTS           uint64
-	lockWaitTime          *lockWaitTimeInMs
-	WaitStartTime         time.Time
-	PessimisticLockWaited *int32
-	LockKeysDuration      *int64
-	LockKeysCount         *int32
-	ReturnValues          bool
-	CheckExistence        bool
-	LockOnlyIfExists      bool
-	Values                map[string]ReturnedValue
-	ValuesLock            sync.Mutex
-	LockExpired           *uint32
-	Stats                 *util.LockKeysDetails
-	ResourceGroupTag      []byte
+	Killed                  *uint32
+	ForUpdateTS             uint64
+	lockWaitTime            *lockWaitTimeInMs
+	WaitStartTime           time.Time
+	PessimisticLockWaited   *int32
+	LockKeysDuration        *int64
+	LockKeysCount           *int32
+	ReturnValues            bool
+	CheckExistence          bool
+	LockOnlyIfExists        bool
+	Values                  map[string]ReturnedValue
+	MaxLockedWithConflictTS uint64
+	ValuesLock              sync.Mutex
+	LockExpired             *uint32
+	Stats                   *util.LockKeysDetails
+	ResourceGroupTag        []byte
 	// ResourceGroupTagger is a special tagger used only for PessimisticLockRequest.
 	// We did not use tikvrpc.ResourceGroupTagger here because the kv package is a
 	// more basic component, and we cannot rely on tikvrpc.Request here, so we treat
