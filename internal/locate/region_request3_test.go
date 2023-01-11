@@ -320,7 +320,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
+	cache.mu.Lock()
 	cache.insertRegionToCache(region)
+	cache.mu.Unlock()
 
 	// Test accessFollower state with kv.ReplicaReadLearner request type.
 	region.lastAccess = time.Now().Unix()
@@ -369,7 +371,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
+	cache.mu.Lock()
 	cache.insertRegionToCache(region)
+	cache.mu.Unlock()
 
 	// Verify creating the replicaSelector.
 	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, req)
@@ -590,7 +594,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Nil(err)
 
 	// Test accessFollower state filtering epoch-stale stores.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	// Mark all followers as stale.
 	tiKVNum := regionStore.accessStoreNum(tiKVOnly)
