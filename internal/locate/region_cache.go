@@ -2231,7 +2231,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 			continue
 		}
 		// The store is a tombstone.
-		if store == nil {
+		if store == nil || (store != nil && store.GetState() == metapb.StoreState_Tombstone) {
 			s.setResolveState(tombstone)
 			return "", nil
 		}
@@ -2274,7 +2274,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 		// we cannot do backoff in reResolve loop but try check other store and wait tick.
 		return false, err
 	}
-	if store == nil {
+	if store == nil || (store != nil && store.GetState() == metapb.StoreState_Tombstone) {
 		// store has be removed in PD, we should invalidate all regions using those store.
 		logutil.BgLogger().Info("invalidate regions in removed store",
 			zap.Uint64("store", s.storeID), zap.String("add", s.addr))
@@ -2429,6 +2429,7 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
 
 	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	lastCheckPDTime := time.Now()
 
 	for {
