@@ -264,8 +264,9 @@ type replicaSelector struct {
 // selectorState is the interface of states of the replicaSelector.
 // Here is the main state transition diagram:
 //
-//                                    exceeding maxReplicaAttempt
-//           +-------------------+   || RPC failure && unreachable && no forwarding
+//	                         exceeding maxReplicaAttempt
+//	+-------------------+   || RPC failure && unreachable && no forwarding
+//
 // +-------->+ accessKnownLeader +----------------+
 // |         +------+------------+                |
 // |                |                             |
@@ -282,7 +283,8 @@ type replicaSelector struct {
 // | leader becomes   v                           +---+---+
 // | reachable  +-----+-----+ all proxies are tried   ^
 // +------------+tryNewProxy+-------------------------+
-//              +-----------+
+//
+//	+-----------+
 type selectorState interface {
 	next(*retry.Backoffer, *replicaSelector) (*RPCContext, error)
 	onSendSuccess(*replicaSelector)
@@ -520,18 +522,20 @@ type accessFollower struct {
 	option            storeSelectorOp
 	leaderIdx         AccessIndex
 	lastIdx           AccessIndex
+	learnerOnly       bool
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	replicaSize := len(selector.replicas)
 	if state.lastIdx < 0 {
 		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas)))
+			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
 		} else {
-			if len(selector.replicas) <= 1 {
+			if replicaSize <= 1 {
 				state.lastIdx = state.leaderIdx
 			} else {
 				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas) - 1))
+				state.lastIdx = AccessIndex(rand.Intn(replicaSize - 1))
 				if state.lastIdx >= state.leaderIdx {
 					state.lastIdx++
 				}
@@ -547,8 +551,13 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx++
 	}
 
-	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
+		idx := AccessIndex((int(state.lastIdx) + i) % replicaSize)
+		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
+		// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
+		for cnt := 0; cnt < replicaSize && !state.isCandidate(idx, selector.replicas[idx]); cnt++ {
+			idx = AccessIndex((int(idx) + rand.Intn(replicaSize)) % replicaSize)
+		}
 		if state.isCandidate(idx, selector.replicas[idx]) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
@@ -583,7 +592,7 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels)))
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)))
 }
 
 type invalidStore struct {
@@ -641,6 +650,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 			option:            option,
 			leaderIdx:         regionStore.workTiKVIdx,
 			lastIdx:           -1,
+			learnerOnly:       req.ReplicaReadType == kv.ReplicaReadLearner,
 		}
 	}
 
