@@ -317,6 +317,11 @@ func (r *Region) compareAndSwapStore(oldStore, newStore *regionStore) bool {
 	return atomic.CompareAndSwapPointer(&r.store, unsafe.Pointer(oldStore), unsafe.Pointer(newStore))
 }
 
+func (r *Region) isCacheTTLExpired(ts int64) bool {
+	lastAccess := atomic.LoadInt64(&r.lastAccess)
+	return ts-lastAccess > regionCacheTTLSec
+}
+
 func (r *Region) checkRegionCacheTTL(ts int64) bool {
 	// Only consider use percentage on this failpoint, for example, "2%return"
 	if _, err := util.EvalFailpoint("invalidateRegionCache"); err == nil {
@@ -424,6 +429,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
+	go c.cacheGC()
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
@@ -1909,6 +1915,56 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 	}
 }
 
+const cleanCacheInterval = time.Second
+const cleanRegionNumPerRound = 50
+
+// This function is expected to run in a background goroutine.
+// It keeps iterating over the whole region cache, searching for stale region
+// info. It runs at cleanCacheInterval and checks only cleanRegionNumPerRound
+// regions. In this way, the impact of this background goroutine should be
+// negligible.
+func (c *RegionCache) cacheGC() {
+	ticker := time.NewTicker(cleanCacheInterval)
+	defer ticker.Stop()
+
+	iterItem := newBtreeSearchItem([]byte(""))
+	expired := make([]*btreeItem, cleanRegionNumPerRound)
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			count := 0
+			expired = expired[:0]
+
+			// Only RLock when checking TTL to avoid blocking other readers
+			c.mu.RLock()
+			ts := time.Now().Unix()
+			c.mu.sorted.b.AscendGreaterOrEqual(iterItem, func(item *btreeItem) bool {
+				if count > cleanRegionNumPerRound {
+					iterItem = item
+					return false
+				}
+				count++
+				if item.cachedRegion.isCacheTTLExpired(ts) {
+					expired = append(expired, item)
+				}
+				return true
+			})
+			c.mu.RUnlock()
+
+			if len(expired) > 0 {
+				c.mu.Lock()
+				for _, item := range expired {
+					c.mu.sorted.b.Delete(item)
+					c.removeVersionFromCache(item.cachedRegion.VerID(), item.cachedRegion.GetID())
+				}
+				c.mu.Unlock()
+			}
+		}
+	}
+}
+
 // btreeItem is BTree's Item that uses []byte to compare.
 type btreeItem struct {
 	key          []byte
@@ -2237,7 +2293,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 			continue
 		}
 		// The store is a tombstone.
-		if store == nil {
+		if store == nil || (store != nil && store.GetState() == metapb.StoreState_Tombstone) {
 			s.setResolveState(tombstone)
 			return "", nil
 		}
@@ -2280,7 +2336,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 		// we cannot do backoff in reResolve loop but try check other store and wait tick.
 		return false, err
 	}
-	if store == nil {
+	if store == nil || (store != nil && store.GetState() == metapb.StoreState_Tombstone) {
 		// store has be removed in PD, we should invalidate all regions using those store.
 		logutil.BgLogger().Info("invalidate regions in removed store",
 			zap.Uint64("store", s.storeID), zap.String("add", s.addr))
@@ -2438,6 +2494,7 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
 
 	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	lastCheckPDTime := time.Now()
 
 	for {
