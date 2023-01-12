@@ -197,30 +197,6 @@ func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *Reg
 	}
 }
 
-// RecordStoreRequestRuntimeStats records request runtime stats to each Store.
-func RecordStoreRequestRuntimeStats(regionCache *RegionCache, storeID uint64, duration time.Duration) {
-	regionCache.storeMu.RLock()
-	defer regionCache.storeMu.RUnlock()
-	store, exists := regionCache.storeMu.stores[storeID]
-	if !exists {
-		return
-	}
-	// Records store slowScore
-	store.recordSlowScoreStat(duration)
-}
-
-// MarkStoreAlreadySlow marks the given Store already slow.
-func MarkStoreAlreadySlow(regionCache *RegionCache, storeID uint64) {
-	regionCache.storeMu.RLock()
-	defer regionCache.storeMu.RUnlock()
-	store, exists := regionCache.storeMu.stores[storeID]
-	if !exists {
-		return
-	}
-	store.markAlreadySlow()
-	logutil.BgLogger().Warn("store is too busy to serve", zap.Uint64("storeID", storeID))
-}
-
 // GetRegionCache returns the region cache.
 func (s *RegionRequestSender) GetRegionCache() *RegionCache {
 	return s.regionCache
@@ -915,9 +891,6 @@ func (s *RegionRequestSender) getRPCContext(
 			}
 			s.replicaSelector = selector
 		}
-		if req.Type.IsReadCmd() {
-			req.Context.ReplicaRead = true
-		}
 		return s.replicaSelector.next(bo)
 	case tikvrpc.TiFlash:
 		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true)
@@ -1239,7 +1212,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		// Record timecost of this request into the related Store.
 		if !util.IsInternalRequest(req.RequestSource) {
-			RecordStoreRequestRuntimeStats(s.regionCache, rpcCtx.Store.storeID, time.Since(start))
+			rpcCtx.Store.recordSlowScoreStat(time.Since(start))
 		}
 		if s.Stats != nil {
 			RecordRegionRequestRuntimeStats(s.Stats, req.Type, time.Since(start))
@@ -1563,7 +1536,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		// Mark the server is busy (the next incoming READs could be redirect
 		// to expected followers. )
 		if ctx != nil && ctx.Store != nil {
-			MarkStoreAlreadySlow(s.regionCache, ctx.Store.storeID)
+			ctx.Store.markAlreadySlow()
 		}
 
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",

@@ -213,21 +213,6 @@ func (t CmdType) String() string {
 	return "Unknown"
 }
 
-// IsReadCmd returns whether current Cmd is a Read command or not.
-func (t CmdType) IsReadCmd() bool {
-	switch t {
-	case CmdGet, CmdBatchGet, CmdRawGet, CmdRawBatchGet:
-		return true
-	case CmdRawChecksum:
-		return true
-	case CmdScan, CmdRawScan:
-		return true
-	case CmdCop, CmdCopStream, CmdBatchCop:
-		return true
-	}
-	return false
-}
-
 // Request wraps all kv/coprocessor requests.
 type Request struct {
 	Type CmdType
