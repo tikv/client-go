@@ -2714,7 +2714,7 @@ func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration) bool {
 	}
 	curTimecost := uint64(timecost.Abs().Microseconds())
 	if curTimecost >= slowScoreMaxTimeout {
-		// Current query is too slow to serve (>= 30s, double timecost of ticking) in this tick.
+		// Current query is too slow to serve (>= 30s, max timeout of a request) in this tick.
 		atomic.StoreUint64(&ss.avgScore, slowScoreMax)
 		return false
 	}
@@ -2783,23 +2783,15 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 				zap.Stack("stack trace"))
 		}
 	}()
-	type statSlice struct {
-		slowScore   float64
-		avgTimecost float64
-	}
-	slowScoreMetrics := make(map[string]statSlice)
+	slowScoreMetrics := make(map[string]float64)
 	c.storeMu.RLock()
 	for _, store := range c.storeMu.stores {
 		store.updateSlowScoreStat()
-		slowScoreMetrics[store.addr] = statSlice{
-			slowScore:   float64(store.getSlowScore()),
-			avgTimecost: float64(store.getAvgTimecost()),
-		}
+		slowScoreMetrics[store.addr] = float64(store.getSlowScore())
 	}
 	c.storeMu.RUnlock()
 	for store, score := range slowScoreMetrics {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score.slowScore)
-		metrics.TiKVStoreSlowScoreAvgTimecostGauge.WithLabelValues(store).Set(score.avgTimecost / 1000.0)
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
 	}
 }
 

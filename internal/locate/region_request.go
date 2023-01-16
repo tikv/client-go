@@ -576,11 +576,6 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx = state.leaderIdx
 		selector.targetIdx = state.leaderIdx
 	}
-	if selector.targetIdx != state.leaderIdx {
-		metrics.TiKVFollowerReadReqCounter.WithLabelValues("to_follower", selector.replicas[selector.targetIdx].store.addr).Inc()
-	} else {
-		metrics.TiKVFollowerReadReqCounter.WithLabelValues("to_leader", selector.replicas[selector.targetIdx].store.addr).Inc()
-	}
 	return selector.buildRPCContext(bo)
 }
 
