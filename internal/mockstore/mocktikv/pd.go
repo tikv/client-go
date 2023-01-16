@@ -44,6 +44,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
@@ -78,8 +79,8 @@ func NewPDClient(cluster *Cluster) pd.Client {
 	}
 }
 
-func (c *pdClient) LoadGlobalConfig(ctx context.Context, names []string) ([]pd.GlobalConfigItem, error) {
-	return nil, nil
+func (c *pdClient) LoadGlobalConfig(ctx context.Context, configPath string) ([]pd.GlobalConfigItem, int64, error) {
+	return nil, 0, nil
 }
 
 func (c *pdClient) StoreGlobalConfig(ctx context.Context, items []pd.GlobalConfigItem) error {
@@ -290,5 +291,33 @@ func (c *pdClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.K
 }
 
 func (c *pdClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *pdClient) UpdateKeyspaceState(ctx context.Context, id uint32, state keyspacepb.KeyspaceState) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *pdClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *pdClient) AddResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {
+	return "", nil
+}
+
+func (c *pdClient) ModifyResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {
+	return "", nil
+}
+
+func (c *pdClient) DeleteResourceGroup(ctx context.Context, resourceGroupName string) (string, error) {
+	return "", nil
+}
+
+func (c *pdClient) AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBucketsRequest) ([]*rmpb.TokenBucketResponse, error) {
 	return nil, nil
 }
