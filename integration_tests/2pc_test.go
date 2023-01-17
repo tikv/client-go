@@ -381,7 +381,7 @@ func (s *testCommitterSuite) isKeyOptimisticLocked(key []byte) bool {
 	})
 	loc, err := s.store.GetRegionCache().LocateKey(bo, key)
 	s.Nil(err)
-	resp, err := s.store.SendReq(bo, req, loc.Region, 5000*time.Millisecond)
+	resp, err := s.store.SendReq(bo, req, loc.Region, 5000)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 	keyErr := (resp.Resp.(*kvrpcpb.GetResponse)).GetError()
@@ -646,7 +646,7 @@ func (s *testCommitterSuite) TestRejectCommitTS() {
 		MinCommitTs:  committer.GetStartTS() + 100, // Set minCommitTS
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, prewrite)
-	_, err = s.store.SendReq(bo, req, loc.Region, 5000*time.Millisecond)
+	_, err = s.store.SendReq(bo, req, loc.Region, 5000)
 	s.Nil(err)
 
 	// Make commitTS less than minCommitTS.
@@ -1633,7 +1633,7 @@ func (s *testCommitterSuite) getLockInfo(key []byte) *kvrpcpb.LockInfo {
 	loc, err := s.store.GetRegionCache().LocateKey(bo, key)
 	s.Nil(err)
 	req := committer.BuildPrewriteRequest(loc.Region.GetID(), loc.Region.GetConfVer(), loc.Region.GetVer(), committer.GetMutations().Slice(0, 1), 1)
-	resp, err := s.store.SendReq(bo, req, loc.Region, 5000*time.Millisecond)
+	resp, err := s.store.SendReq(bo, req, loc.Region, 5000)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 	keyErrs := (resp.Resp.(*kvrpcpb.PrewriteResponse)).Errors

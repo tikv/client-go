@@ -2652,10 +2652,6 @@ func (ss *SlowScoreStat) getSlowScore() uint64 {
 	return atomic.LoadUint64(&ss.avgScore)
 }
 
-func (ss *SlowScoreStat) getAvgTimecost() uint64 {
-	return atomic.LoadUint64(&ss.avgTimecost)
-}
-
 // Update the statistics on SlowScore periodically.
 func (ss *SlowScoreStat) updateSlowScore() bool {
 	if atomic.LoadUint64(&ss.avgTimecost) == 0 {
@@ -2709,10 +2705,10 @@ func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration) bool {
 		// Init the whole statistics with the original one.
 		atomic.StoreUint64(&ss.avgScore, slowScoreInitVal)
 		atomic.StoreUint64(&ss.avgTimecost, slowScoreInitTimeout)
-		atomic.StoreUint64(&ss.intervalTimecost, uint64(timecost.Abs().Microseconds()))
+		atomic.StoreUint64(&ss.intervalTimecost, uint64(timecost/time.Microsecond))
 		return true
 	}
-	curTimecost := uint64(timecost.Abs().Microseconds())
+	curTimecost := uint64(timecost / time.Microsecond)
 	if curTimecost >= slowScoreMaxTimeout {
 		// Current query is too slow to serve (>= 30s, max timeout of a request) in this tick.
 		atomic.StoreUint64(&ss.avgScore, slowScoreMax)
@@ -2733,11 +2729,6 @@ func (ss *SlowScoreStat) isSlow() bool {
 // getSlowScore returns the slow score of store.
 func (s *Store) getSlowScore() uint64 {
 	return s.slowScore.getSlowScore()
-}
-
-// getAvgTimecost returns the avg timecost of store.
-func (s *Store) getAvgTimecost() uint64 {
-	return s.slowScore.getAvgTimecost()
 }
 
 // isSlow returns whether current Store is slow or not.
