@@ -96,6 +96,7 @@ var (
 	TiKVReadThroughput                       prometheus.Histogram
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
+	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
 )
 
 // Label constants.
@@ -589,6 +590,14 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of assertions used in prewrite requests",
 		}, []string{LblType})
 
+	TiKVAggressiveLockedKeysCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "aggressive_locking_count",
+			Help:      "Counter of keys locked in aggressive locking mode",
+		}, []string{LblType})
+
 	initShortcuts()
 }
 
@@ -659,6 +668,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadThroughput)
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
+	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.

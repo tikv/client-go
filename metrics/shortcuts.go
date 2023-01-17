@@ -136,6 +136,11 @@ var (
 	PrewriteAssertionUsageCounterExist    prometheus.Counter
 	PrewriteAssertionUsageCounterNotExist prometheus.Counter
 	PrewriteAssertionUsageCounterUnknown  prometheus.Counter
+
+	AggressiveLockedKeysNew                prometheus.Counter
+	AggressiveLockedKeysDerived            prometheus.Counter
+	AggressiveLockedKeysLockedWithConflict prometheus.Counter
+	AggressiveLockedKeysNonForceLock       prometheus.Counter
 )
 
 func initShortcuts() {
@@ -237,4 +242,8 @@ func initShortcuts() {
 	PrewriteAssertionUsageCounterExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("exist")
 	PrewriteAssertionUsageCounterNotExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("not-exist")
 	PrewriteAssertionUsageCounterUnknown = TiKVPrewriteAssertionUsageCounter.WithLabelValues("unknown")
+
+	AggressiveLockedKeysNew = TiKVAggressiveLockedKeysCounter.WithLabelValues("new")
+	AggressiveLockedKeysDerived = TiKVAggressiveLockedKeysCounter.WithLabelValues("derived")
+	AggressiveLockedKeysLockedWithConflict = TiKVAggressiveLockedKeysCounter.WithLabelValues("locked_with_conflict")
 }
