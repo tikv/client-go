@@ -83,11 +83,11 @@ func (c *pdClient) LoadGlobalConfig(ctx context.Context, configPath string) ([]p
 	return nil, 0, nil
 }
 
-func (c *pdClient) StoreGlobalConfig(ctx context.Context, items []pd.GlobalConfigItem) error {
+func (c *pdClient) StoreGlobalConfig(ctx context.Context, configPath string, items []pd.GlobalConfigItem) error {
 	return nil
 }
 
-func (c *pdClient) WatchGlobalConfig(ctx context.Context) (chan []pd.GlobalConfigItem, error) {
+func (c *pdClient) WatchGlobalConfig(ctx context.Context, configPath string, revision int64) (chan []pd.GlobalConfigItem, error) {
 	return nil, nil
 }
 
