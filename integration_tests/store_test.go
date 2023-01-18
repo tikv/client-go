@@ -118,6 +118,9 @@ type checkRequestClient struct {
 
 func (c *checkRequestClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
+	if err != nil {
+		return resp, err
+	}
 	if c.priority != req.Priority {
 		if resp.Resp != nil {
 			if getResp, ok := resp.Resp.(*kvrpcpb.GetResponse); ok {

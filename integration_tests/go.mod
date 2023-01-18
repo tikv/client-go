@@ -6,13 +6,13 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220423142525-ae43b7f4e5c3
-	github.com/pingcap/kvproto v0.0.0-20230105060948-64890fa4f6c1
+	github.com/pingcap/kvproto v0.0.0-20230118055818-adcf4c414bfd
 	github.com/pingcap/tidb v1.1.0-beta.0.20230109054422-b477b1c94620
 	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.8.0
+	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.4
-	github.com/tikv/pd/client v0.0.0-20221031025758-80f0d8ca4d07
+	github.com/tikv/client-go/v2 v2.0.5-0.20230112062023-fe5b35c5f5dc
+	github.com/tikv/pd/client v0.0.0-20230118040950-082fc6a9bc2e
 	go.uber.org/goleak v1.2.0
 )
 
@@ -89,11 +89,13 @@ require (
 	golang.org/x/text v0.6.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	golang.org/x/tools v0.2.0 // indirect
-	google.golang.org/genproto v0.0.0-20220719170305-83ca9fad585f // indirect
-	google.golang.org/grpc v1.48.0 // indirect
+	google.golang.org/genproto v0.0.0-20221202195650-67e5cbc046fd // indirect
+	google.golang.org/grpc v1.51.0 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/pingcap/tidb => github.com/HuSharp/tidb v0.0.0-20230118064626-888c2ba2e80f
