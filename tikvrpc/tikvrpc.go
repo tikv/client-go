@@ -1263,5 +1263,15 @@ func (req *Request) IsTxnWriteRequest() bool {
 	return false
 }
 
+// IsRawWriteRequest checks if the request is a raw write request.
+func (req *Request) IsRawWriteRequest() bool {
+	if req.Type == CmdRawPut ||
+		req.Type == CmdRawBatchPut ||
+		req.Type == CmdRawDelete {
+		return true
+	}
+	return false
+}
+
 // ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
 type ResourceGroupTagger func(req *Request)
