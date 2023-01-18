@@ -28,35 +28,29 @@ var _ Client = interceptedClient{}
 
 type interceptedClient struct {
 	Client
-	resourceControlIt client.ResourceGroupKVInterceptor
 }
 
 // NewInterceptedClient creates a Client which can execute interceptor.
 func NewInterceptedClient(client Client) Client {
-	return interceptedClient{client, nil}
-}
-
-// SetupResourceGroupKVInterceptor sets the interceptor for resource control.
-func (r interceptedClient) SetupResourceGroupKVInterceptor(resourceControlIt client.ResourceGroupKVInterceptor) {
-	r.resourceControlIt = resourceControlIt
+	return interceptedClient{client}
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// Build the resource control interceptor if there is one and the resource group name is given.
 	var rcInterceptor interceptor.RPCInterceptor
 	resourceGroupName := req.GetResourceGroupName()
-	if r.resourceControlIt != nil && len(resourceGroupName) > 0 {
+	if resourceControlInterceptor != nil && len(resourceGroupName) > 0 {
 		rcInterceptor = func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 			return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 				reqInfo := resource_control.MakeRequestInfo(req)
-				err := r.resourceControlIt.OnRequestWait(ctx, resourceGroupName, reqInfo)
+				err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 				if err != nil {
 					return nil, err
 				}
 				resp, err := next(target, req)
 				if resp != nil {
 					respInfo := resource_control.MakeResponseInfo(resp)
-					r.resourceControlIt.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
+					resourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
 				}
 				return resp, err
 			}
@@ -80,4 +74,16 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 		})(addr, req)
 	}
 	return r.Client.SendRequest(ctx, addr, req, timeout)
+}
+
+var resourceControlInterceptor client.ResourceGroupKVInterceptor
+
+// SetupResourceControlInterceptor sets the interceptor for resource control.
+func SetupResourceControlInterceptor(interceptor client.ResourceGroupKVInterceptor) {
+	resourceControlInterceptor = interceptor
+}
+
+// UnsetResourceControlInterceptor un-sets the interceptor for resource control.
+func UnsetResourceControlInterceptor() {
+	resourceControlInterceptor = nil
 }

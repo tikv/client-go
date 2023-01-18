@@ -2,7 +2,7 @@ module github.com/tikv/client-go/v2
 
 go 1.18
 
-replace github.com/tikv/pd => github.com/CabinfeverB/pd v1.1.0-beta.0.20230117175918-55fedf50a131
+replace github.com/tikv/pd => github.com/CabinfeverB/pd v1.1.0-beta.0.20230118092256-ed807b93fceb
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548

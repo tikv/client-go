@@ -2,8 +2,8 @@ cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMT
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/CabinfeverB/pd v1.1.0-beta.0.20230117175918-55fedf50a131 h1:agjNzxREwT+JqF/UocMsQa7JHhoOi167t9lcwRjtFq8=
-github.com/CabinfeverB/pd v1.1.0-beta.0.20230117175918-55fedf50a131/go.mod h1:ZJUZ8xZBjCWZAQixiX0y2EE5+TFiNJ9lnP0bfB3gOu8=
+github.com/CabinfeverB/pd v1.1.0-beta.0.20230118092256-ed807b93fceb h1:/SVKkznEk3eMSXtJYrle0hkkyI0GQ/b0hB6eIwQCeiM=
+github.com/CabinfeverB/pd v1.1.0-beta.0.20230118092256-ed807b93fceb/go.mod h1:ZJUZ8xZBjCWZAQixiX0y2EE5+TFiNJ9lnP0bfB3gOu8=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/units v0.0.0-20151022065526-2efee857e7cf/go.mod h1:ybxpYRFXyAe+OPACYpWeL0wqObRcbAqCMya13uyzqw0=
