@@ -2,6 +2,8 @@ module integration_tests
 
 go 1.18
 
+replace github.com/tikv/pd => github.com/CabinfeverB/pd v1.1.0-beta.0.20230118184315-8efd2e043066
+
 require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
@@ -72,6 +74,7 @@ require (
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
+	github.com/tikv/pd v1.1.0-beta.0.20230118040950-082fc6a9bc2e // indirect
 	github.com/twmb/murmur3 v1.1.3 // indirect
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
