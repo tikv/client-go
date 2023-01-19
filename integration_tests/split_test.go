@@ -322,6 +322,10 @@ func (c *mockPDClient) DeleteResourceGroup(ctx context.Context, resourceGroupNam
 	return "", nil
 }
 
+func (c *mockPDClient) WatchResourceGroup(ctx context.Context, revision int64) (chan []*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBucketsRequest) ([]*rmpb.TokenBucketResponse, error) {
 	return nil, nil
 }

@@ -318,6 +318,10 @@ func (c *pdClient) DeleteResourceGroup(ctx context.Context, resourceGroupName st
 	return "", nil
 }
 
+func (c *pdClient) WatchResourceGroup(ctx context.Context, revision int64) (chan []*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
 func (c *pdClient) AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBucketsRequest) ([]*rmpb.TokenBucketResponse, error) {
 	return nil, nil
 }
