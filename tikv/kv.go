@@ -585,22 +585,22 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 
 // EnableResourceControl enables the resource control.
 func EnableResourceControl() {
-	client.EnableResourceControl()
+	client.ResourceControlSwitch.Store(true)
 }
 
 // DisableResourceControl disables the resource control.
 func DisableResourceControl() {
-	client.DisableResourceControl()
+	client.ResourceControlSwitch.Store(false)
 }
 
 // SetResourceControlInterceptor sets the interceptor for resource control.
 func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
-	client.SetResourceControlInterceptor(interceptor)
+	client.ResourceControlInterceptor = interceptor
 }
 
 // UnsetResourceControlInterceptor un-sets the interceptor for resource control.
 func UnsetResourceControlInterceptor() {
-	client.SetResourceControlInterceptor(nil)
+	client.ResourceControlInterceptor = nil
 }
 
 // Variables defines the variables used by TiKV storage.

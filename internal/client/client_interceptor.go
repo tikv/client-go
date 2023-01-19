@@ -26,8 +26,8 @@ import (
 )
 
 func init() {
-	resourceControlSwitch.Store(false)
-	resourceControlInterceptor = nil
+	ResourceControlSwitch.Store(false)
+	ResourceControlInterceptor = nil
 }
 
 var _ Client = interceptedClient{}
@@ -62,24 +62,11 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 }
 
 var (
-	resourceControlSwitch      atomic.Value
-	resourceControlInterceptor resourceControlClient.ResourceGroupKVInterceptor
+	// ResourceControlSwitch is used to control whether to enable the resource control.
+	ResourceControlSwitch atomic.Value
+	// ResourceControlInterceptor is used to build the resource control interceptor.
+	ResourceControlInterceptor resourceControlClient.ResourceGroupKVInterceptor
 )
-
-// EnableResourceControl enables the resource control.
-func EnableResourceControl() {
-	resourceControlSwitch.Store(true)
-}
-
-// DisableResourceControl disables the resource control.
-func DisableResourceControl() {
-	resourceControlSwitch.Store(false)
-}
-
-// SetResourceControlInterceptor sets the interceptor for resource control.
-func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
-	resourceControlInterceptor = interceptor
-}
 
 // buildResourceControlInterceptor builds a resource control interceptor with
 // the given resource group name.
@@ -88,7 +75,7 @@ func buildResourceControlInterceptor(
 	req *tikvrpc.Request,
 	resourceGroupName string,
 ) interceptor.RPCInterceptor {
-	if !resourceControlSwitch.Load().(bool) {
+	if !ResourceControlSwitch.Load().(bool) {
 		return nil
 	}
 	// When the group name is empty or "default", we don't need to
@@ -97,7 +84,7 @@ func buildResourceControlInterceptor(
 		return nil
 	}
 	// No resource group interceptor is set.
-	if resourceControlInterceptor == nil {
+	if ResourceControlInterceptor == nil {
 		return nil
 	}
 	// Make the request info.
@@ -105,14 +92,14 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
 			resp, err := next(target, req)
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				resourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
+				ResourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
 			}
 			return resp, err
 		}
