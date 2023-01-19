@@ -22,7 +22,7 @@ require (
 	github.com/stathat/consistent v1.0.0
 	github.com/stretchr/testify v1.8.1
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20230118040950-082fc6a9bc2e
+	github.com/tikv/pd/client v0.0.0-20230119094950-c5bf5be4a928
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
 	go.etcd.io/etcd/client/v3 v3.5.2
@@ -59,5 +59,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	stathat.com/c/consistent v1.0.0 // indirect
 )
-
-replace github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230119070237-4bd95b5f30a9
