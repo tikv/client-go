@@ -584,22 +584,22 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 }
 
 // EnableResourceControl enables the resource control.
-func (s *KVStore) EnableResourceControl() {
+func EnableResourceControl() {
 	client.EnableResourceControl()
 }
 
 // DisableResourceControl disables the resource control.
-func (s *KVStore) DisableResourceControl() {
+func DisableResourceControl() {
 	client.DisableResourceControl()
 }
 
 // SetResourceControlInterceptor sets the interceptor for resource control.
-func (s *KVStore) SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
+func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
 	client.SetResourceControlInterceptor(interceptor)
 }
 
 // UnsetResourceControlInterceptor un-sets the interceptor for resource control.
-func (s *KVStore) UnsetResourceControlInterceptor() {
+func UnsetResourceControlInterceptor() {
 	client.SetResourceControlInterceptor(nil)
 }
 
