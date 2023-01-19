@@ -126,10 +126,12 @@ func getKVCPUMs(detailsV2 *kvrpcpb.ExecDetailsV2, details *kvrpcpb.ExecDetails) 
 	return 0
 }
 
+// ReadBytes returns the read bytes of the response.
 func (res *ResponseInfo) ReadBytes() uint64 {
 	return res.readBytes
 }
 
+// KVCPUMs returns the KV CPU time in milliseconds of the response.
 func (res *ResponseInfo) KVCPUMs() uint64 {
 	return res.kvCPUMs
 }

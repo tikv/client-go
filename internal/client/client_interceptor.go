@@ -57,7 +57,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 }
 
 var (
-	resourceControlSwitch      atomic.Bool
+	resourceControlSwitch      atomic.Value
 	resourceControlInterceptor client.ResourceGroupKVInterceptor
 )
 
@@ -88,7 +88,7 @@ func buildResourceControlInterceptor(
 	req *tikvrpc.Request,
 	resourceGroupName string,
 ) interceptor.RPCInterceptor {
-	if !resourceControlSwitch.Load() {
+	if !resourceControlSwitch.Load().(bool) {
 		return nil
 	}
 	// When the group name is empty or "default", we don't need to
