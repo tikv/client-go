@@ -2637,15 +2637,52 @@ const (
 	slowScoreMax         = 100
 	slowScoreInitTimeout = 500000   // unit: us
 	slowScoreMaxTimeout  = 30000000 // max timeout of one txn, unit: us
+	slidingWindowSize    = 10       // default size of sliding window
 )
 
-// SlowScoreStat represents the statistics on busyness of Store.
+// CntSlidingWindow represents the statistics on a bunch of sliding windows.
+type CntSlidingWindow struct {
+	avg     uint64
+	sum     uint64
+	history []uint64
+}
+
+// Avg returns the average value of this sliding window
+func (cnt *CntSlidingWindow) Avg() uint64 {
+	return cnt.avg
+}
+
+// Sum returns the sum value of this sliding window
+func (cnt *CntSlidingWindow) Sum() uint64 {
+	return cnt.sum
+}
+
+// Append adds one value into this sliding windown and returns the gradient.
+func (cnt *CntSlidingWindow) Append(value uint64) (gradient float64) {
+	prevAvg := cnt.avg
+	if len(cnt.history) < slidingWindowSize {
+		cnt.sum += value
+	} else {
+		cnt.sum = cnt.sum - cnt.history[0] + value
+		cnt.history = cnt.history[1:]
+	}
+	cnt.history = append(cnt.history, value)
+	cnt.avg = cnt.sum / (uint64(len(cnt.history)))
+	gradient = 1e-6
+	if prevAvg > 0 && value != prevAvg {
+		gradient = (float64(value) - float64(prevAvg)) / float64(prevAvg)
+	}
+	return gradient
+}
+
+// SlowScoreStat represents the statistics on business of Store.
 type SlowScoreStat struct {
-	avgScore         uint64
-	avgTimecost      uint64 // unit: us
-	updCount         uint64 // sum of update count
-	intervalTimecost uint64 // sum of the timecost in one counting interval. Unit: us
-	intervalUpdCount uint64 // count of update in one counting interval.
+	avgScore            uint64
+	avgTimecost         uint64
+	intervalTimecost    uint64           // sum of the timecost in one counting interval. Unit: us
+	intervalUpdCount    uint64           // count of update in one counting interval.
+	tsCntSlidingWindow  CntSlidingWindow // sliding window on timecost
+	updCntSlidingWindow CntSlidingWindow // sliding window on update count
 }
 
 func (ss *SlowScoreStat) getSlowScore() uint64 {
@@ -2663,33 +2700,29 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 
 	intervalUpdCount := atomic.LoadUint64(&ss.intervalUpdCount)
 	intervalTimecost := atomic.LoadUint64(&ss.intervalTimecost)
-	avgTimecost := atomic.LoadUint64(&ss.avgTimecost)
-	avgScore := atomic.LoadUint64(&ss.avgScore)
-	// Update avgTimecost
-	intervalAvgTimecost := uint64(0)
-	gradient := float64(1.0)
-	if intervalUpdCount > 0 {
-		intervalAvgTimecost = intervalTimecost / intervalUpdCount
-		gradient = float64(intervalAvgTimecost) / float64(avgTimecost)
 
-		updCount := atomic.AddUint64(&ss.updCount, intervalUpdCount)
-		updRatio := math.Min(float64(intervalUpdCount)/math.Max(float64(updCount), float64(1.0)), float64(0.1))
-		updAvgTimecost := math.Max(float64(avgTimecost)*(float64(1.0)-updRatio)+float64(intervalAvgTimecost)*updRatio, float64(1.0))
-		atomic.CompareAndSwapUint64(&ss.avgTimecost, avgTimecost, uint64(updAvgTimecost))
+	updGradient := float64(1.0)
+	tsGradient := float64(1.0)
+	if intervalUpdCount > 0 {
+		intervalAvgTimecost := intervalTimecost / intervalUpdCount
+		updGradient = ss.updCntSlidingWindow.Append(intervalUpdCount)
+		tsGradient = ss.tsCntSlidingWindow.Append(intervalAvgTimecost)
 	}
-	// Update slowScore, using 2e(that is, 2.71828 * 2 => ~5.43) as the default thresholds of ratio.
-	if intervalAvgTimecost > avgTimecost {
-		risenRatio := math.Min(float64(5.43), gradient)
+	// Update avgScore
+	avgScore := atomic.LoadUint64(&ss.avgScore)
+	if updGradient+0.1 <= float64(1e-9) && tsGradient-0.1 >= float64(1e-9) {
+		risenRatio := math.Min(float64(5.43), math.Abs(tsGradient/updGradient))
 		curAvgScore := math.Ceil(math.Min(float64(avgScore)*risenRatio+float64(1.0), float64(slowScoreMax)))
 		atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, uint64(curAvgScore))
 	} else {
-		costScore := uint64(math.Max(float64(slowScoreInitVal), math.Min(float64(5.43), float64(1.0)/gradient)))
+		costScore := uint64(math.Ceil(math.Max(float64(slowScoreInitVal), math.Min(float64(2.71), 1.0+math.Abs(updGradient)))))
 		if avgScore <= slowScoreInitVal+costScore {
 			atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, slowScoreInitVal)
 		} else {
 			atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, avgScore-costScore)
 		}
 	}
+	atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, ss.tsCntSlidingWindow.Avg())
 
 	// Resets the counter of inteval timecost
 	atomic.StoreUint64(&ss.intervalTimecost, 0)
