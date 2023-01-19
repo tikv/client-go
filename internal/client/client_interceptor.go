@@ -22,7 +22,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
-	"github.com/tikv/pd/pkg/mcs/resource_manager/client"
+	resourceControlClient "github.com/tikv/pd/pkg/mcs/resource_manager/client"
 )
 
 func init() {
@@ -63,7 +63,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 
 var (
 	resourceControlSwitch      atomic.Value
-	resourceControlInterceptor client.ResourceGroupKVInterceptor
+	resourceControlInterceptor resourceControlClient.ResourceGroupKVInterceptor
 )
 
 // EnableResourceControl enables the resource control.
@@ -77,13 +77,8 @@ func DisableResourceControl() {
 }
 
 // SetResourceControlInterceptor sets the interceptor for resource control.
-func SetResourceControlInterceptor(interceptor client.ResourceGroupKVInterceptor) {
+func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
 	resourceControlInterceptor = interceptor
-}
-
-// UnsetResourceControlInterceptor un-sets the interceptor for resource control.
-func UnsetResourceControlInterceptor() {
-	resourceControlInterceptor = nil
 }
 
 // buildResourceControlInterceptor builds a resource control interceptor with

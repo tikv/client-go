@@ -67,6 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	resourceControlClient "github.com/tikv/pd/pkg/mcs/resource_manager/client"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -580,6 +581,26 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		s.updateMinSafeTS(txnScope, storeIDs)
 	}
 	wg.Wait()
+}
+
+// EnableResourceControl enables the resource control.
+func (s *KVStore) EnableResourceControl() {
+	client.EnableResourceControl()
+}
+
+// DisableResourceControl disables the resource control.
+func (s *KVStore) DisableResourceControl() {
+	client.DisableResourceControl()
+}
+
+// SetResourceControlInterceptor sets the interceptor for resource control.
+func (s *KVStore) SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
+	client.SetResourceControlInterceptor(interceptor)
+}
+
+// UnsetResourceControlInterceptor un-sets the interceptor for resource control.
+func (s *KVStore) UnsetResourceControlInterceptor() {
+	client.SetResourceControlInterceptor(nil)
 }
 
 // Variables defines the variables used by TiKV storage.
