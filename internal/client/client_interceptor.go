@@ -19,11 +19,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/internal/resource_control"
+	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/pd/pkg/mcs/resource_manager/client"
 )
+
+func init() {
+	resourceControlSwitch.Store(false)
+	resourceControlInterceptor = nil
+}
 
 var _ Client = interceptedClient{}
 
@@ -101,7 +106,7 @@ func buildResourceControlInterceptor(
 		return nil
 	}
 	// Make the request info.
-	reqInfo := resource_control.MakeRequestInfo(req)
+	reqInfo := resourcecontrol.MakeRequestInfo(req)
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
@@ -111,7 +116,7 @@ func buildResourceControlInterceptor(
 			}
 			resp, err := next(target, req)
 			if resp != nil {
-				respInfo := resource_control.MakeResponseInfo(resp)
+				respInfo := resourcecontrol.MakeResponseInfo(resp)
 				resourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
 			}
 			return resp, err
