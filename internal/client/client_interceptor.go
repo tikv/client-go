@@ -78,8 +78,8 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 
 var resourceControlInterceptor client.ResourceGroupKVInterceptor
 
-// SetupResourceControlInterceptor sets the interceptor for resource control.
-func SetupResourceControlInterceptor(interceptor client.ResourceGroupKVInterceptor) {
+// SetResourceControlInterceptor sets the interceptor for resource control.
+func SetResourceControlInterceptor(interceptor client.ResourceGroupKVInterceptor) {
 	resourceControlInterceptor = interceptor
 }
 
