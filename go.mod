@@ -2,8 +2,6 @@ module github.com/tikv/client-go/v2
 
 go 1.18
 
-replace github.com/tikv/pd => github.com/CabinfeverB/pd v1.1.0-beta.0.20230118184315-8efd2e043066
-
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
@@ -16,7 +14,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20210918120811-547c13e3eb00
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20230118055818-adcf4c414bfd
+	github.com/pingcap/kvproto v0.0.0-20230119031034-25f1909b7934
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.11.0
@@ -24,7 +22,7 @@ require (
 	github.com/stathat/consistent v1.0.0
 	github.com/stretchr/testify v1.8.1
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd v1.1.0-beta.0.20230118040950-082fc6a9bc2e
+	github.com/tikv/pd v1.1.0-beta.0.20230119114149-402c2bfee2f3
 	github.com/tikv/pd/client v0.0.0-20230118040950-082fc6a9bc2e
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
