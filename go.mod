@@ -22,7 +22,8 @@ require (
 	github.com/stathat/consistent v1.0.0
 	github.com/stretchr/testify v1.8.1
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20230119094950-c5bf5be4a928
+	github.com/tikv/pd v1.1.0-beta.0.20230119114149-402c2bfee2f3
+	github.com/tikv/pd/client v0.0.0-20230118040950-082fc6a9bc2e
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
 	go.etcd.io/etcd/client/v3 v3.5.2
@@ -40,10 +41,11 @@ require (
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/golang/snappy v0.0.3 // indirect
+	github.com/golang/snappy v0.0.4 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
+	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/onsi/ginkgo v1.16.5 // indirect
-	github.com/onsi/gomega v1.18.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
@@ -55,6 +57,7 @@ require (
 	golang.org/x/text v0.4.0 // indirect
 	google.golang.org/genproto v0.0.0-20221202195650-67e5cbc046fd // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
+	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	stathat.com/c/consistent v1.0.0 // indirect

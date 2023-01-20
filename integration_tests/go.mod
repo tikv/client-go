@@ -72,6 +72,7 @@ require (
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
+	github.com/tikv/pd v1.1.0-beta.0.20230119114149-402c2bfee2f3 // indirect
 	github.com/twmb/murmur3 v1.1.3 // indirect
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
