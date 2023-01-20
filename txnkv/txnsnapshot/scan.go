@@ -233,6 +233,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				ResourceGroupTag:  s.snapshot.mu.resourceGroupTag,
 				RequestSource:     s.snapshot.GetRequestSource(),
 				ResourceGroupName: s.snapshot.mu.resourceGroupName,
+				BusyThresholdMs:   uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
