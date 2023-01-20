@@ -7,12 +7,12 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220423142525-ae43b7f4e5c3
 	github.com/pingcap/kvproto v0.0.0-20230119031034-25f1909b7934
-	github.com/pingcap/tidb v1.1.0-beta.0.20230109054422-b477b1c94620
+	github.com/pingcap/tidb v0.0.0-20230120062950-38a7c6220ea6
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.5-0.20230119021317-7409e690af6b
-	github.com/tikv/pd/client v0.0.0-20230119094950-c5bf5be4a928
+	github.com/tikv/client-go/v2 v2.0.5-0.20230120021435-f89383775234
+	github.com/tikv/pd/client v0.0.0-20230119115149-5c518d079b93
 	go.uber.org/goleak v1.2.0
 )
 
@@ -57,7 +57,7 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c // indirect
 	github.com/pingcap/tidb/parser v0.0.0-20230109054422-b477b1c94620 // indirect
-	github.com/pingcap/tipb v0.0.0-20221123081521-2fb828910813 // indirect
+	github.com/pingcap/tipb v0.0.0-20230119054146-c6b7a5a1623b // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_golang v1.14.0 // indirect
@@ -98,5 +98,3 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
-
-replace github.com/pingcap/tidb => github.com/HuSharp/tidb v1.1.0-beta.0.20230119075755-59624ef0dc70
