@@ -2698,6 +2698,7 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 		return true
 	}
 
+	avgTimecost := atomic.LoadUint64(&ss.avgTimecost)
 	intervalUpdCount := atomic.LoadUint64(&ss.intervalUpdCount)
 	intervalTimecost := atomic.LoadUint64(&ss.intervalTimecost)
 
@@ -2708,7 +2709,7 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 		updGradient = ss.updCntSlidingWindow.Append(intervalUpdCount)
 		tsGradient = ss.tsCntSlidingWindow.Append(intervalAvgTimecost)
 	}
-	// Update avgScore
+	// Update avgScore & avgTimecost
 	avgScore := atomic.LoadUint64(&ss.avgScore)
 	if updGradient+0.1 <= float64(1e-9) && tsGradient-0.1 >= float64(1e-9) {
 		risenRatio := math.Min(float64(5.43), math.Abs(tsGradient/updGradient))
@@ -2722,7 +2723,7 @@ func (ss *SlowScoreStat) updateSlowScore() bool {
 			atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, avgScore-costScore)
 		}
 	}
-	atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, ss.tsCntSlidingWindow.Avg())
+	atomic.CompareAndSwapUint64(&ss.avgTimecost, avgTimecost, ss.tsCntSlidingWindow.Avg())
 
 	// Resets the counter of inteval timecost
 	atomic.StoreUint64(&ss.intervalTimecost, 0)
