@@ -70,6 +70,10 @@ type Scanner struct {
 }
 
 func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize int, reverse bool) (*Scanner, error) {
+	err := snapshot.handleLazyVersion()
+	if err != nil {
+		return nil, err
+	}
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
 		batchSize = DefaultScanBatchSize
@@ -83,7 +87,7 @@ func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize 
 		reverse:      reverse,
 		nextEndKey:   endKey,
 	}
-	err := scanner.Next()
+	err = scanner.Next()
 	if tikverr.IsErrNotFound(err) {
 		return scanner, nil
 	}

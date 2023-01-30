@@ -51,10 +51,10 @@ func NextKey(k []byte) []byte {
 //
 // Assume there are keys like:
 //
-//   rowkey1
-//   rowkey1_column1
-//   rowkey1_column2
-//   rowKey2
+//	rowkey1
+//	rowkey1_column1
+//	rowkey1_column2
+//	rowKey2
 //
 // If we seek 'rowkey1' NextKey, we will get 'rowkey1_column1'.
 // If we seek 'rowkey1' PrefixNextKey, we will get 'rowkey2'.
