@@ -1444,8 +1444,8 @@ func (s *testRegionCacheSuite) TestNoBackoffWhenFailToDecodeRegion() {
 }
 
 func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
-	// Prepare 50 regions
-	regionCnt := 50
+	// Prepare 100 regions
+	regionCnt := 100
 	regions := s.cluster.AllocIDs(regionCnt)
 	regions = append([]uint64{s.region1}, regions...)
 	peers := [][]uint64{{s.peer1, s.peer2}}
@@ -1475,6 +1475,26 @@ func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
 		s.cache.mu.RLock()
 		defer s.cache.mu.RUnlock()
 		return len(s.cache.mu.regions) == remaining
-	}, 2*time.Second, 200*time.Millisecond)
+	}, 3*time.Second, 200*time.Millisecond)
+	s.checkCache(remaining)
+
+	// Make another part of the regions stale
+	remaining = 0
+	s.cache.mu.Lock()
+	now = time.Now().Unix()
+	for verID, r := range s.cache.mu.regions {
+		if verID.id%3 == 1 {
+			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+		} else {
+			remaining++
+		}
+	}
+	s.cache.mu.Unlock()
+
+	s.Eventually(func() bool {
+		s.cache.mu.RLock()
+		defer s.cache.mu.RUnlock()
+		return len(s.cache.mu.regions) == remaining
+	}, 3*time.Second, 200*time.Millisecond)
 	s.checkCache(remaining)
 }
