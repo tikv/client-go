@@ -1822,7 +1822,8 @@ func (c *RegionCache) cacheGC() {
 	ticker := time.NewTicker(cleanCacheInterval)
 	defer ticker.Stop()
 
-	iterItem := newBtreeSearchItem([]byte(""))
+	beginning := newBtreeSearchItem([]byte(""))
+	iterItem := beginning
 	expired := make([]*btreeItem, cleanRegionNumPerRound)
 	for {
 		select {
@@ -1835,7 +1836,8 @@ func (c *RegionCache) cacheGC() {
 			// Only RLock when checking TTL to avoid blocking other readers
 			c.mu.RLock()
 			ts := time.Now().Unix()
-			c.mu.sorted.b.AscendGreaterOrEqual(iterItem, func(item *btreeItem) bool {
+			c.mu.sorted.AscendGreaterOrEqual(iterItem, func(item_ btree.Item) bool {
+				item := item_.(*btreeItem)
 				if count > cleanRegionNumPerRound {
 					iterItem = item
 					return false
@@ -1848,10 +1850,15 @@ func (c *RegionCache) cacheGC() {
 			})
 			c.mu.RUnlock()
 
+			// Reach the end of the region cache, start from the beginning
+			if count <= cleanRegionNumPerRound {
+				iterItem = beginning
+			}
+
 			if len(expired) > 0 {
 				c.mu.Lock()
 				for _, item := range expired {
-					c.mu.sorted.b.Delete(item)
+					c.mu.sorted.Delete(item)
 					c.removeVersionFromCache(item.cachedRegion.VerID(), item.cachedRegion.GetID())
 				}
 				c.mu.Unlock()
