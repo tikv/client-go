@@ -29,6 +29,13 @@ var (
 	errKeyOutOfBound = errors.New("given key does not belong to the keyspace")
 )
 
+func checkV2Key(b []byte) error {
+	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
+		return errors.Errorf("invalid API V2 key %s", b)
+	}
+	return nil
+}
+
 // BuildKeyspaceName builds a keyspace name
 func BuildKeyspaceName(name string) string {
 	if name == "" {

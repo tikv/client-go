@@ -190,10 +190,11 @@ Loop:
 
 		rangeEndKey, err := s.store.GetRegionCache().BatchLoadRegionsFromKey(bo, key, s.regionsPerTask)
 		if err != nil {
-			logutil.Logger(ctx).Info("range task failed",
+			logutil.Logger(ctx).Info("range task try to get range end key failure",
 				zap.String("name", s.name),
 				zap.String("startKey", kv.StrKey(startKey)),
 				zap.String("endKey", kv.StrKey(endKey)),
+				zap.String("loadRegionKey", kv.StrKey(key)),
 				zap.Duration("cost time", time.Since(startTime)),
 				zap.Error(err))
 			return err
@@ -235,6 +236,8 @@ Loop:
 				zap.String("startKey", kv.StrKey(startKey)),
 				zap.String("endKey", kv.StrKey(endKey)),
 				zap.Duration("cost time", time.Since(startTime)),
+				zap.Int("completed regions", s.CompletedRegions()),
+				zap.Int("failed regions", s.FailedRegions()),
 				zap.Error(w.err))
 			return errors.WithStack(w.err)
 		}

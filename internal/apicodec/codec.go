@@ -30,8 +30,8 @@ const (
 // ParseKeyspaceID retrieves the keyspaceID from the given keyspace-encoded key.
 // It returns error if the given key is not in proper api-v2 format.
 func ParseKeyspaceID(b []byte) (KeyspaceID, error) {
-	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
-		return NulSpaceID, errors.Errorf("unsupported key %s", b)
+	if err := checkV2Key(b); err != nil {
+		return NulSpaceID, err
 	}
 
 	buf := append([]byte{}, b[:keyspacePrefixLen]...)
@@ -77,8 +77,9 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 	case kvrpcpb.APIVersion_V1:
 		return nil, encoded, nil
 	case kvrpcpb.APIVersion_V2:
-		if len(encoded) < keyspacePrefixLen {
-			return nil, nil, errors.Errorf("invalid V2 key: %s", encoded)
+		err := checkV2Key(encoded)
+		if err != nil {
+			return nil, nil, err
 		}
 		return encoded[:keyspacePrefixLen], encoded[keyspacePrefixLen:], nil
 	}
