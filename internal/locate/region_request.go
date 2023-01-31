@@ -549,6 +549,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx++
 	}
 
+	// If selector is under `ReplicaReadPreferLeader` mode, we should choose leader as high priority.
+	if state.option.preferLeader {
+		state.lastIdx = state.leaderIdx
+	}
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % replicaSize)
 		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
@@ -591,9 +595,9 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
 			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)) &&
-				// And If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
+				// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
 				// as candidates to serve the Read request.
-				(!state.tryLeader || (state.tryLeader && !replica.store.isSlow())))
+				(!state.option.preferLeader || !replica.store.isSlow()))
 }
 
 type invalidStore struct {
@@ -646,8 +650,15 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		for _, op := range opts {
 			op(&option)
 		}
+		if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
+			WithPerferLeader()(&option)
+		}
+		tryLeader := false
+		if req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader {
+			tryLeader = true
+		}
 		state = &accessFollower{
-			tryLeader:         req.ReplicaReadType == kv.ReplicaReadMixed,
+			tryLeader:         tryLeader,
 			isGlobalStaleRead: req.IsGlobalStaleRead(),
 			option:            option,
 			leaderIdx:         regionStore.workTiKVIdx,

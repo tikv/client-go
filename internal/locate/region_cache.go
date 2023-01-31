@@ -235,7 +235,7 @@ func (r *regionStore) kvPeer(seed uint32, op *storeSelectorOp) AccessIndex {
 func (r *regionStore) filterStoreCandidate(aidx AccessIndex, op *storeSelectorOp) bool {
 	_, s := r.accessStore(tiKVOnly, aidx)
 	// filter label unmatched store and slow stores
-	return s.IsLabelsMatch(op.labels) && !s.isSlow()
+	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (op.preferLeader && aidx == r.workTiKVIdx && !s.isSlow()))
 }
 
 func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Region, error) {
@@ -552,8 +552,9 @@ func (c *RPCContext) String() string {
 }
 
 type storeSelectorOp struct {
-	leaderOnly bool
-	labels     []*metapb.StoreLabel
+	leaderOnly   bool
+	preferLeader bool
+	labels       []*metapb.StoreLabel
 }
 
 // StoreSelectorOption configures storeSelectorOp.
@@ -570,6 +571,13 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 func WithLeaderOnly() StoreSelectorOption {
 	return func(op *storeSelectorOp) {
 		op.leaderOnly = true
+	}
+}
+
+// WithPerferLeader indicates selecting stores with leader as priority until leader unaccessible.
+func WithPerferLeader() StoreSelectorOption {
+	return func(op *storeSelectorOp) {
+		op.preferLeader = true
 	}
 }
 
@@ -607,6 +615,9 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	case kv.ReplicaReadFollower:
 		store, peer, accessIdx, storeIdx = cachedRegion.FollowerStorePeer(regionStore, followerStoreSeed, options)
 	case kv.ReplicaReadMixed:
+		store, peer, accessIdx, storeIdx = cachedRegion.AnyStorePeer(regionStore, followerStoreSeed, options)
+	case kv.ReplicaReadPreferLeader:
+		options.preferLeader = true
 		store, peer, accessIdx, storeIdx = cachedRegion.AnyStorePeer(regionStore, followerStoreSeed, options)
 	default:
 		isLeaderReq = true
