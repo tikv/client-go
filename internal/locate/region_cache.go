@@ -1645,7 +1645,8 @@ func (c *RegionCache) cacheGC() {
 	ticker := time.NewTicker(cleanCacheInterval)
 	defer ticker.Stop()
 
-	iterItem := newBtreeSearchItem([]byte(""))
+	beginning := newBtreeSearchItem([]byte(""))
+	iterItem := beginning
 	expired := make([]*btreeItem, cleanRegionNumPerRound)
 	for {
 		select {
@@ -1671,6 +1672,11 @@ func (c *RegionCache) cacheGC() {
 				return true
 			})
 			c.mu.RUnlock()
+
+			// Reach the end of the region cache, start from the beginning
+			if count <= cleanRegionNumPerRound {
+				iterItem = beginning
+			}
 
 			if len(expired) > 0 {
 				c.mu.Lock()
