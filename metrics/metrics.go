@@ -96,6 +96,7 @@ var (
 	TiKVReadThroughput                       prometheus.Histogram
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
+	TiKVGrpcConnectionState                  *prometheus.GaugeVec
 )
 
 // Label constants.
@@ -589,6 +590,14 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of assertions used in prewrite requests",
 		}, []string{LblType})
 
+	TiKVGrpcConnectionState = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "grpc_connection_state",
+			Help:      "State of gRPC connection",
+		}, []string{"connection_id", "store_ip", "grpc_state"})
+
 	initShortcuts()
 }
 
@@ -659,6 +668,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadThroughput)
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
+	prometheus.MustRegister(TiKVGrpcConnectionState)
 }
 
 // readCounter reads the value of a prometheus.Counter.

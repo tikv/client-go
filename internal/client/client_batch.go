@@ -544,6 +544,9 @@ func (c *batchCommandsClient) waitConnReady() (err error) {
 	if c.conn.GetState() == connectivity.Ready {
 		return
 	}
+	if c.conn.GetState() == connectivity.Idle {
+		c.conn.Connect()
+	}
 	start := time.Now()
 	defer func() {
 		metrics.TiKVBatchClientWaitEstablish.Observe(time.Since(start).Seconds())
