@@ -308,6 +308,11 @@ func (r *Region) compareAndSwapStore(oldStore, newStore *regionStore) bool {
 	return atomic.CompareAndSwapPointer(&r.store, unsafe.Pointer(oldStore), unsafe.Pointer(newStore))
 }
 
+func (r *Region) isCacheTTLExpired(ts int64) bool {
+	lastAccess := atomic.LoadInt64(&r.lastAccess)
+	return ts-lastAccess > regionCacheTTLSec
+}
+
 func (r *Region) checkRegionCacheTTL(ts int64) bool {
 	// Only consider use percentage on this failpoint, for example, "2%return"
 	if _, err := util.EvalFailpoint("invalidateRegionCache"); err == nil {
@@ -417,6 +422,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
+	go c.cacheGC()
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	return c
 }
@@ -1903,6 +1909,62 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 			c.insertRegionToCache(new)
 			c.mu.Unlock()
 		}()
+	}
+}
+
+const cleanCacheInterval = time.Second
+const cleanRegionNumPerRound = 50
+
+// This function is expected to run in a background goroutine.
+// It keeps iterating over the whole region cache, searching for stale region
+// info. It runs at cleanCacheInterval and checks only cleanRegionNumPerRound
+// regions. In this way, the impact of this background goroutine should be
+// negligible.
+func (c *RegionCache) cacheGC() {
+	ticker := time.NewTicker(cleanCacheInterval)
+	defer ticker.Stop()
+
+	beginning := newBtreeSearchItem([]byte(""))
+	iterItem := beginning
+	expired := make([]*btreeItem, cleanRegionNumPerRound)
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			count := 0
+			expired = expired[:0]
+
+			// Only RLock when checking TTL to avoid blocking other readers
+			c.mu.RLock()
+			ts := time.Now().Unix()
+			c.mu.sorted.b.AscendGreaterOrEqual(iterItem, func(item *btreeItem) bool {
+				if count > cleanRegionNumPerRound {
+					iterItem = item
+					return false
+				}
+				count++
+				if item.cachedRegion.isCacheTTLExpired(ts) {
+					expired = append(expired, item)
+				}
+				return true
+			})
+			c.mu.RUnlock()
+
+			// Reach the end of the region cache, start from the beginning
+			if count <= cleanRegionNumPerRound {
+				iterItem = beginning
+			}
+
+			if len(expired) > 0 {
+				c.mu.Lock()
+				for _, item := range expired {
+					c.mu.sorted.b.Delete(item)
+					c.removeVersionFromCache(item.cachedRegion.VerID(), item.cachedRegion.GetID())
+				}
+				c.mu.Unlock()
+			}
+		}
 	}
 }
 
