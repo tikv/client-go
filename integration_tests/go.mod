@@ -98,3 +98,5 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230131044052-43bdd423d3fd

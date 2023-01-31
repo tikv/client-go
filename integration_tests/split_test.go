@@ -142,7 +142,7 @@ type mockPDClient struct {
 	stop   bool
 }
 
-func (c *mockPDClient) LoadGlobalConfig(ctx context.Context, configPath string) ([]pd.GlobalConfigItem, int64, error) {
+func (c *mockPDClient) LoadGlobalConfig(ctx context.Context, names []string, configPath string) ([]pd.GlobalConfigItem, int64, error) {
 	return nil, 0, nil
 }
 
@@ -337,4 +337,3 @@ func (c *mockPDClient) GetExternalTimestamp(ctx context.Context) (uint64, error)
 func (c *mockPDClient) SetExternalTimestamp(ctx context.Context, tso uint64) error {
 	panic("unimplemented")
 }
-
