@@ -687,6 +687,7 @@ type MPPStreamResponse struct {
 	Lease
 }
 
+// SetContext sets the request context to the request.
 func SetContext(req *Request, ctx *kvrpcpb.Context) error {
 	switch req.Type {
 	case CmdGet:
