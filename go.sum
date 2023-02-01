@@ -657,10 +657,10 @@ github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKs
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW93SG+q0F8KI+yFrcIDT4c/RNoc4=
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
-github.com/tikv/pd v1.1.0-beta.0.20230119114149-402c2bfee2f3 h1:cj3bhdIBJcLL2304EDEmd3eX+r73+hbGSYRFn/APiDU=
-github.com/tikv/pd v1.1.0-beta.0.20230119114149-402c2bfee2f3/go.mod h1:IFQZ85uu1438yp7Tb0xCgvw/BdSPReB9zcJsxXbyTP4=
-github.com/tikv/pd/client v0.0.0-20230118040950-082fc6a9bc2e h1:MD/PZa8Hcv7dg3cFY0tO+g+OPMhTW3O3tXetE80SjbY=
-github.com/tikv/pd/client v0.0.0-20230118040950-082fc6a9bc2e/go.mod h1:yRGXx64wsS1dGsjtyeBm6Iy6DItkYkbcQ9+Hj9OED4U=
+github.com/tikv/pd v1.1.0-beta.0.20230201064005-6ca9a3398f15 h1:ef+kODGby/rmF9fabJzqRM15NcGufkTRftROdy7jvAk=
+github.com/tikv/pd v1.1.0-beta.0.20230201064005-6ca9a3398f15/go.mod h1:UnfZJ+ykNsVbQgo/CZ3NFyHnLJ/pQGlBD0M/WgxFHMQ=
+github.com/tikv/pd/client v0.0.0-20230201064005-6ca9a3398f15 h1:hbitfRe280+5wJbzPom1v4rUA1l3ASVWCNzkT0K3nfU=
+github.com/tikv/pd/client v0.0.0-20230201064005-6ca9a3398f15/go.mod h1:dpOuw2Gok27aSQbtN2fvee8QfsqOX8EE5I1ZUNUClpQ=
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
 github.com/twmb/murmur3 v1.1.3/go.mod h1:Qq/R7NUyOfr65zD+6Q5IHKsJLwP7exErjN6lyyq3OSQ=
 github.com/yuin/goldmark v1.1.25/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
