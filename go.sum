@@ -379,10 +379,10 @@ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
 github.com/HuSharp/kvproto v0.0.0-20230201020050-37fb6e711acb h1:b3EX7nyUAquOF9LYJHUcm0VNA3cta5ab0D0y9yjHxDI=
 github.com/HuSharp/kvproto v0.0.0-20230201020050-37fb6e711acb/go.mod h1:+on3Lfk/fb1lXkud3XvskJumhSIEEgN2TTbMObUlrxE=
-github.com/HuSharp/pd v0.0.0-20230201072746-cd4e572dff6f h1:mXqaRqnOVUPdiBWDB/ak9GLwmw5Nyu8fMOAPVXA3YNU=
-github.com/HuSharp/pd v0.0.0-20230201072746-cd4e572dff6f/go.mod h1:KhiCuPvIKr9AVxxUUZK+vV8pHJRJQq7wOBvSsY3QLnI=
-github.com/HuSharp/pd/client v0.0.0-20230201072746-cd4e572dff6f h1:m8S/URx52Nc6nULE4lyVnIDjzkZDfMlmSGhRnR4U/bQ=
-github.com/HuSharp/pd/client v0.0.0-20230201072746-cd4e572dff6f/go.mod h1:Vu4MewHAy5rw77vB/6e5H5VPdoxLPhvEJWHTbUyjAhE=
+github.com/HuSharp/pd v1.1.0-beta.0.20230201083612-3c17fe0e1344 h1:o/rs339DqdS8uzThBZytaiep5ZgbM1ZyveQVIu8Jlck=
+github.com/HuSharp/pd v1.1.0-beta.0.20230201083612-3c17fe0e1344/go.mod h1:KhiCuPvIKr9AVxxUUZK+vV8pHJRJQq7wOBvSsY3QLnI=
+github.com/HuSharp/pd/client v0.0.0-20230201083612-3c17fe0e1344 h1:FZmqkIfJDVBfJ6wJv2CRtXL1v2pP6NR1cuq60XIEa/8=
+github.com/HuSharp/pd/client v0.0.0-20230201083612-3c17fe0e1344/go.mod h1:Vu4MewHAy5rw77vB/6e5H5VPdoxLPhvEJWHTbUyjAhE=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
