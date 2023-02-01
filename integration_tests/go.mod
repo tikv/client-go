@@ -89,7 +89,7 @@ require (
 	golang.org/x/sys v0.4.0 // indirect
 	golang.org/x/text v0.6.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
-	golang.org/x/tools v0.2.0 // indirect
+	golang.org/x/tools v0.5.0 // indirect
 	google.golang.org/genproto v0.0.0-20221202195650-67e5cbc046fd // indirect
 	google.golang.org/grpc v1.51.0 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
@@ -99,4 +99,10 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230131044052-43bdd423d3fd
+replace github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230201072746-cd4e572dff6f
+
+replace github.com/tikv/pd => github.com/HuSharp/pd v0.0.0-20230201072746-cd4e572dff6f
+
+replace github.com/pingcap/kvproto => github.com/HuSharp/kvproto v0.0.0-20230201020050-37fb6e711acb
+
+replace github.com/pingcap/tidb => github.com/HuSharp/tidb v1.1.0-beta.0.20230201062708-cf813d9aa984
