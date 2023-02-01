@@ -14,7 +14,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20210918120811-547c13e3eb00
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20230119031034-25f1909b7934
+	github.com/pingcap/kvproto v0.0.0-20230201112839-2b853bed8125
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.11.0
@@ -63,8 +63,6 @@ require (
 	stathat.com/c/consistent v1.0.0 // indirect
 )
 
-replace github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230201083612-3c17fe0e1344
+replace github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230201135423-1217f01b15d6
 
-replace github.com/tikv/pd => github.com/HuSharp/pd v1.1.0-beta.0.20230201083612-3c17fe0e1344
-
-replace github.com/pingcap/kvproto => github.com/HuSharp/kvproto v0.0.0-20230201020050-37fb6e711acb
+replace github.com/tikv/pd => github.com/HuSharp/pd v1.1.0-beta.0.20230201135423-1217f01b15d6
