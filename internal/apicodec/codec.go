@@ -23,15 +23,15 @@ const (
 )
 
 const (
-	// NulSpaceID is a special keyspace id that represents no keyspace exist.
-	NulSpaceID KeyspaceID = 0xffffffff
+	// NullspaceID is a special keyspace id that represents no keyspace exist.
+	NullspaceID KeyspaceID = 0xffffffff
 )
 
 // ParseKeyspaceID retrieves the keyspaceID from the given keyspace-encoded key.
 // It returns error if the given key is not in proper api-v2 format.
 func ParseKeyspaceID(b []byte) (KeyspaceID, error) {
 	if err := checkV2Key(b); err != nil {
-		return NulSpaceID, err
+		return NullspaceID, err
 	}
 
 	buf := append([]byte{}, b[:keyspacePrefixLen]...)

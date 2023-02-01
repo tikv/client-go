@@ -687,15 +687,7 @@ type MPPStreamResponse struct {
 	Lease
 }
 
-// SetContext set the Context field for the given req to the specified ctx.
-func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
-	ctx := &req.Context
-	if region != nil {
-		ctx.RegionId = region.Id
-		ctx.RegionEpoch = region.RegionEpoch
-	}
-	ctx.Peer = peer
-
+func SetContext(req *Request, ctx *kvrpcpb.Context) error {
 	switch req.Type {
 	case CmdGet:
 		req.Get().Context = ctx
@@ -763,6 +755,8 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.BatchCop().Context = ctx
 	case CmdMPPTask:
 		// Dispatching MPP tasks don't need a region context, because it's a request for store but not region.
+		// However, we should attach the keyspace_id to the request.
+		req.DispatchMPPTask().Meta.KeyspaceId = ctx.KeyspaceId
 	case CmdMvccGetByKey:
 		req.MvccGetByKey().Context = ctx
 	case CmdMvccGetByStartTs:
@@ -785,6 +779,17 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		return errors.Errorf("invalid request type %v", req.Type)
 	}
 	return nil
+}
+
+// BuildContext set the Context field for the given req to the specified ctx.
+func BuildContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
+	ctx := &req.Context
+	if region != nil {
+		ctx.RegionId = region.Id
+		ctx.RegionEpoch = region.RegionEpoch
+	}
+	ctx.Peer = peer
+	return SetContext(req, ctx)
 }
 
 // GenRegionErrorResp returns corresponding Response with specified RegionError

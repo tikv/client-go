@@ -1142,9 +1142,7 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 }
 
 func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, retry bool, err error) {
-	req.ApiVersion = s.apiVersion
-
-	if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+	if e := tikvrpc.BuildContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 		return nil, false, err
 	}
 	// judge the store limit switch.

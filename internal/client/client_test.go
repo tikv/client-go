@@ -162,7 +162,7 @@ func TestCollapseResolveLock(t *testing.T) {
 			CommitVersion: commitTS,
 			Keys:          keys,
 		})
-		tikvrpc.SetContext(req, region, nil)
+		tikvrpc.BuildContext(req, region, nil)
 		return req
 	}
 	buildBatchResolveLockReq := func(regionID uint64, txnInfos []*kvrpcpb.TxnInfo) *tikvrpc.Request {
@@ -170,7 +170,7 @@ func TestCollapseResolveLock(t *testing.T) {
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{
 			TxnInfos: txnInfos,
 		})
-		tikvrpc.SetContext(req, region, nil)
+		tikvrpc.BuildContext(req, region, nil)
 		return req
 	}
 

@@ -62,3 +62,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	stathat.com/c/consistent v1.0.0 // indirect
 )
+
+replace github.com/pingcap/kvproto => github.com/iosmanthus/kvproto v0.0.0-20230201071501-40e4417db2ce

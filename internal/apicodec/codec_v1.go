@@ -31,7 +31,7 @@ func (c *codecV1) GetKeyspace() []byte {
 }
 
 func (c *codecV1) GetKeyspaceID() KeyspaceID {
-	return NulSpaceID
+	return NullspaceID
 }
 
 func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
