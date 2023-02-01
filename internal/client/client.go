@@ -646,7 +646,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	codec := c.option.codec
-	req, err = codec.EncodeRequest(req)
+	req, err := codec.EncodeRequest(req)
 	if err != nil {
 		return nil, err
 	}
