@@ -646,16 +646,6 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	codec := c.option.codec
-	// Attach api version and keyspace id to request context.
-	reqCtx := &req.Context
-	reqCtx.ApiVersion = codec.GetAPIVersion()
-	reqCtx.KeyspaceId = uint32(codec.GetKeyspaceID())
-
-	err := tikvrpc.SetContext(req, reqCtx)
-	if err != nil {
-		return nil, err
-	}
-
 	req, err = codec.EncodeRequest(req)
 	if err != nil {
 		return nil, err

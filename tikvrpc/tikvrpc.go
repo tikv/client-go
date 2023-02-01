@@ -754,10 +754,12 @@ func SetContext(req *Request, ctx *kvrpcpb.Context) error {
 		req.Cop().Context = ctx
 	case CmdBatchCop:
 		req.BatchCop().Context = ctx
+	// Dispatching MPP tasks don't need a region context, because it's a request for store but not region.
 	case CmdMPPTask:
-		// Dispatching MPP tasks don't need a region context, because it's a request for store but not region.
-		// However, we should attach the keyspace_id to the request.
-		req.DispatchMPPTask().Meta.KeyspaceId = ctx.KeyspaceId
+	case CmdMPPConn:
+	case CmdMPPCancel:
+	case CmdMPPAlive:
+
 	case CmdMvccGetByKey:
 		req.MvccGetByKey().Context = ctx
 	case CmdMvccGetByStartTs:

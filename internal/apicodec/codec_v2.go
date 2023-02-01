@@ -110,6 +110,9 @@ func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
 // NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	newReq := *req
+	newReqCtx := &req.Context
+	newReqCtx.ApiVersion = kvrpcpb.APIVersion_V2
+	newReqCtx.KeyspaceId = uint32(c.GetKeyspaceID())
 	// Encode requests based on command type.
 	switch req.Type {
 	// Transaction Request Types.
@@ -233,6 +236,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdMPPTask:
 		r := *req.DispatchMPPTask()
+		r.Meta.KeyspaceId = uint32(c.GetKeyspaceID())
 		r.Regions = c.encodeRegionInfos(r.Regions)
 		r.TableRegions = c.encodeTableRegions(r.TableRegions)
 		newReq.Req = &r
@@ -266,6 +270,11 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		r := *req.SplitRegion()
 		r.SplitKeys = c.encodeKeys(r.SplitKeys)
 		newReq.Req = &r
+	}
+
+	err := tikvrpc.SetContext(&newReq, newReqCtx)
+	if err != nil {
+		return nil, err
 	}
 
 	return &newReq, nil

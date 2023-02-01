@@ -35,6 +35,14 @@ func (c *codecV1) GetKeyspaceID() KeyspaceID {
 }
 
 func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
+	switch req.Type {
+	case tikvrpc.CmdMPPTask:
+		req.DispatchMPPTask().Meta.KeyspaceId = uint32(NullspaceID)
+	}
+	err := tikvrpc.SetContext(req, &req.Context)
+	if err != nil {
+		return nil, err
+	}
 	return req, nil
 }
 
