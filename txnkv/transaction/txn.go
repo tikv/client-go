@@ -825,6 +825,52 @@ func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]
 	return keys, nil
 }
 
+// CheckConstraintForAlreadyLockedKeys checks if the key satisfies the key existence constraint for a key that's already
+// locked, including those locked in aggressive-locking state.
+func (txn *KVTxn) CheckConstraintForAlreadyLockedKeys(keys ...[]byte) error {
+	memBuf := txn.us.GetMemBuffer()
+	memBuf.RLock()
+	defer memBuf.RUnlock()
+	for _, key := range keys {
+		_, err := txn.checkKeyStatusAndConstraint(memBuf, key)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (txn *KVTxn) checkKeyStatusAndConstraint(memBuf *unionstore.MemDB, key []byte) (alreadyLocked bool, err error) {
+	// The value of lockedMap is only used by pessimistic transactions.
+	var valueExist, locked, checkKeyExists bool
+	if flags, err := memBuf.GetFlags(key); err == nil {
+		locked = flags.HasLocked()
+		valueExist = flags.HasLockedValueExists()
+		checkKeyExists = flags.HasNeedCheckExists()
+	}
+	// If the key is locked in the current aggressive locking stage, override the information in memBuf.
+	isInLastAggressiveLockingStage := false
+	if txn.aggressiveLockingContext != nil {
+		if entry, ok := txn.aggressiveLockingContext.currentLockedKeys[string(key)]; ok {
+			locked = true
+			valueExist = entry.Value.Exists
+		} else if entry, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[string(key)]; ok {
+			locked = true
+			valueExist = entry.Value.Exists
+			isInLastAggressiveLockingStage = true
+		}
+	}
+
+	if locked && txn.IsPessimistic() {
+		if checkKeyExists && valueExist {
+			alreadyExist := kvrpcpb.AlreadyExist{Key: key}
+			e := &tikverr.ErrKeyExist{AlreadyExist: &alreadyExist}
+			return false, txn.committer.extractKeyExistsErr(e)
+		}
+	}
+	return locked && !isInLastAggressiveLockingStage, nil
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
@@ -890,44 +936,23 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	// Avoid data race with concurrent updates to the memBuf
 	memBuf.RLock()
 	for _, key := range keysInput {
-		// The value of lockedMap is only used by pessimistic transactions.
-		var valueExist, locked, checkKeyExists bool
-		if flags, err := memBuf.GetFlags(key); err == nil {
-			locked = flags.HasLocked()
-			valueExist = flags.HasLockedValueExists()
-			checkKeyExists = flags.HasNeedCheckExists()
-		}
-		// If the key is locked in the current aggressive locking stage, override the information in memBuf.
-		isInLastAggressiveLockingStage := false
-		if txn.aggressiveLockingContext != nil {
-			if entry, ok := txn.aggressiveLockingContext.currentLockedKeys[string(key)]; ok {
-				locked = true
-				valueExist = entry.Value.Exists
-			} else if entry, ok := txn.aggressiveLockingContext.lastRetryUnnecessaryLocks[string(key)]; ok {
-				locked = true
-				valueExist = entry.Value.Exists
-				isInLastAggressiveLockingStage = true
-			}
+		alreadyLocked, err := txn.checkKeyStatusAndConstraint(memBuf, key)
+		if err != nil {
+			memBuf.RUnlock()
+			return err
 		}
 
-		if !locked || isInLastAggressiveLockingStage {
+		if alreadyLocked {
+			if lockCtx.ReturnValues {
+				keyStr := string(key)
+				// An already locked key can not return values, we add an entry to let the caller get the value
+				// in other ways.
+				lockCtx.Values[keyStr] = tikv.ReturnedValue{AlreadyLocked: true}
+			}
+		} else {
 			// Locks acquired in the previous aggressive locking stage might need to be updated later in
 			// `filterAggressiveLockedKeys`.
 			keys = append(keys, key)
-		}
-		if locked && txn.IsPessimistic() {
-			if checkKeyExists && valueExist {
-				alreadyExist := kvrpcpb.AlreadyExist{Key: key}
-				e := &tikverr.ErrKeyExist{AlreadyExist: &alreadyExist}
-				memBuf.RUnlock()
-				return txn.committer.extractKeyExistsErr(e)
-			}
-		}
-		if lockCtx.ReturnValues && locked {
-			keyStr := string(key)
-			// An already locked key can not return values, we add an entry to let the caller get the value
-			// in other ways.
-			lockCtx.Values[keyStr] = tikv.ReturnedValue{AlreadyLocked: true}
 		}
 	}
 	memBuf.RUnlock()

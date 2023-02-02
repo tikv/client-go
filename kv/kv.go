@@ -73,6 +73,12 @@ type LockCtx struct {
 	LockExpired             *uint32
 	Stats                   *util.LockKeysDetails
 	ResourceGroupTag        []byte
+
+	// When aggressive locking is used (in which case locking-with-conflict is allowed), usually when some keys are
+	// locked with conflict, the caller should update the forUpdateTS and retry the current operation (statement).
+	// However, in some cases, the caller may be able to guarantee the consistency in some way without retrying.
+	CheckAggressiveLockedKeys bool
+
 	// ResourceGroupTagger is a special tagger used only for PessimisticLockRequest.
 	// We did not use tikvrpc.ResourceGroupTagger here because the kv package is a
 	// more basic component, and we cannot rely on tikvrpc.Request here, so we treat
