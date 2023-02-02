@@ -114,28 +114,117 @@ type connArray struct {
 	target string
 
 	index uint32
-	v     []*grpc.ClientConn
+	v     []*monitoredConn
 	// streamTimeout binds with a background goroutine to process coprocessor streaming timeout.
 	streamTimeout chan *tikvrpc.Lease
 	dialTimeout   time.Duration
 	// batchConn is not null when batch is enabled.
 	*batchConn
 	done chan struct{}
+
+	monitor *connMonitor
 }
 
 func newConnArray(maxSize uint, addr string, security config.Security,
-	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, opts []grpc.DialOption) (*connArray, error) {
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, opts []grpc.DialOption) (*connArray, error) {
 	a := &connArray{
 		index:         0,
-		v:             make([]*grpc.ClientConn, maxSize),
+		v:             make([]*monitoredConn, maxSize),
 		streamTimeout: make(chan *tikvrpc.Lease, 1024),
 		done:          make(chan struct{}),
 		dialTimeout:   dialTimeout,
+		monitor:       m,
 	}
 	if err := a.Init(addr, security, idleNotify, enableBatch, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
+}
+
+type connMonitor struct {
+	m        sync.Map
+	loopOnce sync.Once
+	stopOnce sync.Once
+	stop     chan struct{}
+}
+
+func (c *connMonitor) AddConn(conn *monitoredConn) {
+	c.m.Store(conn.Name, conn)
+}
+
+func (c *connMonitor) RemoveConn(conn *monitoredConn) {
+	c.m.Delete(conn.Name)
+	for state := connectivity.Idle; state <= connectivity.Shutdown; state++ {
+		metrics.TiKVGrpcConnectionState.WithLabelValues(conn.Name, conn.Target(), state.String()).Set(0)
+	}
+}
+
+func (c *connMonitor) Start() {
+	c.loopOnce.Do(
+		func() {
+			c.stop = make(chan struct{})
+			go c.start()
+		},
+	)
+}
+
+func (c *connMonitor) Stop() {
+	c.stopOnce.Do(
+		func() {
+			if c.stop != nil {
+				close(c.stop)
+			}
+		},
+	)
+}
+
+func (c *connMonitor) start() {
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.m.Range(func(_, value interface{}) bool {
+				conn := value.(*monitoredConn)
+				nowState := conn.GetState()
+				for state := connectivity.Idle; state <= connectivity.Shutdown; state++ {
+					if state == nowState {
+						metrics.TiKVGrpcConnectionState.WithLabelValues(conn.Name, conn.Target(), nowState.String()).Set(1)
+					} else {
+						metrics.TiKVGrpcConnectionState.WithLabelValues(conn.Name, conn.Target(), state.String()).Set(0)
+					}
+				}
+				return true
+			})
+		case <-c.stop:
+			return
+		}
+	}
+}
+
+type monitoredConn struct {
+	*grpc.ClientConn
+	Name string
+}
+
+func (a *connArray) monitoredDial(ctx context.Context, connName, target string, opts ...grpc.DialOption) (conn *monitoredConn, err error) {
+	conn = &monitoredConn{
+		Name: connName,
+	}
+	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
+	if err != nil {
+		return nil, err
+	}
+	a.monitor.AddConn(conn)
+	return conn, nil
+}
+
+func (c *monitoredConn) Close() error {
+	if c.ClientConn != nil {
+		return c.ClientConn.Close()
+	}
+	return nil
 }
 
 func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, opts ...grpc.DialOption) error {
@@ -198,11 +287,13 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 			}),
 		}, opts...)
 
-		conn, err := grpc.DialContext(
+		conn, err := a.monitoredDial(
 			ctx,
+			fmt.Sprintf("%s-%d", a.target, i),
 			addr,
 			opts...,
 		)
+
 		cancel()
 		if err != nil {
 			// Cleanup if the initialization fails.
@@ -214,7 +305,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 		if allowBatch {
 			batchClient := &batchCommandsClient{
 				target:           a.target,
-				conn:             conn,
+				conn:             conn.ClientConn,
 				forwardedClients: make(map[string]*batchCommandsStream),
 				batched:          sync.Map{},
 				epoch:            0,
@@ -237,7 +328,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 
 func (a *connArray) Get() *grpc.ClientConn {
 	next := atomic.AddUint32(&a.index, 1) % uint32(len(a.v))
-	return a.v[next]
+	return a.v[next].ClientConn
 }
 
 func (a *connArray) Close() {
@@ -249,6 +340,9 @@ func (a *connArray) Close() {
 		if c != nil {
 			err := c.Close()
 			tikverr.Log(err)
+			if err == nil {
+				a.monitor.RemoveConn(c)
+			}
 		}
 	}
 
@@ -301,6 +395,8 @@ type RPCClient struct {
 	// Periodically check whether there is any connection that is idle and then close and remove these connections.
 	// Implement background cleanup.
 	isClosed bool
+
+	connMonitor *connMonitor
 }
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
@@ -310,10 +406,12 @@ func NewRPCClient(opts ...Opt) *RPCClient {
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
+		connMonitor: &connMonitor{},
 	}
 	for _, opt := range opts {
 		opt(cli.option)
 	}
+	cli.connMonitor.Start()
 	return cli
 }
 
@@ -352,7 +450,6 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 		for _, opt := range opts {
 			opt(&client)
 		}
-
 		array, err = newConnArray(
 			client.GrpcConnectionCount,
 			addr,
@@ -360,6 +457,7 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 			&c.idleNotify,
 			enableBatch,
 			c.option.dialTimeout,
+			c.connMonitor,
 			c.option.gRPCDialOptions)
 
 		if err != nil {
@@ -663,6 +761,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 func (c *RPCClient) Close() error {
 	// TODO: add a unit test for SendRequest After Closed
 	c.closeConns()
+	c.connMonitor.Stop()
 	return nil
 }
 
