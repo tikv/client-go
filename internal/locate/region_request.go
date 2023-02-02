@@ -1183,6 +1183,9 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		sendToAddr = rpcCtx.ProxyAddr
 	}
 
+	// TODO: include TiFlash replica(s) in the future.
+	req.ReplicaNumber = int64(rpcCtx.TiKVNum)
+
 	var sessionID uint64
 	if v := bo.GetCtx().Value(util.SessionID); v != nil {
 		sessionID = v.(uint64)

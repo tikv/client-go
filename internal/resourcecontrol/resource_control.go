@@ -55,7 +55,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 		}
 	}
 
-	return &RequestInfo{writeBytes: writeBytes}
+	return &RequestInfo{writeBytes: writeBytes * req.ReplicaNumber}
 }
 
 // IsWrite returns whether the request is a write request.
