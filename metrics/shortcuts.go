@@ -246,4 +246,5 @@ func initShortcuts() {
 	AggressiveLockedKeysNew = TiKVAggressiveLockedKeysCounter.WithLabelValues("new")
 	AggressiveLockedKeysDerived = TiKVAggressiveLockedKeysCounter.WithLabelValues("derived")
 	AggressiveLockedKeysLockedWithConflict = TiKVAggressiveLockedKeysCounter.WithLabelValues("locked_with_conflict")
+	AggressiveLockedKeysNonForceLock = TiKVAggressiveLockedKeysCounter.WithLabelValues("non_force_lock")
 }
