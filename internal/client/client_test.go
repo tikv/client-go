@@ -64,6 +64,7 @@ func TestConn(t *testing.T) {
 	})()
 
 	client := NewRPCClient()
+	defer client.Close()
 
 	addr := "127.0.0.1:6379"
 	conn1, err := client.getConnArray(addr, true)
@@ -88,6 +89,7 @@ func TestConn(t *testing.T) {
 
 func TestGetConnAfterClose(t *testing.T) {
 	client := NewRPCClient()
+	defer client.Close()
 
 	addr := "127.0.0.1:6379"
 	connArray, err := client.getConnArray(addr, true)
@@ -116,6 +118,7 @@ func TestSendWhenReconnect(t *testing.T) {
 	require.True(t, port > 0)
 
 	rpcClient := NewRPCClient()
+	defer rpcClient.Close()
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
 	conn, err := rpcClient.getConnArray(addr, true)
 	assert.Nil(t, err)
@@ -128,7 +131,6 @@ func TestSendWhenReconnect(t *testing.T) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 100*time.Second)
 	assert.True(t, err.Error() == "no available connections")
-	conn.Close()
 	server.Stop()
 }
 
@@ -247,7 +249,7 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
 	rpcClient := NewRPCClient()
-	defer rpcClient.closeConns()
+	defer rpcClient.Close()
 
 	var checkCnt uint64
 	// Check no corresponding metadata if ForwardedHost is empty.
@@ -316,7 +318,7 @@ func TestForwardMetadataByBatchCommands(t *testing.T) {
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
 	rpcClient := NewRPCClient()
-	defer rpcClient.closeConns()
+	defer rpcClient.Close()
 
 	var checkCnt uint64
 	setCheckHandler := func(forwardedHost string) {

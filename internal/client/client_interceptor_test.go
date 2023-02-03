@@ -47,6 +47,6 @@ func TestInterceptedClient(t *testing.T) {
 			return next(target, req)
 		}
 	})
-	_, _ = client.SendRequest(ctx, "", nil, 0)
+	_, _ = client.SendRequest(ctx, "", &tikvrpc.Request{}, 0)
 	assert.True(t, executed)
 }

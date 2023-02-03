@@ -3,6 +3,7 @@ package apicodec
 import (
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,4 +23,26 @@ func TestParseKeyspaceID(t *testing.T) {
 	id, err = ParseKeyspaceID([]byte{'t', 0, 0, 1, 1, 2, 3})
 	assert.NotNil(t, err)
 	assert.Equal(t, NulSpaceID, id)
+}
+
+func TestDecodeKey(t *testing.T) {
+	pfx, key, err := DecodeKey([]byte{'r', 1, 2, 3, 1, 2, 3, 4}, kvrpcpb.APIVersion_V2)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte{'r', 1, 2, 3}, pfx)
+	assert.Equal(t, []byte{1, 2, 3, 4}, key)
+
+	pfx, key, err = DecodeKey([]byte{'x', 1, 2, 3, 1, 2, 3, 4}, kvrpcpb.APIVersion_V2)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte{'x', 1, 2, 3}, pfx)
+	assert.Equal(t, []byte{1, 2, 3, 4}, key)
+
+	pfx, key, err = DecodeKey([]byte{'t', 1, 2, 3, 1, 2, 3, 4}, kvrpcpb.APIVersion_V1)
+	assert.Nil(t, err)
+	assert.Empty(t, pfx)
+	assert.Equal(t, []byte{'t', 1, 2, 3, 1, 2, 3, 4}, key)
+
+	pfx, key, err = DecodeKey([]byte{'t', 1, 2, 3, 1, 2, 3, 4}, kvrpcpb.APIVersion_V2)
+	assert.NotNil(t, err)
+	assert.Empty(t, pfx)
+	assert.Empty(t, key)
 }
