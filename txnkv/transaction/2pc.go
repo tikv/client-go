@@ -135,6 +135,9 @@ type twoPhaseCommitter struct {
 	hasNoNeedCommitKeys bool
 	resourceGroupName   string
 
+	disableKeepAlive bool
+	lifetimeMs       uint64
+
 	primaryKey  []byte
 	forUpdateTS uint64
 
@@ -452,16 +455,19 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 }
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
-func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
+func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64, disableKeepAlive bool, lifetimeMs uint64) (
+	*twoPhaseCommitter, error) {
 	return &twoPhaseCommitter{
-		store:         txn.store,
-		txn:           txn,
-		startTS:       txn.StartTS(),
-		sessionID:     sessionID,
-		regionTxnSize: map[uint64]int{},
-		isPessimistic: txn.IsPessimistic(),
-		binlog:        txn.binlog,
-		diskFullOpt:   kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		store:            txn.store,
+		txn:              txn,
+		startTS:          txn.StartTS(),
+		sessionID:        sessionID,
+		disableKeepAlive: disableKeepAlive,
+		lifetimeMs:       lifetimeMs,
+		regionTxnSize:    map[uint64]int{},
+		isPessimistic:    txn.IsPessimistic(),
+		binlog:           txn.binlog,
+		diskFullOpt:      kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 	}, nil
 }
 
@@ -698,7 +704,11 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	metrics.TiKVTxnWriteKVCountHistogram.Observe(float64(commitDetail.WriteKeys))
 	metrics.TiKVTxnWriteSizeHistogram.Observe(float64(commitDetail.WriteSize))
 	c.hasNoNeedCommitKeys = checkCnt > 0
-	c.lockTTL = txnLockTTL(txn.startTime, size)
+	if c.lifetimeMs == 0 {
+		c.lockTTL = txnLockTTL(txn.startTime, size)
+	} else {
+		c.lockTTL = c.lifetimeMs
+	}
 	c.priority = txn.priority.ToPB()
 	c.syncLog = txn.syncLog
 	c.resourceGroupTag = txn.resourceGroupTag

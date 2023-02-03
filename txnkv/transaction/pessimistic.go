@@ -277,7 +277,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *t
 			action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
 		}
 
-		if batch.isPrimary {
+		if !c.disableKeepAlive && batch.isPrimary {
 			// After locking the primary key, we should protect the primary lock from expiring
 			// now in case locking the remaining keys take a long time.
 			c.run(c, action.LockCtx)
@@ -367,7 +367,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 	if len(mutationsPb) > 1 || len(lockResp.Results) > 1 {
 		panic("unreachable")
 	}
-	if batch.isPrimary && len(lockResp.Results) > 0 && lockResp.Results[0].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
+	if !c.disableKeepAlive && batch.isPrimary && len(lockResp.Results) > 0 &&
+		lockResp.Results[0].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
 		// After locking the primary key, we should protect the primary lock from expiring.
 		c.run(c, action.LockCtx)
 	}

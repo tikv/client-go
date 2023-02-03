@@ -116,7 +116,7 @@ func (txn TxnProbe) GetAggressiveLockingPreviousKeys() []string {
 }
 
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
-	c, err := newTwoPhaseCommitter(txn, sessionID)
+	c, err := newTwoPhaseCommitter(txn, sessionID, false, 0)
 	if err != nil {
 		return nil, err
 	}

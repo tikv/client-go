@@ -323,7 +323,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 				// After writing the primary key, if the size of the transaction is larger than 32M,
 				// start the ttlManager. The ttlManager will be closed in tikvTxn.Commit().
 				// In this case 1PC is not expected to be used, but still check it for safety.
-				if int64(c.txnSize) > config.GetGlobalConfig().TiKVClient.TTLRefreshedTxnSize &&
+				if !c.disableKeepAlive && int64(c.txnSize) > config.GetGlobalConfig().TiKVClient.TTLRefreshedTxnSize &&
 					prewriteResp.OnePcCommitTs == 0 {
 					c.run(c, nil)
 				}
