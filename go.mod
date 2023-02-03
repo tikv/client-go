@@ -1,4 +1,4 @@
-module github.com/tikv/client-go/v2
+module github.com/ergesun/client-go/v2
 
 go 1.19
 
