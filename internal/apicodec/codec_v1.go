@@ -3,7 +3,7 @@ package apicodec
 import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/tikvrpc"
 )
 
 type codecV1 struct {

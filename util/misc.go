@@ -44,8 +44,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/ergesun/client-go/v2/internal/logutil"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/internal/logutil"
 	"go.uber.org/zap"
 )
 

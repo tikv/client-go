@@ -39,12 +39,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ergesun/client-go/v2/internal/logutil"
+	"github.com/ergesun/client-go/v2/util"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 

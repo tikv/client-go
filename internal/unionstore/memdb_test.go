@@ -44,7 +44,7 @@ import (
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/kv"
 )
 
 type KeyFlags = kv.KeyFlags

@@ -18,7 +18,7 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/tikvrpc"
 )
 
 // RPCInterceptor is used to decorate the RPC requests to TiKV.

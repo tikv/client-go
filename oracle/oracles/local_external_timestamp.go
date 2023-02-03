@@ -18,7 +18,7 @@ import (
 	"context"
 
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/oracle"
+	"github.com/ergesun/client-go/v2/oracle"
 	"go.uber.org/atomic"
 )
 

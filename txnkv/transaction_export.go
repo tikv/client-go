@@ -14,7 +14,7 @@
 
 package txnkv
 
-import "github.com/tikv/client-go/v2/txnkv/transaction"
+import "github.com/ergesun/client-go/v2/txnkv/transaction"
 
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn = transaction.KVTxn

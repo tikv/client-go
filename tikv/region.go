@@ -37,11 +37,11 @@ package tikv
 import (
 	"time"
 
+	"github.com/ergesun/client-go/v2/internal/apicodec"
+	"github.com/ergesun/client-go/v2/internal/client"
+	"github.com/ergesun/client-go/v2/internal/locate"
+	"github.com/ergesun/client-go/v2/tikvrpc"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/tikv/client-go/v2/internal/apicodec"
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )
 

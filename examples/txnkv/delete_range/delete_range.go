@@ -22,7 +22,7 @@ import (
 	"math/rand"
 	"os"
 
-	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/ergesun/client-go/v2/txnkv"
 )
 
 var (

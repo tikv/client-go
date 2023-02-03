@@ -40,7 +40,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/internal/apicodec"
+	"github.com/ergesun/client-go/v2/internal/apicodec"
 	pd "github.com/tikv/pd/client"
 )
 

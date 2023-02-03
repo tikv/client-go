@@ -47,8 +47,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/oracle"
+	"github.com/ergesun/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/oracle"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.

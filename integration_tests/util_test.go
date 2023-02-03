@@ -50,11 +50,11 @@ import (
 	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
-	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/testutils"
-	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
-	"github.com/tikv/client-go/v2/util/codec"
+	"github.com/ergesun/client-go/v2/config"
+	"github.com/ergesun/client-go/v2/testutils"
+	"github.com/ergesun/client-go/v2/tikv"
+	"github.com/ergesun/client-go/v2/txnkv/transaction"
+	"github.com/ergesun/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
 )
 

@@ -40,11 +40,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/txnkv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
-	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/ergesun/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/tikv"
+	"github.com/ergesun/client-go/v2/txnkv"
+	"github.com/ergesun/client-go/v2/txnkv/transaction"
+	"github.com/ergesun/client-go/v2/txnkv/txnsnapshot"
 )
 
 var scanBatchSize = tikv.ConfigProbe{}.GetScanBatchSize()

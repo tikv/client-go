@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/rawkv"
+	"github.com/ergesun/client-go/v2/config"
+	"github.com/ergesun/client-go/v2/rawkv"
 )
 
 func main() {

@@ -41,11 +41,11 @@ import (
 	"hash/crc64"
 	"testing"
 
+	"github.com/ergesun/client-go/v2/internal/locate"
+	"github.com/ergesun/client-go/v2/internal/mockstore/mocktikv"
+	"github.com/ergesun/client-go/v2/internal/retry"
+	"github.com/ergesun/client-go/v2/kv"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/kv"
 )
 
 func TestRawKV(t *testing.T) {

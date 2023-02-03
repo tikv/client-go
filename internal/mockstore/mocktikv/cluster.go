@@ -45,7 +45,7 @@ import (
 	"github.com/golang/protobuf/proto" //nolint:staticcheck
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/tikv/client-go/v2/internal/mockstore/cluster"
+	"github.com/ergesun/client-go/v2/internal/mockstore/cluster"
 	pd "github.com/tikv/pd/client"
 )
 

@@ -39,8 +39,8 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/internal/logutil"
+	"github.com/ergesun/client-go/v2/kv"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
