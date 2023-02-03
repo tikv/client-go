@@ -37,12 +37,12 @@ package tikv
 import (
 	"context"
 
+	"github.com/ergesun/client-go/v2/internal/retry"
+	"github.com/ergesun/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/txnkv/transaction"
+	"github.com/ergesun/client-go/v2/txnkv/txnlock"
+	"github.com/ergesun/client-go/v2/txnkv/txnsnapshot"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
-	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
 )
 

@@ -25,11 +25,11 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/testutils"
-	"github.com/tikv/client-go/v2/tikv"
+	tikverr "github.com/ergesun/client-go/v2/error"
+	"github.com/ergesun/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/oracle"
+	"github.com/ergesun/client-go/v2/testutils"
+	"github.com/ergesun/client-go/v2/tikv"
 )
 
 func TestAssertion(t *testing.T) {

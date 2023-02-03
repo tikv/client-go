@@ -39,7 +39,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	tikverr "github.com/tikv/client-go/v2/error"
+	tikverr "github.com/ergesun/client-go/v2/error"
 )
 
 func TestUnionStoreGetSet(t *testing.T) {

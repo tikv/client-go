@@ -49,14 +49,14 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	tikverr "github.com/ergesun/client-go/v2/error"
+	"github.com/ergesun/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/oracle"
+	"github.com/ergesun/client-go/v2/tikv"
+	"github.com/ergesun/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/txnkv"
+	"github.com/ergesun/client-go/v2/txnkv/transaction"
+	"github.com/ergesun/client-go/v2/txnkv/txnlock"
 )
 
 var getMaxBackoff = tikv.ConfigProbe{}.GetGetMaxBackoff()

@@ -42,16 +42,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ergesun/client-go/v2/error"
+	"github.com/ergesun/client-go/v2/tikv"
+	"github.com/ergesun/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/txnkv"
+	"github.com/ergesun/client-go/v2/txnkv/transaction"
+	"github.com/ergesun/client-go/v2/txnkv/txnsnapshot"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
-	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 func TestSnapshot(t *testing.T) {

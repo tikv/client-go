@@ -46,7 +46,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/oracle"
+	"github.com/ergesun/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 )

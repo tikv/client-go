@@ -21,13 +21,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ergesun/client-go/v2/internal/mockstore/mocktikv"
+	"github.com/ergesun/client-go/v2/oracle"
+	"github.com/ergesun/client-go/v2/testutils"
+	"github.com/ergesun/client-go/v2/tikvrpc"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/testutils"
-	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 func TestKV(t *testing.T) {

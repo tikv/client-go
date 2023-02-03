@@ -46,8 +46,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/config"
+	"github.com/ergesun/client-go/v2/tikvrpc"
 )
 
 func TestPanicInRecvLoop(t *testing.T) {

@@ -16,9 +16,9 @@ package txnsnapshot
 
 import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/internal/locate"
+	"github.com/ergesun/client-go/v2/internal/retry"
+	"github.com/ergesun/client-go/v2/tikvrpc"
 )
 
 // SnapshotProbe exposes some snapshot utilities for testing purpose.

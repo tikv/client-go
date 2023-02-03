@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/ergesun/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/txnkv"
 )
 
 // KV represents a Key-Value pair.

@@ -43,7 +43,7 @@ import (
 	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/util/codec"
+	"github.com/ergesun/client-go/v2/util/codec"
 )
 
 type mvccValueType int

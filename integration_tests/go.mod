@@ -11,7 +11,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.5-0.20230120021435-f89383775234
+	github.com/ergesun/client-go/v2 v2.0.5-0.20230120021435-f89383775234
 	github.com/tikv/pd/client v0.0.0-20230202094356-18df271ce57f
 	go.uber.org/goleak v1.2.0
 )
@@ -97,6 +97,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/tikv/client-go/v2 => ../
+replace github.com/ergesun/client-go/v2 => ../
 
 replace github.com/pingcap/tidb => github.com/HuSharp/tidb v0.0.0-20230201105642-2ff0bda68903

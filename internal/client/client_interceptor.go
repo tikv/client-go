@@ -19,9 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/internal/resourcecontrol"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/ergesun/client-go/v2/internal/resourcecontrol"
+	"github.com/ergesun/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/tikvrpc/interceptor"
 	resourceControlClient "github.com/tikv/pd/pkg/mcs/resource_manager/client"
 )
 

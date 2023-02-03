@@ -54,14 +54,14 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/metrics"
-	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util"
+	tikverr "github.com/ergesun/client-go/v2/error"
+	"github.com/ergesun/client-go/v2/internal/client"
+	"github.com/ergesun/client-go/v2/internal/logutil"
+	"github.com/ergesun/client-go/v2/internal/retry"
+	"github.com/ergesun/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/metrics"
+	"github.com/ergesun/client-go/v2/tikvrpc"
+	"github.com/ergesun/client-go/v2/util"
 )
 
 // shuttingDown is a flag to indicate tidb-server is exiting (Ctrl+C signal

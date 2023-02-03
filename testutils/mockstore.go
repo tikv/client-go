@@ -15,8 +15,8 @@
 package testutils
 
 import (
-	"github.com/tikv/client-go/v2/internal/mockstore/cluster"
-	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
+	"github.com/ergesun/client-go/v2/internal/mockstore/cluster"
+	"github.com/ergesun/client-go/v2/internal/mockstore/mocktikv"
 	pd "github.com/tikv/pd/client"
 )
 

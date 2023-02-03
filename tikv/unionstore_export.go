@@ -34,7 +34,7 @@
 
 package tikv
 
-import "github.com/tikv/client-go/v2/internal/unionstore"
+import "github.com/ergesun/client-go/v2/internal/unionstore"
 
 // Getter is the interface for the Get method.
 type Getter = unionstore.Getter

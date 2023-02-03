@@ -2,7 +2,7 @@ package apicodec
 
 import (
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/util/codec"
+	"github.com/ergesun/client-go/v2/util/codec"
 )
 
 // memCodec is used by Codec to encode/decode keys to

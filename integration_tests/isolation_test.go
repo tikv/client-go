@@ -47,9 +47,9 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	kverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/tikv"
-	"github.com/tikv/client-go/v2/txnkv/transaction"
+	kverr "github.com/ergesun/client-go/v2/error"
+	"github.com/ergesun/client-go/v2/tikv"
+	"github.com/ergesun/client-go/v2/txnkv/transaction"
 )
 
 func TestIsolation(t *testing.T) {

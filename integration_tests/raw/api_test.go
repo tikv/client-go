@@ -14,8 +14,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tidwall/gjson"
-	"github.com/tikv/client-go/v2/rawkv"
-	"github.com/tikv/client-go/v2/tikv"
+	"github.com/ergesun/client-go/v2/rawkv"
+	"github.com/ergesun/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 )
 

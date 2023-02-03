@@ -37,7 +37,7 @@ package unionstore
 import (
 	"context"
 
-	tikverr "github.com/tikv/client-go/v2/error"
+	tikverr "github.com/ergesun/client-go/v2/error"
 )
 
 type mockSnapshot struct {

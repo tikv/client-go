@@ -42,10 +42,10 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/metrics"
+	tikverr "github.com/ergesun/client-go/v2/error"
+	"github.com/ergesun/client-go/v2/internal/logutil"
+	"github.com/ergesun/client-go/v2/kv"
+	"github.com/ergesun/client-go/v2/metrics"
 	"go.uber.org/zap"
 )
 
