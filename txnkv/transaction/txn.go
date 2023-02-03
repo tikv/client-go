@@ -107,23 +107,27 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope string
-	StartTS  *uint64
+	TxnScope         string
+	StartTS          *uint64
+	LifetimeMs       uint64
+	DisableKeepAlive bool
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn struct {
-	snapshot  *txnsnapshot.KVSnapshot
-	us        *unionstore.KVUnionStore
-	store     kvstore // for connection to region.
-	startTS   uint64
-	startTime time.Time // Monotonic timestamp for recording txn time consuming.
-	commitTS  uint64
-	mu        sync.Mutex // For thread-safe LockKeys function.
-	setCnt    int64
-	vars      *tikv.Variables
-	committer *twoPhaseCommitter
-	lockedCnt int
+	snapshot         *txnsnapshot.KVSnapshot
+	us               *unionstore.KVUnionStore
+	store            kvstore // for connection to region.
+	startTS          uint64
+	startTime        time.Time // Monotonic timestamp for recording txn time consuming.
+	commitTS         uint64
+	disableKeepAlive bool
+	lifetimeMs       uint64
+	mu               sync.Mutex // For thread-safe LockKeys function.
+	setCnt           int64
+	vars             *tikv.Variables
+	committer        *twoPhaseCommitter
+	lockedCnt        int
 
 	valid bool
 
@@ -167,6 +171,8 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		store:             store,
 		startTS:           startTS,
 		startTime:         time.Now(),
+		disableKeepAlive:  options.DisableKeepAlive,
+		lifetimeMs:        options.LifetimeMs,
 		valid:             true,
 		vars:              tikv.DefaultVars,
 		scope:             options.TxnScope,
@@ -448,7 +454,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	// If the txn use pessimistic lock, committer is initialized.
 	committer := txn.committer
 	if committer == nil {
-		committer, err = newTwoPhaseCommitter(txn, sessionID)
+		committer, err = newTwoPhaseCommitter(txn, sessionID, txn.disableKeepAlive, txn.lifetimeMs)
 		if err != nil {
 			return err
 		}
@@ -966,7 +972,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			if val != nil {
 				sessionID = val.(uint64)
 			}
-			txn.committer, err = newTwoPhaseCommitter(txn, sessionID)
+			txn.committer, err = newTwoPhaseCommitter(txn, sessionID, txn.disableKeepAlive, txn.lifetimeMs)
 			if err != nil {
 				return err
 			}
