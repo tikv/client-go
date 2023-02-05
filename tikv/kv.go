@@ -662,14 +662,14 @@ func WithStartTS(startTS uint64) TxnOption {
 // WithLifetime sets the LifetimeMs to lifetimeMs
 func WithLifetime(lifetimeMs uint64) TxnOption {
 	return func(st *transaction.TxnOptions) {
-		st.LifetimeMs = lifetimeMs
+		st.LifetimeMs = &lifetimeMs
 	}
 }
 
 // WithDisableKeepAlive sets the DisableKeepAlive to true
-func WithDisableKeepAlive() TxnOption {
+func WithDisableKeepAlive(disableKeepAlive bool) TxnOption {
 	return func(st *transaction.TxnOptions) {
-		st.DisableKeepAlive = true
+		st.DisableKeepAlive = &disableKeepAlive
 	}
 }
 

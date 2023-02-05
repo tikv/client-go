@@ -3,6 +3,7 @@ module integration_tests
 go 1.19
 
 require (
+	github.com/ergesun/client-go/v2 v2.0.5-0.20230120021435-f89383775234
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220423142525-ae43b7f4e5c3
@@ -11,7 +12,6 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
-	github.com/ergesun/client-go/v2 v2.0.5-0.20230120021435-f89383775234
 	github.com/tikv/pd/client v0.0.0-20230202094356-18df271ce57f
 	go.uber.org/goleak v1.2.0
 )
@@ -50,7 +50,6 @@ require (
 	github.com/ncw/directio v1.0.5 // indirect
 	github.com/ngaut/pools v0.0.0-20180318154953-b7bc8c42aac7 // indirect
 	github.com/ngaut/sync2 v0.0.0-20141008032647-7a24ed77b2ef // indirect
-	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/opentracing/basictracer-go v1.1.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pingcap/badger v1.5.1-0.20230103063557-828f39b09b6d // indirect
@@ -72,6 +71,7 @@ require (
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
+	github.com/tikv/client-go/v2 v2.0.5-0.20230120021435-f89383775234 // indirect
 	github.com/tikv/pd v1.1.0-beta.0.20230202094356-18df271ce57f // indirect
 	github.com/twmb/murmur3 v1.1.3 // indirect
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
