@@ -109,8 +109,8 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 type TxnOptions struct {
 	TxnScope         string
 	StartTS          *uint64
-	LifetimeMs       uint64
-	DisableKeepAlive bool
+	LifetimeMs       *uint64
+	DisableKeepAlive *bool
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -171,8 +171,8 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		store:             store,
 		startTS:           startTS,
 		startTime:         time.Now(),
-		disableKeepAlive:  options.DisableKeepAlive,
-		lifetimeMs:        options.LifetimeMs,
+		disableKeepAlive:  *options.DisableKeepAlive,
+		lifetimeMs:        *options.LifetimeMs,
 		valid:             true,
 		vars:              tikv.DefaultVars,
 		scope:             options.TxnScope,
