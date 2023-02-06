@@ -7,11 +7,11 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220423142525-ae43b7f4e5c3
 	github.com/pingcap/kvproto v0.0.0-20230206081257-eccad3776d7b
-	github.com/pingcap/tidb v0.0.0-20230120062950-38a7c6220ea6
+	github.com/pingcap/tidb v0.0.0-20230206134558-191503599a39
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.5-0.20230120021435-f89383775234
+	github.com/tikv/client-go/v2 v2.0.5-0.20230202101145-8fd09cd88cce
 	github.com/tikv/pd/client v0.0.0-20230202094356-18df271ce57f
 	go.uber.org/goleak v1.2.0
 )
@@ -66,13 +66,15 @@ require (
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20220927061507-ef77025ab5aa // indirect
 	github.com/rogpeppe/go-internal v1.8.0 // indirect
-	github.com/shirou/gopsutil/v3 v3.22.9 // indirect
+	github.com/shirou/gopsutil/v3 v3.22.12 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stathat/consistent v1.0.0 // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tikv/pd v1.1.0-beta.0.20230202094356-18df271ce57f // indirect
+	github.com/tklauser/go-sysconf v0.3.11 // indirect
+	github.com/tklauser/numcpus v0.6.0 // indirect
 	github.com/twmb/murmur3 v1.1.3 // indirect
 	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
@@ -98,5 +100,3 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
-
-replace github.com/pingcap/tidb => github.com/HuSharp/tidb v0.0.0-20230201105642-2ff0bda68903
