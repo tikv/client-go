@@ -1488,7 +1488,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	if regionErr.GetFlashbackInProgress() != nil {
 		logutil.BgLogger().Debug("tikv reports `FlashbackInProgress`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
 		return false, errors.Errorf("region %d is in flashback progress, FlashbackStartTS is %d",
-			regionErr.GetFlashbackInProgress().GetRegionId(), regionErr.GetFlashbackInProgress().FlashbackStartTs)
+			regionErr.GetFlashbackInProgress().GetRegionId(), regionErr.GetFlashbackInProgress().GetFlashbackStartTs())
 	}
 	// This error means a second-phase flashback request is sent to a region that is not
 	// prepared for the flashback before, it should stop retrying immediately to avoid
