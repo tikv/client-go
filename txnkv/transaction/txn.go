@@ -825,6 +825,28 @@ func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]
 	return keys, nil
 }
 
+// collectAggressiveLockingStats collects statistics about aggressive locking and updates metrics if needed.
+func (txn *KVTxn) collectAggressiveLockingStats(lockCtx *tikv.LockCtx, keys int, skippedLockKeys int, filteredAggressiveLockedKeysCount int, lockWakeUpMode kvrpcpb.PessimisticLockWakeUpMode) {
+	if keys > 0 {
+		lockCtx.Stats.AggressiveLockNewCount += keys - skippedLockKeys
+
+		lockedWithConflictCount := 0
+		for _, v := range lockCtx.Values {
+			if v.LockedWithConflictTS != 0 {
+				lockedWithConflictCount++
+			}
+		}
+		lockCtx.Stats.LockedWithConflictCount += lockedWithConflictCount
+		metrics.AggressiveLockedKeysLockedWithConflict.Add(float64(lockedWithConflictCount))
+
+		if lockWakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
+			metrics.AggressiveLockedKeysNonForceLock.Add(float64(keys))
+		}
+	}
+
+	lockCtx.Stats.AggressiveLockDerivedCount += filteredAggressiveLockedKeysCount
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
@@ -1000,7 +1022,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 
 			if len(keys) == 0 {
 				if lockCtx.Stats != nil {
-					lockCtx.Stats.AggressiveLockDerivedCount += filteredAggressiveLockedKeysCount
+					txn.collectAggressiveLockingStats(lockCtx, 0, 0, filteredAggressiveLockedKeysCount, lockWakeUpMode)
 				}
 				return nil
 			}
@@ -1142,21 +1164,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	// Update statistics information.
 	txn.lockedCnt += len(keys) - skippedLockKeys
 	if txn.aggressiveLockingContext != nil && lockCtx.Stats != nil {
-		lockCtx.Stats.AggressiveLockNewCount += len(keys) - skippedLockKeys
-		lockCtx.Stats.AggressiveLockDerivedCount += filteredAggressiveLockedKeysCount
-
-		lockedWithConflictCount := 0
-		for _, v := range lockCtx.Values {
-			if v.LockedWithConflictTS != 0 {
-				lockedWithConflictCount++
-			}
-		}
-		lockCtx.Stats.LockedWithConflictCount += lockedWithConflictCount
-		metrics.AggressiveLockedKeysLockedWithConflict.Add(float64(lockedWithConflictCount))
-
-		if lockWakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
-			metrics.AggressiveLockedKeysNonForceLock.Add(float64(len(keys)))
-		}
+		txn.collectAggressiveLockingStats(lockCtx, len(keys), skippedLockKeys, filteredAggressiveLockedKeysCount, lockWakeUpMode)
 	}
 	return nil
 }
