@@ -119,8 +119,6 @@ const (
 	LblToStore         = "to_store"
 	LblStaleRead       = "stale_read"
 	LblSource          = "source"
-	LblToFollower      = "to_follower"
-	LblToLeader        = "to_leader"
 )
 
 func initMetrics(namespace, subsystem string) {
