@@ -653,10 +653,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
 			WithPerferLeader()(&option)
 		}
-		tryLeader := false
-		if req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader {
-			tryLeader = true
-		}
+		tryLeader := req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader
 		state = &accessFollower{
 			tryLeader:         tryLeader,
 			isGlobalStaleRead: req.IsGlobalStaleRead(),
@@ -1216,8 +1213,8 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 	if !injectFailOnSend {
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
-		// Record timecost of this request into the related Store.
-		if !util.IsInternalRequest(req.RequestSource) {
+		// Record timecost of external requests on related Store when ReplicaReadMode == PreferLeader.
+		if req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.recordSlowScoreStat(time.Since(start))
 		}
 		if s.Stats != nil {

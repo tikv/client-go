@@ -39,7 +39,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -234,8 +233,8 @@ func (r *regionStore) kvPeer(seed uint32, op *storeSelectorOp) AccessIndex {
 
 func (r *regionStore) filterStoreCandidate(aidx AccessIndex, op *storeSelectorOp) bool {
 	_, s := r.accessStore(tiKVOnly, aidx)
-	// filter label unmatched store and slow stores
-	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (op.preferLeader && aidx == r.workTiKVIdx && !s.isSlow()))
+	// filter label unmatched store and slow stores when ReplicaReadMode == PreferLeader
+	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (aidx == r.workTiKVIdx && !s.isSlow()))
 }
 
 func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Region, error) {
@@ -2649,135 +2648,6 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	return
 }
 
-const (
-	slowScoreInitVal     = 1
-	slowScoreThreshold   = 80
-	slowScoreMax         = 100
-	slowScoreInitTimeout = 500000   // unit: us
-	slowScoreMaxTimeout  = 30000000 // max timeout of one txn, unit: us
-	slidingWindowSize    = 10       // default size of sliding window
-)
-
-// CntSlidingWindow represents the statistics on a bunch of sliding windows.
-type CntSlidingWindow struct {
-	avg     uint64
-	sum     uint64
-	history []uint64
-}
-
-// Avg returns the average value of this sliding window
-func (cnt *CntSlidingWindow) Avg() uint64 {
-	return cnt.avg
-}
-
-// Sum returns the sum value of this sliding window
-func (cnt *CntSlidingWindow) Sum() uint64 {
-	return cnt.sum
-}
-
-// Append adds one value into this sliding windown and returns the gradient.
-func (cnt *CntSlidingWindow) Append(value uint64) (gradient float64) {
-	prevAvg := cnt.avg
-	if len(cnt.history) < slidingWindowSize {
-		cnt.sum += value
-	} else {
-		cnt.sum = cnt.sum - cnt.history[0] + value
-		cnt.history = cnt.history[1:]
-	}
-	cnt.history = append(cnt.history, value)
-	cnt.avg = cnt.sum / (uint64(len(cnt.history)))
-	gradient = 1e-6
-	if prevAvg > 0 && value != prevAvg {
-		gradient = (float64(value) - float64(prevAvg)) / float64(prevAvg)
-	}
-	return gradient
-}
-
-// SlowScoreStat represents the statistics on business of Store.
-type SlowScoreStat struct {
-	avgScore            uint64
-	avgTimecost         uint64
-	intervalTimecost    uint64           // sum of the timecost in one counting interval. Unit: us
-	intervalUpdCount    uint64           // count of update in one counting interval.
-	tsCntSlidingWindow  CntSlidingWindow // sliding window on timecost
-	updCntSlidingWindow CntSlidingWindow // sliding window on update count
-}
-
-func (ss *SlowScoreStat) getSlowScore() uint64 {
-	return atomic.LoadUint64(&ss.avgScore)
-}
-
-// Update the statistics on SlowScore periodically.
-func (ss *SlowScoreStat) updateSlowScore() bool {
-	if atomic.LoadUint64(&ss.avgTimecost) == 0 {
-		// Init the whole statistics.
-		atomic.StoreUint64(&ss.avgScore, slowScoreInitVal)
-		atomic.StoreUint64(&ss.avgTimecost, slowScoreInitTimeout)
-		return true
-	}
-
-	avgTimecost := atomic.LoadUint64(&ss.avgTimecost)
-	intervalUpdCount := atomic.LoadUint64(&ss.intervalUpdCount)
-	intervalTimecost := atomic.LoadUint64(&ss.intervalTimecost)
-
-	updGradient := float64(1.0)
-	tsGradient := float64(1.0)
-	if intervalUpdCount > 0 {
-		intervalAvgTimecost := intervalTimecost / intervalUpdCount
-		updGradient = ss.updCntSlidingWindow.Append(intervalUpdCount)
-		tsGradient = ss.tsCntSlidingWindow.Append(intervalAvgTimecost)
-	}
-	// Update avgScore & avgTimecost
-	avgScore := atomic.LoadUint64(&ss.avgScore)
-	if updGradient+0.1 <= float64(1e-9) && tsGradient-0.1 >= float64(1e-9) {
-		risenRatio := math.Min(float64(5.43), math.Abs(tsGradient/updGradient))
-		curAvgScore := math.Ceil(math.Min(float64(avgScore)*risenRatio+float64(1.0), float64(slowScoreMax)))
-		atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, uint64(curAvgScore))
-	} else {
-		costScore := uint64(math.Ceil(math.Max(float64(slowScoreInitVal), math.Min(float64(2.71), 1.0+math.Abs(updGradient)))))
-		if avgScore <= slowScoreInitVal+costScore {
-			atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, slowScoreInitVal)
-		} else {
-			atomic.CompareAndSwapUint64(&ss.avgScore, avgScore, avgScore-costScore)
-		}
-	}
-	atomic.CompareAndSwapUint64(&ss.avgTimecost, avgTimecost, ss.tsCntSlidingWindow.Avg())
-
-	// Resets the counter of inteval timecost
-	atomic.StoreUint64(&ss.intervalTimecost, 0)
-	atomic.StoreUint64(&ss.intervalUpdCount, 0)
-	return true
-}
-
-// recordSlowScoreStat records the timecost of each request.
-func (ss *SlowScoreStat) recordSlowScoreStat(timecost time.Duration) bool {
-	atomic.AddUint64(&ss.intervalUpdCount, 1)
-	avgTimecost := atomic.LoadUint64(&ss.avgTimecost)
-	if avgTimecost == 0 {
-		// Init the whole statistics with the original one.
-		atomic.StoreUint64(&ss.avgScore, slowScoreInitVal)
-		atomic.StoreUint64(&ss.avgTimecost, slowScoreInitTimeout)
-		atomic.StoreUint64(&ss.intervalTimecost, uint64(timecost/time.Microsecond))
-		return true
-	}
-	curTimecost := uint64(timecost / time.Microsecond)
-	if curTimecost >= slowScoreMaxTimeout {
-		// Current query is too slow to serve (>= 30s, max timeout of a request) in this tick.
-		atomic.StoreUint64(&ss.avgScore, slowScoreMax)
-		return false
-	}
-	atomic.AddUint64(&ss.intervalTimecost, curTimecost)
-	return true
-}
-
-func (ss *SlowScoreStat) markAlreadySlow() {
-	atomic.StoreUint64(&ss.avgScore, slowScoreMax)
-}
-
-func (ss *SlowScoreStat) isSlow() bool {
-	return ss.getSlowScore() >= slowScoreThreshold
-}
-
 // getSlowScore returns the slow score of store.
 func (s *Store) getSlowScore() uint64 {
 	return s.slowScore.getSlowScore()
@@ -2789,13 +2659,13 @@ func (s *Store) isSlow() bool {
 }
 
 // updateSlowScore updates the slow score of this store according to the timecost of current request.
-func (s *Store) updateSlowScoreStat() bool {
-	return s.slowScore.updateSlowScore()
+func (s *Store) updateSlowScoreStat() {
+	s.slowScore.updateSlowScore()
 }
 
 // recordSlowScoreStat records timecost of each request.
-func (s *Store) recordSlowScoreStat(timecost time.Duration) bool {
-	return s.slowScore.recordSlowScoreStat(timecost)
+func (s *Store) recordSlowScoreStat(timecost time.Duration) {
+	s.slowScore.recordSlowScoreStat(timecost)
 }
 
 func (s *Store) markAlreadySlow() {
