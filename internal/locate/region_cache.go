@@ -233,8 +233,8 @@ func (r *regionStore) kvPeer(seed uint32, op *storeSelectorOp) AccessIndex {
 
 func (r *regionStore) filterStoreCandidate(aidx AccessIndex, op *storeSelectorOp) bool {
 	_, s := r.accessStore(tiKVOnly, aidx)
-	// filter label unmatched store
-	return s.IsLabelsMatch(op.labels)
+	// filter label unmatched store and slow stores when ReplicaReadMode == PreferLeader
+	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (aidx == r.workTiKVIdx && !s.isSlow()))
 }
 
 func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Region, error) {
@@ -430,6 +430,8 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	go c.cacheGC()
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
+	// Default use 15s as the update inerval.
+	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
 	return c
 }
 
@@ -549,8 +551,9 @@ func (c *RPCContext) String() string {
 }
 
 type storeSelectorOp struct {
-	leaderOnly bool
-	labels     []*metapb.StoreLabel
+	leaderOnly   bool
+	preferLeader bool
+	labels       []*metapb.StoreLabel
 }
 
 // StoreSelectorOption configures storeSelectorOp.
@@ -567,6 +570,13 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 func WithLeaderOnly() StoreSelectorOption {
 	return func(op *storeSelectorOp) {
 		op.leaderOnly = true
+	}
+}
+
+// WithPerferLeader indicates selecting stores with leader as priority until leader unaccessible.
+func WithPerferLeader() StoreSelectorOption {
+	return func(op *storeSelectorOp) {
+		op.preferLeader = true
 	}
 }
 
@@ -604,6 +614,9 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	case kv.ReplicaReadFollower:
 		store, peer, accessIdx, storeIdx = cachedRegion.FollowerStorePeer(regionStore, followerStoreSeed, options)
 	case kv.ReplicaReadMixed:
+		store, peer, accessIdx, storeIdx = cachedRegion.AnyStorePeer(regionStore, followerStoreSeed, options)
+	case kv.ReplicaReadPreferLeader:
+		options.preferLeader = true
 		store, peer, accessIdx, storeIdx = cachedRegion.AnyStorePeer(regionStore, followerStoreSeed, options)
 	default:
 		isLeaderReq = true
@@ -2230,6 +2243,9 @@ type Store struct {
 	// this mechanism is currently only applicable for TiKV stores.
 	livenessState    uint32
 	unreachableSince time.Time
+
+	// A statistic for counting the request latency to this store
+	slowScore SlowScoreStat
 }
 
 type resolveState uint64
@@ -2352,6 +2368,9 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		c.storeMu.Lock()
+		if s.addr == addr {
+			newStore.slowScore = s.slowScore
+		}
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
 		s.setResolveState(deleted)
@@ -2627,6 +2646,66 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 
 	l = reachable
 	return
+}
+
+// getSlowScore returns the slow score of store.
+func (s *Store) getSlowScore() uint64 {
+	return s.slowScore.getSlowScore()
+}
+
+// isSlow returns whether current Store is slow or not.
+func (s *Store) isSlow() bool {
+	return s.slowScore.isSlow()
+}
+
+// updateSlowScore updates the slow score of this store according to the timecost of current request.
+func (s *Store) updateSlowScoreStat() {
+	s.slowScore.updateSlowScore()
+}
+
+// recordSlowScoreStat records timecost of each request.
+func (s *Store) recordSlowScoreStat(timecost time.Duration) {
+	s.slowScore.recordSlowScoreStat(timecost)
+}
+
+func (s *Store) markAlreadySlow() {
+	s.slowScore.markAlreadySlow()
+}
+
+// asyncUpdateStoreSlowScore updates the slow score of each store periodically.
+func (c *RegionCache) asyncUpdateStoreSlowScore(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			// update store slowScores
+			c.checkAndUpdateStoreSlowScores()
+		}
+	}
+}
+
+func (c *RegionCache) checkAndUpdateStoreSlowScores() {
+	defer func() {
+		r := recover()
+		if r != nil {
+			logutil.BgLogger().Error("panic in the checkAndUpdateStoreSlowScores goroutine",
+				zap.Reflect("r", r),
+				zap.Stack("stack trace"))
+		}
+	}()
+	slowScoreMetrics := make(map[string]float64)
+	c.storeMu.RLock()
+	for _, store := range c.storeMu.stores {
+		store.updateSlowScoreStat()
+		slowScoreMetrics[store.addr] = float64(store.getSlowScore())
+	}
+	c.storeMu.RUnlock()
+	for store, score := range slowScoreMetrics {
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+	}
 }
 
 func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {

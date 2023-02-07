@@ -97,6 +97,8 @@ var (
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
 	TiKVGrpcConnectionState                  *prometheus.GaugeVec
+	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
+	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 )
 
 // Label constants.
@@ -598,6 +600,22 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "State of gRPC connection",
 		}, []string{"connection_id", "store_ip", "grpc_state"})
 
+	TiKVAggressiveLockedKeysCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "aggressive_locking_count",
+			Help:      "Counter of keys locked in aggressive locking mode",
+		}, []string{LblType})
+
+	TiKVStoreSlowScoreGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "store_slow_score",
+			Help:      "Slow scores of each tikv node based on RPC timecosts",
+		}, []string{LblStore})
+
 	initShortcuts()
 }
 
@@ -669,6 +687,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
 	prometheus.MustRegister(TiKVGrpcConnectionState)
+	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
+	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 }
 
 // readCounter reads the value of a prometheus.Counter.
