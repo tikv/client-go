@@ -825,6 +825,28 @@ func (txn *KVTxn) filterAggressiveLockedKeys(lockCtx *tikv.LockCtx, allKeys [][]
 	return keys, nil
 }
 
+// collectAggressiveLockingStats collects statistics about aggressive locking and updates metrics if needed.
+func (txn *KVTxn) collectAggressiveLockingStats(lockCtx *tikv.LockCtx, keys int, skippedLockKeys int, filteredAggressiveLockedKeysCount int, lockWakeUpMode kvrpcpb.PessimisticLockWakeUpMode) {
+	if keys > 0 {
+		lockCtx.Stats.AggressiveLockNewCount += keys - skippedLockKeys
+
+		lockedWithConflictCount := 0
+		for _, v := range lockCtx.Values {
+			if v.LockedWithConflictTS != 0 {
+				lockedWithConflictCount++
+			}
+		}
+		lockCtx.Stats.LockedWithConflictCount += lockedWithConflictCount
+		metrics.AggressiveLockedKeysLockedWithConflict.Add(float64(lockedWithConflictCount))
+
+		if lockWakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
+			metrics.AggressiveLockedKeysNonForceLock.Add(float64(keys))
+		}
+	}
+
+	lockCtx.Stats.AggressiveLockDerivedCount += filteredAggressiveLockedKeysCount
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
@@ -956,7 +978,9 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	}
 	keys = deduplicateKeys(keys)
 	checkedExistence := false
+	filteredAggressiveLockedKeysCount := 0
 	var assignedPrimaryKey bool
+	lockWakeUpMode := kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal
 	if txn.IsPessimistic() && lockCtx.ForUpdateTS > 0 {
 		if txn.committer == nil {
 			// sessionID is used for log.
@@ -979,6 +1003,10 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		txn.committer.forUpdateTS = lockCtx.ForUpdateTS
 
 		allKeys := keys
+		lockCtx.Stats = &util.LockKeysDetails{
+			LockKeys:    int32(len(keys)),
+			ResolveLock: util.ResolveLockDetail{},
+		}
 
 		// If aggressive locking is enabled and we don't need to update the primary for all locks, we can avoid sending
 		// RPC to those already locked keys.
@@ -988,24 +1016,26 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				return err
 			}
 
+			filteredAggressiveLockedKeysCount = len(allKeys) - len(keys)
+			metrics.AggressiveLockedKeysDerived.Add(float64(filteredAggressiveLockedKeysCount))
+			metrics.AggressiveLockedKeysNew.Add(float64(len(keys)))
+
 			if len(keys) == 0 {
+				if lockCtx.Stats != nil {
+					txn.collectAggressiveLockingStats(lockCtx, 0, 0, filteredAggressiveLockedKeysCount, lockWakeUpMode)
+				}
 				return nil
 			}
 		}
 
-		lockWaitMode := kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal
 		if txn.aggressiveLockingContext != nil && len(keys) == 1 && !lockCtx.LockOnlyIfExists {
-			lockWaitMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
-		}
-		lockCtx.Stats = &util.LockKeysDetails{
-			LockKeys:    int32(len(keys)),
-			ResolveLock: util.ResolveLockDetail{},
+			lockWakeUpMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
 		// If the number of keys greater than 1, it can be on different region,
 		// concurrently execute on multiple regions may lead to deadlock.
 		txn.committer.isFirstLock = txn.lockedCnt == 0 && len(keys) == 1
-		err = txn.committer.pessimisticLockMutations(bo, lockCtx, lockWaitMode, &PlainMutations{keys: keys})
+		err = txn.committer.pessimisticLockMutations(bo, lockCtx, lockWakeUpMode, &PlainMutations{keys: keys})
 		if lockCtx.Stats != nil && bo.GetTotalSleep() > 0 {
 			atomic.AddInt64(&lockCtx.Stats.BackoffTime, int64(bo.GetTotalSleep())*int64(time.Millisecond))
 			lockCtx.Stats.Mu.Lock()
@@ -1095,7 +1125,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		}
 		txn.unsetPrimaryKeyIfNeeded(lockCtx)
 	}
-	skipedLockKeys := 0
+	skippedLockKeys := 0
 	for _, key := range keys {
 		valExists := true
 		// PointGet and BatchPointGet will return value in pessimistic lock response, the value may not exist.
@@ -1124,13 +1154,18 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 			// TODO: Fix the calculation when aggressive-locking is active
 			if lockCtx.LockOnlyIfExists && !valExists {
-				skipedLockKeys++
+				skippedLockKeys++
 				continue
 			}
 			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists)
 		}
 	}
-	txn.lockedCnt += len(keys) - skipedLockKeys
+
+	// Update statistics information.
+	txn.lockedCnt += len(keys) - skippedLockKeys
+	if txn.aggressiveLockingContext != nil && lockCtx.Stats != nil {
+		txn.collectAggressiveLockingStats(lockCtx, len(keys), skippedLockKeys, filteredAggressiveLockedKeysCount, lockWakeUpMode)
+	}
 	return nil
 }
 
