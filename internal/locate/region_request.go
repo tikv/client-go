@@ -264,9 +264,8 @@ type replicaSelector struct {
 // selectorState is the interface of states of the replicaSelector.
 // Here is the main state transition diagram:
 //
-//	                         exceeding maxReplicaAttempt
-//	+-------------------+   || RPC failure && unreachable && no forwarding
-//
+//                                    exceeding maxReplicaAttempt
+//           +-------------------+   || RPC failure && unreachable && no forwarding
 // +-------->+ accessKnownLeader +----------------+
 // |         +------+------------+                |
 // |                |                             |
@@ -283,8 +282,7 @@ type replicaSelector struct {
 // | leader becomes   v                           +---+---+
 // | reachable  +-----+-----+ all proxies are tried   ^
 // +------------+tryNewProxy+-------------------------+
-//
-//	+-----------+
+//              +-----------+
 type selectorState interface {
 	next(*retry.Backoffer, *replicaSelector) (*RPCContext, error)
 	onSendSuccess(*replicaSelector)
@@ -516,7 +514,7 @@ func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
 // If there is no suitable follower, requests will be sent to the leader as a fallback.
 type accessFollower struct {
 	stateBase
-	// If tryLeader is true, the request can also be sent to the leader.
+	// If tryLeader is true, the request can also be sent to the leader when !leader.isSlow()
 	tryLeader         bool
 	isGlobalStaleRead bool
 	option            storeSelectorOp
@@ -551,6 +549,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx++
 	}
 
+	// If selector is under `ReplicaReadPreferLeader` mode, we should choose leader as high priority.
+	if state.option.preferLeader {
+		state.lastIdx = state.leaderIdx
+	}
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % replicaSize)
 		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
@@ -592,7 +594,10 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)))
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)) &&
+				// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
+				// as candidates to serve the Read request.
+				(!state.option.preferLeader || !replica.store.isSlow()))
 }
 
 type invalidStore struct {
@@ -632,6 +637,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 			attempts: 0,
 		})
 	}
+
 	var state selectorState
 	if !req.ReplicaReadType.IsFollowerRead() {
 		if regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0 {
@@ -644,8 +650,12 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		for _, op := range opts {
 			op(&option)
 		}
+		if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
+			WithPerferLeader()(&option)
+		}
+		tryLeader := req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader
 		state = &accessFollower{
-			tryLeader:         req.ReplicaReadType == kv.ReplicaReadMixed,
+			tryLeader:         tryLeader,
 			isGlobalStaleRead: req.IsGlobalStaleRead(),
 			option:            option,
 			leaderIdx:         regionStore.workTiKVIdx,
@@ -805,6 +815,7 @@ func (s *replicaSelector) invalidateReplicaStore(replica *replica, cause error) 
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
 		store.markNeedCheck(s.regionCache.notifyCheckCh)
+		store.markAlreadySlow()
 	}
 }
 
@@ -1202,6 +1213,10 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 	if !injectFailOnSend {
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
+		// Record timecost of external requests on related Store when ReplicaReadMode == PreferLeader.
+		if req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
+			rpcCtx.Store.recordSlowScoreStat(time.Since(start))
+		}
 		if s.Stats != nil {
 			RecordRegionRequestRuntimeStats(s.Stats, req.Type, time.Since(start))
 			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
@@ -1522,6 +1537,12 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	if regionErr.GetServerIsBusy() != nil {
+		// Mark the server is busy (the next incoming READs could be redirect
+		// to expected followers. )
+		if ctx != nil && ctx.Store != nil {
+			ctx.Store.markAlreadySlow()
+		}
+
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx))
