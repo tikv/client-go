@@ -538,7 +538,7 @@ type RPCContext struct {
 	ProxyAddr  string // valid when ProxyStore is not nil
 	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
 
-	overrides contextOverrides // kvrpcpb.Context fields that need to be overridden
+	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
 
 func (c *RPCContext) String() string {
@@ -554,17 +554,17 @@ func (c *RPCContext) String() string {
 	return res
 }
 
-type contextOverrides struct {
+type contextPatcher struct {
 	replicaRead   *bool
 	busyThreshold *time.Duration
 }
 
-func (overrides *contextOverrides) patchContext(pbCtx *kvrpcpb.Context) {
-	if overrides.replicaRead != nil {
-		pbCtx.ReplicaRead = *overrides.replicaRead
+func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
+	if patcher.replicaRead != nil {
+		pbCtx.ReplicaRead = *patcher.replicaRead
 	}
-	if overrides.busyThreshold != nil {
-		millis := overrides.busyThreshold.Milliseconds()
+	if patcher.busyThreshold != nil {
+		millis := patcher.busyThreshold.Milliseconds()
 		if millis > 0 && millis <= math.MaxUint32 {
 			pbCtx.BusyThresholdMs = uint32(millis)
 		} else {

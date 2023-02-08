@@ -653,11 +653,11 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 		return nil, err
 	}
 	replicaRead := targetIdx != state.leaderIdx
-	rpcCtx.overrides.replicaRead = &replicaRead
+	rpcCtx.contextPatcher.replicaRead = &replicaRead
 	if targetIdx == state.leaderIdx {
 		// No threshold if all peers are too busy.
 		selector.busyThreshold = 0
-		rpcCtx.overrides.busyThreshold = &selector.busyThreshold
+		rpcCtx.contextPatcher.busyThreshold = &selector.busyThreshold
 	}
 	return rpcCtx, nil
 }
@@ -1263,7 +1263,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 	if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 		return nil, false, err
 	}
-	rpcCtx.overrides.patchContext(&req.Context)
+	rpcCtx.contextPatcher.applyTo(&req.Context)
 	// judge the store limit switch.
 	if limit := kv.StoreLimit.Load(); limit > 0 {
 		if err := s.getStoreToken(rpcCtx.Store, limit); err != nil {

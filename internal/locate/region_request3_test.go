@@ -960,7 +960,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.Nil(err)
 	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
 	s.IsType(&tryIdleReplica{}, replicaSelector.state)
-	s.True(*rpcCtx.overrides.replicaRead)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
 	lastPeerID := rpcCtx.Peer.Id
 
 	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
@@ -973,7 +973,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
 	s.NotEqual(rpcCtx.Peer.Id, lastPeerID)
 	s.IsType(&tryIdleReplica{}, replicaSelector.state)
-	s.True(*rpcCtx.overrides.replicaRead)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
 
 	// All peers are too busy
 	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
@@ -986,8 +986,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
 	s.IsType(&tryIdleReplica{}, replicaSelector.state)
-	s.False(*rpcCtx.overrides.replicaRead)
-	s.Equal(*rpcCtx.overrides.busyThreshold, time.Duration(0))
+	s.False(*rpcCtx.contextPatcher.replicaRead)
+	s.Equal(*rpcCtx.contextPatcher.busyThreshold, time.Duration(0))
 
 	time.Sleep(120 * time.Millisecond)
 
@@ -999,5 +999,5 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, lessBusyPeer)
 	s.IsType(&tryIdleReplica{}, replicaSelector.state)
-	s.True(*rpcCtx.overrides.replicaRead)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
 }
