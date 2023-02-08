@@ -1190,7 +1190,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		for _, peer := range rpcCtx.Meta.GetPeers() {
 			role := peer.GetRole()
 			if role == metapb.PeerRole_Voter || role == metapb.PeerRole_Learner {
-				req.ReplicaNumber += 1
+				req.ReplicaNumber++
 			}
 		}
 	}
