@@ -36,6 +36,7 @@ package unionstore
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"reflect"
 	"sync"
@@ -95,6 +96,7 @@ func newMemDB() *MemDB {
 	db.stages = make([]MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
+	db.vlog.memdb = db
 	return db
 }
 
@@ -141,7 +143,7 @@ func (db *MemDB) Cleanup(h int) {
 	if h < len(db.stages) {
 		// This should never happens in production environment.
 		// Use panic to make debug easier.
-		panic("cannot cleanup staging buffer")
+		panic(fmt.Sprintf("cannot cleanup staging buffer, h=%v, len(db.stages)=%v", h, len(db.stages)))
 	}
 
 	cp := &db.stages[h-1]
@@ -153,6 +155,7 @@ func (db *MemDB) Cleanup(h int) {
 		}
 	}
 	db.stages = db.stages[:h-1]
+	db.vlog.onMemChange()
 }
 
 // Checkpoint returns a checkpoint of MemDB.
@@ -165,6 +168,7 @@ func (db *MemDB) Checkpoint() *MemDBCheckpoint {
 func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
 	db.vlog.revertToCheckpoint(db, cp)
 	db.vlog.truncate(cp)
+	db.vlog.onMemChange()
 }
 
 // Reset resets the MemBuffer to initial states.
@@ -330,13 +334,20 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	}
 	x := db.traverse(key, true)
 
-	if len(ops) != 0 {
-		flags := kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
-		if flags.AndPersistent() != 0 {
-			db.dirty = true
-		}
-		x.setKeyFlags(flags)
+	// the NeedConstraintCheckInPrewrite flag is temporary,
+	// every write to the node removes the flag unless it's explicitly set.
+	// This set must be in the latest stage so no special processing is needed.
+	var flags kv.KeyFlags
+	if value != nil {
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), append([]kv.FlagsOp{kv.DelNeedConstraintCheckInPrewrite}, ops...)...)
+	} else {
+		// an UpdateFlag operation, do not delete the NeedConstraintCheckInPrewrite flag.
+		flags = kv.ApplyFlagsOps(x.getKeyFlags(), ops...)
 	}
+	if flags.AndPersistent() != 0 {
+		db.dirty = true
+	}
+	x.setKeyFlags(flags)
 
 	if value == nil {
 		return nil
@@ -863,8 +874,8 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
 		hook(db.allocator.capacity + db.vlog.capacity)
 	}
-	db.allocator.memChangeHook = innerHook
-	db.vlog.memChangeHook = innerHook
+	db.allocator.memChangeHook.Store(&innerHook)
+	db.vlog.memChangeHook.Store(&innerHook)
 }
 
 // Mem returns the current memory footprint

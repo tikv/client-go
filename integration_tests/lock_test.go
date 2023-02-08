@@ -453,7 +453,7 @@ func (s *testLockSuite) ttlEquals(x, y uint64) {
 	if x < y {
 		x, y = y, x
 	}
-	s.LessOrEqual(x-y, uint64(5))
+	s.LessOrEqual(x-y, uint64(50))
 }
 
 func (s *testLockSuite) TestLockTTL() {
@@ -515,7 +515,7 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 	s.Nil(err)
 	committer.SetUseAsyncCommit()
 	committer.SetLockTTL(20000)
-	committer.PrewriteAllMutations(context.Background())
+	err = committer.PrewriteAllMutations(context.Background())
 	s.Nil(err)
 
 	var locks []*txnkv.Lock

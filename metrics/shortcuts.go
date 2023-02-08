@@ -66,6 +66,7 @@ var (
 	BackoffHistogramRegionRecoveryInProgress prometheus.Observer
 	BackoffHistogramStaleCmd                 prometheus.Observer
 	BackoffHistogramDataNotReady             prometheus.Observer
+	BackoffHistogramIsWitness                prometheus.Observer
 	BackoffHistogramEmpty                    prometheus.Observer
 
 	TxnRegionsNumHistogramWithSnapshot         prometheus.Observer
@@ -135,6 +136,11 @@ var (
 	PrewriteAssertionUsageCounterExist    prometheus.Counter
 	PrewriteAssertionUsageCounterNotExist prometheus.Counter
 	PrewriteAssertionUsageCounterUnknown  prometheus.Counter
+
+	AggressiveLockedKeysNew                prometheus.Counter
+	AggressiveLockedKeysDerived            prometheus.Counter
+	AggressiveLockedKeysLockedWithConflict prometheus.Counter
+	AggressiveLockedKeysNonForceLock       prometheus.Counter
 )
 
 func initShortcuts() {
@@ -166,6 +172,7 @@ func initShortcuts() {
 	BackoffHistogramRegionRecoveryInProgress = TiKVBackoffHistogram.WithLabelValues("regionRecoveryInProgress")
 	BackoffHistogramStaleCmd = TiKVBackoffHistogram.WithLabelValues("staleCommand")
 	BackoffHistogramDataNotReady = TiKVBackoffHistogram.WithLabelValues("dataNotReady")
+	BackoffHistogramIsWitness = TiKVBackoffHistogram.WithLabelValues("isWitness")
 	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")
 
 	TxnRegionsNumHistogramWithSnapshot = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot")
@@ -235,4 +242,17 @@ func initShortcuts() {
 	PrewriteAssertionUsageCounterExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("exist")
 	PrewriteAssertionUsageCounterNotExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("not-exist")
 	PrewriteAssertionUsageCounterUnknown = TiKVPrewriteAssertionUsageCounter.WithLabelValues("unknown")
+
+	// Counts new locks trying to acquire inside an aggressive locking stage.
+	AggressiveLockedKeysNew = TiKVAggressiveLockedKeysCounter.WithLabelValues("new")
+	// Counts locks trying to acquire inside an aggressive locking stage, but it's already locked in the previous
+	// aggressive locking stage (before the latest invocation to `RetryAggressiveLocking`), in which case the lock
+	// can be *derived* from the previous stage and no RPC is needed for the key.
+	AggressiveLockedKeysDerived = TiKVAggressiveLockedKeysCounter.WithLabelValues("derived")
+	// Counts locks that's forced acquired ignoring the WriteConflict.
+	AggressiveLockedKeysLockedWithConflict = TiKVAggressiveLockedKeysCounter.WithLabelValues("locked_with_conflict")
+	// Counts locks that's acquired within an aggressive locking stage, but with force-lock disabled (by passing
+	// `WakeUpMode = PessimisticLockWakeUpMode_WakeUpModeNormal`, which will disable `allow_lock_with_conflict` in
+	// TiKV).
+	AggressiveLockedKeysNonForceLock = TiKVAggressiveLockedKeysCounter.WithLabelValues("non_force_lock")
 }

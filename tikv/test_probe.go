@@ -101,7 +101,7 @@ func (s StoreProbe) SaveSafePoint(v uint64) error {
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
 func (s StoreProbe) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
-	s.regionCache.SetRegionCacheStore(id, storeType, state, labels)
+	s.regionCache.SetRegionCacheStore(id, "", "", storeType, state, labels)
 }
 
 // SetSafeTS is used to set safeTS for the store with `storeID`

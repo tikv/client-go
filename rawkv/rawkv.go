@@ -48,6 +48,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 	"google.golang.org/grpc"
@@ -95,7 +96,6 @@ type RawOption interface {
 	apply(opts *rawOptions)
 }
 
-//
 type rawOptionFunc func(opts *rawOptions)
 
 func (f rawOptionFunc) apply(opts *rawOptions) {
@@ -135,6 +135,7 @@ type option struct {
 	security        config.Security
 	gRPCDialOptions []grpc.DialOption
 	pdOptions       []pd.ClientOption
+	keyspace        string
 }
 
 // ClientOpt is factory to set the client options.
@@ -168,6 +169,13 @@ func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 	}
 }
 
+// WithKeyspace is used to set the keyspace Name.
+func WithKeyspace(name string) ClientOpt {
+	return func(o *option) {
+		o.keyspace = name
+	}
+}
+
 // SetAtomicForCAS sets atomic mode for CompareAndSwap
 func (c *Client) SetAtomicForCAS(b bool) *Client {
 	c.atomic = b
@@ -192,26 +200,45 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		o(opt)
 	}
 
+	// Use an unwrapped PDClient to obtain keyspace meta.
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
 		KeyPath:  opt.security.ClusterSSLKey,
 	}, opt.pdOptions...)
-
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	if opt.apiVersion == kvrpcpb.APIVersion_V2 {
-		pdCli = locate.NewCodecPDClientV2(pdCli, client.ModeRaw)
+	// Build a CodecPDClient
+	var codecCli *tikv.CodecPDClient
+
+	switch opt.apiVersion {
+	case kvrpcpb.APIVersion_V1, kvrpcpb.APIVersion_V1TTL:
+		codecCli = locate.NewCodecPDClient(tikv.ModeRaw, pdCli)
+	case kvrpcpb.APIVersion_V2:
+		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdCli, opt.keyspace)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
 	}
+
+	pdCli = codecCli
+
+	rpcCli := client.NewRPCClient(
+		client.WithSecurity(opt.security),
+		client.WithGRPCDialOptions(opt.gRPCDialOptions...),
+		client.WithCodec(codecCli.GetCodec()),
+	)
 
 	return &Client{
 		apiVersion:  opt.apiVersion,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
 		pdClient:    pdCli,
-		rpcClient:   client.NewRPCClient(client.WithSecurity(opt.security), client.WithGRPCDialOptions(opt.gRPCDialOptions...)),
+		rpcClient:   rpcCli,
 	}, nil
 }
 
@@ -260,7 +287,6 @@ func (c *Client) Get(ctx context.Context, key []byte, options ...RawOption) ([]b
 	if cmdResp.NotFound {
 		return nil, nil
 	}
-	// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
 	return convertNilToEmptySlice(cmdResp.Value), nil
 }
 
@@ -294,7 +320,6 @@ func (c *Client) BatchGet(ctx context.Context, keys [][]byte, options ...RawOpti
 	for i, key := range keys {
 		v, ok := keyToValue[string(key)]
 		if ok {
-			// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
 			v = convertNilToEmptySlice(v)
 		}
 		values[i] = v
@@ -361,6 +386,11 @@ func (c *Client) GetKeyTTL(ctx context.Context, key []byte, options ...RawOption
 
 	ttl = cmdResp.GetTtl()
 	return &ttl, nil
+}
+
+// GetPDClient returns the PD client.
+func (c *Client) GetPDClient() pd.Client {
+	return c.pdClient
 }
 
 // Put stores a key-value pair to TiKV.
@@ -510,7 +540,6 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
 			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
 		startKey = loc.EndKey
@@ -559,7 +588,6 @@ func (c *Client) ReverseScan(ctx context.Context, startKey, endKey []byte, limit
 		cmdResp := resp.Resp.(*kvrpcpb.RawScanResponse)
 		for _, pair := range cmdResp.Kvs {
 			keys = append(keys, pair.Key)
-			// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
 			values = append(values, convertNilToEmptySlice(pair.Value))
 		}
 		startKey = loc.StartKey
@@ -653,7 +681,6 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 	if cmdResp.PreviousNotExist {
 		return nil, cmdResp.Succeed, nil
 	}
-	// Return `[]byte{}`` to indicate an empty value, and distinguish from not found
 	return convertNilToEmptySlice(cmdResp.PreviousValue), cmdResp.Succeed, nil
 }
 
@@ -872,12 +899,16 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 
 	for i := 0; i < len(batches); i++ {
 		if e := <-ch; e != nil {
-			cancel()
 			// catch the first error
 			if err == nil {
 				err = errors.WithStack(e)
+				cancel()
 			}
 		}
+	}
+
+	if err == nil {
+		cancel()
 	}
 	return err
 }
@@ -946,6 +977,10 @@ func (c *Client) getRawKVOptions(options ...RawOption) *rawOptions {
 	return &opts
 }
 
+// convertNilToEmptySlice is used to convert value of existed key return from TiKV.
+// Convert nil to `[]byte{}` for indicating an empty value, and distinguishing from "not found",
+// which is necessary when putting empty value is permitted.
+// Also note that gRPC will always transfer empty byte slice as nil.
 func convertNilToEmptySlice(value []byte) []byte {
 	if value == nil {
 		return []byte{}

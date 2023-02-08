@@ -35,18 +35,48 @@
 package tikv
 
 import (
+	"context"
+	"time"
+
 	"github.com/google/uuid"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )
 
+// CodecClient warps Client to provide codec encode and decode.
+type CodecClient struct {
+	Client
+	codec apicodec.Codec
+}
+
+// SendRequest uses codec to encode request before send, and decode response before return.
+func (c *CodecClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	req, err := c.codec.EncodeRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return c.codec.DecodeResponse(req, resp)
+}
+
 // NewTestTiKVStore creates a test store with Option
 func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Client) Client, pdClientHijack func(pd.Client) pd.Client, txnLocalLatches uint) (*KVStore, error) {
+	codec := apicodec.NewCodecV1(apicodec.ModeTxn)
+	client = &CodecClient{
+		Client: client,
+		codec:  codec,
+	}
+	pdCli := pd.Client(locate.NewCodecPDClient(ModeTxn, pdClient))
+
 	if clientHijack != nil {
 		client = clientHijack(client)
 	}
 
-	pdCli := pd.Client(locate.NewCodeCPDClient(pdClient))
 	if pdClientHijack != nil {
 		pdCli = pdClientHijack(pdCli)
 	}

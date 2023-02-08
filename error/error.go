@@ -35,6 +35,7 @@
 package error
 
 import (
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -88,6 +89,12 @@ var (
 	ErrTiKVDiskFull = errors.New("tikv disk full")
 	// ErrRegionRecoveryInProgress is the error when region is recovering.
 	ErrRegionRecoveryInProgress = errors.New("region is being online unsafe recovered")
+	// ErrRegionFlashbackInProgress is the error when a region in the flashback progress receive any other request.
+	ErrRegionFlashbackInProgress = errors.New("region is in the flashback progress")
+	// ErrRegionFlashbackNotPrepared is the error when a region is not prepared for the flashback first.
+	ErrRegionFlashbackNotPrepared = errors.New("region is not prepared for the flashback")
+	// ErrIsWitness is the error when a request is send to a witness.
+	ErrIsWitness = errors.New("peer is witness")
 	// ErrUnknown is the unknow error.
 	ErrUnknown = errors.New("unknow")
 	// ErrResultUndetermined is the error when execution result is unknown.
@@ -152,13 +159,14 @@ func IsErrWriteConflict(err error) bool {
 	return errors.As(err, &e)
 }
 
-//NewErrWriteConfictWithArgs generates an ErrWriteConflict with args.
-func NewErrWriteConfictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte) *ErrWriteConflict {
+// NewErrWriteConflictWithArgs generates an ErrWriteConflict with args.
+func NewErrWriteConflictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte, reason kvrpcpb.WriteConflict_Reason) *ErrWriteConflict {
 	conflict := kvrpcpb.WriteConflict{
 		StartTs:          startTs,
 		ConflictTs:       conflictTs,
 		Key:              key,
 		ConflictCommitTs: conflictCommitTs,
+		Reason:           reason,
 	}
 	return &ErrWriteConflict{WriteConflict: &conflict}
 }
@@ -238,8 +246,34 @@ type ErrAssertionFailed struct {
 	*kvrpcpb.AssertionFailed
 }
 
+// ErrLockOnlyIfExistsNoReturnValue is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but `ReturnValues`` is not.
+type ErrLockOnlyIfExistsNoReturnValue struct {
+	StartTS     uint64
+	ForUpdateTs uint64
+	LockKey     []byte
+}
+
+// ErrLockOnlyIfExistsNoPrimaryKey is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but primary key of current transaction is not.
+type ErrLockOnlyIfExistsNoPrimaryKey struct {
+	StartTS     uint64
+	ForUpdateTs uint64
+	LockKey     []byte
+}
+
 func (e *ErrAssertionFailed) Error() string {
 	return fmt.Sprintf("assertion failed { %s }", e.AssertionFailed.String())
+}
+
+func (e *ErrLockOnlyIfExistsNoReturnValue) Error() string {
+	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but ReturnValues is not set, "+
+		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%v}.",
+		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
+}
+
+func (e *ErrLockOnlyIfExistsNoPrimaryKey) Error() string {
+	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set, "+
+		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%s}",
+		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
 }
 
 // ExtractKeyErr extracts a KeyError.

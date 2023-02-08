@@ -47,8 +47,8 @@ import (
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -67,6 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	resourceControlClient "github.com/tikv/pd/client/resource_manager/client"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -122,12 +123,21 @@ type KVStore struct {
 	// it indicates the safe timestamp point that can be used to read consistent but may not the latest data.
 	safeTSMap sync.Map
 
+	// MinSafeTs stores the minimum ts value for each txnScope
+	minSafeTS sync.Map
+
 	replicaReadSeed uint32 // this is used to load balance followers / learners when replica read is enabled
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
+	gP     *gp.Pool
+}
+
+// Go run the function in a separate goroutine.
+func (s *KVStore) Go(f func()) {
+	s.gP.Go(f)
 }
 
 // UpdateSPCache updates cached safepoint.
@@ -181,6 +191,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		replicaReadSeed: rand.Uint32(),
 		ctx:             ctx,
 		cancel:          cancel,
+		gP:              gp.New(128, 10*time.Second),
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
@@ -192,7 +203,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	return store, nil
 }
 
-// NewPDClient creates pd.Client with pdAddrs.
+// NewPDClient returns an unwrapped pd client.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
@@ -212,8 +223,7 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdClient := &CodecPDClient{Client: util.InterceptedPDClient{Client: pdCli}}
-	return pdClient, nil
+	return pdCli, nil
 }
 
 // EnableTxnLocalLatches enables txn latch. It should be called before using
@@ -257,11 +267,6 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 		opt(options)
 	}
 
-	defer func() {
-		if err == nil && txn != nil && options.MemoryFootprintChangeHook != nil {
-			txn.SetMemoryFootprintChangeHook(options.MemoryFootprintChangeHook)
-		}
-	}()
 	if options.TxnScope == "" {
 		options.TxnScope = oracle.GlobalTxnScope
 	}
@@ -305,6 +310,7 @@ func (s *KVStore) GetSnapshot(ts uint64) *txnsnapshot.KVSnapshot {
 
 // Close store
 func (s *KVStore) Close() error {
+	defer s.gP.Close()
 	s.close.Store(true)
 	s.cancel()
 	s.wg.Wait()
@@ -443,23 +449,10 @@ func (s *KVStore) GetTiKVClient() (client Client) {
 
 // GetMinSafeTS return the minimal safeTS of the storage with given txnScope.
 func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
-	stores := make([]*locate.Store, 0)
-	allStores := s.regionCache.GetStoresByType(tikvrpc.TiKV)
-	if txnScope != oracle.GlobalTxnScope {
-		for _, store := range allStores {
-			if store.IsLabelsMatch([]*metapb.StoreLabel{
-				{
-					Key:   DCLabelKey,
-					Value: txnScope,
-				},
-			}) {
-				stores = append(stores, store)
-			}
-		}
-	} else {
-		stores = allStores
+	if val, ok := s.minSafeTS.Load(txnScope); ok {
+		return val.(uint64)
 	}
-	return s.getMinSafeTSByStores(stores)
+	return 0
 }
 
 // Ctx returns ctx.
@@ -487,12 +480,12 @@ func (s *KVStore) GetClusterID() uint64 {
 	return s.clusterID
 }
 
-func (s *KVStore) getSafeTS(storeID uint64) uint64 {
+func (s *KVStore) getSafeTS(storeID uint64) (bool, uint64) {
 	safeTS, ok := s.safeTSMap.Load(storeID)
 	if !ok {
-		return 0
+		return false, 0
 	}
-	return safeTS.(uint64)
+	return true, safeTS.(uint64)
 }
 
 // setSafeTS sets safeTs for store storeID, export for testing
@@ -500,23 +493,23 @@ func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
 	s.safeTSMap.Store(storeID, safeTS)
 }
 
-func (s *KVStore) getMinSafeTSByStores(stores []*locate.Store) uint64 {
-	if val, err := util.EvalFailpoint("injectSafeTS"); err == nil {
-		injectTS := val.(int)
-		return uint64(injectTS)
-	}
+func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 	minSafeTS := uint64(math.MaxUint64)
 	// when there is no store, return 0 in order to let minStartTS become startTS directly
-	if len(stores) < 1 {
-		return 0
+	if len(storeIDs) < 1 {
+		s.minSafeTS.Store(txnScope, 0)
 	}
-	for _, store := range stores {
-		safeTS := s.getSafeTS(store.StoreID())
-		if safeTS < minSafeTS {
-			minSafeTS = safeTS
+	for _, store := range storeIDs {
+		ok, safeTS := s.getSafeTS(store)
+		if ok {
+			if safeTS != 0 && safeTS < minSafeTS {
+				minSafeTS = safeTS
+			}
+		} else {
+			minSafeTS = 0
 		}
 	}
-	return minSafeTS
+	s.minSafeTS.Store(txnScope, minSafeTS)
 }
 
 func (s *KVStore) safeTSUpdater() {
@@ -537,13 +530,16 @@ func (s *KVStore) safeTSUpdater() {
 }
 
 func (s *KVStore) updateSafeTS(ctx context.Context) {
-	stores := s.regionCache.GetStoresByType(tikvrpc.TiKV)
+	stores := s.regionCache.GetAllStores()
 	tikvClient := s.GetTiKVClient()
 	wg := &sync.WaitGroup{}
 	wg.Add(len(stores))
 	for _, store := range stores {
 		storeID := store.StoreID()
 		storeAddr := store.GetAddr()
+		if store.IsTiFlash() {
+			storeAddr = store.GetPeerAddr()
+		}
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
 			resp, err := tikvClient.SendRequest(ctx, storeAddr, tikvrpc.NewRequest(tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{KeyRange: &kvrpcpb.KeyRange{
@@ -559,7 +555,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 				return
 			}
 			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
-			preSafeTS := s.getSafeTS(storeID)
+			_, preSafeTS := s.getSafeTS(storeID)
 			if preSafeTS > safeTS {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()
 				preSafeTSTime := oracle.GetTimeFromTS(preSafeTS)
@@ -572,7 +568,39 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 			metrics.TiKVMinSafeTSGapSeconds.WithLabelValues(storeIDStr).Set(time.Since(safeTSTime).Seconds())
 		}(ctx, wg, storeID, storeAddr)
 	}
+
+	txnScopeMap := make(map[string][]uint64)
+	for _, store := range stores {
+		txnScopeMap[oracle.GlobalTxnScope] = append(txnScopeMap[oracle.GlobalTxnScope], store.StoreID())
+
+		if label, ok := store.GetLabelValue(DCLabelKey); ok {
+			txnScopeMap[label] = append(txnScopeMap[label], store.StoreID())
+		}
+	}
+	for txnScope, storeIDs := range txnScopeMap {
+		s.updateMinSafeTS(txnScope, storeIDs)
+	}
 	wg.Wait()
+}
+
+// EnableResourceControl enables the resource control.
+func EnableResourceControl() {
+	client.ResourceControlSwitch.Store(true)
+}
+
+// DisableResourceControl disables the resource control.
+func DisableResourceControl() {
+	client.ResourceControlSwitch.Store(false)
+}
+
+// SetResourceControlInterceptor sets the interceptor for resource control.
+func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
+	client.ResourceControlInterceptor = interceptor
+}
+
+// UnsetResourceControlInterceptor un-sets the interceptor for resource control.
+func UnsetResourceControlInterceptor() {
+	client.ResourceControlInterceptor = nil
 }
 
 // Variables defines the variables used by TiKV storage.
@@ -584,6 +612,7 @@ var _ = NewLockResolver
 // NewLockResolver creates a LockResolver.
 // It is exported for other pkg to use. For instance, binlog service needs
 // to determine a transaction's commit state.
+// TODO(iosmanthus): support api v2
 func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.ClientOption) (*txnlock.LockResolver, error) {
 	pdCli, err := pd.NewClient(etcdAddrs, pd.SecurityOption{
 		CAPath:   security.ClusterSSLCA,
@@ -606,7 +635,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, err
 	}
 
-	s, err := NewKVStore(uuid, locate.NewCodeCPDClient(pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
+	s, err := NewKVStore(uuid, locate.NewCodecPDClient(ModeTxn, pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
 	if err != nil {
 		return nil, err
 	}
@@ -646,9 +675,6 @@ type SchemaLeaseChecker = transaction.SchemaLeaseChecker
 
 // SchemaVer is the infoSchema which will return the schema version.
 type SchemaVer = transaction.SchemaVer
-
-// SchemaAmender is used by pessimistic transactions to amend commit mutations for schema change during 2pc.
-type SchemaAmender = transaction.SchemaAmender
 
 // MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
 // We use it to abort the transaction to guarantee GC worker will not influence it.

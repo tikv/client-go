@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
@@ -79,7 +81,7 @@ func (s *testRegionCacheSuite) SetupTest() {
 	s.store2 = storeIDs[1]
 	s.peer1 = peerIDs[0]
 	s.peer2 = peerIDs[1]
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
@@ -956,7 +958,7 @@ func (s *testRegionCacheSuite) TestReconnect() {
 
 func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	// Create a separated region cache to do this test.
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	cache := NewRegionCache(pdCli)
 	defer cache.Close()
 
@@ -1252,6 +1254,42 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 		DownPeers: []*metapb.Peer{{Id: s.peer1, StoreId: s.store1}},
 	}
 	filterUnavailablePeers(cpRegion)
+	region, err := newRegion(s.bo, s.cache, cpRegion)
+	s.Nil(err)
+	s.cache.insertRegionToCache(region)
+
+	// OnSendFail should not panic
+	s.cache.OnSendFail(retry.NewNoopBackoff(context.Background()), ctx, false, errors.New("send fail"))
+}
+
+func (s *testRegionCacheSuite) TestPeersLenChangedByWitness() {
+	// 2 peers [peer1, peer2] and let peer2 become leader
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, 0)
+
+	// current leader is peer2 in [peer1, peer2]
+	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
+	s.Nil(err)
+	s.Equal(ctx.Peer.StoreId, s.store2)
+
+	// simulate peer1 become witness in kv heartbeat and loaded before response back.
+	cpMeta := &metapb.Region{
+		Id:          ctx.Meta.Id,
+		StartKey:    ctx.Meta.StartKey,
+		EndKey:      ctx.Meta.EndKey,
+		RegionEpoch: ctx.Meta.RegionEpoch,
+		Peers:       make([]*metapb.Peer, len(ctx.Meta.Peers)),
+	}
+	copy(cpMeta.Peers, ctx.Meta.Peers)
+	for _, peer := range cpMeta.Peers {
+		if peer.Id == s.peer1 {
+			peer.IsWitness = true
+		}
+	}
+	cpRegion := &pd.Region{Meta: cpMeta}
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
 	s.cache.insertRegionToCache(region)
@@ -1591,4 +1629,102 @@ func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	s.Nil(err)
 	s.Equal(loc.Region.GetID(), regions[0])
 	s.checkCache(1)
+}
+
+func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.NoError(err)
+	ctx, err := s.cache.GetTiKVRPCContext(retry.NewBackofferWithVars(context.Background(), 100, nil), loc.Region, kv.ReplicaReadLeader, 0)
+	s.NotNil(ctx)
+	s.NoError(err)
+	reqSend := NewRegionRequestSender(s.cache, nil)
+	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
+	s.Error(err)
+	s.False(shouldRetry)
+	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
+	s.Error(err)
+	s.False(shouldRetry)
+}
+
+func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
+	// Prepare 100 regions
+	regionCnt := 100
+	regions := s.cluster.AllocIDs(regionCnt)
+	regions = append([]uint64{s.region1}, regions...)
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < regionCnt; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+	for i := 0; i < regionCnt; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte(fmt.Sprintf(regionSplitKeyFormat, i)), peers[i+1], peers[i+1][0])
+	}
+	loadRegionsToCache(s.cache, regionCnt)
+	s.checkCache(regionCnt)
+
+	// Make parts of the regions stale
+	remaining := 0
+	s.cache.mu.Lock()
+	now := time.Now().Unix()
+	for verID, r := range s.cache.mu.regions {
+		if verID.id%3 == 0 {
+			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+		} else {
+			remaining++
+		}
+	}
+	s.cache.mu.Unlock()
+
+	s.Eventually(func() bool {
+		s.cache.mu.RLock()
+		defer s.cache.mu.RUnlock()
+		return len(s.cache.mu.regions) == remaining
+	}, 3*time.Second, 200*time.Millisecond)
+	s.checkCache(remaining)
+
+	// Make another part of the regions stale
+	remaining = 0
+	s.cache.mu.Lock()
+	now = time.Now().Unix()
+	for verID, r := range s.cache.mu.regions {
+		if verID.id%3 == 1 {
+			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+		} else {
+			remaining++
+		}
+	}
+	s.cache.mu.Unlock()
+
+	s.Eventually(func() bool {
+		s.cache.mu.RLock()
+		defer s.cache.mu.RUnlock()
+		return len(s.cache.mu.regions) == remaining
+	}, 3*time.Second, 200*time.Millisecond)
+	s.checkCache(remaining)
+}
+
+func (s *testRegionCacheSuite) TestSlowScoreStat() {
+	slowScore := SlowScoreStat{
+		avgScore: 1,
+	}
+	s.False(slowScore.isSlow())
+	slowScore.recordSlowScoreStat(time.Millisecond * 1)
+	slowScore.updateSlowScore()
+	s.False(slowScore.isSlow())
+	for i := 2; i <= 100; i++ {
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	for i := 100; i >= 2; i-- {
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	slowScore.markAlreadySlow()
+	s.True(slowScore.isSlow())
 }
