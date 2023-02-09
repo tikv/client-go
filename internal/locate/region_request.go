@@ -1290,6 +1290,18 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		sendToAddr = rpcCtx.ProxyAddr
 	}
 
+	// Count the replica number as the RU cost factor.
+	req.ReplicaNumber = 1
+	if rpcCtx.Meta != nil && len(rpcCtx.Meta.GetPeers()) > 0 {
+		req.ReplicaNumber = 0
+		for _, peer := range rpcCtx.Meta.GetPeers() {
+			role := peer.GetRole()
+			if role == metapb.PeerRole_Voter || role == metapb.PeerRole_Learner {
+				req.ReplicaNumber++
+			}
+		}
+	}
+
 	var sessionID uint64
 	if v := bo.GetCtx().Value(util.SessionID); v != nil {
 		sessionID = v.(uint64)

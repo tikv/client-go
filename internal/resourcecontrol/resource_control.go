@@ -55,7 +55,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 		}
 	}
 
-	return &RequestInfo{writeBytes: writeBytes}
+	return &RequestInfo{writeBytes: writeBytes * req.ReplicaNumber}
 }
 
 // IsWrite returns whether the request is a write request.
@@ -109,7 +109,7 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 		// TODO: using a more accurate size rather than using the whole response size as the read bytes.
 		readBytes = uint64(r.Size())
 	default:
-		log.Warn("[kv resource] unknown response type to collect the info", zap.Any("type", reflect.TypeOf(r)))
+		log.Debug("[kv resource] unknown response type to collect the info", zap.Any("type", reflect.TypeOf(r)))
 		return &ResponseInfo{}
 	}
 	// Try to get read bytes from the `detailsV2`.
