@@ -758,6 +758,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 // NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
 func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID, stores []*Store) (res []*RPCContext, err error) {
 	hasher := consistent.New()
+	hasher.NumberOfReplicas = 200 // Larger replicas can balance requests more evenly
 	for _, store := range stores {
 		if !isStoreContainLabel(store.labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) {
 			return nil, errors.New("expect store should be tiflash_compute")
