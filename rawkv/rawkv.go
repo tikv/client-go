@@ -899,12 +899,16 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 
 	for i := 0; i < len(batches); i++ {
 		if e := <-ch; e != nil {
-			cancel()
 			// catch the first error
 			if err == nil {
 				err = errors.WithStack(e)
+				cancel()
 			}
 		}
+	}
+
+	if err == nil {
+		cancel()
 	}
 	return err
 }

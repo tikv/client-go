@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"strings"
 )
 
 // RequestSourceTypeKeyType is a dummy type to avoid naming collision in context.
@@ -79,6 +80,11 @@ func RequestSourceFromCtx(ctx context.Context) string {
 		return rs.GetRequestSource()
 	}
 	return SourceUnknown
+}
+
+// IsInternalRequest returns the type of the request source.
+func IsInternalRequest(source string) bool {
+	return strings.HasPrefix(source, InternalRequest)
 }
 
 // ResourceGroupNameKeyType is the context key type of resource group name.

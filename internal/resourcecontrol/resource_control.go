@@ -16,7 +16,6 @@ package resourcecontrol
 
 import (
 	"reflect"
-	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -43,12 +42,20 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	var writeBytes int64
 	switch r := req.Req.(type) {
 	case *kvrpcpb.PrewriteRequest:
-		writeBytes += int64(r.TxnSize)
+		for _, m := range r.Mutations {
+			writeBytes += int64(len(m.Key)) + int64(len(m.Value))
+		}
+		writeBytes += int64(len(r.PrimaryLock))
+		for _, l := range r.Secondaries {
+			writeBytes += int64(len(l))
+		}
 	case *kvrpcpb.CommitRequest:
-		writeBytes += int64(unsafe.Sizeof(r.Keys))
+		for _, k := range r.Keys {
+			writeBytes += int64(len(k))
+		}
 	}
 
-	return &RequestInfo{writeBytes: writeBytes}
+	return &RequestInfo{writeBytes: writeBytes * req.ReplicaNumber}
 }
 
 // IsWrite returns whether the request is a write request.
@@ -102,7 +109,7 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 		// TODO: using a more accurate size rather than using the whole response size as the read bytes.
 		readBytes = uint64(r.Size())
 	default:
-		log.Warn("[kv resource] unknown response type to collect the info", zap.Any("type", reflect.TypeOf(r)))
+		log.Debug("[kv resource] unknown response type to collect the info", zap.Any("type", reflect.TypeOf(r)))
 		return &ResponseInfo{}
 	}
 	// Try to get read bytes from the `detailsV2`.

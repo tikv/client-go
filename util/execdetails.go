@@ -239,12 +239,15 @@ func (cd *CommitDetails) Clone() *CommitDetails {
 
 // LockKeysDetails contains pessimistic lock keys detail information.
 type LockKeysDetails struct {
-	TotalTime   time.Duration
-	RegionNum   int32
-	LockKeys    int32
-	ResolveLock ResolveLockDetail
-	BackoffTime int64
-	Mu          struct {
+	TotalTime                  time.Duration
+	RegionNum                  int32
+	LockKeys                   int32
+	AggressiveLockNewCount     int
+	AggressiveLockDerivedCount int
+	LockedWithConflictCount    int
+	ResolveLock                ResolveLockDetail
+	BackoffTime                int64
+	Mu                         struct {
 		sync.Mutex
 		BackoffTypes        []string
 		SlowestReqTotalTime time.Duration
@@ -262,6 +265,9 @@ func (ld *LockKeysDetails) Merge(lockKey *LockKeysDetails) {
 	ld.TotalTime += lockKey.TotalTime
 	ld.RegionNum += lockKey.RegionNum
 	ld.LockKeys += lockKey.LockKeys
+	ld.AggressiveLockNewCount += lockKey.AggressiveLockNewCount
+	ld.AggressiveLockDerivedCount += lockKey.AggressiveLockDerivedCount
+	ld.LockedWithConflictCount += lockKey.LockedWithConflictCount
 	ld.ResolveLock.ResolveLockTime += lockKey.ResolveLock.ResolveLockTime
 	ld.BackoffTime += lockKey.BackoffTime
 	ld.LockRPCTime += lockKey.LockRPCTime
@@ -294,14 +300,17 @@ func (ld *LockKeysDetails) MergeReqDetails(reqDuration time.Duration, regionID u
 // Clone returns a deep copy of itself.
 func (ld *LockKeysDetails) Clone() *LockKeysDetails {
 	lock := &LockKeysDetails{
-		TotalTime:    ld.TotalTime,
-		RegionNum:    ld.RegionNum,
-		LockKeys:     ld.LockKeys,
-		BackoffTime:  ld.BackoffTime,
-		LockRPCTime:  ld.LockRPCTime,
-		LockRPCCount: ld.LockRPCCount,
-		RetryCount:   ld.RetryCount,
-		ResolveLock:  ld.ResolveLock,
+		TotalTime:                  ld.TotalTime,
+		RegionNum:                  ld.RegionNum,
+		LockKeys:                   ld.LockKeys,
+		AggressiveLockNewCount:     ld.AggressiveLockNewCount,
+		AggressiveLockDerivedCount: ld.AggressiveLockDerivedCount,
+		LockedWithConflictCount:    ld.LockedWithConflictCount,
+		BackoffTime:                ld.BackoffTime,
+		LockRPCTime:                ld.LockRPCTime,
+		LockRPCCount:               ld.LockRPCCount,
+		RetryCount:                 ld.RetryCount,
+		ResolveLock:                ld.ResolveLock,
 	}
 	lock.Mu.BackoffTypes = append([]string{}, ld.Mu.BackoffTypes...)
 	lock.Mu.SlowestReqTotalTime = ld.Mu.SlowestReqTotalTime
@@ -321,12 +330,12 @@ type ExecDetails struct {
 
 // FormatDuration uses to format duration, this function will prune precision before format duration.
 // Pruning precision is for human readability. The prune rule is:
-// 1. if the duration was less than 1us, return the original string.
-// 2. readable value >=10, keep 1 decimal, otherwise, keep 2 decimal. such as:
-//    9.412345ms  -> 9.41ms
-//    10.412345ms -> 10.4ms
-//    5.999s      -> 6s
-//    100.45µs    -> 100.5µs
+//  1. if the duration was less than 1us, return the original string.
+//  2. readable value >=10, keep 1 decimal, otherwise, keep 2 decimal. such as:
+//     9.412345ms  -> 9.41ms
+//     10.412345ms -> 10.4ms
+//     5.999s      -> 6s
+//     100.45µs    -> 100.5µs
 func FormatDuration(d time.Duration) string {
 	if d <= time.Microsecond {
 		return d.String()
