@@ -106,22 +106,11 @@ func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
 	return kvrpcpb.APIVersion_V2
 }
 
-func (c *codecV2) attachAPICtx(req *tikvrpc.Request) error {
-	ctx := &req.Context
-	ctx.ApiVersion = kvrpcpb.APIVersion_V2
-	ctx.KeyspaceId = uint32(c.GetKeyspaceID())
-	switch req.Type {
-	case tikvrpc.CmdMPPTask:
-		req.DispatchMPPTask().Meta.KeyspaceId = ctx.KeyspaceId
-	}
-	return tikvrpc.SetContext(req, ctx)
-}
-
 // EncodeRequest encodes with the given Codec.
 // NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	newReq := *req
-	if err := c.attachAPICtx(&newReq); err != nil {
+	newReq, err := attachAPICtx(c, req)
+	if err != nil {
 		return nil, err
 	}
 	// Encode requests based on command type.
@@ -283,7 +272,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	}
 
-	return &newReq, nil
+	return newReq, nil
 }
 
 // DecodeResponse decode the resp with the given codec.

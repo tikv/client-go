@@ -34,24 +34,8 @@ func (c *codecV1) GetKeyspaceID() KeyspaceID {
 	return NullspaceID
 }
 
-func (c *codecV1) attachAPICtx(req *tikvrpc.Request) error {
-	ctx := &req.Context
-	ctx.ApiVersion = kvrpcpb.APIVersion_V1
-	ctx.KeyspaceId = uint32(NullspaceID)
-
-	switch req.Type {
-	case tikvrpc.CmdMPPTask:
-		req.DispatchMPPTask().Meta.KeyspaceId = uint32(NullspaceID)
-	}
-
-	return tikvrpc.SetContext(req, ctx)
-}
-
 func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	if err := c.attachAPICtx(req); err != nil {
-		return nil, err
-	}
-	return req, nil
+	return attachAPICtx(c, req)
 }
 
 func (c *codecV1) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
