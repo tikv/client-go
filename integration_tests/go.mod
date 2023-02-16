@@ -6,7 +6,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230206112125-0561adc37543
+	github.com/pingcap/kvproto v0.0.0-20230216153817-c6df78cc9dea
 	github.com/pingcap/tidb v1.1.0-beta.0.20230207083958-f1d450ff7aa4
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.1
@@ -98,7 +98,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace (
-	github.com/pingcap/kvproto => github.com/iosmanthus/kvproto v0.0.0-20230210123209-579d6ab1bfff
-	github.com/tikv/client-go/v2 => ../
-)
+replace github.com/tikv/client-go/v2 => ../
