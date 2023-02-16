@@ -689,8 +689,8 @@ type MPPStreamResponse struct {
 	Lease
 }
 
-// SetContext sets the request context to the request.
-func SetContext(req *Request, ctx *kvrpcpb.Context) error {
+// AttachContext sets the request context to the request.
+func AttachContext(req *Request, ctx *kvrpcpb.Context) error {
 	switch req.Type {
 	case CmdGet:
 		req.Get().Context = ctx
@@ -786,15 +786,15 @@ func SetContext(req *Request, ctx *kvrpcpb.Context) error {
 	return nil
 }
 
-// BuildContext set the Context field for the given req to the specified ctx.
-func BuildContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
+// SetContext set the Context field for the given req to the specified ctx.
+func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	ctx := &req.Context
 	if region != nil {
 		ctx.RegionId = region.Id
 		ctx.RegionEpoch = region.RegionEpoch
 	}
 	ctx.Peer = peer
-	return SetContext(req, ctx)
+	return AttachContext(req, ctx)
 }
 
 // GenRegionErrorResp returns corresponding Response with specified RegionError
