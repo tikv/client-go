@@ -1142,8 +1142,12 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		}
 
 		// note that lock_only_if_exists guarantees the response tells us whether the value exists
-		keyIsNotLocked := lockCtx.LockOnlyIfExists && !valExists
-		if txn.IsInAggressiveLockingMode() && !keyIsNotLocked {
+		if lockCtx.LockOnlyIfExists && !valExists {
+			skippedLockKeys++
+			continue
+		}
+
+		if txn.IsInAggressiveLockingMode() {
 			txn.aggressiveLockingContext.currentLockedKeys[keyStr] = tempLockBufferEntry{
 				HasReturnValue:    lockCtx.ReturnValues,
 				HasCheckExistence: lockCtx.CheckExistence,
@@ -1154,11 +1158,6 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			setValExists := tikv.SetKeyLockedValueExists
 			if !valExists {
 				setValExists = tikv.SetKeyLockedValueNotExists
-			}
-			// TODO: Fix the calculation when aggressive-locking is active
-			if lockCtx.LockOnlyIfExists && !valExists {
-				skippedLockKeys++
-				continue
 			}
 			memBuf.UpdateFlags(key, tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists)
 		}
