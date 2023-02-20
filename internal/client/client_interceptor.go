@@ -78,9 +78,8 @@ func buildResourceControlInterceptor(
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
 	}
-	// When the group name is empty or "default", we don't need to
-	// perform the resource control.
-	if len(resourceGroupName) == 0 || resourceGroupName == "default" {
+	// When the group name is empty, we don't need to perform the resource control.
+	if len(resourceGroupName) == 0 {
 		return nil
 	}
 	// No resource group interceptor is set.
