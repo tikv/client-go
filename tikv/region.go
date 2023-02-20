@@ -119,12 +119,20 @@ var DefaultKeyspaceName = apicodec.DefaultKeyspaceName
 // Mode represents the operation mode of a request, export client.Mode
 type Mode = apicodec.Mode
 
-var (
+const (
 	// ModeRaw represent a raw operation in TiKV, export client.ModeRaw
 	ModeRaw Mode = apicodec.ModeRaw
 
 	// ModeTxn represent a transaction operation in TiKV, export client.ModeTxn
 	ModeTxn Mode = apicodec.ModeTxn
+)
+
+// KeyspaceID denotes the target keyspace of the request.
+type KeyspaceID = apicodec.KeyspaceID
+
+const (
+	// NullspaceID is a special keyspace id that represents no keyspace exist
+	NullspaceID KeyspaceID = apicodec.NullspaceID
 )
 
 // RecordRegionRequestRuntimeStats records request runtime stats.
