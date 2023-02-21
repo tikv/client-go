@@ -67,7 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
-	resourceControlClient "github.com/tikv/pd/client/resource_manager/client"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"

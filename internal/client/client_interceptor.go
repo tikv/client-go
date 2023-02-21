@@ -22,7 +22,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
-	resourceControlClient "github.com/tikv/pd/client/resource_manager/client"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
 func init() {
@@ -98,8 +98,15 @@ func buildResourceControlInterceptor(
 			}
 			resp, err := next(target, req)
 			if resp != nil {
-				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				ResourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
+				regionErr, err := resp.GetRegionError()
+				if err != nil || regionErr != nil {
+					ResourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, &resourcecontrol.ResponseInfo{})
+				} else {
+					respInfo := resourcecontrol.MakeResponseInfo(resp)
+					ResourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
+				}
+			} else {
+				ResourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, &resourcecontrol.ResponseInfo{})
 			}
 			return resp, err
 		}

@@ -76,12 +76,15 @@ func (req *RequestInfo) WriteBytes() uint64 {
 type ResponseInfo struct {
 	readBytes uint64
 	kvCPUMs   uint64
+	succeed   bool
 }
 
 // MakeResponseInfo extracts the relevant information from a BatchResponse.
 func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	if resp.Resp == nil {
-		return &ResponseInfo{}
+		return &ResponseInfo{
+			succeed: false,
+		}
 	}
 	// Parse the response to extract the info.
 	var (
@@ -110,7 +113,7 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 		readBytes = uint64(r.Size())
 	default:
 		log.Debug("[kv resource] unknown response type to collect the info", zap.Any("type", reflect.TypeOf(r)))
-		return &ResponseInfo{}
+		return &ResponseInfo{succeed: true}
 	}
 	// Try to get read bytes from the `detailsV2`.
 	// TODO: clarify whether we should count the underlying storage engine read bytes or not.
@@ -119,7 +122,7 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	}
 	// Get the KV CPU time in milliseconds from the execution time details.
 	kvCPUMs := getKVCPUMs(detailsV2, details)
-	return &ResponseInfo{readBytes: readBytes, kvCPUMs: kvCPUMs}
+	return &ResponseInfo{readBytes: readBytes, kvCPUMs: kvCPUMs, succeed: true}
 }
 
 // TODO: find out a more accurate way to get the actual KV CPU time.
@@ -141,4 +144,8 @@ func (res *ResponseInfo) ReadBytes() uint64 {
 // KVCPUMs returns the KV CPU time in milliseconds of the response.
 func (res *ResponseInfo) KVCPUMs() uint64 {
 	return res.kvCPUMs
+}
+
+func (res *ResponseInfo) Succeed() bool {
+	return res.succeed
 }
