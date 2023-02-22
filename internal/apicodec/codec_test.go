@@ -18,11 +18,11 @@ func TestParseKeyspaceID(t *testing.T) {
 
 	id, err = ParseKeyspaceID([]byte{'t', 0, 0})
 	assert.NotNil(t, err)
-	assert.Equal(t, NulSpaceID, id)
+	assert.Equal(t, NullspaceID, id)
 
 	id, err = ParseKeyspaceID([]byte{'t', 0, 0, 1, 1, 2, 3})
 	assert.NotNil(t, err)
-	assert.Equal(t, NulSpaceID, id)
+	assert.Equal(t, NullspaceID, id)
 }
 
 func TestDecodeKey(t *testing.T) {

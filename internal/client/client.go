@@ -640,11 +640,13 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 // SendRequest sends a Request to server and receives Response.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	// In unit test, the option or codec may be nil. Here should skip the encode/decode process.
 	if c.option == nil || c.option.codec == nil {
 		return c.sendRequest(ctx, addr, req, timeout)
 	}
 
-	req, err := c.option.codec.EncodeRequest(req)
+	codec := c.option.codec
+	req, err := codec.EncodeRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +654,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if err != nil {
 		return nil, err
 	}
-	return c.option.codec.DecodeResponse(req, resp)
+	return codec.DecodeResponse(req, resp)
 }
 
 func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {
