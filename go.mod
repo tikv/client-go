@@ -61,3 +61,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	stathat.com/c/consistent v1.0.0 // indirect
 )
+
+replace (
+	github.com/tikv/pd/client => github.com/CabinfeverB/pd/client v0.0.0-20230222065352-9b140d925a55
+)
