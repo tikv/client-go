@@ -135,6 +135,7 @@ type KVSnapshot struct {
 		replicaRead      kv.ReplicaReadType
 		taskID           uint64
 		isStaleness      bool
+		busyThreshold    time.Duration
 		readReplicaScope string
 		// replicaReadAdjuster check and adjust the replica read type and store match labels.
 		replicaReadAdjuster ReplicaReadAdjuster
@@ -384,6 +385,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			IsolationLevel:    s.isolationLevel.ToPB(),
 			RequestSource:     s.GetRequestSource(),
 			ResourceGroupName: s.mu.resourceGroupName,
+			BusyThresholdMs:   uint32(s.mu.busyThreshold.Milliseconds()),
 		})
 		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 			s.mu.resourceGroupTagger(req)
@@ -588,6 +590,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			IsolationLevel:    s.isolationLevel.ToPB(),
 			RequestSource:     s.GetRequestSource(),
 			ResourceGroupName: s.mu.resourceGroupName,
+			BusyThresholdMs:   uint32(s.mu.busyThreshold.Milliseconds()),
 		})
 	if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 		s.mu.resourceGroupTagger(req)
@@ -804,6 +807,18 @@ func (s *KVSnapshot) SetReplicaReadAdjuster(f ReplicaReadAdjuster) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mu.replicaReadAdjuster = f
+}
+
+// SetLoadBasedReplicaReadThreshold sets the TiKV wait duration threshold of
+// enabling replica read automatically
+func (s *KVSnapshot) SetLoadBasedReplicaReadThreshold(busyThreshold time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if busyThreshold <= 0 || busyThreshold.Milliseconds() > math.MaxUint32 {
+		s.mu.busyThreshold = 0
+	} else {
+		s.mu.busyThreshold = busyThreshold
+	}
 }
 
 // SetIsStalenessReadOnly indicates whether the transaction is staleness read only transaction

@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -51,6 +52,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stathat/consistent"
@@ -535,6 +537,8 @@ type RPCContext struct {
 	ProxyStore *Store // nil means proxy is not used
 	ProxyAddr  string // valid when ProxyStore is not nil
 	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+
+	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
 
 func (c *RPCContext) String() string {
@@ -548,6 +552,25 @@ func (c *RPCContext) String() string {
 		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.addr)
 	}
 	return res
+}
+
+type contextPatcher struct {
+	replicaRead   *bool
+	busyThreshold *time.Duration
+}
+
+func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
+	if patcher.replicaRead != nil {
+		pbCtx.ReplicaRead = *patcher.replicaRead
+	}
+	if patcher.busyThreshold != nil {
+		millis := patcher.busyThreshold.Milliseconds()
+		if millis > 0 && millis <= math.MaxUint32 {
+			pbCtx.BusyThresholdMs = uint32(millis)
+		} else {
+			pbCtx.BusyThresholdMs = 0
+		}
+	}
 }
 
 type storeSelectorOp struct {
@@ -2238,6 +2261,8 @@ type Store struct {
 	storeType    tikvrpc.EndpointType // type of the store
 	tokenCount   atomic2.Int64        // used store token count
 
+	loadStats atomic2.Pointer[storeLoadStats]
+
 	// whether the store is unreachable due to some reason, therefore requests to the store needs to be
 	// forwarded by other stores. this is also the flag that a checkUntilHealth goroutine is running for this store.
 	// this mechanism is currently only applicable for TiKV stores.
@@ -2249,6 +2274,11 @@ type Store struct {
 }
 
 type resolveState uint64
+
+type storeLoadStats struct {
+	estimatedWait     time.Duration
+	waitTimeUpdatedAt time.Time
+}
 
 const (
 	// The store is just created and normally is being resolved.
@@ -2595,6 +2625,20 @@ func (s *Store) GetAddr() string {
 // GetPeerAddr returns the peer address of the store
 func (s *Store) GetPeerAddr() string {
 	return s.peerAddr
+}
+
+// estimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.
+// It's calculated by subtracting the time since the last update from the wait time returned from TiKV.
+func (s *Store) estimatedWaitTime() time.Duration {
+	loadStats := s.loadStats.Load()
+	if loadStats == nil {
+		return 0
+	}
+	timeSinceUpdated := time.Since(loadStats.waitTimeUpdatedAt)
+	if loadStats.estimatedWait < timeSinceUpdated {
+		return 0
+	}
+	return loadStats.estimatedWait - timeSinceUpdated
 }
 
 func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
