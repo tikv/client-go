@@ -2328,7 +2328,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 		} else {
 			metrics.RegionCacheCounterWithGetStoreOK.Inc()
 		}
-		if err := bo.GetCtx().Err(); err != nil && errors.Cause(err) == context.Canceled {
+		if err := bo.GetCtx().Err(); err != nil && (errors.Cause(err) == context.Canceled || errors.Cause(err) == context.DeadlineExceeded) {
 			return "", errors.WithStack(err)
 		}
 		if err != nil && !isStoreNotFoundError(err) {
