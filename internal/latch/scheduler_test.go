@@ -45,7 +45,7 @@ import (
 func TestWithConcurrency(t *testing.T) {
 	sched := NewScheduler(7)
 	defer sched.Close()
-	rand.Seed(time.Now().Unix())
+	rand.New(rand.NewSource(time.Now().Unix()))
 
 	ch := make(chan [][]byte, 100)
 	const workerCount = 10
