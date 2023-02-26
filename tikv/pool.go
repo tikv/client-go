@@ -20,6 +20,7 @@ import (
 	"github.com/tiancaiamao/gp"
 )
 
+// Pool is a simple interface for goroutine pool.
 type Pool interface {
 	Run(func()) error
 	Close()
@@ -30,12 +31,14 @@ type Spool struct {
 	gp.Pool
 }
 
+// NewSpool creates a new Spool.
 func NewSpool(n int, dur time.Duration) *Spool {
 	return &Spool{
 		*gp.New(n, dur),
 	}
 }
 
+// Run implements Pool.Run.
 func (p *Spool) Run(fn func()) error {
 	p.Go(fn)
 	return nil
