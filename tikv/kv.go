@@ -177,7 +177,7 @@ type Option func(*Options)
 // WithPool set the pool
 func WithPool(gp Pool) Option {
 	return func(o *Options) {
-		o = &Options{
+		*o = Options{
 			gp,
 		}
 	}
@@ -195,11 +195,8 @@ func defaultOption() *Options {
 }
 
 // NewOption creates a new KVStore option.
-func NewOption(opt ...Option) (o *Options) {
-	if opt != nil {
-		o = defaultOption()
-		return
-	}
+func NewOption(opt ...Option) *Options {
+	o := defaultOption()
 	for _, f := range opt {
 		f(o)
 	}
