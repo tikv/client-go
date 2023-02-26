@@ -196,7 +196,10 @@ func defaultOption() *Options {
 
 // NewOption creates a new KVStore option.
 func NewOption(opt ...Option) (o *Options) {
-	o = defaultOption()
+	if opt != nil {
+		o = defaultOption()
+		return
+	}
 	for _, f := range opt {
 		f(o)
 	}
