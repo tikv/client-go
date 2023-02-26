@@ -183,7 +183,7 @@ func WithPool(gp Pool) Option {
 	}
 }
 
-// Options is the options for pool.
+// Options is the options for KVStore. it is used for pool now.
 type Options struct {
 	Pool
 }
@@ -194,10 +194,9 @@ func defaultOption() *Options {
 	}
 }
 
-// NewOption creates a new option.
-func NewOption(opt ...Option) *Options {
-	//lint:ignore SA4009 it should be overwritten.
-	o := defaultOption()
+// NewOption creates a new KVStore option.
+func NewOption(opt ...Option) (o *Options) {
+	o = defaultOption()
 	for _, f := range opt {
 		f(o)
 	}
