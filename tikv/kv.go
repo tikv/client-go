@@ -48,7 +48,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
-	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -132,12 +131,12 @@ type KVStore struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
-	gP     *gp.Pool
+	gP     Pool
 }
 
 // Go run the function in a separate goroutine.
 func (s *KVStore) Go(f func()) {
-	s.gP.Go(f)
+	s.gP.Run(f)
 }
 
 // UpdateSPCache updates cached safepoint.
@@ -172,12 +171,41 @@ func (s *KVStore) CheckVisibility(startTime uint64) error {
 	return nil
 }
 
+type Option func(*Options)
+
+func WithPool(gp Pool) Option {
+	return func(o *Options) {
+		o = &Options{
+			gp,
+		}
+	}
+}
+
+type Options struct {
+	Pool
+}
+
+func defaultOption() *Options {
+	return &Options{
+		NewSpool(128, 10*time.Second),
+	}
+}
+
+func NewOption(opt ...Option) *Options {
+	o := defaultOption()
+	for _, f := range opt {
+		f(o)
+	}
+	return o
+}
+
 // NewKVStore creates a new TiKV store instance.
-func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client) (*KVStore, error) {
+func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
 	o, err := oracles.NewPdOracle(pdClient, time.Duration(oracleUpdateInterval)*time.Millisecond)
 	if err != nil {
 		return nil, err
 	}
+	pool := NewOption(opt...)
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &KVStore{
 		clusterID:       pdClient.GetClusterID(context.TODO()),
@@ -191,7 +219,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		replicaReadSeed: rand.Uint32(),
 		ctx:             ctx,
 		cancel:          cancel,
-		gP:              gp.New(128, 10*time.Second),
+		gP:              pool,
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
