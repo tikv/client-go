@@ -176,7 +176,6 @@ type Option func(*Options)
 
 // WithPool set the pool
 func WithPool(gp Pool) Option {
-	//lint:ignore SA4009 it should be overwritten.
 	return func(o *Options) {
 		o = &Options{
 			gp,
@@ -197,6 +196,7 @@ func defaultOption() *Options {
 
 // NewOption creates a new option.
 func NewOption(opt ...Option) *Options {
+	//lint:ignore SA4009 it should be overwritten.
 	o := defaultOption()
 	for _, f := range opt {
 		f(o)
