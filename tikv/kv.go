@@ -183,6 +183,9 @@ func WithPool(gp Pool) Option {
 
 // loadOption load KVStore option into KVStore.
 func loadOption(store *KVStore, opt ...Option) {
+	if len(opt) == 0 {
+		store.gP = NewSpool(128, 10*time.Second)
+	}
 	for _, f := range opt {
 		f(store)
 	}
