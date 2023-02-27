@@ -135,8 +135,8 @@ type KVStore struct {
 }
 
 // Go run the function in a separate goroutine.
-func (s *KVStore) Go(f func()) {
-	s.gP.Run(f)
+func (s *KVStore) Go(f func()) error {
+	return s.gP.Run(f)
 }
 
 // UpdateSPCache updates cached safepoint.
