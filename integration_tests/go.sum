@@ -15,8 +15,8 @@ github.com/BurntSushi/toml v1.2.1 h1:9F2/+DoOYIOksmaJFPw1tGFy1eDnIJXg+UHjuD8lTak
 github.com/BurntSushi/toml v1.2.1/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
 github.com/CabinfeverB/pd/client v0.0.0-20230224083531-76c9b5af8fdc h1:cWcEmJHeQbOq8SjcUE/BMADAF0jMOz+RhE32V5tCVJw=
 github.com/CabinfeverB/pd/client v0.0.0-20230224083531-76c9b5af8fdc/go.mod h1:j94ECCo0drzB/GsMFaUjESjLXNvIbed5PWJXcd8eggo=
-github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227083330-e95efde8b24b h1:a1FUcKdZGw5U0Wf28IM2dQC6mMp2iXKo06jgJEpuhVU=
-github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227083330-e95efde8b24b/go.mod h1:yxV75u3Sb1RjjEJVSzYdp6EAWtSqjS0gSSQIED5agV0=
+github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227104931-4510b8be6c1c h1:gp1V9+UhBPnbU6PptfH2xiIoYuZG30NNJNZR1K9Ywq4=
+github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227104931-4510b8be6c1c/go.mod h1:/p8NJZGzx6+4l3VKmNPcLF1UlRMbjFR7IW6fxr9kCaI=
 github.com/CloudyKit/fastprinter v0.0.0-20170127035650-74b38d55f37a/go.mod h1:EFZQ978U7x8IRnstaskI3IysnWY5Ao3QgZUKOXlsAdw=
 github.com/CloudyKit/jet v2.1.3-0.20180809161101-62edd43e4f88+incompatible/go.mod h1:HPYO+50pSWkPoj9Q/eq0aRGByCL6ScRlUmiEX5Zgm+w=
 github.com/DataDog/zstd v1.4.5 h1:EndNeuB0l9syBZhut0wns3gV1hL8zX8LIu6ZiVHWLIQ=
@@ -344,8 +344,8 @@ github.com/pingcap/log v1.1.0/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoO
 github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c h1:crhkw6DD+07Bg1wYhW5Piw+kYNKZqFQqfC2puUf6gMI=
 github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c/go.mod h1:DWQW5jICDR7UJh4HtxXSM20Churx4CQL0fwL/SoOSA4=
 github.com/pingcap/sysutil v0.0.0-20220114020952-ea68d2dbf5b4 h1:HYbcxtnkN3s5tqrZ/z3eJS4j3Db8wMphEm1q10lY/TM=
-github.com/pingcap/tidb/parser v0.0.0-20230109054422-b477b1c94620 h1:cEP+A7ylw8sGGOCHe8F8gto+vlkGQaYt09DHgHd2xmg=
-github.com/pingcap/tidb/parser v0.0.0-20230109054422-b477b1c94620/go.mod h1:wjvp+T3/T9XYt0nKqGX3Kc1AKuyUcfno6LTc6b2A6ew=
+github.com/pingcap/tidb/parser v0.0.0-20230227053508-aff0847822f1 h1:9CTvnUaM0cm5MF564WoJeM6tmtZZ+DXe3OtCDSK7ZiM=
+github.com/pingcap/tidb/parser v0.0.0-20230227053508-aff0847822f1/go.mod h1:1e/12DDMAJsY3fLnCFbERX5Fwwjris29aoy3IH1y0U8=
 github.com/pingcap/tipb v0.0.0-20230119054146-c6b7a5a1623b h1:j5sw2YZY7QfgIFZEoUcn1P5cYflms1PCVVS96i+IQiI=
 github.com/pingcap/tipb v0.0.0-20230119054146-c6b7a5a1623b/go.mod h1:A7mrd7WHBl1o63LE2bIBGEJMTNWXqhgmYiOvMLxozfs=
 github.com/pkg/browser v0.0.0-20180916011732-0a3d74bf9ce4 h1:49lOXmGaUpV9Fz3gd7TFZY106KVlPVa5jcYD1gaQf98=

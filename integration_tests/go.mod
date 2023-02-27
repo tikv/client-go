@@ -56,7 +56,7 @@ require (
 	github.com/pingcap/badger v1.5.1-0.20230103063557-828f39b09b6d // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c // indirect
-	github.com/pingcap/tidb/parser v0.0.0-20230109054422-b477b1c94620 // indirect
+	github.com/pingcap/tidb/parser v0.0.0-20230227053508-aff0847822f1 // indirect
 	github.com/pingcap/tipb v0.0.0-20230119054146-c6b7a5a1623b // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
@@ -102,4 +102,5 @@ replace github.com/tikv/client-go/v2 => ../
 
 replace github.com/tikv/pd/client => github.com/CabinfeverB/pd/client v0.0.0-20230224083531-76c9b5af8fdc
 
-replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227083330-e95efde8b24b
+
+replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227104931-4510b8be6c1c

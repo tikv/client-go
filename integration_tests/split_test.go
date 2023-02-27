@@ -337,3 +337,19 @@ func (c *mockPDClient) GetExternalTimestamp(ctx context.Context) (uint64, error)
 func (c *mockPDClient) SetExternalTimestamp(ctx context.Context, tso uint64) error {
 	panic("unimplemented")
 }
+
+func (c *mockPDClient) GetTSWithinKeyspace(ctx context.Context, keyspaceID uint32) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *mockPDClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) pd.TSFuture {
+	return nil
+}
+
+func (c *mockPDClient) GetLocalTSWithinKeyspace(ctx context.Context, dcLocation string, keyspaceID uint32) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *mockPDClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) pd.TSFuture {
+	return nil
+}
