@@ -226,14 +226,6 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			}
 		}
 		sreq := &kvrpcpb.ScanRequest{
-			Context: &kvrpcpb.Context{
-				Priority:          s.snapshot.priority.ToPB(),
-				NotFillCache:      s.snapshot.notFillCache,
-				IsolationLevel:    s.snapshot.isolationLevel.ToPB(),
-				ResourceGroupTag:  s.snapshot.mu.resourceGroupTag,
-				RequestSource:     s.snapshot.GetRequestSource(),
-				ResourceGroupName: s.snapshot.mu.resourceGroupName,
-			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
 			Limit:      uint32(s.batchSize),
@@ -255,6 +247,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			IsolationLevel:    s.snapshot.isolationLevel.ToPB(),
 			RequestSource:     s.snapshot.GetRequestSource(),
 			ResourceGroupName: s.snapshot.mu.resourceGroupName,
+			BusyThresholdMs:   uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 		})
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)
