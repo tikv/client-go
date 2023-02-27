@@ -183,9 +183,6 @@ func WithPool(gp Pool) Option {
 
 // loadOption load KVStore option into KVStore.
 func loadOption(store *KVStore, opt ...Option) {
-	if len(opt) == 0 {
-		store.gP = NewSpool(128, 10*time.Second)
-	}
 	for _, f := range opt {
 		f(store)
 	}
@@ -210,6 +207,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		replicaReadSeed: rand.Uint32(),
 		ctx:             ctx,
 		cancel:          cancel,
+		gP:              NewSpool(128, 10*time.Second),
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
