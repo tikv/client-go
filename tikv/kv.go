@@ -172,35 +172,26 @@ func (s *KVStore) CheckVisibility(startTime uint64) error {
 }
 
 // Option is the option for pool.
-type Option func(*Options)
+type Option func(*KVStore)
 
 // WithPool set the pool
 func WithPool(gp Pool) Option {
-	return func(o *Options) {
-		*o = Options{
-			gp,
-		}
+	return func(o *KVStore) {
+		o.gP = gp
 	}
 }
 
-// Options is the options for KVStore. it is used for pool now.
-type Options struct {
-	Pool
-}
-
-func defaultOption() *Options {
-	return &Options{
-		NewSpool(128, 10*time.Second),
+func defaultOption() *KVStore {
+	return &KVStore{
+		gP: NewSpool(128, 10*time.Second),
 	}
 }
 
-// NewOption creates a new KVStore option.
-func NewOption(opt ...Option) *Options {
-	o := defaultOption()
+// loadOption creates a new KVStore option.
+func loadOption(store *KVStore, opt ...Option) {
 	for _, f := range opt {
-		f(o)
+		f(store)
 	}
-	return o
 }
 
 // NewKVStore creates a new TiKV store instance.
@@ -209,7 +200,6 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	if err != nil {
 		return nil, err
 	}
-	pool := NewOption(opt...)
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &KVStore{
 		clusterID:       pdClient.GetClusterID(context.TODO()),
@@ -223,10 +213,10 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		replicaReadSeed: rand.Uint32(),
 		ctx:             ctx,
 		cancel:          cancel,
-		gP:              pool,
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
+	loadOption(store, opt...)
 
 	store.wg.Add(2)
 	go store.runSafePointChecker()
