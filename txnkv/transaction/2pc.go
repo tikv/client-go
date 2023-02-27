@@ -1021,7 +1021,6 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 				zap.Error(err))
 			return err
 		}
-
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}
