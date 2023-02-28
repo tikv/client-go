@@ -142,3 +142,9 @@ func (res *ResponseInfo) ReadBytes() uint64 {
 func (res *ResponseInfo) KVCPUMs() uint64 {
 	return res.kvCPUMs
 }
+
+// Succeed returns whether the KV request is successful.
+// Todo: to fit https://github.com/tikv/pd/pull/5941
+func (res *ResponseInfo) Succeed() bool {
+	return true
+}

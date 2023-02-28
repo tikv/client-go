@@ -120,6 +120,9 @@ const (
 	LblToStore         = "to_store"
 	LblStaleRead       = "stale_read"
 	LblSource          = "source"
+	LblScope           = "scope"
+	LblInternal        = "internal"
+	LblGeneral         = "general"
 )
 
 func initMetrics(namespace, subsystem string) {
@@ -130,7 +133,7 @@ func initMetrics(namespace, subsystem string) {
 			Name:      "txn_cmd_duration_seconds",
 			Help:      "Bucketed histogram of processing time of txn cmds.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
-		}, []string{LblType})
+		}, []string{LblType, LblScope})
 
 	TiKVBackoffHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
