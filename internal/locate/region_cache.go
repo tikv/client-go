@@ -434,7 +434,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
-	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
+	go c.asyncReportStoreReplicaFlows(time.Duration(interval/4) * time.Second)
 	return c
 }
 
