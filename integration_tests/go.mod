@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.6-0.20230227032358-40a82457ebaa
-	github.com/tikv/pd/client v0.0.0-20230213110402-e6086c444b72
+	github.com/tikv/pd/client v0.0.0-20230224101107-b2f2a8219a40
 	go.uber.org/goleak v1.2.1
 )
 
@@ -102,5 +102,4 @@ replace github.com/tikv/client-go/v2 => ../
 
 replace github.com/tikv/pd/client => github.com/CabinfeverB/pd/client v0.0.0-20230224083531-76c9b5af8fdc
 
-
-replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227104931-4510b8be6c1c
+replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230228083604-3891a5cff370

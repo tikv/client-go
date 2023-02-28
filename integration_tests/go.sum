@@ -15,8 +15,8 @@ github.com/BurntSushi/toml v1.2.1 h1:9F2/+DoOYIOksmaJFPw1tGFy1eDnIJXg+UHjuD8lTak
 github.com/BurntSushi/toml v1.2.1/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
 github.com/CabinfeverB/pd/client v0.0.0-20230224083531-76c9b5af8fdc h1:cWcEmJHeQbOq8SjcUE/BMADAF0jMOz+RhE32V5tCVJw=
 github.com/CabinfeverB/pd/client v0.0.0-20230224083531-76c9b5af8fdc/go.mod h1:j94ECCo0drzB/GsMFaUjESjLXNvIbed5PWJXcd8eggo=
-github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227104931-4510b8be6c1c h1:gp1V9+UhBPnbU6PptfH2xiIoYuZG30NNJNZR1K9Ywq4=
-github.com/CabinfeverB/tidb v1.1.0-beta.0.20230227104931-4510b8be6c1c/go.mod h1:/p8NJZGzx6+4l3VKmNPcLF1UlRMbjFR7IW6fxr9kCaI=
+github.com/CabinfeverB/tidb v1.1.0-beta.0.20230228083604-3891a5cff370 h1:StesKnCfpo0f8mOLGarim2u2k2Rcx0wLqW8QeVZBWc8=
+github.com/CabinfeverB/tidb v1.1.0-beta.0.20230228083604-3891a5cff370/go.mod h1:M4EDri6W+nVYo/Ed+XY80kalq2xM8auH5aRBkfpD3SY=
 github.com/CloudyKit/fastprinter v0.0.0-20170127035650-74b38d55f37a/go.mod h1:EFZQ978U7x8IRnstaskI3IysnWY5Ao3QgZUKOXlsAdw=
 github.com/CloudyKit/jet v2.1.3-0.20180809161101-62edd43e4f88+incompatible/go.mod h1:HPYO+50pSWkPoj9Q/eq0aRGByCL6ScRlUmiEX5Zgm+w=
 github.com/DataDog/zstd v1.4.5 h1:EndNeuB0l9syBZhut0wns3gV1hL8zX8LIu6ZiVHWLIQ=
