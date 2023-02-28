@@ -5,6 +5,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 func TestParseKeyspaceID(t *testing.T) {
@@ -45,4 +46,14 @@ func TestDecodeKey(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Empty(t, pfx)
 	assert.Empty(t, key)
+}
+
+func TestEncodeUnknownRequest(t *testing.T) {
+	req := &tikvrpc.Request{
+		Type: tikvrpc.CmdStoreSafeTS,
+		Req:  &kvrpcpb.StoreSafeTSRequest{},
+	}
+	c := NewCodecV1(ModeTxn)
+	_, err := c.EncodeRequest(req)
+	assert.Nil(t, err)
 }
