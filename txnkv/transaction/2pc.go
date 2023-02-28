@@ -116,7 +116,7 @@ type kvstore interface {
 	// IsClose checks whether the store is closed.
 	IsClose() bool
 	// Go run the function in a separate goroutine.
-	Go(f func())
+	Go(f func()) error
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -454,14 +454,15 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
 func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	return &twoPhaseCommitter{
-		store:         txn.store,
-		txn:           txn,
-		startTS:       txn.StartTS(),
-		sessionID:     sessionID,
-		regionTxnSize: map[uint64]int{},
-		isPessimistic: txn.IsPessimistic(),
-		binlog:        txn.binlog,
-		diskFullOpt:   kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		store:             txn.store,
+		txn:               txn,
+		startTS:           txn.StartTS(),
+		sessionID:         sessionID,
+		regionTxnSize:     map[uint64]int{},
+		isPessimistic:     txn.IsPessimistic(),
+		binlog:            txn.binlog,
+		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		resourceGroupName: txn.resourceGroupName,
 	}, nil
 }
 
@@ -988,7 +989,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
-		c.store.Go(func() {
+		err = c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
@@ -1013,7 +1014,14 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 				metrics.SecondaryLockCleanupFailureCounterCommit.Inc()
 			}
 		})
-
+		if err != nil {
+			c.store.WaitGroup().Done()
+			logutil.BgLogger().Error("fail to create goroutine",
+				zap.Uint64("session", c.sessionID),
+				zap.Stringer("action type", action),
+				zap.Error(err))
+			return err
+		}
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}

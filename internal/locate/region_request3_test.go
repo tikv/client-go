@@ -928,3 +928,76 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		s.True(totalAttempts <= 2)
 	}
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	region := s.cache.GetCachedRegionWithRLock(regionLoc.Region)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		BusyThresholdMs: 50,
+	})
+
+	replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.NotNil(replicaSelector)
+	s.Nil(err)
+	s.Equal(replicaSelector.region, region)
+	s.IsType(&accessKnownLeader{}, replicaSelector.state)
+	// The busyThreshold in replicaSelector should be initialized with the request context.
+	s.Equal(replicaSelector.busyThreshold, 50*time.Millisecond)
+
+	bo := retry.NewBackoffer(context.Background(), -1)
+	rpcCtx, err := replicaSelector.next(bo)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+
+	// Receive a ServerIsBusy error
+	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
+		EstimatedWaitMs: 500,
+	})
+
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
+	lastPeerID := rpcCtx.Peer.Id
+
+	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
+		EstimatedWaitMs: 800,
+	})
+
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	// Should choose a peer different from before
+	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
+	s.NotEqual(rpcCtx.Peer.Id, lastPeerID)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
+
+	// All peers are too busy
+	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
+		EstimatedWaitMs: 150,
+	})
+	lessBusyPeer := rpcCtx.Peer.Id
+
+	// Then, send to the leader again with no threshold.
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.False(*rpcCtx.contextPatcher.replicaRead)
+	s.Equal(*rpcCtx.contextPatcher.busyThreshold, time.Duration(0))
+
+	time.Sleep(120 * time.Millisecond)
+
+	// When there comes a new request, it should skip busy leader and choose a less busy store
+	replicaSelector, err = newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.NotNil(replicaSelector)
+	s.Nil(err)
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, lessBusyPeer)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
+}
