@@ -60,6 +60,15 @@ func WithInternalSourceType(ctx context.Context, source string) context.Context 
 	})
 }
 
+// IsRequestSourceInternal checks whether the input request source type is internal type.
+func IsRequestSourceInternal(reqSrc *RequestSource) bool {
+	isInternal := false
+	if reqSrc != nil && IsInternalRequest(reqSrc.GetRequestSource()) {
+		isInternal = true
+	}
+	return isInternal
+}
+
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
 	// if r.RequestSourceType is not set, it's mostly possible that r.RequestSourceInternal is not set
