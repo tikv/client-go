@@ -38,11 +38,16 @@ import "github.com/prometheus/client_golang/prometheus"
 
 // Shortcuts for performance improvement.
 var (
-	TxnCmdHistogramWithCommit   prometheus.Observer
-	TxnCmdHistogramWithRollback prometheus.Observer
-	TxnCmdHistogramWithBatchGet prometheus.Observer
-	TxnCmdHistogramWithGet      prometheus.Observer
-	TxnCmdHistogramWithLockKeys prometheus.Observer
+	TxnCmdHistogramWithCommitInternal   prometheus.Observer
+	TxnCmdHistogramWithCommitGeneral    prometheus.Observer
+	TxnCmdHistogramWithRollbackInternal prometheus.Observer
+	TxnCmdHistogramWithRollbackGeneral  prometheus.Observer
+	TxnCmdHistogramWithBatchGetInternal prometheus.Observer
+	TxnCmdHistogramWithBatchGetGeneral  prometheus.Observer
+	TxnCmdHistogramWithGetInternal      prometheus.Observer
+	TxnCmdHistogramWithGetGeneral       prometheus.Observer
+	TxnCmdHistogramWithLockKeysInternal prometheus.Observer
+	TxnCmdHistogramWithLockKeysGeneral  prometheus.Observer
 
 	RawkvCmdHistogramWithGet           prometheus.Observer
 	RawkvCmdHistogramWithBatchGet      prometheus.Observer
@@ -144,11 +149,16 @@ var (
 )
 
 func initShortcuts() {
-	TxnCmdHistogramWithCommit = TiKVTxnCmdHistogram.WithLabelValues(LblCommit)
-	TxnCmdHistogramWithRollback = TiKVTxnCmdHistogram.WithLabelValues(LblRollback)
-	TxnCmdHistogramWithBatchGet = TiKVTxnCmdHistogram.WithLabelValues(LblBatchGet)
-	TxnCmdHistogramWithGet = TiKVTxnCmdHistogram.WithLabelValues(LblGet)
-	TxnCmdHistogramWithLockKeys = TiKVTxnCmdHistogram.WithLabelValues(LblLockKeys)
+	TxnCmdHistogramWithCommitInternal = TiKVTxnCmdHistogram.WithLabelValues(LblCommit, LblInternal)
+	TxnCmdHistogramWithCommitGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblCommit, LblGeneral)
+	TxnCmdHistogramWithRollbackInternal = TiKVTxnCmdHistogram.WithLabelValues(LblRollback, LblInternal)
+	TxnCmdHistogramWithRollbackGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblRollback, LblGeneral)
+	TxnCmdHistogramWithBatchGetInternal = TiKVTxnCmdHistogram.WithLabelValues(LblBatchGet, LblInternal)
+	TxnCmdHistogramWithBatchGetGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblBatchGet, LblGeneral)
+	TxnCmdHistogramWithGetInternal = TiKVTxnCmdHistogram.WithLabelValues(LblGet, LblInternal)
+	TxnCmdHistogramWithGetGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblGet, LblGeneral)
+	TxnCmdHistogramWithLockKeysInternal = TiKVTxnCmdHistogram.WithLabelValues(LblLockKeys, LblInternal)
+	TxnCmdHistogramWithLockKeysGeneral = TiKVTxnCmdHistogram.WithLabelValues(LblLockKeys, LblGeneral)
 
 	RawkvCmdHistogramWithGet = TiKVRawkvCmdHistogram.WithLabelValues("get")
 	RawkvCmdHistogramWithBatchGet = TiKVRawkvCmdHistogram.WithLabelValues("batch_get")
