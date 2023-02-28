@@ -101,10 +101,7 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		r.Req = &mpp
 	}
 
-	err := tikvrpc.AttachContext(&r, ctx)
-	if err != nil {
-		return nil, err
-	}
+	_ = tikvrpc.AttachContext(&r, ctx)
 
 	return &r, nil
 }
