@@ -190,6 +190,10 @@ func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
 	s.resolvedLocks = util.TSSet{}
 }
 
+func (s *KVSnapshot) IsInternal() bool {
+	return util.IsRequestSourceInternal(s.RequestSource)
+}
+
 // BatchGet gets all the keys' value from kv-server and returns a map contains key/value pairs.
 // The map will not contain nonexistent keys.
 // NOTE: Don't modify keys. Some codes rely on the order of keys.
@@ -319,7 +323,11 @@ func appendBatchKeysBySize(b []batchKeys, region locate.RegionVerID, keys [][]by
 
 func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, collectF func(k, v []byte)) error {
 	defer func(start time.Time) {
-		metrics.TxnCmdHistogramWithBatchGet.Observe(time.Since(start).Seconds())
+		if s.IsInternal() {
+			metrics.TxnCmdHistogramWithBatchGetInternal.Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithBatchGetGeneral.Observe(time.Since(start).Seconds())
+		}
 	}(time.Now())
 	groups, _, err := s.store.GetRegionCache().GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
@@ -516,7 +524,11 @@ const getMaxBackoff = 20000
 // Get gets the value for key k from snapshot.
 func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	defer func(start time.Time) {
-		metrics.TxnCmdHistogramWithGet.Observe(time.Since(start).Seconds())
+		if s.IsInternal() {
+			metrics.TxnCmdHistogramWithGetInternal.Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithGetGeneral.Observe(time.Since(start).Seconds())
+		}
 	}(time.Now())
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
