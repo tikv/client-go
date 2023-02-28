@@ -190,6 +190,7 @@ func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
 	s.resolvedLocks = util.TSSet{}
 }
 
+// IsInternal returns if the KvSnapshot is used by internal executions.
 func (s *KVSnapshot) IsInternal() bool {
 	return util.IsRequestSourceInternal(s.RequestSource)
 }
