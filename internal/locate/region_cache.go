@@ -434,7 +434,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
-	go c.asyncReportStoreReplicaFlows(time.Duration(interval/4) * time.Second)
+	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
 	return c
 }
 
@@ -2784,7 +2784,7 @@ func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
 			c.storeMu.RLock()
 			for _, store := range c.storeMu.stores {
 				for destType := toLeader; destType < numReplicaFlowsType; destType++ {
-					metrics.TiKVPreferLeaderFlowsCounter.WithLabelValues(destType.String(), store.addr).Add(float64(store.getReplicaFlowsStats(destType)))
+					metrics.TiKVPreferLeaderFlowsGauge.WithLabelValues(destType.String(), store.addr).Set(float64(store.getReplicaFlowsStats(destType)))
 					store.resetReplicaFlowsStats(destType)
 				}
 			}
