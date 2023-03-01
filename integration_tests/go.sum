@@ -13,8 +13,8 @@ github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v0.2.0 h1:62Ew5xXg5UCGIXDOM
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/toml v1.2.1 h1:9F2/+DoOYIOksmaJFPw1tGFy1eDnIJXg+UHjuD8lTak=
 github.com/BurntSushi/toml v1.2.1/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
-github.com/CabinfeverB/tidb v1.1.0-beta.0.20230228083604-3891a5cff370 h1:StesKnCfpo0f8mOLGarim2u2k2Rcx0wLqW8QeVZBWc8=
-github.com/CabinfeverB/tidb v1.1.0-beta.0.20230228083604-3891a5cff370/go.mod h1:M4EDri6W+nVYo/Ed+XY80kalq2xM8auH5aRBkfpD3SY=
+github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931 h1:aNr1SbxZMbOs8/Zb2c6oMVdkkIoe8uQtJ9uSVNX8WOc=
+github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931/go.mod h1:IVEQd1UKHbQReFP6vC4tCi0Byhz8SWPSDTmhpZdSU1g=
 github.com/CloudyKit/fastprinter v0.0.0-20170127035650-74b38d55f37a/go.mod h1:EFZQ978U7x8IRnstaskI3IysnWY5Ao3QgZUKOXlsAdw=
 github.com/CloudyKit/jet v2.1.3-0.20180809161101-62edd43e4f88+incompatible/go.mod h1:HPYO+50pSWkPoj9Q/eq0aRGByCL6ScRlUmiEX5Zgm+w=
 github.com/DataDog/zstd v1.4.5 h1:EndNeuB0l9syBZhut0wns3gV1hL8zX8LIu6ZiVHWLIQ=

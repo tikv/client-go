@@ -11,7 +11,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.6-0.20230227032358-40a82457ebaa
+	github.com/tikv/client-go/v2 v2.0.6-0.20230228091502-e2da5527026f
 	github.com/tikv/pd/client v0.0.0-20230301094509-c82b237672a0
 	go.uber.org/goleak v1.2.1
 )
@@ -100,4 +100,4 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230228083604-3891a5cff370
+replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931
