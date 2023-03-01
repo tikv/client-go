@@ -463,7 +463,6 @@ func (state *accessByKnownProxy) onNoLeader(selector *replicaSelector) {
 
 // tryNewProxy is the state where we try to find a node from followers as proxy.
 type tryNewProxy struct {
-	stateBase
 	leaderIdx AccessIndex
 }
 
