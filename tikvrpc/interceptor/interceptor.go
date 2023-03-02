@@ -32,29 +32,33 @@ import (
 //
 // We can implement an RPCInterceptor like this:
 // ```
-// func LogInterceptor(next InterceptorFunc) RPCInterceptorFunc {
-//     return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-//         log.Println("before")
-//         resp, err := next(target, req)
-//         log.Println("after")
-//         return resp, err
-//     }
-// }
+//
+//	func LogInterceptor(next InterceptorFunc) RPCInterceptorFunc {
+//	    return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+//	        log.Println("before")
+//	        resp, err := next(target, req)
+//	        log.Println("after")
+//	        return resp, err
+//	    }
+//	}
+//
 // txn.SetRPCInterceptor(LogInterceptor)
 // ```
 //
 // Or you want to inject some dependent modules:
 // ```
-// func GetLogInterceptor(lg *log.Logger) RPCInterceptor {
-//     return func(next RPCInterceptorFunc) RPCInterceptorFunc {
-//         return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-//             lg.Println("before")
-//             resp, err := next(target, req)
-//             lg.Println("after")
-//             return resp, err
-//         }
-//     }
-// }
+//
+//	func GetLogInterceptor(lg *log.Logger) RPCInterceptor {
+//	    return func(next RPCInterceptorFunc) RPCInterceptorFunc {
+//	        return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+//	            lg.Println("before")
+//	            resp, err := next(target, req)
+//	            lg.Println("after")
+//	            return resp, err
+//	        }
+//	    }
+//	}
+//
 // txn.SetRPCInterceptor(GetLogInterceptor())
 // ```
 //
@@ -62,8 +66,9 @@ import (
 // This is because there may be some exceptions, such as: request batched, no
 // valid connection etc. If you have questions about the execution location of
 // RPCInterceptor, please refer to:
-//     tikv/kv.go#NewKVStore()
-//     internal/client/client_interceptor.go#SendRequest.
+//
+//	tikv/kv.go#NewKVStore()
+//	internal/client/client_interceptor.go#SendRequest.
 type RPCInterceptor func(next RPCInterceptorFunc) RPCInterceptorFunc
 
 // RPCInterceptorFunc is a callable function used to initiate a request to TiKV.
@@ -77,20 +82,23 @@ type RPCInterceptorFunc func(target string, req *tikvrpc.Request) (*tikvrpc.Resp
 //
 // We can use RPCInterceptorChain like this:
 // ```
-// func Interceptor1(next InterceptorFunc) RPCInterceptorFunc {
-//     return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-//         fmt.Println("begin-interceptor-1")
-//         defer fmt.Println("end-interceptor-1")
-//         return next(target, req)
-//     }
-// }
-// func Interceptor2(next InterceptorFunc) RPCInterceptorFunc {
-//     return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-//         fmt.Println("begin-interceptor-2")
-//         defer fmt.Println("end-interceptor-2")
-//         return next(target, req)
-//     }
-// }
+//
+//	func Interceptor1(next InterceptorFunc) RPCInterceptorFunc {
+//	    return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+//	        fmt.Println("begin-interceptor-1")
+//	        defer fmt.Println("end-interceptor-1")
+//	        return next(target, req)
+//	    }
+//	}
+//
+//	func Interceptor2(next InterceptorFunc) RPCInterceptorFunc {
+//	    return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+//	        fmt.Println("begin-interceptor-2")
+//	        defer fmt.Println("end-interceptor-2")
+//	        return next(target, req)
+//	    }
+//	}
+//
 // txn.SetRPCInterceptor(NewRPCInterceptorChain().Link(Interceptor1).Link(Interceptor2).Build())
 // ```
 //

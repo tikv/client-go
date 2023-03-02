@@ -44,7 +44,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
-	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	"go.uber.org/zap"
 )
 
@@ -79,7 +78,6 @@ type Config struct {
 	TxnScope              string
 	EnableAsyncCommit     bool
 	Enable1PC             bool
-	ResourceControl       resourceControlClient.RequestUnitConfig
 }
 
 // DefaultConfig returns the default configuration.
@@ -97,7 +95,6 @@ func DefaultConfig() Config {
 		TxnScope:              "",
 		EnableAsyncCommit:     false,
 		Enable1PC:             false,
-		ResourceControl:       *resourceControlClient.DefaultRequestUnitConfig(),
 	}
 }
 

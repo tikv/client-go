@@ -63,6 +63,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	pderr "github.com/tikv/pd/client/errs"
 )
 
 // shuttingDown is a flag to indicate tidb-server is exiting (Ctrl+C signal
@@ -462,7 +463,6 @@ func (state *accessByKnownProxy) onNoLeader(selector *replicaSelector) {
 
 // tryNewProxy is the state where we try to find a node from followers as proxy.
 type tryNewProxy struct {
-	stateBase
 	leaderIdx AccessIndex
 }
 
@@ -1468,6 +1468,18 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		} else {
 			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
 		}
+	}
+
+	// don't need to retry for ResourceGroup error
+	if errors.Is(err, pderr.ErrClientResourceGroupThrottled) {
+		return err
+	}
+	if errors.Is(err, pderr.ErrClientResourceGroupConfigUnavailable) {
+		return err
+	}
+	var errGetResourceGroup *pderr.ErrClientGetResourceGroup
+	if errors.As(err, &errGetResourceGroup) {
+		return err
 	}
 
 	// Retry on send request failure when it's not canceled.
