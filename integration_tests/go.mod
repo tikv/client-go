@@ -6,13 +6,13 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230216153817-c6df78cc9dea
+	github.com/pingcap/kvproto v0.0.0-20230228041042-1e9aca94bab6
 	github.com/pingcap/tidb v1.1.0-beta.0.20230207083958-f1d450ff7aa4
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.6-0.20230227032358-40a82457ebaa
-	github.com/tikv/pd/client v0.0.0-20230224101107-b2f2a8219a40
+	github.com/tikv/client-go/v2 v2.0.6-0.20230228091502-e2da5527026f
+	github.com/tikv/pd/client v0.0.0-20230301094509-c82b237672a0
 	go.uber.org/goleak v1.2.1
 )
 
@@ -100,4 +100,4 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230228083604-3891a5cff370
+replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931
