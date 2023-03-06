@@ -187,6 +187,10 @@ type twoPhaseCommitter struct {
 
 	// assertion error happened when initializing mutations, could be false positive if pessimistic lock is lost
 	stashedAssertionError error
+
+	// isInternal means it's related to an internal transaction. It's only used by `asyncPessimisticRollback` as the
+	// committer may contain a nil `txn` pointer.
+	isInternal bool
 }
 
 type memBufferMutations struct {
@@ -696,8 +700,15 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		WriteKeys:   c.mutations.Len(),
 		ResolveLock: util.ResolveLockDetail{},
 	}
-	metrics.TiKVTxnWriteKVCountHistogram.Observe(float64(commitDetail.WriteKeys))
-	metrics.TiKVTxnWriteSizeHistogram.Observe(float64(commitDetail.WriteSize))
+
+	isInternalReq := util.IsInternalRequest(c.txn.GetRequestSource())
+	if isInternalReq {
+		metrics.TxnWriteKVCountHistogramInternal.Observe(float64(commitDetail.WriteKeys))
+		metrics.TxnWriteSizeHistogramInternal.Observe(float64(commitDetail.WriteSize))
+	} else {
+		metrics.TxnWriteKVCountHistogramGeneral.Observe(float64(commitDetail.WriteKeys))
+		metrics.TxnWriteSizeHistogramGeneral.Observe(float64(commitDetail.WriteSize))
+	}
 	c.hasNoNeedCommitKeys = checkCnt > 0
 	c.lockTTL = txnLockTTL(txn.startTime, size)
 	c.priority = txn.priority.ToPB()
