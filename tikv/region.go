@@ -203,3 +203,9 @@ func SetStoreLivenessTimeout(t time.Duration) {
 func NewRegionCache(pdClient pd.Client) *locate.RegionCache {
 	return locate.NewRegionCache(pdClient)
 }
+
+type LabelFilter = locate.LabelFilter
+var LabelFilterOnlyTiFlashWriteNode = locate.LabelFilterOnlyTiFlashWriteNode
+var LabelFilterNoTiFlashWriteNode = locate.LabelFilterNoTiFlashWriteNode
+var LabelFilterAllTiFlashNode = locate.LabelFilterAllTiFlashNode
+var LabelFilterAllNode = locate.LabelFilterAllNode
