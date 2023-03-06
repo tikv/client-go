@@ -553,5 +553,11 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCt
 }
 
 func (c *twoPhaseCommitter) pessimisticRollbackMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
-	return c.doActionOnMutations(bo, actionPessimisticRollback{isInternal: c.txn.isInternal()}, mutations)
+	isInternal := false
+	if c.txn != nil {
+		isInternal = c.txn.isInternal()
+	} else {
+		isInternal = c.isInternal
+	}
+	return c.doActionOnMutations(bo, actionPessimisticRollback{isInternal: isInternal}, mutations)
 }

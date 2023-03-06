@@ -187,6 +187,10 @@ type twoPhaseCommitter struct {
 
 	// assertion error happened when initializing mutations, could be false positive if pessimistic lock is lost
 	stashedAssertionError error
+
+	// isInternal means it's related to an internal transaction. It's only used by `asyncPessimisticRollback` as the
+	// committer may contain a nil `txn` pointer.
+	isInternal bool
 }
 
 type memBufferMutations struct {
