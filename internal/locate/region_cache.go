@@ -84,23 +84,29 @@ const (
 	defaultRegionsPerBatch    = 128
 )
 
-// Return false means label doesn't match, and will ignore this store.
+// LabelFilter returns false means label doesn't match, and will ignore this store.
 type LabelFilter = func(labels []*metapb.StoreLabel) bool
 
+// LabelFilterOnlyTiFlashWriteNode will only select stores whose label contains: <engine, tiflash> and <engine_role, write>.
+// Only used for tiflash_compute node.
 var LabelFilterOnlyTiFlashWriteNode = func(labels []*metapb.StoreLabel) bool {
 	return isStoreContainLabel(labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlash) &&
-			isStoreContainLabel(labels, tikvrpc.EngineRoleLabelKey, tikvrpc.EngineRoleWrite)
+		isStoreContainLabel(labels, tikvrpc.EngineRoleLabelKey, tikvrpc.EngineRoleWrite)
 }
 
+// LabelFilterNoTiFlashWriteNode will only select stores whose label contains: <engine, tiflash>, but not contains <engine_role, write>.
+// Normally tidb use this filter.
 var LabelFilterNoTiFlashWriteNode = func(labels []*metapb.StoreLabel) bool {
 	return isStoreContainLabel(labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlash) &&
-			!isStoreContainLabel(labels, tikvrpc.EngineRoleLabelKey, tikvrpc.EngineRoleWrite)
+		!isStoreContainLabel(labels, tikvrpc.EngineRoleLabelKey, tikvrpc.EngineRoleWrite)
 }
 
+// LabelFilterAllTiFlashNode will select all tiflash stores.
 var LabelFilterAllTiFlashNode = func(labels []*metapb.StoreLabel) bool {
 	return isStoreContainLabel(labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlash)
 }
 
+// LabelFilterAllNode will select all stores.
 var LabelFilterAllNode = func(_ []*metapb.StoreLabel) bool {
 	return true
 }
