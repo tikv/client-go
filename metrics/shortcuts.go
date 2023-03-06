@@ -86,6 +86,7 @@ var (
 	TxnRegionsNumHistogramPessimisticLock              prometheus.Observer
 	TxnRegionsNumHistogramPessimisticRollbackInternal  prometheus.Observer
 	TxnRegionsNumHistogramPessimisticRollback          prometheus.Observer
+	TxnRegionsNumHistogramWithCoprocessorInternal      prometheus.Observer
 	TxnRegionsNumHistogramWithCoprocessor              prometheus.Observer
 	TxnRegionsNumHistogramWithBatchCoprocessorInternal prometheus.Observer
 	TxnRegionsNumHistogramWithBatchCoprocessor         prometheus.Observer
@@ -209,10 +210,14 @@ func initShortcuts() {
 	TxnRegionsNumHistogramPessimisticLock = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_lock", LblGeneral)
 	TxnRegionsNumHistogramPessimisticRollbackInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_rollback", LblInternal)
 	TxnRegionsNumHistogramPessimisticRollback = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_rollback", LblGeneral)
+	TxnRegionsNumHistogramWithCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("coprocessor", LblInternal)
+	TxnRegionsNumHistogramWithCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor", LblGeneral)
 	TxnRegionsNumHistogramWithBatchCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("coprocessor", LblInternal)
 	TxnRegionsNumHistogramWithBatchCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor", LblGeneral)
 	TxnWriteKVCountHistogramInternal = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblInternal)
 	TxnWriteKVCountHistogramGeneral = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblGeneral)
+	TxnWriteSizeHistogramInternal = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblInternal)
+	TxnWriteSizeHistogramGeneral = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblGeneral)
 
 	LockResolverCountWithBatchResolve = TiKVLockResolverCounter.WithLabelValues("batch_resolve")
 	LockResolverCountWithExpired = TiKVLockResolverCounter.WithLabelValues("expired")
