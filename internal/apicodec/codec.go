@@ -99,9 +99,13 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) (*tikvrpc.Request, error) {
 		mpp := *r.DispatchMPPTask()
 		mpp.Meta.KeyspaceId = ctx.KeyspaceId
 		r.Req = &mpp
+	case tikvrpc.CmdCompact:
+		compact := *r.Compact()
+		compact.KeyspaceId = ctx.KeyspaceId
+		r.Req = &compact
 	}
 
-	_ = tikvrpc.AttachContext(&r, ctx)
+	tikvrpc.AttachContext(&r, ctx)
 
 	return &r, nil
 }

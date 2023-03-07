@@ -68,7 +68,6 @@ require (
 	github.com/rogpeppe/go-internal v1.8.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.23.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/stathat/consistent v1.0.0 // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
@@ -100,4 +99,7 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931
+replace (
+	github.com/pingcap/kvproto => github.com/iosmanthus/kvproto v0.0.0-20230307113443-b53c62a9d11e
+	github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931
+)
