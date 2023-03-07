@@ -335,7 +335,11 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 		return err
 	}
 
-	metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	if s.IsInternal() {
+		metrics.TxnRegionsNumHistogramWithSnapshotInternal.Observe(float64(len(groups)))
+	} else {
+		metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	}
 
 	var batches []batchKeys
 	for id, g := range groups {

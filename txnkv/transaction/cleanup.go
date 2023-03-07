@@ -46,19 +46,22 @@ import (
 	"go.uber.org/zap"
 )
 
-type actionCleanup struct{}
+type actionCleanup struct{ isInternal bool }
 
 var _ twoPhaseCommitAction = actionCleanup{}
 
-func (actionCleanup) String() string {
+func (action actionCleanup) String() string {
 	return "cleanup"
 }
 
-func (actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+func (action actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+	if action.isInternal {
+		return metrics.TxnRegionsNumHistogramCleanupInternal
+	}
 	return metrics.TxnRegionsNumHistogramCleanup
 }
 
-func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
 		Keys:         batch.mutations.GetKeys(),
 		StartVersion: c.startTS,
@@ -99,5 +102,5 @@ func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer
 }
 
 func (c *twoPhaseCommitter) cleanupMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
-	return c.doActionOnMutations(bo, actionCleanup{}, mutations)
+	return c.doActionOnMutations(bo, actionCleanup{isInternal: c.txn.isInternal()}, mutations)
 }
