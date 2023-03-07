@@ -969,6 +969,20 @@ func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, 
 	}, nil
 }
 
+// TryLocateKey searches for the region and range that the key is located, but return nil when region miss or invalid.
+func (c *RegionCache) TryLocateKey(key []byte) *KeyLocation {
+	r := c.tryFindRegionByKey(key, false)
+	if r == nil {
+		return nil
+	}
+	return &KeyLocation{
+		Region:   r.VerID(),
+		StartKey: r.StartKey(),
+		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
+	}
+}
+
 // LocateEndKey searches for the region and range that the key is located.
 // Unlike LocateKey, start key of a region is exclusive and end key is inclusive.
 func (c *RegionCache) LocateEndKey(bo *retry.Backoffer, key []byte) (*KeyLocation, error) {
@@ -1014,6 +1028,14 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		}
 	}
 	return r, nil
+}
+
+func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
+	r = c.searchCachedRegion(key, isEndKey)
+	if r == nil || r.checkNeedReloadAndMarkUpdated() {
+		return nil
+	}
+	return r
 }
 
 // OnSendFailForTiFlash handles send request fail logic for tiflash.
