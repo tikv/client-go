@@ -16,6 +16,7 @@ package resourcecontrol
 
 import (
 	"reflect"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -75,7 +76,7 @@ func (req *RequestInfo) WriteBytes() uint64 {
 // be calculated by its execution details info.
 type ResponseInfo struct {
 	readBytes uint64
-	kvCPUMs   uint64
+	kvCPU     time.Duration
 }
 
 // MakeResponseInfo extracts the relevant information from a BatchResponse.
@@ -118,19 +119,22 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 		readBytes = scanDetail.GetProcessedVersionsSize()
 	}
 	// Get the KV CPU time in milliseconds from the execution time details.
-	kvCPUMs := getKVCPUMs(detailsV2, details)
-	return &ResponseInfo{readBytes: readBytes, kvCPUMs: kvCPUMs}
+	kvCPU := getKVCPU(detailsV2, details)
+	return &ResponseInfo{readBytes: readBytes, kvCPU: kvCPU}
 }
 
 // TODO: find out a more accurate way to get the actual KV CPU time.
-func getKVCPUMs(detailsV2 *kvrpcpb.ExecDetailsV2, details *kvrpcpb.ExecDetails) uint64 {
+func getKVCPU(detailsV2 *kvrpcpb.ExecDetailsV2, details *kvrpcpb.ExecDetails) time.Duration {
+	if timeDetail := detailsV2.GetTimeDetailV2(); timeDetail != nil {
+		return time.Duration(timeDetail.GetProcessWallTimeNs())
+	}
 	if timeDetail := detailsV2.GetTimeDetail(); timeDetail != nil {
-		return timeDetail.GetProcessWallTimeMs()
+		return time.Duration(timeDetail.GetProcessWallTimeMs()) * time.Millisecond
 	}
 	if timeDetail := details.GetTimeDetail(); timeDetail != nil {
-		return timeDetail.GetProcessWallTimeMs()
+		return time.Duration(timeDetail.GetProcessWallTimeMs()) * time.Millisecond
 	}
-	return 0
+	return time.Duration(0)
 }
 
 // ReadBytes returns the read bytes of the response.
@@ -138,9 +142,9 @@ func (res *ResponseInfo) ReadBytes() uint64 {
 	return res.readBytes
 }
 
-// KVCPUMs returns the KV CPU time in milliseconds of the response.
-func (res *ResponseInfo) KVCPUMs() uint64 {
-	return res.kvCPUMs
+// KVCPU returns the KV CPU time in milliseconds of the response.
+func (res *ResponseInfo) KVCPU() time.Duration {
+	return res.kvCPU
 }
 
 // Succeed returns whether the KV request is successful.
