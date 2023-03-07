@@ -480,12 +480,20 @@ func (s *mockTikvGrpcServer) TryMarkDelete(context.Context, *disaggregated.TryMa
 	return nil, errors.New("unreachable")
 }
 
+func (s *mockTikvGrpcServer) EstablishDisaggTask(ctx context.Context, req *disaggregated.EstablishDisaggTaskRequest) (*disaggregated.EstablishDisaggTaskResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) KvFlashbackToVersion(context.Context, *kvrpcpb.FlashbackToVersionRequest) (*kvrpcpb.FlashbackToVersionResponse, error) {
 	return nil, errors.New("unreachable")
 }
 
 func (s *mockTikvGrpcServer) KvPrepareFlashbackToVersion(context.Context, *kvrpcpb.PrepareFlashbackToVersionRequest) (*kvrpcpb.PrepareFlashbackToVersionResponse, error) {
 	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) FetchDisaggPages(*disaggregated.FetchDisaggPagesRequest, tikvpb.Tikv_FetchDisaggPagesServer) error {
+	return errors.New("unreachable")
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCanceled() {
