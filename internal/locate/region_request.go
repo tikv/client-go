@@ -1010,24 +1010,13 @@ func (s *RegionRequestSender) getRPCContext(
 		}
 		return s.replicaSelector.next(bo)
 	case tikvrpc.TiFlash:
-		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true)
+		// Should ignore WN, because in disaggregated tiflash mode, TiDB will build rpcCtx itself.
+		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true, LabelFilterNoTiFlashWriteNode)
 	case tikvrpc.TiDB:
 		return &RPCContext{Addr: s.storeAddr}, nil
 	case tikvrpc.TiFlashCompute:
-		stores, err := s.regionCache.GetTiFlashComputeStores(bo)
-		if err != nil {
-			return nil, err
-		}
-		rpcCtxs, err := s.regionCache.GetTiFlashComputeRPCContextByConsistentHash(bo, []RegionVerID{regionID}, stores)
-		if err != nil {
-			return nil, err
-		}
-		if rpcCtxs == nil {
-			return nil, nil
-		} else if len(rpcCtxs) != 1 {
-			return nil, errors.New(fmt.Sprintf("unexpected number of rpcCtx, expect 1, got: %v", len(rpcCtxs)))
-		}
-		return rpcCtxs[0], nil
+		// In disaggregated tiflash mode, TiDB will build rpcCtx itself, so cannot reach here.
+		return nil, errors.Errorf("should not reach here for disaggregated tiflash mode")
 	default:
 		return nil, errors.Errorf("unsupported storage type: %v", et)
 	}
@@ -1579,7 +1568,11 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	// NOTE: Please add the region error handler in the same order of errorpb.Error.
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr)).Inc()
+	isInternal := false
+	if req != nil {
+		isInternal = util.IsInternalRequest(req.GetRequestSource())
+	}
+	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr), strconv.FormatBool(isInternal)).Inc()
 
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
 		// Retry if error is `NotLeader`.

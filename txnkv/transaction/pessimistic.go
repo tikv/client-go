@@ -61,27 +61,36 @@ import (
 type actionPessimisticLock struct {
 	*kv.LockCtx
 	wakeUpMode kvrpcpb.PessimisticLockWakeUpMode
+	isInternal bool
 }
-type actionPessimisticRollback struct{}
+type actionPessimisticRollback struct {
+	isInternal bool
+}
 
 var (
 	_ twoPhaseCommitAction = actionPessimisticLock{}
 	_ twoPhaseCommitAction = actionPessimisticRollback{}
 )
 
-func (actionPessimisticLock) String() string {
+func (action actionPessimisticLock) String() string {
 	return "pessimistic_lock"
 }
 
-func (actionPessimisticLock) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+func (action actionPessimisticLock) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+	if action.isInternal {
+		return metrics.TxnRegionsNumHistogramPessimisticLockInternal
+	}
 	return metrics.TxnRegionsNumHistogramPessimisticLock
 }
 
-func (actionPessimisticRollback) String() string {
+func (action actionPessimisticRollback) String() string {
 	return "pessimistic_rollback"
 }
 
-func (actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+func (action actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+	if action.isInternal {
+		return metrics.TxnRegionsNumHistogramPessimisticRollbackInternal
+	}
 	return metrics.TxnRegionsNumHistogramPessimisticRollback
 }
 
@@ -540,9 +549,15 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCt
 			}
 		}
 	}
-	return c.doActionOnMutations(bo, actionPessimisticLock{LockCtx: lockCtx, wakeUpMode: lockWaitMode}, mutations)
+	return c.doActionOnMutations(bo, actionPessimisticLock{LockCtx: lockCtx, wakeUpMode: lockWaitMode, isInternal: c.txn.isInternal()}, mutations)
 }
 
 func (c *twoPhaseCommitter) pessimisticRollbackMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
-	return c.doActionOnMutations(bo, actionPessimisticRollback{}, mutations)
+	isInternal := false
+	if c.txn != nil {
+		isInternal = c.txn.isInternal()
+	} else {
+		isInternal = c.isInternal
+	}
+	return c.doActionOnMutations(bo, actionPessimisticRollback{isInternal: isInternal}, mutations)
 }
