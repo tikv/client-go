@@ -615,6 +615,11 @@ func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGro
 	client.ResourceControlInterceptor = interceptor
 }
 
+// GetResourceControlInterceptor get the interceptor for resource control.
+func GetResourceControlInterceptor() resourceControlClient.ResourceGroupKVInterceptor {
+	return client.ResourceControlInterceptor
+}
+
 // UnsetResourceControlInterceptor un-sets the interceptor for resource control.
 func UnsetResourceControlInterceptor() {
 	client.ResourceControlInterceptor = nil
