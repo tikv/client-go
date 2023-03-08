@@ -1280,6 +1280,7 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		startTS:     txn.committer.startTS,
 		forUpdateTS: txn.committer.forUpdateTS,
 		primaryKey:  txn.committer.primaryKey,
+		isInternal:  txn.isInternal(),
 	}
 	if specifiedForUpdateTS > committer.forUpdateTS {
 		committer.forUpdateTS = specifiedForUpdateTS
