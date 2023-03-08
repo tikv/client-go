@@ -16,9 +16,12 @@ package client
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
@@ -34,17 +37,17 @@ var _ Client = interceptedClient{}
 
 type interceptedClient struct {
 	Client
+	ruRuntimeStatsMap *sync.Map
 }
 
 // NewInterceptedClient creates a Client which can execute interceptor.
-func NewInterceptedClient(client Client) Client {
-	return interceptedClient{client}
+func NewInterceptedClient(client Client, ruRuntimeStatsMap *sync.Map) Client {
+	return interceptedClient{client, ruRuntimeStatsMap}
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// Build the resource control interceptor.
-	resourceGroupName := req.GetResourceGroupName()
-	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, resourceGroupName)
+	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, r.getRURuntimeStats(req.GetStartTs()))
 	// Chain the interceptors if there are multiple interceptors.
 	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
 		if finalInterceptor != nil {
@@ -61,6 +64,16 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 	return r.Client.SendRequest(ctx, addr, req, timeout)
 }
 
+func (r interceptedClient) getRURuntimeStats(startTS uint64) *RURuntimeStats {
+	if r.ruRuntimeStatsMap == nil {
+		return nil
+	}
+	if v, ok := r.ruRuntimeStatsMap.Load(startTS); ok {
+		return v.(*RURuntimeStats)
+	}
+	return nil
+}
+
 var (
 	// ResourceControlSwitch is used to control whether to enable the resource control.
 	ResourceControlSwitch atomic.Value
@@ -73,11 +86,12 @@ var (
 func buildResourceControlInterceptor(
 	ctx context.Context,
 	req *tikvrpc.Request,
-	resourceGroupName string,
+	ruRuntimeStats *RURuntimeStats,
 ) interceptor.RPCInterceptor {
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
 	}
+	resourceGroupName := req.GetResourceGroupName()
 	// When the group name is empty or "default", we don't need to
 	// perform the resource control.
 	if len(resourceGroupName) == 0 || resourceGroupName == "default" {
@@ -92,16 +106,55 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
+			ruRuntimeStats.Update(consumption)
 			resp, err := next(target, req)
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				ResourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
+				consumption, err = ResourceControlInterceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
+				if err != nil {
+					return nil, err
+				}
+				ruRuntimeStats.Update(consumption)
 			}
 			return resp, err
 		}
 	}
+}
+
+// RURuntimeStats is the runtime stats collector for RU.
+type RURuntimeStats struct {
+	readRU  float64
+	writeRU float64
+}
+
+// Clone implements the RuntimeStats interface.
+func (rs *RURuntimeStats) Clone() *RURuntimeStats {
+	return &RURuntimeStats{
+		readRU:  rs.readRU,
+		writeRU: rs.writeRU,
+	}
+}
+
+// Merge implements the RuntimeStats interface.
+func (rs *RURuntimeStats) Merge(other *RURuntimeStats) {
+	rs.readRU += other.readRU
+	rs.writeRU += other.writeRU
+}
+
+// String implements fmt.Stringer interface.
+func (rs *RURuntimeStats) String() string {
+	return fmt.Sprintf("RRU: %f, WRU: %f", rs.readRU, rs.writeRU)
+}
+
+// Update updates the RU runtime stats with the given consumption info.
+func (rs *RURuntimeStats) Update(consumption *rmpb.Consumption) {
+	if rs == nil || consumption == nil {
+		return
+	}
+	rs.readRU += consumption.RRU
+	rs.writeRU += consumption.WRU
 }

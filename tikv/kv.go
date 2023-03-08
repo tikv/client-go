@@ -127,6 +127,9 @@ type KVStore struct {
 
 	replicaReadSeed uint32 // this is used to load balance followers / learners when replica read is enabled
 
+	// StartTS -> RURuntimeStats, stores the RU runtime stats for certain transaction.
+	ruRuntimeStatsMap sync.Map
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -209,7 +212,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		cancel:          cancel,
 		gP:              NewSpool(128, 10*time.Second),
 	}
-	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
+	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient, &store.ruRuntimeStatsMap))
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
 
@@ -598,6 +601,11 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		s.updateMinSafeTS(txnScope, storeIDs)
 	}
 	wg.Wait()
+}
+
+// CreateRURuntimeStats creates a RURuntimeStats for the startTS.
+func (s *KVStore) CreateRURuntimeStats(startTS uint64) {
+	s.ruRuntimeStatsMap.LoadOrStore(startTS, &client.RURuntimeStats{})
 }
 
 // EnableResourceControl enables the resource control.

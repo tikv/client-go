@@ -184,6 +184,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	}
 
 	r := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req, kvrpcpb.Context{
+		StartTs:                c.startTS,
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,

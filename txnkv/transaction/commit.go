@@ -77,6 +77,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 		Keys:          keys,
 		CommitVersion: c.commitTS,
 	}, kvrpcpb.Context{
+		StartTs:                c.startTS,
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,

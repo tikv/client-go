@@ -391,6 +391,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			Keys:    pending,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
+			StartTs:           s.version,
 			Priority:          s.priority.ToPB(),
 			NotFillCache:      s.notFillCache,
 			TaskId:            s.mu.taskID,
@@ -600,6 +601,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			Key:     k,
 			Version: s.version,
 		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
+			StartTs:           s.version,
 			Priority:          s.priority.ToPB(),
 			NotFillCache:      s.notFillCache,
 			TaskId:            s.mu.taskID,

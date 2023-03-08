@@ -422,6 +422,9 @@ func (s *mockTikvGrpcServer) BatchRaft(tikvpb.Tikv_BatchRaftServer) error {
 func (s *mockTikvGrpcServer) Snapshot(tikvpb.Tikv_SnapshotServer) error {
 	return errors.New("unreachable")
 }
+func (s *mockTikvGrpcServer) TabletSnapshot(tikvpb.Tikv_TabletSnapshotServer) error {
+	return errors.New("unreachable")
+}
 func (s *mockTikvGrpcServer) MvccGetByKey(context.Context, *kvrpcpb.MvccGetByKeyRequest) (*kvrpcpb.MvccGetByKeyResponse, error) {
 	return nil, errors.New("unreachable")
 }
@@ -478,6 +481,14 @@ func (s *mockTikvGrpcServer) TryAddLock(context.Context, *disaggregated.TryAddLo
 
 func (s *mockTikvGrpcServer) TryMarkDelete(context.Context, *disaggregated.TryMarkDeleteRequest) (*disaggregated.TryMarkDeleteResponse, error) {
 	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) EstablishDisaggTask(context.Context, *disaggregated.EstablishDisaggTaskRequest) (*disaggregated.EstablishDisaggTaskResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) FetchDisaggPages(*disaggregated.FetchDisaggPagesRequest, tikvpb.Tikv_FetchDisaggPagesServer) error {
+	return errors.New("unreachable")
 }
 
 func (s *mockTikvGrpcServer) KvFlashbackToVersion(context.Context, *kvrpcpb.FlashbackToVersionRequest) (*kvrpcpb.FlashbackToVersionResponse, error) {
