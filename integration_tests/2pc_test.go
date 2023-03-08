@@ -1298,7 +1298,7 @@ func (s *testCommitterSuite) TestAggressiveLockingLockOnlyIfExists() {
 	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
 	s.True(lockCtx.Values["k1"].Exists)
 	s.False(lockCtx.Values["k1"].AlreadyLocked)
-	s.Equal(lockCtx.Values["k1"].Value, []byte("k1"))
+	s.Equal(lockCtx.Values["k1"].Value, []byte("v1"))
 	s.Equal(lockCtx.Values["k1"].LockedWithConflictTS, txn0CommitTS)
 	s.Equal(txn.GetAggressiveLockingKeys(), []string{"k1"})
 
