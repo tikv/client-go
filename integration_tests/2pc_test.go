@@ -1283,6 +1283,49 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 	s.NoError(txn.Rollback())
 }
 
+func (s *testCommitterSuite) TestAggressiveLockingLockOnlyIfExists() {
+	// txn conflicts with txn0, key exists
+	txn := s.begin()
+	txn.SetPessimistic(true)
+
+	txn0 := s.begin()
+	s.NoError(txn0.Set([]byte("k1"), []byte("v1")))
+	s.NoError(txn0.Commit(context.Background()))
+	txn0CommitTS := txn0.GetCommitTS()
+
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.True(lockCtx.Values["k1"].Exists)
+	s.False(lockCtx.Values["k1"].AlreadyLocked)
+	s.Equal(lockCtx.Values["k1"].Value, []byte("v1"))
+	s.Equal(lockCtx.Values["k1"].LockedWithConflictTS, txn0CommitTS)
+	s.Equal(txn.GetAggressiveLockingKeys(), []string{"k1"})
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+
+	// txn conflicts with txn0, key doesn't exist. Returns WriteConflict error.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+
+	txn0 = s.begin()
+	s.NoError(txn0.Delete([]byte("k1")))
+	s.NoError(txn0.Commit(context.Background()))
+	txn0CommitTS = txn0.GetCommitTS()
+
+	txn.StartAggressiveLocking()
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
+	err := txn.LockKeys(context.Background(), lockCtx, []byte("k1"))
+	s.NotNil(err)
+	s.IsType(errors.Cause(err), &tikverr.ErrWriteConflict{})
+	s.NotContains(lockCtx.Values, "k1")
+	s.Equal(txn.GetAggressiveLockingKeys(), []string{})
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+}
+
 func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
 	txn := s.begin()
 	txn.SetPessimistic(true)
