@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
@@ -26,6 +25,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
+	"go.uber.org/atomic"
 )
 
 func init() {
@@ -127,27 +127,27 @@ func buildResourceControlInterceptor(
 
 // RURuntimeStats is the runtime stats collector for RU.
 type RURuntimeStats struct {
-	readRU  float64
-	writeRU float64
+	readRU  *atomic.Float64
+	writeRU *atomic.Float64
 }
 
 // Clone implements the RuntimeStats interface.
 func (rs *RURuntimeStats) Clone() *RURuntimeStats {
 	return &RURuntimeStats{
-		readRU:  rs.readRU,
-		writeRU: rs.writeRU,
+		readRU:  atomic.NewFloat64(rs.readRU.Load()),
+		writeRU: atomic.NewFloat64(rs.writeRU.Load()),
 	}
 }
 
 // Merge implements the RuntimeStats interface.
 func (rs *RURuntimeStats) Merge(other *RURuntimeStats) {
-	rs.readRU += other.readRU
-	rs.writeRU += other.writeRU
+	rs.readRU.Add(other.readRU.Load())
+	rs.writeRU.Add(other.writeRU.Load())
 }
 
 // String implements fmt.Stringer interface.
 func (rs *RURuntimeStats) String() string {
-	return fmt.Sprintf("RRU: %f, WRU: %f", rs.readRU, rs.writeRU)
+	return fmt.Sprintf("RRU: %f, WRU: %f", rs.readRU.Load(), rs.writeRU.Load())
 }
 
 // Update updates the RU runtime stats with the given consumption info.
@@ -155,6 +155,6 @@ func (rs *RURuntimeStats) Update(consumption *rmpb.Consumption) {
 	if rs == nil || consumption == nil {
 		return
 	}
-	rs.readRU += consumption.RRU
-	rs.writeRU += consumption.WRU
+	rs.readRU.Add(consumption.RRU)
+	rs.writeRU.Add(consumption.WRU)
 }
