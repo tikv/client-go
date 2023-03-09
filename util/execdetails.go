@@ -628,6 +628,9 @@ func (td *TimeDetail) String() string {
 		buf.WriteString(FormatDuration(td.ProcessTime))
 	}
 	if td.SuspendTime > 0 {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
 		buf.WriteString("total_suspend_time: ")
 		buf.WriteString(FormatDuration(td.SuspendTime))
 	}
