@@ -142,7 +142,7 @@ func (res *ResponseInfo) ReadBytes() uint64 {
 	return res.readBytes
 }
 
-// KVCPU returns the KV CPU time in milliseconds of the response.
+// KVCPU returns the KV CPU time of the response.
 func (res *ResponseInfo) KVCPU() time.Duration {
 	return res.kvCPU
 }
