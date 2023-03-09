@@ -2593,9 +2593,12 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 			return unknown
 		}
 	}
-	livenessFunc := c.testingKnobs.mockRequestLiveness.Load()
-	if c != nil && livenessFunc != nil {
-		return (*livenessFunc)(s, bo)
+
+	if c != nil {
+		livenessFunc := c.testingKnobs.mockRequestLiveness.Load()
+		if livenessFunc != nil {
+			return (*livenessFunc)(s, bo)
+		}
 	}
 
 	if storeLivenessTimeout == 0 {
