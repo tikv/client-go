@@ -604,9 +604,9 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 }
 
 // CreateRURuntimeStats creates a RURuntimeStats for the startTS and returns it.
-func (s *KVStore) CreateRURuntimeStats(startTS uint64) *client.RURuntimeStats {
-	rrs, _ := s.ruRuntimeStatsMap.LoadOrStore(startTS, &client.RURuntimeStats{})
-	return rrs.(*client.RURuntimeStats)
+func (s *KVStore) CreateRURuntimeStats(startTS uint64) *util.RURuntimeStats {
+	rrs, _ := s.ruRuntimeStatsMap.LoadOrStore(startTS, &util.RURuntimeStats{})
+	return rrs.(*util.RURuntimeStats)
 }
 
 // EnableResourceControl enables the resource control.

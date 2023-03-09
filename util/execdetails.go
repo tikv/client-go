@@ -37,6 +37,7 @@ package util
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"strconv"
 	"sync"
@@ -44,6 +45,8 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
+	uatomic "go.uber.org/atomic"
 )
 
 type commitDetailCtxKeyType struct{}
@@ -662,4 +665,38 @@ type ResolveLockDetail struct {
 // Merge merges resolve lock detail details into self.
 func (rd *ResolveLockDetail) Merge(resolveLock *ResolveLockDetail) {
 	rd.ResolveLockTime += resolveLock.ResolveLockTime
+}
+
+// RURuntimeStats is the runtime stats collector for RU.
+type RURuntimeStats struct {
+	readRU  *uatomic.Float64
+	writeRU *uatomic.Float64
+}
+
+// Clone implements the RuntimeStats interface.
+func (rs *RURuntimeStats) Clone() *RURuntimeStats {
+	return &RURuntimeStats{
+		readRU:  uatomic.NewFloat64(rs.readRU.Load()),
+		writeRU: uatomic.NewFloat64(rs.writeRU.Load()),
+	}
+}
+
+// Merge implements the RuntimeStats interface.
+func (rs *RURuntimeStats) Merge(other *RURuntimeStats) {
+	rs.readRU.Add(other.readRU.Load())
+	rs.writeRU.Add(other.writeRU.Load())
+}
+
+// String implements fmt.Stringer interface.
+func (rs *RURuntimeStats) String() string {
+	return fmt.Sprintf("RRU: %f, WRU: %f", rs.readRU.Load(), rs.writeRU.Load())
+}
+
+// Update updates the RU runtime stats with the given consumption info.
+func (rs *RURuntimeStats) Update(consumption *rmpb.Consumption) {
+	if rs == nil || consumption == nil {
+		return
+	}
+	rs.readRU.Add(consumption.RRU)
+	rs.writeRU.Add(consumption.WRU)
 }

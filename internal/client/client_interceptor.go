@@ -16,16 +16,15 @@ package client
 
 import (
 	"context"
-	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/tikv/client-go/v2/util"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
-	"go.uber.org/atomic"
 )
 
 func init() {
@@ -64,12 +63,12 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 	return r.Client.SendRequest(ctx, addr, req, timeout)
 }
 
-func (r interceptedClient) getRURuntimeStats(startTS uint64) *RURuntimeStats {
+func (r interceptedClient) getRURuntimeStats(startTS uint64) *util.RURuntimeStats {
 	if r.ruRuntimeStatsMap == nil {
 		return nil
 	}
 	if v, ok := r.ruRuntimeStatsMap.Load(startTS); ok {
-		return v.(*RURuntimeStats)
+		return v.(*util.RURuntimeStats)
 	}
 	return nil
 }
@@ -86,7 +85,7 @@ var (
 func buildResourceControlInterceptor(
 	ctx context.Context,
 	req *tikvrpc.Request,
-	ruRuntimeStats *RURuntimeStats,
+	ruRuntimeStats *util.RURuntimeStats,
 ) interceptor.RPCInterceptor {
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
@@ -123,38 +122,4 @@ func buildResourceControlInterceptor(
 			return resp, err
 		}
 	}
-}
-
-// RURuntimeStats is the runtime stats collector for RU.
-type RURuntimeStats struct {
-	readRU  *atomic.Float64
-	writeRU *atomic.Float64
-}
-
-// Clone implements the RuntimeStats interface.
-func (rs *RURuntimeStats) Clone() *RURuntimeStats {
-	return &RURuntimeStats{
-		readRU:  atomic.NewFloat64(rs.readRU.Load()),
-		writeRU: atomic.NewFloat64(rs.writeRU.Load()),
-	}
-}
-
-// Merge implements the RuntimeStats interface.
-func (rs *RURuntimeStats) Merge(other *RURuntimeStats) {
-	rs.readRU.Add(other.readRU.Load())
-	rs.writeRU.Add(other.writeRU.Load())
-}
-
-// String implements fmt.Stringer interface.
-func (rs *RURuntimeStats) String() string {
-	return fmt.Sprintf("RRU: %f, WRU: %f", rs.readRU.Load(), rs.writeRU.Load())
-}
-
-// Update updates the RU runtime stats with the given consumption info.
-func (rs *RURuntimeStats) Update(consumption *rmpb.Consumption) {
-	if rs == nil || consumption == nil {
-		return
-	}
-	rs.readRU.Add(consumption.RRU)
-	rs.writeRU.Add(consumption.WRU)
 }
