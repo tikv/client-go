@@ -98,6 +98,7 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	case tikvrpc.CmdMPPTask:
 		mpp := *r.DispatchMPPTask()
 		mpp.Meta.KeyspaceId = ctx.KeyspaceId
+		mpp.Meta.ApiVersion = ctx.ApiVersion
 		r.Req = &mpp
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
