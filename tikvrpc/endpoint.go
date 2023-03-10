@@ -73,6 +73,8 @@ const (
 	EngineLabelKey            = "engine"
 	EngineLabelTiFlash        = "tiflash"
 	EngineLabelTiFlashCompute = "tiflash_compute"
+	EngineRoleLabelKey        = "engine_role"
+	EngineRoleWrite           = "write"
 )
 
 // GetStoreTypeByMeta gets store type by store meta pb.

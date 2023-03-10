@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.8.1
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.6-0.20230228091502-e2da5527026f
-	github.com/tikv/pd/client v0.0.0-20230301094509-c82b237672a0
+	github.com/tikv/pd/client v0.0.0-20230309025512-47cd76ae5d67
 	go.uber.org/goleak v1.2.1
 )
 
@@ -34,6 +34,7 @@ require (
 	github.com/danjacques/gofslock v0.0.0-20220131014315-6e321f4509c8 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-farm v0.0.0-20200201041132-a6ae2369ad13 // indirect
+	github.com/elastic/gosigar v0.14.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect

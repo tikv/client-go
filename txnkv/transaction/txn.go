@@ -1046,7 +1046,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 
-		if txn.IsInAggressiveLockingMode() && len(keys) == 1 && !lockCtx.LockOnlyIfExists {
+		if txn.IsInAggressiveLockingMode() && len(keys) == 1 {
 			lockWakeUpMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
@@ -1280,6 +1280,7 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		startTS:     txn.committer.startTS,
 		forUpdateTS: txn.committer.forUpdateTS,
 		primaryKey:  txn.committer.primaryKey,
+		isInternal:  txn.isInternal(),
 	}
 	if specifiedForUpdateTS > committer.forUpdateTS {
 		committer.forUpdateTS = specifiedForUpdateTS

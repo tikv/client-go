@@ -487,14 +487,20 @@ var (
 )
 
 type sendReqHistCacheKey struct {
-	tp       tikvrpc.CmdType
-	id       uint64
-	staleRad bool
+	tp         tikvrpc.CmdType
+	id         uint64
+	staleRad   bool
+	isInternal bool
 }
 
 type sendReqCounterCacheKey struct {
 	sendReqHistCacheKey
 	requestSource string
+}
+
+type rpcNetLatencyCacheKey struct {
+	storeID    uint64
+	isInternal bool
 }
 
 type sendReqCounterCacheValue struct {
@@ -506,11 +512,13 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 	elapsed := time.Since(start)
 	secs := elapsed.Seconds()
 	storeID := req.Context.GetPeer().GetStoreId()
+	isInternal := util.IsInternalRequest(req.GetRequestSource())
 
 	histKey := sendReqHistCacheKey{
 		req.Type,
 		storeID,
 		staleRead,
+		isInternal,
 	}
 	counterKey := sendReqCounterCacheKey{
 		histKey,
@@ -525,7 +533,8 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 		if len(storeIDStr) == 0 {
 			storeIDStr = strconv.FormatUint(storeID, 10)
 		}
-		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead))
+		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr,
+			strconv.FormatBool(staleRead), strconv.FormatBool(isInternal))
 		sendReqHistCache.Store(histKey, hist)
 	}
 	counter, ok := sendReqCounterCache.Load(counterKey)
@@ -534,8 +543,10 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 			storeIDStr = strconv.FormatUint(storeID, 10)
 		}
 		counter = sendReqCounterCacheValue{
-			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
-			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
+			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead),
+				counterKey.requestSource, strconv.FormatBool(isInternal)),
+			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr,
+				strconv.FormatBool(staleRead), counterKey.requestSource, strconv.FormatBool(isInternal)),
 		}
 		sendReqCounterCache.Store(counterKey, counter)
 	}
@@ -546,13 +557,17 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 
 	if execDetail := resp.GetExecDetailsV2(); execDetail != nil &&
 		execDetail.TimeDetail != nil && execDetail.TimeDetail.TotalRpcWallTimeNs > 0 {
-		latHist, ok := rpcNetLatencyHistCache.Load(storeID)
+		cacheKey := rpcNetLatencyCacheKey{
+			storeID,
+			isInternal,
+		}
+		latHist, ok := rpcNetLatencyHistCache.Load(cacheKey)
 		if !ok {
 			if len(storeIDStr) == 0 {
 				storeIDStr = strconv.FormatUint(storeID, 10)
 			}
-			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr)
-			rpcNetLatencyHistCache.Store(storeID, latHist)
+			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr, strconv.FormatBool(isInternal))
+			rpcNetLatencyHistCache.Store(cacheKey, latHist)
 		}
 		latency := elapsed - time.Duration(execDetail.TimeDetail.TotalRpcWallTimeNs)*time.Nanosecond
 		latHist.(prometheus.Observer).Observe(latency.Seconds())
