@@ -673,6 +673,14 @@ type RURuntimeStats struct {
 	writeRU *uatomic.Float64
 }
 
+// NewRURuntimeStats creates a new RURuntimeStats.
+func NewRURuntimeStats() *RURuntimeStats {
+	return &RURuntimeStats{
+		readRU:  uatomic.NewFloat64(0),
+		writeRU: uatomic.NewFloat64(0),
+	}
+}
+
 // Clone implements the RuntimeStats interface.
 func (rs *RURuntimeStats) Clone() *RURuntimeStats {
 	return &RURuntimeStats{

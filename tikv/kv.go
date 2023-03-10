@@ -605,7 +605,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 
 // CreateRURuntimeStats creates a RURuntimeStats for the startTS and returns it.
 func (s *KVStore) CreateRURuntimeStats(startTS uint64) *util.RURuntimeStats {
-	rrs, _ := s.ruRuntimeStatsMap.LoadOrStore(startTS, &util.RURuntimeStats{})
+	rrs, _ := s.ruRuntimeStatsMap.LoadOrStore(startTS, util.NewRURuntimeStats())
 	return rrs.(*util.RURuntimeStats)
 }
 
