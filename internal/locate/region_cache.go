@@ -459,6 +459,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
+	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
 	return c
 }
 
@@ -2277,6 +2278,8 @@ type Store struct {
 
 	// A statistic for counting the request latency to this store
 	slowScore SlowScoreStat
+	// A statistic for counting the flows of different replicas on this store
+	replicaFlowsStats [numReplicaFlowsType]uint64
 }
 
 type resolveState uint64
@@ -2718,6 +2721,7 @@ func (s *Store) recordSlowScoreStat(timecost time.Duration) {
 	s.slowScore.recordSlowScoreStat(timecost)
 }
 
+// markAlreadySlow marks the related store already slow.
 func (s *Store) markAlreadySlow() {
 	s.slowScore.markAlreadySlow()
 }
@@ -2737,6 +2741,7 @@ func (c *RegionCache) asyncUpdateStoreSlowScore(interval time.Duration) {
 	}
 }
 
+// checkAndUpdateStoreSlowScores checks and updates slowScore on each store.
 func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 	defer func() {
 		r := recover()
@@ -2755,6 +2760,42 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 	c.storeMu.RUnlock()
 	for store, score := range slowScoreMetrics {
 		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+	}
+}
+
+// getReplicaFlowsStats returns the statistics on the related replicaFlowsType.
+func (s *Store) getReplicaFlowsStats(destType replicaFlowsType) uint64 {
+	return atomic.LoadUint64(&s.replicaFlowsStats[destType])
+}
+
+// resetReplicaFlowsStats resets the statistics on the related replicaFlowsType.
+func (s *Store) resetReplicaFlowsStats(destType replicaFlowsType) {
+	atomic.StoreUint64(&s.replicaFlowsStats[destType], 0)
+}
+
+// recordReplicaFlowsStats records the statistics on the related replicaFlowsType.
+func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
+	atomic.AddUint64(&s.replicaFlowsStats[destType], 1)
+}
+
+// asyncReportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
+func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			c.storeMu.RLock()
+			for _, store := range c.storeMu.stores {
+				for destType := toLeader; destType < numReplicaFlowsType; destType++ {
+					metrics.TiKVPreferLeaderFlowsGauge.WithLabelValues(destType.String(), store.addr).Set(float64(store.getReplicaFlowsStats(destType)))
+					store.resetReplicaFlowsStats(destType)
+				}
+			}
+			c.storeMu.RUnlock()
+		}
 	}
 }
 
