@@ -689,8 +689,9 @@ type MPPStreamResponse struct {
 	Lease
 }
 
-// AttachContext sets the request context to the request.
-func AttachContext(req *Request, ctx *kvrpcpb.Context) error {
+// AttachContext sets the request context to the request,
+// return false if encounter unknown request type.
+func AttachContext(req *Request, ctx *kvrpcpb.Context) bool {
 	switch req.Type {
 	case CmdGet:
 		req.Get().Context = ctx
@@ -781,9 +782,9 @@ func AttachContext(req *Request, ctx *kvrpcpb.Context) error {
 	case CmdPrepareFlashbackToVersion:
 		req.PrepareFlashbackToVersion().Context = ctx
 	default:
-		return errors.Errorf("invalid request type %v", req.Type)
+		return false
 	}
-	return nil
+	return true
 }
 
 // SetContext set the Context field for the given req to the specified ctx.
@@ -794,7 +795,10 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		ctx.RegionEpoch = region.RegionEpoch
 	}
 	ctx.Peer = peer
-	return AttachContext(req, ctx)
+	if !AttachContext(req, ctx) {
+		return errors.Errorf("invalid request type %v", req.Type)
+	}
+	return nil
 }
 
 // GenRegionErrorResp returns corresponding Response with specified RegionError
