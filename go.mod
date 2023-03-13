@@ -2,10 +2,7 @@ module github.com/tikv/client-go/v2
 
 go 1.19
 
-replace (
-	github.com/pingcap/kvproto => github.com/JmPotato/kvproto v0.0.0-20230309094958-c2ae1b770df6
-	github.com/tikv/pd/client => github.com/JmPotato/pd/client v0.0.0-20230309083851-79cdaf82c8af
-)
+replace github.com/pingcap/kvproto => github.com/JmPotato/kvproto v0.0.0-20230313095855-d6780293a06a
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
@@ -26,7 +23,7 @@ require (
 	github.com/prometheus/client_model v0.3.0
 	github.com/stretchr/testify v1.8.1
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20230309025512-47cd76ae5d67
+	github.com/tikv/pd/client v0.0.0-20230313083840-3e3ae55f68ac
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
 	go.etcd.io/etcd/client/v3 v3.5.2
