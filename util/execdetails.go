@@ -88,7 +88,7 @@ func NewTiKVExecDetails(pb *kvrpcpb.ExecDetailsV2) TiKVExecDetails {
 		return TiKVExecDetails{}
 	}
 	td := &TimeDetail{}
-	td.MergeFromTimeDetail(pb.TimeDetail)
+	td.MergeFromTimeDetail(pb.TimeDetailV2, pb.TimeDetail)
 	sd := &ScanDetail{}
 	sd.MergeFromScanDetailV2(pb.ScanDetailV2)
 	wd := &WriteDetail{}
@@ -606,11 +606,13 @@ type TimeDetail struct {
 	// cannot be excluded for now, like Mutex wait time, which is included in this field, so that
 	// this field is called wall time instead of CPU time.
 	ProcessTime time.Duration
+	// Cpu wall time elapsed that task is waiting in queue.
+	SuspendTime time.Duration
 	// Off-cpu wall time elapsed in TiKV side. Usually this includes queue waiting time and
 	// other kind of waits in series.
 	WaitTime time.Duration
-	// KvReadWallTimeMs is the time used in KV Scan/Get.
-	KvReadWallTimeMs time.Duration
+	// KvReadWallTime is the time used in KV Scan/Get.
+	KvReadWallTime time.Duration
 	// TotalRPCWallTime is Total wall clock time spent on this RPC in TiKV.
 	TotalRPCWallTime time.Duration
 }
@@ -624,6 +626,13 @@ func (td *TimeDetail) String() string {
 	if td.ProcessTime > 0 {
 		buf.WriteString("total_process_time: ")
 		buf.WriteString(FormatDuration(td.ProcessTime))
+	}
+	if td.SuspendTime > 0 {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString("total_suspend_time: ")
+		buf.WriteString(FormatDuration(td.SuspendTime))
 	}
 	if td.WaitTime > 0 {
 		if buf.Len() > 0 {
@@ -643,11 +652,17 @@ func (td *TimeDetail) String() string {
 }
 
 // MergeFromTimeDetail merges time detail from pb into itself.
-func (td *TimeDetail) MergeFromTimeDetail(timeDetail *kvrpcpb.TimeDetail) {
-	if timeDetail != nil {
+func (td *TimeDetail) MergeFromTimeDetail(timeDetailV2 *kvrpcpb.TimeDetailV2, timeDetail *kvrpcpb.TimeDetail) {
+	if timeDetailV2 != nil {
+		td.WaitTime += time.Duration(timeDetailV2.WaitWallTimeNs) * time.Nanosecond
+		td.ProcessTime += time.Duration(timeDetailV2.ProcessWallTimeNs) * time.Nanosecond
+		td.SuspendTime += time.Duration(timeDetailV2.ProcessSuspendWallTimeNs) * time.Nanosecond
+		td.KvReadWallTime += time.Duration(timeDetailV2.KvReadWallTimeNs) * time.Nanosecond
+		td.TotalRPCWallTime += time.Duration(timeDetailV2.TotalRpcWallTimeNs) * time.Nanosecond
+	} else if timeDetail != nil {
 		td.WaitTime += time.Duration(timeDetail.WaitWallTimeMs) * time.Millisecond
 		td.ProcessTime += time.Duration(timeDetail.ProcessWallTimeMs) * time.Millisecond
-		td.KvReadWallTimeMs += time.Duration(timeDetail.KvReadWallTimeMs) * time.Millisecond
+		td.KvReadWallTime += time.Duration(timeDetail.KvReadWallTimeMs) * time.Millisecond
 		td.TotalRPCWallTime += time.Duration(timeDetail.TotalRpcWallTimeNs) * time.Nanosecond
 	}
 }
