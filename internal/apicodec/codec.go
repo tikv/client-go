@@ -103,6 +103,7 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
 		compact.KeyspaceId = ctx.KeyspaceId
+		compact.ApiVersion = ctx.ApiVersion
 		r.Req = &compact
 	}
 
