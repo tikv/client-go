@@ -697,7 +697,7 @@ func (rs *RURuntimeStats) Merge(other *RURuntimeStats) {
 
 // String implements fmt.Stringer interface.
 func (rs *RURuntimeStats) String() string {
-	return fmt.Sprintf("RRU: %f, WRU: %f", rs.readRU.Load(), rs.writeRU.Load())
+	return fmt.Sprintf("RRU:%f, WRU:%f", rs.readRU.Load(), rs.writeRU.Load())
 }
 
 // Update updates the RU runtime stats with the given consumption info.
