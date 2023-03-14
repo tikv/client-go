@@ -346,7 +346,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	if selector.busyThreshold > 0 {
 		// If the leader is busy in our estimation, change to tryIdleReplica state to try other replicas.
 		// If other replicas are all busy, tryIdleReplica will try the leader again without busy threshold.
-		leaderEstimated := selector.replicas[state.leaderIdx].store.estimatedWaitTime()
+		leaderEstimated := selector.replicas[state.leaderIdx].store.EstimatedWaitTime()
 		if leaderEstimated > selector.busyThreshold {
 			selector.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
 			return nil, stateChanged{}
@@ -619,7 +619,9 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)) &&
 				// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
 				// as candidates to serve the Read request.
-				(!state.option.preferLeader || !replica.store.isSlow()))
+				(!state.option.preferLeader || !replica.store.isSlow())) &&
+		// If the stores are limited, check if the store is in the list.
+		replica.store.IsStoreMatch(state.option.stores)
 }
 
 // tryIdleReplica is the state where we find the leader is busy and retry the request using replica read.
@@ -644,7 +646,7 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 		if r.isExhausted(1) {
 			continue
 		}
-		estimated := r.store.estimatedWaitTime()
+		estimated := r.store.EstimatedWaitTime()
 		if estimated > selector.busyThreshold {
 			continue
 		}

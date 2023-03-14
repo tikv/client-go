@@ -184,6 +184,11 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 	return locate.WithMatchLabels(labels)
 }
 
+// WithMatchStores indicates selecting stores with matched store ids.
+func WithMatchStores(stores []uint64) StoreSelectorOption {
+	return locate.WithMatchStores(stores)
+}
+
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
 func NewRegionRequestRuntimeStats() RegionRequestRuntimeStats {
 	return locate.NewRegionRequestRuntimeStats()
