@@ -74,8 +74,15 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-// DCLabelKey indicates the key of label which represents the dc for Store.
-const DCLabelKey = "zone"
+const (
+	// DCLabelKey indicates the key of label which represents the dc for Store.
+	DCLabelKey           = "zone"
+	safeTSUpdateInterval = time.Second * 2
+	// Since the default max transaction TTL is 1 hour, we can use this to
+	// clean up the RU runtime stats as well.
+	ruRuntimeStatsCleanThreshold = time.Hour
+	ruRuntimeStatsCleanInterval  = ruRuntimeStatsCleanThreshold / 2
+)
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
 	cfg := config.GetGlobalConfig()
@@ -216,9 +223,10 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
 
-	store.wg.Add(2)
+	store.wg.Add(3)
 	go store.runSafePointChecker()
 	go store.safeTSUpdater()
+	go store.ruRuntimeStatsMapCleaner()
 
 	return store, nil
 }
@@ -534,14 +542,14 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 
 func (s *KVStore) safeTSUpdater() {
 	defer s.wg.Done()
-	t := time.NewTicker(time.Second * 2)
+	t := time.NewTicker(safeTSUpdateInterval)
 	defer t.Stop()
 	ctx, cancel := context.WithCancel(s.ctx)
 	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
 	defer cancel()
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.updateSafeTS(ctx)
@@ -601,6 +609,37 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		s.updateMinSafeTS(txnScope, storeIDs)
 	}
 	wg.Wait()
+}
+
+func (s *KVStore) ruRuntimeStatsMapCleaner() {
+	defer s.wg.Done()
+	t := time.NewTicker(ruRuntimeStatsCleanInterval)
+	defer t.Stop()
+	ctx, cancel := context.WithCancel(s.ctx)
+	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
+	defer cancel()
+
+	cleanThreshold := ruRuntimeStatsCleanThreshold
+	if _, e := util.EvalFailpoint("mockFastRURuntimeStatsMapClean"); e == nil {
+		t.Reset(time.Millisecond * 100)
+		cleanThreshold = time.Millisecond
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now()
+			s.ruRuntimeStatsMap.Range(func(key, _ interface{}) bool {
+				startTSTime := oracle.GetTimeFromTS(key.(uint64))
+				if now.Sub(startTSTime) >= cleanThreshold {
+					s.ruRuntimeStatsMap.Delete(key)
+				}
+				return true
+			})
+		}
+	}
 }
 
 // CreateRURuntimeStats creates a RURuntimeStats for the startTS and returns it.
