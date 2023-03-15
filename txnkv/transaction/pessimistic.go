@@ -133,7 +133,6 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 		WakeUpMode:       action.wakeUpMode,
 		LockOnlyIfExists: action.LockOnlyIfExists,
 	}, kvrpcpb.Context{
-		StartTs:                c.startTS,
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       action.LockCtx.ResourceGroupTag,

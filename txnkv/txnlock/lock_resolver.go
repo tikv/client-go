@@ -709,7 +709,6 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		ForceSyncCommit:          forceSyncCommit,
 		ResolvingPessimisticLock: resolvingPessimisticLock,
 	}, kvrpcpb.Context{
-		StartTs:           txnID,
 		RequestSource:     util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
 	})
@@ -854,7 +853,6 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 		StartVersion: txnID,
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckSecondaryLocks, checkReq, kvrpcpb.Context{
-		StartTs:           txnID,
 		RequestSource:     util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
 	})
@@ -1012,7 +1010,6 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	}
 	lreq.Keys = keys
 	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
-		StartTs:           l.TxnID,
 		ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
 	})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -1091,7 +1088,6 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 			lreq.Keys = [][]byte{l.Key}
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
-			StartTs:           l.TxnID,
 			ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
 		})
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -1148,7 +1144,6 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) err
 			Keys:         [][]byte{l.Key},
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, pessimisticRollbackReq, kvrpcpb.Context{
-			StartTs:           l.TxnID,
 			ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
 		})
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())

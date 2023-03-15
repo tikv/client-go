@@ -46,7 +46,7 @@ func NewInterceptedClient(client Client, ruRuntimeStatsMap *sync.Map) Client {
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// Build the resource control interceptor.
-	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, r.getRURuntimeStats(req.GetStartTs()))
+	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, r.getRURuntimeStats(req.GetStartTS()))
 	// Chain the interceptors if there are multiple interceptors.
 	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
 		if finalInterceptor != nil {
@@ -64,7 +64,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 }
 
 func (r interceptedClient) getRURuntimeStats(startTS uint64) *util.RURuntimeStats {
-	if r.ruRuntimeStatsMap == nil {
+	if r.ruRuntimeStatsMap == nil || startTS == 0 {
 		return nil
 	}
 	if v, ok := r.ruRuntimeStatsMap.Load(startTS); ok {

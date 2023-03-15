@@ -240,7 +240,6 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		}
 		s.snapshot.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdScan, sreq, s.snapshot.mu.replicaRead, &s.snapshot.replicaReadSeed, kvrpcpb.Context{
-			StartTs:           s.startTS(),
 			Priority:          s.snapshot.priority.ToPB(),
 			NotFillCache:      s.snapshot.notFillCache,
 			TaskId:            s.snapshot.mu.taskID,

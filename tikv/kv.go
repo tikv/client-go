@@ -629,8 +629,7 @@ func (s *KVStore) ruRuntimeStatsMapCleaner() {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			now := time.Now()
+		case now := <-t.C:
 			s.ruRuntimeStatsMap.Range(func(key, _ interface{}) bool {
 				startTSTime := oracle.GetTimeFromTS(key.(uint64))
 				if now.Sub(startTSTime) >= cleanThreshold {

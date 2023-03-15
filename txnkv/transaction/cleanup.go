@@ -66,7 +66,6 @@ func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Ba
 		Keys:         batch.mutations.GetKeys(),
 		StartVersion: c.startTS,
 	}, kvrpcpb.Context{
-		StartTs:                c.startTS,
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,
