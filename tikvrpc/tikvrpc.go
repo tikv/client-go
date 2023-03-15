@@ -1299,10 +1299,6 @@ func (req *Request) GetStartTS() uint64 {
 		return req.Scan().GetVersion()
 	case CmdPrewrite:
 		return req.Prewrite().GetStartVersion()
-	case CmdPessimisticLock:
-		return req.PessimisticLock().GetStartVersion()
-	case CmdPessimisticRollback:
-		return req.PessimisticRollback().GetStartVersion()
 	case CmdCommit:
 		return req.Commit().GetStartVersion()
 	case CmdCleanup:
@@ -1311,16 +1307,14 @@ func (req *Request) GetStartTS() uint64 {
 		return req.BatchGet().GetVersion()
 	case CmdBatchRollback:
 		return req.BatchRollback().GetStartVersion()
+	case CmdScanLock:
+		return req.ScanLock().GetMaxVersion()
 	case CmdResolveLock:
 		return req.ResolveLock().GetStartVersion()
-	case CmdCop:
-		return req.Cop().GetStartTs()
-	case CmdCopStream:
-		return req.Cop().GetStartTs()
-	case CmdBatchCop:
-		return req.BatchCop().GetStartTs()
-	case CmdMvccGetByStartTs:
-		return req.MvccGetByStartTs().GetStartTs()
+	case CmdPessimisticLock:
+		return req.PessimisticLock().GetStartVersion()
+	case CmdPessimisticRollback:
+		return req.PessimisticRollback().GetStartVersion()
 	case CmdTxnHeartBeat:
 		return req.TxnHeartBeat().GetStartVersion()
 	case CmdCheckTxnStatus:
@@ -1331,6 +1325,14 @@ func (req *Request) GetStartTS() uint64 {
 		return req.FlashbackToVersion().GetStartTs()
 	case CmdPrepareFlashbackToVersion:
 		req.PrepareFlashbackToVersion().GetStartTs()
+	case CmdCop:
+		return req.Cop().GetStartTs()
+	case CmdCopStream:
+		return req.Cop().GetStartTs()
+	case CmdBatchCop:
+		return req.BatchCop().GetStartTs()
+	case CmdMvccGetByStartTs:
+		return req.MvccGetByStartTs().GetStartTs()
 	default:
 	}
 	return 0
