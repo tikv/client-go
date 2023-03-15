@@ -952,7 +952,7 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 	s.region.invalidate(StoreNotFound)
 }
 
-func (s *replicaSelector) onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error) {
+func (s *replicaSelector) onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error) {
 	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
 		estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
 		// Update the estimated wait time of the store.
@@ -963,6 +963,13 @@ func (s *replicaSelector) onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, s
 		ctx.Store.loadStats.Store(loadStats)
 
 		if s.busyThreshold != 0 {
+			// do not retry with batched coprocessor requests.
+			// it'll be region misses if we send the tasks to replica.
+			if req.Type == tikvrpc.CmdCop {
+				if copReq := req.Cop(); len(copReq.Tasks) > 0 {
+					return false, nil
+				}
+			}
 			switch state := s.state.(type) {
 			case *accessKnownLeader:
 				// Clear attempt history of the leader, so the leader can be accessed again.
@@ -1670,7 +1677,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
 		if s.replicaSelector != nil {
-			return s.replicaSelector.onServerIsBusy(bo, ctx, serverIsBusy)
+			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
 		}
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
