@@ -288,6 +288,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{TxnInfos: listTxnInfos},
 		kvrpcpb.Context{
+			// TODO: how to pass the `start_ts`	here?
 			RequestSource:     util.RequestSourceFromCtx(bo.GetCtx()),
 			ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
 		},
