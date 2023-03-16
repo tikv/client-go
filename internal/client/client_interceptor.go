@@ -16,12 +16,14 @@ package client
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/tikv/client-go/v2/util"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
@@ -34,17 +36,17 @@ var _ Client = interceptedClient{}
 
 type interceptedClient struct {
 	Client
+	ruRuntimeStatsMap *sync.Map
 }
 
 // NewInterceptedClient creates a Client which can execute interceptor.
-func NewInterceptedClient(client Client) Client {
-	return interceptedClient{client}
+func NewInterceptedClient(client Client, ruRuntimeStatsMap *sync.Map) Client {
+	return interceptedClient{client, ruRuntimeStatsMap}
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// Build the resource control interceptor.
-	resourceGroupName := req.GetResourceGroupName()
-	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, resourceGroupName)
+	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, r.getRURuntimeStats(req.GetStartTS()))
 	// Chain the interceptors if there are multiple interceptors.
 	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
 		if finalInterceptor != nil {
@@ -61,6 +63,16 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 	return r.Client.SendRequest(ctx, addr, req, timeout)
 }
 
+func (r interceptedClient) getRURuntimeStats(startTS uint64) *util.RURuntimeStats {
+	if r.ruRuntimeStatsMap == nil || startTS == 0 {
+		return nil
+	}
+	if v, ok := r.ruRuntimeStatsMap.Load(startTS); ok {
+		return v.(*util.RURuntimeStats)
+	}
+	return nil
+}
+
 var (
 	// ResourceControlSwitch is used to control whether to enable the resource control.
 	ResourceControlSwitch atomic.Value
@@ -73,11 +85,12 @@ var (
 func buildResourceControlInterceptor(
 	ctx context.Context,
 	req *tikvrpc.Request,
-	resourceGroupName string,
+	ruRuntimeStats *util.RURuntimeStats,
 ) interceptor.RPCInterceptor {
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
 	}
+	resourceGroupName := req.GetResourceGroupName()
 	// When the group name is empty or "default", we don't need to
 	// perform the resource control.
 	if len(resourceGroupName) == 0 || resourceGroupName == "default" {
@@ -92,14 +105,19 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
+			ruRuntimeStats.Update(consumption)
 			resp, err := next(target, req)
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				ResourceControlInterceptor.OnResponse(ctx, resourceGroupName, reqInfo, respInfo)
+				consumption, err = ResourceControlInterceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
+				if err != nil {
+					return nil, err
+				}
+				ruRuntimeStats.Update(consumption)
 			}
 			return resp, err
 		}
