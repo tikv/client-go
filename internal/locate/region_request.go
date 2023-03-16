@@ -594,6 +594,14 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx = state.leaderIdx
 		selector.targetIdx = state.leaderIdx
 	}
+	// Monitor the flows destination if selector is under `ReplicaReadPreferLeader` mode.
+	if state.option.preferLeader {
+		if selector.targetIdx != state.leaderIdx {
+			selector.replicas[selector.targetIdx].store.recordReplicaFlowsStats(toFollower)
+		} else {
+			selector.replicas[selector.targetIdx].store.recordReplicaFlowsStats(toLeader)
+		}
+	}
 	return selector.buildRPCContext(bo)
 }
 

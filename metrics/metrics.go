@@ -99,6 +99,7 @@ var (
 	TiKVGrpcConnectionState                  *prometheus.GaugeVec
 	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
+	TiKVPreferLeaderFlowsGauge               *prometheus.GaugeVec
 )
 
 // Label constants.
@@ -619,6 +620,14 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Slow scores of each tikv node based on RPC timecosts",
 		}, []string{LblStore})
 
+	TiKVPreferLeaderFlowsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "prefer_leader_flows_gauge",
+			Help:      "Counter of flows under PreferLeader mode.",
+		}, []string{LblType, LblStore})
+
 	initShortcuts()
 }
 
@@ -692,6 +701,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVGrpcConnectionState)
 	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
+	prometheus.MustRegister(TiKVPreferLeaderFlowsGauge)
 }
 
 // readCounter reads the value of a prometheus.Counter.

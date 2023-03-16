@@ -125,13 +125,16 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 
 // TODO: find out a more accurate way to get the actual KV CPU time.
 func getKVCPU(detailsV2 *kvrpcpb.ExecDetailsV2, details *kvrpcpb.ExecDetails) time.Duration {
+	if timeDetail := detailsV2.GetTimeDetailV2(); timeDetail != nil {
+		return time.Duration(timeDetail.GetProcessWallTimeNs())
+	}
 	if timeDetail := detailsV2.GetTimeDetail(); timeDetail != nil {
 		return time.Duration(timeDetail.GetProcessWallTimeMs()) * time.Millisecond
 	}
 	if timeDetail := details.GetTimeDetail(); timeDetail != nil {
 		return time.Duration(timeDetail.GetProcessWallTimeMs()) * time.Millisecond
 	}
-	return 0
+	return time.Duration(0)
 }
 
 // ReadBytes returns the read bytes of the response.
@@ -139,7 +142,7 @@ func (res *ResponseInfo) ReadBytes() uint64 {
 	return res.readBytes
 }
 
-// KVCPUMs returns the KV CPU time in milliseconds of the response.
+// KVCPU returns the KV CPU time of the response.
 func (res *ResponseInfo) KVCPU() time.Duration {
 	return res.kvCPU
 }
