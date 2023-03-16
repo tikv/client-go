@@ -63,6 +63,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	pderr "github.com/tikv/pd/client/errs"
 )
 
 // shuttingDown is a flag to indicate tidb-server is exiting (Ctrl+C signal
@@ -462,7 +463,6 @@ func (state *accessByKnownProxy) onNoLeader(selector *replicaSelector) {
 
 // tryNewProxy is the state where we try to find a node from followers as proxy.
 type tryNewProxy struct {
-	stateBase
 	leaderIdx AccessIndex
 }
 
@@ -593,6 +593,14 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		}
 		state.lastIdx = state.leaderIdx
 		selector.targetIdx = state.leaderIdx
+	}
+	// Monitor the flows destination if selector is under `ReplicaReadPreferLeader` mode.
+	if state.option.preferLeader {
+		if selector.targetIdx != state.leaderIdx {
+			selector.replicas[selector.targetIdx].store.recordReplicaFlowsStats(toFollower)
+		} else {
+			selector.replicas[selector.targetIdx].store.recordReplicaFlowsStats(toLeader)
+		}
 	}
 	return selector.buildRPCContext(bo)
 }
@@ -1002,24 +1010,13 @@ func (s *RegionRequestSender) getRPCContext(
 		}
 		return s.replicaSelector.next(bo)
 	case tikvrpc.TiFlash:
-		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true)
+		// Should ignore WN, because in disaggregated tiflash mode, TiDB will build rpcCtx itself.
+		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true, LabelFilterNoTiFlashWriteNode)
 	case tikvrpc.TiDB:
 		return &RPCContext{Addr: s.storeAddr}, nil
 	case tikvrpc.TiFlashCompute:
-		stores, err := s.regionCache.GetTiFlashComputeStores(bo)
-		if err != nil {
-			return nil, err
-		}
-		rpcCtxs, err := s.regionCache.GetTiFlashComputeRPCContextByConsistentHash(bo, []RegionVerID{regionID}, stores)
-		if err != nil {
-			return nil, err
-		}
-		if rpcCtxs == nil {
-			return nil, nil
-		} else if len(rpcCtxs) != 1 {
-			return nil, errors.New(fmt.Sprintf("unexpected number of rpcCtx, expect 1, got: %v", len(rpcCtxs)))
-		}
-		return rpcCtxs[0], nil
+		// In disaggregated tiflash mode, TiDB will build rpcCtx itself, so cannot reach here.
+		return nil, errors.Errorf("should not reach here for disaggregated tiflash mode")
 	default:
 		return nil, errors.Errorf("unsupported storage type: %v", et)
 	}
@@ -1470,6 +1467,18 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		}
 	}
 
+	// don't need to retry for ResourceGroup error
+	if errors.Is(err, pderr.ErrClientResourceGroupThrottled) {
+		return err
+	}
+	if errors.Is(err, pderr.ErrClientResourceGroupConfigUnavailable) {
+		return err
+	}
+	var errGetResourceGroup *pderr.ErrClientGetResourceGroup
+	if errors.As(err, &errGetResourceGroup) {
+		return err
+	}
+
 	// Retry on send request failure when it's not canceled.
 	// When a store is not available, the leader of related region should be elected quickly.
 	// TODO: the number of retry time should be limited:since region may be unavailable
@@ -1559,7 +1568,11 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	// NOTE: Please add the region error handler in the same order of errorpb.Error.
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr)).Inc()
+	isInternal := false
+	if req != nil {
+		isInternal = util.IsInternalRequest(req.GetRequestSource())
+	}
+	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr), strconv.FormatBool(isInternal)).Inc()
 
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
 		// Retry if error is `NotLeader`.

@@ -151,7 +151,7 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
-	// resourceGroupName is the name of tenent resource group.
+	// resourceGroupName is the name of tenant resource group.
 	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
@@ -428,7 +428,13 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}
 
 	start := time.Now()
-	defer func() { metrics.TxnCmdHistogramWithCommit.Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		if txn.isInternal() {
+			metrics.TxnCmdHistogramWithCommitInternal.Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithCommitGeneral.Observe(time.Since(start).Seconds())
+		}
+	}()
 
 	// sessionID is used for log.
 	var sessionID uint64
@@ -555,7 +561,11 @@ func (txn *KVTxn) Rollback() error {
 	}
 	txn.close()
 	logutil.BgLogger().Debug("[kv] rollback txn", zap.Uint64("txnStartTS", txn.StartTS()))
-	metrics.TxnCmdHistogramWithRollback.Observe(time.Since(start).Seconds())
+	if txn.isInternal() {
+		metrics.TxnCmdHistogramWithRollbackInternal.Observe(time.Since(start).Seconds())
+	} else {
+		metrics.TxnCmdHistogramWithRollbackGeneral.Observe(time.Since(start).Seconds())
+	}
 	return nil
 }
 
@@ -586,6 +596,10 @@ func (txn *KVTxn) collectLockedKeys() [][]byte {
 		}
 	}
 	return keys
+}
+
+func (txn *KVTxn) isInternal() bool {
+	return util.IsRequestSourceInternal(txn.RequestSource)
 }
 
 // TxnInfo is used to keep track the info of a committed transaction (mainly for diagnosis and testing)
@@ -876,7 +890,11 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
 	defer func() {
-		metrics.TxnCmdHistogramWithLockKeys.Observe(time.Since(startTime).Seconds())
+		if txn.isInternal() {
+			metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
+		}
 		if err == nil {
 			if lockCtx.PessimisticLockWaited != nil {
 				if atomic.LoadInt32(lockCtx.PessimisticLockWaited) > 0 {
@@ -1028,7 +1046,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 
-		if txn.IsInAggressiveLockingMode() && len(keys) == 1 && !lockCtx.LockOnlyIfExists {
+		if txn.IsInAggressiveLockingMode() && len(keys) == 1 {
 			lockWakeUpMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
@@ -1262,6 +1280,7 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		startTS:     txn.committer.startTS,
 		forUpdateTS: txn.committer.forUpdateTS,
 		primaryKey:  txn.committer.primaryKey,
+		isInternal:  txn.isInternal(),
 	}
 	if specifiedForUpdateTS > committer.forUpdateTS {
 		committer.forUpdateTS = specifiedForUpdateTS

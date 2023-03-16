@@ -42,7 +42,6 @@ import (
 	"math"
 	"math/rand"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,7 +54,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
-	"github.com/stathat/consistent"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -85,6 +83,33 @@ const (
 	invalidatedLastAccessTime = -1
 	defaultRegionsPerBatch    = 128
 )
+
+// LabelFilter returns false means label doesn't match, and will ignore this store.
+type LabelFilter = func(labels []*metapb.StoreLabel) bool
+
+// LabelFilterOnlyTiFlashWriteNode will only select stores whose label contains: <engine, tiflash> and <engine_role, write>.
+// Only used for tiflash_compute node.
+var LabelFilterOnlyTiFlashWriteNode = func(labels []*metapb.StoreLabel) bool {
+	return isStoreContainLabel(labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlash) &&
+		isStoreContainLabel(labels, tikvrpc.EngineRoleLabelKey, tikvrpc.EngineRoleWrite)
+}
+
+// LabelFilterNoTiFlashWriteNode will only select stores whose label contains: <engine, tiflash>, but not contains <engine_role, write>.
+// Normally tidb use this filter.
+var LabelFilterNoTiFlashWriteNode = func(labels []*metapb.StoreLabel) bool {
+	return isStoreContainLabel(labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlash) &&
+		!isStoreContainLabel(labels, tikvrpc.EngineRoleLabelKey, tikvrpc.EngineRoleWrite)
+}
+
+// LabelFilterAllTiFlashNode will select all tiflash stores.
+var LabelFilterAllTiFlashNode = func(labels []*metapb.StoreLabel) bool {
+	return isStoreContainLabel(labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlash)
+}
+
+// LabelFilterAllNode will select all stores.
+var LabelFilterAllNode = func(_ []*metapb.StoreLabel) bool {
+	return true
+}
 
 // regionCacheTTLSec is the max idle time for regions in the region cache.
 var regionCacheTTLSec int64 = 600
@@ -434,6 +459,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
+	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
 	return c
 }
 
@@ -703,7 +729,7 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 }
 
 // GetAllValidTiFlashStores returns the store ids of all valid TiFlash stores, the store id of currentStore is always the first one
-func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Store) []uint64 {
+func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Store, labelFilter LabelFilter) []uint64 {
 	// set the cap to 2 because usually, TiFlash table will have 2 replicas
 	allStores := make([]uint64, 0, 2)
 	// make sure currentStore id is always the first in allStores
@@ -731,6 +757,9 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 			continue
 		}
+		if !labelFilter(store.labels) {
+			continue
+		}
 		allStores = append(allStores, store.storeID)
 	}
 	return allStores
@@ -739,7 +768,7 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 // GetTiFlashRPCContext returns RPCContext for a region must access flash store. If it returns nil, the region
 // must be out of date and already dropped from cache or not flash store found.
 // `loadBalance` is an option. For batch cop, it is pointless and might cause try the failed store repeatly.
-func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool) (*RPCContext, error) {
+func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool, labelFilter LabelFilter) (*RPCContext, error) {
 	ts := time.Now().Unix()
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
@@ -762,6 +791,9 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	for i := 0; i < regionStore.accessStoreNum(tiFlashOnly); i++ {
 		accessIdx := AccessIndex((sIdx + i) % regionStore.accessStoreNum(tiFlashOnly))
 		storeIdx, store := regionStore.accessStore(tiFlashOnly, accessIdx)
+		if !labelFilter(store.labels) {
+			continue
+		}
 		addr, err := c.getStoreAddr(bo, cachedRegion, store)
 		if err != nil {
 			return nil, err
@@ -799,56 +831,6 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 
 	cachedRegion.invalidate(Other)
 	return nil, nil
-}
-
-// GetTiFlashComputeRPCContextByConsistentHash return rpcCtx of tiflash_compute stores.
-// Each mpp computation of specific region will be handled by specific node whose engine-label is tiflash_compute.
-// 1. Get all stores with label <engine, tiflash_compute>.
-// 2. Get rpcCtx that indicates where the region is stored.
-// 3. Compute which tiflash_compute node should handle this region by consistent hash.
-// 4. Replace infos(addr/Store) that indicate where the region is stored to infos that indicate where the region will be computed.
-// NOTE: This function make sure the returned slice of RPCContext and the input ids correspond to each other.
-func (c *RegionCache) GetTiFlashComputeRPCContextByConsistentHash(bo *retry.Backoffer, ids []RegionVerID, stores []*Store) (res []*RPCContext, err error) {
-	hasher := consistent.New()
-	hasher.NumberOfReplicas = 200 // Larger replicas can balance requests more evenly
-	for _, store := range stores {
-		if !isStoreContainLabel(store.labels, tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) {
-			return nil, errors.New("expect store should be tiflash_compute")
-		}
-		hasher.Add(store.GetAddr())
-	}
-
-	for _, id := range ids {
-		addr, err := hasher.Get(strconv.Itoa(int(id.GetID())))
-		if err != nil {
-			return nil, err
-		}
-		rpcCtx, err := c.GetTiFlashRPCContext(bo, id, false)
-		if err != nil {
-			return nil, err
-		}
-		if rpcCtx == nil {
-			logutil.Logger(context.Background()).Info("rpcCtx is nil", zap.Any("region", id.String()))
-			return nil, nil
-		}
-
-		var store *Store
-		for _, s := range stores {
-			if s.GetAddr() == addr {
-				store = s
-				break
-			}
-		}
-		if store == nil {
-			return nil, errors.New(fmt.Sprintf("cannot find tiflash_compute store: %v", addr))
-		}
-
-		rpcCtx.Store = store
-		rpcCtx.Addr = addr
-		// Maybe no need to replace rpcCtx.AccessMode, it's only used for loadBalance when access storeIdx.
-		res = append(res, rpcCtx)
-	}
-	return res, nil
 }
 
 // KeyLocation is the region and range that a key is located.
@@ -969,6 +951,20 @@ func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, 
 	}, nil
 }
 
+// TryLocateKey searches for the region and range that the key is located, but return nil when region miss or invalid.
+func (c *RegionCache) TryLocateKey(key []byte) *KeyLocation {
+	r := c.tryFindRegionByKey(key, false)
+	if r == nil {
+		return nil
+	}
+	return &KeyLocation{
+		Region:   r.VerID(),
+		StartKey: r.StartKey(),
+		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
+	}
+}
+
 // LocateEndKey searches for the region and range that the key is located.
 // Unlike LocateKey, start key of a region is exclusive and end key is inclusive.
 func (c *RegionCache) LocateEndKey(bo *retry.Backoffer, key []byte) (*KeyLocation, error) {
@@ -1014,6 +1010,14 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		}
 	}
 	return r, nil
+}
+
+func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
+	r = c.searchCachedRegion(key, isEndKey)
+	if r == nil || r.checkNeedReloadAndMarkUpdated() {
+		return nil
+	}
+	return r
 }
 
 // OnSendFailForTiFlash handles send request fail logic for tiflash.
@@ -1841,12 +1845,15 @@ func (c *RegionCache) PDClient() pd.Client {
 }
 
 // GetTiFlashStores returns the information of all tiflash nodes.
-func (c *RegionCache) GetTiFlashStores() []*Store {
+func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	c.storeMu.RLock()
 	defer c.storeMu.RUnlock()
 	var stores []*Store
 	for _, s := range c.storeMu.stores {
 		if s.storeType == tikvrpc.TiFlash {
+			if !labelFilter(s.labels) {
+				continue
+			}
 			stores = append(stores, s)
 		}
 	}
@@ -2271,6 +2278,8 @@ type Store struct {
 
 	// A statistic for counting the request latency to this store
 	slowScore SlowScoreStat
+	// A statistic for counting the flows of different replicas on this store
+	replicaFlowsStats [numReplicaFlowsType]uint64
 }
 
 type resolveState uint64
@@ -2712,6 +2721,7 @@ func (s *Store) recordSlowScoreStat(timecost time.Duration) {
 	s.slowScore.recordSlowScoreStat(timecost)
 }
 
+// markAlreadySlow marks the related store already slow.
 func (s *Store) markAlreadySlow() {
 	s.slowScore.markAlreadySlow()
 }
@@ -2731,6 +2741,7 @@ func (c *RegionCache) asyncUpdateStoreSlowScore(interval time.Duration) {
 	}
 }
 
+// checkAndUpdateStoreSlowScores checks and updates slowScore on each store.
 func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 	defer func() {
 		r := recover()
@@ -2749,6 +2760,42 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 	c.storeMu.RUnlock()
 	for store, score := range slowScoreMetrics {
 		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+	}
+}
+
+// getReplicaFlowsStats returns the statistics on the related replicaFlowsType.
+func (s *Store) getReplicaFlowsStats(destType replicaFlowsType) uint64 {
+	return atomic.LoadUint64(&s.replicaFlowsStats[destType])
+}
+
+// resetReplicaFlowsStats resets the statistics on the related replicaFlowsType.
+func (s *Store) resetReplicaFlowsStats(destType replicaFlowsType) {
+	atomic.StoreUint64(&s.replicaFlowsStats[destType], 0)
+}
+
+// recordReplicaFlowsStats records the statistics on the related replicaFlowsType.
+func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
+	atomic.AddUint64(&s.replicaFlowsStats[destType], 1)
+}
+
+// asyncReportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
+func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			c.storeMu.RLock()
+			for _, store := range c.storeMu.stores {
+				for destType := toLeader; destType < numReplicaFlowsType; destType++ {
+					metrics.TiKVPreferLeaderFlowsGauge.WithLabelValues(destType.String(), store.addr).Set(float64(store.getReplicaFlowsStats(destType)))
+					store.resetReplicaFlowsStats(destType)
+				}
+			}
+			c.storeMu.RUnlock()
+		}
 	}
 }
 

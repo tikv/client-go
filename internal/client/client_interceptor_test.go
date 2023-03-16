@@ -40,7 +40,7 @@ func (c emptyClient) CloseAddr(addr string) error {
 
 func TestInterceptedClient(t *testing.T) {
 	executed := false
-	client := NewInterceptedClient(emptyClient{})
+	client := NewInterceptedClient(emptyClient{}, nil)
 	ctx := interceptor.WithRPCInterceptor(context.Background(), func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			executed = true

@@ -190,6 +190,11 @@ func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
 	s.resolvedLocks = util.TSSet{}
 }
 
+// IsInternal returns if the KvSnapshot is used by internal executions.
+func (s *KVSnapshot) IsInternal() bool {
+	return util.IsRequestSourceInternal(s.RequestSource)
+}
+
 // BatchGet gets all the keys' value from kv-server and returns a map contains key/value pairs.
 // The map will not contain nonexistent keys.
 // NOTE: Don't modify keys. Some codes rely on the order of keys.
@@ -319,14 +324,22 @@ func appendBatchKeysBySize(b []batchKeys, region locate.RegionVerID, keys [][]by
 
 func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, collectF func(k, v []byte)) error {
 	defer func(start time.Time) {
-		metrics.TxnCmdHistogramWithBatchGet.Observe(time.Since(start).Seconds())
+		if s.IsInternal() {
+			metrics.TxnCmdHistogramWithBatchGetInternal.Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithBatchGetGeneral.Observe(time.Since(start).Seconds())
+		}
 	}(time.Now())
 	groups, _, err := s.store.GetRegionCache().GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
 		return err
 	}
 
-	metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	if s.IsInternal() {
+		metrics.TxnRegionsNumHistogramWithSnapshotInternal.Observe(float64(len(groups)))
+	} else {
+		metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	}
 
 	var batches []batchKeys
 	for id, g := range groups {
@@ -471,7 +484,12 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		if batchGetResp.ExecDetailsV2 != nil {
 			readKeys := len(batchGetResp.Pairs)
-			readTime := float64(batchGetResp.ExecDetailsV2.GetTimeDetail().GetKvReadWallTimeMs() / 1000)
+			var readTime float64
+			if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
+			} else if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetail(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
+			}
 			readSize := float64(batchGetResp.ExecDetailsV2.GetScanDetailV2().GetProcessedVersionsSize())
 			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
 			s.mergeExecDetail(batchGetResp.ExecDetailsV2)
@@ -516,7 +534,11 @@ const getMaxBackoff = 20000
 // Get gets the value for key k from snapshot.
 func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	defer func(start time.Time) {
-		metrics.TxnCmdHistogramWithGet.Observe(time.Since(start).Seconds())
+		if s.IsInternal() {
+			metrics.TxnCmdHistogramWithGetInternal.Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithGetGeneral.Observe(time.Since(start).Seconds())
+		}
 	}(time.Now())
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
@@ -651,7 +673,12 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		cmdGetResp := resp.Resp.(*kvrpcpb.GetResponse)
 		if cmdGetResp.ExecDetailsV2 != nil {
 			readKeys := len(cmdGetResp.Value)
-			readTime := float64(cmdGetResp.ExecDetailsV2.GetTimeDetail().GetKvReadWallTimeMs() / 1000)
+			var readTime float64
+			if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
+			} else if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetail(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
+			}
 			readSize := float64(cmdGetResp.ExecDetailsV2.GetScanDetailV2().GetProcessedVersionsSize())
 			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
 			s.mergeExecDetail(cmdGetResp.ExecDetailsV2)
@@ -719,7 +746,7 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 		s.mu.stats.timeDetail = &util.TimeDetail{}
 	}
 	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.ScanDetailV2)
-	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetail)
+	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetailV2, detail.TimeDetail)
 }
 
 // Iter return a list of key-value pair after `k`.
