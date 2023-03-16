@@ -612,16 +612,27 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 }
 
 func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool {
-	return !replica.isEpochStale() && !replica.isExhausted(1) &&
-		// The request can only be sent to the leader.
-		((state.option.leaderOnly && idx == state.leaderIdx) ||
-			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)) &&
-				// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
-				// as candidates to serve the Read request.
-				(!state.option.preferLeader || !replica.store.isSlow())) &&
-		// If the stores are limited, check if the store is in the list.
-		replica.store.IsStoreMatch(state.option.stores)
+	// the epoch is staled or retry exhausted.
+	if replica.isEpochStale() || replica.isExhausted(1) {
+		return false
+	}
+	// The request can only be sent to the leader.
+	if state.option.leaderOnly && idx == state.leaderIdx {
+		return true
+	}
+	// Choose a replica with matched labels.
+	followerCandidate := !state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) &&
+		replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)
+	if !followerCandidate {
+		return false
+	}
+	// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
+	// as candidates to serve the Read request.
+	if state.option.preferLeader && replica.store.isSlow() {
+		return false
+	}
+	// If the stores are limited, check if the store is in the list.
+	return replica.store.IsStoreMatch(state.option.stores)
 }
 
 // tryIdleReplica is the state where we find the leader is busy and retry the request using replica read.
@@ -965,10 +976,8 @@ func (s *replicaSelector) onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, r
 		if s.busyThreshold != 0 {
 			// do not retry with batched coprocessor requests.
 			// it'll be region misses if we send the tasks to replica.
-			if req.Type == tikvrpc.CmdCop {
-				if copReq := req.Cop(); len(copReq.Tasks) > 0 {
-					return false, nil
-				}
+			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
+				return false, nil
 			}
 			switch state := s.state.(type) {
 			case *accessKnownLeader:
