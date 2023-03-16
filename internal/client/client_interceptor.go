@@ -91,7 +91,7 @@ func buildResourceControlInterceptor(
 		return nil
 	}
 	resourceGroupName := req.GetResourceGroupName()
-	// When the group name is empty we don't need to perform the resource control.
+	// When the group name is empty, we don't need to perform the resource control.
 	if len(resourceGroupName) == 0 {
 		return nil
 	}
