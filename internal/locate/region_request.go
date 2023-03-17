@@ -346,7 +346,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	if selector.busyThreshold > 0 {
 		// If the leader is busy in our estimation, change to tryIdleReplica state to try other replicas.
 		// If other replicas are all busy, tryIdleReplica will try the leader again without busy threshold.
-		leaderEstimated := selector.replicas[state.leaderIdx].store.estimatedWaitTime()
+		leaderEstimated := selector.replicas[state.leaderIdx].store.EstimatedWaitTime()
 		if leaderEstimated > selector.busyThreshold {
 			selector.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
 			return nil, stateChanged{}
@@ -612,14 +612,27 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 }
 
 func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool {
-	return !replica.isEpochStale() && !replica.isExhausted(1) &&
-		// The request can only be sent to the leader.
-		((state.option.leaderOnly && idx == state.leaderIdx) ||
-			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)) &&
-				// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
-				// as candidates to serve the Read request.
-				(!state.option.preferLeader || !replica.store.isSlow()))
+	// the epoch is staled or retry exhausted.
+	if replica.isEpochStale() || replica.isExhausted(1) {
+		return false
+	}
+	// The request can only be sent to the leader.
+	if state.option.leaderOnly && idx == state.leaderIdx {
+		return true
+	}
+	// Choose a replica with matched labels.
+	followerCandidate := !state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) &&
+		replica.store.IsLabelsMatch(state.option.labels) && (!state.learnerOnly || replica.peer.Role == metapb.PeerRole_Learner)
+	if !followerCandidate {
+		return false
+	}
+	// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
+	// as candidates to serve the Read request.
+	if state.option.preferLeader && replica.store.isSlow() {
+		return false
+	}
+	// If the stores are limited, check if the store is in the list.
+	return replica.store.IsStoreMatch(state.option.stores)
 }
 
 // tryIdleReplica is the state where we find the leader is busy and retry the request using replica read.
@@ -644,7 +657,7 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 		if r.isExhausted(1) {
 			continue
 		}
-		estimated := r.store.estimatedWaitTime()
+		estimated := r.store.EstimatedWaitTime()
 		if estimated > selector.busyThreshold {
 			continue
 		}
@@ -950,7 +963,7 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 	s.region.invalidate(StoreNotFound)
 }
 
-func (s *replicaSelector) onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error) {
+func (s *replicaSelector) onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error) {
 	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
 		estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
 		// Update the estimated wait time of the store.
@@ -961,6 +974,11 @@ func (s *replicaSelector) onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, s
 		ctx.Store.loadStats.Store(loadStats)
 
 		if s.busyThreshold != 0 {
+			// do not retry with batched coprocessor requests.
+			// it'll be region misses if we send the tasks to replica.
+			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
+				return false, nil
+			}
 			switch state := s.state.(type) {
 			case *accessKnownLeader:
 				// Clear attempt history of the leader, so the leader can be accessed again.
@@ -1668,7 +1686,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
 		if s.replicaSelector != nil {
-			return s.replicaSelector.onServerIsBusy(bo, ctx, serverIsBusy)
+			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
 		}
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),

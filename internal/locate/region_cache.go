@@ -603,6 +603,7 @@ type storeSelectorOp struct {
 	leaderOnly   bool
 	preferLeader bool
 	labels       []*metapb.StoreLabel
+	stores       []uint64
 }
 
 // StoreSelectorOption configures storeSelectorOp.
@@ -626,6 +627,13 @@ func WithLeaderOnly() StoreSelectorOption {
 func WithPerferLeader() StoreSelectorOption {
 	return func(op *storeSelectorOp) {
 		op.preferLeader = true
+	}
+}
+
+// WithMatchStores indicates selecting stores with matched store ids.
+func WithMatchStores(stores []uint64) StoreSelectorOption {
+	return func(op *storeSelectorOp) {
+		op.stores = stores
 	}
 }
 
@@ -2480,6 +2488,19 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 	return true
 }
 
+// IsStoreMatch returns whether the store's id match the target ids.
+func (s *Store) IsStoreMatch(stores []uint64) bool {
+	if len(stores) < 1 {
+		return true
+	}
+	for _, storeID := range stores {
+		if s.storeID == storeID {
+			return true
+		}
+	}
+	return false
+}
+
 func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
 	for _, label := range labels {
 		if label.GetKey() == key && label.GetValue() == val {
@@ -2636,9 +2657,9 @@ func (s *Store) GetPeerAddr() string {
 	return s.peerAddr
 }
 
-// estimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.
+// EstimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.
 // It's calculated by subtracting the time since the last update from the wait time returned from TiKV.
-func (s *Store) estimatedWaitTime() time.Duration {
+func (s *Store) EstimatedWaitTime() time.Duration {
 	loadStats := s.loadStats.Load()
 	if loadStats == nil {
 		return 0
