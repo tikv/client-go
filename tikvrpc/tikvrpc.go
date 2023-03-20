@@ -229,6 +229,8 @@ type Request struct {
 	// If it's not empty, the store which receive the request will forward it to
 	// the forwarded host. It's useful when network partition occurs.
 	ForwardedHost string
+	// ReplicaNumber is the number of current replicas, which is used to calculate the RU cost.
+	ReplicaNumber int64
 }
 
 // NewRequest returns new kv rpc request.
@@ -687,15 +689,9 @@ type MPPStreamResponse struct {
 	Lease
 }
 
-// SetContext set the Context field for the given req to the specified ctx.
-func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
-	ctx := &req.Context
-	if region != nil {
-		ctx.RegionId = region.Id
-		ctx.RegionEpoch = region.RegionEpoch
-	}
-	ctx.Peer = peer
-
+// AttachContext sets the request context to the request,
+// return false if encounter unknown request type.
+func AttachContext(req *Request, ctx *kvrpcpb.Context) bool {
 	switch req.Type {
 	case CmdGet:
 		req.Get().Context = ctx
@@ -761,8 +757,12 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.Cop().Context = ctx
 	case CmdBatchCop:
 		req.BatchCop().Context = ctx
+	// Dispatching MPP tasks don't need a region context, because it's a request for store but not region.
 	case CmdMPPTask:
-		// Dispatching MPP tasks don't need a region context, because it's a request for store but not region.
+	case CmdMPPConn:
+	case CmdMPPCancel:
+	case CmdMPPAlive:
+
 	case CmdMvccGetByKey:
 		req.MvccGetByKey().Context = ctx
 	case CmdMvccGetByStartTs:
@@ -782,6 +782,20 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	case CmdPrepareFlashbackToVersion:
 		req.PrepareFlashbackToVersion().Context = ctx
 	default:
+		return false
+	}
+	return true
+}
+
+// SetContext set the Context field for the given req to the specified ctx.
+func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
+	ctx := &req.Context
+	if region != nil {
+		ctx.RegionId = region.Id
+		ctx.RegionEpoch = region.RegionEpoch
+	}
+	ctx.Peer = peer
+	if !AttachContext(req, ctx) {
 		return errors.Errorf("invalid request type %v", req.Type)
 	}
 	return nil
@@ -1263,5 +1277,63 @@ func (req *Request) IsTxnWriteRequest() bool {
 	return false
 }
 
+// IsRawWriteRequest checks if the request is a raw write request.
+func (req *Request) IsRawWriteRequest() bool {
+	if req.Type == CmdRawPut ||
+		req.Type == CmdRawBatchPut ||
+		req.Type == CmdRawDelete {
+		return true
+	}
+	return false
+}
+
 // ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
 type ResourceGroupTagger func(req *Request)
+
+// GetStartTS returns the `start_ts` of the request.
+func (req *Request) GetStartTS() uint64 {
+	switch req.Type {
+	case CmdGet:
+		return req.Get().GetVersion()
+	case CmdScan:
+		return req.Scan().GetVersion()
+	case CmdPrewrite:
+		return req.Prewrite().GetStartVersion()
+	case CmdCommit:
+		return req.Commit().GetStartVersion()
+	case CmdCleanup:
+		return req.Cleanup().GetStartVersion()
+	case CmdBatchGet:
+		return req.BatchGet().GetVersion()
+	case CmdBatchRollback:
+		return req.BatchRollback().GetStartVersion()
+	case CmdScanLock:
+		return req.ScanLock().GetMaxVersion()
+	case CmdResolveLock:
+		return req.ResolveLock().GetStartVersion()
+	case CmdPessimisticLock:
+		return req.PessimisticLock().GetStartVersion()
+	case CmdPessimisticRollback:
+		return req.PessimisticRollback().GetStartVersion()
+	case CmdTxnHeartBeat:
+		return req.TxnHeartBeat().GetStartVersion()
+	case CmdCheckTxnStatus:
+		return req.CheckTxnStatus().GetLockTs()
+	case CmdCheckSecondaryLocks:
+		return req.CheckSecondaryLocks().GetStartVersion()
+	case CmdFlashbackToVersion:
+		return req.FlashbackToVersion().GetStartTs()
+	case CmdPrepareFlashbackToVersion:
+		req.PrepareFlashbackToVersion().GetStartTs()
+	case CmdCop:
+		return req.Cop().GetStartTs()
+	case CmdCopStream:
+		return req.Cop().GetStartTs()
+	case CmdBatchCop:
+		return req.BatchCop().GetStartTs()
+	case CmdMvccGetByStartTs:
+		return req.MvccGetByStartTs().GetStartTs()
+	default:
+	}
+	return 0
+}

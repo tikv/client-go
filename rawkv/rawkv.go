@@ -750,9 +750,9 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 		singleResp, ok := <-ches
 		if ok {
 			if singleResp.Error != nil {
-				cancel()
 				if firstError == nil {
 					firstError = errors.WithStack(singleResp.Error)
+					cancel()
 				}
 			} else if cmdType == tikvrpc.CmdRawBatchGet {
 				cmdResp := singleResp.Resp.(*kvrpcpb.RawBatchGetResponse)
@@ -761,6 +761,9 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 		}
 	}
 
+	if firstError == nil {
+		cancel()
+	}
 	return resp, firstError
 }
 
@@ -899,12 +902,16 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 
 	for i := 0; i < len(batches); i++ {
 		if e := <-ch; e != nil {
-			cancel()
 			// catch the first error
 			if err == nil {
 				err = errors.WithStack(e)
+				cancel()
 			}
 		}
+	}
+
+	if err == nil {
+		cancel()
 	}
 	return err
 }

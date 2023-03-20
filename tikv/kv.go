@@ -48,7 +48,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
-	"github.com/tiancaiamao/gp"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -67,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -74,8 +74,15 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-// DCLabelKey indicates the key of label which represents the dc for Store.
-const DCLabelKey = "zone"
+const (
+	// DCLabelKey indicates the key of label which represents the dc for Store.
+	DCLabelKey           = "zone"
+	safeTSUpdateInterval = time.Second * 2
+	// Since the default max transaction TTL is 1 hour, we can use this to
+	// clean up the RU runtime stats as well.
+	ruRuntimeStatsCleanThreshold = time.Hour
+	ruRuntimeStatsCleanInterval  = ruRuntimeStatsCleanThreshold / 2
+)
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
 	cfg := config.GetGlobalConfig()
@@ -127,16 +134,19 @@ type KVStore struct {
 
 	replicaReadSeed uint32 // this is used to load balance followers / learners when replica read is enabled
 
+	// StartTS -> RURuntimeStats, stores the RU runtime stats for certain transaction.
+	ruRuntimeStatsMap sync.Map
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
-	gP     *gp.Pool
+	gP     Pool
 }
 
 // Go run the function in a separate goroutine.
-func (s *KVStore) Go(f func()) {
-	s.gP.Go(f)
+func (s *KVStore) Go(f func()) error {
+	return s.gP.Run(f)
 }
 
 // UpdateSPCache updates cached safepoint.
@@ -171,8 +181,25 @@ func (s *KVStore) CheckVisibility(startTime uint64) error {
 	return nil
 }
 
+// Option is the option for pool.
+type Option func(*KVStore)
+
+// WithPool set the pool
+func WithPool(gp Pool) Option {
+	return func(o *KVStore) {
+		o.gP = gp
+	}
+}
+
+// loadOption load KVStore option into KVStore.
+func loadOption(store *KVStore, opt ...Option) {
+	for _, f := range opt {
+		f(store)
+	}
+}
+
 // NewKVStore creates a new TiKV store instance.
-func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client) (*KVStore, error) {
+func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
 	o, err := oracles.NewPdOracle(pdClient, time.Duration(oracleUpdateInterval)*time.Millisecond)
 	if err != nil {
 		return nil, err
@@ -190,14 +217,16 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		replicaReadSeed: rand.Uint32(),
 		ctx:             ctx,
 		cancel:          cancel,
-		gP:              gp.New(128, 10*time.Second),
+		gP:              NewSpool(128, 10*time.Second),
 	}
-	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
+	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient, &store.ruRuntimeStatsMap))
 	store.lockResolver = txnlock.NewLockResolver(store)
+	loadOption(store, opt...)
 
-	store.wg.Add(2)
+	store.wg.Add(3)
 	go store.runSafePointChecker()
 	go store.safeTSUpdater()
+	go store.ruRuntimeStatsMapCleaner()
 
 	return store, nil
 }
@@ -513,14 +542,14 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 
 func (s *KVStore) safeTSUpdater() {
 	defer s.wg.Done()
-	t := time.NewTicker(time.Second * 2)
+	t := time.NewTicker(safeTSUpdateInterval)
 	defer t.Stop()
 	ctx, cancel := context.WithCancel(s.ctx)
 	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
 	defer cancel()
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.updateSafeTS(ctx)
@@ -580,6 +609,62 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		s.updateMinSafeTS(txnScope, storeIDs)
 	}
 	wg.Wait()
+}
+
+func (s *KVStore) ruRuntimeStatsMapCleaner() {
+	defer s.wg.Done()
+	t := time.NewTicker(ruRuntimeStatsCleanInterval)
+	defer t.Stop()
+	ctx, cancel := context.WithCancel(s.ctx)
+	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
+	defer cancel()
+
+	cleanThreshold := ruRuntimeStatsCleanThreshold
+	if _, e := util.EvalFailpoint("mockFastRURuntimeStatsMapClean"); e == nil {
+		t.Reset(time.Millisecond * 100)
+		cleanThreshold = time.Millisecond
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			s.ruRuntimeStatsMap.Range(func(key, _ interface{}) bool {
+				startTSTime := oracle.GetTimeFromTS(key.(uint64))
+				if now.Sub(startTSTime) >= cleanThreshold {
+					s.ruRuntimeStatsMap.Delete(key)
+				}
+				return true
+			})
+		}
+	}
+}
+
+// CreateRURuntimeStats creates a RURuntimeStats for the startTS and returns it.
+func (s *KVStore) CreateRURuntimeStats(startTS uint64) *util.RURuntimeStats {
+	rrs, _ := s.ruRuntimeStatsMap.LoadOrStore(startTS, util.NewRURuntimeStats())
+	return rrs.(*util.RURuntimeStats)
+}
+
+// EnableResourceControl enables the resource control.
+func EnableResourceControl() {
+	client.ResourceControlSwitch.Store(true)
+}
+
+// DisableResourceControl disables the resource control.
+func DisableResourceControl() {
+	client.ResourceControlSwitch.Store(false)
+}
+
+// SetResourceControlInterceptor sets the interceptor for resource control.
+func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
+	client.ResourceControlInterceptor = interceptor
+}
+
+// UnsetResourceControlInterceptor un-sets the interceptor for resource control.
+func UnsetResourceControlInterceptor() {
+	client.ResourceControlInterceptor = nil
 }
 
 // Variables defines the variables used by TiKV storage.

@@ -59,15 +59,21 @@ import (
 	"go.uber.org/zap"
 )
 
-type actionPrewrite struct{ retry bool }
+type actionPrewrite struct {
+	retry      bool
+	isInternal bool
+}
 
 var _ twoPhaseCommitAction = actionPrewrite{}
 
-func (actionPrewrite) String() string {
+func (action actionPrewrite) String() string {
 	return "prewrite"
 }
 
-func (actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+func (action actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+	if action.isInternal {
+		return metrics.TxnRegionsNumHistogramPrewriteInternal
+	}
 	return metrics.TxnRegionsNumHistogramPrewrite
 }
 
@@ -302,7 +308,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if same {
 				continue
 			}
-			err = c.doActionOnMutations(bo, actionPrewrite{true}, batch.mutations)
+			err = c.doActionOnMutations(bo, actionPrewrite{true, action.isInternal}, batch.mutations)
 			return err
 		}
 
@@ -436,5 +442,5 @@ func (c *twoPhaseCommitter) prewriteMutations(bo *retry.Backoffer, mutations Com
 	}
 
 	// `doActionOnMutations` will unset `useOnePC` if the mutations is splitted into multiple batches.
-	return c.doActionOnMutations(bo, actionPrewrite{}, mutations)
+	return c.doActionOnMutations(bo, actionPrewrite{isInternal: c.txn.isInternal()}, mutations)
 }

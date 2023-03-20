@@ -29,6 +29,13 @@ var (
 	errKeyOutOfBound = errors.New("given key does not belong to the keyspace")
 )
 
+func checkV2Key(b []byte) error {
+	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
+		return errors.Errorf("invalid API V2 key %s", b)
+	}
+	return nil
+}
+
 // BuildKeyspaceName builds a keyspace name
 func BuildKeyspaceName(name string) string {
 	if name == "" {
@@ -102,7 +109,10 @@ func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
 // EncodeRequest encodes with the given Codec.
 // NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	newReq := *req
+	newReq, err := attachAPICtx(c, req)
+	if err != nil {
+		return nil, err
+	}
 	// Encode requests based on command type.
 	switch req.Type {
 	// Transaction Request Types.
@@ -226,6 +236,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	case tikvrpc.CmdMPPTask:
 		r := *req.DispatchMPPTask()
+		r.Meta.KeyspaceId = uint32(c.GetKeyspaceID())
 		r.Regions = c.encodeRegionInfos(r.Regions)
 		r.TableRegions = c.encodeTableRegions(r.TableRegions)
 		newReq.Req = &r
@@ -261,7 +272,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		newReq.Req = &r
 	}
 
-	return &newReq, nil
+	return newReq, nil
 }
 
 // DecodeResponse decode the resp with the given codec.

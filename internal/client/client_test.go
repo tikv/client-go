@@ -64,6 +64,7 @@ func TestConn(t *testing.T) {
 	})()
 
 	client := NewRPCClient()
+	defer client.Close()
 
 	addr := "127.0.0.1:6379"
 	conn1, err := client.getConnArray(addr, true)
@@ -88,6 +89,7 @@ func TestConn(t *testing.T) {
 
 func TestGetConnAfterClose(t *testing.T) {
 	client := NewRPCClient()
+	defer client.Close()
 
 	addr := "127.0.0.1:6379"
 	connArray, err := client.getConnArray(addr, true)
@@ -116,6 +118,7 @@ func TestSendWhenReconnect(t *testing.T) {
 	require.True(t, port > 0)
 
 	rpcClient := NewRPCClient()
+	defer rpcClient.Close()
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
 	conn, err := rpcClient.getConnArray(addr, true)
 	assert.Nil(t, err)
@@ -128,7 +131,6 @@ func TestSendWhenReconnect(t *testing.T) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 100*time.Second)
 	assert.True(t, err.Error() == "no available connections")
-	conn.Close()
 	server.Stop()
 }
 
@@ -247,7 +249,7 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
 	rpcClient := NewRPCClient()
-	defer rpcClient.closeConns()
+	defer rpcClient.Close()
 
 	var checkCnt uint64
 	// Check no corresponding metadata if ForwardedHost is empty.
@@ -316,7 +318,7 @@ func TestForwardMetadataByBatchCommands(t *testing.T) {
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
 	rpcClient := NewRPCClient()
-	defer rpcClient.closeConns()
+	defer rpcClient.Close()
 
 	var checkCnt uint64
 	setCheckHandler := func(forwardedHost string) {
@@ -513,54 +515,59 @@ func TestTraceExecDetails(t *testing.T) {
 	}{
 		{
 			&kvrpcpb.ExecDetailsV2{
-				TimeDetail: &kvrpcpb.TimeDetail{TotalRpcWallTimeNs: uint64(time.Second)},
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{TotalRpcWallTimeNs: uint64(time.Second)},
 			},
-			"tikv.RPC[1s]{ tikv.Wait tikv.Process }",
+			"tikv.RPC[1s]{ tikv.Wait tikv.Process tikv.Suspend }",
 			"[00.000,01.000] tikv.RPC",
 		},
 		{
 			&kvrpcpb.ExecDetailsV2{
-				TimeDetail: &kvrpcpb.TimeDetail{
-					TotalRpcWallTimeNs: uint64(time.Second),
-					WaitWallTimeMs:     100,
-					ProcessWallTimeMs:  500,
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
+					TotalRpcWallTimeNs:       uint64(time.Second),
+					WaitWallTimeNs:           100000000,
+					ProcessWallTimeNs:        500000000,
+					ProcessSuspendWallTimeNs: 50000000,
 				},
 			},
-			"tikv.RPC[1s]{ tikv.Wait[100ms] tikv.Process[500ms] }",
+			"tikv.RPC[1s]{ tikv.Wait[100ms] tikv.Process[500ms] tikv.Suspend[50ms] }",
 			strings.Join([]string{
 				"[00.000,00.100] tikv.Wait",
 				"[00.100,00.600] tikv.Process",
+				"[00.600,00.650] tikv.Suspend",
 				"[00.000,01.000] tikv.RPC",
 			}, "\n"),
 		},
 		{
 			&kvrpcpb.ExecDetailsV2{
-				TimeDetail: &kvrpcpb.TimeDetail{
-					TotalRpcWallTimeNs: uint64(time.Second),
-					WaitWallTimeMs:     100,
-					ProcessWallTimeMs:  500,
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
+					TotalRpcWallTimeNs:       uint64(time.Second),
+					WaitWallTimeNs:           100000000,
+					ProcessWallTimeNs:        500000000,
+					ProcessSuspendWallTimeNs: 50000000,
 				},
 				ScanDetailV2: &kvrpcpb.ScanDetailV2{
 					GetSnapshotNanos:      uint64(80 * time.Millisecond),
 					RocksdbBlockReadNanos: uint64(200 * time.Millisecond),
 				},
 			},
-			"tikv.RPC[1s]{ tikv.Wait[100ms]{ tikv.GetSnapshot[80ms] } tikv.Process[500ms]{ tikv.RocksDBBlockRead[200ms] } }",
+			"tikv.RPC[1s]{ tikv.Wait[100ms]{ tikv.GetSnapshot[80ms] } tikv.Process[500ms]{ tikv.RocksDBBlockRead[200ms] } tikv.Suspend[50ms] }",
 			strings.Join([]string{
 				"[00.000,00.080] tikv.GetSnapshot",
 				"[00.000,00.100] tikv.Wait",
 				"[00.100,00.300] tikv.RocksDBBlockRead",
 				"[00.100,00.600] tikv.Process",
+				"[00.600,00.650] tikv.Suspend",
 				"[00.000,01.000] tikv.RPC",
 			}, "\n"),
 		},
 		{
 			// WriteDetail hides RocksDBBlockRead
 			&kvrpcpb.ExecDetailsV2{
-				TimeDetail: &kvrpcpb.TimeDetail{
-					TotalRpcWallTimeNs: uint64(time.Second),
-					WaitWallTimeMs:     100,
-					ProcessWallTimeMs:  500,
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
+					TotalRpcWallTimeNs:       uint64(time.Second),
+					WaitWallTimeNs:           100000000,
+					ProcessWallTimeNs:        500000000,
+					ProcessSuspendWallTimeNs: 50000000,
 				},
 				ScanDetailV2: &kvrpcpb.ScanDetailV2{
 					GetSnapshotNanos:      uint64(80 * time.Millisecond),
@@ -568,17 +575,18 @@ func TestTraceExecDetails(t *testing.T) {
 				},
 				WriteDetail: &kvrpcpb.WriteDetail{},
 			},
-			"tikv.RPC[1s]{ tikv.Wait[100ms]{ tikv.GetSnapshot[80ms] } tikv.Process[500ms] tikv.AsyncWrite{ tikv.StoreBatchWait tikv.ProposeSendWait tikv.PersistLog'{ tikv.RaftDBWriteWait tikv.RaftDBWriteWAL tikv.RaftDBWriteMemtable } tikv.CommitLog tikv.ApplyBatchWait tikv.ApplyLog{ tikv.ApplyMutexLock tikv.ApplyWriteLeaderWait tikv.ApplyWriteWAL tikv.ApplyWriteMemtable } } }",
+			"tikv.RPC[1s]{ tikv.Wait[100ms]{ tikv.GetSnapshot[80ms] } tikv.Process[500ms] tikv.Suspend[50ms] tikv.AsyncWrite{ tikv.StoreBatchWait tikv.ProposeSendWait tikv.PersistLog'{ tikv.RaftDBWriteWait tikv.RaftDBWriteWAL tikv.RaftDBWriteMemtable } tikv.CommitLog tikv.ApplyBatchWait tikv.ApplyLog{ tikv.ApplyMutexLock tikv.ApplyWriteLeaderWait tikv.ApplyWriteWAL tikv.ApplyWriteMemtable } } }",
 			strings.Join([]string{
 				"[00.000,00.080] tikv.GetSnapshot",
 				"[00.000,00.100] tikv.Wait",
 				"[00.100,00.600] tikv.Process",
+				"[00.600,00.650] tikv.Suspend",
 				"[00.000,01.000] tikv.RPC",
 			}, "\n"),
 		},
 		{
 			&kvrpcpb.ExecDetailsV2{
-				TimeDetail: &kvrpcpb.TimeDetail{
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
 					TotalRpcWallTimeNs: uint64(time.Second),
 				},
 				ScanDetailV2: &kvrpcpb.ScanDetailV2{
@@ -600,7 +608,7 @@ func TestTraceExecDetails(t *testing.T) {
 					ApplyWriteMemtableNanos:    uint64(50 * time.Millisecond),
 				},
 			},
-			"tikv.RPC[1s]{ tikv.Wait{ tikv.GetSnapshot[80ms] } tikv.Process tikv.AsyncWrite{ tikv.StoreBatchWait[10ms] tikv.ProposeSendWait[10ms] tikv.PersistLog'[100ms]{ tikv.RaftDBWriteWait[20ms] tikv.RaftDBWriteWAL[30ms] tikv.RaftDBWriteMemtable[30ms] } tikv.CommitLog[200ms] tikv.ApplyBatchWait[20ms] tikv.ApplyLog[300ms]{ tikv.ApplyMutexLock[10ms] tikv.ApplyWriteLeaderWait[10ms] tikv.ApplyWriteWAL[80ms] tikv.ApplyWriteMemtable[50ms] } } }",
+			"tikv.RPC[1s]{ tikv.Wait{ tikv.GetSnapshot[80ms] } tikv.Process tikv.Suspend tikv.AsyncWrite{ tikv.StoreBatchWait[10ms] tikv.ProposeSendWait[10ms] tikv.PersistLog'[100ms]{ tikv.RaftDBWriteWait[20ms] tikv.RaftDBWriteWAL[30ms] tikv.RaftDBWriteMemtable[30ms] } tikv.CommitLog[200ms] tikv.ApplyBatchWait[20ms] tikv.ApplyLog[300ms]{ tikv.ApplyMutexLock[10ms] tikv.ApplyWriteLeaderWait[10ms] tikv.ApplyWriteWAL[80ms] tikv.ApplyWriteMemtable[50ms] } } }",
 			strings.Join([]string{
 				"[00.000,00.080] tikv.GetSnapshot",
 				"[00.000,00.080] tikv.Wait",

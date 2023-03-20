@@ -119,12 +119,20 @@ var DefaultKeyspaceName = apicodec.DefaultKeyspaceName
 // Mode represents the operation mode of a request, export client.Mode
 type Mode = apicodec.Mode
 
-var (
+const (
 	// ModeRaw represent a raw operation in TiKV, export client.ModeRaw
 	ModeRaw Mode = apicodec.ModeRaw
 
 	// ModeTxn represent a transaction operation in TiKV, export client.ModeTxn
 	ModeTxn Mode = apicodec.ModeTxn
+)
+
+// KeyspaceID denotes the target keyspace of the request.
+type KeyspaceID = apicodec.KeyspaceID
+
+const (
+	// NullspaceID is a special keyspace id that represents no keyspace exist
+	NullspaceID KeyspaceID = apicodec.NullspaceID
 )
 
 // RecordRegionRequestRuntimeStats records request runtime stats.
@@ -176,6 +184,11 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 	return locate.WithMatchLabels(labels)
 }
 
+// WithMatchStores indicates selecting stores with matched store ids.
+func WithMatchStores(stores []uint64) StoreSelectorOption {
+	return locate.WithMatchStores(stores)
+}
+
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
 func NewRegionRequestRuntimeStats() RegionRequestRuntimeStats {
 	return locate.NewRegionRequestRuntimeStats()
@@ -195,3 +208,20 @@ func SetStoreLivenessTimeout(t time.Duration) {
 func NewRegionCache(pdClient pd.Client) *locate.RegionCache {
 	return locate.NewRegionCache(pdClient)
 }
+
+// LabelFilter returns false means label doesn't match, and will ignore this store.
+type LabelFilter = locate.LabelFilter
+
+// LabelFilterOnlyTiFlashWriteNode will only select stores whose label contains: <engine, tiflash> and <engine_role, write>.
+// Only used for tiflash_compute node.
+var LabelFilterOnlyTiFlashWriteNode = locate.LabelFilterOnlyTiFlashWriteNode
+
+// LabelFilterNoTiFlashWriteNode will only select stores whose label contains: <engine, tiflash>, but not contains <engine_role, write>.
+// Normally tidb use this filter.
+var LabelFilterNoTiFlashWriteNode = locate.LabelFilterNoTiFlashWriteNode
+
+// LabelFilterAllTiFlashNode will select all tiflash stores.
+var LabelFilterAllTiFlashNode = locate.LabelFilterAllTiFlashNode
+
+// LabelFilterAllNode will select all stores.
+var LabelFilterAllNode = locate.LabelFilterAllNode

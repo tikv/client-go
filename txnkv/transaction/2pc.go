@@ -116,7 +116,7 @@ type kvstore interface {
 	// IsClose checks whether the store is closed.
 	IsClose() bool
 	// Go run the function in a separate goroutine.
-	Go(f func())
+	Go(f func()) error
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -187,6 +187,10 @@ type twoPhaseCommitter struct {
 
 	// assertion error happened when initializing mutations, could be false positive if pessimistic lock is lost
 	stashedAssertionError error
+
+	// isInternal means it's related to an internal transaction. It's only used by `asyncPessimisticRollback` as the
+	// committer may contain a nil `txn` pointer.
+	isInternal bool
 }
 
 type memBufferMutations struct {
@@ -454,14 +458,15 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
 func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	return &twoPhaseCommitter{
-		store:         txn.store,
-		txn:           txn,
-		startTS:       txn.StartTS(),
-		sessionID:     sessionID,
-		regionTxnSize: map[uint64]int{},
-		isPessimistic: txn.IsPessimistic(),
-		binlog:        txn.binlog,
-		diskFullOpt:   kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		store:             txn.store,
+		txn:               txn,
+		startTS:           txn.StartTS(),
+		sessionID:         sessionID,
+		regionTxnSize:     map[uint64]int{},
+		isPessimistic:     txn.IsPessimistic(),
+		binlog:            txn.binlog,
+		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		resourceGroupName: txn.resourceGroupName,
 	}, nil
 }
 
@@ -695,8 +700,15 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		WriteKeys:   c.mutations.Len(),
 		ResolveLock: util.ResolveLockDetail{},
 	}
-	metrics.TiKVTxnWriteKVCountHistogram.Observe(float64(commitDetail.WriteKeys))
-	metrics.TiKVTxnWriteSizeHistogram.Observe(float64(commitDetail.WriteSize))
+
+	isInternalReq := util.IsInternalRequest(c.txn.GetRequestSource())
+	if isInternalReq {
+		metrics.TxnWriteKVCountHistogramInternal.Observe(float64(commitDetail.WriteKeys))
+		metrics.TxnWriteSizeHistogramInternal.Observe(float64(commitDetail.WriteSize))
+	} else {
+		metrics.TxnWriteKVCountHistogramGeneral.Observe(float64(commitDetail.WriteKeys))
+		metrics.TxnWriteSizeHistogramGeneral.Observe(float64(commitDetail.WriteSize))
+	}
 	c.hasNoNeedCommitKeys = checkCnt > 0
 	c.lockTTL = txnLockTTL(txn.startTime, size)
 	c.priority = txn.priority.ToPB()
@@ -988,7 +1000,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
-		c.store.Go(func() {
+		err = c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
@@ -1013,7 +1025,14 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 				metrics.SecondaryLockCleanupFailureCounterCommit.Inc()
 			}
 		})
-
+		if err != nil {
+			c.store.WaitGroup().Done()
+			logutil.BgLogger().Error("fail to create goroutine",
+				zap.Uint64("session", c.sessionID),
+				zap.Stringer("action type", action),
+				zap.Error(err))
+			return err
+		}
 	} else {
 		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
 	}

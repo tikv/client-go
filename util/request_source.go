@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"strings"
 )
 
 // RequestSourceTypeKeyType is a dummy type to avoid naming collision in context.
@@ -59,6 +60,15 @@ func WithInternalSourceType(ctx context.Context, source string) context.Context 
 	})
 }
 
+// IsRequestSourceInternal checks whether the input request source type is internal type.
+func IsRequestSourceInternal(reqSrc *RequestSource) bool {
+	isInternal := false
+	if reqSrc != nil && IsInternalRequest(reqSrc.GetRequestSource()) {
+		isInternal = true
+	}
+	return isInternal
+}
+
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
 	// if r.RequestSourceType is not set, it's mostly possible that r.RequestSourceInternal is not set
@@ -79,6 +89,11 @@ func RequestSourceFromCtx(ctx context.Context) string {
 		return rs.GetRequestSource()
 	}
 	return SourceUnknown
+}
+
+// IsInternalRequest returns the type of the request source.
+func IsInternalRequest(source string) bool {
+	return strings.HasPrefix(source, InternalRequest)
 }
 
 // ResourceGroupNameKeyType is the context key type of resource group name.

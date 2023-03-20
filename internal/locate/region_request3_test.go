@@ -314,7 +314,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	region = &Region{
 		meta: region.GetMeta(),
 	}
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	region.meta.Peers = append(region.meta.Peers, tikvLearner)
 	atomic.StorePointer(&region.store, unsafe.Pointer(regionStore))
 
@@ -325,7 +325,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	cache.mu.Unlock()
 
 	// Test accessFollower state with kv.ReplicaReadLearner request type.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	req.ReplicaReadType = kv.ReplicaReadLearner
 	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, req)
@@ -334,7 +334,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 
 	accessLearner, _ := replicaSelector.state.(*accessFollower)
 	// Invalidate the region if the leader is not in the region.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	rpcCtx, err := replicaSelector.next(s.bo)
 	s.Nil(err)
 	// Should swith to the next follower.
@@ -365,7 +365,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	region = &Region{
 		meta: region.GetMeta(),
 	}
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	region.meta.Peers = append(region.meta.Peers, tiflash)
 	atomic.StorePointer(&region.store, unsafe.Pointer(regionStore))
 
@@ -429,7 +429,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.False(replicaSelector.region.isValid())
 
 	// Test switching to tryFollower if leader is unreachable
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
@@ -613,7 +613,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
 
 	// Test accessFollower state filtering label-not-match stores.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	labels := []*metapb.StoreLabel{
 		{
@@ -635,7 +635,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	}
 
 	// Test accessFollower state with leaderOnly option
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	for i := 0; i < 5; i++ {
 		replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req, WithLeaderOnly())
@@ -648,7 +648,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	}
 
 	// Test accessFollower state with kv.ReplicaReadMixed request type.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	req.ReplicaReadType = kv.ReplicaReadMixed
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
@@ -656,7 +656,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Nil(err)
 
 	// Invalidate the region if the leader is not in the region.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	replicaSelector.updateLeader(&metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID()})
 	s.False(region.isValid())
 	// Don't try next replica if the region is invalidated.
@@ -927,4 +927,77 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		}
 		s.True(totalAttempts <= 2)
 	}
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	region := s.cache.GetCachedRegionWithRLock(regionLoc.Region)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kvrpcpb.Context{
+		BusyThresholdMs: 50,
+	})
+
+	replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.NotNil(replicaSelector)
+	s.Nil(err)
+	s.Equal(replicaSelector.region, region)
+	s.IsType(&accessKnownLeader{}, replicaSelector.state)
+	// The busyThreshold in replicaSelector should be initialized with the request context.
+	s.Equal(replicaSelector.busyThreshold, 50*time.Millisecond)
+
+	bo := retry.NewBackoffer(context.Background(), -1)
+	rpcCtx, err := replicaSelector.next(bo)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+
+	// Receive a ServerIsBusy error
+	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
+		EstimatedWaitMs: 500,
+	})
+
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
+	lastPeerID := rpcCtx.Peer.Id
+
+	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
+		EstimatedWaitMs: 800,
+	})
+
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	// Should choose a peer different from before
+	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
+	s.NotEqual(rpcCtx.Peer.Id, lastPeerID)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
+
+	// All peers are too busy
+	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
+		EstimatedWaitMs: 150,
+	})
+	lessBusyPeer := rpcCtx.Peer.Id
+
+	// Then, send to the leader again with no threshold.
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.False(*rpcCtx.contextPatcher.replicaRead)
+	s.Equal(*rpcCtx.contextPatcher.busyThreshold, time.Duration(0))
+
+	time.Sleep(120 * time.Millisecond)
+
+	// When there comes a new request, it should skip busy leader and choose a less busy store
+	replicaSelector, err = newReplicaSelector(s.cache, regionLoc.Region, req)
+	s.NotNil(replicaSelector)
+	s.Nil(err)
+	rpcCtx, err = replicaSelector.next(bo)
+	s.Nil(err)
+	s.Equal(rpcCtx.Peer.Id, lessBusyPeer)
+	s.IsType(&tryIdleReplica{}, replicaSelector.state)
+	s.True(*rpcCtx.contextPatcher.replicaRead)
 }

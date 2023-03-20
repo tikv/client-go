@@ -997,7 +997,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	s.Equal(lctx.Peer.Id, peer3)
 
 	// epoch-not-match on tiflash
-	ctxTiFlash, err := s.cache.GetTiFlashRPCContext(s.bo, loc1.Region, true)
+	ctxTiFlash, err := s.cache.GetTiFlashRPCContext(s.bo, loc1.Region, true, LabelFilterNoTiFlashWriteNode)
 	s.Nil(err)
 	s.Equal(ctxTiFlash.Peer.Id, s.peer1)
 	ctxTiFlash.Peer.Role = metapb.PeerRole_Learner
@@ -1648,8 +1648,8 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 }
 
 func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
-	// Prepare 50 regions
-	regionCnt := 50
+	// Prepare 100 regions
+	regionCnt := 100
 	regions := s.cluster.AllocIDs(regionCnt)
 	regions = append([]uint64{s.region1}, regions...)
 	peers := [][]uint64{{s.peer1, s.peer2}}
@@ -1679,6 +1679,52 @@ func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
 		s.cache.mu.RLock()
 		defer s.cache.mu.RUnlock()
 		return len(s.cache.mu.regions) == remaining
-	}, 2*time.Second, 200*time.Millisecond)
+	}, 3*time.Second, 200*time.Millisecond)
 	s.checkCache(remaining)
+
+	// Make another part of the regions stale
+	remaining = 0
+	s.cache.mu.Lock()
+	now = time.Now().Unix()
+	for verID, r := range s.cache.mu.regions {
+		if verID.id%3 == 1 {
+			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+		} else {
+			remaining++
+		}
+	}
+	s.cache.mu.Unlock()
+
+	s.Eventually(func() bool {
+		s.cache.mu.RLock()
+		defer s.cache.mu.RUnlock()
+		return len(s.cache.mu.regions) == remaining
+	}, 3*time.Second, 200*time.Millisecond)
+	s.checkCache(remaining)
+}
+
+func (s *testRegionCacheSuite) TestSlowScoreStat() {
+	slowScore := SlowScoreStat{
+		avgScore: 1,
+	}
+	s.False(slowScore.isSlow())
+	slowScore.recordSlowScoreStat(time.Millisecond * 1)
+	slowScore.updateSlowScore()
+	s.False(slowScore.isSlow())
+	for i := 2; i <= 100; i++ {
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	for i := 100; i >= 2; i-- {
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	slowScore.markAlreadySlow()
+	s.True(slowScore.isSlow())
 }
