@@ -86,7 +86,7 @@ func DecodeKey(encoded []byte, version kvrpcpb.APIVersion) ([]byte, []byte, erro
 	return nil, nil, errors.Errorf("unsupported api version %s", version.String())
 }
 
-func attachAPICtx(c Codec, req *tikvrpc.Request) (*tikvrpc.Request, error) {
+func attachAPICtx(c Codec, req *tikvrpc.Request) *tikvrpc.Request {
 	// Shallow copy the request to avoid concurrent modification.
 	r := *req
 
@@ -97,9 +97,13 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) (*tikvrpc.Request, error) {
 	switch r.Type {
 	case tikvrpc.CmdMPPTask:
 		mpp := *r.DispatchMPPTask()
-		mpp.Meta.KeyspaceId = ctx.KeyspaceId
-		mpp.Meta.ApiVersion = ctx.ApiVersion
+		// Shallow copy the request to avoid concurrent modification.
+		meta := *mpp.Meta
+		meta.KeyspaceId = ctx.KeyspaceId
+		meta.ApiVersion = ctx.ApiVersion
+		mpp.Meta = &meta
 		r.Req = &mpp
+
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
 		compact.KeyspaceId = ctx.KeyspaceId
@@ -109,5 +113,5 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) (*tikvrpc.Request, error) {
 
 	tikvrpc.AttachContext(&r, ctx)
 
-	return &r, nil
+	return &r
 }

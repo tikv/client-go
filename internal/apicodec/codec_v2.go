@@ -109,170 +109,167 @@ func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
 // EncodeRequest encodes with the given Codec.
 // NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	newReq, err := attachAPICtx(c, req)
-	if err != nil {
-		return nil, err
-	}
+	// attachAPICtx will shallow copy the request.
+	req = attachAPICtx(c, req)
 	// Encode requests based on command type.
 	switch req.Type {
 	// Transaction Request Types.
 	case tikvrpc.CmdGet:
 		r := *req.Get()
 		r.Key = c.EncodeKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdScan:
 		r := *req.Scan()
 		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, r.Reverse)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdPrewrite:
 		r := *req.Prewrite()
 		r.Mutations = c.encodeMutations(r.Mutations)
 		r.PrimaryLock = c.EncodeKey(r.PrimaryLock)
 		r.Secondaries = c.encodeKeys(r.Secondaries)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdCommit:
 		r := *req.Commit()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdCleanup:
 		r := *req.Cleanup()
 		r.Key = c.EncodeKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdBatchGet:
 		r := *req.BatchGet()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdBatchRollback:
 		r := *req.BatchRollback()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdScanLock:
 		r := *req.ScanLock()
 		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdResolveLock:
 		r := *req.ResolveLock()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdGC:
 		// TODO: Deprecate Central GC Mode.
 	case tikvrpc.CmdDeleteRange:
 		r := *req.DeleteRange()
 		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdPessimisticLock:
 		r := *req.PessimisticLock()
 		r.Mutations = c.encodeMutations(r.Mutations)
 		r.PrimaryLock = c.EncodeKey(r.PrimaryLock)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdPessimisticRollback:
 		r := *req.PessimisticRollback()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdTxnHeartBeat:
 		r := *req.TxnHeartBeat()
 		r.PrimaryLock = c.EncodeKey(r.PrimaryLock)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdCheckTxnStatus:
 		r := *req.CheckTxnStatus()
 		r.PrimaryKey = c.EncodeKey(r.PrimaryKey)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdCheckSecondaryLocks:
 		r := *req.CheckSecondaryLocks()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 
 	// Raw Request Types.
 	case tikvrpc.CmdRawGet:
 		r := *req.RawGet()
 		r.Key = c.EncodeKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawBatchGet:
 		r := *req.RawBatchGet()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawPut:
 		r := *req.RawPut()
 		r.Key = c.EncodeKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawBatchPut:
 		r := *req.RawBatchPut()
 		r.Pairs = c.encodeParis(r.Pairs)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawDelete:
 		r := *req.RawDelete()
 		r.Key = c.EncodeKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawBatchDelete:
 		r := *req.RawBatchDelete()
 		r.Keys = c.encodeKeys(r.Keys)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawDeleteRange:
 		r := *req.RawDeleteRange()
 		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawScan:
 		r := *req.RawScan()
 		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, r.Reverse)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdGetKeyTTL:
 		r := *req.RawGetKeyTTL()
 		r.Key = c.EncodeKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawCompareAndSwap:
 		r := *req.RawCompareAndSwap()
 		r.Key = c.EncodeKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdRawChecksum:
 		r := *req.RawChecksum()
 		r.Ranges = c.encodeKeyRanges(r.Ranges)
-		newReq.Req = &r
+		req.Req = &r
 
 	// TiFlash Requests
 	case tikvrpc.CmdBatchCop:
 		r := *req.BatchCop()
 		r.Regions = c.encodeRegionInfos(r.Regions)
 		r.TableRegions = c.encodeTableRegions(r.TableRegions)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdMPPTask:
 		r := *req.DispatchMPPTask()
-		r.Meta.KeyspaceId = uint32(c.GetKeyspaceID())
 		r.Regions = c.encodeRegionInfos(r.Regions)
 		r.TableRegions = c.encodeTableRegions(r.TableRegions)
-		newReq.Req = &r
+		req.Req = &r
 
 	// Other requests.
 	case tikvrpc.CmdUnsafeDestroyRange:
 		r := *req.UnsafeDestroyRange()
 		r.StartKey, r.EndKey = c.encodeRange(r.StartKey, r.EndKey, false)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdPhysicalScanLock:
 		r := *req.PhysicalScanLock()
 		r.StartKey = c.EncodeKey(r.StartKey)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdStoreSafeTS:
 		r := *req.StoreSafeTS()
 		r.KeyRange = c.encodeKeyRange(r.KeyRange)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdCop:
 		r := *req.Cop()
 		r.Ranges = c.encodeCopRanges(r.Ranges)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdCopStream:
 		r := *req.Cop()
 		r.Ranges = c.encodeCopRanges(r.Ranges)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
 		r.Key = c.EncodeRegionKey(r.Key)
-		newReq.Req = &r
+		req.Req = &r
 	case tikvrpc.CmdSplitRegion:
 		r := *req.SplitRegion()
 		r.SplitKeys = c.encodeKeys(r.SplitKeys)
-		newReq.Req = &r
+		req.Req = &r
 	}
 
-	return newReq, nil
+	return req, nil
 }
 
 // DecodeResponse decode the resp with the given codec.
