@@ -4,9 +4,11 @@ import (
 	"math"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -269,4 +271,25 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 
 func (suite *testCodecV2Suite) TestGetKeyspaceID() {
 	suite.Equal(KeyspaceID(testKeyspaceID), suite.codec.GetKeyspaceID())
+}
+
+func (suite *testCodecV2Suite) TestEncodeMPPRequest() {
+	req, err := suite.codec.EncodeRequest(&tikvrpc.Request{
+		Type: tikvrpc.CmdMPPTask,
+		Req: &mpp.DispatchTaskRequest{
+			Meta: &mpp.TaskMeta{},
+			Regions: []*coprocessor.RegionInfo{
+				{
+					Ranges: []*coprocessor.KeyRange{{Start: []byte("a"), End: []byte("b")}},
+				},
+			},
+		},
+	})
+	suite.Nil(err)
+	task, ok := req.Req.(*mpp.DispatchTaskRequest)
+	suite.True(ok)
+	suite.Equal(task.Meta.KeyspaceId, testKeyspaceID)
+	suite.Equal(task.Meta.ApiVersion, kvrpcpb.APIVersion_V2)
+	suite.Equal(task.Regions[0].Ranges[0].Start, suite.codec.EncodeKey([]byte("a")))
+	suite.Equal(task.Regions[0].Ranges[0].End, suite.codec.EncodeKey([]byte("b")))
 }
