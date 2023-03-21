@@ -97,7 +97,7 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) *tikvrpc.Request {
 	switch r.Type {
 	case tikvrpc.CmdMPPTask:
 		mpp := *r.DispatchMPPTask()
-		// Shallow copy the request to avoid concurrent modification.
+		// Shallow copy the meta to avoid concurrent modification.
 		meta := *mpp.Meta
 		meta.KeyspaceId = ctx.KeyspaceId
 		meta.ApiVersion = ctx.ApiVersion
