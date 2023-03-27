@@ -42,6 +42,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1731,7 +1732,7 @@ func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
 
 	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
 		handle := db.IterWithFlags(key, nil).Handle()
-		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, handle)
+		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, handle, nil)
 	})
 
 	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
@@ -1741,4 +1742,91 @@ func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
 		s.Equal(assertExist, mutations.IsAssertExists(i))
 		s.Equal(assertNotExist, mutations.IsAssertNotExist(i))
 	})
+}
+
+func (s *testCommitterSuite) TestSetLockedKeyValue() {
+	ctx := context.Background()
+	k1 := []byte("k1")
+	v1 := []byte("v1")
+	v2 := []byte("v2")
+
+	mustLockKey := func(txn transaction.TxnProbe, key []byte) {
+		s.Require().NoError(txn.LockKeys(ctx, &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}, key))
+	}
+	mutOpVals := func(opVals ...interface{}) func(m transaction.CommitterMutations) {
+		s.Require().Equal(0, len(opVals)%2)
+		return func(m transaction.CommitterMutations) {
+			s.Require().Equal(m.Len(), len(opVals)/2)
+			for i := 0; i < len(opVals); i += 2 {
+				s.Require().Equal(opVals[i], m.GetOp(0))
+				s.Require().Equal(opVals[i+1], m.GetValue(0))
+			}
+		}
+	}
+
+	for _, tt := range []struct {
+		name    string
+		actions []func(txn transaction.TxnProbe)
+		check   func(m transaction.CommitterMutations)
+	}{
+		{
+			"NoLock",
+			[]func(txn transaction.TxnProbe){
+				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
+			},
+			mutOpVals(),
+		},
+		{
+			"LockOnly",
+			[]func(txn transaction.TxnProbe){
+				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
+				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
+			},
+			mutOpVals(kvrpcpb.Op_Put, v1),
+		},
+		{
+			"LockAndSet",
+			[]func(txn transaction.TxnProbe){
+				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
+				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
+				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Set(k1, v2)) },
+			},
+			mutOpVals(kvrpcpb.Op_Put, v2),
+		},
+		{
+			"LockAndDelete",
+			[]func(txn transaction.TxnProbe){
+				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
+				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
+				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Delete(k1)) },
+			},
+			mutOpVals(kvrpcpb.Op_Del, []byte{}),
+		},
+	} {
+		var testAll func(name string, state []bool, actions []func(txn transaction.TxnProbe))
+		testAll = func(name string, state []bool, actions []func(txn transaction.TxnProbe)) {
+			if len(actions) == len(tt.actions) {
+				s.Run(name, func() {
+					txn := s.begin()
+					for _, action := range actions {
+						action(txn)
+					}
+					c, err := txn.NewCommitter(1)
+					s.Require().NoError(err)
+					tt.check(c.GetMutations())
+					s.Require().NoError(txn.Rollback())
+				})
+				return
+			}
+			for i, used := range state {
+				if used {
+					continue
+				}
+				state[i] = true
+				testAll(name+"-"+strconv.Itoa(i), state, append(actions, tt.actions[i]))
+				state[i] = false
+			}
+		}
+		testAll(tt.name, make([]bool, len(tt.actions)), nil)
+	}
 }
