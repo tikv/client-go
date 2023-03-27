@@ -583,7 +583,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
 		if len(state.option.labels) > 0 {
-			logutil.BgLogger().Warn("unable to find stores with given labels")
+			logutil.BgLogger().Warn("unable to find stores with given labels",
+				zap.Any("labels", state.option.labels))
 		}
 		leader := selector.replicas[state.leaderIdx]
 		if leader.isEpochStale() || leader.isExhausted(1) {
