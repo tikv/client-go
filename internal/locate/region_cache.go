@@ -461,6 +461,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
+	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
 	return c
 }
 
@@ -604,6 +605,7 @@ type storeSelectorOp struct {
 	leaderOnly   bool
 	preferLeader bool
 	labels       []*metapb.StoreLabel
+	stores       []uint64
 }
 
 // StoreSelectorOption configures storeSelectorOp.
@@ -627,6 +629,13 @@ func WithLeaderOnly() StoreSelectorOption {
 func WithPerferLeader() StoreSelectorOption {
 	return func(op *storeSelectorOp) {
 		op.preferLeader = true
+	}
+}
+
+// WithMatchStores indicates selecting stores with matched store ids.
+func WithMatchStores(stores []uint64) StoreSelectorOption {
+	return func(op *storeSelectorOp) {
+		op.stores = stores
 	}
 }
 
@@ -2279,6 +2288,8 @@ type Store struct {
 
 	// A statistic for counting the request latency to this store
 	slowScore SlowScoreStat
+	// A statistic for counting the flows of different replicas on this store
+	replicaFlowsStats [numReplicaFlowsType]uint64
 }
 
 type resolveState uint64
@@ -2479,6 +2490,19 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 	return true
 }
 
+// IsStoreMatch returns whether the store's id match the target ids.
+func (s *Store) IsStoreMatch(stores []uint64) bool {
+	if len(stores) < 1 {
+		return true
+	}
+	for _, storeID := range stores {
+		if s.storeID == storeID {
+			return true
+		}
+	}
+	return false
+}
+
 func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
 	for _, label := range labels {
 		if label.GetKey() == key && label.GetValue() == val {
@@ -2639,9 +2663,9 @@ func (s *Store) GetPeerAddr() string {
 	return s.peerAddr
 }
 
-// estimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.
+// EstimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.
 // It's calculated by subtracting the time since the last update from the wait time returned from TiKV.
-func (s *Store) estimatedWaitTime() time.Duration {
+func (s *Store) EstimatedWaitTime() time.Duration {
 	loadStats := s.loadStats.Load()
 	if loadStats == nil {
 		return 0
@@ -2724,6 +2748,7 @@ func (s *Store) recordSlowScoreStat(timecost time.Duration) {
 	s.slowScore.recordSlowScoreStat(timecost)
 }
 
+// markAlreadySlow marks the related store already slow.
 func (s *Store) markAlreadySlow() {
 	s.slowScore.markAlreadySlow()
 }
@@ -2743,6 +2768,7 @@ func (c *RegionCache) asyncUpdateStoreSlowScore(interval time.Duration) {
 	}
 }
 
+// checkAndUpdateStoreSlowScores checks and updates slowScore on each store.
 func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 	defer func() {
 		r := recover()
@@ -2761,6 +2787,42 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 	c.storeMu.RUnlock()
 	for store, score := range slowScoreMetrics {
 		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+	}
+}
+
+// getReplicaFlowsStats returns the statistics on the related replicaFlowsType.
+func (s *Store) getReplicaFlowsStats(destType replicaFlowsType) uint64 {
+	return atomic.LoadUint64(&s.replicaFlowsStats[destType])
+}
+
+// resetReplicaFlowsStats resets the statistics on the related replicaFlowsType.
+func (s *Store) resetReplicaFlowsStats(destType replicaFlowsType) {
+	atomic.StoreUint64(&s.replicaFlowsStats[destType], 0)
+}
+
+// recordReplicaFlowsStats records the statistics on the related replicaFlowsType.
+func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
+	atomic.AddUint64(&s.replicaFlowsStats[destType], 1)
+}
+
+// asyncReportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
+func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			c.storeMu.RLock()
+			for _, store := range c.storeMu.stores {
+				for destType := toLeader; destType < numReplicaFlowsType; destType++ {
+					metrics.TiKVPreferLeaderFlowsGauge.WithLabelValues(destType.String(), store.addr).Set(float64(store.getReplicaFlowsStats(destType)))
+					store.resetReplicaFlowsStats(destType)
+				}
+			}
+			c.storeMu.RUnlock()
+		}
 	}
 }
 

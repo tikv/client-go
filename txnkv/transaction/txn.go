@@ -151,7 +151,7 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
-	// resourceGroupName is the name of tenent resource group.
+	// resourceGroupName is the name of tenant resource group.
 	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
@@ -1046,7 +1046,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 
-		if txn.IsInAggressiveLockingMode() && len(keys) == 1 && !lockCtx.LockOnlyIfExists {
+		if txn.IsInAggressiveLockingMode() && len(keys) == 1 {
 			lockWakeUpMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)

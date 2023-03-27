@@ -689,8 +689,9 @@ type MPPStreamResponse struct {
 	Lease
 }
 
-// AttachContext sets the request context to the request.
-func AttachContext(req *Request, ctx *kvrpcpb.Context) error {
+// AttachContext sets the request context to the request,
+// return false if encounter unknown request type.
+func AttachContext(req *Request, ctx *kvrpcpb.Context) bool {
 	switch req.Type {
 	case CmdGet:
 		req.Get().Context = ctx
@@ -781,9 +782,9 @@ func AttachContext(req *Request, ctx *kvrpcpb.Context) error {
 	case CmdPrepareFlashbackToVersion:
 		req.PrepareFlashbackToVersion().Context = ctx
 	default:
-		return errors.Errorf("invalid request type %v", req.Type)
+		return false
 	}
-	return nil
+	return true
 }
 
 // SetContext set the Context field for the given req to the specified ctx.
@@ -794,7 +795,10 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		ctx.RegionEpoch = region.RegionEpoch
 	}
 	ctx.Peer = peer
-	return AttachContext(req, ctx)
+	if !AttachContext(req, ctx) {
+		return errors.Errorf("invalid request type %v", req.Type)
+	}
+	return nil
 }
 
 // GenRegionErrorResp returns corresponding Response with specified RegionError
@@ -1285,3 +1289,51 @@ func (req *Request) IsRawWriteRequest() bool {
 
 // ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
 type ResourceGroupTagger func(req *Request)
+
+// GetStartTS returns the `start_ts` of the request.
+func (req *Request) GetStartTS() uint64 {
+	switch req.Type {
+	case CmdGet:
+		return req.Get().GetVersion()
+	case CmdScan:
+		return req.Scan().GetVersion()
+	case CmdPrewrite:
+		return req.Prewrite().GetStartVersion()
+	case CmdCommit:
+		return req.Commit().GetStartVersion()
+	case CmdCleanup:
+		return req.Cleanup().GetStartVersion()
+	case CmdBatchGet:
+		return req.BatchGet().GetVersion()
+	case CmdBatchRollback:
+		return req.BatchRollback().GetStartVersion()
+	case CmdScanLock:
+		return req.ScanLock().GetMaxVersion()
+	case CmdResolveLock:
+		return req.ResolveLock().GetStartVersion()
+	case CmdPessimisticLock:
+		return req.PessimisticLock().GetStartVersion()
+	case CmdPessimisticRollback:
+		return req.PessimisticRollback().GetStartVersion()
+	case CmdTxnHeartBeat:
+		return req.TxnHeartBeat().GetStartVersion()
+	case CmdCheckTxnStatus:
+		return req.CheckTxnStatus().GetLockTs()
+	case CmdCheckSecondaryLocks:
+		return req.CheckSecondaryLocks().GetStartVersion()
+	case CmdFlashbackToVersion:
+		return req.FlashbackToVersion().GetStartTs()
+	case CmdPrepareFlashbackToVersion:
+		req.PrepareFlashbackToVersion().GetStartTs()
+	case CmdCop:
+		return req.Cop().GetStartTs()
+	case CmdCopStream:
+		return req.Cop().GetStartTs()
+	case CmdBatchCop:
+		return req.BatchCop().GetStartTs()
+	case CmdMvccGetByStartTs:
+		return req.MvccGetByStartTs().GetStartTs()
+	default:
+	}
+	return 0
+}

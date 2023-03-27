@@ -960,7 +960,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
 
 	// Receive a ServerIsBusy error
-	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
+	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 500,
 	})
 
@@ -971,7 +971,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.True(*rpcCtx.contextPatcher.replicaRead)
 	lastPeerID := rpcCtx.Peer.Id
 
-	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
+	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 800,
 	})
 
@@ -984,7 +984,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.True(*rpcCtx.contextPatcher.replicaRead)
 
 	// All peers are too busy
-	replicaSelector.onServerIsBusy(bo, rpcCtx, &errorpb.ServerIsBusy{
+	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 150,
 	})
 	lessBusyPeer := rpcCtx.Peer.Id

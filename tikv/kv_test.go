@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
@@ -28,9 +29,11 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func TestKV(t *testing.T) {
+	util.EnableFailpoints()
 	suite.Run(t, new(testKVSuite))
 }
 
@@ -121,4 +124,29 @@ func (s *testKVSuite) TestMinSafeTs() {
 	}
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(2))
 	s.Require().Equal(uint64(80), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+}
+
+func (s *testKVSuite) TestRURuntimeStatsCleanUp() {
+	s.Nil(failpoint.Enable("tikvclient/mockFastRURuntimeStatsMapClean", `return()`))
+	defer func() {
+		s.Nil(failpoint.Disable("tikvclient/mockFastRURuntimeStatsMapClean"))
+	}()
+
+	mockClient := storeSafeTsMockClient{
+		Client:    s.store.GetTiKVClient(),
+		testSuite: s,
+	}
+	s.store.SetTiKVClient(&mockClient)
+
+	// Create a ruRuntimeStats first.
+	startTS := oracle.ComposeTS(oracle.GetPhysical(time.Now()), 0)
+	ruRuntimeStats := s.store.CreateRURuntimeStats(startTS)
+	s.NotNil(ruRuntimeStats)
+	// Wait for the cleanup goroutine to clean up the ruRuntimeStatsMap.
+	time.Sleep(time.Millisecond * 150)
+	// The ruRuntimeStatsMap should be cleaned up.
+	s.store.ruRuntimeStatsMap.Range(func(key, value interface{}) bool {
+		s.Fail("ruRuntimeStatsMap should be cleaned up")
+		return true
+	})
 }
