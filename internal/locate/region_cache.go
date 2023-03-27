@@ -364,6 +364,8 @@ func (r *Region) isValid() bool {
 	return r != nil && !r.checkNeedReload() && r.checkRegionCacheTTL(time.Now().Unix())
 }
 
+type livenessFunc func(s *Store, bo *retry.Backoffer) livenessState
+
 // RegionCache caches Regions loaded from PD.
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
@@ -396,7 +398,7 @@ type RegionCache struct {
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
 		// requestLiveness always returns unreachable.
-		mockRequestLiveness func(s *Store, bo *retry.Backoffer) livenessState
+		mockRequestLiveness atomic.Pointer[livenessFunc]
 	}
 
 	regionsNeedReload struct {
@@ -2605,8 +2607,12 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 			return unknown
 		}
 	}
-	if c != nil && c.testingKnobs.mockRequestLiveness != nil {
-		return c.testingKnobs.mockRequestLiveness(s, bo)
+
+	if c != nil {
+		livenessFunc := c.testingKnobs.mockRequestLiveness.Load()
+		if livenessFunc != nil {
+			return (*livenessFunc)(s, bo)
+		}
 	}
 
 	if storeLivenessTimeout == 0 {
