@@ -36,7 +36,6 @@ package tikv_test
 
 import (
 	"context"
-	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"sync"
 	"testing"
 
@@ -44,6 +43,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/testutils"
