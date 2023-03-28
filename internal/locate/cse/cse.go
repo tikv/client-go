@@ -28,6 +28,11 @@ var (
 	_ pd.Client = &Client{}
 )
 
+var (
+	StoresRefreshInterval = time.Second * 5
+	SyncRegionTimeout     = time.Second * 10
+)
+
 type Client struct {
 	pd.Client
 
@@ -45,21 +50,9 @@ type Client struct {
 	// id atomic.Int64
 }
 
-func NewCSEClient(origin pd.Client) (*Client, error) {
-	ctx := context.Background()
-	stores, err := origin.GetAllStores(ctx)
-	if err != nil {
-		return nil, err
-	}
-	c := &Client{
+func NewCSEClient(origin pd.Client) (c *Client, err error) {
+	c = &Client{
 		Client: origin,
-
-		mu: struct {
-			sync.Mutex
-			stores []*metapb.Store
-		}{
-			stores: stores,
-		},
 
 		done: make(chan struct{}, 1),
 
@@ -69,18 +62,22 @@ func NewCSEClient(origin pd.Client) (*Client, error) {
 
 		gp: util.NewSpool(16, time.Second*10),
 	}
-	go c.getAllStoresLoop()
+	c.mu.stores, err = c.Client.GetAllStores(context.Background(), pd.WithExcludeTombstone())
+	if err != nil {
+		return nil, err
+	}
+	go c.refreshStoresLoop()
 	return c, nil
 }
 
-func (c *Client) getAllStoresLoop() {
-	ticker := time.NewTicker(time.Second * 5)
+func (c *Client) refreshStoresLoop() {
+	ticker := time.NewTicker(StoresRefreshInterval)
 	for {
 		select {
 		case <-c.done:
 			return
 		case <-ticker.C:
-			stores, err := c.GetAllStores(context.Background())
+			stores, err := c.Client.GetAllStores(context.Background(), pd.WithExcludeTombstone())
 			if err != nil {
 				log.Warn("get all stores failed", zap.Error(err))
 				continue
@@ -104,19 +101,32 @@ func (c *Client) Close() {
 }
 
 func (c *Client) getStores() []*metapb.Store {
-	stores := func() []*metapb.Store {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		return c.mu.stores
-	}()
-	ss := make([]*metapb.Store, 0, len(stores))
-	for _, store := range stores {
-		if tikvrpc.GetStoreTypeByMeta(store) != tikvrpc.TiKV {
-			continue
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mu.stores
+}
+
+func (c *Client) GetAllStores(context.Context, ...pd.GetStoreOption) ([]*metapb.Store, error) {
+	return c.getStores(), nil
+}
+
+func (c *Client) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+	for _, s := range c.getStores() {
+		if s.Id == storeID {
+			return s, nil
 		}
-		ss = append(ss, store)
 	}
-	return ss
+	return nil, errors.Errorf("store %d not found", storeID)
+}
+
+func (c *Client) getValidTiKVStores() []*metapb.Store {
+	var tikvStores []*metapb.Store
+	for _, s := range c.getStores() {
+		if s.GetState() == metapb.StoreState_Up && tikvrpc.GetStoreTypeByMeta(s) == tikvrpc.TiKV {
+			tikvStores = append(tikvStores, s)
+		}
+	}
+	return tikvStores
 }
 
 type SyncRegionRequest struct {
@@ -137,8 +147,8 @@ type result struct {
 	index int
 }
 
-func mkOK(idx int, ok []*pdcore.RegionInfo) result {
-	return result{ok: ok, index: idx}
+func mkOK(ok []*pdcore.RegionInfo) result {
+	return result{ok: ok}
 }
 
 func mkErr(idx int, err error) result {
@@ -146,12 +156,14 @@ func mkErr(idx int, err error) result {
 }
 
 func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (*pdcore.RegionsInfo, error) {
-	stores := c.getStores()
+	stores := c.getValidTiKVStores()
 	rchan := make(chan result, len(stores))
 	for i, s := range stores {
 		store := *s
 		index := i
 		c.gp.Go(func() {
+			ctx, cancel := context.WithTimeout(ctx, SyncRegionTimeout)
+			defer cancel()
 			buf := new(bytes.Buffer)
 			err := json.NewEncoder(buf).Encode(req)
 			if err != nil {
@@ -196,11 +208,11 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 			for i, leader := range syncResp.RegionLeaders {
 				if leader.GetId() != 0 {
 					region := syncResp.Regions[i]
-					log.Info("sync region leader from cse", zap.Any("region", region))
+					log.Debug("sync region leader from cse", zap.Any("region", region))
 					regionInfos = append(regionInfos, pdcore.NewRegionInfo(region, leader))
 				}
 			}
-			rchan <- mkOK(index, regionInfos)
+			rchan <- mkOK(regionInfos)
 		})
 	}
 
@@ -211,7 +223,7 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 			return nil, ctx.Err()
 		case r := <-rchan:
 			if err := r.err; err != nil {
-				log.Warn("failed to sync regions from CSE", zap.Error(err))
+				log.Warn("failed to sync regions from CSE", zap.Error(err), zap.Any("store", stores[r.index]))
 			}
 			for _, regionInfo := range r.ok {
 				regionsInfo.CheckAndPutRegion(regionInfo)
