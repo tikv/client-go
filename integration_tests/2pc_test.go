@@ -1759,21 +1759,27 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 			s.Require().Equal(m.Len(), len(opVals)/2)
 			for i := 0; i < len(opVals); i += 2 {
 				s.Require().Equal(opVals[i], m.GetOp(0))
-				s.Require().Equal(opVals[i+1], m.GetValue(0))
+				if opVals[i+1] == nil {
+					s.Require().Nil(m.GetValue(0))
+				} else {
+					s.Require().Equal(opVals[i+1], m.GetValue(0))
+				}
 			}
 		}
 	}
 
 	for _, tt := range []struct {
-		name    string
-		actions []func(txn transaction.TxnProbe)
-		check   func(m transaction.CommitterMutations)
+		name             string
+		actions          []func(txn transaction.TxnProbe)
+		checkPessimistic func(m transaction.CommitterMutations)
+		checkOptimisitc  func(m transaction.CommitterMutations)
 	}{
 		{
 			"NoLock",
 			[]func(txn transaction.TxnProbe){
 				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
 			},
+			checkByOpVals(),
 			checkByOpVals(),
 		},
 		{
@@ -1783,6 +1789,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
 			},
 			checkByOpVals(kvrpcpb.Op_Put, v1),
+			checkByOpVals(kvrpcpb.Op_Lock, nil),
 		},
 		{
 			"LockAndSet",
@@ -1791,6 +1798,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
 				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Set(k1, v2)) },
 			},
+			checkByOpVals(kvrpcpb.Op_Put, v2),
 			checkByOpVals(kvrpcpb.Op_Put, v2),
 		},
 		{
@@ -1801,19 +1809,31 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Delete(k1)) },
 			},
 			checkByOpVals(kvrpcpb.Op_Del, []byte{}),
+			checkByOpVals(kvrpcpb.Op_Del, []byte{}),
 		},
 	} {
 		var testAll func(name string, state []bool, actions []func(txn transaction.TxnProbe))
 		testAll = func(name string, state []bool, actions []func(txn transaction.TxnProbe)) {
 			if len(actions) == len(tt.actions) {
-				s.Run(name, func() {
+				s.Run("Pessimistic"+name, func() {
+					txn := s.begin()
+					txn.SetPessimistic(true)
+					for _, action := range actions {
+						action(txn)
+					}
+					c, err := txn.NewCommitter(1)
+					s.Require().NoError(err)
+					tt.checkPessimistic(c.GetMutations())
+					s.Require().NoError(txn.Rollback())
+				})
+				s.Run("Optimistic"+name, func() {
 					txn := s.begin()
 					for _, action := range actions {
 						action(txn)
 					}
 					c, err := txn.NewCommitter(1)
 					s.Require().NoError(err)
-					tt.check(c.GetMutations())
+					tt.checkOptimisitc(c.GetMutations())
 					s.Require().NoError(txn.Rollback())
 				})
 				return

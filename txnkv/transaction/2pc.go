@@ -261,7 +261,13 @@ func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist,
 	}
 	handle.UserData = aux
 	m.handles = append(m.handles, handle)
-	if value != nil {
+	if len(value) > 0 {
+		if op != kvrpcpb.Op_Put {
+			panic("op must be PUT when pushing with value")
+		}
+		if !isPessimisticLock {
+			panic("key must be locked when pushing with value")
+		}
 		if m.overlay == nil {
 			m.overlay = make(map[unionstore.MemKeyHandle][]byte)
 		}
@@ -525,7 +531,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		flags := it.Flags()
 		var (
 			value       []byte
-			cachedValue []byte
+			cachedValue []byte = nil
 			op          kvrpcpb.Op
 		)
 
@@ -533,7 +539,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			if !flags.HasLocked() {
 				continue
 			}
-			if val, ok := txn.getValueByLockedKey(key); ok {
+			if val, ok := txn.getValueByLockedKey(key); ok && len(val) > 0 && c.isPessimistic {
 				// Change the LOCK into PUT if the value of this key has a cached value.
 				cachedValue = val
 				op = kvrpcpb.Op_Put
