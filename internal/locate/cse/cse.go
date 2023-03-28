@@ -192,6 +192,7 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 				return
 			}
 			regionInfos := make([]*pdcore.RegionInfo, 0, len(syncResp.Regions))
+			// TODO(iosmanthus): extract buckets and peer info from resp.
 			for i, leader := range syncResp.RegionLeaders {
 				if leader.GetId() != 0 {
 					region := syncResp.Regions[i]
