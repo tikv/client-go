@@ -1753,7 +1753,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 	mustLockKey := func(txn transaction.TxnProbe, key []byte) {
 		s.Require().NoError(txn.LockKeys(ctx, &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}, key))
 	}
-	mutOpVals := func(opVals ...interface{}) func(m transaction.CommitterMutations) {
+	checkByOpVals := func(opVals ...interface{}) func(m transaction.CommitterMutations) {
 		s.Require().Equal(0, len(opVals)%2)
 		return func(m transaction.CommitterMutations) {
 			s.Require().Equal(m.Len(), len(opVals)/2)
@@ -1774,7 +1774,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 			[]func(txn transaction.TxnProbe){
 				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
 			},
-			mutOpVals(),
+			checkByOpVals(),
 		},
 		{
 			"LockOnly",
@@ -1782,7 +1782,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
 				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
 			},
-			mutOpVals(kvrpcpb.Op_Put, v1),
+			checkByOpVals(kvrpcpb.Op_Put, v1),
 		},
 		{
 			"LockAndSet",
@@ -1791,7 +1791,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
 				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Set(k1, v2)) },
 			},
-			mutOpVals(kvrpcpb.Op_Put, v2),
+			checkByOpVals(kvrpcpb.Op_Put, v2),
 		},
 		{
 			"LockAndDelete",
@@ -1800,7 +1800,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
 				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Delete(k1)) },
 			},
-			mutOpVals(kvrpcpb.Op_Del, []byte{}),
+			checkByOpVals(kvrpcpb.Op_Del, []byte{}),
 		},
 	} {
 		var testAll func(name string, state []bool, actions []func(txn transaction.TxnProbe))
