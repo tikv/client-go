@@ -14,7 +14,7 @@ import (
 // TODO(iosmanthus): refactor this suite as a unit test.
 func TestCSE(t *testing.T) {
 	if !*withCSE {
-		t.Skip("skipping test; use -with-tikv flag to run this test")
+		t.Skip("skipping test; use -with-cse flag to run this test")
 	}
 	suite.Run(t, new(cseSuite))
 }
