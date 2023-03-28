@@ -562,11 +562,18 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					if !flags.HasLocked() {
 						continue
 					}
-					// If the key was locked before, we should prewrite the lock even if
-					// the KV needn't be committed according to the filter. Otherwise, we
-					// were forgetting removing pessimistic locks added before.
-					op = kvrpcpb.Op_Lock
-					lockCnt++
+					if val, ok := txn.getValueByLockedKey(key); ok && bytes.Equal(val, value) && c.isPessimistic {
+						// Change the LOCK into PUT if the value of this key has a cached value.
+						cachedValue = val
+						op = kvrpcpb.Op_Put
+						putFromLockCnt++
+					} else {
+						// If the key was locked before, we should prewrite the lock even if
+						// the KV needn't be committed according to the filter. Otherwise, we
+						// were forgetting removing pessimistic locks added before.
+						op = kvrpcpb.Op_Lock
+						lockCnt++
+					}
 				} else {
 					op = kvrpcpb.Op_Put
 					if flags.HasPresumeKeyNotExists() {
