@@ -902,7 +902,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	startTime := time.Now()
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
-	
+
 	err = txn.exitAggressiveLockingIfInapplicable(ctx, keysInput)
 	if err != nil {
 		return err
