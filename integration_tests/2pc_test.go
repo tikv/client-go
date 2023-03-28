@@ -1496,6 +1496,30 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 	}
 }
 
+func (s *testCommitterSuite) TestAggressiveLockingExitIfInapplicable() {
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	s.True(txn.IsInAggressiveLockingMode())
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	s.True(txn.IsInAggressiveLockingMode())
+
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3"), []byte("k4")))
+	s.False(txn.IsInAggressiveLockingMode())
+	s.checkIsKeyLocked([]byte("k1"), false)
+	s.checkIsKeyLocked([]byte("k2"), true)
+	s.checkIsKeyLocked([]byte("k3"), true)
+	s.checkIsKeyLocked([]byte("k4"), true)
+
+	s.NoError(txn.Rollback())
+}
+
 // TestElapsedTTL tests that elapsed time is correct even if ts physical time is greater than local time.
 func (s *testCommitterSuite) TestElapsedTTL() {
 	key := []byte("key")
