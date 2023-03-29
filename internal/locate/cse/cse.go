@@ -208,7 +208,6 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 			for i, leader := range syncResp.RegionLeaders {
 				if leader.GetId() != 0 {
 					region := syncResp.Regions[i]
-					log.Debug("sync region leader from cse", zap.Any("region", region))
 					regionInfos = append(regionInfos, pdcore.NewRegionInfo(region, leader))
 				}
 			}
