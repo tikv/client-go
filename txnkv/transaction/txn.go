@@ -85,11 +85,14 @@ type KVTxn struct {
 	startTS   uint64
 	startTime time.Time // Monotonic timestamp for recording txn time consuming.
 	commitTS  uint64
-	mu        sync.Mutex // For thread-safe LockKeys function.
+	mu        sync.Mutex // For thread-safe LockKeys, SetLockedKeyValue functions.
 	setCnt    int64
 	vars      *tikv.Variables
 	committer *twoPhaseCommitter
 	lockedCnt int
+	// lockedKV is used to cache kv pairs that have been locked, the 2pc committer will read this map when init
+	// mutations, convert lock into put if needed.
+	lockedKVs map[string][]byte
 
 	valid bool
 
@@ -776,6 +779,27 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	}
 	txn.lockedCnt += len(keys)
 	return nil
+}
+
+// SetLockedKeyValue caches a key-value pair whose key has been locked. Those key-value pairs may be turned to PUT
+// record if possible.
+func (txn *KVTxn) SetLockedKeyValue(key []byte, value []byte) {
+	txn.mu.Lock()
+	if txn.lockedKVs == nil {
+		txn.lockedKVs = make(map[string][]byte)
+	}
+	txn.lockedKVs[string(key)] = value
+	txn.mu.Unlock()
+}
+
+// getValueByLockedKey returns the cached value of the given locked key.
+func (txn *KVTxn) getValueByLockedKey(key []byte) (value []byte, ok bool) {
+	txn.mu.Lock()
+	if txn.lockedKVs != nil {
+		value, ok = txn.lockedKVs[string(key)]
+	}
+	txn.mu.Unlock()
+	return
 }
 
 // deduplicateKeys deduplicate the keys, it use sort instead of map to avoid memory allocation.

@@ -185,6 +185,8 @@ type memBufferMutations struct {
 	// MSB                                                                            LSB
 	// [13 bits: Op][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
 	handles []unionstore.MemKeyHandle
+	// overlay of mutation values
+	overlay map[unionstore.MemKeyHandle][]byte
 }
 
 func newMemBufferMutations(sizeHint int, storage *unionstore.MemDB) *memBufferMutations {
@@ -211,7 +213,13 @@ func (m *memBufferMutations) GetKeys() [][]byte {
 }
 
 func (m *memBufferMutations) GetValue(i int) []byte {
-	v, _ := m.storage.GetValueByHandle(m.handles[i])
+	h := m.handles[i]
+	if m.overlay != nil {
+		if v, ok := m.overlay[h]; ok {
+			return v
+		}
+	}
+	v, _ := m.storage.GetValueByHandle(h)
 	return v
 }
 
@@ -235,10 +243,11 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 	return &memBufferMutations{
 		handles: m.handles[from:to],
 		storage: m.storage,
+		overlay: m.overlay,
 	}
 }
 
-func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle) {
+func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist bool, handle unionstore.MemKeyHandle, value []byte) {
 	// See comments of `m.handles` field about the format of the user data `aux`.
 	aux := uint16(op) << 3
 	if isPessimisticLock {
@@ -252,6 +261,18 @@ func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist,
 	}
 	handle.UserData = aux
 	m.handles = append(m.handles, handle)
+	if len(value) > 0 {
+		if op != kvrpcpb.Op_Put {
+			panic("op must be PUT when pushing with value")
+		}
+		if !isPessimisticLock {
+			panic("key must be locked when pushing with value")
+		}
+		if m.overlay == nil {
+			m.overlay = make(map[unionstore.MemKeyHandle][]byte)
+		}
+		m.overlay[handle] = value
+	}
 }
 
 // CommitterMutationFlags represents various bit flags of mutations.
@@ -495,7 +516,7 @@ func (c *twoPhaseCommitter) checkSchemaOnAssertionFail(ctx context.Context, asse
 }
 
 func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
-	var size, putCnt, delCnt, lockCnt, checkCnt int
+	var size, putCnt, delCnt, lockCnt, checkCnt, putFromLockCnt int
 
 	txn := c.txn
 	memBuf := txn.GetMemBuffer()
@@ -510,15 +531,25 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		_ = err
 		key := it.Key()
 		flags := it.Flags()
-		var value []byte
-		var op kvrpcpb.Op
+		var (
+			value       []byte
+			cachedValue []byte = nil
+			op          kvrpcpb.Op
+		)
 
 		if !it.HasValue() {
 			if !flags.HasLocked() {
 				continue
 			}
-			op = kvrpcpb.Op_Lock
-			lockCnt++
+			if val, ok := txn.getValueByLockedKey(key); ok && len(val) > 0 && c.isPessimistic {
+				// Change the LOCK into PUT if the value of this key has a cached value.
+				cachedValue = val
+				op = kvrpcpb.Op_Put
+				putFromLockCnt++
+			} else {
+				op = kvrpcpb.Op_Lock
+				lockCnt++
+			}
 		} else {
 			value = it.Value()
 			var isUnnecessaryKV bool
@@ -533,11 +564,18 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					if !flags.HasLocked() {
 						continue
 					}
-					// If the key was locked before, we should prewrite the lock even if
-					// the KV needn't be committed according to the filter. Otherwise, we
-					// were forgetting removing pessimistic locks added before.
-					op = kvrpcpb.Op_Lock
-					lockCnt++
+					if val, ok := txn.getValueByLockedKey(key); ok && len(val) > 0 && c.isPessimistic {
+						// Change the LOCK into PUT if the value of this key has a cached value.
+						cachedValue = val
+						op = kvrpcpb.Op_Put
+						putFromLockCnt++
+					} else {
+						// If the key was locked before, we should prewrite the lock even if
+						// the KV needn't be committed according to the filter. Otherwise, we
+						// were forgetting removing pessimistic locks added before.
+						op = kvrpcpb.Op_Lock
+						lockCnt++
+					}
 				} else {
 					op = kvrpcpb.Op_Put
 					if flags.HasPresumeKeyNotExists() {
@@ -583,8 +621,8 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		if c.txn.schemaAmender != nil || c.txn.assertionLevel == kvrpcpb.AssertionLevel_Off {
 			mustExist, mustNotExist, hasAssertUnknown = false, false, false
 		}
-		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle())
-		size += len(key) + len(value)
+		c.mutations.Push(op, isPessimistic, mustExist, mustNotExist, it.Handle(), cachedValue)
+		size += len(key) + len(value) + len(cachedValue)
 
 		if c.txn.assertionLevel != kvrpcpb.AssertionLevel_Off {
 			// Check mutations for pessimistic-locked keys with the read results of pessimistic lock requests.
@@ -637,6 +675,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 			zap.Int("dels", delCnt),
 			zap.Int("locks", lockCnt),
 			zap.Int("checks", checkCnt),
+			zap.Int("putsFromLocks", putFromLockCnt),
 			zap.Uint64("txnStartTS", txn.startTS))
 	}
 
@@ -1760,7 +1799,7 @@ func (c *twoPhaseCommitter) tryAmendTxn(ctx context.Context, startInfoSchema Sch
 				return false, err
 			}
 			handle := c.txn.GetMemBuffer().IterWithFlags(key, nil).Handle()
-			c.mutations.Push(op, addMutations.IsPessimisticLock(i), addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i), handle)
+			c.mutations.Push(op, addMutations.IsPessimisticLock(i), addMutations.IsAssertExists(i), addMutations.IsAssertNotExist(i), handle, nil)
 		}
 	}
 	return false, nil
