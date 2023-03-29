@@ -35,7 +35,7 @@ func (c *codecV1) GetKeyspaceID() KeyspaceID {
 }
 
 func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	return attachAPICtx(c, req)
+	return attachAPICtx(c, req), nil
 }
 
 func (c *codecV1) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {

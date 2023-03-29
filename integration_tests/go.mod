@@ -6,13 +6,13 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230228041042-1e9aca94bab6
-	github.com/pingcap/tidb v1.1.0-beta.0.20230207083958-f1d450ff7aa4
+	github.com/pingcap/kvproto v0.0.0-20230317010544-b47a4830141f
+	github.com/pingcap/tidb v1.1.0-beta.0.20230321033041-8ba2035203f7
 	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.8.2
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.6-0.20230228091502-e2da5527026f
-	github.com/tikv/pd/client v0.0.0-20230301094509-c82b237672a0
+	github.com/tikv/client-go/v2 v2.0.7-0.20230317032622-884a634378d4
+	github.com/tikv/pd/client v0.0.0-20230324033443-79ec29cee8db
 	go.uber.org/goleak v1.2.1
 )
 
@@ -34,6 +34,7 @@ require (
 	github.com/danjacques/gofslock v0.0.0-20220131014315-6e321f4509c8 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-farm v0.0.0-20200201041132-a6ae2369ad13 // indirect
+	github.com/elastic/gosigar v0.14.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
@@ -56,8 +57,8 @@ require (
 	github.com/pingcap/badger v1.5.1-0.20230103063557-828f39b09b6d // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c // indirect
-	github.com/pingcap/tidb/parser v0.0.0-20230227053508-aff0847822f1 // indirect
-	github.com/pingcap/tipb v0.0.0-20230119054146-c6b7a5a1623b // indirect
+	github.com/pingcap/tidb/parser v0.0.0-20230321033041-8ba2035203f7 // indirect
+	github.com/pingcap/tipb v0.0.0-20230310043643-5362260ee6f7 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_golang v1.14.0 // indirect
@@ -68,7 +69,6 @@ require (
 	github.com/rogpeppe/go-internal v1.8.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.23.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/stathat/consistent v1.0.0 // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
@@ -85,12 +85,12 @@ require (
 	go.uber.org/multierr v1.9.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
 	golang.org/x/exp v0.0.0-20221023144134-a1e5550cf13e // indirect
-	golang.org/x/net v0.7.0 // indirect
+	golang.org/x/net v0.8.0 // indirect
 	golang.org/x/sync v0.1.0 // indirect
-	golang.org/x/sys v0.5.0 // indirect
-	golang.org/x/text v0.7.0 // indirect
+	golang.org/x/sys v0.6.0 // indirect
+	golang.org/x/text v0.8.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
-	golang.org/x/tools v0.6.0 // indirect
+	golang.org/x/tools v0.7.0 // indirect
 	google.golang.org/genproto v0.0.0-20230202175211-008b39050e57 // indirect
 	google.golang.org/grpc v1.52.3 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
@@ -99,5 +99,3 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
-
-replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931

@@ -487,14 +487,20 @@ var (
 )
 
 type sendReqHistCacheKey struct {
-	tp       tikvrpc.CmdType
-	id       uint64
-	staleRad bool
+	tp         tikvrpc.CmdType
+	id         uint64
+	staleRad   bool
+	isInternal bool
 }
 
 type sendReqCounterCacheKey struct {
 	sendReqHistCacheKey
 	requestSource string
+}
+
+type rpcNetLatencyCacheKey struct {
+	storeID    uint64
+	isInternal bool
 }
 
 type sendReqCounterCacheValue struct {
@@ -506,11 +512,13 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 	elapsed := time.Since(start)
 	secs := elapsed.Seconds()
 	storeID := req.Context.GetPeer().GetStoreId()
+	isInternal := util.IsInternalRequest(req.GetRequestSource())
 
 	histKey := sendReqHistCacheKey{
 		req.Type,
 		storeID,
 		staleRead,
+		isInternal,
 	}
 	counterKey := sendReqCounterCacheKey{
 		histKey,
@@ -525,7 +533,8 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 		if len(storeIDStr) == 0 {
 			storeIDStr = strconv.FormatUint(storeID, 10)
 		}
-		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead))
+		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr,
+			strconv.FormatBool(staleRead), strconv.FormatBool(isInternal))
 		sendReqHistCache.Store(histKey, hist)
 	}
 	counter, ok := sendReqCounterCache.Load(counterKey)
@@ -534,8 +543,10 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 			storeIDStr = strconv.FormatUint(storeID, 10)
 		}
 		counter = sendReqCounterCacheValue{
-			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
-			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), counterKey.requestSource),
+			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead),
+				counterKey.requestSource, strconv.FormatBool(isInternal)),
+			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr,
+				strconv.FormatBool(staleRead), counterKey.requestSource, strconv.FormatBool(isInternal)),
 		}
 		sendReqCounterCache.Store(counterKey, counter)
 	}
@@ -544,18 +555,29 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 	counter.(sendReqCounterCacheValue).counter.Inc()
 	counter.(sendReqCounterCacheValue).timeCounter.Add(secs)
 
-	if execDetail := resp.GetExecDetailsV2(); execDetail != nil &&
-		execDetail.TimeDetail != nil && execDetail.TimeDetail.TotalRpcWallTimeNs > 0 {
-		latHist, ok := rpcNetLatencyHistCache.Load(storeID)
-		if !ok {
-			if len(storeIDStr) == 0 {
-				storeIDStr = strconv.FormatUint(storeID, 10)
-			}
-			latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr)
-			rpcNetLatencyHistCache.Store(storeID, latHist)
+	if execDetail := resp.GetExecDetailsV2(); execDetail != nil {
+		var totalRpcWallTimeNs uint64
+		if execDetail.TimeDetailV2 != nil {
+			totalRpcWallTimeNs = execDetail.TimeDetailV2.TotalRpcWallTimeNs
+		} else if execDetail.TimeDetail != nil {
+			totalRpcWallTimeNs = execDetail.TimeDetail.TotalRpcWallTimeNs
 		}
-		latency := elapsed - time.Duration(execDetail.TimeDetail.TotalRpcWallTimeNs)*time.Nanosecond
-		latHist.(prometheus.Observer).Observe(latency.Seconds())
+		if totalRpcWallTimeNs > 0 {
+			cacheKey := rpcNetLatencyCacheKey{
+				storeID,
+				isInternal,
+			}
+			latHist, ok := rpcNetLatencyHistCache.Load(cacheKey)
+			if !ok {
+				if len(storeIDStr) == 0 {
+					storeIDStr = strconv.FormatUint(storeID, 10)
+				}
+				latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr, strconv.FormatBool(isInternal))
+				rpcNetLatencyHistCache.Store(cacheKey, latHist)
+			}
+			latency := elapsed - time.Duration(totalRpcWallTimeNs)*time.Nanosecond
+			latHist.(prometheus.Observer).Observe(latency.Seconds())
+		}
 	}
 }
 
@@ -861,17 +883,26 @@ func buildSpanInfoFromResp(resp *tikvrpc.Response) *spanInfo {
 		return nil
 	}
 
-	td := details.TimeDetail
+	td := details.TimeDetailV2
+	tdOld := details.TimeDetail
 	sd := details.ScanDetailV2
 	wd := details.WriteDetail
 
-	if td == nil {
+	if td == nil && tdOld == nil {
 		return nil
 	}
 
-	spanRPC := spanInfo{name: "tikv.RPC", dur: td.TotalRpcWallTimeNs}
-	spanWait := spanInfo{name: "tikv.Wait", dur: td.WaitWallTimeMs * uint64(time.Millisecond)}
-	spanProcess := spanInfo{name: "tikv.Process", dur: td.ProcessWallTimeMs * uint64(time.Millisecond)}
+	var spanRPC, spanWait, spanProcess spanInfo
+	if td != nil {
+		spanRPC = spanInfo{name: "tikv.RPC", dur: td.TotalRpcWallTimeNs}
+		spanWait = spanInfo{name: "tikv.Wait", dur: td.WaitWallTimeNs}
+		spanProcess = spanInfo{name: "tikv.Process", dur: td.ProcessWallTimeNs}
+	} else if tdOld != nil {
+		// TimeDetail is deprecated, will be removed in future version.
+		spanRPC = spanInfo{name: "tikv.RPC", dur: tdOld.TotalRpcWallTimeNs}
+		spanWait = spanInfo{name: "tikv.Wait", dur: tdOld.WaitWallTimeMs * uint64(time.Millisecond)}
+		spanProcess = spanInfo{name: "tikv.Process", dur: tdOld.ProcessWallTimeMs * uint64(time.Millisecond)}
+	}
 
 	if sd != nil {
 		spanWait.children = append(spanWait.children, spanInfo{name: "tikv.GetSnapshot", dur: sd.GetSnapshotNanos})
@@ -881,6 +912,10 @@ func buildSpanInfoFromResp(resp *tikvrpc.Response) *spanInfo {
 	}
 
 	spanRPC.children = append(spanRPC.children, spanWait, spanProcess)
+	if td != nil {
+		spanSuspend := spanInfo{name: "tikv.Suspend", dur: td.ProcessSuspendWallTimeNs}
+		spanRPC.children = append(spanRPC.children, spanSuspend)
+	}
 
 	if wd != nil {
 		spanAsyncWrite := spanInfo{

@@ -335,7 +335,11 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 		return err
 	}
 
-	metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	if s.IsInternal() {
+		metrics.TxnRegionsNumHistogramWithSnapshotInternal.Observe(float64(len(groups)))
+	} else {
+		metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	}
 
 	var batches []batchKeys
 	for id, g := range groups {
@@ -480,7 +484,12 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		if batchGetResp.ExecDetailsV2 != nil {
 			readKeys := len(batchGetResp.Pairs)
-			readTime := float64(batchGetResp.ExecDetailsV2.GetTimeDetail().GetKvReadWallTimeMs() / 1000)
+			var readTime float64
+			if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
+			} else if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetail(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
+			}
 			readSize := float64(batchGetResp.ExecDetailsV2.GetScanDetailV2().GetProcessedVersionsSize())
 			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
 			s.mergeExecDetail(batchGetResp.ExecDetailsV2)
@@ -664,7 +673,12 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		cmdGetResp := resp.Resp.(*kvrpcpb.GetResponse)
 		if cmdGetResp.ExecDetailsV2 != nil {
 			readKeys := len(cmdGetResp.Value)
-			readTime := float64(cmdGetResp.ExecDetailsV2.GetTimeDetail().GetKvReadWallTimeMs() / 1000)
+			var readTime float64
+			if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
+			} else if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetail(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
+			}
 			readSize := float64(cmdGetResp.ExecDetailsV2.GetScanDetailV2().GetProcessedVersionsSize())
 			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
 			s.mergeExecDetail(cmdGetResp.ExecDetailsV2)
@@ -732,7 +746,7 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 		s.mu.stats.timeDetail = &util.TimeDetail{}
 	}
 	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.ScanDetailV2)
-	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetail)
+	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetailV2, detail.TimeDetail)
 }
 
 // Iter return a list of key-value pair after `k`.

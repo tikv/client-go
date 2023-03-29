@@ -151,7 +151,7 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
-	// resourceGroupName is the name of tenent resource group.
+	// resourceGroupName is the name of tenant resource group.
 	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
@@ -861,6 +861,19 @@ func (txn *KVTxn) collectAggressiveLockingStats(lockCtx *tikv.LockCtx, keys int,
 	lockCtx.Stats.AggressiveLockDerivedCount += filteredAggressiveLockedKeysCount
 }
 
+func (txn *KVTxn) exitAggressiveLockingIfInapplicable(ctx context.Context, keys [][]byte) error {
+	if len(keys) > 1 && txn.IsInAggressiveLockingMode() {
+		// Only allow fair locking if it only needs to lock one key. Considering that it's possible that a
+		// statement causes multiple calls to `LockKeys` (which means some keys may have been locked in fair
+		// locking mode), here we exit fair locking mode by calling DoneFairLocking instead of cancelling.
+		// Then the previously-locked keys during execution in this statement (if any) will be turned into the state
+		// as if they were locked in normal way.
+		// Note that the issue https://github.com/pingcap/tidb/issues/35682 also exists here.
+		txn.DoneAggressiveLocking(ctx)
+	}
+	return nil
+}
+
 // LockKeys tries to lock the entries with the keys in KV store.
 // lockCtx is the context for lock, lockCtx.lockWaitTime in ms
 func (txn *KVTxn) LockKeys(ctx context.Context, lockCtx *tikv.LockCtx, keysInput ...[]byte) error {
@@ -889,6 +902,12 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	startTime := time.Now()
 	txn.mu.Lock()
 	defer txn.mu.Unlock()
+
+	err = txn.exitAggressiveLockingIfInapplicable(ctx, keysInput)
+	if err != nil {
+		return err
+	}
+
 	defer func() {
 		if txn.isInternal() {
 			metrics.TxnCmdHistogramWithLockKeysInternal.Observe(time.Since(startTime).Seconds())
@@ -1046,7 +1065,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 		}
 
-		if txn.IsInAggressiveLockingMode() && len(keys) == 1 && !lockCtx.LockOnlyIfExists {
+		if txn.IsInAggressiveLockingMode() && len(keys) == 1 {
 			lockWakeUpMode = kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock
 		}
 		bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, txn.vars)
@@ -1280,6 +1299,7 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		startTS:     txn.committer.startTS,
 		forUpdateTS: txn.committer.forUpdateTS,
 		primaryKey:  txn.committer.primaryKey,
+		isInternal:  txn.isInternal(),
 	}
 	if specifiedForUpdateTS > committer.forUpdateTS {
 		committer.forUpdateTS = specifiedForUpdateTS

@@ -74,14 +74,27 @@ var (
 	BackoffHistogramIsWitness                prometheus.Observer
 	BackoffHistogramEmpty                    prometheus.Observer
 
-	TxnRegionsNumHistogramWithSnapshot         prometheus.Observer
-	TxnRegionsNumHistogramPrewrite             prometheus.Observer
-	TxnRegionsNumHistogramCommit               prometheus.Observer
-	TxnRegionsNumHistogramCleanup              prometheus.Observer
-	TxnRegionsNumHistogramPessimisticLock      prometheus.Observer
-	TxnRegionsNumHistogramPessimisticRollback  prometheus.Observer
-	TxnRegionsNumHistogramWithCoprocessor      prometheus.Observer
-	TxnRegionsNumHistogramWithBatchCoprocessor prometheus.Observer
+	TxnRegionsNumHistogramWithSnapshotInternal         prometheus.Observer
+	TxnRegionsNumHistogramWithSnapshot                 prometheus.Observer
+	TxnRegionsNumHistogramPrewriteInternal             prometheus.Observer
+	TxnRegionsNumHistogramPrewrite                     prometheus.Observer
+	TxnRegionsNumHistogramCommitInternal               prometheus.Observer
+	TxnRegionsNumHistogramCommit                       prometheus.Observer
+	TxnRegionsNumHistogramCleanupInternal              prometheus.Observer
+	TxnRegionsNumHistogramCleanup                      prometheus.Observer
+	TxnRegionsNumHistogramPessimisticLockInternal      prometheus.Observer
+	TxnRegionsNumHistogramPessimisticLock              prometheus.Observer
+	TxnRegionsNumHistogramPessimisticRollbackInternal  prometheus.Observer
+	TxnRegionsNumHistogramPessimisticRollback          prometheus.Observer
+	TxnRegionsNumHistogramWithCoprocessorInternal      prometheus.Observer
+	TxnRegionsNumHistogramWithCoprocessor              prometheus.Observer
+	TxnRegionsNumHistogramWithBatchCoprocessorInternal prometheus.Observer
+	TxnRegionsNumHistogramWithBatchCoprocessor         prometheus.Observer
+
+	TxnWriteKVCountHistogramInternal prometheus.Observer
+	TxnWriteKVCountHistogramGeneral  prometheus.Observer
+	TxnWriteSizeHistogramInternal    prometheus.Observer
+	TxnWriteSizeHistogramGeneral     prometheus.Observer
 
 	LockResolverCountWithBatchResolve             prometheus.Counter
 	LockResolverCountWithExpired                  prometheus.Counter
@@ -185,14 +198,26 @@ func initShortcuts() {
 	BackoffHistogramIsWitness = TiKVBackoffHistogram.WithLabelValues("isWitness")
 	BackoffHistogramEmpty = TiKVBackoffHistogram.WithLabelValues("")
 
-	TxnRegionsNumHistogramWithSnapshot = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot")
-	TxnRegionsNumHistogramPrewrite = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_prewrite")
-	TxnRegionsNumHistogramCommit = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_commit")
-	TxnRegionsNumHistogramCleanup = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_cleanup")
-	TxnRegionsNumHistogramPessimisticLock = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_lock")
-	TxnRegionsNumHistogramPessimisticRollback = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_rollback")
-	TxnRegionsNumHistogramWithCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("coprocessor")
-	TxnRegionsNumHistogramWithBatchCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor")
+	TxnRegionsNumHistogramWithSnapshotInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot", LblInternal)
+	TxnRegionsNumHistogramWithSnapshot = TiKVTxnRegionsNumHistogram.WithLabelValues("snapshot", LblGeneral)
+	TxnRegionsNumHistogramPrewriteInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_prewrite", LblInternal)
+	TxnRegionsNumHistogramPrewrite = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_prewrite", LblGeneral)
+	TxnRegionsNumHistogramCommitInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_commit", LblInternal)
+	TxnRegionsNumHistogramCommit = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_commit", LblGeneral)
+	TxnRegionsNumHistogramCleanupInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_cleanup", LblInternal)
+	TxnRegionsNumHistogramCleanup = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_cleanup", LblGeneral)
+	TxnRegionsNumHistogramPessimisticLockInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_lock", LblInternal)
+	TxnRegionsNumHistogramPessimisticLock = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_lock", LblGeneral)
+	TxnRegionsNumHistogramPessimisticRollbackInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_rollback", LblInternal)
+	TxnRegionsNumHistogramPessimisticRollback = TiKVTxnRegionsNumHistogram.WithLabelValues("2pc_pessimistic_rollback", LblGeneral)
+	TxnRegionsNumHistogramWithCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("coprocessor", LblInternal)
+	TxnRegionsNumHistogramWithCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor", LblGeneral)
+	TxnRegionsNumHistogramWithBatchCoprocessorInternal = TiKVTxnRegionsNumHistogram.WithLabelValues("coprocessor", LblInternal)
+	TxnRegionsNumHistogramWithBatchCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor", LblGeneral)
+	TxnWriteKVCountHistogramInternal = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblInternal)
+	TxnWriteKVCountHistogramGeneral = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblGeneral)
+	TxnWriteSizeHistogramInternal = TiKVTxnWriteSizeHistogram.WithLabelValues(LblInternal)
+	TxnWriteSizeHistogramGeneral = TiKVTxnWriteSizeHistogram.WithLabelValues(LblGeneral)
 
 	LockResolverCountWithBatchResolve = TiKVLockResolverCounter.WithLabelValues("batch_resolve")
 	LockResolverCountWithExpired = TiKVLockResolverCounter.WithLabelValues("expired")

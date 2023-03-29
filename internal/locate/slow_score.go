@@ -15,6 +15,7 @@
 package locate
 
 import (
+	"fmt"
 	"math"
 	"sync/atomic"
 	"time"
@@ -154,4 +155,27 @@ func (ss *SlowScoreStat) markAlreadySlow() {
 
 func (ss *SlowScoreStat) isSlow() bool {
 	return ss.getSlowScore() >= slowScoreThreshold
+}
+
+// replicaFlowsType indicates the type of the destination replica of flows.
+type replicaFlowsType int
+
+const (
+	// toLeader indicates that flows are sent to leader replica.
+	toLeader replicaFlowsType = iota
+	// toFollower indicates that flows are sent to followers' replica
+	toFollower
+	// numflowsDestType reserved to keep max replicaFlowsType value.
+	numReplicaFlowsType
+)
+
+func (a replicaFlowsType) String() string {
+	switch a {
+	case toLeader:
+		return "ToLeader"
+	case toFollower:
+		return "ToFollower"
+	default:
+		return fmt.Sprintf("%d", a)
+	}
 }
