@@ -1747,6 +1747,7 @@ func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
 func (s *testCommitterSuite) TestSetLockedKeyValue() {
 	ctx := context.Background()
 	k1 := []byte("k1")
+	k2 := []byte("t00000001_i000000001")
 	v1 := []byte("v1")
 	v2 := []byte("v2")
 
@@ -1802,6 +1803,26 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 			checkByOpVals(kvrpcpb.Op_Put, v2),
 		},
 		{
+			"LockAndSetUnnecessaryKeyWithSameValue",
+			[]func(txn transaction.TxnProbe){
+				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k2, v2) },
+				func(txn transaction.TxnProbe) { mustLockKey(txn, k2) },
+				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Set(k2, v2)) },
+			},
+			checkByOpVals(kvrpcpb.Op_Put, v2),
+			checkByOpVals(kvrpcpb.Op_Lock, v2),
+		},
+		{
+			"LockAndSetUnnecessaryKeyWithDiffValue",
+			[]func(txn transaction.TxnProbe){
+				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k2, v1) },
+				func(txn transaction.TxnProbe) { mustLockKey(txn, k2) },
+				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Set(k2, v2)) },
+			},
+			checkByOpVals(kvrpcpb.Op_Lock, v2),
+			checkByOpVals(kvrpcpb.Op_Lock, v2),
+		},
+		{
 			"LockAndDelete",
 			[]func(txn transaction.TxnProbe){
 				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
@@ -1811,12 +1832,26 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 			checkByOpVals(kvrpcpb.Op_Del, []byte{}),
 			checkByOpVals(kvrpcpb.Op_Del, []byte{}),
 		},
+		{
+			"LockAndDeleteYourWrite",
+			[]func(txn transaction.TxnProbe){
+				func(txn transaction.TxnProbe) { txn.SetLockedKeyValue(k1, v1) },
+				func(txn transaction.TxnProbe) { mustLockKey(txn, k1) },
+				func(txn transaction.TxnProbe) {
+					s.Require().NoError(txn.GetMemBuffer().DeleteWithFlags(k1, kv.SetNewlyInserted))
+				},
+			},
+			checkByOpVals(kvrpcpb.Op_Lock, []byte{}),
+			checkByOpVals(kvrpcpb.Op_Lock, []byte{}),
+		},
 	} {
 		var testAll func(name string, state []bool, actions []func(txn transaction.TxnProbe))
 		testAll = func(name string, state []bool, actions []func(txn transaction.TxnProbe)) {
 			if len(actions) == len(tt.actions) {
 				s.Run("Pessimistic"+name, func() {
 					txn := s.begin()
+					defer txn.Rollback()
+					txn.SetKVFilter(kvFilter{})
 					txn.SetPessimistic(true)
 					for _, action := range actions {
 						action(txn)
@@ -1828,13 +1863,14 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				})
 				s.Run("Optimistic"+name, func() {
 					txn := s.begin()
+					defer txn.Rollback()
+					txn.SetKVFilter(kvFilter{})
 					for _, action := range actions {
 						action(txn)
 					}
 					c, err := txn.NewCommitter(1)
 					s.Require().NoError(err)
 					tt.checkOptimisitc(c.GetMutations())
-					s.Require().NoError(txn.Rollback())
 				})
 				return
 			}
