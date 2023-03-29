@@ -562,7 +562,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					if !flags.HasLocked() {
 						continue
 					}
-					if val, ok := txn.getValueByLockedKey(key); ok && bytes.Equal(val, value) && c.isPessimistic {
+					if val, ok := txn.getValueByLockedKey(key); ok && len(val) > 0 && c.isPessimistic {
 						// Change the LOCK into PUT if the value of this key has a cached value.
 						cachedValue = val
 						op = kvrpcpb.Op_Put

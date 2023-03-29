@@ -1819,7 +1819,7 @@ func (s *testCommitterSuite) TestSetLockedKeyValue() {
 				func(txn transaction.TxnProbe) { mustLockKey(txn, k2) },
 				func(txn transaction.TxnProbe) { s.Require().NoError(txn.Set(k2, v2)) },
 			},
-			checkByOpVals(kvrpcpb.Op_Lock, v2),
+			checkByOpVals(kvrpcpb.Op_Put, v1),
 			checkByOpVals(kvrpcpb.Op_Lock, v2),
 		},
 		{
