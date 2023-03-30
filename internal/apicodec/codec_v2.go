@@ -953,3 +953,16 @@ func (c *codecV2) decodeLockInfos(locks []*kvrpcpb.LockInfo) ([]*kvrpcpb.LockInf
 	}
 	return locks, nil
 }
+
+func (c *codecV2) DecodeBucketKey(encodedKey []byte) ([]byte, error) {
+	key, err := c.memCodec.decodeKey(encodedKey)
+	if err != nil {
+		return nil, err
+	}
+
+	if bytes.Compare(key, c.endKey) >= 0 || bytes.Compare(key, c.prefix) < 0 {
+		return []byte{}, nil
+	}
+
+	return key[len(c.prefix):], nil
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/codec"
 )
 
 var (
@@ -18,12 +19,13 @@ var (
 	// Keys below are ordered as following:
 	// beforePrefix, keyspacePrefix, insideLeft, insideRight, keyspaceEndKey, afterEndKey
 	// where valid keyspace range is [keyspacePrefix, keyspaceEndKey)
-	keyspacePrefix = []byte{'r', 0, 16, 146}
-	keyspaceEndKey = []byte{'r', 0, 16, 147}
-	beforePrefix   = []byte{'r', 0, 0, 1}
-	afterEndKey    = []byte{'r', 1, 0, 0}
-	insideLeft     = []byte{'r', 0, 16, 146, 100}
-	insideRight    = []byte{'r', 0, 16, 146, 200}
+	prevKeyspacePrefix = []byte{'r', 0, 16, 145}
+	keyspacePrefix     = []byte{'r', 0, 16, 146}
+	keyspaceEndKey     = []byte{'r', 0, 16, 147}
+	beforePrefix       = []byte{'r', 0, 0, 1}
+	afterEndKey        = []byte{'r', 1, 0, 0}
+	insideLeft         = []byte{'r', 0, 16, 146, 100}
+	insideRight        = []byte{'r', 0, 16, 146, 200}
 )
 
 type testCodecV2Suite struct {
@@ -292,4 +294,24 @@ func (suite *testCodecV2Suite) TestEncodeMPPRequest() {
 	suite.Equal(task.Meta.ApiVersion, kvrpcpb.APIVersion_V2)
 	suite.Equal(task.Regions[0].Ranges[0].Start, suite.codec.EncodeKey([]byte("a")))
 	suite.Equal(task.Regions[0].Ranges[0].End, suite.codec.EncodeKey([]byte("b")))
+}
+
+func (suite *testCodecV2Suite) TestDecodeBucketKey() {
+	raw := []byte("a")
+	key := suite.codec.EncodeRegionKey(raw)
+	bucketKey, err := suite.codec.DecodeBucketKey(key)
+	suite.Nil(err)
+	suite.Equal(raw, bucketKey)
+
+	raw = keyspaceEndKey
+	key = codec.EncodeBytes([]byte{}, raw)
+	bucketKey, err = suite.codec.DecodeBucketKey(key)
+	suite.Nil(err)
+	suite.Empty(bucketKey)
+
+	raw = append(prevKeyspacePrefix, []byte("a")...)
+	key = codec.EncodeBytes([]byte{}, raw)
+	bucketKey, err = suite.codec.DecodeBucketKey(key)
+	suite.Nil(err)
+	suite.Empty(bucketKey)
 }
