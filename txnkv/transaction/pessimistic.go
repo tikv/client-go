@@ -100,7 +100,9 @@ type diagnosticContext struct {
 	reqDuration          time.Duration
 }
 
-func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+func (action actionPessimisticLock) handleSingleBatch(
+	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
+) error {
 	convertMutationsToPb := func(committerMutations CommitterMutations) []*kvrpcpb.Mutation {
 		mutations := make([]*kvrpcpb.Mutation, committerMutations.Len())
 		c.txn.GetMemBuffer().RLock()
@@ -120,26 +122,28 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 
 	m := batch.mutations
 	mutations := convertMutationsToPb(m)
-	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
-		Mutations:        mutations,
-		PrimaryLock:      c.primary(),
-		StartVersion:     c.startTS,
-		ForUpdateTs:      c.forUpdateTS,
-		IsFirstLock:      c.isFirstLock,
-		WaitTimeout:      action.LockWaitTime(),
-		ReturnValues:     action.ReturnValues,
-		CheckExistence:   action.CheckExistence,
-		MinCommitTs:      c.forUpdateTS + 1,
-		WakeUpMode:       action.wakeUpMode,
-		LockOnlyIfExists: action.LockOnlyIfExists,
-	}, kvrpcpb.Context{
-		Priority:               c.priority,
-		SyncLog:                c.syncLog,
-		ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
-		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
-		RequestSource:          c.txn.GetRequestSource(),
-		ResourceGroupName:      c.resourceGroupName,
-	})
+	req := tikvrpc.NewRequest(
+		tikvrpc.CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{
+			Mutations:        mutations,
+			PrimaryLock:      c.primary(),
+			StartVersion:     c.startTS,
+			ForUpdateTs:      c.forUpdateTS,
+			IsFirstLock:      c.isFirstLock,
+			WaitTimeout:      action.LockWaitTime(),
+			ReturnValues:     action.ReturnValues,
+			CheckExistence:   action.CheckExistence,
+			MinCommitTs:      c.forUpdateTS + 1,
+			WakeUpMode:       action.wakeUpMode,
+			LockOnlyIfExists: action.LockOnlyIfExists,
+		}, kvrpcpb.Context{
+			Priority:               c.priority,
+			SyncLog:                c.syncLog,
+			ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
+			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+			RequestSource:          c.txn.GetRequestSource(),
+			ResourceGroupName:      c.resourceGroupName,
+		},
+	)
 	if action.LockCtx.ResourceGroupTag == nil && action.LockCtx.ResourceGroupTagger != nil {
 		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
 	}
@@ -168,8 +172,10 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 			for _, m := range mutations {
 				keys = append(keys, hex.EncodeToString(m.Key))
 			}
-			logutil.BgLogger().Info("[failpoint] injected lock ttl = 1 on pessimistic lock",
-				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys))
+			logutil.BgLogger().Info(
+				"[failpoint] injected lock ttl = 1 on pessimistic lock",
+				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys),
+			)
 		}
 		req.PessimisticLock().LockTtl = ttl
 		if _, err := util.EvalFailpoint("PessimisticLockErrWriteConflict"); err == nil {
@@ -221,7 +227,9 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 	}
 }
 
-func (action actionPessimisticLock) handleRegionError(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, regionErr *errorpb.Error) (finished bool, err error) {
+func (action actionPessimisticLock) handleRegionError(
+	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, regionErr *errorpb.Error,
+) (finished bool, err error) {
 	// For other region error and the fake region error, backoff because
 	// there's something wrong.
 	// For the real EpochNotMatch error, don't backoff.
@@ -242,7 +250,9 @@ func (action actionPessimisticLock) handleRegionError(c *twoPhaseCommitter, bo *
 	return true, err
 }
 
-func (action actionPessimisticLock) handleKeyError(c *twoPhaseCommitter, keyErrs []*kvrpcpb.KeyError) (locks []*txnlock.Lock, finished bool, err error) {
+func (action actionPessimisticLock) handleKeyError(
+	c *twoPhaseCommitter, keyErrs []*kvrpcpb.KeyError,
+) (locks []*txnlock.Lock, finished bool, err error) {
 	for _, keyErr := range keyErrs {
 		// Check already exists error
 		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
@@ -263,7 +273,10 @@ func (action actionPessimisticLock) handleKeyError(c *twoPhaseCommitter, keyErrs
 	return locks, false, nil
 }
 
-func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, err error) {
+func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
+	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation,
+	resp *tikvrpc.Response, diagCtx *diagnosticContext,
+) (finished bool, err error) {
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
 		return true, err
@@ -283,7 +296,12 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *t
 	if len(keyErrs) == 0 {
 
 		if action.LockCtx.Stats != nil {
-			action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+			action.LockCtx.Stats.MergeReqDetails(
+				diagCtx.reqDuration,
+				batch.region.GetID(),
+				diagCtx.sender.GetStoreAddr(),
+				lockResp.ExecDetailsV2,
+			)
 		}
 
 		if batch.isPrimary {
@@ -314,6 +332,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *t
 		}
 		return true, nil
 	}
+
 	locks, finished, err := action.handleKeyError(c, keyErrs)
 	if err != nil {
 		return finished, err
@@ -360,7 +379,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(c *t
 	return false, nil
 }
 
-func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation, resp *tikvrpc.Response, diagCtx *diagnosticContext) (finished bool, err error) {
+func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
+	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, mutationsPb []*kvrpcpb.Mutation,
+	resp *tikvrpc.Response, diagCtx *diagnosticContext,
+) (finished bool, err error) {
 	regionErr, err := resp.GetRegionError()
 	if err != nil {
 		return true, err
@@ -376,7 +398,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 	if len(mutationsPb) > 1 || len(lockResp.Results) > 1 {
 		panic("unreachable")
 	}
-	if batch.isPrimary && len(lockResp.Results) > 0 && lockResp.Results[0].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
+	if batch.isPrimary &&
+		len(lockResp.Results) > 0 &&
+		lockResp.Results[0].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
 		// After locking the primary key, we should protect the primary lock from expiring.
 		c.run(c, action.LockCtx)
 	}
@@ -422,7 +446,12 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 
 	if len(lockResp.Results) > 0 && !isMutationFailed {
 		if action.LockCtx.Stats != nil {
-			action.LockCtx.Stats.MergeReqDetails(diagCtx.reqDuration, batch.region.GetID(), diagCtx.sender.GetStoreAddr(), lockResp.ExecDetailsV2)
+			action.LockCtx.Stats.MergeReqDetails(
+				diagCtx.reqDuration,
+				batch.region.GetID(),
+				diagCtx.sender.GetStoreAddr(),
+				lockResp.ExecDetailsV2,
+			)
 		}
 	}
 
@@ -497,16 +526,20 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(c
 	return true, nil
 }
 
-func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+func (actionPessimisticRollback) handleSingleBatch(
+	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
+) error {
 	forUpdateTS := c.forUpdateTS
 	if c.maxLockedWithConflictTS > forUpdateTS {
 		forUpdateTS = c.maxLockedWithConflictTS
 	}
-	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
-		StartVersion: c.startTS,
-		ForUpdateTs:  forUpdateTS,
-		Keys:         batch.mutations.GetKeys(),
-	})
+	req := tikvrpc.NewRequest(
+		tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
+			StartVersion: c.startTS,
+			ForUpdateTs:  forUpdateTS,
+			Keys:         batch.mutations.GetKeys(),
+		},
+	)
 	req.RequestSource = util.RequestSourceFromCtx(bo.GetCtx())
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
@@ -528,7 +561,10 @@ func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *ret
 	return nil
 }
 
-func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticLockWakeUpMode, mutations CommitterMutations) error {
+func (c *twoPhaseCommitter) pessimisticLockMutations(
+	bo *retry.Backoffer, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticLockWakeUpMode,
+	mutations CommitterMutations,
+) error {
 	if c.sessionID > 0 {
 		if val, err := util.EvalFailpoint("beforePessimisticLock"); err == nil {
 			// Pass multiple instructions in one string, delimited by commas, to trigger multiple behaviors, like
@@ -537,19 +573,27 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(bo *retry.Backoffer, lockCt
 				for _, action := range strings.Split(v, ",") {
 					if action == "delay" {
 						duration := time.Duration(rand.Int63n(int64(time.Second) * 5))
-						logutil.Logger(bo.GetCtx()).Info("[failpoint] injected delay at pessimistic lock",
-							zap.Uint64("txnStartTS", c.startTS), zap.Duration("duration", duration))
+						logutil.Logger(bo.GetCtx()).Info(
+							"[failpoint] injected delay at pessimistic lock",
+							zap.Uint64("txnStartTS", c.startTS), zap.Duration("duration", duration),
+						)
 						time.Sleep(duration)
 					} else if action == "fail" {
-						logutil.Logger(bo.GetCtx()).Info("[failpoint] injected failure at pessimistic lock",
-							zap.Uint64("txnStartTS", c.startTS))
+						logutil.Logger(bo.GetCtx()).Info(
+							"[failpoint] injected failure at pessimistic lock",
+							zap.Uint64("txnStartTS", c.startTS),
+						)
 						return errors.New("injected failure at pessimistic lock")
 					}
 				}
 			}
 		}
 	}
-	return c.doActionOnMutations(bo, actionPessimisticLock{LockCtx: lockCtx, wakeUpMode: lockWaitMode, isInternal: c.txn.isInternal()}, mutations)
+	return c.doActionOnMutations(
+		bo,
+		actionPessimisticLock{LockCtx: lockCtx, wakeUpMode: lockWaitMode, isInternal: c.txn.isInternal()},
+		mutations,
+	)
 }
 
 func (c *twoPhaseCommitter) pessimisticRollbackMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
