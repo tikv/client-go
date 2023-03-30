@@ -250,7 +250,11 @@ func (action actionPessimisticLock) handleRegionError(
 	return true, err
 }
 
-func (action actionPessimisticLock) handleKeyError(
+// When handling wait timeout, if the current lock is updated within the threshold, do not try to resolve lock
+// The value is the same as the default timeout in TiKV.
+const skipResolveThresholdMs = 1000
+
+func (action actionPessimisticLock) handleKeyErrorForResolve(
 	c *twoPhaseCommitter, keyErrs []*kvrpcpb.KeyError,
 ) (locks []*txnlock.Lock, finished bool, err error) {
 	for _, keyErr := range keyErrs {
@@ -263,12 +267,26 @@ func (action actionPessimisticLock) handleKeyError(
 			return nil, true, errors.WithStack(&tikverr.ErrDeadlock{Deadlock: deadlock})
 		}
 
+		// Do not resolve the lock if the lock was recently updated which indicates the txn holding the lock is
+		// much likely alive.
+		// This should only happen for wait timeout.
+		if lockInfo := keyErr.GetLocked(); lockInfo != nil &&
+			lockInfo.DurationToLastUpdateMs > 0 &&
+			lockInfo.DurationToLastUpdateMs < skipResolveThresholdMs {
+			return nil, true, tikverr.NewErrWriteConflictWithArgs(
+				c.startTS, lockInfo.LockVersion, lockInfo.LockForUpdateTs, lockInfo.Key, kvrpcpb.WriteConflict_Unknown,
+			)
+		}
+
 		// Extract lock from key error
 		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 		if err1 != nil {
 			return nil, true, err1
 		}
 		locks = append(locks, lock)
+	}
+	if len(locks) == 0 {
+		return nil, true, nil
 	}
 	return locks, false, nil
 }
@@ -333,7 +351,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		return true, nil
 	}
 
-	locks, finished, err := action.handleKeyError(c, keyErrs)
+	locks, finished, err := action.handleKeyErrorForResolve(c, keyErrs)
 	if err != nil {
 		return finished, err
 	}
@@ -455,7 +473,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 		}
 	}
 
-	locks, finished, err := action.handleKeyError(c, keyErrs)
+	locks, finished, err := action.handleKeyErrorForResolve(c, keyErrs)
 	if err != nil {
 		return finished, err
 	}
