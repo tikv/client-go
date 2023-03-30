@@ -76,6 +76,8 @@ type tempLockBufferEntry struct {
 	HasReturnValue    bool
 	HasCheckExistence bool
 	Value             tikv.ReturnedValue
+
+	ActualLockForUpdateTS uint64
 }
 
 // trySkipLockingOnRetry checks if the key can be skipped in an aggressive locking context, and performs necessary
@@ -156,6 +158,8 @@ type KVTxn struct {
 
 	aggressiveLockingContext *aggressiveLockingContext
 	aggressiveLockingDirty   bool
+
+	forUpdateTSChecks map[string]uint64
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -463,6 +467,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 
 	txn.committer.SetDiskFullOpt(txn.diskFullOpt)
 	txn.committer.SetTxnSource(txn.txnSource)
+	txn.committer.forUpdateTSChecks = txn.forUpdateTSChecks
 
 	defer committer.ttlManager.close()
 
@@ -741,6 +746,11 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
+
+	if txn.forUpdateTSChecks == nil {
+		txn.forUpdateTSChecks = make(map[string]uint64, len(txn.aggressiveLockingContext.currentLockedKeys))
+	}
+
 	memBuffer := txn.GetMemBuffer()
 	for key, entry := range txn.aggressiveLockingContext.currentLockedKeys {
 		setValExists := tikv.SetKeyLockedValueExists
@@ -748,6 +758,10 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 			setValExists = tikv.SetKeyLockedValueNotExists
 		}
 		memBuffer.UpdateFlags([]byte(key), tikv.SetKeyLocked, tikv.DelNeedCheckExists, setValExists)
+
+		if _, ok := txn.forUpdateTSChecks[key]; !ok {
+			txn.forUpdateTSChecks[key] = entry.ActualLockForUpdateTS
+		}
 	}
 	if txn.aggressiveLockingContext.maxLockedWithConflictTS > 0 {
 		// There are some keys locked so the committer must have been created.
@@ -1185,10 +1199,15 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		}
 
 		if txn.IsInAggressiveLockingMode() {
+			actualForUpdateTS := lockCtx.ForUpdateTS
+			if val.LockedWithConflictTS > actualForUpdateTS {
+				actualForUpdateTS = val.LockedWithConflictTS
+			}
 			txn.aggressiveLockingContext.currentLockedKeys[keyStr] = tempLockBufferEntry{
-				HasReturnValue:    lockCtx.ReturnValues,
-				HasCheckExistence: lockCtx.CheckExistence,
-				Value:             val,
+				HasReturnValue:        lockCtx.ReturnValues,
+				HasCheckExistence:     lockCtx.CheckExistence,
+				Value:                 val,
+				ActualLockForUpdateTS: actualForUpdateTS,
 			}
 			txn.aggressiveLockingDirty = true
 		} else {

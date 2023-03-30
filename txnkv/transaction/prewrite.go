@@ -81,6 +81,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
+	var forUpdateTSChecks []*kvrpcpb.PrewriteRequest_ForUpdateTSCheck
 
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
@@ -102,6 +103,15 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
+		}
+
+		if c.forUpdateTSChecks != nil {
+			if actualLockForUpdateTS, ok := c.forUpdateTSChecks[string(mutations[i].Key)]; ok {
+				forUpdateTSChecks = append(forUpdateTSChecks, &kvrpcpb.PrewriteRequest_ForUpdateTSCheck{
+					Index:               uint32(i),
+					ExpectedForUpdateTs: actualLockForUpdateTS,
+				})
+			}
 		}
 	}
 	c.mu.Lock()
@@ -164,6 +174,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		MinCommitTs:        minCommitTS,
 		MaxCommitTs:        c.maxCommitTS,
 		AssertionLevel:     assertionLevel,
+		ForUpdateTsChecks:  forUpdateTSChecks,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {
