@@ -202,3 +202,7 @@ func (c *codecV1) DecodeRange(start, end []byte) ([]byte, []byte, error) {
 func (c *codecV1) DecodeKey(key []byte) ([]byte, error) {
 	return key, nil
 }
+
+func (c *codecV1) DecodeBucketKey(key []byte) ([]byte, error) {
+	return c.DecodeRegionKey(key)
+}
