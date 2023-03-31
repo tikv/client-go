@@ -216,8 +216,8 @@ func initShortcuts() {
 	TxnRegionsNumHistogramWithBatchCoprocessor = TiKVTxnRegionsNumHistogram.WithLabelValues("batch_coprocessor", LblGeneral)
 	TxnWriteKVCountHistogramInternal = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblInternal)
 	TxnWriteKVCountHistogramGeneral = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblGeneral)
-	TxnWriteSizeHistogramInternal = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblInternal)
-	TxnWriteSizeHistogramGeneral = TiKVTxnWriteKVCountHistogram.WithLabelValues(LblGeneral)
+	TxnWriteSizeHistogramInternal = TiKVTxnWriteSizeHistogram.WithLabelValues(LblInternal)
+	TxnWriteSizeHistogramGeneral = TiKVTxnWriteSizeHistogram.WithLabelValues(LblGeneral)
 
 	LockResolverCountWithBatchResolve = TiKVLockResolverCounter.WithLabelValues("batch_resolve")
 	LockResolverCountWithExpired = TiKVLockResolverCounter.WithLabelValues("expired")
