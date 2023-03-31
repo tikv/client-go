@@ -252,7 +252,7 @@ func (action actionPessimisticLock) handleRegionError(
 
 // When handling wait timeout, if the current lock is updated within the threshold, do not try to resolve lock
 // The value is the same as the default timeout in TiKV.
-const skipResolveThresholdMs = 1000
+const skipResolveThresholdMs = 1200
 
 func (action actionPessimisticLock) handleKeyErrorForResolve(
 	c *twoPhaseCommitter, keyErrs []*kvrpcpb.KeyError,
