@@ -324,7 +324,6 @@ func (c *Client) GetRegion(ctx context.Context, key []byte, pts ...pd.GetRegionO
 		return nil, ErrRegionNotFound
 	}
 	resp := mkPDRegions(region)[0]
-	log.Info("get region", zap.Any("region", resp))
 	return resp, nil
 }
 
