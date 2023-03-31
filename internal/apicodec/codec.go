@@ -67,6 +67,8 @@ type Codec interface {
 	EncodeRange(start, end []byte) ([]byte, []byte)
 	// DecodeRange decode a key range.
 	DecodeRange(encodedStart, encodedEnd []byte) ([]byte, []byte, error)
+	// DecodeBucketsKey decode a bucket's key.
+	DecodeBucketsKey(encodedKey []byte) ([]byte, error)
 	// EncodeKey encode a key.
 	EncodeKey(key []byte) []byte
 	// DecodeKey decode a key.

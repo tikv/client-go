@@ -3,6 +3,7 @@ package tikv_test
 import (
 	"context"
 	"encoding/hex"
+	"log"
 	"strings"
 	"testing"
 
@@ -47,4 +48,48 @@ func (s *cseSuite) TestGetRegion() {
 	prevRegion, err := s.pdCli.GetPrevRegion(context.Background(), key)
 	s.Nil(err)
 	s.Equal(prevRegion.Meta.EndKey, currentRegion.Meta.StartKey)
+}
+
+func BenchmarkGetRegionByPD(b *testing.B) {
+	pdCli, err := pd.NewClient(strings.Split(*pdAddrs, ","), pd.SecurityOption{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	pdCli = tikv.NewCodecPDClient(tikv.ModeTxn, pdCli)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		region, err := pdCli.GetRegion(context.Background(), []byte("780000016d44444c5461626c65ff56657273696f6e00fe0000000000000073"))
+		if err != nil {
+			b.Fatal(err)
+		}
+		if region == nil {
+			log.Fatalln("region is nil")
+		}
+	}
+	b.StopTimer()
+	pdCli.Close()
+}
+
+func BenchmarkGetRegionByCSE(b *testing.B) {
+	pdCli, err := pd.NewClient(strings.Split(*pdAddrs, ","), pd.SecurityOption{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	pdCli, err = tikv.NewCSEClient(pdCli)
+	if err != nil {
+		b.Fatal(err)
+	}
+	pdCli = tikv.NewCodecPDClient(tikv.ModeTxn, pdCli)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		region, err := pdCli.GetRegion(context.Background(), []byte("780000016d44444c5461626c65ff56657273696f6e00fe0000000000000073"))
+		if err != nil {
+			b.Fatal(err)
+		}
+		if region == nil {
+			log.Fatalln("region is nil")
+		}
+	}
+	b.StopTimer()
+	pdCli.Close()
 }

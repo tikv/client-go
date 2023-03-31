@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -29,9 +30,26 @@ var (
 )
 
 var (
-	StoresRefreshInterval = time.Second * 5
-	SyncRegionTimeout     = time.Second * 10
+	StoresRefreshInterval = time.Second * 1
+	SyncRegionTimeout     = time.Millisecond * 500
 )
+
+var (
+	ErrRegionNotFound = errors.New("region not found")
+)
+
+type liveliness int64
+
+const (
+	reachable liveliness = iota
+	unreachable
+	tombstone
+)
+
+type store struct {
+	*metapb.Store
+	state liveliness
+}
 
 type Client struct {
 	pd.Client
@@ -39,8 +57,8 @@ type Client struct {
 	done chan struct{}
 
 	mu struct {
-		sync.Mutex
-		stores []*metapb.Store
+		sync.RWMutex
+		stores map[uint64]*store
 	}
 
 	httpClient *http.Client
@@ -60,14 +78,46 @@ func NewCSEClient(origin pd.Client) (c *Client, err error) {
 			Transport: &http.Transport{},
 		},
 
-		gp: util.NewSpool(16, time.Second*10),
+		gp: util.NewSpool(32, time.Second*10),
 	}
-	c.mu.stores, err = c.Client.GetAllStores(context.Background(), pd.WithExcludeTombstone())
+	c.mu.stores = make(map[uint64]*store)
+	err = c.refreshStores()
 	if err != nil {
 		return nil, err
 	}
 	go c.refreshStoresLoop()
 	return c, nil
+}
+
+func (c *Client) updateStores(stores []*metapb.Store) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range stores {
+		if origin, ok := c.mu.stores[s.Id]; !ok {
+			c.mu.stores[s.GetId()] = &store{Store: s, state: reachable}
+		} else {
+			origin.Store = s
+		}
+	}
+}
+
+func (c *Client) getAllStores() []*metapb.Store {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var stores []*metapb.Store
+	for _, s := range c.mu.stores {
+		stores = append(stores, s.Store)
+	}
+	return stores
+}
+
+func (c *Client) refreshStores() error {
+	stores, err := c.Client.GetAllStores(context.Background(), pd.WithExcludeTombstone())
+	if err != nil {
+		return err
+	}
+	c.updateStores(stores)
+	return nil
 }
 
 func (c *Client) refreshStoresLoop() {
@@ -77,14 +127,10 @@ func (c *Client) refreshStoresLoop() {
 		case <-c.done:
 			return
 		case <-ticker.C:
-			stores, err := c.Client.GetAllStores(context.Background(), pd.WithExcludeTombstone())
+			err := c.refreshStores()
 			if err != nil {
-				log.Warn("get all stores failed", zap.Error(err))
-				continue
+				log.Error("refresh stores failed", zap.Error(err))
 			}
-			c.mu.Lock()
-			c.mu.stores = stores
-			c.mu.Unlock()
 		}
 	}
 }
@@ -100,30 +146,33 @@ func (c *Client) Close() {
 	c.Client.Close()
 }
 
-func (c *Client) getStores() []*metapb.Store {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.mu.stores
-}
-
 func (c *Client) GetAllStores(context.Context, ...pd.GetStoreOption) ([]*metapb.Store, error) {
-	return c.getStores(), nil
+	return c.getAllStores(), nil
 }
 
 func (c *Client) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
-	for _, s := range c.getStores() {
-		if s.Id == storeID {
-			return s, nil
-		}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s, ok := c.mu.stores[storeID]
+	if !ok {
+		return nil, errors.Errorf("store %d not found", storeID)
 	}
-	return nil, errors.Errorf("store %d not found", storeID)
+	return s.Store, nil
 }
 
-func (c *Client) getValidTiKVStores() []*metapb.Store {
+func (c *Client) getAliveTiKVStores() []*metapb.Store {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	var tikvStores []*metapb.Store
-	for _, s := range c.getStores() {
-		if s.GetState() == metapb.StoreState_Up && tikvrpc.GetStoreTypeByMeta(s) == tikvrpc.TiKV {
-			tikvStores = append(tikvStores, s)
+	for _, s := range c.mu.stores {
+		state := liveliness(atomic.LoadInt64((*int64)(&s.state)))
+		if s.GetState() == metapb.StoreState_Up &&
+			tikvrpc.GetStoreTypeByMeta(s.Store) == tikvrpc.TiKV &&
+			state == reachable {
+			tikvStores = append(tikvStores, s.Store)
+		}
+		if state == unreachable {
+			log.Warn("ignored, store is unreachable", zap.Uint64("store-id", s.GetId()))
 		}
 	}
 	return tikvStores
@@ -156,7 +205,7 @@ func mkErr(idx int, err error) result {
 }
 
 func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (*pdcore.RegionsInfo, error) {
-	stores := c.getValidTiKVStores()
+	stores := c.getAliveTiKVStores()
 	rchan := make(chan result, len(stores))
 	for i, s := range stores {
 		store := *s
@@ -177,6 +226,7 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 			}
 			resp, err := c.httpClient.Do(req)
 			if err != nil {
+				c.markStoreUnreachable(store.GetId())
 				rchan <- mkErr(index, err)
 				return
 			}
@@ -208,7 +258,14 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 			for i, leader := range syncResp.RegionLeaders {
 				if leader.GetId() != 0 {
 					region := syncResp.Regions[i]
-					regionInfos = append(regionInfos, pdcore.NewRegionInfo(region, leader))
+					downPeers := syncResp.DownPeers[i].Peers
+					pendingPeers := syncResp.PendingPeers[i].Peers
+					regionInfo := pdcore.NewRegionInfo(region, leader,
+						pdcore.WithDownPeers(downPeers), pdcore.WithPendingPeers(pendingPeers))
+					if bs := syncResp.GetBuckets()[i]; bs.RegionId > 0 {
+						regionInfo.UpdateBuckets(bs, nil)
+					}
+					regionInfos = append(regionInfos, regionInfo)
 				}
 			}
 			rchan <- mkOK(regionInfos)
@@ -232,6 +289,23 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 	return regionsInfo, nil
 }
 
+func mkPDRegions(regions ...*pdcore.RegionInfo) []*pd.Region {
+	rs := make([]*pd.Region, 0, len(regions))
+	for _, region := range regions {
+		pdRegion := &pd.Region{
+			Meta:         region.GetMeta(),
+			Leader:       region.GetLeader(),
+			Buckets:      region.GetBuckets(),
+			PendingPeers: region.GetPendingPeers(),
+		}
+		for _, p := range region.GetDownPeers() {
+			pdRegion.DownPeers = append(pdRegion.DownPeers, p.Peer)
+		}
+		rs = append(rs, pdRegion)
+	}
+	return rs
+}
+
 func (c *Client) GetRegion(ctx context.Context, key []byte, pts ...pd.GetRegionOption) (*pd.Region, error) {
 	_, start, err := codec.DecodeBytes(key, nil)
 	if err != nil {
@@ -247,12 +321,10 @@ func (c *Client) GetRegion(ctx context.Context, key []byte, pts ...pd.GetRegionO
 	}
 	region := regionsInfo.GetRegionByKey(key)
 	if region == nil {
-		return nil, errors.New("no region found")
+		return nil, ErrRegionNotFound
 	}
-	resp := &pd.Region{
-		Meta:   region.GetMeta(),
-		Leader: region.GetLeader(),
-	}
+	resp := mkPDRegions(region)[0]
+	log.Info("get region", zap.Any("region", resp))
 	return resp, nil
 }
 
@@ -271,13 +343,9 @@ func (c *Client) GetPrevRegion(ctx context.Context, key []byte, pts ...pd.GetReg
 	}
 	region := regionsInfo.GetPrevRegionByKey(key)
 	if region == nil {
-		return nil, errors.New("no region found")
+		return nil, ErrRegionNotFound
 	}
-	resp := &pd.Region{
-		Meta:   region.GetMeta(),
-		Leader: region.GetLeader(),
-	}
-	return resp, nil
+	return mkPDRegions(region)[0], nil
 }
 
 func (c *Client) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
@@ -289,13 +357,9 @@ func (c *Client) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.
 	}
 	region := regionsInfo.GetRegion(regionID)
 	if region == nil {
-		return nil, errors.New("no region found")
+		return nil, ErrRegionNotFound
 	}
-	resp := &pd.Region{
-		Meta:   region.GetMeta(),
-		Leader: region.GetLeader(),
-	}
-	return resp, nil
+	return mkPDRegions(region)[0], nil
 }
 
 func (c *Client) ScanRegions(ctx context.Context, startKey, endKey []byte, limit int) ([]*pd.Region, error) {
@@ -320,14 +384,44 @@ func (c *Client) ScanRegions(ctx context.Context, startKey, endKey []byte, limit
 	}
 	regions := regionsInfo.ScanRange(startKey, endKey, limit)
 	if len(regions) == 0 {
-		return nil, errors.New("no region found")
+		return nil, ErrRegionNotFound
 	}
-	resp := make([]*pd.Region, 0, len(regions))
-	for _, region := range regions {
-		resp = append(resp, &pd.Region{
-			Meta:   region.GetMeta(),
-			Leader: region.GetLeader(),
-		})
+	return mkPDRegions(regions...), nil
+}
+
+func (c *Client) markStoreUnreachable(id uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if s, ok := c.mu.stores[id]; ok {
+		if atomic.CompareAndSwapInt64((*int64)(&s.state), int64(reachable), int64(unreachable)) {
+			go c.checkUtilStoreReachable(s)
+		}
 	}
-	return resp, nil
+}
+
+func (c *Client) checkUtilStoreReachable(s *store) {
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s", s.StatusAddress), nil)
+				if err != nil {
+					log.Warn("failed to create request", zap.Error(err))
+					return
+				}
+				_, err = c.httpClient.Do(req)
+				if err != nil {
+					log.Warn("failed to check store", zap.Error(err))
+					return
+				}
+				state := atomic.LoadInt64((*int64)(&s.state))
+				atomic.CompareAndSwapInt64((*int64)(&s.state), state, int64(reachable))
+				return
+			}()
+		default:
+		}
+	}
 }
