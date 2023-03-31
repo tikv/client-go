@@ -167,7 +167,7 @@ func (c *CodecPDClient) decodeRegionKeyInPlace(r *pd.Region) error {
 			if len(k) == 0 {
 				continue
 			}
-			decoded, err := c.codec.DecodeRegionKey(k)
+			decoded, err := c.codec.DecodeBucketKey(k)
 			if err != nil {
 				return errors.WithStack(err)
 			}
