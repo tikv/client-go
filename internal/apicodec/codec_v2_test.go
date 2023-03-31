@@ -331,10 +331,28 @@ func (suite *testCodecV2Suite) TestDecodeBucketKeys() {
 		suite.codec.EncodeRegionKey([]byte("a")),
 		suite.codec.EncodeRegionKey([]byte("b")),
 		suite.codec.EncodeRegionKey([]byte("c")),
-		encodeWithPrefix(keyspaceEndKey, []byte("")),
-		encodeWithPrefix(keyspaceEndKey, []byte("a")),
-		encodeWithPrefix(keyspaceEndKey, []byte("b")),
-		encodeWithPrefix(keyspaceEndKey, []byte("c")),
+		{},
+	}
+	keys, err = suite.codec.DecodeBucketKeys(bucketKeys)
+	suite.Nil(err)
+	suite.Equal([][]byte{
+		{},
+		[]byte("a"),
+		[]byte("b"),
+		[]byte("c"),
+		{},
+	}, keys)
+
+	bucketKeys = [][]byte{
+		{},
+		encodeWithPrefix(prevKeyspacePrefix, []byte("a")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("b")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("c")),
+		suite.codec.EncodeRegionKey([]byte("")),
+		suite.codec.EncodeRegionKey([]byte("a")),
+		suite.codec.EncodeRegionKey([]byte("b")),
+		suite.codec.EncodeRegionKey([]byte("c")),
+		{},
 	}
 	keys, err = suite.codec.DecodeBucketKeys(bucketKeys)
 	suite.Nil(err)
