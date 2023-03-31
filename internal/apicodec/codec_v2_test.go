@@ -1,7 +1,6 @@
 package apicodec
 
 import (
-	"github.com/tikv/client-go/v2/util/codec"
 	"math"
 	"testing"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/codec"
 )
 
 var (
