@@ -60,8 +60,9 @@ import (
 )
 
 type actionPrewrite struct {
-	retry      bool
-	isInternal bool
+	retry         bool
+	isInternal    bool
+	hasRpcRetries bool // RPC tried more than once => we need to set is_retry_request
 }
 
 var _ twoPhaseCommitAction = actionPrewrite{}
@@ -143,8 +144,10 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			for _, m := range mutations {
 				keys = append(keys, hex.EncodeToString(m.Key))
 			}
-			logutil.BgLogger().Info("[failpoint] injected lock ttl = 1 on prewrite",
-				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys))
+			logutil.BgLogger().Info(
+				"[failpoint] injected lock ttl = 1 on prewrite",
+				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys),
+			)
 		}
 	}
 
@@ -183,23 +186,27 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		req.TryOnePc = true
 	}
 
-	r := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req, kvrpcpb.Context{
-		Priority:               c.priority,
-		SyncLog:                c.syncLog,
-		ResourceGroupTag:       c.resourceGroupTag,
-		DiskFullOpt:            c.diskFullOpt,
-		TxnSource:              c.txnSource,
-		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
-		RequestSource:          c.txn.GetRequestSource(),
-		ResourceGroupName:      c.resourceGroupName,
-	})
+	r := tikvrpc.NewRequest(
+		tikvrpc.CmdPrewrite, req, kvrpcpb.Context{
+			Priority:               c.priority,
+			SyncLog:                c.syncLog,
+			ResourceGroupTag:       c.resourceGroupTag,
+			DiskFullOpt:            c.diskFullOpt,
+			TxnSource:              c.txnSource,
+			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+			RequestSource:          c.txn.GetRequestSource(),
+			ResourceGroupName:      c.resourceGroupName,
+		},
+	)
 	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
 		c.resourceGroupTagger(r)
 	}
 	return r
 }
 
-func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) (err error) {
+func (action actionPrewrite) handleSingleBatch(
+	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
+) (err error) {
 	// WARNING: This function only tries to send a single request to a single region, so it don't
 	// need to unset the `useOnePC` flag when it fails. A special case is that when TiKV returns
 	// regionErr, it's uncertain if the request will be splitted into multiple and sent to multiple
@@ -211,8 +218,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if _, err := util.EvalFailpoint("prewritePrimaryFail"); err == nil {
 				// Delay to avoid cancelling other normally ongoing prewrite requests.
 				time.Sleep(time.Millisecond * 50)
-				logutil.Logger(bo.GetCtx()).Info("[failpoint] injected error on prewriting primary batch",
-					zap.Uint64("txnStartTS", c.startTS))
+				logutil.Logger(bo.GetCtx()).Info(
+					"[failpoint] injected error on prewriting primary batch",
+					zap.Uint64("txnStartTS", c.startTS),
+				)
 				return errors.New("injected error on prewriting primary batch")
 			}
 			util.EvalFailpoint("prewritePrimary") // for other failures like sleep or pause
@@ -220,8 +229,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if _, err := util.EvalFailpoint("prewriteSecondaryFail"); err == nil {
 				// Delay to avoid cancelling other normally ongoing prewrite requests.
 				time.Sleep(time.Millisecond * 50)
-				logutil.Logger(bo.GetCtx()).Info("[failpoint] injected error on prewriting secondary batch",
-					zap.Uint64("txnStartTS", c.startTS))
+				logutil.Logger(bo.GetCtx()).Info(
+					"[failpoint] injected error on prewriting secondary batch",
+					zap.Uint64("txnStartTS", c.startTS),
+				)
 				return errors.New("injected error on prewriting secondary batch")
 			}
 			util.EvalFailpoint("prewriteSecondary") // for other failures like sleep or pause
@@ -259,19 +270,27 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 	}()
 	for {
 		attempts++
-		if attempts > 1 || action.retry {
+		if action.hasRpcRetries {
 			req.IsRetryRequest = true
 		}
 		reqBegin := time.Now()
 		if reqBegin.Sub(tBegin) > slowRequestThreshold {
-			logutil.BgLogger().Warn("slow prewrite request", zap.Uint64("startTS", c.startTS), zap.Stringer("region", &batch.region), zap.Int("attempts", attempts))
+			logutil.BgLogger().Warn(
+				"slow prewrite request",
+				zap.Uint64("startTS", c.startTS),
+				zap.Stringer("region", &batch.region),
+				zap.Int("attempts", attempts),
+			)
 			tBegin = time.Now()
 		}
 
-		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, tryTimes, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		// Unexpected error occurs, return it
 		if err != nil {
 			return err
+		}
+		if tryTimes > 0 {
+			action.hasRpcRetries = true
 		}
 
 		regionErr, err := resp.GetRegionError()
@@ -295,9 +314,11 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					desc += strconv.FormatUint(i, 10) + " "
 				}
 
-				logutil.Logger(bo.GetCtx()).Error("Request failed cause of TiKV disk full",
+				logutil.Logger(bo.GetCtx()).Error(
+					"Request failed cause of TiKV disk full",
 					zap.String("store_id", desc),
-					zap.String("reason", regionErr.GetDiskFull().GetReason()))
+					zap.String("reason", regionErr.GetDiskFull().GetReason()),
+				)
 
 				return errors.New(regionErr.String())
 			}
@@ -308,7 +329,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if same {
 				continue
 			}
-			err = c.doActionOnMutations(bo, actionPrewrite{true, action.isInternal}, batch.mutations)
+			err = c.doActionOnMutations(bo, actionPrewrite{true, action.isInternal, action.hasRpcRetries}, batch.mutations)
 			return err
 		}
 
@@ -323,7 +344,12 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 
 			// Update CommitDetails
 			reqDuration := time.Since(reqBegin)
-			c.getDetail().MergePrewriteReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), prewriteResp.ExecDetailsV2)
+			c.getDetail().MergePrewriteReqDetails(
+				reqDuration,
+				batch.region.GetID(),
+				sender.GetStoreAddr(),
+				prewriteResp.ExecDetailsV2,
+			)
 
 			if batch.isPrimary {
 				// After writing the primary key, if the size of the transaction is larger than 32M,
@@ -340,8 +366,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					if prewriteResp.MinCommitTs != 0 {
 						return errors.New("MinCommitTs must be 0 when 1pc falls back to 2pc")
 					}
-					logutil.Logger(bo.GetCtx()).Warn("1pc failed and fallbacks to normal commit procedure",
-						zap.Uint64("startTS", c.startTS))
+					logutil.Logger(bo.GetCtx()).Warn(
+						"1pc failed and fallbacks to normal commit procedure",
+						zap.Uint64("startTS", c.startTS),
+					)
 					metrics.OnePCTxnCounterFallback.Inc()
 					c.setOnePC(false)
 					c.setAsyncCommit(false)
@@ -349,15 +377,19 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					// For 1PC, there's no racing to access to access `onePCCommmitTS` so it's safe
 					// not to lock the mutex.
 					if c.onePCCommitTS != 0 {
-						logutil.Logger(bo.GetCtx()).Fatal("one pc happened multiple times",
-							zap.Uint64("startTS", c.startTS))
+						logutil.Logger(bo.GetCtx()).Fatal(
+							"one pc happened multiple times",
+							zap.Uint64("startTS", c.startTS),
+						)
 					}
 					c.onePCCommitTS = prewriteResp.OnePcCommitTs
 				}
 				return nil
 			} else if prewriteResp.OnePcCommitTs != 0 {
-				logutil.Logger(bo.GetCtx()).Fatal("tikv committed a non-1pc transaction with 1pc protocol",
-					zap.Uint64("startTS", c.startTS))
+				logutil.Logger(bo.GetCtx()).Fatal(
+					"tikv committed a non-1pc transaction with 1pc protocol",
+					zap.Uint64("startTS", c.startTS),
+				)
 			}
 			if c.isAsyncCommit() {
 				// 0 if the min_commit_ts is not ready or any other reason that async
@@ -367,8 +399,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					if c.testingKnobs.noFallBack {
 						return nil
 					}
-					logutil.Logger(bo.GetCtx()).Warn("async commit cannot proceed since the returned minCommitTS is zero, "+
-						"fallback to normal path", zap.Uint64("startTS", c.startTS))
+					logutil.Logger(bo.GetCtx()).Warn(
+						"async commit cannot proceed since the returned minCommitTS is zero, "+
+							"fallback to normal path", zap.Uint64("startTS", c.startTS),
+					)
 					c.setAsyncCommit(false)
 				} else {
 					c.mu.Lock()
@@ -394,17 +428,25 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if err1 != nil {
 				return err1
 			}
-			logutil.BgLogger().Info("prewrite encounters lock",
+			logutil.BgLogger().Info(
+				"prewrite encounters lock",
 				zap.Uint64("session", c.sessionID),
 				zap.Uint64("txnID", c.startTS),
-				zap.Stringer("lock", lock))
+				zap.Stringer("lock", lock),
+			)
 			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
 			// fail due to a WriteConflict error. So we can construct and return an error here early.
 			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if lock.TxnID > c.startTS && !c.isPessimistic {
-				return tikverr.NewErrWriteConflictWithArgs(c.startTS, lock.TxnID, 0, lock.Key, kvrpcpb.WriteConflict_Optimistic)
+				return tikverr.NewErrWriteConflictWithArgs(
+					c.startTS,
+					lock.TxnID,
+					0,
+					lock.Key,
+					kvrpcpb.WriteConflict_Optimistic,
+				)
 			}
 			locks = append(locks, lock)
 		}
@@ -426,7 +468,11 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 		}
 		msBeforeExpired := resolveLockRes.TTL
 		if msBeforeExpired > 0 {
-			err = bo.BackoffWithCfgAndMaxSleep(retry.BoTxnLock, int(msBeforeExpired), errors.Errorf("2PC prewrite lockedKeys: %d", len(locks)))
+			err = bo.BackoffWithCfgAndMaxSleep(
+				retry.BoTxnLock,
+				int(msBeforeExpired),
+				errors.Errorf("2PC prewrite lockedKeys: %d", len(locks)),
+			)
 			if err != nil {
 				return err
 			}

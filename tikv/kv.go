@@ -86,14 +86,16 @@ const (
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
 	cfg := config.GetGlobalConfig()
-	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:            addrs,
-		AutoSyncInterval:     30 * time.Second,
-		DialTimeout:          5 * time.Second,
-		TLS:                  tlsConfig,
-		DialKeepAliveTime:    time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTime),
-		DialKeepAliveTimeout: time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout),
-	})
+	cli, err := clientv3.New(
+		clientv3.Config{
+			Endpoints:            addrs,
+			AutoSyncInterval:     30 * time.Second,
+			DialTimeout:          5 * time.Second,
+			TLS:                  tlsConfig,
+			DialKeepAliveTime:    time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTime),
+			DialKeepAliveTimeout: time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout),
+		},
+	)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -235,19 +237,23 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
-	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   cfg.Security.ClusterSSLCA,
-		CertPath: cfg.Security.ClusterSSLCert,
-		KeyPath:  cfg.Security.ClusterSSLKey,
-	},
+	pdCli, err := pd.NewClient(
+		pdAddrs, pd.SecurityOption{
+			CAPath:   cfg.Security.ClusterSSLCA,
+			CertPath: cfg.Security.ClusterSSLCert,
+			KeyPath:  cfg.Security.ClusterSSLKey,
+		},
 		pd.WithGRPCDialOptions(
-			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:    time.Duration(cfg.TiKVClient.GrpcKeepAliveTime) * time.Second,
-				Timeout: time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout) * time.Second,
-			}),
+			grpc.WithKeepaliveParams(
+				keepalive.ClientParameters{
+					Time:    time.Duration(cfg.TiKVClient.GrpcKeepAliveTime) * time.Second,
+					Timeout: time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout) * time.Second,
+				},
+			),
 		),
 		pd.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
-		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding))
+		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
+	)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -318,7 +324,9 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 // DeleteRange delete all versions of all keys in the range[startKey,endKey) immediately.
 // Be careful while using this API. This API doesn't keep recent MVCC versions, but will delete all versions of all keys
 // in the range immediately. Also notice that frequent invocation to this API may cause performance problems to TiKV.
-func (s *KVStore) DeleteRange(ctx context.Context, startKey []byte, endKey []byte, concurrency int) (completedRegions int, err error) {
+func (s *KVStore) DeleteRange(
+	ctx context.Context, startKey []byte, endKey []byte, concurrency int,
+) (completedRegions int, err error) {
 	task := rangetask.NewDeleteRangeTask(s, startKey, endKey, concurrency)
 	err = task.Execute(ctx)
 	if err == nil {
@@ -431,9 +439,12 @@ func (s *KVStore) SupportDeleteRange() (supported bool) {
 }
 
 // SendReq sends a request to locate.
-func (s *KVStore) SendReq(bo *Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error) {
+func (s *KVStore) SendReq(
+	bo *Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration,
+) (*tikvrpc.Response, error) {
 	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())
-	return sender.SendReq(bo, req, regionID, timeout)
+	resp, _, err := sender.SendReq(bo, req, regionID, timeout)
+	return resp, err
 }
 
 // GetRegionCache returns the region cache instance.
@@ -570,12 +581,18 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		}
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
-			resp, err := tikvClient.SendRequest(ctx, storeAddr, tikvrpc.NewRequest(tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{KeyRange: &kvrpcpb.KeyRange{
-				StartKey: []byte(""),
-				EndKey:   []byte(""),
-			}}, kvrpcpb.Context{
-				RequestSource: util.RequestSourceFromCtx(ctx),
-			}), client.ReadTimeoutShort)
+			resp, err := tikvClient.SendRequest(
+				ctx, storeAddr, tikvrpc.NewRequest(
+					tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
+						KeyRange: &kvrpcpb.KeyRange{
+							StartKey: []byte(""),
+							EndKey:   []byte(""),
+						},
+					}, kvrpcpb.Context{
+						RequestSource: util.RequestSourceFromCtx(ctx),
+					},
+				), client.ReadTimeoutShort,
+			)
 			storeIDStr := strconv.Itoa(int(storeID))
 			if err != nil {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
@@ -630,13 +647,15 @@ func (s *KVStore) ruRuntimeStatsMapCleaner() {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			s.ruRuntimeStatsMap.Range(func(key, _ interface{}) bool {
-				startTSTime := oracle.GetTimeFromTS(key.(uint64))
-				if now.Sub(startTSTime) >= cleanThreshold {
-					s.ruRuntimeStatsMap.Delete(key)
-				}
-				return true
-			})
+			s.ruRuntimeStatsMap.Range(
+				func(key, _ interface{}) bool {
+					startTSTime := oracle.GetTimeFromTS(key.(uint64))
+					if now.Sub(startTSTime) >= cleanThreshold {
+						s.ruRuntimeStatsMap.Delete(key)
+					}
+					return true
+				},
+			)
 		}
 	}
 }
@@ -677,12 +696,16 @@ var _ = NewLockResolver
 // It is exported for other pkg to use. For instance, binlog service needs
 // to determine a transaction's commit state.
 // TODO(iosmanthus): support api v2
-func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.ClientOption) (*txnlock.LockResolver, error) {
-	pdCli, err := pd.NewClient(etcdAddrs, pd.SecurityOption{
-		CAPath:   security.ClusterSSLCA,
-		CertPath: security.ClusterSSLCert,
-		KeyPath:  security.ClusterSSLKey,
-	}, opts...)
+func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.ClientOption) (
+	*txnlock.LockResolver, error,
+) {
+	pdCli, err := pd.NewClient(
+		etcdAddrs, pd.SecurityOption{
+			CAPath:   security.ClusterSSLCA,
+			CertPath: security.ClusterSSLCert,
+			KeyPath:  security.ClusterSSLKey,
+		}, opts...,
+	)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -699,7 +722,12 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, err
 	}
 
-	s, err := NewKVStore(uuid, locate.NewCodecPDClient(ModeTxn, pdCli), spkv, client.NewRPCClient(WithSecurity(security)))
+	s, err := NewKVStore(
+		uuid,
+		locate.NewCodecPDClient(ModeTxn, pdCli),
+		spkv,
+		client.NewRPCClient(WithSecurity(security)),
+	)
 	if err != nil {
 		return nil, err
 	}
