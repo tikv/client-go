@@ -2,12 +2,12 @@ package cse
 
 import (
 	"context"
-	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pkg/errors"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
+	"github.com/pkg/errors"
 	"github.com/sony/gobreaker"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -39,7 +39,7 @@ func NewFallback(client pd.Client) (*Fallback, error) {
 	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:     "pd-fallback-client",
 		Interval: 5 * time.Second,
-		Timeout:  5 * time.Second,
+		Timeout:  1 * time.Second,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
 			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
 			return counts.Requests >= 5 && failureRatio >= 0.4
@@ -78,7 +78,6 @@ func NewFallback(client pd.Client) (*Fallback, error) {
 				}()
 			}
 		},
-		IsSuccessful: nil,
 	})
 	f.cb = cb
 	return f, nil
