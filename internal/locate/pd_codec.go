@@ -163,16 +163,7 @@ func (c *CodecPDClient) decodeRegionKeyInPlace(r *pd.Region) error {
 	r.Meta.StartKey = decodedStart
 	r.Meta.EndKey = decodedEnd
 	if r.Buckets != nil {
-		for i, k := range r.Buckets.Keys {
-			if len(k) == 0 {
-				continue
-			}
-			decoded, err := c.codec.DecodeRegionKey(k)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			r.Buckets.Keys[i] = decoded
-		}
+		r.Buckets.Keys, err = c.codec.DecodeBucketKeys(r.Buckets.Keys)
 	}
-	return nil
+	return err
 }
