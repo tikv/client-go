@@ -100,6 +100,7 @@ var (
 	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 	TiKVPreferLeaderFlowsGauge               *prometheus.GaugeVec
+	TiKVSyncRegionDuration                   *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -628,6 +629,15 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of flows under PreferLeader mode.",
 		}, []string{LblType, LblStore})
 
+	TiKVSyncRegionDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "sync_region_duration",
+			Help:      "Bucketed histogram of the duration of sync region.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28),
+		}, []string{LblType})
+
 	initShortcuts()
 }
 
@@ -702,6 +712,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVPreferLeaderFlowsGauge)
+	prometheus.MustRegister(TiKVSyncRegionDuration)
 }
 
 // readCounter reads the value of a prometheus.Counter.

@@ -101,6 +101,8 @@ var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
 
 var NewCSEClient = cse.NewCSEClient
 
+var NewFallback = cse.NewFallback
+
 type CSEClient = cse.Client
 
 // NewCodecV1 is a constructor for v1 Codec.

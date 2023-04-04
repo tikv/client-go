@@ -19,6 +19,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.14.0
 	github.com/prometheus/client_model v0.3.0
+	github.com/sony/gobreaker v0.5.0
 	github.com/stretchr/testify v1.8.1
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
 	github.com/tikv/pd v0.0.0-20230313083840-3e3ae55f68ac
