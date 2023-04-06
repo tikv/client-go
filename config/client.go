@@ -84,6 +84,10 @@ type TiKVClient struct {
 	// TTLRefreshedTxnSize controls whether a transaction should update its TTL or not.
 	TTLRefreshedTxnSize      int64  `toml:"ttl-refreshed-txn-size" json:"ttl-refreshed-txn-size"`
 	ResolveLockLiteThreshold uint64 `toml:"resolve-lock-lite-threshold" json:"resolve-lock-lite-threshold"`
+
+	// EnableCSERegionClient indicates whether to enable the CSE region client.
+	// If it is enabled, the client will locate region from CSE instead of PD.
+	EnableCSERegionClient bool `toml:"enable-cse-region-client" json:"enable-cse-region-client"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
