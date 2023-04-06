@@ -57,8 +57,8 @@ type Codec interface {
 	EncodeRegionKey(key []byte) []byte
 	// DecodeRegionKey decode region's key
 	DecodeRegionKey(encodedKey []byte) ([]byte, error)
-	// DecodeBucketKey decode region bucket's key
-	DecodeBucketKey(encodedKey []byte) ([]byte, error)
+	// DecodeBucketKeys decode region bucket's key
+	DecodeBucketKeys(keys [][]byte) ([][]byte, error)
 	// EncodeRegionRange encode region's start and end.
 	EncodeRegionRange(start, end []byte) ([]byte, []byte)
 	// DecodeRegionRange decode region's start and end.

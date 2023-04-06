@@ -1,6 +1,7 @@
 package apicodec
 
 import (
+	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -203,6 +204,14 @@ func (c *codecV1) DecodeKey(key []byte) ([]byte, error) {
 	return key, nil
 }
 
-func (c *codecV1) DecodeBucketKey(key []byte) ([]byte, error) {
-	return c.DecodeRegionKey(key)
+func (c *codecV1) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
+	ks := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		k, err := c.DecodeRegionKey(key)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		ks = append(ks, k)
+	}
+	return ks, nil
 }

@@ -296,22 +296,71 @@ func (suite *testCodecV2Suite) TestEncodeMPPRequest() {
 	suite.Equal(task.Regions[0].Ranges[0].End, suite.codec.EncodeKey([]byte("b")))
 }
 
-func (suite *testCodecV2Suite) TestDecodeBucketKey() {
-	raw := []byte("a")
-	key := suite.codec.EncodeRegionKey(raw)
-	bucketKey, err := suite.codec.DecodeBucketKey(key)
-	suite.Nil(err)
-	suite.Equal(raw, bucketKey)
+func (suite *testCodecV2Suite) TestDecodeBucketKeys() {
+	encodeWithPrefix := func(prefix, key []byte) []byte {
+		return codec.EncodeBytes(nil, append(prefix, key...))
+	}
 
-	raw = keyspaceEndKey
-	key = codec.EncodeBytes([]byte{}, raw)
-	bucketKey, err = suite.codec.DecodeBucketKey(key)
+	bucketKeys := [][]byte{
+		encodeWithPrefix(prevKeyspacePrefix, []byte("a")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("b")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("c")),
+		suite.codec.EncodeRegionKey([]byte("a")),
+		suite.codec.EncodeRegionKey([]byte("b")),
+		suite.codec.EncodeRegionKey([]byte("c")),
+		encodeWithPrefix(keyspaceEndKey, []byte("")),
+		encodeWithPrefix(keyspaceEndKey, []byte("a")),
+		encodeWithPrefix(keyspaceEndKey, []byte("b")),
+		encodeWithPrefix(keyspaceEndKey, []byte("c")),
+	}
+	keys, err := suite.codec.DecodeBucketKeys(bucketKeys)
 	suite.Nil(err)
-	suite.Empty(bucketKey)
+	suite.Equal([][]byte{
+		{},
+		[]byte("a"),
+		[]byte("b"),
+		[]byte("c"),
+		{},
+	}, keys)
 
-	raw = append(prevKeyspacePrefix, []byte("a")...)
-	key = codec.EncodeBytes([]byte{}, raw)
-	bucketKey, err = suite.codec.DecodeBucketKey(key)
+	bucketKeys = [][]byte{
+		encodeWithPrefix(prevKeyspacePrefix, []byte("a")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("b")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("c")),
+		suite.codec.EncodeRegionKey([]byte("")),
+		suite.codec.EncodeRegionKey([]byte("a")),
+		suite.codec.EncodeRegionKey([]byte("b")),
+		suite.codec.EncodeRegionKey([]byte("c")),
+		{},
+	}
+	keys, err = suite.codec.DecodeBucketKeys(bucketKeys)
 	suite.Nil(err)
-	suite.Empty(bucketKey)
+	suite.Equal([][]byte{
+		{},
+		[]byte("a"),
+		[]byte("b"),
+		[]byte("c"),
+		{},
+	}, keys)
+
+	bucketKeys = [][]byte{
+		{},
+		encodeWithPrefix(prevKeyspacePrefix, []byte("a")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("b")),
+		encodeWithPrefix(prevKeyspacePrefix, []byte("c")),
+		suite.codec.EncodeRegionKey([]byte("")),
+		suite.codec.EncodeRegionKey([]byte("a")),
+		suite.codec.EncodeRegionKey([]byte("b")),
+		suite.codec.EncodeRegionKey([]byte("c")),
+		{},
+	}
+	keys, err = suite.codec.DecodeBucketKeys(bucketKeys)
+	suite.Nil(err)
+	suite.Equal([][]byte{
+		{},
+		[]byte("a"),
+		[]byte("b"),
+		[]byte("c"),
+		{},
+	}, keys)
 }
