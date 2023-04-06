@@ -284,12 +284,12 @@ func (action actionPrewrite) handleSingleBatch(
 			tBegin = time.Now()
 		}
 
-		resp, tryTimes, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, retryTimes, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		// Unexpected error occurs, return it
 		if err != nil {
 			return err
 		}
-		if tryTimes > 0 {
+		if retryTimes > 0 {
 			action.hasRpcRetries = true
 		}
 

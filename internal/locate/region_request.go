@@ -231,11 +231,12 @@ func (s *RegionRequestSender) SetRPCError(err error) {
 
 // SendReq sends a request to tikv server. If fails to send the request to all replicas,
 // a fake region error may be returned. Caller which receives the error should retry the request.
+// It also returns the times of retries in RPC layer. A positive retryTimes indicates a possible undetermined error.
 func (s *RegionRequestSender) SendReq(
 	bo *retry.Backoffer, req *tikvrpc.Request, regionID RegionVerID, timeout time.Duration,
 ) (*tikvrpc.Response, int, error) {
-	resp, _, tryTimes, err := s.SendReqCtx(bo, req, regionID, timeout, tikvrpc.TiKV)
-	return resp, tryTimes, err
+	resp, _, retryTimes, err := s.SendReqCtx(bo, req, regionID, timeout, tikvrpc.TiKV)
+	return resp, retryTimes, err
 }
 
 type replica struct {
@@ -1082,7 +1083,7 @@ func (s *RegionRequestSender) SendReqCtx(
 ) (
 	resp *tikvrpc.Response,
 	rpcCtx *RPCContext,
-	tryTimes int,
+	retryTimes int,
 	err error,
 ) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
@@ -1137,34 +1138,34 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 
 	s.reset()
-	tryTimes = 0
+	retryTimes = 0
 	defer func() {
-		if tryTimes > 0 {
-			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(tryTimes))
+		if retryTimes > 0 {
+			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
 	}()
 	for {
-		if tryTimes > 0 {
+		if retryTimes > 0 {
 			req.IsRetryRequest = true
-			if tryTimes%100 == 0 {
+			if retryTimes%100 == 0 {
 				logutil.Logger(bo.GetCtx()).Warn(
 					"retry",
 					zap.Uint64("region", regionID.GetID()),
-					zap.Int("times", tryTimes),
+					zap.Int("times", retryTimes),
 				)
 			}
 		}
 
 		rpcCtx, err = s.getRPCContext(bo, req, regionID, et, opts...)
 		if err != nil {
-			return nil, nil, tryTimes, err
+			return nil, nil, retryTimes, err
 		}
 
 		if _, err := util.EvalFailpoint("invalidCacheAndRetry"); err == nil {
 			// cooperate with tikvclient/setGcResolveMaxBackoff
 			if c := bo.GetCtx().Value("injectedBackoff"); c != nil {
 				resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
-				return resp, nil, tryTimes, err
+				return resp, nil, retryTimes, err
 			}
 		}
 		if rpcCtx == nil {
@@ -1180,7 +1181,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				zap.Stringer("region", &regionID),
 			)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
-			return resp, nil, tryTimes, err
+			return resp, nil, retryTimes, err
 		}
 
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
@@ -1196,13 +1197,13 @@ func (s *RegionRequestSender) SendReqCtx(
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
-			return nil, nil, tryTimes, err
+			return nil, nil, retryTimes, err
 		}
 
 		// recheck whether the session/query is killed during the Next()
 		boVars := bo.GetVars()
 		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
-			return nil, nil, tryTimes, errors.WithStack(tikverr.ErrQueryInterrupted)
+			return nil, nil, retryTimes, errors.WithStack(tikverr.ErrQueryInterrupted)
 		}
 		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
 			if val.(bool) {
@@ -1210,22 +1211,22 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 		if retry {
-			tryTimes++
+			retryTimes++
 			continue
 		}
 
 		var regionErr *errorpb.Error
 		regionErr, err = resp.GetRegionError()
 		if err != nil {
-			return nil, nil, tryTimes, err
+			return nil, nil, retryTimes, err
 		}
 		if regionErr != nil {
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
-				return nil, nil, tryTimes, err
+				return nil, nil, retryTimes, err
 			}
 			if retry {
-				tryTimes++
+				retryTimes++
 				continue
 			}
 		} else {
@@ -1233,7 +1234,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				s.replicaSelector.onSendSuccess()
 			}
 		}
-		return resp, rpcCtx, tryTimes, nil
+		return resp, rpcCtx, retryTimes, nil
 	}
 }
 
