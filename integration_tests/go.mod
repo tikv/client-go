@@ -108,6 +108,4 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/tidb => github.com/CabinfeverB/tidb v1.1.0-beta.0.20230301105538-509b40bfd931
-
 replace github.com/pingcap/kvproto => github.com/iosmanthus/kvproto v0.0.0-20230406084759-f5b2654a9915
