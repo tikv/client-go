@@ -2,13 +2,10 @@ package cse
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/pkg/errors"
-	"github.com/sony/gobreaker"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -19,75 +16,52 @@ var (
 
 type Fallback struct {
 	pd.Client
-	cse             pd.Client
-	cb              *gobreaker.CircuitBreaker
-	originAvailable uint32
-	done            chan struct{}
+	cse     pd.Client
+	breaker *asyncBreaker
+}
+
+func probePD(name string, client pd.Client, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_, err := client.GetRegionByID(ctx, 1)
+	if err == nil {
+		log.Warn("mark pd client as available", zap.String("name", name))
+		return nil
+	}
+	log.Warn("pd client still unavailable", zap.String("name", name))
+	return err
 }
 
 func NewFallback(client pd.Client) (*Fallback, error) {
 	f := &Fallback{
-		Client:          client,
-		originAvailable: 1,
-		done:            make(chan struct{}, 1),
+		Client: client,
 	}
 	cse, err := NewCSEClient(client)
 	if err != nil {
 		return nil, err
 	}
 	f.cse = cse
-	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
-		Name:     "pd-fallback-client",
-		Interval: 5 * time.Second,
-		Timeout:  1 * time.Second,
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-			return counts.Requests >= 5 && failureRatio >= 0.4
+
+	s := settings{
+		Name:          "pd-fallback-client",
+		Interval:      5 * time.Second,
+		Timeout:       1 * time.Second,
+		ProbeInterval: 1 * time.Second,
+		ReadyToTrip:   ifMostFailures,
+		Probe: func(name string) error {
+			log.Warn("origin pd client unavailable, start probing", zap.String("name", name))
+			return probePD(name, client, 1*time.Second)
 		},
-		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
-			switch {
-			case from == gobreaker.StateClosed && to == gobreaker.StateOpen:
-				log.Warn("mark pd client as unavailable", zap.String("name", name))
-				atomic.CompareAndSwapUint32(&f.originAvailable, 1, 0)
-				go func() {
-					ticker := time.NewTicker(1 * time.Second)
-					for {
-						select {
-						case <-ticker.C:
-							var success bool
-							func() {
-								ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-								defer cancel()
-								_, err := client.GetRegionByID(ctx, 1)
-								if err == nil {
-									log.Warn("mark pd client as available", zap.String("name", name))
-									atomic.CompareAndSwapUint32(&f.originAvailable, 0, 1)
-									success = true
-									return
-								}
-								log.Warn("pd client still unavailable")
-							}()
-							if success {
-								return
-							}
-						case <-f.done:
-							return
-						default:
-						}
-					}
-				}()
-			}
-		},
-	})
-	f.cb = cb
+	}
+
+	breaker := newAsyncBreaker(s)
+	f.breaker = breaker
+
 	return f, nil
 }
 
 func (f *Fallback) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	resp, err := f.cb.Execute(func() (interface{}, error) {
-		if atomic.LoadUint32(&f.originAvailable) == 0 {
-			return nil, errors.New("origin pd client is not available")
-		}
+	resp, err := f.breaker.Execute(func() (interface{}, error) {
 		return f.Client.GetRegion(ctx, key, opts...)
 	})
 	if err == nil {
@@ -97,10 +71,7 @@ func (f *Fallback) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegi
 }
 
 func (f *Fallback) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	resp, err := f.cb.Execute(func() (interface{}, error) {
-		if atomic.LoadUint32(&f.originAvailable) == 0 {
-			return nil, errors.New("origin pd client is not available")
-		}
+	resp, err := f.breaker.Execute(func() (interface{}, error) {
 		return f.Client.GetPrevRegion(ctx, key, opts...)
 	})
 	if err == nil {
@@ -110,10 +81,7 @@ func (f *Fallback) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.Get
 }
 
 func (f *Fallback) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
-	resp, err := f.cb.Execute(func() (interface{}, error) {
-		if atomic.LoadUint32(&f.originAvailable) == 0 {
-			return nil, errors.New("origin pd client is not available")
-		}
+	resp, err := f.breaker.Execute(func() (interface{}, error) {
 		return f.Client.GetRegionByID(ctx, regionID, opts...)
 	})
 	if err == nil {
@@ -123,10 +91,7 @@ func (f *Fallback) GetRegionByID(ctx context.Context, regionID uint64, opts ...p
 }
 
 func (f *Fallback) ScanRegions(ctx context.Context, key, endKey []byte, limit int) ([]*pd.Region, error) {
-	resp, err := f.cb.Execute(func() (interface{}, error) {
-		if atomic.LoadUint32(&f.originAvailable) == 0 {
-			return nil, errors.New("origin pd client is not available")
-		}
+	resp, err := f.breaker.Execute(func() (interface{}, error) {
 		return f.Client.ScanRegions(ctx, key, endKey, limit)
 	})
 	if err == nil {
@@ -136,10 +101,7 @@ func (f *Fallback) ScanRegions(ctx context.Context, key, endKey []byte, limit in
 }
 
 func (f *Fallback) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
-	resp, err := f.cb.Execute(func() (interface{}, error) {
-		if atomic.LoadUint32(&f.originAvailable) == 0 {
-			return nil, errors.New("origin pd client is not available")
-		}
+	resp, err := f.breaker.Execute(func() (interface{}, error) {
 		return f.Client.GetStore(ctx, storeID)
 	})
 	if err == nil {
@@ -149,10 +111,7 @@ func (f *Fallback) GetStore(ctx context.Context, storeID uint64) (*metapb.Store,
 }
 
 func (f *Fallback) GetAllStores(ctx context.Context, opts ...pd.GetStoreOption) ([]*metapb.Store, error) {
-	resp, err := f.cb.Execute(func() (interface{}, error) {
-		if atomic.LoadUint32(&f.originAvailable) == 0 {
-			return nil, errors.New("origin pd client is not available")
-		}
+	resp, err := f.breaker.Execute(func() (interface{}, error) {
 		return f.Client.GetAllStores(ctx, opts...)
 	})
 	if err == nil {
@@ -163,5 +122,5 @@ func (f *Fallback) GetAllStores(ctx context.Context, opts ...pd.GetStoreOption) 
 
 func (f *Fallback) Close() {
 	f.cse.Close()
-	f.done <- struct{}{}
+	f.breaker.Close()
 }

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -17,7 +16,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
 	"github.com/pkg/errors"
-	"github.com/sony/gobreaker"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -32,26 +30,17 @@ var (
 )
 
 var (
-	StoresRefreshInterval = time.Second * 1
-	SyncRegionTimeout     = time.Second * 1
+	StoresRefreshInterval = time.Second * 5
+	SyncRegionTimeout     = time.Second * 2
 )
 
 var (
 	ErrRegionNotFound = errors.New("region not found")
 )
 
-type liveliness int64
-
-const (
-	reachable liveliness = iota
-	unreachable
-)
-
 type store struct {
 	*metapb.Store
-	state liveliness
-	cb    *gobreaker.CircuitBreaker
-	done  chan<- struct{}
+	breaker *asyncBreaker
 }
 
 type Client struct {
@@ -90,6 +79,22 @@ func NewCSEClient(origin pd.Client) (c *Client, err error) {
 	return c, nil
 }
 
+func (c *Client) probeStoreStatus(name string, addr string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s", addr), nil)
+	if err != nil {
+		return err
+	}
+	_, err = c.httpClient.Do(req)
+	if err != nil {
+		log.Warn("failed to check store", zap.String("name", name), zap.Error(err))
+		return err
+	}
+	log.Warn("mark store reachable", zap.String("name", name), zap.String("store", addr))
+	return nil
+}
+
 func (c *Client) updateStores(stores []*metapb.Store) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -97,28 +102,26 @@ func (c *Client) updateStores(stores []*metapb.Store) {
 		if origin, ok := c.mu.stores[s.Id]; !ok {
 			s := &store{
 				Store: s,
-				state: reachable,
-				done:  make(chan struct{}, 1),
 			}
-			s.cb = gobreaker.NewCircuitBreaker(gobreaker.Settings{
-				Name:     fmt.Sprintf("store-%d", s.GetId()),
-				Interval: 5 * time.Second,
-				Timeout:  1 * time.Second,
-				ReadyToTrip: func(counts gobreaker.Counts) bool {
-					failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-					return counts.Requests >= 5 && failureRatio >= 0.4
+			settings := settings{
+				Name:          fmt.Sprintf("store-%d", s.GetId()),
+				Interval:      5 * time.Second,
+				Timeout:       1 * time.Second,
+				ProbeInterval: 1 * time.Second,
+				ReadyToTrip:   ifMostFailures,
+				Probe: func(name string) error {
+					addr := s.GetStatusAddress()
+					log.Warn("store is marked as unavailable, probing",
+						zap.String("name", name),
+						zap.String("store", addr))
+					return c.probeStoreStatus(name, addr, 1*time.Second)
 				},
-				OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
-					switch {
-					case from == gobreaker.StateClosed && to == gobreaker.StateOpen:
-						c.markStoreUnreachable(s)
-					}
-				},
-			})
+			}
+			s.breaker = newAsyncBreaker(settings)
 			c.mu.stores[s.GetId()] = s
 		} else {
 			if s.GetState() == metapb.StoreState_Tombstone {
-				origin.done <- struct{}{}
+				origin.breaker.Close()
 				delete(c.mu.stores, s.GetId())
 				continue
 			}
@@ -170,20 +173,12 @@ func (c *Client) Close() {
 	c.done <- struct{}{}
 	// Close the origin PDClient.
 	c.Client.Close()
-}
-
-func (c *Client) GetAllStores(context.Context, ...pd.GetStoreOption) ([]*metapb.Store, error) {
-	return c.getAllStores(), nil
-}
-
-func (c *Client) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	s, ok := c.mu.stores[storeID]
-	if !ok {
-		return nil, errors.Errorf("store %d not found", storeID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.mu.stores {
+		s.breaker.Close()
+		delete(c.mu.stores, s.GetId())
 	}
-	return s.Store, nil
 }
 
 func (c *Client) getAliveTiKVStores() []*store {
@@ -251,10 +246,7 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 				rchan <- mkErr(index, err)
 				return
 			}
-			r, err := store.cb.Execute(func() (interface{}, error) {
-				if atomic.LoadInt64((*int64)(&store.state)) == int64(unreachable) {
-					return nil, errors.Errorf("store %d is unreachable", store.GetId())
-				}
+			r, err := store.breaker.Execute(func() (any, error) {
 				return c.httpClient.Do(req)
 			})
 			if err != nil {
@@ -420,44 +412,16 @@ func (c *Client) ScanRegions(ctx context.Context, startKey, endKey []byte, limit
 	return mkPDRegions(regions...), nil
 }
 
-func (c *Client) markStoreUnreachable(s *store) {
-	if atomic.CompareAndSwapInt64((*int64)(&s.state), int64(reachable), int64(unreachable)) {
-		log.Info("mark store unreachable", zap.String("store", s.StatusAddress))
-		go c.checkUtilStoreReachable(s)
-	}
+func (c *Client) GetAllStores(context.Context, ...pd.GetStoreOption) ([]*metapb.Store, error) {
+	return c.getAllStores(), nil
 }
 
-func (c *Client) checkUtilStoreReachable(s *store) {
-	ticker := time.NewTicker(time.Second)
-	for {
-		select {
-		case <-ticker.C:
-			var success bool
-			func() {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s", s.StatusAddress), nil)
-				if err != nil {
-					log.Warn("failed to create request", zap.Error(err))
-					return
-				}
-				_, err = c.httpClient.Do(req)
-				if err != nil {
-					log.Warn("failed to check store", zap.Error(err))
-					return
-				}
-				log.Warn("mark store reachable", zap.String("store", s.StatusAddress))
-				state := atomic.LoadInt64((*int64)(&s.state))
-				atomic.CompareAndSwapInt64((*int64)(&s.state), state, int64(reachable))
-				success = true
-				return
-			}()
-			if success {
-				return
-			}
-		case <-c.done:
-			return
-		default:
-		}
+func (c *Client) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s, ok := c.mu.stores[storeID]
+	if !ok {
+		return nil, errors.Errorf("store %d not found", storeID)
 	}
+	return s.Store, nil
 }
