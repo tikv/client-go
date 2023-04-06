@@ -111,6 +111,7 @@ const (
 
 	CmdDebugGetRegionProperties CmdType = 2048 + iota
 	CmdCompact                          // TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
 )
@@ -209,6 +210,8 @@ func (t CmdType) String() string {
 		return "FlashbackToVersion"
 	case CmdPrepareFlashbackToVersion:
 		return "PrepareFlashbackToVersion"
+	case CmdGetTiFlashSystemTable:
+		return "GetTiFlashSystemTable"
 	}
 	return "Unknown"
 }
@@ -487,6 +490,11 @@ func (req *Request) DebugGetRegionProperties() *debugpb.GetRegionPropertiesReque
 // Compact returns CompactRequest in request.
 func (req *Request) Compact() *kvrpcpb.CompactRequest {
 	return req.Req.(*kvrpcpb.CompactRequest)
+}
+
+// GetTiFlashSystemTable returns TiFlashSystemTableRequest in request.
+func (req *Request) GetTiFlashSystemTable() *kvrpcpb.TiFlashSystemTableRequest {
+	return req.Req.(*kvrpcpb.TiFlashSystemTableRequest)
 }
 
 // Empty returns BatchCommandsEmptyRequest in request.
@@ -1108,6 +1116,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.KvFlashbackToVersion(ctx, req.FlashbackToVersion())
 	case CmdPrepareFlashbackToVersion:
 		resp.Resp, err = client.KvPrepareFlashbackToVersion(ctx, req.PrepareFlashbackToVersion())
+	case CmdGetTiFlashSystemTable:
+		resp.Resp, err = client.GetTiFlashSystemTable(ctx, req.GetTiFlashSystemTable())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
