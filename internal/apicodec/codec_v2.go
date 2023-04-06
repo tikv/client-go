@@ -691,17 +691,6 @@ func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	return encodedKey[len(c.prefix):], nil
 }
 
-func (c *codecV2) DecodeBucketsKey(encodedKey []byte) ([]byte, error) {
-	key, err := c.memCodec.decodeKey(encodedKey)
-	if err != nil {
-		return nil, err
-	}
-	if bytes.Compare(key, c.endKey) >= 0 || bytes.Compare(key, c.prefix) < 0 {
-		return []byte{}, nil
-	}
-	return key[len(c.prefix):], nil
-}
-
 func (c *codecV2) encodeKeyRange(keyRange *kvrpcpb.KeyRange) *kvrpcpb.KeyRange {
 	encodedRange := &kvrpcpb.KeyRange{}
 	encodedRange.StartKey, encodedRange.EndKey = c.encodeRange(keyRange.StartKey, keyRange.EndKey, false)

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/proto" //nolint:staticcheck
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
@@ -86,11 +86,12 @@ func (c *Client) probeStoreStatus(name string, addr string, timeout time.Duratio
 	if err != nil {
 		return err
 	}
-	_, err = c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		log.Warn("failed to check store", zap.String("name", name), zap.Error(err))
 		return err
 	}
+	defer resp.Body.Close()
 	log.Warn("mark store reachable", zap.String("name", name), zap.String("store", addr))
 	return nil
 }
@@ -247,13 +248,14 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 				return
 			}
 			r, err := store.breaker.Execute(func() (any, error) {
-				return c.httpClient.Do(req)
+				return c.httpClient.Do(req) //nolint:bodyclose
 			})
 			if err != nil {
 				rchan <- mkErr(index, err)
 				return
 			}
 			resp := r.(*http.Response)
+			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
 				rchan <- mkErr(index, fmt.Errorf("unexpected status code: %d", resp.StatusCode))
@@ -263,7 +265,6 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 			syncResp := &pdpb.SyncRegionResponse{}
 			func() {
 				var buf []byte
-				defer resp.Body.Close()
 				buf, err = io.ReadAll(resp.Body)
 				if err != nil {
 					return
