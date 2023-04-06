@@ -111,7 +111,7 @@ const (
 
 	CmdDebugGetRegionProperties CmdType = 2048 + iota
 	CmdCompact                          // TODO: These non TiKV RPCs should be moved out of TiKV client
-	CmdGetTiFlashSystemTable 			// TODO: These non TiKV RPCs should be moved out of TiKV client
+	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
 )
