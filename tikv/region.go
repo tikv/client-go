@@ -35,13 +35,13 @@
 package tikv
 
 import (
-	"github.com/tikv/client-go/v2/internal/locate/cse"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/internal/locate/cse"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )
@@ -99,8 +99,10 @@ var NewCodecPDClient = locate.NewCodecPDClient
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
 var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
 
+// NewCSEClient is a constructor for CSEClient
 var NewCSEClient = cse.NewCSEClient
 
+// NewFallback is a constructor for Fallback
 var NewFallback = cse.NewFallback
 
 type CSEClient = cse.Client
