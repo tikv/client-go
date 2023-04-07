@@ -17,11 +17,6 @@ var (
 	errUnavailable = errors.New("resource unavailable")
 )
 
-func ifMostFailures(counts gobreaker.Counts) bool {
-	failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-	return counts.Requests >= 5 && failureRatio >= 0.4
-}
-
 type asyncBreaker struct {
 	cb    *gobreaker.CircuitBreaker
 	state uint32

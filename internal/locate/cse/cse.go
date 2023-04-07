@@ -48,6 +48,8 @@ type Client struct {
 
 	done chan struct{}
 
+	cbOpt *CBOptions
+
 	mu struct {
 		sync.RWMutex
 		stores map[uint64]*store
@@ -58,11 +60,17 @@ type Client struct {
 	gp *util.Spool
 }
 
-func NewCSEClient(origin pd.Client) (c *Client, err error) {
+func NewCSEClient(origin pd.Client, cbOpt *CBOptions) (c *Client, err error) {
+	if cbOpt == nil {
+		cbOpt = defaultCBOptions()
+	}
+
 	c = &Client{
 		Client: origin,
 
 		done: make(chan struct{}, 1),
+
+		cbOpt: cbOpt,
 
 		httpClient: &http.Client{
 			Transport: &http.Transport{},
@@ -106,10 +114,10 @@ func (c *Client) updateStores(stores []*metapb.Store) {
 			}
 			settings := settings{
 				Name:          fmt.Sprintf("store-%d", s.GetId()),
-				Interval:      5 * time.Second,
-				Timeout:       1 * time.Second,
-				ProbeInterval: 1 * time.Second,
-				ReadyToTrip:   ifMostFailures,
+				Interval:      c.cbOpt.Interval,
+				Timeout:       c.cbOpt.Timeout,
+				ProbeInterval: c.cbOpt.ProbeInterval,
+				ReadyToTrip:   c.cbOpt.ReadyToTrip,
 				Probe: func(name string) error {
 					addr := s.GetStatusAddress()
 					log.Warn("store is marked as unavailable, probing",
@@ -121,6 +129,7 @@ func (c *Client) updateStores(stores []*metapb.Store) {
 			s.breaker = newAsyncBreaker(settings)
 			c.mu.stores[s.GetId()] = s
 		} else {
+			// Remove the store from the map if it's tombstone.
 			if s.GetState() == metapb.StoreState_Tombstone {
 				origin.breaker.Close()
 				delete(c.mu.stores, s.GetId())
@@ -220,6 +229,9 @@ func mkErr(idx int, err error) result {
 	return result{err: err, index: idx}
 }
 
+// fanout sends the request to all the "up" TiKV stores concurrently.
+// Then, collect the region results, and merge them into a BTreeMap: RegionsInfo provided by the PD.
+// Finally, return the RegionsInfo.
 func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (*pdcore.RegionsInfo, error) {
 	start := time.Now()
 	defer func() {
@@ -247,6 +259,8 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 				rchan <- mkErr(index, err)
 				return
 			}
+			// If the breaker is open or the store is probed as unreachable,
+			// the request will be rejected immediately.
 			r, err := store.breaker.Execute(func() (any, error) {
 				return c.httpClient.Do(req) //nolint:bodyclose
 			})
@@ -281,6 +295,7 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 			regionInfos := make([]*pdcore.RegionInfo, 0, len(syncResp.Regions))
 			// TODO(iosmanthus): extract buckets and peer info from resp.
 			for i, leader := range syncResp.RegionLeaders {
+				// Found a region with leader.
 				if leader.GetId() != 0 {
 					region := syncResp.Regions[i]
 					downPeers := syncResp.DownPeers[i].Peers
@@ -331,7 +346,7 @@ func mkPDRegions(regions ...*pdcore.RegionInfo) []*pd.Region {
 	return rs
 }
 
-func (c *Client) GetRegion(ctx context.Context, key []byte, pts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *Client) GetRegion(ctx context.Context, key []byte, _ ...pd.GetRegionOption) (*pd.Region, error) {
 	_, start, err := codec.DecodeBytes(key, nil)
 	if err != nil {
 		return nil, err
@@ -352,7 +367,7 @@ func (c *Client) GetRegion(ctx context.Context, key []byte, pts ...pd.GetRegionO
 	return resp, nil
 }
 
-func (c *Client) GetPrevRegion(ctx context.Context, key []byte, pts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *Client) GetPrevRegion(ctx context.Context, key []byte, _ ...pd.GetRegionOption) (*pd.Region, error) {
 	_, start, err := codec.DecodeBytes(key, nil)
 	if err != nil {
 		return nil, err
@@ -372,7 +387,7 @@ func (c *Client) GetPrevRegion(ctx context.Context, key []byte, pts ...pd.GetReg
 	return mkPDRegions(region)[0], nil
 }
 
-func (c *Client) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *Client) GetRegionByID(ctx context.Context, regionID uint64, _ ...pd.GetRegionOption) (*pd.Region, error) {
 	regionsInfo, err := c.fanout(ctx, http.MethodGet, "sync_region_by_id", &SyncRegionByIDRequest{
 		RegionID: regionID,
 	})
@@ -417,7 +432,7 @@ func (c *Client) GetAllStores(context.Context, ...pd.GetStoreOption) ([]*metapb.
 	return c.getAllStores(), nil
 }
 
-func (c *Client) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
+func (c *Client) GetStore(_ context.Context, storeID uint64) (*metapb.Store, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	s, ok := c.mu.stores[storeID]

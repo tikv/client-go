@@ -102,10 +102,11 @@ var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
 // NewCSEClient is a constructor for CSEClient
 var NewCSEClient = cse.NewCSEClient
 
-// NewFallback is a constructor for Fallback
-var NewFallback = cse.NewFallback
+// NewClientWithFallback is a constructor for ClientWithFallback
+var NewClientWithFallback = cse.NewClientWithFallback
 
-type CSEClient = cse.Client
+// CBOptions is the circuit breaker options for CSEClient/ClientWithFallback
+type CBOptions = cse.CBOptions
 
 // NewCodecV1 is a constructor for v1 Codec.
 var NewCodecV1 = apicodec.NewCodecV1
