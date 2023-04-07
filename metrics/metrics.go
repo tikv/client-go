@@ -47,6 +47,7 @@ var (
 	TiKVSendReqCounter                       *prometheus.CounterVec
 	TiKVSendReqTimeCounter                   *prometheus.CounterVec
 	TiKVRPCNetLatencyHistogram               *prometheus.HistogramVec
+	TiKVRPCLatencyHistogram                  *prometheus.HistogramVec
 	TiKVCoprocessorHistogram                 *prometheus.HistogramVec
 	TiKVLockResolverCounter                  *prometheus.CounterVec
 	TiKVRegionErrorCounter                   *prometheus.CounterVec
@@ -123,6 +124,7 @@ const (
 	LblScope           = "scope"
 	LblInternal        = "internal"
 	LblGeneral         = "general"
+	LblKeyspaceID      = "keyspace_id"
 )
 
 func initMetrics(namespace, subsystem string) {
@@ -177,6 +179,15 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Bucketed histogram of time difference between TiDB and TiKV.",
 			Buckets:   prometheus.ExponentialBuckets(5e-5, 2, 18), // 50us ~ 6.5s
 		}, []string{LblStore, LblScope})
+
+	TiKVRPCLatencyHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "rpc_latency",
+			Help:      "Bucketed histogram of time difference between TiDB and TiKV.",
+			Buckets:   prometheus.ExponentialBuckets(5e-5, 2, 18), // 50us ~ 6.5s
+		}, []string{LblType, LblKeyspaceID})
 
 	TiKVCoprocessorHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -649,6 +660,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVSendReqCounter)
 	prometheus.MustRegister(TiKVSendReqTimeCounter)
 	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
+	prometheus.MustRegister(TiKVRPCLatencyHistogram)
 	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVRegionErrorCounter)

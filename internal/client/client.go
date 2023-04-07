@@ -672,11 +672,104 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if err != nil {
 		return nil, err
 	}
+	startts := time.Now()
 	resp, err := c.sendRequest(ctx, addr, req, timeout)
+	rpcDuration := time.Since(startts)
+	c.setMetrics(req, rpcDuration)
 	if err != nil {
 		return nil, err
 	}
+
 	return codec.DecodeResponse(req, resp)
+}
+
+func (c *RPCClient) setMetrics(req *tikvrpc.Request, rpcDuration time.Duration) {
+
+	ctx := &req.Context
+	keyspace_id := fmt.Sprintf("%d", ctx.KeyspaceId)
+	val := float64(rpcDuration.Milliseconds())
+	switch req.Type {
+	// Transaction Request Types.
+	case tikvrpc.CmdGet:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("get", keyspace_id).Observe(val)
+	case tikvrpc.CmdScan:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("scan", keyspace_id).Observe(val)
+	case tikvrpc.CmdPrewrite:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("prewrite", keyspace_id).Observe(val)
+	case tikvrpc.CmdCommit:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("commit", keyspace_id).Observe(val)
+	case tikvrpc.CmdCleanup:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("cleanup", keyspace_id).Observe(val)
+	case tikvrpc.CmdBatchGet:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("batch_get", keyspace_id).Observe(val)
+	case tikvrpc.CmdBatchRollback:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("batch_roll_back", keyspace_id).Observe(val)
+	case tikvrpc.CmdScanLock:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("scan_lock", keyspace_id).Observe(val)
+	case tikvrpc.CmdResolveLock:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("resolve_lock", keyspace_id).Observe(val)
+	case tikvrpc.CmdGC:
+		// TODO: Deprecate Central GC Mode.
+	case tikvrpc.CmdDeleteRange:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("delete_range", keyspace_id).Observe(val)
+	case tikvrpc.CmdPessimisticLock:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("pessimistic_lock", keyspace_id).Observe(val)
+	case tikvrpc.CmdPessimisticRollback:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("pessimistic_rollback", keyspace_id).Observe(val)
+	case tikvrpc.CmdTxnHeartBeat:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("txn_heartbeat", keyspace_id).Observe(val)
+	case tikvrpc.CmdCheckTxnStatus:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("check_txn_status", keyspace_id).Observe(val)
+	case tikvrpc.CmdCheckSecondaryLocks:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("secondary_locks", keyspace_id).Observe(val)
+
+	// Raw Request Types.
+	case tikvrpc.CmdRawGet:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_get", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawBatchGet:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_batch_get", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawPut:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_put", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawBatchPut:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_batch_put", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawDelete:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_delete", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawBatchDelete:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_batch_delete", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawDeleteRange:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_delete_range", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawScan:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_scan", keyspace_id).Observe(val)
+	case tikvrpc.CmdGetKeyTTL:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("get_key_ttl", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawCompareAndSwap:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_compare_and_swap", keyspace_id).Observe(val)
+	case tikvrpc.CmdRawChecksum:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("raw_check_sum", keyspace_id).Observe(val)
+
+	// TiFlash Requests
+	case tikvrpc.CmdBatchCop:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("batch_cop", keyspace_id).Observe(val)
+	case tikvrpc.CmdMPPTask:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("mpp_task", keyspace_id).Observe(val)
+
+	// Other requests.
+	case tikvrpc.CmdUnsafeDestroyRange:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("unsafe_destroy_range", keyspace_id).Observe(val)
+	case tikvrpc.CmdPhysicalScanLock:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("physical_scan_lock", keyspace_id).Observe(val)
+	case tikvrpc.CmdStoreSafeTS:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("store_safe_ts", keyspace_id).Observe(val)
+	case tikvrpc.CmdCop:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("cop", keyspace_id).Observe(val)
+	case tikvrpc.CmdCopStream:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("cop_stream", keyspace_id).Observe(val)
+	case tikvrpc.CmdMvccGetByKey:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("mvcc_get_by_key", keyspace_id).Observe(val)
+	case tikvrpc.CmdSplitRegion:
+		metrics.TiKVRPCLatencyHistogram.WithLabelValues("split_region", keyspace_id).Observe(val)
+	}
+
 }
 
 func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {
