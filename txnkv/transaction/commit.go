@@ -102,7 +102,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			tBegin = time.Now()
 		}
 
-		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		// If we fail to receive response for the request that commits primary key, it will be undetermined whether this
 		// transaction has been successfully committed.
 		// Under this circumstance, we can not declare the commit is complete (may lead to data lost), nor can we throw

@@ -698,7 +698,7 @@ func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, 
 		if err != nil {
 			return nil, nil, err
 		}
-		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
+		resp, _, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -785,7 +785,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *raw
 
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
-	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
+	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 
 	batchResp := kvrpc.BatchResult{}
 	if err != nil {
@@ -852,7 +852,7 @@ func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey
 		})
 
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
-		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
+		resp, _, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -938,7 +938,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOpt
 	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	req.ApiVersion = c.apiVersion
-	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
+	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 	if err != nil {
 		return err
 	}

@@ -184,7 +184,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 		}
 		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 		startTime := time.Now()
-		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		diagCtx.reqDuration = time.Since(startTime)
 		diagCtx.sender = sender
 		if action.LockCtx.Stats != nil {
