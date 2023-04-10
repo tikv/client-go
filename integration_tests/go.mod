@@ -6,12 +6,12 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230317010544-b47a4830141f
+	github.com/pingcap/kvproto v0.0.0-20230406125331-ce835ae20dfc
 	github.com/pingcap/tidb v1.1.0-beta.0.20230321033041-8ba2035203f7
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.2
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.7-0.20230317032622-884a634378d4
+	github.com/tikv/client-go/v2 v2.0.7-0.20230328084104-ea13e9700259
 	github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1
 	go.uber.org/goleak v1.2.1
 )
@@ -56,7 +56,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pingcap/badger v1.5.1-0.20230103063557-828f39b09b6d // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
-	github.com/pingcap/log v1.1.1-0.20221116035753-734d527bc87c // indirect
+	github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 // indirect
 	github.com/pingcap/tidb/parser v0.0.0-20230321033041-8ba2035203f7 // indirect
 	github.com/pingcap/tipb v0.0.0-20230310043643-5362260ee6f7 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -67,7 +67,7 @@ require (
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20220927061507-ef77025ab5aa // indirect
 	github.com/rogpeppe/go-internal v1.8.0 // indirect
-	github.com/shirou/gopsutil/v3 v3.23.1 // indirect
+	github.com/shirou/gopsutil/v3 v3.23.2 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -100,4 +100,4 @@ require (
 
 replace github.com/tikv/client-go/v2 => ../
 
-replace github.com/pingcap/kvproto => github.com/MyonKeminta/kvproto v0.0.0-20230330062117-304159d7780c
+replace github.com/pingcap/tidb => github.com/MyonKeminta/tidb v1.1.0-alpha.1.0.20230406125646-d4f0e3afba21

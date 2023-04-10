@@ -37,6 +37,7 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	stderrs "errors"
 	"fmt"
 	"math"
 	"sync"
@@ -63,6 +64,10 @@ var getMaxBackoff = tikv.ConfigProbe{}.GetGetMaxBackoff()
 
 func TestLock(t *testing.T) {
 	suite.Run(t, new(testLockSuite))
+}
+
+func TestLockWithTiKV(t *testing.T) {
+	suite.Run(t, new(testLockWithTiKVSuite))
 }
 
 type testLockSuite struct {
@@ -1006,4 +1011,149 @@ func (s *testLockSuite) TestLockWaitTimeLimit() {
 
 	s.Nil(txn1.Rollback())
 	s.Nil(txn2.Rollback())
+}
+
+type testLockWithTiKVSuite struct {
+	suite.Suite
+	store tikv.StoreProbe
+}
+
+func (s *testLockWithTiKVSuite) SetupTest() {
+	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
+}
+
+func (s *testLockWithTiKVSuite) TearDownTest() {
+	s.store.Close()
+}
+
+// TODO: Migrate FairLocking related tests here.
+
+func withRetry[T any](f func() (T, error), limit int, delay time.Duration) (T, error) {
+	for {
+		res, err := f()
+		if err == nil {
+			return res, nil
+		}
+
+		limit--
+		if limit <= 0 {
+			return res, err
+		}
+
+		if delay != 0 {
+			time.Sleep(delay)
+		}
+	}
+}
+
+func (s *testLockWithTiKVSuite) checkIsKeyLocked(key []byte, expectedLocked bool) {
+	// To be aware of the result of async operations (e.g. async pessimistic rollback), retry if the check fails.
+	_, err := withRetry(func() (interface{}, error) {
+		txn, err := s.store.Begin()
+		s.NoError(err)
+
+		txn.SetPessimistic(true)
+
+		lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
+		err = txn.LockKeys(context.Background(), lockCtx, key)
+
+		var isCheckSuccess bool
+		if err != nil && stderrs.Is(err, tikverr.ErrLockAcquireFailAndNoWaitSet) {
+			isCheckSuccess = expectedLocked
+		} else {
+			s.Nil(err)
+			isCheckSuccess = !expectedLocked
+		}
+
+		if isCheckSuccess {
+			s.Nil(txn.Rollback())
+			return nil, nil
+		}
+
+		s.Nil(txn.Rollback())
+
+		return nil, errors.Errorf("expected key %q locked = %v, but the actual result not match", string(key), expectedLocked)
+	}, 5, time.Millisecond*50)
+
+	s.NoError(err)
+}
+
+func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
+	test := func(asyncCommit bool, onePC bool, causalConsistency bool) {
+		key := []byte("k1")
+		value1 := []byte("v1")
+		value2 := []byte("v2")
+
+		txn, err := s.store.Begin()
+		s.NoError(err)
+
+		txn.SetPessimistic(true)
+
+		txn.SetEnableAsyncCommit(asyncCommit)
+		txn.SetEnable1PC(onePC)
+		txn.SetCausalConsistency(causalConsistency)
+
+		txn.StartAggressiveLocking()
+		lockTime := time.Now()
+		lockCtx := kv.NewLockCtx(txn.StartTS(), 200, lockTime)
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, key))
+		txn.DoneAggressiveLocking(context.Background())
+		s.NoError(txn.Set(key, value1))
+
+		simulatedCommitter, err := txn.NewCommitter(1)
+		s.NoError(err)
+
+		s.NoError(failpoint.Enable("tikvclient/beforePrewrite", "pause"))
+		commitFinishCh := make(chan error)
+		go func() {
+			commitFinishCh <- txn.Commit(context.Background())
+		}()
+		time.Sleep(time.Millisecond * 100)
+
+		// Simulate pessimistic lock lost. Retry on region error to make it stable when running with TiKV.
+		{
+			mutations := transaction.NewPlainMutations(1)
+			mutations.Push(kvrpcpb.Op_PessimisticLock, key, nil, true, false, false, false)
+			err := simulatedCommitter.PessimisticRollbackMutations(context.Background(), &mutations)
+			s.NoError(err)
+		}
+
+		// Simulate the key being written by another transaction
+		txn2, err := s.store.Begin()
+		s.NoError(err)
+		s.NoError(txn2.Set(key, value2))
+		s.NoError(txn2.Commit(context.Background()))
+
+		// Simulate stale pessimistic lock request being replayed on TiKV
+		{
+			simulatedTxn, err := s.store.Begin()
+			s.NoError(err)
+			simulatedTxn.SetStartTS(txn.StartTS())
+			simulatedTxn.SetPessimistic(true)
+
+			simulatedTxn.StartAggressiveLocking()
+			lockCtx := kv.NewLockCtx(txn.StartTS(), 200, lockTime)
+			s.NoError(simulatedTxn.LockKeys(context.Background(), lockCtx, key))
+
+			info := simulatedTxn.GetAggressiveLockingKeysInfo()
+			s.Equal(1, len(info))
+			s.Equal(key, info[0].Key())
+			s.Equal(txn2.GetCommitTS(), info[0].ActualLockForUpdateTS())
+
+			simulatedTxn.DoneAggressiveLocking(context.Background())
+			defer func() {
+				s.NoError(simulatedTxn.Rollback())
+			}()
+		}
+
+		s.NoError(failpoint.Disable("tikvclient/beforePrewrite"))
+		err = <-commitFinishCh
+		s.Error(err)
+		s.Regexp("[pP]essimistic ?[lL]ock ?[nN]ot ?[fF]ound", err.Error())
+	}
+
+	test(false, false, false)
+	test(true, false, false)
+	test(true, true, false)
+	test(true, false, true)
 }
