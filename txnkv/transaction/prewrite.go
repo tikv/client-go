@@ -81,7 +81,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
-	var forUpdateTSChecks []*kvrpcpb.PrewriteRequest_ForUpdateTSCheck
+	var forUpdateTSConstraints []*kvrpcpb.PrewriteRequest_ForUpdateTSConstraint
 
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
@@ -105,9 +105,9 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
 		}
 
-		if c.forUpdateTSChecks != nil {
-			if actualLockForUpdateTS, ok := c.forUpdateTSChecks[string(mutations[i].Key)]; ok {
-				forUpdateTSChecks = append(forUpdateTSChecks, &kvrpcpb.PrewriteRequest_ForUpdateTSCheck{
+		if c.forUpdateTSConstraints != nil {
+			if actualLockForUpdateTS, ok := c.forUpdateTSConstraints[string(mutations[i].Key)]; ok {
+				forUpdateTSConstraints = append(forUpdateTSConstraints, &kvrpcpb.PrewriteRequest_ForUpdateTSConstraint{
 					Index:               uint32(i),
 					ExpectedForUpdateTs: actualLockForUpdateTS,
 				})
@@ -164,17 +164,17 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	}
 
 	req := &kvrpcpb.PrewriteRequest{
-		Mutations:          mutations,
-		PrimaryLock:        c.primary(),
-		StartVersion:       c.startTS,
-		LockTtl:            ttl,
-		PessimisticActions: pessimisticActions,
-		ForUpdateTs:        c.forUpdateTS,
-		TxnSize:            txnSize,
-		MinCommitTs:        minCommitTS,
-		MaxCommitTs:        c.maxCommitTS,
-		AssertionLevel:     assertionLevel,
-		ForUpdateTsChecks:  forUpdateTSChecks,
+		Mutations:              mutations,
+		PrimaryLock:            c.primary(),
+		StartVersion:           c.startTS,
+		LockTtl:                ttl,
+		PessimisticActions:     pessimisticActions,
+		ForUpdateTs:            c.forUpdateTS,
+		TxnSize:                txnSize,
+		MinCommitTs:            minCommitTS,
+		MaxCommitTs:            c.maxCommitTS,
+		AssertionLevel:         assertionLevel,
+		ForUpdateTsConstraints: forUpdateTSConstraints,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {

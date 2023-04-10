@@ -58,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util"
 )
 
 var getMaxBackoff = tikv.ConfigProbe{}.GetGetMaxBackoff()
@@ -1019,7 +1020,11 @@ type testLockWithTiKVSuite struct {
 }
 
 func (s *testLockWithTiKVSuite) SetupTest() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
+	if *withTiKV {
+		s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
+	} else {
+		s.store = tikv.StoreProbe{KVStore: NewTestUniStore(s.T())}
+	}
 }
 
 func (s *testLockWithTiKVSuite) TearDownTest() {
@@ -1084,6 +1089,16 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		value1 := []byte("v1")
 		value2 := []byte("v2")
 
+		// Clear previous value
+		{
+			txn, err := s.store.Begin()
+			s.NoError(err)
+			s.NoError(txn.Delete(key))
+			s.NoError(txn.Commit(context.Background()))
+		}
+
+		ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+
 		txn, err := s.store.Begin()
 		s.NoError(err)
 
@@ -1096,9 +1111,11 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		txn.StartAggressiveLocking()
 		lockTime := time.Now()
 		lockCtx := kv.NewLockCtx(txn.StartTS(), 200, lockTime)
-		s.NoError(txn.LockKeys(context.Background(), lockCtx, key))
-		txn.DoneAggressiveLocking(context.Background())
+		s.NoError(txn.LockKeys(ctx, lockCtx, key))
+		txn.DoneAggressiveLocking(ctx)
 		s.NoError(txn.Set(key, value1))
+
+		txn.GetCommitter().CloseTTLManager()
 
 		simulatedCommitter, err := txn.NewCommitter(1)
 		s.NoError(err)
@@ -1106,16 +1123,22 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		s.NoError(failpoint.Enable("tikvclient/beforePrewrite", "pause"))
 		commitFinishCh := make(chan error)
 		go func() {
-			commitFinishCh <- txn.Commit(context.Background())
+			commitFinishCh <- txn.Commit(ctx)
 		}()
-		time.Sleep(time.Millisecond * 100)
+		select {
+		case <-commitFinishCh:
+			s.FailNow("txn commit not blocked")
+		case <-time.After(time.Millisecond * 100):
+		}
 
 		// Simulate pessimistic lock lost. Retry on region error to make it stable when running with TiKV.
 		{
 			mutations := transaction.NewPlainMutations(1)
 			mutations.Push(kvrpcpb.Op_PessimisticLock, key, nil, true, false, false, false)
+			simulatedCommitter.SetForUpdateTS(simulatedCommitter.GetStartTS())
 			err := simulatedCommitter.PessimisticRollbackMutations(context.Background(), &mutations)
 			s.NoError(err)
+			s.checkIsKeyLocked(key, false)
 		}
 
 		// Simulate the key being written by another transaction
@@ -1150,6 +1173,15 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		err = <-commitFinishCh
 		s.Error(err)
 		s.Regexp("[pP]essimistic ?[lL]ock ?[nN]ot ?[fF]ound", err.Error())
+
+		snapshot := s.store.GetSnapshot(txn2.GetCommitTS())
+		v, err := snapshot.Get(context.Background(), key)
+		s.NoError(err)
+		s.Equal(value2, v)
+
+		snapshot = s.store.GetSnapshot(txn2.GetCommitTS() - 1)
+		_, err = snapshot.Get(context.Background(), key)
+		s.Equal(tikverr.ErrNotExist, err)
 	}
 
 	test(false, false, false)

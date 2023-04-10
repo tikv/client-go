@@ -192,7 +192,7 @@ type twoPhaseCommitter struct {
 	// committer may contain a nil `txn` pointer.
 	isInternal bool
 
-	forUpdateTSChecks map[string]uint64
+	forUpdateTSConstraints map[string]uint64
 }
 
 type memBufferMutations struct {

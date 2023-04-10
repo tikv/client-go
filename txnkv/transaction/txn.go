@@ -467,7 +467,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 
 	txn.committer.SetDiskFullOpt(txn.diskFullOpt)
 	txn.committer.SetTxnSource(txn.txnSource)
-	txn.committer.forUpdateTSChecks = txn.forUpdateTSChecks
+	txn.committer.forUpdateTSConstraints = txn.forUpdateTSChecks
 
 	defer committer.ttlManager.close()
 
