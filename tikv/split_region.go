@@ -149,7 +149,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	})
 
 	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())
-	resp, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
+	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 
 	batchResp := kvrpc.BatchResult{Response: resp}
 	if err != nil {

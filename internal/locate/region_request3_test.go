@@ -98,7 +98,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStoreTokenLimit() {
 	kv.StoreLimit.Store(500)
 	s.cache.getStoreByStoreID(s.storeIDs[0]).tokenCount.Store(500)
 	// cause there is only one region in this cluster, regionID maps this leader.
-	resp, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	resp, _, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.NotNil(err)
 	s.Nil(resp)
 	e, ok := errors.Cause(err).(*tikverr.ErrTokenLimit)
@@ -130,7 +130,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeader() {
 	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
 	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
 	s.Nil(err)
-	resp, err := s.regionRequestSender.SendReq(bo, req, loc.Region, time.Second)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, loc.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
 }
@@ -181,7 +181,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		Key:   []byte("k"),
 		Value: []byte("v1"),
 	})
-	resp, ctx, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err := resp.GetRegionError()
 	s.Nil(err)
@@ -208,7 +208,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	atomic.StoreUint32(&storeState, uint32(unreachable))
 
 	req = tikvrpc.NewRequest(tikvrpc.CmdRawGet, &kvrpcpb.RawGetRequest{Key: []byte("k")})
-	resp, ctx, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err = resp.GetRegionError()
 	s.Nil(err)
@@ -241,7 +241,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		Key:   []byte("k"),
 		Value: []byte("v2"),
 	})
-	resp, ctx, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err = resp.GetRegionError()
 	s.Nil(err)
@@ -261,7 +261,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		Key:   []byte("k"),
 		Value: []byte("v2"),
 	})
-	resp, ctx, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err = resp.GetRegionError()
 	s.Nil(err)
@@ -700,7 +700,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	// Normal
 	bo := retry.NewBackoffer(context.Background(), -1)
 	sender := s.regionRequestSender
-	resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
 	s.True(bo.GetTotalBackoffTimes() == 0)
@@ -709,7 +709,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	bo = retry.NewBackoffer(context.Background(), -1)
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[1])
 	s.cluster.StopStore(s.storeIDs[0])
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
 	s.Equal(sender.replicaSelector.targetIdx, AccessIndex(1))
@@ -718,7 +718,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 
 	// Leader is updated because of send success, so no backoff.
 	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
 	s.Equal(sender.replicaSelector.targetIdx, AccessIndex(1))
@@ -729,7 +729,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	reloadRegion()
 	s.cluster.StopStore(s.storeIDs[1])
 	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.Equal(bo.GetTotalBackoffTimes(), 1)
@@ -739,7 +739,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	reloadRegion()
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
 	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
 	s.Equal(bo.GetTotalBackoffTimes(), 0)
@@ -747,7 +747,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	// No leader. Backoff for each replica and runs out all replicas.
 	s.cluster.GiveUpLeader(s.regionID)
 	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.Equal(bo.GetTotalBackoffTimes(), 2) // The unreachable leader is skipped
@@ -770,7 +770,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	reloadRegion()
 	s.cluster.StopStore(s.storeIDs[0])
 	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.False(sender.replicaSelector.region.isValid())
@@ -804,7 +804,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 			}}
 			reloadRegion()
 			bo = retry.NewBackoffer(context.Background(), -1)
-			resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+			resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 			s.Nil(err)
 			s.True(hasFakeRegionError(resp))
 			s.False(sender.replicaSelector.region.isValid())
@@ -824,7 +824,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		}}
 		reloadRegion()
 		bo = retry.NewBackoffer(context.Background(), -1)
-		resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+		resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.True(hasFakeRegionError(resp))
 		s.False(sender.replicaSelector.region.isValid())
@@ -843,7 +843,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		}}
 		reloadRegion()
 		bo = retry.NewBackoffer(context.Background(), -1)
-		resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+		resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.True(hasFakeRegionError(resp))
 		s.False(sender.replicaSelector.region.isValid())
@@ -867,7 +867,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 			}}
 			reloadRegion()
 			bo = retry.NewBackoffer(context.Background(), -1)
-			resp, err := sender.SendReq(bo, req, region.Region, time.Second)
+			resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 
 			// Return a sendError when meets NotLeader and can't find the leader in the region.
 			if i == 3 {
@@ -894,7 +894,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		s.cluster.StopStore(store)
 	}
 	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.True(bo.GetTotalBackoffTimes() == 3)
