@@ -1096,7 +1096,9 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		{
 			txn, err := s.store.Begin()
 			s.NoError(err)
-			s.NoError(txn.Delete(k1))
+			for _, k := range [][]byte{k1, k2, k3, k4} {
+				s.NoError(txn.Delete(k))
+			}
 			s.NoError(txn.Commit(context.Background()))
 		}
 
@@ -1201,7 +1203,7 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		{
 			txn1, err := s.store.Begin()
 			s.NoError(err)
-			s.NoError(txn.Set(k2, v2))
+			s.NoError(txn1.Set(k2, v2))
 			s.NoError(txn1.Commit(context.Background()))
 		}
 
