@@ -1085,20 +1085,24 @@ func (s *testLockWithTiKVSuite) checkIsKeyLocked(key []byte, expectedLocked bool
 
 func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test := func(asyncCommit bool, onePC bool, causalConsistency bool) {
-		key := []byte("k1")
-		value1 := []byte("v1")
-		value2 := []byte("v2")
+		k1 := []byte("k1")
+		k2 := []byte("k2")
+		k3 := []byte("k3")
+		k4 := []byte("k4")
+		v1 := []byte("v1")
+		v2 := []byte("v2")
 
 		// Clear previous value
 		{
 			txn, err := s.store.Begin()
 			s.NoError(err)
-			s.NoError(txn.Delete(key))
+			s.NoError(txn.Delete(k1))
 			s.NoError(txn.Commit(context.Background()))
 		}
 
 		ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 
+		// Test failing case
 		txn, err := s.store.Begin()
 		s.NoError(err)
 
@@ -1111,9 +1115,11 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		txn.StartAggressiveLocking()
 		lockTime := time.Now()
 		lockCtx := kv.NewLockCtx(txn.StartTS(), 200, lockTime)
-		s.NoError(txn.LockKeys(ctx, lockCtx, key))
+		s.NoError(txn.LockKeys(ctx, lockCtx, k1))
+		s.NoError(txn.LockKeys(ctx, lockCtx, k2))
+		s.NoError(txn.LockKeys(ctx, lockCtx, k3))
 		txn.DoneAggressiveLocking(ctx)
-		s.NoError(txn.Set(key, value1))
+		s.NoError(txn.Set(k1, v1))
 
 		txn.GetCommitter().CloseTTLManager()
 
@@ -1127,24 +1133,24 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		}()
 		select {
 		case <-commitFinishCh:
-			s.FailNow("txn commit not blocked")
+			s.Fail("txn commit not blocked")
 		case <-time.After(time.Millisecond * 100):
 		}
 
 		// Simulate pessimistic lock lost. Retry on region error to make it stable when running with TiKV.
 		{
 			mutations := transaction.NewPlainMutations(1)
-			mutations.Push(kvrpcpb.Op_PessimisticLock, key, nil, true, false, false, false)
+			mutations.Push(kvrpcpb.Op_PessimisticLock, k1, nil, true, false, false, false)
 			simulatedCommitter.SetForUpdateTS(simulatedCommitter.GetStartTS())
 			err := simulatedCommitter.PessimisticRollbackMutations(context.Background(), &mutations)
 			s.NoError(err)
-			s.checkIsKeyLocked(key, false)
+			s.checkIsKeyLocked(k1, false)
 		}
 
 		// Simulate the key being written by another transaction
 		txn2, err := s.store.Begin()
 		s.NoError(err)
-		s.NoError(txn2.Set(key, value2))
+		s.NoError(txn2.Set(k1, v2))
 		s.NoError(txn2.Commit(context.Background()))
 
 		// Simulate stale pessimistic lock request being replayed on TiKV
@@ -1156,11 +1162,11 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 
 			simulatedTxn.StartAggressiveLocking()
 			lockCtx := kv.NewLockCtx(txn.StartTS(), 200, lockTime)
-			s.NoError(simulatedTxn.LockKeys(context.Background(), lockCtx, key))
+			s.NoError(simulatedTxn.LockKeys(context.Background(), lockCtx, k1))
 
 			info := simulatedTxn.GetAggressiveLockingKeysInfo()
 			s.Equal(1, len(info))
-			s.Equal(key, info[0].Key())
+			s.Equal(k1, info[0].Key())
 			s.Equal(txn2.GetCommitTS(), info[0].ActualLockForUpdateTS())
 
 			simulatedTxn.DoneAggressiveLocking(context.Background())
@@ -1175,12 +1181,63 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		s.Regexp("[pP]essimistic ?[lL]ock ?[nN]ot ?[fF]ound", err.Error())
 
 		snapshot := s.store.GetSnapshot(txn2.GetCommitTS())
-		v, err := snapshot.Get(context.Background(), key)
+		v, err := snapshot.Get(context.Background(), k1)
 		s.NoError(err)
-		s.Equal(value2, v)
+		s.Equal(v2, v)
 
 		snapshot = s.store.GetSnapshot(txn2.GetCommitTS() - 1)
-		_, err = snapshot.Get(context.Background(), key)
+		_, err = snapshot.Get(context.Background(), k1)
+		s.Equal(tikverr.ErrNotExist, err)
+
+		// Test passing case
+		txn, err = s.store.Begin()
+		s.NoError(err)
+		txn.SetPessimistic(true)
+		txn.SetEnableAsyncCommit(asyncCommit)
+		txn.SetEnable1PC(onePC)
+		txn.SetCausalConsistency(causalConsistency)
+
+		// Prepare a conflicting version to key k2
+		{
+			txn1, err := s.store.Begin()
+			s.NoError(err)
+			s.NoError(txn.Set(k2, v2))
+			s.NoError(txn1.Commit(context.Background()))
+		}
+
+		txn.StartAggressiveLocking()
+		lockCtx = kv.NewLockCtx(txn.StartTS(), 200, lockTime)
+		// k2: conflicting key
+		s.NoError(txn.LockKeys(ctx, lockCtx, k2))
+		// k3: non-conflicting key
+		s.NoError(txn.LockKeys(ctx, lockCtx, k3))
+		// There must be a new tso allocation before committing if any key is locked with conflict, otherwise
+		// async commit will become unsafe.
+		// In TiDB, there must be a tso allocation for updating forUpdateTS.
+		currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+		s.NoError(err)
+		lockCtx = kv.NewLockCtx(currentTS, 200, lockTime)
+		// k4: non-conflicting key but forUpdateTS updated
+		s.NoError(txn.LockKeys(ctx, lockCtx, k4))
+		s.NoError(txn.Set(k2, v1))
+		s.NoError(txn.Set(k3, v1))
+		txn.DoneAggressiveLocking(ctx)
+
+		s.NoError(txn.Commit(ctx))
+
+		snapshot = s.store.GetSnapshot(txn.GetCommitTS())
+		v, err = snapshot.Get(context.Background(), k2)
+		s.NoError(err)
+		s.Equal(v1, v)
+		v, err = snapshot.Get(context.Background(), k3)
+		s.NoError(err)
+		s.Equal(v1, v)
+
+		snapshot = s.store.GetSnapshot(txn.GetCommitTS() - 1)
+		v, err = snapshot.Get(context.Background(), k2)
+		s.NoError(err)
+		s.Equal(v2, v)
+		_, err = snapshot.Get(context.Background(), k3)
 		s.Equal(tikverr.ErrNotExist, err)
 	}
 
