@@ -95,6 +95,7 @@ func buildResourceControlInterceptor(
 	if len(resourceGroupName) == 0 {
 		return nil
 	}
+
 	// No resource group interceptor is set.
 	if ResourceControlInterceptor == nil {
 		return nil
@@ -104,10 +105,11 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			consumption, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, delta, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
+			req.Context.Delta = delta
 			ruRuntimeStats.Update(consumption)
 			resp, err := next(target, req)
 			if resp != nil {
