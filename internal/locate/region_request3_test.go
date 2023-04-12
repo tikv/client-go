@@ -909,8 +909,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
-	req.EnableStaleRead()
 	for i := 0; i < 5; i++ {
+		req.EnableStaleRead()
 		// The request may be sent to the leader directly. We have to distinguish it.
 		failureOnFollower := false
 		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
@@ -929,6 +929,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 			totalAttempts += replica.attempts
 			if idx == int(state.leaderIdx) {
 				s.Equal(1, replica.attempts)
+				if failureOnFollower {
+					// retry always goes to the leader as an ordinary read,not a stale one
+					s.True(!req.StaleRead)
+				} else {
+					// if the first request goes directly to the leader then it keeps stale read flag
+					s.True(req.StaleRead)
+				}
 			} else {
 				s.True(replica.attempts <= 1)
 			}

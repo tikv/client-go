@@ -1194,6 +1194,12 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
+		if retryTimes > 0 && s.replicaSelector != nil && s.replicaSelector.regionStore != nil &&
+			s.replicaSelector.targetIdx == s.replicaSelector.regionStore.workTiKVIdx {
+			// retry on the leader should not use stale read to avoid possible DataIsNotReady error as it always can serve any read
+			req.StaleRead = false
+		}
+
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
