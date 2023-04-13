@@ -253,7 +253,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			s.snapshot.mu.resourceGroupTagger(req)
 		}
 		s.snapshot.mu.RUnlock()
-		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
+		resp, _, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}
