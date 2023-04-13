@@ -4,7 +4,7 @@ go 1.19
 
 replace (
 	github.com/pingcap/kvproto => github.com/Connor1996/kvproto v0.0.0-20230412100521-f88837e62665
-	github.com/tikv/pd/client => github.com/Connor1996/pd/client v0.0.0-20230412102926-839665187346
+	github.com/tikv/pd/client => github.com/Connor1996/pd/client v0.0.0-20230413064639-59be29944084
 )
 
 require (
