@@ -75,6 +75,7 @@ var (
 	TiKVRangeTaskPushDuration                *prometheus.HistogramVec
 	TiKVTokenWaitDuration                    prometheus.Histogram
 	TiKVTxnHeartBeatHistogram                *prometheus.HistogramVec
+	TiKVTTLManagerHistogram                  prometheus.Histogram
 	TiKVPessimisticLockKeysDuration          prometheus.Histogram
 	TiKVTTLLifeTimeReachCounter              prometheus.Counter
 	TiKVNoAvailableConnectionCounter         prometheus.Counter
@@ -422,6 +423,15 @@ func initMetrics(namespace, subsystem string) {
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms ~ 524s
 		}, []string{LblType})
 
+	TiKVTTLManagerHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "txn_ttl_manager",
+			Help:      "Bucketed histogram of the txn ttl manager lifetime duration.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 20), // 1s ~ 524288s
+		})
+
 	TiKVPessimisticLockKeysDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: namespace,
@@ -677,6 +687,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVRangeTaskPushDuration)
 	prometheus.MustRegister(TiKVTokenWaitDuration)
 	prometheus.MustRegister(TiKVTxnHeartBeatHistogram)
+	prometheus.MustRegister(TiKVTTLManagerHistogram)
 	prometheus.MustRegister(TiKVPessimisticLockKeysDuration)
 	prometheus.MustRegister(TiKVTTLLifeTimeReachCounter)
 	prometheus.MustRegister(TiKVNoAvailableConnectionCounter)

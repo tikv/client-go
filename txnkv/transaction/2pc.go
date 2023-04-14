@@ -1144,6 +1144,10 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
+	startKeepAlive := time.Now()
+	defer func() {
+		metrics.TiKVTTLManagerHistogram.Observe(time.Since(startKeepAlive).Seconds())
+	}()
 	keepFail := 0
 	for {
 		select {
