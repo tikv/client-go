@@ -191,6 +191,8 @@ type twoPhaseCommitter struct {
 	// isInternal means it's related to an internal transaction. It's only used by `asyncPessimisticRollback` as the
 	// committer may contain a nil `txn` pointer.
 	isInternal bool
+
+	forUpdateTSConstraints map[string]uint64
 }
 
 type memBufferMutations struct {
