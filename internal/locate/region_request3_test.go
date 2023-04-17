@@ -909,38 +909,34 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10; i++ {
 		req.EnableStaleRead()
 		// The request may be sent to the leader directly. We have to distinguish it.
-		failureOnFollower := false
+		failureOnFollower := 0
+		failureOnLeader := 0
 		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			if addr != s.cluster.GetStore(s.storeIDs[0]).Address {
-				failureOnFollower = true
+				failureOnFollower++
 				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{}}}, nil
+			} else if failureOnLeader == 0 && i%2 == 0 {
+				failureOnLeader++
+				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{}}}, nil
+			} else {
+				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
 			}
-			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
 		}}
 		sender.SendReq(bo, req, region.Region, time.Second)
 		state, ok := sender.replicaSelector.state.(*accessFollower)
 		s.True(ok)
-		s.True(!failureOnFollower || state.option.leaderOnly)
-		totalAttempts := 0
-		for idx, replica := range sender.replicaSelector.replicas {
-			totalAttempts += replica.attempts
-			if idx == int(state.leaderIdx) {
-				s.Equal(1, replica.attempts)
-				if failureOnFollower {
-					// retry always goes to the leader as an ordinary read,not a stale one
-					s.True(!req.StaleRead)
-				} else {
-					// if the first request goes directly to the leader then it keeps stale read flag
-					s.True(req.StaleRead)
-				}
-			} else {
-				s.True(replica.attempts <= 1)
-			}
+		s.True(failureOnFollower <= 1) // any retry should go to the leader, hence at most one failure on the follower allowed
+		if failureOnFollower == 0 && failureOnLeader == 0 {
+			// if the request goes to the leader and succeeds then it is executed as a StaleRead
+			s.True(req.StaleRead)
+		} else {
+			// otherwise #leaderOnly flag should be set and retry request as a normal read
+			s.True(state.option.leaderOnly)
+			s.False(req.StaleRead)
 		}
-		s.True(totalAttempts <= 2)
 	}
 }
 

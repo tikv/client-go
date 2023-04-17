@@ -542,6 +542,7 @@ type accessFollower struct {
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	replicaSize := len(selector.replicas)
+	resetStaleRead := false
 	if state.lastIdx < 0 {
 		if state.tryLeader {
 			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
@@ -562,6 +563,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		// if txnScope is local, we will retry both other peers and the leader by the strategy of replicaSelector.
 		if state.isGlobalStaleRead {
 			WithLeaderOnly()(&state.option)
+			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read
+			resetStaleRead = true
 		}
 		state.lastIdx++
 	}
@@ -592,7 +595,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			)
 		}
 		leader := selector.replicas[state.leaderIdx]
-		if leader.isEpochStale() || leader.isExhausted(1) {
+		if leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1)) {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 			return nil, nil
@@ -608,7 +611,15 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			selector.replicas[selector.targetIdx].store.recordReplicaFlowsStats(toLeader)
 		}
 	}
-	return selector.buildRPCContext(bo)
+	rpcCtx, err := selector.buildRPCContext(bo)
+	if err != nil || rpcCtx == nil {
+		return nil, err
+	}
+	if resetStaleRead {
+		staleRead := false
+		rpcCtx.contextPatcher.staleRead = &staleRead
+	}
+	return rpcCtx, nil
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1153,11 +1164,6 @@ func (s *RegionRequestSender) SendReqCtx(
 					zap.Uint64("region", regionID.GetID()),
 					zap.Int("times", retryTimes),
 				)
-			}
-			if req.StaleRead {
-				// retry on the leader should not use stale read to avoid possible DataIsNotReady error as it always can serve any read
-				// note that StaleRead retry always goes to the leader thanks to storeSelectorOp.leaderOnly set by replica selector
-				req.StaleRead = false
 			}
 		}
 
@@ -1874,9 +1880,12 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx),
 		)
-		err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
-		if err != nil {
-			return false, err
+		if !req.IsGlobalStaleRead() {
+			// only backoff local stale reads as global should retry immediately against the leader as a normal read
+			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
+			if err != nil {
+				return false, err
+			}
 		}
 		return true, nil
 	}
