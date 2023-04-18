@@ -49,6 +49,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -246,7 +247,9 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			ResourceGroupTag:  s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:    s.snapshot.isolationLevel.ToPB(),
 			RequestSource:     s.snapshot.GetRequestSource(),
-			ResourceGroupName: s.snapshot.mu.resourceGroupName,
+			ResourceControlContext: &kvrpcpb.ResourceControlContext {
+				ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
+			},
 			BusyThresholdMs:   uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 		})
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {

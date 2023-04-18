@@ -3,8 +3,8 @@ module github.com/tikv/client-go/v2
 go 1.19
 
 replace (
-	github.com/pingcap/kvproto => github.com/Connor1996/kvproto v0.0.0-20230412100521-f88837e62665
-	github.com/tikv/pd/client => github.com/Connor1996/pd/client v0.0.0-20230414065949-17de08f4de12
+	github.com/pingcap/kvproto => github.com/Connor1996/kvproto v0.0.0-20230418060742-bfb16b443c3a
+	github.com/tikv/pd/client => github.com/Connor1996/pd/client v0.0.0-20230418083159-c530690e2987
 )
 
 require (

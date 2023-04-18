@@ -39,7 +39,6 @@ func (c emptyClient) CloseAddr(addr string) error {
 }
 
 func TestInterceptedClient(t *testing.T) {
-	ResourceControlSwitch.Store(true)
 	executed := false
 	client := NewInterceptedClient(emptyClient{}, nil)
 	ctx := interceptor.WithRPCInterceptor(context.Background(), func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {

@@ -1,10 +1,10 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/Connor1996/kvproto v0.0.0-20230412100521-f88837e62665 h1:hlz4/rcW81G6kHlSV+yl/bpmKadqwU8EU2Jx9o2oFN8=
-github.com/Connor1996/kvproto v0.0.0-20230412100521-f88837e62665/go.mod h1:guCyM5N+o+ru0TsoZ1hi9lDjUMs2sIBjW3ARTEpVbnk=
-github.com/Connor1996/pd/client v0.0.0-20230414065949-17de08f4de12 h1:zdLy5Y1louRXxNMCPNeV9e458aMRubUQrmtrGMxRkJw=
-github.com/Connor1996/pd/client v0.0.0-20230414065949-17de08f4de12/go.mod h1:5vgcvO020ZCdMZkTrRdS/wFZQUab82BSfKE38T61ro0=
+github.com/Connor1996/kvproto v0.0.0-20230418060742-bfb16b443c3a h1:uljCSBsojB1wtIt4qptA+i2dvuWZ6cso8uHFin8EWBc=
+github.com/Connor1996/kvproto v0.0.0-20230418060742-bfb16b443c3a/go.mod h1:guCyM5N+o+ru0TsoZ1hi9lDjUMs2sIBjW3ARTEpVbnk=
+github.com/Connor1996/pd/client v0.0.0-20230418083159-c530690e2987 h1:RjD/yGYiHPl4sQZ1K6Pe1hJZAc1vvEc1rlNreWZyKrI=
+github.com/Connor1996/pd/client v0.0.0-20230418083159-c530690e2987/go.mod h1:5vgcvO020ZCdMZkTrRdS/wFZQUab82BSfKE38T61ro0=
 github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
 github.com/alecthomas/units v0.0.0-20151022065526-2efee857e7cf/go.mod h1:ybxpYRFXyAe+OPACYpWeL0wqObRcbAqCMya13uyzqw0=

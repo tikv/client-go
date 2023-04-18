@@ -90,12 +90,11 @@ func buildResourceControlInterceptor(
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
 	}
-	resourceGroupName := req.GetResourceGroupName()
+	resourceGroupName := req.GetResourceControlContext().GetResourceGroupName()
 	// When the group name is empty, we don't need to perform the resource control.
 	if len(resourceGroupName) == 0 {
 		return nil
 	}
-
 	// No resource group interceptor is set.
 	if ResourceControlInterceptor == nil {
 		return nil
@@ -109,7 +108,8 @@ func buildResourceControlInterceptor(
 			if err != nil {
 				return nil, err
 			}
-			req.Context.Delta = delta
+			req.GetResourceControlContext().WriteBytesDelta = delta.WriteBytes
+			req.GetResourceControlContext().CpuDurationNsDelta = uint64(delta.CpuTime.Nanoseconds())
 			ruRuntimeStats.Update(consumption)
 			resp, err := next(target, req)
 			if resp != nil {
