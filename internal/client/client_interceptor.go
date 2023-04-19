@@ -104,12 +104,11 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			consumption, delta, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, penalty, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
-			req.GetResourceControlContext().WriteBytesDelta = delta.WriteBytes
-			req.GetResourceControlContext().CpuDurationNsDelta = uint64(delta.CPUTime.Nanoseconds())
+			req.GetResourceControlContext().Penalty = penalty
 			ruRuntimeStats.Update(consumption)
 			resp, err := next(target, req)
 			if resp != nil {
