@@ -84,7 +84,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 		TxnSource:              c.txnSource,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
-		ResourceControlContext: &kvrpcpb.ResourceControlContext {
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})

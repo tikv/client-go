@@ -141,7 +141,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 			RequestSource:          c.txn.GetRequestSource(),
-			ResourceControlContext: &kvrpcpb.ResourceControlContext {
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: c.resourceGroupName,
 			},
 		},

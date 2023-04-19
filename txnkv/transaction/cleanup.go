@@ -71,7 +71,7 @@ func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Ba
 		ResourceGroupTag:       c.resourceGroupTag,
 		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 		RequestSource:          c.txn.GetRequestSource(),
-		ResourceControlContext: &kvrpcpb.ResourceControlContext {
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})

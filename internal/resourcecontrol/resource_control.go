@@ -32,7 +32,7 @@ type RequestInfo struct {
 	// writeBytes is the actual write size if the request is a write request,
 	// or -1 if it's a read request.
 	writeBytes int64
-	storeID uint64
+	storeID    uint64
 }
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
