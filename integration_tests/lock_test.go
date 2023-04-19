@@ -37,9 +37,12 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	stderrs "errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -48,8 +51,11 @@ import (
 	"github.com/pingcap/failpoint"
 	deadlockpb "github.com/pingcap/kvproto/pkg/deadlock"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -1249,12 +1255,131 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test(true, false, true)
 }
 
+func (s *testLockWithTiKVSuite) setTiKVConfig(name string, value interface{}) func() {
+	stores, err := s.store.GetPDClient().GetAllStores(context.Background())
+	s.NoError(err)
+
+	type configItem struct {
+		url   string
+		name  string
+		value interface{}
+	}
+
+	var recoverConfigs []configItem
+
+	httpScheme := "http"
+	if c, err := config.GetGlobalConfig().Security.ToTLSConfig(); err == nil && c != nil {
+		httpScheme = "https"
+	}
+
+	t := s.Suite.T()
+
+	setCfg := func(url, name string, value interface{}) error {
+		postBody, err := json.Marshal(map[string]interface{}{name: value})
+		if err != nil {
+			return err
+		}
+		resp, err := http.Post(url, "text/json", bytes.NewReader(postBody))
+		if err != nil {
+			return err
+		}
+		s.NoError(resp.Body.Close())
+		if resp.StatusCode != 200 {
+			return errors.Errorf("post config got unexpected status code: %v, request body: %s", resp.StatusCode, postBody)
+		}
+		t.Logf("set config for tikv at %s finished: %s", url, string(postBody))
+		return nil
+	}
+
+storeIter:
+	for _, store := range stores {
+		if store.State != metapb.StoreState_Up {
+			continue
+		}
+		for _, label := range store.Labels {
+			if label.Key == "engine" && label.Value != "tikv" {
+				continue storeIter
+			}
+		}
+
+		err := func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = errors.Errorf("set config for store at %v panicked: %v", store.StatusAddress, r)
+				}
+			}()
+
+			url := fmt.Sprintf("%s://%s/config", httpScheme, store.StatusAddress)
+			resp, err := http.Get(url)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				return errors.Errorf("unexpected response status: %v", resp.Status)
+			}
+			oldCfgRaw, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+
+			oldCfg := make(map[string]interface{})
+			err = json.Unmarshal(oldCfgRaw, &oldCfg)
+			if err != nil {
+				return err
+			}
+
+			oldValue := oldCfg["pessimistic-txn"].(map[string]interface{})["in-memory"]
+			if assert.ObjectsAreEqual(oldValue, value) {
+				return nil
+			}
+
+			err = setCfg(url, name, value)
+			if err != nil {
+				return err
+			}
+
+			recoverConfigs = append(recoverConfigs, configItem{
+				url:   url,
+				name:  name,
+				value: oldValue,
+			})
+
+			return nil
+		}()
+
+		if err != nil {
+			t.Logf("failed to set config for store at %s: %v", store.StatusAddress, err)
+		}
+	}
+
+	http.DefaultClient.CloseIdleConnections()
+
+	if len(recoverConfigs) > 0 {
+		// Sleep for a while to ensure the new configs are applied.
+		time.Sleep(time.Second)
+	}
+
+	return func() {
+		for _, item := range recoverConfigs {
+			err = setCfg(item.url, item.name, item.value)
+			if err != nil {
+				t.Logf("failed to recover config for store at %s: %v", item.url, err)
+			}
+		}
+	}
+}
+
 func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 	// See https://github.com/tikv/tikv/issues/14551 for detail about the issue this test is supposed to cover.
 	if !*withTiKV {
 		// The issue only exists in TiKV's storage model. Unnecessary to run with mocks.
 		return
 	}
+
+	recoverFunc := s.setTiKVConfig("pessimistic-txn.in-memory", "false")
+	defer recoverFunc()
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 
@@ -1267,10 +1392,20 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 			// Add prefix to the key to make that more likely to locate in the same region.
 			pk := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-p", iteration))
 			key1 := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-1", iteration))
-			key2 := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-1", iteration))
+			key2 := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-2", iteration))
 
 			v1 := []byte("v1")
 			v2 := []byte("v2")
+
+			// Remove the keys if they already exists
+			{
+				t, err := s.store.Begin()
+				s.NoError(err)
+				s.NoError(t.Delete(pk))
+				s.NoError(t.Delete(key1))
+				s.NoError(t.Delete(key2))
+				s.NoError(t.Commit(ctx))
+			}
 
 			t1, err := s.store.Begin()
 			s.NoError(err)
@@ -1330,8 +1465,22 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 				return false
 			}
 
-			// Wait async commit on key1 be finished
-			s.checkIsKeyLocked(key1, false)
+			checkDataConsistency := func() {
+				currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+				s.NoError(err)
+				snapshot = s.store.GetSnapshot(currentTS)
+				v, err := snapshot.Get(context.Background(), pk)
+				s.NoError(err)
+				s.Equal(v1, v)
+				v, err = snapshot.Get(context.Background(), key2)
+				s.NoError(err)
+				s.Equal(v2, v)
+				v, err = snapshot.Get(context.Background(), key1)
+				s.NoError(err)
+				s.Equal(v2, v)
+			}
+
+			checkDataConsistency()
 
 			// Simulate a repeated stale request of t1 locking key1 sent to TiKV
 			{
@@ -1352,21 +1501,9 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 			// cannot have in the current interface design).
 			currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 			s.NoError(err)
-			s.NoError(s.store.GCResolveLockPhase(ctx, currentTS, 2))
+			s.NoError(s.store.GCResolveLockPhase(ctx, currentTS, 1))
 
-			// Check data consistency.
-			currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
-			s.NoError(err)
-			snapshot = s.store.GetSnapshot(currentTS)
-			v, err := snapshot.Get(context.Background(), pk)
-			s.NoError(err)
-			s.Equal(v1, v)
-			v, err = snapshot.Get(context.Background(), key2)
-			s.NoError(err)
-			s.Equal(v2, v)
-			v, err = snapshot.Get(context.Background(), key1)
-			s.NoError(err)
-			s.Equal(v2, v)
+			checkDataConsistency()
 
 			return true
 		}()
@@ -1376,6 +1513,6 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 	}
 
 	if !success {
-		s.Fail("failed to construct colliding commit ts in 100 iterations")
+		s.Fail("failed to construct colliding commit ts in 20 iterations")
 	}
 }
