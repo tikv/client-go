@@ -1295,6 +1295,8 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 			lockCtx = kv.NewLockCtx(t1.StartTS(), 200, lockTime)
 			s.NoError(t1.LockKeys(ctx, lockCtx, key1))
 			t1.CancelAggressiveLocking(ctx)
+			// Wait the pessimistic lock of t1 on key1 to be rolled back.
+			s.checkIsKeyLocked(key1, false)
 
 			// Try to make transaction t1 and t2 commit at the same commitTS.
 			// First, block at finishing getting minCommitTS from PD and before prewriting
@@ -1344,14 +1346,15 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 				s.Equal(t2.GetCommitTS(), lockCtx.Values[string(key1)].LockedWithConflictTS)
 			}
 
-			// Trigger resolving locks
-			t3, err := s.store.Begin()
+			// Trigger resolving locks.
+			// For normal resolve lock procedures, it always uses special path for resolving pessimistic locks, which
+			// avoids this problem. However, `BatchResolveLock` which is used by GC doesn't have that handling (and
+			// cannot have in the current interface design).
+			currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 			s.NoError(err)
-			t3.SetPessimistic(true)
-			lockCtx = kv.NewLockCtx(t3.StartTS(), 200, time.Now())
-			s.NoError(t3.LockKeys(ctx, lockCtx, pk, key1, key2))
-			s.NoError(t3.Rollback())
+			s.NoError(s.store.GCResolveLockPhase(ctx, currentTS, 2))
 
+			// Check data consistency.
 			currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 			s.NoError(err)
 			snapshot = s.store.GetSnapshot(currentTS)
