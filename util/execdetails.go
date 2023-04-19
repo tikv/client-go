@@ -715,6 +715,16 @@ func (rs *RURuntimeStats) String() string {
 	return fmt.Sprintf("RRU:%f, WRU:%f", rs.readRU.Load(), rs.writeRU.Load())
 }
 
+// RRU returns the read RU.
+func (rs RURuntimeStats) RRU() float64 {
+	return rs.readRU.Load()
+}
+
+// WRU returns the write RU.
+func (rs RURuntimeStats) WRU() float64 {
+	return rs.writeRU.Load()
+}
+
 // Update updates the RU runtime stats with the given consumption info.
 func (rs *RURuntimeStats) Update(consumption *rmpb.Consumption) {
 	if rs == nil || consumption == nil {
