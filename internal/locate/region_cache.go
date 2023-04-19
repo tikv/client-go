@@ -540,6 +540,16 @@ func (c *RPCContext) String() string {
 	return res
 }
 
+type contextPatcher struct {
+	staleRead *bool
+}
+
+func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
+	if patcher.staleRead != nil {
+		pbCtx.StaleRead = *patcher.staleRead
+	}
+}
+
 type storeSelectorOp struct {
 	leaderOnly bool
 	labels     []*metapb.StoreLabel

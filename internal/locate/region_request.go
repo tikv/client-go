@@ -264,8 +264,9 @@ type replicaSelector struct {
 // selectorState is the interface of states of the replicaSelector.
 // Here is the main state transition diagram:
 //
-//                                    exceeding maxReplicaAttempt
-//           +-------------------+   || RPC failure && unreachable && no forwarding
+//	                         exceeding maxReplicaAttempt
+//	+-------------------+   || RPC failure && unreachable && no forwarding
+//
 // +-------->+ accessKnownLeader +----------------+
 // |         +------+------------+                |
 // |                |                             |
@@ -282,7 +283,8 @@ type replicaSelector struct {
 // | leader becomes   v                           +---+---+
 // | reachable  +-----+-----+ all proxies are tried   ^
 // +------------+tryNewProxy+-------------------------+
-//              +-----------+
+//
+//	+-----------+
 type selectorState interface {
 	next(*retry.Backoffer, *replicaSelector) (*RPCContext, error)
 	onSendSuccess(*replicaSelector)
@@ -523,6 +525,8 @@ type accessFollower struct {
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	replicaSize := len(selector.replicas)
+	resetStaleRead := false
 	if state.lastIdx < 0 {
 		if state.tryLeader {
 			state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas)))
@@ -543,6 +547,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		// if txnScope is local, we will retry both other peers and the leader by the strategy of replicaSelector.
 		if state.isGlobalStaleRead {
 			WithLeaderOnly()(&state.option)
+			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read
+			resetStaleRead = true
 		}
 		state.lastIdx++
 	}
@@ -561,7 +567,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			logutil.BgLogger().Warn("unable to find stores with given labels")
 		}
 		leader := selector.replicas[state.leaderIdx]
-		if leader.isEpochStale() || leader.isExhausted(1) {
+		if leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1)) {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 			return nil, nil
@@ -569,7 +575,15 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx = state.leaderIdx
 		selector.targetIdx = state.leaderIdx
 	}
-	return selector.buildRPCContext(bo)
+	rpcCtx, err := selector.buildRPCContext(bo)
+	if err != nil || rpcCtx == nil {
+		return nil, err
+	}
+	if resetStaleRead {
+		staleRead := false
+		rpcCtx.contextPatcher.staleRead = &staleRead
+	}
+	return rpcCtx, nil
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1599,10 +1613,14 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			zap.Uint64("peer-id", regionErr.GetDataIsNotReady().GetPeerId()),
 			zap.Uint64("region-id", regionErr.GetDataIsNotReady().GetRegionId()),
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
-			zap.Stringer("ctx", ctx))
-		err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
-		if err != nil {
-			return false, err
+			zap.Stringer("ctx", ctx),
+		)
+		if !req.IsGlobalStaleRead() {
+			// only backoff local stale reads as global should retry immediately against the leader as a normal read
+			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
+			if err != nil {
+				return false, err
+			}
 		}
 		return true, nil
 	}
