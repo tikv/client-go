@@ -2,8 +2,6 @@ module github.com/tikv/client-go/v2
 
 go 1.19
 
-replace github.com/tikv/pd/client => github.com/Connor1996/pd/client v0.0.0-20230419072406-4ee343e9b397
-
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
@@ -23,7 +21,7 @@ require (
 	github.com/prometheus/client_model v0.3.0
 	github.com/stretchr/testify v1.8.2
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20230329114254-1948c247c2b1
+	github.com/tikv/pd/client v0.0.0-20230419105719-9e7b8e8c95fd
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
 	go.etcd.io/etcd/client/v3 v3.5.2
