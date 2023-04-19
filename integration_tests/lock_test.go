@@ -1248,3 +1248,131 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test(true, true, false)
 	test(true, false, true)
 }
+
+func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
+	// See https://github.com/tikv/tikv/issues/14551 for detail about the issue this test is supposed to cover.
+	if !*withTiKV {
+		// The issue only exists in TiKV's storage model. Unnecessary to run with mocks.
+		return
+	}
+
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+
+	var success bool
+	for iteration := 0; iteration < 20; iteration++ {
+		success = func() bool {
+			// Test several times repeatedly for greater possibility to reproduce the issue if it exists.
+			s.T().Logf("TestStaleForcePessimisticLockNotCommitted starts iteration %d", iteration)
+
+			// Add prefix to the key to make that more likely to locate in the same region.
+			pk := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-p", iteration))
+			key1 := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-1", iteration))
+			key2 := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-1", iteration))
+
+			v1 := []byte("v1")
+			v2 := []byte("v2")
+
+			t1, err := s.store.Begin()
+			s.NoError(err)
+			t1.SetPessimistic(true)
+			t1.SetEnableAsyncCommit(true)
+			// Make t1's primary determined
+			lockCtx := kv.NewLockCtx(t1.StartTS(), 200, time.Now())
+			s.NoError(t1.LockKeys(ctx, lockCtx, pk))
+			s.NoError(t1.Set(pk, v1))
+
+			simulatedCommiter, err := t1.NewCommitter(1)
+			s.NoError(err)
+
+			t2, err := s.store.Begin()
+			s.NoError(err)
+			t2.SetEnableAsyncCommit(true)
+			s.NoError(t2.Set(key1, v2))
+			s.NoError(t2.Set(key2, v2))
+
+			t1.StartAggressiveLocking()
+			lockTime := time.Now()
+			lockCtx = kv.NewLockCtx(t1.StartTS(), 200, lockTime)
+			s.NoError(t1.LockKeys(ctx, lockCtx, key1))
+			t1.CancelAggressiveLocking(ctx)
+
+			// Try to make transaction t1 and t2 commit at the same commitTS.
+			// First, block at finishing getting minCommitTS from PD and before prewriting
+			s.NoError(failpoint.Enable("tikvclient/beforePrewrite", "pause"))
+			resCh := make(chan error)
+			go func() {
+				resCh <- t1.Commit(ctx)
+			}()
+			go func() {
+				resCh <- t2.Commit(ctx)
+			}()
+			select {
+			case <-resCh:
+				s.Fail("commit not blocked")
+			case <-time.After(time.Millisecond * 100):
+			}
+
+			// Send a read request to TiKV to update max_ts
+			currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+			s.NoError(err)
+			snapshot := s.store.GetSnapshot(currentTS)
+			_, err = snapshot.Get(context.Background(), key2)
+			s.Equal(tikverr.ErrNotExist, err)
+
+			// Continue committing
+			s.NoError(failpoint.Disable("tikvclient/beforePrewrite"))
+			s.NoError(<-resCh)
+			s.NoError(<-resCh)
+
+			if t1.GetCommitTS() != t2.GetCommitTS() {
+				return false
+			}
+
+			// Wait async commit on key1 be finished
+			s.checkIsKeyLocked(key1, false)
+
+			// Simulate a repeated stale request of t1 locking key1 sent to TiKV
+			{
+				simulatedCommiter.SetPrimaryKey(pk)
+				simulatedCommiter.SetForUpdateTS(t1.StartTS())
+				lockCtx := kv.NewLockCtx(t1.StartTS(), 200, lockTime)
+				mutations := transaction.NewPlainMutations(1)
+				mutations.Push(kvrpcpb.Op_PessimisticLock, key1, nil, true, false, false, false)
+				err = simulatedCommiter.PessimisticLockMutations(ctx, lockCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock, &mutations)
+				s.NoError(err)
+
+				s.Equal(t2.GetCommitTS(), lockCtx.Values[string(key1)].LockedWithConflictTS)
+			}
+
+			// Trigger resolving locks
+			t3, err := s.store.Begin()
+			s.NoError(err)
+			t3.SetPessimistic(true)
+			lockCtx = kv.NewLockCtx(t3.StartTS(), 200, time.Now())
+			s.NoError(t3.LockKeys(ctx, lockCtx, pk, key1, key2))
+			s.NoError(t3.Rollback())
+
+			currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+			s.NoError(err)
+			snapshot = s.store.GetSnapshot(currentTS)
+			v, err := snapshot.Get(context.Background(), pk)
+			s.NoError(err)
+			s.Equal(v1, v)
+			v, err = snapshot.Get(context.Background(), key2)
+			s.NoError(err)
+			s.Equal(v2, v)
+			v, err = snapshot.Get(context.Background(), key1)
+			s.NoError(err)
+			s.Equal(v2, v)
+
+			return true
+		}()
+		if !success || s.T().Failed() {
+			break
+		}
+	}
+
+	if !success {
+		s.Fail("failed to construct colliding commit ts in 100 iterations")
+	}
+}

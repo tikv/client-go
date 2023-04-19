@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
@@ -276,6 +277,12 @@ func (c CommitterProbe) CommitMutations(ctx context.Context) error {
 // MutationsOfKeys returns mutations match the keys.
 func (c CommitterProbe) MutationsOfKeys(keys [][]byte) CommitterMutations {
 	return c.mutationsOfKeys(keys)
+}
+
+// PessimisticLockMutations pessimistic locks mutations.
+func (c CommitterProbe) PessimisticLockMutations(ctx context.Context, lockCtx *kv.LockCtx, lockWaitMode kvrpcpb.PessimisticLockWakeUpMode, muts CommitterMutations) error {
+	bo := retry.NewBackofferWithVars(ctx, pessimisticLockMaxBackoff, kv.DefaultVars)
+	return c.pessimisticLockMutations(bo, lockCtx, lockWaitMode, muts)
 }
 
 // PessimisticRollbackMutations rolls mutations back.
