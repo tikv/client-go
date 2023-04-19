@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	errors2 "errors"
 	"math"
 	"math/rand"
 	"strings"
@@ -191,6 +192,8 @@ type twoPhaseCommitter struct {
 	// isInternal means it's related to an internal transaction. It's only used by `asyncPessimisticRollback` as the
 	// committer may contain a nil `txn` pointer.
 	isInternal bool
+
+	forUpdateTSConstraints map[string]uint64
 }
 
 type memBufferMutations struct {
@@ -510,7 +513,11 @@ func (c *twoPhaseCommitter) checkAssertionByPessimisticLockResults(ctx context.C
 	}
 
 	if assertionFailed != nil {
-		return c.checkSchemaOnAssertionFail(ctx, assertionFailed)
+		err := c.checkSchemaOnAssertionFail(ctx, assertionFailed)
+		if errors2.Is(err, assertionFailed) {
+			logutil.Logger(ctx).Error("assertion failed when checking by pessimistic lock results")
+		}
+		return err
 	}
 
 	return nil
@@ -1144,6 +1151,10 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
+	startKeepAlive := time.Now()
+	defer func() {
+		metrics.TiKVTTLManagerHistogram.Observe(time.Since(startKeepAlive).Seconds())
+	}()
 	keepFail := 0
 	for {
 		select {
