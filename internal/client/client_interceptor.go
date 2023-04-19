@@ -109,7 +109,7 @@ func buildResourceControlInterceptor(
 				return nil, err
 			}
 			req.GetResourceControlContext().WriteBytesDelta = delta.WriteBytes
-			req.GetResourceControlContext().CpuDurationNsDelta = uint64(delta.CpuTime.Nanoseconds())
+			req.GetResourceControlContext().CpuDurationNsDelta = uint64(delta.CPUTime.Nanoseconds())
 			ruRuntimeStats.Update(consumption)
 			resp, err := next(target, req)
 			if resp != nil {
