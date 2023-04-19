@@ -1354,6 +1354,7 @@ storeIter:
 		}
 	}
 
+	// Prevent goleak from complaining about its internal connections.
 	http.DefaultClient.CloseIdleConnections()
 
 	if len(recoverConfigs) > 0 {
@@ -1368,6 +1369,9 @@ storeIter:
 				t.Logf("failed to recover config for store at %s: %v", item.url, err)
 			}
 		}
+
+		// Prevent goleak from complaining about its internal connections.
+		http.DefaultClient.CloseIdleConnections()
 	}
 }
 
