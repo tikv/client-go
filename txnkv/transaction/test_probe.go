@@ -99,18 +99,44 @@ func (txn TxnProbe) GetLockedCount() int {
 
 // GetAggressiveLockingKeys returns the keys that are in the current aggressive locking stage.
 func (txn TxnProbe) GetAggressiveLockingKeys() []string {
-	keys := make([]string, 0, len(txn.aggressiveLockingContext.currentLockedKeys))
-	for key := range txn.aggressiveLockingContext.currentLockedKeys {
-		keys = append(keys, key)
+	info := txn.GetAggressiveLockingKeysInfo()
+	keys := make([]string, 0, len(info))
+	for _, info := range info {
+		keys = append(keys, string(info.key))
 	}
 	return keys
 }
 
 // GetAggressiveLockingPreviousKeys returns the keys that were locked in the previous aggressive locking stage.
 func (txn TxnProbe) GetAggressiveLockingPreviousKeys() []string {
-	keys := make([]string, 0, len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks))
-	for key := range txn.aggressiveLockingContext.lastRetryUnnecessaryLocks {
-		keys = append(keys, key)
+	info := txn.GetAggressiveLockingPreviousKeysInfo()
+	keys := make([]string, 0, len(info))
+	for _, info := range info {
+		keys = append(keys, string(info.key))
+	}
+	return keys
+}
+
+// GetAggressiveLockingKeysInfo returns the keys and their internal states that are in the current aggressive locking stage.
+func (txn TxnProbe) GetAggressiveLockingKeysInfo() []AggressiveLockedKeyInfo {
+	keys := make([]AggressiveLockedKeyInfo, 0, len(txn.aggressiveLockingContext.currentLockedKeys))
+	for k, v := range txn.aggressiveLockingContext.currentLockedKeys {
+		keys = append(keys, AggressiveLockedKeyInfo{
+			key:   []byte(k),
+			entry: v,
+		})
+	}
+	return keys
+}
+
+// GetAggressiveLockingPreviousKeysInfo returns the keys and their internal states that were locked in the previous aggressive locking stage.
+func (txn TxnProbe) GetAggressiveLockingPreviousKeysInfo() []AggressiveLockedKeyInfo {
+	keys := make([]AggressiveLockedKeyInfo, 0, len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks))
+	for k, v := range txn.aggressiveLockingContext.lastRetryUnnecessaryLocks {
+		keys = append(keys, AggressiveLockedKeyInfo{
+			key:   []byte(k),
+			entry: v,
+		})
 	}
 	return keys
 }
@@ -399,4 +425,29 @@ type MemBufferMutationsProbe struct {
 // NewMemBufferMutationsProbe creates a new memBufferMutations instance for testing purpose.
 func NewMemBufferMutationsProbe(sizeHint int, storage *unionstore.MemDB) MemBufferMutationsProbe {
 	return MemBufferMutationsProbe{newMemBufferMutations(sizeHint, storage)}
+}
+
+type AggressiveLockedKeyInfo struct {
+	key   []byte
+	entry tempLockBufferEntry
+}
+
+func (i *AggressiveLockedKeyInfo) Key() []byte {
+	return i.key
+}
+
+func (i *AggressiveLockedKeyInfo) HasCheckExistence() bool {
+	return i.entry.HasCheckExistence
+}
+
+func (i *AggressiveLockedKeyInfo) HasReturnValues() bool {
+	return i.entry.HasReturnValue
+}
+
+func (i *AggressiveLockedKeyInfo) Value() kv.ReturnedValue {
+	return i.entry.Value
+}
+
+func (i *AggressiveLockedKeyInfo) ActualLockForUpdateTS() uint64 {
+	return i.entry.ActualLockForUpdateTS
 }

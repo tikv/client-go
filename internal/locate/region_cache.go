@@ -622,11 +622,15 @@ func (c *RPCContext) String() string {
 type contextPatcher struct {
 	replicaRead   *bool
 	busyThreshold *time.Duration
+	staleRead     *bool
 }
 
 func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
 	if patcher.replicaRead != nil {
 		pbCtx.ReplicaRead = *patcher.replicaRead
+	}
+	if patcher.staleRead != nil {
+		pbCtx.StaleRead = *patcher.staleRead
 	}
 	if patcher.busyThreshold != nil {
 		millis := patcher.busyThreshold.Milliseconds()
