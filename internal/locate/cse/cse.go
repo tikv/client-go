@@ -302,8 +302,9 @@ func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (
 					pendingPeers := syncResp.PendingPeers[i].Peers
 					regionInfo := pdcore.NewRegionInfo(region, leader,
 						pdcore.WithDownPeers(downPeers), pdcore.WithPendingPeers(pendingPeers))
-					if bs := syncResp.GetBuckets()[i]; bs.RegionId > 0 {
-						regionInfo.UpdateBuckets(bs, nil)
+					// if the region has buckets, update the region infos.
+					if bs := syncResp.GetBuckets(); len(bs) > 0 && bs[i].RegionId > 0 {
+						regionInfo.UpdateBuckets(bs[i], nil)
 					}
 					regionInfos = append(regionInfos, regionInfo)
 				}
