@@ -82,6 +82,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
+	var forUpdateTSConstraints []*kvrpcpb.PrewriteRequest_ForUpdateTSConstraint
 
 	for i := 0; i < m.Len(); i++ {
 		assertion := kvrpcpb.Assertion_None
@@ -103,6 +104,15 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
+		}
+
+		if c.forUpdateTSConstraints != nil {
+			if actualLockForUpdateTS, ok := c.forUpdateTSConstraints[string(mutations[i].Key)]; ok {
+				forUpdateTSConstraints = append(forUpdateTSConstraints, &kvrpcpb.PrewriteRequest_ForUpdateTSConstraint{
+					Index:               uint32(i),
+					ExpectedForUpdateTs: actualLockForUpdateTS,
+				})
+			}
 		}
 	}
 	c.mu.Lock()
@@ -157,16 +167,17 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	}
 
 	req := &kvrpcpb.PrewriteRequest{
-		Mutations:          mutations,
-		PrimaryLock:        c.primary(),
-		StartVersion:       c.startTS,
-		LockTtl:            ttl,
-		PessimisticActions: pessimisticActions,
-		ForUpdateTs:        c.forUpdateTS,
-		TxnSize:            txnSize,
-		MinCommitTs:        minCommitTS,
-		MaxCommitTs:        c.maxCommitTS,
-		AssertionLevel:     assertionLevel,
+		Mutations:              mutations,
+		PrimaryLock:            c.primary(),
+		StartVersion:           c.startTS,
+		LockTtl:                ttl,
+		PessimisticActions:     pessimisticActions,
+		ForUpdateTs:            c.forUpdateTS,
+		TxnSize:                txnSize,
+		MinCommitTs:            minCommitTS,
+		MaxCommitTs:            c.maxCommitTS,
+		AssertionLevel:         assertionLevel,
+		ForUpdateTsConstraints: forUpdateTSConstraints,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {
@@ -195,7 +206,9 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			TxnSource:              c.txnSource,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 			RequestSource:          c.txn.GetRequestSource(),
-			ResourceGroupName:      c.resourceGroupName,
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{
+				ResourceGroupName: c.resourceGroupName,
+			},
 		},
 	)
 	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
