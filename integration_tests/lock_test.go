@@ -1382,7 +1382,7 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 		return
 	}
 
-	recoverFunc := s.setTiKVConfig("pessimistic-txn.in-memory", "false")
+	recoverFunc := s.setTiKVConfig("pessimistic-txn.in-memory", false)
 	defer recoverFunc()
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
@@ -1511,7 +1511,7 @@ func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
 
 			return true
 		}()
-		if !success || s.T().Failed() {
+		if success || s.T().Failed() {
 			break
 		}
 	}
