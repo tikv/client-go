@@ -270,7 +270,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		req.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
-		r.Key = c.EncodeRegionKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		req.Req = &r
 	case tikvrpc.CmdSplitRegion:
 		r := *req.SplitRegion()
