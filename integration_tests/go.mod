@@ -102,3 +102,5 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/pingcap/kvproto => github.com/MyonKeminta/kvproto v0.0.0-20230423060126-5c32e1833a7f
