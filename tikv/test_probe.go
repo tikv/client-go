@@ -109,6 +109,11 @@ func (s StoreProbe) SetSafeTS(storeID, safeTS uint64) {
 	s.setSafeTS(storeID, safeTS)
 }
 
+// GCResolveLockPhase performs the resolve-locks phase of GC, which scans all locks and resolves them.
+func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, concurrency int) error {
+	return s.resolveLocks(ctx, safepoint, concurrency)
+}
+
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
 type LockResolverProbe struct {
 	*txnlock.LockResolverProbe
