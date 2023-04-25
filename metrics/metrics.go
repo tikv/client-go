@@ -717,7 +717,12 @@ func init() {
 }
 
 // InitMetrics initializes metrics variables with given namespace and subsystem name.
-func InitMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
+func InitMetrics(namespace, subsystem string) {
+	initMetrics(namespace, subsystem, nil)
+}
+
+// InitMetricsWithConstLabels initializes metrics variables with given namespace, subsystem name and const labels.
+func InitMetricsWithConstLabels(namespace, subsystem string, constLabels prometheus.Labels) {
 	initMetrics(namespace, subsystem, constLabels)
 }
 
