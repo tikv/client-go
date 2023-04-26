@@ -704,26 +704,29 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 
 	TiKVStaleReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_read_counter",
-			Help:      "Counter of stale read hit/miss",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_read_counter",
+			Help:        "Counter of stale read hit/miss",
+			ConstLabels: constLabels,
 		}, []string{LblResult})
 
 	TiKVStaleReadReqCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_read_req_counter",
-			Help:      "Counter of stale read requests",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_read_req_counter",
+			Help:        "Counter of stale read requests",
+			ConstLabels: constLabels,
 		}, []string{LblType})
 
 	TiKVStaleReadBytes = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_read_bytes",
-			Help:      "Counter of stale read requests bytes",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_read_bytes",
+			Help:        "Counter of stale read requests bytes",
+			ConstLabels: constLabels,
 		}, []string{LblResult, LblDirection})
 
 	initShortcuts()
