@@ -232,11 +232,11 @@ func mkErr(idx int, err error) result {
 // fanout sends the request to all the "up" TiKV stores concurrently.
 // Then, collect the region results, and merge them into a BTreeMap: RegionsInfo provided by the PD.
 // Finally, return the RegionsInfo.
-func (c *Client) fanout(ctx context.Context, method, endpoint string, req any) (*pdcore.RegionsInfo, error) {
+func (c *Client) fanout(ctx context.Context, tag, method, endpoint string, req any) (*pdcore.RegionsInfo, error) {
 	start := time.Now()
 	defer func() {
 		metrics.TiKVSyncRegionDuration.
-			WithLabelValues([]string{endpoint}...).
+			WithLabelValues([]string{tag}...).
 			Observe(time.Since(start).Seconds())
 	}()
 
@@ -352,7 +352,7 @@ func (c *Client) GetRegion(ctx context.Context, key []byte, _ ...pd.GetRegionOpt
 	if err != nil {
 		return nil, err
 	}
-	regionsInfo, err := c.fanout(ctx, http.MethodGet, "sync_region", &SyncRegionRequest{
+	regionsInfo, err := c.fanout(ctx, "GetRegion", http.MethodGet, "sync_region", &SyncRegionRequest{
 		Start: hex.EncodeToString(start),
 		End:   hex.EncodeToString(append(start, 0)),
 		Limit: 1,
@@ -373,8 +373,11 @@ func (c *Client) GetPrevRegion(ctx context.Context, key []byte, _ ...pd.GetRegio
 	if err != nil {
 		return nil, err
 	}
-	regionsInfo, err := c.fanout(ctx, http.MethodGet, "sync_region", &SyncRegionRequest{
-		End:     hex.EncodeToString(start),
+	regionsInfo, err := c.fanout(ctx, "GetPrevRegion", http.MethodGet, "sync_region", &SyncRegionRequest{
+		// Must include the current region of the `key`.
+		// Otherwise, the regionsInfo might return nil while the region is not found.
+		// Check https://github.com/tikv/pd/blob/400e3bd30c563bdb6b18ee7d59e56d082afff6a6/pkg/core/region_tree.go#L188
+		End:     hex.EncodeToString(append(start, 0)),
 		Limit:   2,
 		Reverse: true,
 	})
@@ -389,7 +392,7 @@ func (c *Client) GetPrevRegion(ctx context.Context, key []byte, _ ...pd.GetRegio
 }
 
 func (c *Client) GetRegionByID(ctx context.Context, regionID uint64, _ ...pd.GetRegionOption) (*pd.Region, error) {
-	regionsInfo, err := c.fanout(ctx, http.MethodGet, "sync_region_by_id", &SyncRegionByIDRequest{
+	regionsInfo, err := c.fanout(ctx, "GetRegionByID", http.MethodGet, "sync_region_by_id", &SyncRegionByIDRequest{
 		RegionID: regionID,
 	})
 	if err != nil {
@@ -414,7 +417,7 @@ func (c *Client) ScanRegions(ctx context.Context, startKey, endKey []byte, limit
 	if err != nil {
 		return nil, err
 	}
-	regionsInfo, err := c.fanout(ctx, http.MethodGet, "sync_region", &SyncRegionRequest{
+	regionsInfo, err := c.fanout(ctx, "ScanRegions", http.MethodGet, "sync_region", &SyncRegionRequest{
 		Start: hex.EncodeToString(start),
 		End:   hex.EncodeToString(end),
 		Limit: uint64(limit),
