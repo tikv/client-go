@@ -143,7 +143,7 @@ type KVStore struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
-	gP     Pool
+	gP     util.Pool
 }
 
 // Go run the function in a separate goroutine.
@@ -187,7 +187,7 @@ func (s *KVStore) CheckVisibility(startTime uint64) error {
 type Option func(*KVStore)
 
 // WithPool set the pool
-func WithPool(gp Pool) Option {
+func WithPool(gp util.Pool) Option {
 	return func(o *KVStore) {
 		o.gP = gp
 	}
@@ -219,7 +219,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		replicaReadSeed: rand.Uint32(),
 		ctx:             ctx,
 		cancel:          cancel,
-		gP:              NewSpool(128, 10*time.Second),
+		gP:              util.NewSpool(128, 10*time.Second),
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient, &store.ruRuntimeStatsMap))
 	store.lockResolver = txnlock.NewLockResolver(store)
