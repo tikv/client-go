@@ -127,7 +127,9 @@ func (s *testKVSuite) TestMinSafeTs() {
 }
 
 func (s *testKVSuite) TestRURuntimeStatsCleanUp() {
+	s.TearDownTest()
 	s.Nil(failpoint.Enable("tikvclient/mockFastRURuntimeStatsMapClean", `return()`))
+	s.SetupTest()
 	defer func() {
 		s.Nil(failpoint.Disable("tikvclient/mockFastRURuntimeStatsMapClean"))
 	}()
