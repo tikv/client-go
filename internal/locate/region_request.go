@@ -1222,6 +1222,13 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 
+		if _, err1 := util.EvalFailpoint("afterSendReqToRegion"); err1 == nil {
+			if hook := bo.GetCtx().Value("sendReqToRegionFinishHook"); hook != nil {
+				h := hook.(func(*tikvrpc.Request, *tikvrpc.Response, error))
+				h(req, resp, err)
+			}
+		}
+
 		// recheck whether the session/query is killed during the Next()
 		boVars := bo.GetVars()
 		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
