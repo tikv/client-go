@@ -41,6 +41,7 @@ import (
 	errors2 "errors"
 	"math"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1647,6 +1648,20 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 						logutil.Logger(ctx).Info("[failpoint] injected delay before commit",
 							zap.Uint64("txnStartTS", c.startTS), zap.Duration("duration", duration))
 						time.Sleep(duration)
+					} else if strings.HasPrefix(action, "delay(") && strings.HasSuffix(action, ")") {
+						durationStr := action[6:]
+						durationStr = durationStr[:len(durationStr)-1]
+						millis, err := strconv.ParseUint(durationStr, 10, 64)
+						if err != nil {
+							panic("failed to parse delay duration: " + durationStr)
+						}
+						duration := time.Millisecond * time.Duration(millis)
+						logutil.Logger(ctx).Info("[failpoint] injected delay before commit",
+							zap.Uint64("txnStartTS", c.startTS), zap.Duration("duration", duration))
+						time.Sleep(duration)
+					} else {
+						logutil.Logger(ctx).Info("[failpoint] unknown failpoint config",
+							zap.Uint64("txnStartTS", c.startTS), zap.String("config", action))
 					}
 				}
 			}
