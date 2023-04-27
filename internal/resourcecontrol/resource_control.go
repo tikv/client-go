@@ -32,6 +32,7 @@ type RequestInfo struct {
 	// writeBytes is the actual write size if the request is a write request,
 	// or -1 if it's a read request.
 	writeBytes int64
+	storeID    uint64
 }
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
@@ -56,7 +57,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 		}
 	}
 
-	return &RequestInfo{writeBytes: writeBytes * req.ReplicaNumber}
+	return &RequestInfo{writeBytes: writeBytes * req.ReplicaNumber, storeID: req.Context.Peer.StoreId}
 }
 
 // IsWrite returns whether the request is a write request.
@@ -68,6 +69,10 @@ func (req *RequestInfo) IsWrite() bool {
 // -1 will be returned if it's not a write request.
 func (req *RequestInfo) WriteBytes() uint64 {
 	return uint64(req.writeBytes)
+}
+
+func (req *RequestInfo) StoreID() uint64 {
+	return req.storeID
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost

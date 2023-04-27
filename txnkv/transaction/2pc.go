@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	errors2 "errors"
 	"math"
 	"math/rand"
 	"strings"
@@ -512,7 +513,11 @@ func (c *twoPhaseCommitter) checkAssertionByPessimisticLockResults(ctx context.C
 	}
 
 	if assertionFailed != nil {
-		return c.checkSchemaOnAssertionFail(ctx, assertionFailed)
+		err := c.checkSchemaOnAssertionFail(ctx, assertionFailed)
+		if errors2.Is(err, assertionFailed) {
+			logutil.Logger(ctx).Error("assertion failed when checking by pessimistic lock results")
+		}
+		return err
 	}
 
 	return nil

@@ -90,7 +90,7 @@ func buildResourceControlInterceptor(
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
 	}
-	resourceGroupName := req.GetResourceGroupName()
+	resourceGroupName := req.GetResourceControlContext().GetResourceGroupName()
 	// When the group name is empty, we don't need to perform the resource control.
 	if len(resourceGroupName) == 0 {
 		return nil
@@ -104,10 +104,11 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			consumption, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, penalty, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
+			req.GetResourceControlContext().Penalty = penalty
 			ruRuntimeStats.Update(consumption)
 			resp, err := next(target, req)
 			if resp != nil {
