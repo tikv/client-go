@@ -159,6 +159,11 @@ var (
 	AggressiveLockedKeysDerived            prometheus.Counter
 	AggressiveLockedKeysLockedWithConflict prometheus.Counter
 	AggressiveLockedKeysNonForceLock       prometheus.Counter
+
+	StaleReadHitInTraffic   prometheus.Observer
+	StaleReadHitOutTraffic  prometheus.Observer
+	StaleReadMissInTraffic  prometheus.Observer
+	StaleReadMissOutTraffic prometheus.Observer
 )
 
 func initShortcuts() {
@@ -290,4 +295,9 @@ func initShortcuts() {
 	// `WakeUpMode = PessimisticLockWakeUpMode_WakeUpModeNormal`, which will disable `allow_lock_with_conflict` in
 	// TiKV).
 	AggressiveLockedKeysNonForceLock = TiKVAggressiveLockedKeysCounter.WithLabelValues("non_force_lock")
+
+	StaleReadHitInTraffic = TiKVStaleReadSizeSummary.WithLabelValues("hit", "in")
+	StaleReadHitOutTraffic = TiKVStaleReadSizeSummary.WithLabelValues("hit", "out")
+	StaleReadMissInTraffic = TiKVStaleReadSizeSummary.WithLabelValues("miss", "in")
+	StaleReadMissOutTraffic = TiKVStaleReadSizeSummary.WithLabelValues("miss", "out")
 }

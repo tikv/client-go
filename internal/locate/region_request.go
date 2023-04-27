@@ -1155,6 +1155,14 @@ func (s *RegionRequestSender) SendReqCtx(
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
 	}()
+
+	var staleReadCollector *staleReadMetricsCollector
+	if req.StaleRead {
+		staleReadCollector = &staleReadMetricsCollector{hit: true}
+		staleReadCollector.onReq(req)
+		defer staleReadCollector.collect()
+	}
+
 	for {
 		if retryTimes > 0 {
 			req.IsRetryRequest = true
@@ -1164,6 +1172,9 @@ func (s *RegionRequestSender) SendReqCtx(
 					zap.Uint64("region", regionID.GetID()),
 					zap.Int("times", retryTimes),
 				)
+			}
+			if req.StaleRead && staleReadCollector != nil {
+				staleReadCollector.hit = false
 			}
 		}
 
@@ -1251,6 +1262,9 @@ func (s *RegionRequestSender) SendReqCtx(
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess()
 			}
+		}
+		if staleReadCollector != nil {
+			staleReadCollector.onResp(resp)
 		}
 		return resp, rpcCtx, retryTimes, nil
 	}
@@ -1916,4 +1930,60 @@ func (s *RegionRequestSender) onRegionError(
 	// For other errors, we only drop cache here.
 	// Because caller may need to re-split the request.
 	return false, nil
+}
+
+type staleReadMetricsCollector struct {
+	tp  tikvrpc.CmdType
+	hit bool
+	out int
+	in  int
+}
+
+func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
+	size := 0
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		size += req.Get().Size()
+	case tikvrpc.CmdBatchGet:
+		size += req.BatchGet().Size()
+	case tikvrpc.CmdScan:
+		size += req.Scan().Size()
+	case tikvrpc.CmdCop:
+		size += req.Cop().Size()
+	default:
+		// ignore non-read requests
+		return
+	}
+	s.tp = req.Type
+	size += req.Context.Size()
+	s.out = size
+}
+
+func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
+	size := 0
+	switch s.tp {
+	case tikvrpc.CmdGet:
+		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
+	case tikvrpc.CmdBatchGet:
+		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
+	case tikvrpc.CmdScan:
+		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
+	case tikvrpc.CmdCop:
+		size += resp.Resp.(*coprocessor.Response).Size()
+	default:
+		// unreachable
+		return
+	}
+	s.in = size
+}
+
+func (s *staleReadMetricsCollector) collect() {
+	in, out := metrics.StaleReadHitInTraffic, metrics.StaleReadHitOutTraffic
+	if !s.hit {
+		in, out = metrics.StaleReadMissInTraffic, metrics.StaleReadMissOutTraffic
+	}
+	if s.in > 0 && s.out > 0 {
+		in.Observe(float64(s.in))
+		out.Observe(float64(s.out))
+	}
 }
