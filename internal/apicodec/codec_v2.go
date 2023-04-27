@@ -816,6 +816,7 @@ func (c *codecV2) encodeTableRegions(infos []*coprocessor.TableRegions) []*copro
 	}
 	return encodedInfos
 }
+
 func (c *codecV2) encodeStoreBatchTasks(tasks []*coprocessor.StoreBatchTask) []*coprocessor.StoreBatchTask {
 	var encodedTasks []*coprocessor.StoreBatchTask
 	for _, task := range tasks {
