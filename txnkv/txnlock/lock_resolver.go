@@ -762,7 +762,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 
 			if p := keyErr.GetPrimaryMismatch(); p != nil && resolvingPessimisticLock {
 				err = primaryMismatch{currentLock: p.GetLockInfo()}
-				logutil.BgLogger().Info("getTxnStatus done on secondary lock", zap.Error(err))
+				logutil.BgLogger().Info("getTxnStatus was called on secondary lock", zap.Error(err))
 				return status, err
 			}
 

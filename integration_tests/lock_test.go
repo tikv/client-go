@@ -1250,11 +1250,6 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 }
 
 func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
-	if !*withTiKV {
-		// Not yet implemented in unistore
-		return
-	}
-
 	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
 	s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", "return"))
 	s.NoError(failpoint.Enable("tikvclient/shortPessimisticLockTTL", "return"))
