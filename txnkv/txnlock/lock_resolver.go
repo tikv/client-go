@@ -1068,6 +1068,9 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	resolveLite := lite || l.TxnSize < lr.resolveLockLiteThreshold
+	if val, err := util.EvalFailpoint("forceSetResolveLockLite"); err == nil {
+		resolveLite = val.(bool)
+	}
 	// The lock has been resolved by getTxnStatusFromLock.
 	if resolveLite && bytes.Equal(l.Key, l.Primary) {
 		return nil

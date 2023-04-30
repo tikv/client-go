@@ -37,9 +37,12 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	stderrs "errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -48,8 +51,11 @@ import (
 	"github.com/pingcap/failpoint"
 	deadlockpb "github.com/pingcap/kvproto/pkg/deadlock"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -1247,4 +1253,270 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test(true, false, false)
 	test(true, true, false)
 	test(true, false, true)
+}
+
+func (s *testLockWithTiKVSuite) setTiKVConfig(name string, value interface{}) func() {
+	stores, err := s.store.GetPDClient().GetAllStores(context.Background())
+	s.NoError(err)
+
+	type configItem struct {
+		url   string
+		name  string
+		value interface{}
+	}
+
+	var recoverConfigs []configItem
+
+	httpScheme := "http"
+	if c, err := config.GetGlobalConfig().Security.ToTLSConfig(); err == nil && c != nil {
+		httpScheme = "https"
+	}
+
+	t := s.Suite.T()
+
+	setCfg := func(url, name string, value interface{}) error {
+		postBody, err := json.Marshal(map[string]interface{}{name: value})
+		if err != nil {
+			return err
+		}
+		resp, err := http.Post(url, "text/json", bytes.NewReader(postBody))
+		if err != nil {
+			return err
+		}
+		s.NoError(resp.Body.Close())
+		if resp.StatusCode != 200 {
+			return errors.Errorf("post config got unexpected status code: %v, request body: %s", resp.StatusCode, postBody)
+		}
+		t.Logf("set config for tikv at %s finished: %s", url, string(postBody))
+		return nil
+	}
+
+storeIter:
+	for _, store := range stores {
+		if store.State != metapb.StoreState_Up {
+			continue
+		}
+		for _, label := range store.Labels {
+			if label.Key == "engine" && label.Value != "tikv" {
+				continue storeIter
+			}
+		}
+
+		err := func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = errors.Errorf("set config for store at %v panicked: %v", store.StatusAddress, r)
+				}
+			}()
+
+			url := fmt.Sprintf("%s://%s/config", httpScheme, store.StatusAddress)
+			resp, err := http.Get(url)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				return errors.Errorf("unexpected response status: %v", resp.Status)
+			}
+			oldCfgRaw, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+
+			oldCfg := make(map[string]interface{})
+			err = json.Unmarshal(oldCfgRaw, &oldCfg)
+			if err != nil {
+				return err
+			}
+
+			oldValue := oldCfg["pessimistic-txn"].(map[string]interface{})["in-memory"]
+			if assert.ObjectsAreEqual(oldValue, value) {
+				return nil
+			}
+
+			err = setCfg(url, name, value)
+			if err != nil {
+				return err
+			}
+
+			recoverConfigs = append(recoverConfigs, configItem{
+				url:   url,
+				name:  name,
+				value: oldValue,
+			})
+
+			return nil
+		}()
+
+		if err != nil {
+			t.Logf("failed to set config for store at %s: %v", store.StatusAddress, err)
+		}
+	}
+
+	// Prevent goleak from complaining about its internal connections.
+	http.DefaultClient.CloseIdleConnections()
+
+	if len(recoverConfigs) > 0 {
+		// Sleep for a while to ensure the new configs are applied.
+		time.Sleep(time.Second)
+	}
+
+	return func() {
+		for _, item := range recoverConfigs {
+			err = setCfg(item.url, item.name, item.value)
+			if err != nil {
+				t.Logf("failed to recover config for store at %s: %v", item.url, err)
+			}
+		}
+
+		// Prevent goleak from complaining about its internal connections.
+		http.DefaultClient.CloseIdleConnections()
+	}
+}
+
+func (s *testLockWithTiKVSuite) TestStaleForcePessimisticLockNotCommitted() {
+	// See https://github.com/tikv/tikv/issues/14551 for detail about the issue this test is supposed to cover.
+	if !*withTiKV {
+		// The issue only exists in TiKV's storage model. Unnecessary to run with mocks.
+		return
+	}
+
+	recoverFunc := s.setTiKVConfig("pessimistic-txn.in-memory", false)
+	defer recoverFunc()
+
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+
+	var success bool
+	for iteration := 0; iteration < 20; iteration++ {
+		success = func() bool {
+			// Test several times repeatedly for greater possibility to reproduce the issue if it exists.
+			s.T().Logf("TestStaleForcePessimisticLockNotCommitted starts iteration %d", iteration)
+
+			// Add prefix to the key to make that more likely to locate in the same region.
+			pk := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-p", iteration))
+			key1 := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-1", iteration))
+			key2 := []byte(fmt.Sprintf("TestStaleForcePessimisticLockNotCommitted-k%d-2", iteration))
+
+			v1 := []byte("v1")
+			v2 := []byte("v2")
+
+			// Remove the keys if they already exists
+			{
+				t, err := s.store.Begin()
+				s.NoError(err)
+				s.NoError(t.Delete(pk))
+				s.NoError(t.Delete(key1))
+				s.NoError(t.Delete(key2))
+				s.NoError(t.Commit(ctx))
+			}
+
+			t1, err := s.store.Begin()
+			s.NoError(err)
+			t1.SetPessimistic(true)
+			t1.SetEnableAsyncCommit(true)
+			// Make t1's primary determined
+			lockCtx := kv.NewLockCtx(t1.StartTS(), 200, time.Now())
+			s.NoError(t1.LockKeys(ctx, lockCtx, pk))
+			s.NoError(t1.Set(pk, v1))
+
+			simulatedCommiter, err := t1.NewCommitter(1)
+			s.NoError(err)
+
+			t2, err := s.store.Begin()
+			s.NoError(err)
+			t2.SetEnableAsyncCommit(true)
+			s.NoError(t2.Set(key1, v2))
+			s.NoError(t2.Set(key2, v2))
+
+			t1.StartAggressiveLocking()
+			lockTime := time.Now()
+			lockCtx = kv.NewLockCtx(t1.StartTS(), 200, lockTime)
+			s.NoError(t1.LockKeys(ctx, lockCtx, key1))
+			t1.CancelAggressiveLocking(ctx)
+			// Wait the pessimistic lock of t1 on key1 to be rolled back.
+			s.checkIsKeyLocked(key1, false)
+
+			// Try to make transaction t1 and t2 commit at the same commitTS.
+			// First, block at finishing getting minCommitTS from PD and before prewriting
+			s.NoError(failpoint.Enable("tikvclient/beforePrewrite", "pause"))
+			resCh := make(chan error)
+			go func() {
+				resCh <- t1.Commit(ctx)
+			}()
+			go func() {
+				resCh <- t2.Commit(ctx)
+			}()
+			select {
+			case <-resCh:
+				s.Fail("commit not blocked")
+			case <-time.After(time.Millisecond * 100):
+			}
+
+			// Send a read request to TiKV to update max_ts
+			currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+			s.NoError(err)
+			snapshot := s.store.GetSnapshot(currentTS)
+			_, err = snapshot.Get(context.Background(), key2)
+			s.Equal(tikverr.ErrNotExist, err)
+
+			// Continue committing
+			s.NoError(failpoint.Disable("tikvclient/beforePrewrite"))
+			s.NoError(<-resCh)
+			s.NoError(<-resCh)
+
+			if t1.GetCommitTS() != t2.GetCommitTS() {
+				return false
+			}
+
+			checkDataConsistency := func() {
+				currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+				s.NoError(err)
+				snapshot = s.store.GetSnapshot(currentTS)
+				v, err := snapshot.Get(context.Background(), pk)
+				s.NoError(err)
+				s.Equal(v1, v)
+				v, err = snapshot.Get(context.Background(), key2)
+				s.NoError(err)
+				s.Equal(v2, v)
+				v, err = snapshot.Get(context.Background(), key1)
+				s.NoError(err)
+				s.Equal(v2, v)
+			}
+
+			checkDataConsistency()
+
+			// Simulate a repeated stale request of t1 locking key1 sent to TiKV
+			{
+				simulatedCommiter.SetPrimaryKey(pk)
+				simulatedCommiter.SetForUpdateTS(t1.StartTS())
+				lockCtx := kv.NewLockCtx(t1.StartTS(), 200, lockTime)
+				mutations := transaction.NewPlainMutations(1)
+				mutations.Push(kvrpcpb.Op_PessimisticLock, key1, nil, true, false, false, false)
+				err = simulatedCommiter.PessimisticLockMutations(ctx, lockCtx, kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock, &mutations)
+				s.NoError(err)
+
+				s.Equal(t2.GetCommitTS(), lockCtx.Values[string(key1)].LockedWithConflictTS)
+			}
+
+			// Trigger resolving locks.
+			// For normal resolve lock procedures, it always uses special path for resolving pessimistic locks, which
+			// avoids this problem. However, `BatchResolveLock` which is used by GC doesn't have that handling (and
+			// cannot have in the current interface design).
+			currentTS, err = s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+			s.NoError(err)
+			s.NoError(s.store.GCResolveLockPhase(ctx, currentTS, 1))
+
+			checkDataConsistency()
+
+			return true
+		}()
+		if success || s.T().Failed() {
+			break
+		}
+	}
+
+	if !success {
+		s.Fail("failed to construct colliding commit ts in 20 iterations")
+	}
 }
