@@ -449,7 +449,11 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 	resolve = func(l *Lock, forceSyncCommit bool) (TxnStatus, error) {
 		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
 
-		if _, ok := errors.Cause(err).(primaryMismatch); ok && l.LockType == kvrpcpb.Op_PessimisticLock {
+		if _, ok := errors.Cause(err).(primaryMismatch); ok {
+			if l.LockType != kvrpcpb.Op_PessimisticLock {
+				logutil.BgLogger().Info("unexpected primaryMismatch error occurred on a non-pessimistic lock", zap.Stringer("lock", l), zap.Error(err))
+				return TxnStatus{}, err
+			}
 			// Pessimistic rollback the pessimistic lock as it points to an invalid primary.
 			status, err = TxnStatus{}, nil
 		} else if err != nil {
