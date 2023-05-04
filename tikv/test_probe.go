@@ -46,7 +46,7 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-// StoreProbe wraps KVSTore and exposes internal states for testing purpose.
+// StoreProbe wraps KVStore and exposes internal states for testing purpose.
 type StoreProbe struct {
 	*KVStore
 }

@@ -254,10 +254,12 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdCop:
 		r := *req.Cop()
 		r.Ranges = c.encodeCopRanges(r.Ranges)
+		r.Tasks = c.encodeStoreBatchTasks(r.Tasks)
 		req.Req = &r
 	case tikvrpc.CmdCopStream:
 		r := *req.Cop()
 		r.Ranges = c.encodeCopRanges(r.Ranges)
+		r.Tasks = c.encodeStoreBatchTasks(r.Tasks)
 		req.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
@@ -813,6 +815,16 @@ func (c *codecV2) encodeTableRegions(infos []*coprocessor.TableRegions) []*copro
 		encodedInfos = append(encodedInfos, &i)
 	}
 	return encodedInfos
+}
+
+func (c *codecV2) encodeStoreBatchTasks(tasks []*coprocessor.StoreBatchTask) []*coprocessor.StoreBatchTask {
+	var encodedTasks []*coprocessor.StoreBatchTask
+	for _, task := range tasks {
+		t := *task
+		t.Ranges = c.encodeCopRanges(t.Ranges)
+		encodedTasks = append(encodedTasks, &t)
+	}
+	return encodedTasks
 }
 
 func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {
