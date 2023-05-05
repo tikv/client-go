@@ -525,7 +525,6 @@ type accessFollower struct {
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	replicaSize := len(selector.replicas)
 	resetStaleRead := false
 	if state.lastIdx < 0 {
 		if state.tryLeader {
@@ -1147,6 +1146,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 	if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 		return nil, false, err
 	}
+	rpcCtx.contextPatcher.applyTo(&req.Context)
 	// judge the store limit switch.
 	if limit := kv.StoreLimit.Load(); limit > 0 {
 		if err := s.getStoreToken(rpcCtx.Store, limit); err != nil {

@@ -525,6 +525,8 @@ type RPCContext struct {
 	ProxyStore *Store // nil means proxy is not used
 	ProxyAddr  string // valid when ProxyStore is not nil
 	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+
+	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
 
 func (c *RPCContext) String() string {
