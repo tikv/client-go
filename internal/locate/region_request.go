@@ -264,9 +264,8 @@ type replicaSelector struct {
 // selectorState is the interface of states of the replicaSelector.
 // Here is the main state transition diagram:
 //
-//	                         exceeding maxReplicaAttempt
-//	+-------------------+   || RPC failure && unreachable && no forwarding
-//
+//                                    exceeding maxReplicaAttempt
+//           +-------------------+   || RPC failure && unreachable && no forwarding
 // +-------->+ accessKnownLeader +----------------+
 // |         +------+------------+                |
 // |                |                             |
@@ -283,8 +282,8 @@ type replicaSelector struct {
 // | leader becomes   v                           +---+---+
 // | reachable  +-----+-----+ all proxies are tried   ^
 // +------------+tryNewProxy+-------------------------+
-//
-//	+-----------+
+//              +-----------+
+
 type selectorState interface {
 	next(*retry.Backoffer, *replicaSelector) (*RPCContext, error)
 	onSendSuccess(*replicaSelector)
