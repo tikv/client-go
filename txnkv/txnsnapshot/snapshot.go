@@ -504,6 +504,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			} else {
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
 			}
+			req.DisableStaleRead()
 			resolveLocksOpts := txnlock.ResolveLocksOptions{
 				CallerStartTS: s.version,
 				Locks:         locks,
@@ -694,6 +695,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				return nil, err
 			}
 			if firstLock == nil {
+				req.DisableStaleRead()
 				firstLock = lock
 			} else if s.version == maxTimestamp && firstLock.TxnID != lock.TxnID {
 				// If it is an autocommit point get, it needs to be blocked only

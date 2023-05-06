@@ -275,6 +275,16 @@ func (req *Request) EnableStaleRead() {
 	req.ReplicaRead = false
 }
 
+// DisableStaleRead is called when stale-read fallbacks to leader read after meeting key-is-locked error.
+func (req *Request) DisableStaleRead() {
+	// only take effect for stale-read requests.
+	if !req.StaleRead {
+		return
+	}
+	req.StaleRead = false
+	req.ReplicaReadType = kv.ReplicaReadLeader
+}
+
 // IsGlobalStaleRead checks if the request is a global stale read request.
 func (req *Request) IsGlobalStaleRead() bool {
 	return req.ReadReplicaScope == oracle.GlobalTxnScope &&
