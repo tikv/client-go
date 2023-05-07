@@ -47,8 +47,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/zap"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.
@@ -1004,13 +1006,26 @@ func (resp *Response) GetExecDetailsV2() *kvrpcpb.ExecDetailsV2 {
 // ch is needed to implement timeout for coprocessor streaming, the stream object's
 // cancel function will be sent to the channel, together with a lease checked by a background goroutine.
 func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Response, error) {
+	req.GetRequestSource()
 	resp := &Response{}
+	respSize := 0
+	defer logutil.Logger(ctx).Info("[TESTLOG] CallRPC",
+		zap.String("request source", req.GetRequestSource()),
+		zap.String("req type", req.Type.String()),
+		zap.Int("resp size", respSize),
+	)
 	var err error
 	switch req.Type {
 	case CmdGet:
-		resp.Resp, err = client.KvGet(ctx, req.Get())
+		resp0, err0 := client.KvGet(ctx, req.Get())
+		respSize = resp0.Size()
+		resp.Resp = resp0
+		err = err0
 	case CmdScan:
-		resp.Resp, err = client.KvScan(ctx, req.Scan())
+		resp0, err0 := client.KvScan(ctx, req.Scan())
+		respSize = resp0.Size()
+		resp.Resp = resp0
+		err = err0
 	case CmdPrewrite:
 		resp.Resp, err = client.KvPrewrite(ctx, req.Prewrite())
 	case CmdPessimisticLock:
@@ -1022,7 +1037,10 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 	case CmdCleanup:
 		resp.Resp, err = client.KvCleanup(ctx, req.Cleanup())
 	case CmdBatchGet:
-		resp.Resp, err = client.KvBatchGet(ctx, req.BatchGet())
+		resp0, err0 := client.KvBatchGet(ctx, req.BatchGet())
+		respSize = resp0.Size()
+		resp.Resp = resp0
+		err = err0
 	case CmdBatchRollback:
 		resp.Resp, err = client.KvBatchRollback(ctx, req.BatchRollback())
 	case CmdScanLock:
@@ -1066,7 +1084,10 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 	case CmdPhysicalScanLock:
 		resp.Resp, err = client.PhysicalScanLock(ctx, req.PhysicalScanLock())
 	case CmdCop:
-		resp.Resp, err = client.Coprocessor(ctx, req.Cop())
+		resp0, err0 := client.Coprocessor(ctx, req.Cop())
+		respSize = resp0.Size()
+		resp.Resp = resp0
+		err = err0
 	case CmdMPPTask:
 		resp.Resp, err = client.DispatchMPPTask(ctx, req.DispatchMPPTask())
 	case CmdMPPAlive:
@@ -1093,9 +1114,15 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 			Tikv_BatchCoprocessorClient: streamClient,
 		}
 	case CmdMvccGetByKey:
-		resp.Resp, err = client.MvccGetByKey(ctx, req.MvccGetByKey())
+		resp0, err0 := client.MvccGetByKey(ctx, req.MvccGetByKey())
+		respSize = resp0.Size()
+		resp.Resp = resp0
+		err = err0
 	case CmdMvccGetByStartTs:
-		resp.Resp, err = client.MvccGetByStartTs(ctx, req.MvccGetByStartTs())
+		resp0, err0 := client.MvccGetByStartTs(ctx, req.MvccGetByStartTs())
+		respSize = resp0.Size()
+		resp.Resp = resp0
+		err = err0
 	case CmdSplitRegion:
 		resp.Resp, err = client.SplitRegion(ctx, req.SplitRegion())
 	case CmdEmpty:
