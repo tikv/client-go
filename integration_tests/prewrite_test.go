@@ -52,12 +52,7 @@ import (
 
 func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 	require, assert := require.New(t), assert.New(t)
-
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
-	require.Nil(err)
-	testutils.BootstrapWithSingleStore(cluster)
-	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)
-	require.Nil(err)
+	store := NewTestStore(t)
 	defer store.Close()
 
 	tx, err := store.Begin()
