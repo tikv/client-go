@@ -6,13 +6,13 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230419072653-dc3cd8784a19
-	github.com/pingcap/tidb v1.1.0-beta.0.20230413060901-2002ca106e99
+	github.com/pingcap/kvproto v0.0.0-20230426023724-d90a321b46be
+	github.com/pingcap/tidb v1.1.0-beta.0.20230428082552-991d99c1e0b9
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.2
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.7-0.20230406064257-1ec0ff5bf443
-	github.com/tikv/pd/client v0.0.0-20230419105719-9e7b8e8c95fd
+	github.com/tikv/client-go/v2 v2.0.8-0.20230427065546-c619a504747d
+	github.com/tikv/pd/client v0.0.0-20230419153320-f1d1a80feb95
 	go.uber.org/goleak v1.2.1
 )
 
@@ -45,7 +45,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/klauspost/compress v1.15.13 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
-	github.com/kr/pretty v0.3.0 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20230326075908-cb1d2100619a // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
@@ -60,15 +60,15 @@ require (
 	github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20230407040306-fb007c5aff21 // indirect
 	github.com/pingcap/tidb/parser v0.0.0-20230321033041-8ba2035203f7 // indirect
-	github.com/pingcap/tipb v0.0.0-20230310043643-5362260ee6f7 // indirect
+	github.com/pingcap/tipb v0.0.0-20230427024529-aed92caf20b9 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
-	github.com/prometheus/client_golang v1.14.0 // indirect
+	github.com/prometheus/client_golang v1.15.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
-	github.com/prometheus/common v0.39.0 // indirect
+	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20220927061507-ef77025ab5aa // indirect
-	github.com/rogpeppe/go-internal v1.8.0 // indirect
+	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.23.3 // indirect
 	github.com/shoenig/go-m1cpu v0.1.5 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
