@@ -73,3 +73,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
+
+replace github.com/pingcap/kvproto => github.com/tidbcloud/kvproto v0.0.0-20230504070030-4ceaef675854
+
+replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20230504090022-fea484d60563

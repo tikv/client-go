@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/util"
@@ -100,26 +99,27 @@ func buildResourceControlInterceptor(
 		return nil
 	}
 	// Make the request info.
-	reqInfo := resourcecontrol.MakeRequestInfo(req)
+	// reqInfo := resourcecontrol.MakeRequestInfo(req)
 	// Build the interceptor.
 	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			consumption, penalty, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
-			if err != nil {
-				return nil, err
-			}
-			req.GetResourceControlContext().Penalty = penalty
-			ruRuntimeStats.Update(consumption)
-			resp, err := next(target, req)
-			if resp != nil {
-				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				consumption, err = ResourceControlInterceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
-				if err != nil {
-					return nil, err
-				}
-				ruRuntimeStats.Update(consumption)
-			}
-			return resp, err
+			//consumption, penalty, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			//if err != nil {
+			//	return nil, err
+			//}
+			//req.GetResourceControlContext().Penalty = penalty
+			//ruRuntimeStats.Update(consumption)
+			//resp, err := next(target, req)
+			//if resp != nil {
+			//	respInfo := resourcecontrol.MakeResponseInfo(resp)
+			//	consumption, err = ResourceControlInterceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
+			//	if err != nil {
+			//		return nil, err
+			//	}
+			//	ruRuntimeStats.Update(consumption)
+			//}
+			//return resp, err
+			return nil, nil
 		}
 	}
 }
