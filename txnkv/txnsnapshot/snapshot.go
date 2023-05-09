@@ -635,12 +635,18 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	if len(matchStoreLabels) > 0 {
 		ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
 	}
-	if req.ReplicaReadType.IsFollowerRead() && replicaAdjuster != nil {
-		op, readType := replicaAdjuster(1)
-		if op != nil {
-			ops = append(ops, op)
+	if req.ReplicaReadType.IsFollowerRead() {
+		// Disable follower read if autocommit point get is used to avoid breaking the linearizability.
+		// See https://github.com/pingcap/tidb/issues/43583 for details.
+		if s.version == math.MaxUint64 {
+			req.ReplicaReadType = kv.ReplicaReadLeader
+		} else if replicaAdjuster != nil {
+			op, readType := replicaAdjuster(1)
+			if op != nil {
+				ops = append(ops, op)
+			}
+			req.ReplicaReadType = readType
 		}
-		req.ReplicaReadType = readType
 	}
 
 	var firstLock *txnlock.Lock
