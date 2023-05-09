@@ -462,6 +462,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			locks      []*txnlock.Lock
 		)
 		if keyErr := batchGetResp.GetError(); keyErr != nil {
+			req.DisableStaleRead()
 			// If a response-level error happens, skip reading pairs.
 			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err != nil {
