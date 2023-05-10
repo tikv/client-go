@@ -115,6 +115,7 @@ type KVStore struct {
 		client Client
 	}
 	pdClient     pd.Client
+	pdHttpClient util.PdController
 	regionCache  *locate.RegionCache
 	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
@@ -190,6 +191,13 @@ type Option func(*KVStore)
 func WithPool(gp Pool) Option {
 	return func(o *KVStore) {
 		o.gP = gp
+	}
+}
+
+// WithPDAddrsAndTls set the pd addrs and tls for pdHttpClient.
+func WithPDAddrsAndTls(tlsConf *tls.Config, pdaddrs []string) Option {
+	return func(o *KVStore) {
+		o.pdHttpClient = *util.NewPdController(tlsConf, pdaddrs)
 	}
 }
 
@@ -581,25 +589,30 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		}
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
-			resp, err := tikvClient.SendRequest(
-				ctx, storeAddr, tikvrpc.NewRequest(
-					tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
-						KeyRange: &kvrpcpb.KeyRange{
-							StartKey: []byte(""),
-							EndKey:   []byte(""),
-						},
-					}, kvrpcpb.Context{
-						RequestSource: util.RequestSourceFromCtx(ctx),
-					},
-				), client.ReadTimeoutShort,
-			)
+
+			safeTS, err := s.pdHttpClient.GetStoreMinResolvedTS(ctx, storeID)
 			storeIDStr := strconv.Itoa(int(storeID))
-			if err != nil {
-				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
-				logutil.BgLogger().Debug("update safeTS failed", zap.Error(err), zap.Uint64("store-id", storeID))
-				return
+			if safeTS == 0 || err != nil {
+				resp, err := tikvClient.SendRequest(
+					ctx, storeAddr, tikvrpc.NewRequest(
+						tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
+							KeyRange: &kvrpcpb.KeyRange{
+								StartKey: []byte(""),
+								EndKey:   []byte(""),
+							},
+						}, kvrpcpb.Context{
+							RequestSource: util.RequestSourceFromCtx(ctx),
+						},
+					), client.ReadTimeoutShort,
+				)
+				if err != nil {
+					metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
+					logutil.BgLogger().Debug("update safeTS failed", zap.Error(err), zap.Uint64("store-id", storeID))
+					return
+				}
+				safeTS = resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
 			}
-			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
+
 			_, preSafeTS := s.getSafeTS(storeID)
 			if preSafeTS > safeTS {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()
