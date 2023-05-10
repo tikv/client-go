@@ -37,11 +37,12 @@ package util
 import (
 	"context"
 	"fmt"
-	"github.com/pingcap/failpoint"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/pingcap/failpoint"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPDRequestRetry(t *testing.T) {

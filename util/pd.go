@@ -39,8 +39,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/pingcap/errors"
-	"github.com/pingcap/log"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -49,6 +47,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 )
 
 // pd request retry time when connection fail
