@@ -49,7 +49,6 @@ func TestPDRequestRetry(t *testing.T) {
 	EnableFailpoints()
 	ctx := context.Background()
 	require := require.New(t)
-
 	require.Nil(failpoint.Enable("tikvclient/FastRetry", `return()`))
 	defer func() {
 		require.Nil(failpoint.Disable("tikvclient/FastRetry"))

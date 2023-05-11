@@ -194,8 +194,8 @@ func WithPool(gp Pool) Option {
 	}
 }
 
-// WithPDTLSConfig set the pd addrs and tls for pdHttpClient.
-func WithPDTLSConfig(tlsConf *tls.Config, pdaddrs []string) Option {
+// WithPDHttpClient set the pd addrs and tls for pdHttpClient.
+func WithPDHttpClient(tlsConf *tls.Config, pdaddrs []string) Option {
 	return func(o *KVStore) {
 		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
 	}

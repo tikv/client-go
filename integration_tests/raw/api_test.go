@@ -39,7 +39,6 @@ type apiTestSuite struct {
 	pdHttpClient *util.PDHTTPClient
 	apiVersion   kvrpcpb.APIVersion
 	store        *tikv.KVStore
-	storeID      uint64
 }
 
 func getConfig(url string) (string, error) {
@@ -112,10 +111,10 @@ func (s *apiTestSuite) SetupTest() {
 
 	rpcClient := tikv.NewRPCClient()
 	defer rpcClient.Close()
-	store, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDTLSConfig(nil, addrs))
+	store, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDHttpClient(nil, addrs))
 	s.store = store
-	s.storeID = 1
-	s.store.GetRegionCache().SetRegionCacheStore(s.storeID, s.storeAddr(s.storeID), s.storeAddr(s.storeID), tikvrpc.TiKV, 1, nil)
+	storeID := uint64(1)
+	s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, nil)
 
 	clientForCas := s.newRawKVClient(pdClient, addrs)
 	clientForCas.SetAtomicForCAS(true)
@@ -544,7 +543,6 @@ func (s *apiTestSuite) storeAddr(id uint64) string {
 type storeSafeTsMockClient struct {
 	tikv.Client
 	requestCount int32
-	testSuite    *apiTestSuite
 }
 
 func (c *storeSafeTsMockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -570,20 +568,19 @@ func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 	// Try to get the minimum resolved timestamp of the store from PD.
 	s.Require().Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
 	mockClient := storeSafeTsMockClient{
-		Client:    s.store.GetTiKVClient(),
-		testSuite: s,
+		Client: s.store.GetTiKVClient(),
 	}
 	s.store.SetTiKVClient(&mockClient)
 	var retryCount int
-	ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
-	for ts != 100 {
-		ts = s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) != 100 {
 		time.Sleep(2 * time.Second)
 		if retryCount > 5 {
 			break
 		}
 		retryCount++
 	}
+	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(0))
+	s.Require().Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 
 	// Try to get the minimum resolved timestamp of the store from TiKV.
@@ -592,14 +589,15 @@ func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 		s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 	}()
 	retryCount = 0
-	for ts != 150 {
-		ts = s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) != 150 {
 		time.Sleep(2 * time.Second)
 		if retryCount > 5 {
 			break
 		}
 		retryCount++
 	}
+	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(2))
+	s.Require().Equal(uint64(150), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
 
 func (s *apiTestSuite) TearDownTest() {

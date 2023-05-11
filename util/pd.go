@@ -107,9 +107,9 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 			return 0, errors.Trace(err)
 		}
 		if !d.IsRealTime {
-			message := "store min resolved ts not enabled"
-			log.Error(message, zap.String("addr", addr))
-			return 0, errors.Trace(errors.New(message))
+			message := fmt.Errorf("store min resolved ts not enabled, addr: %s", addr)
+			log.Error(message.Error())
+			return 0, errors.Trace(message)
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
 			// Need to make sure successfully get from real pd
@@ -123,6 +123,7 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 
 		return d.MinResolvedTS, nil
 	}
+
 	return 0, errors.Trace(err)
 }
 
