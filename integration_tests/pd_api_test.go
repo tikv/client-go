@@ -66,11 +66,10 @@ type apiTestSuite struct {
 
 func (s *apiTestSuite) SetupTest() {
 	addrs := strings.Split(*pdAddrs, ",")
-	// Set PD HTTP client.
 	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
 	s.Require().Nil(err)
-
 	rpcClient := tikv.NewRPCClient()
+	// Set PD HTTP client.
 	store, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDHTTPClient(nil, addrs))
 	s.store = store
 	storeID := uint64(1)

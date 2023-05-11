@@ -59,7 +59,7 @@ const (
 	storeMinResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
 )
 
-// PDHTTPClient manage get/update config from pd.
+// PDHTTPClient is an HTTP client of pd
 type PDHTTPClient struct {
 	addrs []string
 	cli   *http.Client
