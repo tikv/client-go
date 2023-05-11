@@ -48,7 +48,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/log"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"go.uber.org/zap"
 )
 
@@ -93,11 +93,11 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 		query := fmt.Sprintf("%s/%d", storeMinResolvedTSPrefix, storeID)
 		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
 		if e != nil {
-			log.Warn("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
+			logutil.BgLogger().Warn("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			err = e
 			continue
 		}
-		log.Debug("store min resolved ts", zap.String("resp", string(v)))
+		logutil.BgLogger().Debug("store min resolved ts", zap.String("resp", string(v)))
 		d := struct {
 			IsRealTime    bool   `json:"is_real_time,omitempty"`
 			MinResolvedTS uint64 `json:"min_resolved_ts"`
@@ -108,7 +108,7 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 		}
 		if !d.IsRealTime {
 			message := fmt.Errorf("store min resolved ts not enabled, addr: %s", addr)
-			log.Error(message.Error())
+			logutil.BgLogger().Error(message.Error())
 			return 0, errors.Trace(message)
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
@@ -207,5 +207,5 @@ func httpClient(tlsConf *tls.Config) *http.Client {
 
 func (p *PDHTTPClient) Close() {
 	p.cli.CloseIdleConnections()
-	log.Info("closed pd http client")
+	logutil.BgLogger().Info("closed pd http client")
 }

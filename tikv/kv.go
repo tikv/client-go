@@ -601,6 +601,9 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 			// Try to get the minimum resolved timestamp of the store from PD.
 			if s.pdHttpClient != nil {
 				safeTS, err = s.pdHttpClient.GetStoreMinResolvedTS(ctx, storeID)
+				if err != nil {
+					logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err), zap.Uint64("store-id", storeID))
+				}
 			}
 			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
 			if safeTS == 0 || err != nil {
