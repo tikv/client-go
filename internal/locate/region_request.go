@@ -1731,7 +1731,7 @@ func (s *RegionRequestSender) onRegionError(
 	// Since we expect that the workload should be stopped during the flashback progress,
 	// if a request meets the FlashbackInProgress error, it should stop retrying immediately
 	// to avoid unnecessary backoff and potential unexpected data status to the user.
-	if regionErr.GetFlashbackInProgress() != nil {
+	if flashbackInProgress := regionErr.GetFlashbackInProgress(); flashbackInProgress != nil {
 		logutil.BgLogger().Debug(
 			"tikv reports `FlashbackInProgress`",
 			zap.Stringer("req", req),
@@ -1739,6 +1739,8 @@ func (s *RegionRequestSender) onRegionError(
 		)
 		// if the failure is caused by replica read, we can retry it with leader safely.
 		if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
+			req.BusyThresholdMs = 0
+			s.replicaSelector.busyThreshold = 0
 			ctx.contextPatcher.replicaRead = nil
 			ctx.contextPatcher.busyThreshold = nil
 			return true, nil
@@ -1750,7 +1752,7 @@ func (s *RegionRequestSender) onRegionError(
 		}
 		return false, errors.Errorf(
 			"region %d is in flashback progress, FlashbackStartTS is %d",
-			regionErr.GetFlashbackInProgress().GetRegionId(), regionErr.GetFlashbackInProgress().GetFlashbackStartTs(),
+			flashbackInProgress.GetRegionId(), flashbackInProgress.GetFlashbackStartTs(),
 		)
 	}
 	// This error means a second-phase flashback request is sent to a region that is not
