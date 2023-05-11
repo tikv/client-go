@@ -236,10 +236,26 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	txnInfos := make(map[uint64]uint64)
 	startTime := time.Now()
 	for _, l := range expiredLocks {
+		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling lock", zap.Stringer("lock", l))
+
 		if _, ok := txnInfos[l.TxnID]; ok {
 			continue
 		}
 		metrics.LockResolverCountWithExpired.Inc()
+
+		if l.LockType == kvrpcpb.Op_PessimisticLock {
+			// BatchResolveLocks forces resolving the locks ignoring whether whey are expired.
+			// For pessimistic locks, committing them makes no sense, but it won't affect transaction
+			// correctness if we always roll back them.
+			// Pessimistic locks needs special handling logic because their primary may not point
+			// to the real primary of that transaction, and their state cannot be put in `txnInfos`.
+			// (see: https://github.com/pingcap/tidb/issues/42937).
+			err := lr.resolvePessimisticLock(bo, l)
+			if err != nil {
+				return false, err
+			}
+			continue
+		}
 
 		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
 		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, false, l)
