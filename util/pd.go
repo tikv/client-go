@@ -52,23 +52,23 @@ import (
 	"go.uber.org/zap"
 )
 
-// pd request retry time when connection fail
 const (
+	// pd request retry time when connection fail
 	pdRequestRetryTime = 10
 
 	storeMinResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
 )
 
-// PdController manage get/update config from pd.
-type PdController struct {
+// PDHTTPClient manage get/update config from pd.
+type PDHTTPClient struct {
 	addrs []string
 	cli   *http.Client
 }
 
-func NewPdController(
+func NewPDHTTPClient(
 	tlsConf *tls.Config,
 	pdAddrs []string,
-) *PdController {
+) *PDHTTPClient {
 	for i, addr := range pdAddrs {
 		if !strings.HasPrefix(addr, "http") {
 			if tlsConf != nil {
@@ -80,24 +80,24 @@ func NewPdController(
 		}
 	}
 
-	return &PdController{
+	return &PDHTTPClient{
 		addrs: pdAddrs,
 		cli:   httpClient(tlsConf),
 	}
 }
 
 // GetStoreMinResolvedTS get store-level min-resolved-ts from pd
-func (p *PdController) GetStoreMinResolvedTS(ctx context.Context, storeID uint64) (uint64, error) {
+func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64) (uint64, error) {
 	var err error
 	for _, addr := range p.addrs {
-		query := fmt.Sprintf("%s/store_id=%d", storeMinResolvedTSPrefix, storeID)
+		query := fmt.Sprintf("%s/%d", storeMinResolvedTSPrefix, storeID)
 		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
 		if e != nil {
 			log.Warn("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			err = e
 			continue
 		}
-		log.Info("store min resolved ts", zap.String("resp", string(v)))
+		log.Debug("store min resolved ts", zap.String("resp", string(v)))
 		d := struct {
 			IsRealTime    bool   `json:"is_real_time,omitempty"`
 			MinResolvedTS uint64 `json:"min_resolved_ts"`
@@ -111,6 +111,16 @@ func (p *PdController) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 			log.Error(message, zap.String("addr", addr))
 			return 0, errors.Trace(errors.New(message))
 		}
+		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
+			// Need to make sure successfully get from real pd
+			if d.MinResolvedTS != 0 {
+				// Should be val.(uint64) but failpoint doesn't support that.
+				if tmp, ok := val.(int); ok {
+					d.MinResolvedTS = uint64(tmp)
+				}
+			}
+		}
+
 		return d.MinResolvedTS, nil
 	}
 	return 0, errors.Trace(err)
@@ -121,22 +131,14 @@ func pdRequest(
 	ctx context.Context,
 	addr string, prefix string,
 	cli *http.Client, method string, body io.Reader) ([]byte, error) {
-	_, respBody, err := pdRequestWithCode(ctx, addr, prefix, cli, method, body)
-	return respBody, err
-}
-
-func pdRequestWithCode(
-	ctx context.Context,
-	addr string, prefix string,
-	cli *http.Client, method string, body io.Reader) (int, []byte, error) {
 	u, err := url.Parse(addr)
 	if err != nil {
-		return 0, nil, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	reqURL := fmt.Sprintf("%s/%s", u, prefix)
 	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
-		return 0, nil, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	var resp *http.Response
 	count := 0
@@ -150,7 +152,7 @@ func pdRequestWithCode(
 				Op:  "read",
 				Err: os.NewSyscallError("connect", syscall.ECONNREFUSED),
 			}
-			return 0, nil, errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 
 		if count > pdRequestRetryTime || (resp != nil && resp.StatusCode < 500) ||
@@ -163,7 +165,7 @@ func pdRequestWithCode(
 		time.Sleep(pdRequestRetryInterval())
 	}
 	if err != nil {
-		return 0, nil, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -171,22 +173,21 @@ func pdRequestWithCode(
 
 	if resp.StatusCode != http.StatusOK {
 		res, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, nil, errors.Errorf("[%d] %s %s", resp.StatusCode, res, reqURL)
+		return nil, errors.Errorf("[%d] %s %s", resp.StatusCode, res, reqURL)
 	}
 
 	r, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return resp.StatusCode, nil, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
-	return resp.StatusCode, r, nil
+
+	return r, err
 }
 
 func pdRequestRetryInterval() time.Duration {
 	if _, e := EvalFailpoint("FastRetry"); e == nil {
 		return 0
 	}
-	println("pd request retry interval 1s")
-
 	return time.Second
 }
 
@@ -201,4 +202,8 @@ func httpClient(tlsConf *tls.Config) *http.Client {
 		cli.Transport = transport
 	}
 	return cli
+}
+
+func (p *PDHTTPClient) Close() {
+	p.cli.CloseIdleConnections()
 }

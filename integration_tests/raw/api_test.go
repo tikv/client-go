@@ -8,14 +8,19 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tidwall/gjson"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/rawkv"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -31,7 +36,10 @@ type apiTestSuite struct {
 	client       *rawkv.Client
 	clientForCas *rawkv.Client
 	pdClient     pd.Client
+	pdHttpClient *util.PDHTTPClient
 	apiVersion   kvrpcpb.APIVersion
+	store        *tikv.KVStore
+	storeID      uint64
 }
 
 func getConfig(url string) (string, error) {
@@ -94,6 +102,20 @@ func (s *apiTestSuite) SetupTest() {
 
 	client := s.newRawKVClient(pdClient, addrs)
 	s.client = client
+
+	// Set PD HTTP client.
+	var pdAddresses []string
+	for _, addr := range addrs {
+		pdAddresses = append(pdAddresses, addr)
+	}
+	s.pdHttpClient = util.NewPDHTTPClient(nil, pdAddresses)
+
+	rpcClient := tikv.NewRPCClient()
+	defer rpcClient.Close()
+	store, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDTLSConfig(nil, addrs))
+	s.store = store
+	s.storeID = 1
+	s.store.GetRegionCache().SetRegionCacheStore(s.storeID, s.storeAddr(s.storeID), s.storeAddr(s.storeID), tikvrpc.TiKV, 1, nil)
 
 	clientForCas := s.newRawKVClient(pdClient, addrs)
 	clientForCas.SetAtomicForCAS(true)
@@ -515,14 +537,85 @@ func (s *apiTestSuite) TestEmptyValue() {
 	s.Equal([]byte{}, oldVal)
 }
 
+func (s *apiTestSuite) storeAddr(id uint64) string {
+	return fmt.Sprintf("store%d", id)
+}
+
+type storeSafeTsMockClient struct {
+	tikv.Client
+	requestCount int32
+	testSuite    *apiTestSuite
+}
+
+func (c *storeSafeTsMockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if req.Type != tikvrpc.CmdStoreSafeTS {
+		return c.Client.SendRequest(ctx, addr, req, timeout)
+	}
+	atomic.AddInt32(&c.requestCount, 1)
+	resp := &tikvrpc.Response{}
+	resp.Resp = &kvrpcpb.StoreSafeTSResponse{SafeTs: 150}
+	return resp, nil
+}
+
+func (c *storeSafeTsMockClient) Close() error {
+	return c.Client.Close()
+}
+
+func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
+	return c.Client.CloseAddr(addr)
+}
+
+func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
+	util.EnableFailpoints()
+	// Try to get the minimum resolved timestamp of the store from PD.
+	s.Require().Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
+	mockClient := storeSafeTsMockClient{
+		Client:    s.store.GetTiKVClient(),
+		testSuite: s,
+	}
+	s.store.SetTiKVClient(&mockClient)
+	var retryCount int
+	ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+	for ts != 100 {
+		ts = s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+		time.Sleep(2 * time.Second)
+		if retryCount > 5 {
+			break
+		}
+		retryCount++
+	}
+	s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
+
+	// Try to get the minimum resolved timestamp of the store from TiKV.
+	s.Require().Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(0)`))
+	defer func() {
+		s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
+	}()
+	retryCount = 0
+	for ts != 150 {
+		ts = s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+		time.Sleep(2 * time.Second)
+		if retryCount > 5 {
+			break
+		}
+		retryCount++
+	}
+}
+
 func (s *apiTestSuite) TearDownTest() {
 	if s.client != nil {
-		_ = s.client.Close()
+		s.Require().Nil(s.client.Close())
 	}
 	if s.clientForCas != nil {
-		_ = s.clientForCas.Close()
+		s.Require().Nil(s.clientForCas.Close())
 	}
 	if s.pdClient != nil {
 		s.pdClient.Close()
+	}
+	if s.store != nil {
+		s.Require().Nil(s.store.Close())
+	}
+	if s.pdHttpClient != nil {
+		s.pdHttpClient.Close()
 	}
 }

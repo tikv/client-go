@@ -115,7 +115,7 @@ type KVStore struct {
 		client Client
 	}
 	pdClient     pd.Client
-	pdHttpClient util.PdController
+	pdHttpClient *util.PDHTTPClient
 	regionCache  *locate.RegionCache
 	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
@@ -194,10 +194,10 @@ func WithPool(gp Pool) Option {
 	}
 }
 
-// WithPDAddrsAndTls set the pd addrs and tls for pdHttpClient.
-func WithPDAddrsAndTls(tlsConf *tls.Config, pdaddrs []string) Option {
+// WithPDTLSConfig set the pd addrs and tls for pdHttpClient.
+func WithPDTLSConfig(tlsConf *tls.Config, pdaddrs []string) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = *util.NewPdController(tlsConf, pdaddrs)
+		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
 	}
 }
 
@@ -393,7 +393,7 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	return startTS, nil
 }
 
-// GetTimestampWithRetry returns latest timestamp.
+// GetTimestampWithRetry returns the latest timestamp.
 func (s *KVStore) GetTimestampWithRetry(bo *Backoffer, scope string) (uint64, error) {
 	return s.getTimestampWithRetry(bo, scope)
 }
@@ -590,8 +590,14 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
 
-			safeTS, err := s.pdHttpClient.GetStoreMinResolvedTS(ctx, storeID)
+			var safeTS uint64
+			var err error
 			storeIDStr := strconv.Itoa(int(storeID))
+			// Try to get the minimum resolved timestamp of the store from PD.
+			if s.pdHttpClient != nil {
+				safeTS, err = s.pdHttpClient.GetStoreMinResolvedTS(ctx, storeID)
+			}
+			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
 			if safeTS == 0 || err != nil {
 				resp, err := tikvClient.SendRequest(
 					ctx, storeAddr, tikvrpc.NewRequest(
