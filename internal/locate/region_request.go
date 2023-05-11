@@ -1737,18 +1737,20 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("req", req),
 			zap.Stringer("ctx", ctx),
 		)
-		// if the failure is caused by replica read, we can retry it with leader safely.
-		if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
-			req.BusyThresholdMs = 0
-			s.replicaSelector.busyThreshold = 0
-			ctx.contextPatcher.replicaRead = nil
-			ctx.contextPatcher.busyThreshold = nil
-			return true, nil
-		}
-		if req.ReplicaReadType.IsFollowerRead() {
-			s.replicaSelector = nil
-			req.ReplicaReadType = kv.ReplicaReadLeader
-			return true, nil
+		if req != nil {
+			// if the failure is caused by replica read, we can retry it with leader safely.
+			if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
+				req.BusyThresholdMs = 0
+				s.replicaSelector.busyThreshold = 0
+				ctx.contextPatcher.replicaRead = nil
+				ctx.contextPatcher.busyThreshold = nil
+				return true, nil
+			}
+			if req.ReplicaReadType.IsFollowerRead() {
+				s.replicaSelector = nil
+				req.ReplicaReadType = kv.ReplicaReadLeader
+				return true, nil
+			}
 		}
 		return false, errors.Errorf(
 			"region %d is in flashback progress, FlashbackStartTS is %d",
