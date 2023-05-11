@@ -1375,6 +1375,95 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test(true, false, true)
 }
 
+func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
+	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
+	s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", "return"))
+	s.NoError(failpoint.Enable("tikvclient/shortPessimisticLockTTL", "return"))
+	s.NoError(failpoint.Enable("tikvclient/twoPCShortLockTTL", "return"))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/beforeAsyncPessimisticRollback"))
+		s.NoError(failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit"))
+		s.NoError(failpoint.Disable("tikvclient/shortPessimisticLockTTL"))
+		s.NoError(failpoint.Disable("tikvclient/twoPCShortLockTTL"))
+	}()
+
+	k1 := []byte("k1")
+	k2 := []byte("k2")
+	k3 := []byte("k3")
+
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	txn.SetPessimistic(true)
+
+	// Construct write conflict to make the LockKeys operation fail.
+	{
+		txn2, err := s.store.Begin()
+		s.NoError(err)
+		s.NoError(txn2.Set(k3, []byte("v3")))
+		s.NoError(txn2.Commit(ctx))
+	}
+
+	lockCtx := kv.NewLockCtx(txn.StartTS(), 200, time.Now())
+	err = txn.LockKeys(ctx, lockCtx, k1, k2, k3)
+	s.IsType(&tikverr.ErrWriteConflict{}, errors.Cause(err))
+
+	// At this time: txn's primary is unsetted, and the keys:
+	// * k1: stale pessimistic lock, primary
+	// * k2: stale pessimistic lock, primary -> k1
+
+	forUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.NoError(err)
+	lockCtx = kv.NewLockCtx(forUpdateTS, 200, time.Now())
+	err = txn.LockKeys(ctx, lockCtx, k3) // k3 becomes primary
+	err = txn.LockKeys(ctx, lockCtx, k1)
+	s.Equal(k3, txn.GetCommitter().GetPrimaryKey())
+
+	// At this time:
+	// * k1: pessimistic lock, primary -> k3
+	// * k2: stale pessimistic lock, primary -> k1
+	// * k3: pessimistic lock, primary
+
+	s.NoError(txn.Set(k1, []byte("v1-1")))
+	s.NoError(txn.Set(k3, []byte("v3-1")))
+
+	s.NoError(failpoint.Enable("tikvclient/beforeCommitSecondaries", `return("skip")`))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
+	}()
+
+	s.NoError(txn.Commit(ctx))
+
+	// At this time:
+	// * k1: prewritten, primary -> k3
+	// * k2: stale pessimistic lock, primary -> k1
+	// * k3: committed
+
+	// Trigger resolving lock on k2
+	{
+		txn2, err := s.store.Begin()
+		s.NoError(err)
+		txn2.SetPessimistic(true)
+		lockCtx = kv.NewLockCtx(txn2.StartTS(), 200, time.Now())
+		s.NoError(txn2.LockKeys(ctx, lockCtx, k2))
+		s.NoError(txn2.Rollback())
+	}
+
+	// Check data consistency
+	readTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.NoError(err)
+	snapshot := s.store.GetSnapshot(readTS)
+	v, err := snapshot.Get(ctx, k3)
+	s.NoError(err)
+	s.Equal([]byte("v3-1"), v)
+	_, err = snapshot.Get(ctx, k2)
+	s.Equal(tikverr.ErrNotExist, err)
+	v, err = snapshot.Get(ctx, k1)
+	s.NoError(err)
+	s.Equal([]byte("v1-1"), v)
+}
+
 func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	if *withTiKV {
 		recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", false)

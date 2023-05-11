@@ -464,7 +464,15 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 	var resolve func(*Lock, bool) (TxnStatus, error)
 	resolve = func(l *Lock, forceSyncCommit bool) (TxnStatus, error) {
 		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
-		if err != nil {
+
+		if _, ok := errors.Cause(err).(primaryMismatch); ok {
+			if l.LockType != kvrpcpb.Op_PessimisticLock {
+				logutil.BgLogger().Info("unexpected primaryMismatch error occurred on a non-pessimistic lock", zap.Stringer("lock", l), zap.Error(err))
+				return TxnStatus{}, err
+			}
+			// Pessimistic rollback the pessimistic lock as it points to an invalid primary.
+			status, err = TxnStatus{}, nil
+		} else if err != nil {
 			return TxnStatus{}, err
 		}
 		if status.ttl != 0 {
@@ -697,6 +705,14 @@ func (e txnNotFoundErr) Error() string {
 	return e.TxnNotFound.String()
 }
 
+type primaryMismatch struct {
+	currentLock *kvrpcpb.LockInfo
+}
+
+func (e primaryMismatch) Error() string {
+	return "primary mismatch, current lock: " + e.currentLock.String()
+}
+
 // getTxnStatus sends the CheckTxnStatus request to the TiKV server.
 // When rollbackIfNotExist is false, the caller should be careful with the txnNotFoundErr error.
 func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary []byte,
@@ -726,6 +742,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		RollbackIfNotExist:       rollbackIfNotExist,
 		ForceSyncCommit:          forceSyncCommit,
 		ResolvingPessimisticLock: resolvingPessimisticLock,
+		VerifyIsPrimary:          true,
 	}, kvrpcpb.Context{
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
@@ -761,6 +778,12 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 			txnNotFound := keyErr.GetTxnNotFound()
 			if txnNotFound != nil {
 				return status, txnNotFoundErr{txnNotFound}
+			}
+
+			if p := keyErr.GetPrimaryMismatch(); p != nil && resolvingPessimisticLock {
+				err = primaryMismatch{currentLock: p.GetLockInfo()}
+				logutil.BgLogger().Info("getTxnStatus was called on secondary lock", zap.Error(err))
+				return status, err
 			}
 
 			err = errors.Errorf("unexpected err: %s, tid: %v", keyErr, txnID)
