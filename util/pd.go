@@ -53,13 +53,13 @@ import (
 )
 
 const (
-	// pd request retry time when connection fail
+	// pd request retry time when connection fail.
 	pdRequestRetryTime = 10
 
 	storeMinResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
 )
 
-// PDHTTPClient is an HTTP client of pd
+// PDHTTPClient is an HTTP client of pd.
 type PDHTTPClient struct {
 	addrs []string
 	cli   *http.Client
@@ -86,7 +86,7 @@ func NewPDHTTPClient(
 	}
 }
 
-// GetStoreMinResolvedTS get store-level min-resolved-ts from pd
+// GetStoreMinResolvedTS get store-level min-resolved-ts from pd.
 func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64) (uint64, error) {
 	var err error
 	for _, addr := range p.addrs {
@@ -112,7 +112,7 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 			return 0, errors.Trace(message)
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
-			// Need to make sure successfully get from real pd
+			// Need to make sure successfully get from real pd.
 			if d.MinResolvedTS != 0 {
 				// Should be val.(uint64) but failpoint doesn't support that.
 				if tmp, ok := val.(int); ok {
@@ -207,5 +207,5 @@ func httpClient(tlsConf *tls.Config) *http.Client {
 
 func (p *PDHTTPClient) Close() {
 	p.cli.CloseIdleConnections()
-	log.Info("close pd http client")
+	log.Info("closed pd http client")
 }

@@ -19,9 +19,9 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-func TestApi(t *testing.T) {
+func TestAPI(t *testing.T) {
 	if !*withTiKV {
-		t.Skip("skipping TestApi because with-tikv is not enabled")
+		t.Skip("skipping TestAPI because with-tikv is not enabled")
 	}
 	suite.Run(t, new(apiTestSuite))
 }

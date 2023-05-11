@@ -52,9 +52,9 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-func TestPDApi(t *testing.T) {
+func TestPDAPI(t *testing.T) {
 	if !*withTiKV {
-		t.Skip("skipping TestPDApi because with-tikv is not enabled")
+		t.Skip("skipping TestPDAPI because with-tikv is not enabled")
 	}
 	suite.Run(t, new(apiTestSuite))
 }
@@ -106,7 +106,8 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 	util.EnableFailpoints()
 	// Try to get the minimum resolved timestamp of the store from PD.
-	s.Require().Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
+	require := s.Require()
+	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
 	mockClient := storeSafeTsMockClient{
 		Client: s.store.GetTiKVClient(),
 	}
@@ -119,12 +120,12 @@ func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 		}
 		retryCount++
 	}
-	s.Require().Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
-	s.Require().Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
-	s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
+	require.Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
+	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 
 	// Try to get the minimum resolved timestamp of the store from TiKV.
-	s.Require().Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(0)`))
+	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(0)`))
 	defer func() {
 		s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 	}()
@@ -136,8 +137,8 @@ func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 		}
 		retryCount++
 	}
-	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
-	s.Require().Equal(uint64(150), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
+	require.Equal(uint64(150), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
 
 func (s *apiTestSuite) TearDownTest() {
