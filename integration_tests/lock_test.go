@@ -37,9 +37,12 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	stderrs "errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -48,8 +51,11 @@ import (
 	"github.com/pingcap/failpoint"
 	deadlockpb "github.com/pingcap/kvproto/pkg/deadlock"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -1083,6 +1089,126 @@ func (s *testLockWithTiKVSuite) checkIsKeyLocked(key []byte, expectedLocked bool
 	s.NoError(err)
 }
 
+func (s *testLockWithTiKVSuite) trySetTiKVConfig(name string, value interface{}) func() {
+	stores, err := s.store.GetPDClient().GetAllStores(context.Background())
+	s.NoError(err)
+
+	type configItem struct {
+		url   string
+		name  string
+		value interface{}
+	}
+
+	var recoverConfigs []configItem
+
+	httpScheme := "http"
+	if c, err := config.GetGlobalConfig().Security.ToTLSConfig(); err == nil && c != nil {
+		httpScheme = "https"
+	}
+
+	t := s.Suite.T()
+
+	setCfg := func(url, name string, value interface{}) error {
+		postBody, err := json.Marshal(map[string]interface{}{name: value})
+		if err != nil {
+			return err
+		}
+		resp, err := http.Post(url, "text/json", bytes.NewReader(postBody))
+		if err != nil {
+			return err
+		}
+		s.NoError(resp.Body.Close())
+		if resp.StatusCode != 200 {
+			return errors.Errorf("post config got unexpected status code: %v, request body: %s", resp.StatusCode, postBody)
+		}
+		t.Logf("set config for tikv at %s finished: %s", url, string(postBody))
+		return nil
+	}
+
+storeIter:
+	for _, store := range stores {
+		if store.State != metapb.StoreState_Up {
+			continue
+		}
+		for _, label := range store.Labels {
+			if label.Key == "engine" && label.Value != "tikv" {
+				continue storeIter
+			}
+		}
+
+		err := func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = errors.Errorf("set config for store at %v panicked: %v", store.StatusAddress, r)
+				}
+			}()
+
+			url := fmt.Sprintf("%s://%s/config", httpScheme, store.StatusAddress)
+			resp, err := http.Get(url)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				return errors.Errorf("unexpected response status: %v", resp.Status)
+			}
+			oldCfgRaw, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+
+			oldCfg := make(map[string]interface{})
+			err = json.Unmarshal(oldCfgRaw, &oldCfg)
+			if err != nil {
+				return err
+			}
+
+			oldValue := oldCfg["pessimistic-txn"].(map[string]interface{})["in-memory"]
+			if assert.ObjectsAreEqual(oldValue, value) {
+				return nil
+			}
+
+			err = setCfg(url, name, value)
+			if err != nil {
+				return err
+			}
+
+			recoverConfigs = append(recoverConfigs, configItem{
+				url:   url,
+				name:  name,
+				value: oldValue,
+			})
+
+			return nil
+		}()
+
+		if err != nil {
+			t.Logf("failed to set config for store at %s: %v", store.StatusAddress, err)
+		}
+	}
+
+	// Prevent goleak from complaining about its internal connections.
+	http.DefaultClient.CloseIdleConnections()
+
+	if len(recoverConfigs) > 0 {
+		// Sleep for a while to ensure the new configs are applied.
+		time.Sleep(time.Second)
+	}
+
+	return func() {
+		for _, item := range recoverConfigs {
+			err = setCfg(item.url, item.name, item.value)
+			if err != nil {
+				t.Logf("failed to recover config for store at %s: %v", item.url, err)
+			}
+		}
+
+		// Prevent goleak from complaining about its internal connections.
+		http.DefaultClient.CloseIdleConnections()
+	}
+}
+
 func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test := func(asyncCommit bool, onePC bool, causalConsistency bool) {
 		k1 := []byte("k1")
@@ -1336,4 +1462,73 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	v, err = snapshot.Get(ctx, k1)
 	s.NoError(err)
 	s.Equal([]byte("v1-1"), v)
+}
+
+func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
+	if *withTiKV {
+		recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", false)
+		defer recoverFunc()
+	} else {
+		s.T().Skip("this test only works with tikv")
+	}
+
+	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
+	s.NoError(failpoint.Enable("tikvclient/beforeCommitSecondaries", `return("skip")`))
+	s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", `return("skip")`))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/beforeAsyncPessimisticRollback"))
+		s.NoError(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
+		s.NoError(failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit"))
+	}()
+
+	k1, k2, k3 := []byte("k1"), []byte("k2"), []byte("k3")
+	v2, v3 := []byte("v2"), []byte("v3")
+
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	txn.SetPessimistic(true)
+
+	{
+		// Produce write conflict on key k2
+		txn2, err := s.store.Begin()
+		s.NoError(err)
+		s.NoError(txn2.Set(k2, []byte("v0")))
+		s.NoError(txn2.Commit(ctx))
+	}
+
+	lockCtx := kv.NewLockCtx(txn.StartTS(), 200, time.Now())
+	err = txn.LockKeys(ctx, lockCtx, k1, k2)
+	s.IsType(&tikverr.ErrWriteConflict{}, errors.Cause(err))
+
+	// k1 has txn's stale pessimistic lock now.
+
+	forUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.NoError(err)
+	lockCtx = kv.NewLockCtx(forUpdateTS, 200, time.Now())
+	s.NoError(txn.LockKeys(ctx, lockCtx, k2, k3))
+
+	s.NoError(txn.Set(k2, v2))
+	s.NoError(txn.Set(k3, v3))
+	s.NoError(txn.Commit(ctx))
+
+	// k3 has txn's stale prewrite lock now.
+
+	// Perform ScanLock - BatchResolveLock.
+	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.NoError(err)
+	s.NoError(s.store.GCResolveLockPhase(ctx, currentTS, 1))
+
+	// Check data consistency
+	readTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	snapshot := s.store.GetSnapshot(readTS)
+	_, err = snapshot.Get(ctx, k1)
+	s.Equal(tikverr.ErrNotExist, err)
+	v, err := snapshot.Get(ctx, k2)
+	s.NoError(err)
+	s.Equal(v2, v)
+	v, err = snapshot.Get(ctx, k3)
+	s.NoError(err)
+	s.Equal(v3, v)
 }
