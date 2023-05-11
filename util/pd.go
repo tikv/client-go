@@ -207,4 +207,5 @@ func httpClient(tlsConf *tls.Config) *http.Client {
 
 func (p *PDHTTPClient) Close() {
 	p.cli.CloseIdleConnections()
+	log.Info("close pd http client")
 }

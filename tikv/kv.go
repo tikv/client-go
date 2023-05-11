@@ -194,8 +194,8 @@ func WithPool(gp Pool) Option {
 	}
 }
 
-// WithPDHttpClient set the pd addrs and tls for pdHttpClient.
-func WithPDHttpClient(tlsConf *tls.Config, pdaddrs []string) Option {
+// WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
+func WithPDHTTPClient(tlsConf *tls.Config, pdaddrs []string) Option {
 	return func(o *KVStore) {
 		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
 	}
@@ -361,6 +361,9 @@ func (s *KVStore) Close() error {
 
 	s.oracle.Close()
 	s.pdClient.Close()
+	if s.pdHttpClient != nil {
+		s.pdHttpClient.Close()
+	}
 	s.lockResolver.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
@@ -590,8 +593,10 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
 
-			var safeTS uint64
-			var err error
+			var (
+				safeTS uint64
+				err    error
+			)
 			storeIDStr := strconv.Itoa(int(storeID))
 			// Try to get the minimum resolved timestamp of the store from PD.
 			if s.pdHttpClient != nil {
