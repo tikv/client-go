@@ -67,7 +67,7 @@ type Future interface {
 const (
 	physicalShiftBits = 18
 	logicalBits       = (1 << physicalShiftBits) - 1
-	// GlobalTxnScope is the default transaction scope for a Oracle service.
+	// GlobalTxnScope is the default transaction scope for an Oracle service.
 	GlobalTxnScope = "global"
 )
 
