@@ -122,6 +122,10 @@ func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TS
 	return c.GetTSAsync(ctx)
 }
 
+func (c *pdClient) GetMinTS(ctx context.Context) (int64, int64, error) {
+	return 0, 0, nil
+}
+
 func (c *pdClient) SetExternalTimestamp(ctx context.Context, newTimestamp uint64) error {
 	p, l, err := c.GetTS(ctx)
 	if err != nil {
