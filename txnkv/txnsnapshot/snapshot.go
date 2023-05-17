@@ -107,8 +107,10 @@ type ReplicaReadAdjuster func(int) (locate.StoreSelectorOption, kv.ReplicaReadTy
 
 // KVSnapshot implements the tidbkv.Snapshot interface.
 type KVSnapshot struct {
-	store           kvstore
-	version         uint64
+	store   kvstore
+	version uint64
+	// lazyVersion makes it possible to set the `version` lazily. When this field is not nil, it overrides `version`.
+	lazyVersion     func() (uint64, error)
 	isolationLevel  IsoLevel
 	priority        txnutil.Priority
 	notFillCache    bool
@@ -190,6 +192,32 @@ func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
 	s.resolvedLocks = util.TSSet{}
 }
 
+// SetSnapshotTSGetter sets the source of the timestamp for reads. This makes it possible to decide the actual value
+// of the TS later when a read operation is performed.
+func (s *KVSnapshot) SetSnapshotTSGetter(getter func() (uint64, error)) {
+	s.lazyVersion = getter
+
+	s.mu.Lock()
+	s.mu.cached = nil
+	s.mu.Unlock()
+	// And also remove the minCommitTS pushed information.
+	s.resolvedLocks = util.TSSet{}
+}
+
+func (s *KVSnapshot) handleLazyVersion() error {
+	if s.lazyVersion == nil {
+		return nil
+	}
+
+	version, err := s.lazyVersion()
+	if err != nil {
+		return err
+	}
+	s.version = version
+	s.lazyVersion = nil
+	return nil
+}
+
 // IsInternal returns if the KvSnapshot is used by internal executions.
 func (s *KVSnapshot) IsInternal() bool {
 	return util.IsRequestSourceInternal(s.RequestSource)
@@ -199,6 +227,10 @@ func (s *KVSnapshot) IsInternal() bool {
 // The map will not contain nonexistent keys.
 // NOTE: Don't modify keys. Some codes rely on the order of keys.
 func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	err := s.handleLazyVersion()
+	if err != nil {
+		return nil, err
+	}
 	// Check the cached value first.
 	m := make(map[string][]byte)
 	s.mu.RLock()
@@ -237,7 +269,7 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
-	err := s.batchGetKeysByRegions(bo, keys, func(k, v []byte) {
+	err = s.batchGetKeysByRegions(bo, keys, func(k, v []byte) {
 		if len(v) == 0 {
 			return
 		}
@@ -330,6 +362,12 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 			metrics.TxnCmdHistogramWithBatchGetGeneral.Observe(time.Since(start).Seconds())
 		}
 	}(time.Now())
+
+	err := s.handleLazyVersion()
+	if err != nil {
+		return err
+	}
+
 	groups, _, err := s.store.GetRegionCache().GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
 		return err
@@ -373,6 +411,10 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 }
 
 func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, collectF func(k, v []byte)) error {
+	err := s.handleLazyVersion()
+	if err != nil {
+		return err
+	}
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
@@ -542,6 +584,11 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 			metrics.TxnCmdHistogramWithGetGeneral.Observe(time.Since(start).Seconds())
 		}
 	}(time.Now())
+
+	err := s.handleLazyVersion()
+	if err != nil {
+		return nil, err
+	}
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	if ctx.Value(util.RequestSourceKey) == nil {
@@ -755,12 +802,22 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 
 // Iter return a list of key-value pair after `k`.
 func (s *KVSnapshot) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error) {
+	err := s.handleLazyVersion()
+	if err != nil {
+		return nil, err
+	}
+
 	scanner, err := newScanner(s, k, upperBound, s.scanBatchSize, false)
 	return scanner, err
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 func (s *KVSnapshot) IterReverse(k []byte) (unionstore.Iterator, error) {
+	err := s.handleLazyVersion()
+	if err != nil {
+		return nil, err
+	}
+
 	scanner, err := newScanner(s, nil, k, s.scanBatchSize, true)
 	return scanner, err
 }
