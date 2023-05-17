@@ -260,6 +260,34 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	return pdCli, nil
 }
 
+// NewPDClientWithKeyspaceName returns an unwrapped pd client with keyspace name.
+func NewPDClientWithKeyspaceName(pdAddrs []string, keyspaceName string) (pd.Client, error) {
+	cfg := config.GetGlobalConfig()
+	// init pd-client
+	pdCli, err := pd.NewClientWithKeyspaceName(
+		context.Background(), keyspaceName,
+		pdAddrs, pd.SecurityOption{
+			CAPath:   cfg.Security.ClusterSSLCA,
+			CertPath: cfg.Security.ClusterSSLCert,
+			KeyPath:  cfg.Security.ClusterSSLKey,
+		},
+		pd.WithGRPCDialOptions(
+			grpc.WithKeepaliveParams(
+				keepalive.ClientParameters{
+					Time:    time.Duration(cfg.TiKVClient.GrpcKeepAliveTime) * time.Second,
+					Timeout: time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout) * time.Second,
+				},
+			),
+		),
+		pd.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
+		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
+	)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return pdCli, nil
+}
+
 // EnableTxnLocalLatches enables txn latch. It should be called before using
 // the store to serve any requests.
 func (s *KVStore) EnableTxnLocalLatches(size uint) {
