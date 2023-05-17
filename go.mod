@@ -74,6 +74,6 @@ require (
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
 
-replace github.com/pingcap/kvproto => github.com/ystaticy/kvproto v0.0.0-20230508095741-b0746f7e0103
+replace github.com/pingcap/kvproto => github.com/ystaticy/kvproto v0.0.0-20230517081408-0ac3ac00aaee
 
-replace github.com/tikv/pd/client => github.com/ystaticy/pd/client v0.0.0-20230508113559-f81e14d76916
+replace github.com/tikv/pd/client => github.com/ystaticy/pd/client v0.0.0-20230517082919-05a5d724dd02

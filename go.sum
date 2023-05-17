@@ -239,10 +239,10 @@ github.com/tmc/grpc-websocket-proxy v0.0.0-20200427203606-3cfed13b9966 h1:j6JEOq
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
 github.com/twmb/murmur3 v1.1.3/go.mod h1:Qq/R7NUyOfr65zD+6Q5IHKsJLwP7exErjN6lyyq3OSQ=
 github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 h1:eY9dn8+vbi4tKz5Qo6v2eYzo7kUS51QINcR5jNpbZS8=
-github.com/ystaticy/kvproto v0.0.0-20230508095741-b0746f7e0103 h1:dNVGeKIP8lXkg5mn9DcZYu0cv1k5MoZjzKgP8yWrpis=
-github.com/ystaticy/kvproto v0.0.0-20230508095741-b0746f7e0103/go.mod h1:guCyM5N+o+ru0TsoZ1hi9lDjUMs2sIBjW3ARTEpVbnk=
-github.com/ystaticy/pd/client v0.0.0-20230508113559-f81e14d76916 h1:b0zFHAcXJ/UiPr1cnK6wqBuozDbqK7ZYb/zqPd6ikxc=
-github.com/ystaticy/pd/client v0.0.0-20230508113559-f81e14d76916/go.mod h1:MdzacIG9l/qdsp+W/DT+9V25CIgUfuB0WGN1iy9eOKM=
+github.com/ystaticy/kvproto v0.0.0-20230517081408-0ac3ac00aaee h1:6mQ99GgqPVjiyFkcwDNqTLv7D1btQDA5Lfh58rKyuLw=
+github.com/ystaticy/kvproto v0.0.0-20230517081408-0ac3ac00aaee/go.mod h1:guCyM5N+o+ru0TsoZ1hi9lDjUMs2sIBjW3ARTEpVbnk=
+github.com/ystaticy/pd/client v0.0.0-20230517082919-05a5d724dd02 h1:dxSUoxsHO2IwfdF2N67l+h5gAvPUcAlN8ZqeomNuL/4=
+github.com/ystaticy/pd/client v0.0.0-20230517082919-05a5d724dd02/go.mod h1:MdzacIG9l/qdsp+W/DT+9V25CIgUfuB0WGN1iy9eOKM=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
