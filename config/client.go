@@ -88,6 +88,9 @@ type TiKVClient struct {
 	// EnableCSERegionClient indicates whether to enable the CSE region client.
 	// If it is enabled, the client will locate region from CSE instead of PD.
 	EnableCSERegionClient bool `toml:"enable-cse-region-client" json:"enable-cse-region-client"`
+
+	// RemoteCoprocessorAddr is the address of the remote coprocessor.
+	RemoteCoprocessorAddr string `toml:"remote-coprocessor-addr" json:"remote-coprocessor-addr"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
