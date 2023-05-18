@@ -235,29 +235,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 
 // NewPDClient returns an unwrapped pd client.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
-	cfg := config.GetGlobalConfig()
-	// init pd-client
-	pdCli, err := pd.NewClient(
-		pdAddrs, pd.SecurityOption{
-			CAPath:   cfg.Security.ClusterSSLCA,
-			CertPath: cfg.Security.ClusterSSLCert,
-			KeyPath:  cfg.Security.ClusterSSLKey,
-		},
-		pd.WithGRPCDialOptions(
-			grpc.WithKeepaliveParams(
-				keepalive.ClientParameters{
-					Time:    time.Duration(cfg.TiKVClient.GrpcKeepAliveTime) * time.Second,
-					Timeout: time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout) * time.Second,
-				},
-			),
-		),
-		pd.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
-		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
-	)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	return pdCli, nil
+	return NewPDClientWithAPIContext(pdAddrs, pd.NewAPIContextV1())
 }
 
 // NewPDClientWithAPIContext returns an unwrapped pd client with API context.
