@@ -260,12 +260,12 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	return pdCli, nil
 }
 
-// NewPDClientWithKeyspaceName returns an unwrapped pd client with keyspace name.
-func NewPDClientWithKeyspaceName(pdAddrs []string, keyspaceName string) (pd.Client, error) {
+// NewPDClientWithAPIContext returns an unwrapped pd client with API context.
+func NewPDClientWithAPIContext(pdAddrs []string, apiContext pd.APIContext) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
-	pdCli, err := pd.NewClientWithKeyspaceName(
-		context.Background(), keyspaceName,
+	pdCli, err := pd.NewClientWithAPIContext(
+		context.Background(), apiContext,
 		pdAddrs, pd.SecurityOption{
 			CAPath:   cfg.Security.ClusterSSLCA,
 			CertPath: cfg.Security.ClusterSSLCert,

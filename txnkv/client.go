@@ -66,27 +66,21 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 
 	var (
 		pdClient pd.Client
+		apiContext pd.APIContext
 		err      error
 	)
 	switch opt.apiVersion {
 	case kvrpcpb.APIVersion_V1:
-		pdClient, err = tikv.NewPDClient(pdAddrs)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
+		apiContext= pd.NewAPIContextV1()
 	case kvrpcpb.APIVersion_V2:
-		keyspaceName := opt.keyspaceName
-		if len(keyspaceName) == 0 {
-			keyspaceName = tikv.DefaultKeyspaceName
-		}
-		pdClient, err = tikv.NewPDClientWithKeyspaceName(pdAddrs, keyspaceName)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
+		apiContext=pd.NewAPIContextV2(opt.keyspaceName)
 	default:
-		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
+		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
 	}
-
+	pdClient, err = tikv.NewPDClientWithAPIContext(pdAddrs, apiContext)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	pdClient = util.InterceptedPDClient{Client: pdClient}
 
 	// Construct codec from options.
@@ -100,7 +94,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 			return nil, err
 		}
 	default:
-		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
+		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
 	}
 
 	pdClient = codecCli

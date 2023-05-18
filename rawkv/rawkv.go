@@ -208,17 +208,13 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 
 	switch opt.apiVersion {
 	case kvrpcpb.APIVersion_V1, kvrpcpb.APIVersion_V1TTL:
-		pdClient, err = tikv.NewPDClient(pdAddrs)
+		pdClient, err = tikv.NewPDClientWithAPIContext(pdAddrs, pd.NewAPIContextV1())
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 		codecCli = locate.NewCodecPDClient(tikv.ModeRaw, pdClient)
 	case kvrpcpb.APIVersion_V2:
-		keyspaceName := opt.keyspace
-		if len(keyspaceName) == 0 {
-			keyspaceName = tikv.DefaultKeyspaceName
-		}
-		pdClient, err = tikv.NewPDClientWithKeyspaceName(pdAddrs, keyspaceName)
+		pdClient, err = tikv.NewPDClientWithAPIContext(pdAddrs, pd.NewAPIContextV2(opt.keyspace))
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -227,7 +223,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 			return nil, err
 		}
 	default:
-		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
+		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
 	}
 
 	pdClient = codecCli
