@@ -26,6 +26,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util"
+	pd "github.com/tikv/pd/client"
 )
 
 // Client is a txn client.
@@ -62,12 +63,24 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	for _, o := range opts {
 		o(opt)
 	}
-	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdClient, err := tikv.NewPDClient(pdAddrs)
+
+	var (
+		pdClient pd.Client
+		apiContext pd.APIContext
+		err      error
+	)
+	switch opt.apiVersion {
+	case kvrpcpb.APIVersion_V1:
+		apiContext= pd.NewAPIContextV1()
+	case kvrpcpb.APIVersion_V2:
+		apiContext=pd.NewAPIContextV2(opt.keyspaceName)
+	default:
+		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
+	}
+	pdClient, err = tikv.NewPDClientWithAPIContext(pdAddrs, apiContext)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
 	pdClient = util.InterceptedPDClient{Client: pdClient}
 
 	// Construct codec from options.
@@ -81,7 +94,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 			return nil, err
 		}
 	default:
-		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
+		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
 	}
 
 	pdClient = codecCli

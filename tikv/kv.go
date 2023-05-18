@@ -235,9 +235,15 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 
 // NewPDClient returns an unwrapped pd client.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
+	return NewPDClientWithAPIContext(pdAddrs, pd.NewAPIContextV1())
+}
+
+// NewPDClientWithAPIContext returns an unwrapped pd client with API context.
+func NewPDClientWithAPIContext(pdAddrs []string, apiContext pd.APIContext) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
-	pdCli, err := pd.NewClient(
+	pdCli, err := pd.NewClientWithAPIContext(
+		context.Background(), apiContext,
 		pdAddrs, pd.SecurityOption{
 			CAPath:   cfg.Security.ClusterSSLCA,
 			CertPath: cfg.Security.ClusterSSLCert,
