@@ -1468,8 +1468,6 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	if *withTiKV {
 		recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", false)
 		defer recoverFunc()
-	} else {
-		s.T().Skip("this test only works with tikv")
 	}
 
 	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
