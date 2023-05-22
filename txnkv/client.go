@@ -65,15 +65,15 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	}
 
 	var (
-		pdClient pd.Client
+		pdClient   pd.Client
 		apiContext pd.APIContext
-		err      error
+		err        error
 	)
 	switch opt.apiVersion {
 	case kvrpcpb.APIVersion_V1:
-		apiContext= pd.NewAPIContextV1()
+		apiContext = pd.NewAPIContextV1()
 	case kvrpcpb.APIVersion_V2:
-		apiContext=pd.NewAPIContextV2(opt.keyspaceName)
+		apiContext = pd.NewAPIContextV2(opt.keyspaceName)
 	default:
 		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
 	}

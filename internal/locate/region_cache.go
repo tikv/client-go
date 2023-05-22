@@ -398,6 +398,33 @@ func (r *Region) isValid() bool {
 	return r != nil && !r.checkNeedReload() && r.checkRegionCacheTTL(time.Now().Unix())
 }
 
+type regionIndexMu struct {
+	sync.RWMutex
+	regions        map[RegionVerID]*Region // cached regions are organized as regionVerID to region ref mapping
+	latestVersions map[uint64]RegionVerID  // cache the map from regionID to its latest RegionVerID
+	sorted         *SortedRegions          // cache regions are organized as sorted key to region ref mapping
+}
+
+func newRegionIndexMu(rs []*Region) *regionIndexMu {
+	r := &regionIndexMu{}
+	r.regions = make(map[RegionVerID]*Region)
+	r.latestVersions = make(map[uint64]RegionVerID)
+	r.sorted = NewSortedRegions(btreeDegree)
+	for _, region := range rs {
+		r.insertRegionToCache(region)
+	}
+	return r
+}
+
+func (mu *regionIndexMu) refresh(r []*Region) {
+	newMu := newRegionIndexMu(r)
+	mu.Lock()
+	defer mu.Unlock()
+	mu.regions = newMu.regions
+	mu.latestVersions = newMu.latestVersions
+	mu.sorted = newMu.sorted
+}
+
 type livenessFunc func(s *Store, bo *retry.Backoffer) livenessState
 
 // RegionCache caches Regions loaded from PD.
@@ -408,12 +435,8 @@ type RegionCache struct {
 	codec            apicodec.Codec
 	enableForwarding bool
 
-	mu struct {
-		sync.RWMutex                           // mutex protect cached region
-		regions        map[RegionVerID]*Region // cached regions are organized as regionVerID to region ref mapping
-		latestVersions map[uint64]RegionVerID  // cache the map from regionID to its latest RegionVerID
-		sorted         *SortedRegions          // cache regions are organized as sorted key to region ref mapping
-	}
+	mu regionIndexMu
+
 	storeMu struct {
 		sync.RWMutex
 		stores map[uint64]*Store
@@ -447,34 +470,48 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		c.codec = codecPDClient.GetCodec()
 	}
 
-	c.mu.regions = make(map[RegionVerID]*Region)
-	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted = NewSortedRegions(btreeDegree)
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.tiflashComputeStoreMu.needReload = true
 	c.tiflashComputeStoreMu.stores = make([]*Store, 0)
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
+
+	if config.GetGlobalConfig().EnablePreload {
+		logutil.BgLogger().Info("preload region index start")
+		if err := c.refreshRegionIndex(retry.NewBackofferWithVars(c.ctx, 20000, nil)); err != nil {
+			logutil.BgLogger().Error("refresh region index failed", zap.Error(err))
+		}
+		logutil.BgLogger().Info("preload region index finish")
+	} else {
+		c.mu = *newRegionIndexMu(nil)
+	}
+
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
-	go c.cacheGC()
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
+	if config.GetGlobalConfig().RegionsRefreshInterval > 0 {
+		c.timelyRefreshCache(config.GetGlobalConfig().RegionsRefreshInterval)
+	} else {
+		// cacheGC is not compatible with timelyRefreshCache
+		go c.cacheGC()
+	}
 	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
 	return c
 }
 
 // clear clears all cached data in the RegionCache. It's only used in tests.
 func (c *RegionCache) clear() {
-	c.mu.Lock()
-	c.mu.regions = make(map[RegionVerID]*Region)
-	c.mu.latestVersions = make(map[uint64]RegionVerID)
-	c.mu.sorted.Clear()
-	c.mu.Unlock()
+	c.mu = *newRegionIndexMu(nil)
 	c.storeMu.Lock()
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.storeMu.Unlock()
+}
+
+// thread unsafe, should use with lock
+func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
+	c.mu.insertRegionToCache(cachedRegion)
 }
 
 // Close releases region cache's resource.
@@ -1338,17 +1375,17 @@ func (c *RegionCache) UpdateLeader(regionID RegionVerID, leader *metapb.Peer, cu
 
 // removeVersionFromCache removes a RegionVerID from cache, tries to cleanup
 // both c.mu.regions and c.mu.versions. Note this function is not thread-safe.
-func (c *RegionCache) removeVersionFromCache(oldVer RegionVerID, regionID uint64) {
-	delete(c.mu.regions, oldVer)
-	if ver, ok := c.mu.latestVersions[regionID]; ok && ver.Equals(oldVer) {
-		delete(c.mu.latestVersions, regionID)
+func (mu *regionIndexMu) removeVersionFromCache(oldVer RegionVerID, regionID uint64) {
+	delete(mu.regions, oldVer)
+	if ver, ok := mu.latestVersions[regionID]; ok && ver.Equals(oldVer) {
+		delete(mu.latestVersions, regionID)
 	}
 }
 
 // insertRegionToCache tries to insert the Region to cache.
-// It should be protected by c.mu.Lock().
-func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
-	oldRegion := c.mu.sorted.ReplaceOrInsert(cachedRegion)
+// It should be protected by c.mu.l.Lock().
+func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region) {
+	oldRegion := mu.sorted.ReplaceOrInsert(cachedRegion)
 	if oldRegion != nil {
 		store := cachedRegion.getStore()
 		oldRegionStore := oldRegion.getStore()
@@ -1372,22 +1409,21 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
 			store.buckets = oldRegionStore.buckets
 		}
-		c.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
+		mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
 	}
-	c.mu.regions[cachedRegion.VerID()] = cachedRegion
+	mu.regions[cachedRegion.VerID()] = cachedRegion
 	newVer := cachedRegion.VerID()
-	latest, ok := c.mu.latestVersions[cachedRegion.VerID().id]
+	latest, ok := mu.latestVersions[cachedRegion.VerID().id]
 	if !ok || latest.GetVer() < newVer.GetVer() || latest.GetConfVer() < newVer.GetConfVer() {
-		c.mu.latestVersions[cachedRegion.VerID().id] = newVer
+		mu.latestVersions[cachedRegion.VerID().id] = newVer
 	}
 	// The intersecting regions in the cache are probably stale, clear them.
-	deleted := c.mu.sorted.removeIntersecting(cachedRegion)
-	for _, r := range deleted {
-		c.removeVersionFromCache(r.cachedRegion.VerID(), r.cachedRegion.GetID())
+	deleted := mu.sorted.removeIntersecting(cachedRegion)
+	for _, region := range deleted {
+		mu.removeVersionFromCache(region.cachedRegion.VerID(), region.cachedRegion.GetID())
 	}
-}
 
-// searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
+} // searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
 // it should be called with c.mu.RLock(), and the returned Region should not be
 // used after c.mu is RUnlock().
 // If the given key is the end key of the region that you want, you may set the second argument to true. This is useful
@@ -1588,8 +1624,6 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 }
 
 // TODO(youjiali1995): for optimizing BatchLoadRegionsWithKeyRange, not used now.
-//
-//nolint:unused
 func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
 	if limit == 0 {
 		return nil, nil
@@ -1604,6 +1638,45 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 		return nil, errors.New("no regions in the cache")
 	}
 	return regions, nil
+}
+
+func (c *RegionCache) timelyRefreshCache(intervalS uint64) {
+	if intervalS <= 0 {
+		return
+	}
+	ticker := time.NewTicker(time.Duration(intervalS) * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-ticker.C:
+				intervalMs := int(1000 * intervalS)
+				if err := c.refreshRegionIndex(retry.NewBackofferWithVars(c.ctx, intervalMs, nil)); err != nil {
+					logutil.BgLogger().Error("refresh region cache failed", zap.Error(err))
+				}
+			}
+		}
+	}()
+}
+
+func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
+	totalRegions := make([]*Region, 0)
+	startKey := []byte{}
+	for {
+		regions, err := c.scanRegions(bo, startKey, nil, 10000)
+		if err != nil {
+			return err
+		}
+		totalRegions = append(totalRegions, regions...)
+		if len(regions) == 0 || len(regions[len(regions)-1].meta.EndKey) == 0 {
+			break
+		}
+		startKey = regions[len(regions)-1].meta.EndKey
+	}
+	c.mu.refresh(totalRegions)
+	return nil
 }
 
 // scanRegions scans at most `limit` regions from PD, starts from the region containing `startKey` and in key order.
@@ -2018,7 +2091,7 @@ func (c *RegionCache) cacheGC() {
 				c.mu.Lock()
 				for _, item := range expired {
 					c.mu.sorted.b.Delete(item)
-					c.removeVersionFromCache(item.cachedRegion.VerID(), item.cachedRegion.GetID())
+					c.mu.removeVersionFromCache(item.cachedRegion.VerID(), item.cachedRegion.GetID())
 				}
 				c.mu.Unlock()
 			}
