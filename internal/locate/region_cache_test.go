@@ -43,6 +43,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -1727,4 +1728,48 @@ func (s *testRegionCacheSuite) TestSlowScoreStat() {
 	}
 	slowScore.markAlreadySlow()
 	s.True(slowScore.isSlow())
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+
+	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
+	v2 := region.Region.confVer + 1
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	st := &Store{storeID: s.store}
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()})
+
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 2)
+
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func(cache *RegionCache) {
+		for {
+			_ = cache.refreshRegionIndex(retry.NewNoopBackoff(context.Background()))
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}(s.cache)
+
+	regionID := s.region
+	go func(cache *RegionCache) {
+		for {
+			_, _ = cache.LocateRegionByID(retry.NewNoopBackoff(context.Background()), regionID)
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}(s.cache)
+	time.Sleep(5 * time.Second)
+
+	cancel()
 }

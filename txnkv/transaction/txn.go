@@ -1335,7 +1335,9 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 	}
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
+	txn.store.WaitGroup().Add(1)
 	go func() {
+		defer txn.store.WaitGroup().Done()
 		if val, err := util.EvalFailpoint("beforeAsyncPessimisticRollback"); err == nil {
 			if s, ok := val.(string); ok {
 				if s == "skip" {

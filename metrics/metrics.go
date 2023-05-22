@@ -102,6 +102,7 @@ var (
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 	TiKVPreferLeaderFlowsGauge               *prometheus.GaugeVec
 	TiKVSyncRegionDuration                   *prometheus.HistogramVec
+	TiKVStaleReadSizeSummary                 *prometheus.SummaryVec
 )
 
 // Label constants.
@@ -125,6 +126,7 @@ const (
 	LblScope           = "scope"
 	LblInternal        = "internal"
 	LblGeneral         = "general"
+	LblDirection       = "direction"
 )
 
 func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
@@ -709,6 +711,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 28),
 		}, []string{LblType})
 
+	TiKVStaleReadSizeSummary = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_read_bytes",
+			Help:      "Size of stale read.",
+		}, []string{LblResult, LblDirection})
+
 	initShortcuts()
 }
 
@@ -790,6 +800,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVPreferLeaderFlowsGauge)
 	prometheus.MustRegister(TiKVSyncRegionDuration)
+	prometheus.MustRegister(TiKVStaleReadSizeSummary)
 }
 
 // readCounter reads the value of a prometheus.Counter.
