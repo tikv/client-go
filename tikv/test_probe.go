@@ -46,7 +46,7 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-// StoreProbe wraps KVSTore and exposes internal states for testing purpose.
+// StoreProbe wraps KVStore and exposes internal states for testing purpose.
 type StoreProbe struct {
 	*KVStore
 }
@@ -107,6 +107,11 @@ func (s StoreProbe) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointTyp
 // SetSafeTS is used to set safeTS for the store with `storeID`
 func (s StoreProbe) SetSafeTS(storeID, safeTS uint64) {
 	s.setSafeTS(storeID, safeTS)
+}
+
+// GCResolveLockPhase performs the resolve-locks phase of GC, which scans all locks and resolves them.
+func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, concurrency int) error {
+	return s.resolveLocks(ctx, safepoint, concurrency)
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.

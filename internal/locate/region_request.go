@@ -1155,6 +1155,14 @@ func (s *RegionRequestSender) SendReqCtx(
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
 	}()
+
+	var staleReadCollector *staleReadMetricsCollector
+	if req.StaleRead {
+		staleReadCollector = &staleReadMetricsCollector{hit: true}
+		staleReadCollector.onReq(req)
+		defer staleReadCollector.collect()
+	}
+
 	for {
 		if retryTimes > 0 {
 			req.IsRetryRequest = true
@@ -1164,6 +1172,9 @@ func (s *RegionRequestSender) SendReqCtx(
 					zap.Uint64("region", regionID.GetID()),
 					zap.Int("times", retryTimes),
 				)
+			}
+			if req.StaleRead && staleReadCollector != nil {
+				staleReadCollector.hit = false
 			}
 		}
 
@@ -1211,6 +1222,13 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 
+		if _, err1 := util.EvalFailpoint("afterSendReqToRegion"); err1 == nil {
+			if hook := bo.GetCtx().Value("sendReqToRegionFinishHook"); hook != nil {
+				h := hook.(func(*tikvrpc.Request, *tikvrpc.Response, error))
+				h(req, resp, err)
+			}
+		}
+
 		// recheck whether the session/query is killed during the Next()
 		boVars := bo.GetVars()
 		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
@@ -1244,6 +1262,9 @@ func (s *RegionRequestSender) SendReqCtx(
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess()
 			}
+		}
+		if staleReadCollector != nil {
+			staleReadCollector.onResp(resp)
 		}
 		return resp, rpcCtx, retryTimes, nil
 	}
@@ -1710,15 +1731,30 @@ func (s *RegionRequestSender) onRegionError(
 	// Since we expect that the workload should be stopped during the flashback progress,
 	// if a request meets the FlashbackInProgress error, it should stop retrying immediately
 	// to avoid unnecessary backoff and potential unexpected data status to the user.
-	if regionErr.GetFlashbackInProgress() != nil {
+	if flashbackInProgress := regionErr.GetFlashbackInProgress(); flashbackInProgress != nil {
 		logutil.BgLogger().Debug(
 			"tikv reports `FlashbackInProgress`",
 			zap.Stringer("req", req),
 			zap.Stringer("ctx", ctx),
 		)
+		if req != nil {
+			// if the failure is caused by replica read, we can retry it with leader safely.
+			if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
+				req.BusyThresholdMs = 0
+				s.replicaSelector.busyThreshold = 0
+				ctx.contextPatcher.replicaRead = nil
+				ctx.contextPatcher.busyThreshold = nil
+				return true, nil
+			}
+			if req.ReplicaReadType.IsFollowerRead() {
+				s.replicaSelector = nil
+				req.ReplicaReadType = kv.ReplicaReadLeader
+				return true, nil
+			}
+		}
 		return false, errors.Errorf(
 			"region %d is in flashback progress, FlashbackStartTS is %d",
-			regionErr.GetFlashbackInProgress().GetRegionId(), regionErr.GetFlashbackInProgress().GetFlashbackStartTs(),
+			flashbackInProgress.GetRegionId(), flashbackInProgress.GetFlashbackStartTs(),
 		)
 	}
 	// This error means a second-phase flashback request is sent to a region that is not
@@ -1909,4 +1945,60 @@ func (s *RegionRequestSender) onRegionError(
 	// For other errors, we only drop cache here.
 	// Because caller may need to re-split the request.
 	return false, nil
+}
+
+type staleReadMetricsCollector struct {
+	tp  tikvrpc.CmdType
+	hit bool
+	out int
+	in  int
+}
+
+func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
+	size := 0
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		size += req.Get().Size()
+	case tikvrpc.CmdBatchGet:
+		size += req.BatchGet().Size()
+	case tikvrpc.CmdScan:
+		size += req.Scan().Size()
+	case tikvrpc.CmdCop:
+		size += req.Cop().Size()
+	default:
+		// ignore non-read requests
+		return
+	}
+	s.tp = req.Type
+	size += req.Context.Size()
+	s.out = size
+}
+
+func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
+	size := 0
+	switch s.tp {
+	case tikvrpc.CmdGet:
+		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
+	case tikvrpc.CmdBatchGet:
+		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
+	case tikvrpc.CmdScan:
+		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
+	case tikvrpc.CmdCop:
+		size += resp.Resp.(*coprocessor.Response).Size()
+	default:
+		// unreachable
+		return
+	}
+	s.in = size
+}
+
+func (s *staleReadMetricsCollector) collect() {
+	in, out := metrics.StaleReadHitInTraffic, metrics.StaleReadHitOutTraffic
+	if !s.hit {
+		in, out = metrics.StaleReadMissInTraffic, metrics.StaleReadMissOutTraffic
+	}
+	if s.in > 0 && s.out > 0 {
+		in.Observe(float64(s.in))
+		out.Observe(float64(s.out))
+	}
 }
