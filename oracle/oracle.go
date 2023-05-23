@@ -57,6 +57,8 @@ type Oracle interface {
 
 	GetExternalTimestamp(ctx context.Context) (uint64, error)
 	SetExternalTimestamp(ctx context.Context, ts uint64) error
+
+	GetMinTimestamp(ctx context.Context) (uint64, error)
 }
 
 // Future is a future which promises to return a timestamp.
