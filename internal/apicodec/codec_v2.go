@@ -65,11 +65,10 @@ func NewCodecV2(mode Mode, keyspaceID uint32) (Codec, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Region keys in CodecV2 are always encoded in memory comparable form.
 	codec := &codecV2{
 		keyspaceID: KeyspaceID(keyspaceID),
-		memCodec:   &memComparableCodec{},
+		// Region keys in CodecV2 are always encoded in memory comparable form.
+		memCodec: &memComparableCodec{},
 	}
 	codec.prefix = make([]byte, 4)
 	codec.endKey = make([]byte, 4)
