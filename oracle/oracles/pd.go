@@ -65,7 +65,7 @@ type pdOracle struct {
 
 // NewPdOracle create an Oracle that uses a pd client source.
 // Refer https://github.com/tikv/pd/blob/master/client/client.go for more details.
-// PdOracle mantains `lastTS` to store the last timestamp got from PD server. If
+// PdOracle maintains `lastTS` to store the last timestamp got from PD server. If
 // `GetTimestamp()` is not called after `updateInterval`, it will be called by
 // itself to keep up with the timestamp on PD server.
 func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracle, error) {
@@ -102,6 +102,11 @@ func (o *pdOracle) GetTimestamp(ctx context.Context, opt *oracle.Option) (uint64
 	}
 	o.setLastTS(ts, opt.TxnScope)
 	return ts, nil
+}
+
+// GetMinTimestamp gets a minimum timestamp for all keyspace groups.
+func (o *pdOracle) GetMinTimestamp(ctx context.Context) (uint64, error) {
+	return o.getMinTimestamp(ctx)
 }
 
 type tsFuture struct {
@@ -150,6 +155,21 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 	dist := time.Since(now)
 	if dist > slowDist {
 		logutil.Logger(ctx).Warn("get timestamp too slow",
+			zap.Duration("cost time", dist))
+	}
+	return oracle.ComposeTS(physical, logical), nil
+}
+
+func (o *pdOracle) getMinTimestamp(ctx context.Context) (uint64, error) {
+	now := time.Now()
+
+	physical, logical, err := o.c.GetMinTS(ctx)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	dist := time.Since(now)
+	if dist > slowDist {
+		logutil.Logger(ctx).Warn("get minimum timestamp too slow",
 			zap.Duration("cost time", dist))
 	}
 	return oracle.ComposeTS(physical, logical), nil
