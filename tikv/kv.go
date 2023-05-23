@@ -41,6 +41,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -421,7 +422,17 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	return startTS, nil
 }
 
-// GetTimestampWithRetry returns the latest timestamp.
+// CurrentMinTimestamp returns current timestamp across all keyspace groups.
+func (s *KVStore) CurrentMinTimestamp() (uint64, error) {
+	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
+	startTS, err := s.getMinTimestampWithRetry(bo)
+	if err != nil {
+		return 0, err
+	}
+	return startTS, nil
+}
+
+// GetTimestampWithRetry returns latest timestamp.
 func (s *KVStore) GetTimestampWithRetry(bo *Backoffer, scope string) (uint64, error) {
 	return s.getTimestampWithRetry(bo, scope)
 }
@@ -449,6 +460,29 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 			return startTS, nil
 		}
 		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get timestamp failed: %v", err))
+		if err != nil {
+			return 0, err
+		}
+	}
+}
+
+func (s *KVStore) getMinTimestampWithRetry(bo *Backoffer) (uint64, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("TiKVStore.getMinTimestampWithRetry", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
+
+	for {
+		minTS, err := s.oracle.GetMinTimestamp(bo.GetCtx())
+		if err == nil {
+			return minTS, nil
+		}
+		// no need to back off
+		if strings.Contains(err.Error(), "Unimplemented") {
+			return 0, err
+		}
+		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get minimum timestamp failed: %v", err))
 		if err != nil {
 			return 0, err
 		}
