@@ -458,6 +458,10 @@ func (s *KVStore) getMinTimestampWithRetry(bo *Backoffer) (uint64, error) {
 		if err == nil {
 			return minTS, nil
 		}
+		// no need to back off
+		if strings.Contains(err.Error(), "Unimplemented") {
+			return 0, err
+		}
 		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get minimum timestamp failed: %v", err))
 		if err != nil {
 			return 0, err
