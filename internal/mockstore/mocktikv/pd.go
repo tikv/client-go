@@ -81,7 +81,7 @@ func (c *pdClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint
 	panic("implement me")
 }
 
-func (c *pdClient) WatchGCSafePointV2(ctx context.Context) (chan []*pdpb.SafePointEvent, error) {
+func (c *pdClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -135,6 +135,10 @@ func (c *pdClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 
 func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
 	return c.GetTSAsync(ctx)
+}
+
+func (c *pdClient) GetMinTS(ctx context.Context) (int64, int64, error) {
+	return 0, 0, nil
 }
 
 func (c *pdClient) SetExternalTimestamp(ctx context.Context, newTimestamp uint64) error {

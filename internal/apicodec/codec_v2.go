@@ -564,6 +564,11 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+		// decodes batch responses
+		r.BatchResponses, err = c.decodeBatchTaskResps(r.BatchResponses)
+		if err != nil {
+			return nil, err
+		}
 	case tikvrpc.CmdCopStream:
 		return nil, errors.New("streaming coprocessor is not supported yet")
 	case tikvrpc.CmdBatchCop, tikvrpc.CmdMPPTask:
@@ -993,4 +998,22 @@ func (c *codecV2) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
 		}
 	}
 	return ks, nil
+}
+
+func (c *codecV2) decodeBatchTaskResps(responses []*coprocessor.StoreBatchTaskResponse) ([]*coprocessor.StoreBatchTaskResponse, error) {
+	for _, r := range responses {
+		if r == nil {
+			continue
+		}
+		var err error
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		r.Locked, err = c.decodeLockInfo(r.Locked)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return responses, nil
 }

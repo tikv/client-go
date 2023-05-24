@@ -19,9 +19,9 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-func TestApi(t *testing.T) {
+func TestAPI(t *testing.T) {
 	if !*withTiKV {
-		t.Skip("skipping TestApi because with-tikv is not enabled")
+		t.Skip("skipping TestAPI because with-tikv is not enabled")
 	}
 	suite.Run(t, new(apiTestSuite))
 }
@@ -517,10 +517,10 @@ func (s *apiTestSuite) TestEmptyValue() {
 
 func (s *apiTestSuite) TearDownTest() {
 	if s.client != nil {
-		_ = s.client.Close()
+		s.Require().Nil(s.client.Close())
 	}
 	if s.clientForCas != nil {
-		_ = s.clientForCas.Close()
+		s.Require().Nil(s.clientForCas.Close())
 	}
 	if s.pdClient != nil {
 		s.pdClient.Close()

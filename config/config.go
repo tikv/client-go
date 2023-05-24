@@ -78,6 +78,10 @@ type Config struct {
 	TxnScope              string
 	EnableAsyncCommit     bool
 	Enable1PC             bool
+	// RegionsRefreshInterval indicates the interval of loading regions info, the unit is second, if RegionsRefreshInterval == 0, it will be disabled.
+	RegionsRefreshInterval uint64
+	// EnablePreload indicates whether to preload region info when initializing the client.
+	EnablePreload bool
 }
 
 // DefaultConfig returns the default configuration.

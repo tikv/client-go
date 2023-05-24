@@ -41,6 +41,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -115,6 +116,7 @@ type KVStore struct {
 		client Client
 	}
 	pdClient     pd.Client
+	pdHttpClient *util.PDHTTPClient
 	regionCache  *locate.RegionCache
 	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
@@ -193,6 +195,13 @@ func WithPool(gp util.Pool) Option {
 	}
 }
 
+// WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
+func WithPDHTTPClient(tlsConf *tls.Config, pdaddrs []string) Option {
+	return func(o *KVStore) {
+		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
+	}
+}
+
 // loadOption load KVStore option into KVStore.
 func loadOption(store *KVStore, opt ...Option) {
 	for _, f := range opt {
@@ -235,9 +244,15 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 
 // NewPDClient returns an unwrapped pd client.
 func NewPDClient(pdAddrs []string) (pd.Client, error) {
+	return NewPDClientWithAPIContext(pdAddrs, pd.NewAPIContextV1())
+}
+
+// NewPDClientWithAPIContext returns an unwrapped pd client with API context.
+func NewPDClientWithAPIContext(pdAddrs []string, apiContext pd.APIContext) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
-	pdCli, err := pd.NewClient(
+	pdCli, err := pd.NewClientWithAPIContext(
+		context.Background(), apiContext,
 		pdAddrs, pd.SecurityOption{
 			CAPath:   cfg.Security.ClusterSSLCA,
 			CertPath: cfg.Security.ClusterSSLCert,
@@ -353,6 +368,9 @@ func (s *KVStore) Close() error {
 
 	s.oracle.Close()
 	s.pdClient.Close()
+	if s.pdHttpClient != nil {
+		s.pdHttpClient.Close()
+	}
 	s.lockResolver.Close()
 
 	if err := s.GetTiKVClient().Close(); err != nil {
@@ -379,6 +397,16 @@ func (s *KVStore) UUID() string {
 func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
 	startTS, err := s.getTimestampWithRetry(bo, txnScope)
+	if err != nil {
+		return 0, err
+	}
+	return startTS, nil
+}
+
+// CurrentMinTimestamp returns current timestamp across all keyspace groups.
+func (s *KVStore) CurrentMinTimestamp() (uint64, error) {
+	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
+	startTS, err := s.getMinTimestampWithRetry(bo)
 	if err != nil {
 		return 0, err
 	}
@@ -413,6 +441,29 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 			return startTS, nil
 		}
 		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get timestamp failed: %v", err))
+		if err != nil {
+			return 0, err
+		}
+	}
+}
+
+func (s *KVStore) getMinTimestampWithRetry(bo *Backoffer) (uint64, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("TiKVStore.getMinTimestampWithRetry", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
+
+	for {
+		minTS, err := s.oracle.GetMinTimestamp(bo.GetCtx())
+		if err == nil {
+			return minTS, nil
+		}
+		// no need to back off
+		if strings.Contains(err.Error(), "Unimplemented") {
+			return 0, err
+		}
+		err = bo.Backoff(retry.BoPDRPC, errors.Errorf("get minimum timestamp failed: %v", err))
 		if err != nil {
 			return 0, err
 		}
@@ -581,25 +632,41 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		}
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
-			resp, err := tikvClient.SendRequest(
-				ctx, storeAddr, tikvrpc.NewRequest(
-					tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
-						KeyRange: &kvrpcpb.KeyRange{
-							StartKey: []byte(""),
-							EndKey:   []byte(""),
-						},
-					}, kvrpcpb.Context{
-						RequestSource: util.RequestSourceFromCtx(ctx),
-					},
-				), client.ReadTimeoutShort,
+
+			var (
+				safeTS uint64
+				err    error
 			)
 			storeIDStr := strconv.Itoa(int(storeID))
-			if err != nil {
-				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
-				logutil.BgLogger().Debug("update safeTS failed", zap.Error(err), zap.Uint64("store-id", storeID))
-				return
+			// Try to get the minimum resolved timestamp of the store from PD.
+			if s.pdHttpClient != nil {
+				safeTS, err = s.pdHttpClient.GetStoreMinResolvedTS(ctx, storeID)
+				if err != nil {
+					logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err), zap.Uint64("store-id", storeID))
+				}
 			}
-			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
+			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
+			if safeTS == 0 || err != nil {
+				resp, err := tikvClient.SendRequest(
+					ctx, storeAddr, tikvrpc.NewRequest(
+						tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
+							KeyRange: &kvrpcpb.KeyRange{
+								StartKey: []byte(""),
+								EndKey:   []byte(""),
+							},
+						}, kvrpcpb.Context{
+							RequestSource: util.RequestSourceFromCtx(ctx),
+						},
+					), client.ReadTimeoutShort,
+				)
+				if err != nil {
+					metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
+					logutil.BgLogger().Debug("update safeTS failed", zap.Error(err), zap.Uint64("store-id", storeID))
+					return
+				}
+				safeTS = resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
+			}
+
 			_, preSafeTS := s.getSafeTS(storeID)
 			if preSafeTS > safeTS {
 				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", storeIDStr).Inc()

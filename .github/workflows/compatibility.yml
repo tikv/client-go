@@ -2,9 +2,9 @@ name: Compatibility Test
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, cse-region-client ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, cse-region-client ]
 
 jobs:
 
