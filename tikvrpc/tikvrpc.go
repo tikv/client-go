@@ -277,10 +277,6 @@ func (req *Request) EnableStaleRead() {
 
 // DisableStaleRead is called when stale-read fallbacks to leader read after meeting key-is-locked error.
 func (req *Request) DisableStaleRead() {
-	// only take effect for stale-read requests.
-	if !req.StaleRead {
-		return
-	}
 	req.StaleRead = false
 	req.ReplicaReadType = kv.ReplicaReadLeader
 }
