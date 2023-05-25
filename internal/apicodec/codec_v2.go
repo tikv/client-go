@@ -25,6 +25,9 @@ var (
 	txnModePrefix     byte = 'x'
 	keyspacePrefixLen      = 4
 
+	// maxKeyspaceID is the maximum value of keyspaceID, its value is uint24Max.
+	maxKeyspaceID = uint32(0xFFFFFF)
+
 	// errKeyOutOfBound happens when key to be decoded lies outside the keyspace's range.
 	errKeyOutOfBound = errors.New("given key does not belong to the keyspace")
 )
@@ -46,21 +49,27 @@ func BuildKeyspaceName(name string) string {
 
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
-	prefix   []byte
-	endKey   []byte
-	memCodec memCodec
+	keyspaceID KeyspaceID
+	prefix     []byte
+	endKey     []byte
+	memCodec   memCodec
 }
 
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
 func NewCodecV2(mode Mode, keyspaceID uint32) (Codec, error) {
+	if keyspaceID > maxKeyspaceID {
+		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
+	}
 	prefix, err := getIDByte(keyspaceID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Region keys in CodecV2 are always encoded in memory comparable form.
-	codec := &codecV2{memCodec: &memComparableCodec{}}
+	codec := &codecV2{
+		keyspaceID: KeyspaceID(keyspaceID),
+		// Region keys in CodecV2 are always encoded in memory comparable form.
+		memCodec: &memComparableCodec{},
+	}
 	codec.prefix = make([]byte, 4)
 	codec.endKey = make([]byte, 4)
 	switch mode {
@@ -97,9 +106,7 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	prefix := append([]byte{}, c.prefix...)
-	prefix[0] = 0
-	return KeyspaceID(binary.BigEndian.Uint32(prefix))
+	return c.keyspaceID
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
@@ -254,10 +261,12 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdCop:
 		r := *req.Cop()
 		r.Ranges = c.encodeCopRanges(r.Ranges)
+		r.Tasks = c.encodeStoreBatchTasks(r.Tasks)
 		req.Req = &r
 	case tikvrpc.CmdCopStream:
 		r := *req.Cop()
 		r.Ranges = c.encodeCopRanges(r.Ranges)
+		r.Tasks = c.encodeStoreBatchTasks(r.Tasks)
 		req.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
@@ -813,6 +822,16 @@ func (c *codecV2) encodeTableRegions(infos []*coprocessor.TableRegions) []*copro
 		encodedInfos = append(encodedInfos, &i)
 	}
 	return encodedInfos
+}
+
+func (c *codecV2) encodeStoreBatchTasks(tasks []*coprocessor.StoreBatchTask) []*coprocessor.StoreBatchTask {
+	var encodedTasks []*coprocessor.StoreBatchTask
+	for _, task := range tasks {
+		t := *task
+		t.Ranges = c.encodeCopRanges(t.Ranges)
+		encodedTasks = append(encodedTasks, &t)
+	}
+	return encodedTasks
 }
 
 func (c *codecV2) decodeRegionError(regionError *errorpb.Error) (*errorpb.Error, error) {

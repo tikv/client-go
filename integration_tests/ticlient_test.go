@@ -69,8 +69,9 @@ func (s *testTiclientSuite) TearDownSuite() {
 	// Clean all data, or it may pollute other data.
 	txn := s.beginTxn()
 	scanner, err := txn.Iter(encodeKey(s.prefix, ""), nil)
-	s.Require().Nil(err)
-	s.Require().NotNil(scanner)
+	require := s.Require()
+	require.Nil(err)
+	require.NotNil(scanner)
 	for scanner.Valid() {
 		k := scanner.Key()
 		err = txn.Delete(k)
@@ -78,9 +79,9 @@ func (s *testTiclientSuite) TearDownSuite() {
 		scanner.Next()
 	}
 	err = txn.Commit(context.Background())
-	s.Require().Nil(err)
+	require.Nil(err)
 	err = s.store.Close()
-	s.Require().Nil(err)
+	require.Nil(err)
 }
 
 func (s *testTiclientSuite) beginTxn() *tikv.KVTxn {

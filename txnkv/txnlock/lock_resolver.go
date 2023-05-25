@@ -238,10 +238,26 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	txnInfos := make(map[uint64]uint64)
 	startTime := time.Now()
 	for _, l := range expiredLocks {
+		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling lock", zap.Stringer("lock", l))
+
 		if _, ok := txnInfos[l.TxnID]; ok {
 			continue
 		}
 		metrics.LockResolverCountWithExpired.Inc()
+
+		if l.LockType == kvrpcpb.Op_PessimisticLock {
+			// BatchResolveLocks forces resolving the locks ignoring whether whey are expired.
+			// For pessimistic locks, committing them makes no sense, but it won't affect transaction
+			// correctness if we always roll back them.
+			// Pessimistic locks needs special handling logic because their primary may not point
+			// to the real primary of that transaction, and their state cannot be put in `txnInfos`.
+			// (see: https://github.com/pingcap/tidb/issues/42937).
+			err := lr.resolvePessimisticLock(bo, l)
+			if err != nil {
+				return false, err
+			}
+			continue
+		}
 
 		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
 		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, false, l)
@@ -448,7 +464,15 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 	var resolve func(*Lock, bool) (TxnStatus, error)
 	resolve = func(l *Lock, forceSyncCommit bool) (TxnStatus, error) {
 		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
-		if err != nil {
+
+		if _, ok := errors.Cause(err).(primaryMismatch); ok {
+			if l.LockType != kvrpcpb.Op_PessimisticLock {
+				logutil.BgLogger().Info("unexpected primaryMismatch error occurred on a non-pessimistic lock", zap.Stringer("lock", l), zap.Error(err))
+				return TxnStatus{}, err
+			}
+			// Pessimistic rollback the pessimistic lock as it points to an invalid primary.
+			status, err = TxnStatus{}, nil
+		} else if err != nil {
 			return TxnStatus{}, err
 		}
 		if status.ttl != 0 {
@@ -681,6 +705,14 @@ func (e txnNotFoundErr) Error() string {
 	return e.TxnNotFound.String()
 }
 
+type primaryMismatch struct {
+	currentLock *kvrpcpb.LockInfo
+}
+
+func (e primaryMismatch) Error() string {
+	return "primary mismatch, current lock: " + e.currentLock.String()
+}
+
 // getTxnStatus sends the CheckTxnStatus request to the TiKV server.
 // When rollbackIfNotExist is false, the caller should be careful with the txnNotFoundErr error.
 func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary []byte,
@@ -710,6 +742,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		RollbackIfNotExist:       rollbackIfNotExist,
 		ForceSyncCommit:          forceSyncCommit,
 		ResolvingPessimisticLock: resolvingPessimisticLock,
+		VerifyIsPrimary:          true,
 	}, kvrpcpb.Context{
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
@@ -745,6 +778,12 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 			txnNotFound := keyErr.GetTxnNotFound()
 			if txnNotFound != nil {
 				return status, txnNotFoundErr{txnNotFound}
+			}
+
+			if p := keyErr.GetPrimaryMismatch(); p != nil && resolvingPessimisticLock {
+				err = primaryMismatch{currentLock: p.GetLockInfo()}
+				logutil.BgLogger().Info("getTxnStatus was called on secondary lock", zap.Error(err))
+				return status, err
 			}
 
 			err = errors.Errorf("unexpected err: %s, tid: %v", keyErr, txnID)

@@ -1012,3 +1012,43 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.IsType(&tryIdleReplica{}, replicaSelector.state)
 	s.True(*rpcCtx.contextPatcher.replicaRead)
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadWithFlashbackInProgress() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		// Return serverIsBusy when accesses the leader with busy threshold.
+		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
+			if req.BusyThresholdMs > 0 {
+				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+					ServerIsBusy: &errorpb.ServerIsBusy{EstimatedWaitMs: 500},
+				}}}, nil
+			} else {
+				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
+			}
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+			FlashbackInProgress: &errorpb.FlashbackInProgress{
+				RegionId: regionLoc.Region.GetID(),
+			},
+		}}}, nil
+	}}
+
+	reqs := []*tikvrpc.Request{
+		tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kvrpcpb.Context{
+			BusyThresholdMs: 50,
+		}),
+		tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadFollower, nil),
+	}
+
+	for _, req := range reqs {
+		bo := retry.NewBackoffer(context.Background(), -1)
+		s.Nil(err)
+		resp, retry, err := s.regionRequestSender.SendReq(bo, req, regionLoc.Region, time.Second)
+		s.Nil(err)
+		s.GreaterOrEqual(retry, 1)
+		s.Equal(resp.Resp.(*kvrpcpb.GetResponse).Value, []byte("value"))
+	}
+}

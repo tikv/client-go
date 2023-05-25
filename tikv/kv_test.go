@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -126,27 +127,30 @@ func (s *testKVSuite) TestMinSafeTs() {
 	s.Require().Equal(uint64(80), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
 
-func (s *testKVSuite) TestRURuntimeStatsCleanUp() {
-	s.Nil(failpoint.Enable("tikvclient/mockFastRURuntimeStatsMapClean", `return()`))
+func TestRURuntimeStatsCleanUp(t *testing.T) {
+	util.EnableFailpoints()
+	require := require.New(t)
+	require.Nil(failpoint.Enable("tikvclient/mockFastRURuntimeStatsMapClean", `return()`))
 	defer func() {
-		s.Nil(failpoint.Disable("tikvclient/mockFastRURuntimeStatsMapClean"))
+		require.Nil(failpoint.Disable("tikvclient/mockFastRURuntimeStatsMapClean"))
 	}()
 
-	mockClient := storeSafeTsMockClient{
-		Client:    s.store.GetTiKVClient(),
-		testSuite: s,
-	}
-	s.store.SetTiKVClient(&mockClient)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	require.Nil(err)
+	testutils.BootstrapWithSingleStore(cluster)
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	require.Nil(err)
+	defer store.Close()
 
 	// Create a ruRuntimeStats first.
 	startTS := oracle.ComposeTS(oracle.GetPhysical(time.Now()), 0)
-	ruRuntimeStats := s.store.CreateRURuntimeStats(startTS)
-	s.NotNil(ruRuntimeStats)
+	ruRuntimeStats := store.CreateRURuntimeStats(startTS)
+	require.NotNil(ruRuntimeStats)
 	// Wait for the cleanup goroutine to clean up the ruRuntimeStatsMap.
 	time.Sleep(time.Millisecond * 150)
 	// The ruRuntimeStatsMap should be cleaned up.
-	s.store.ruRuntimeStatsMap.Range(func(key, value interface{}) bool {
-		s.Fail("ruRuntimeStatsMap should be cleaned up")
+	store.ruRuntimeStatsMap.Range(func(key, value interface{}) bool {
+		require.Fail("ruRuntimeStatsMap should be cleaned up")
 		return true
 	})
 }
