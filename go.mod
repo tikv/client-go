@@ -23,7 +23,7 @@ require (
 	github.com/stretchr/testify v1.8.2
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
 	github.com/tikv/pd v0.0.0-20230420042919-0e0313adef1f
-	github.com/tikv/pd/client v0.0.0-20230518085737-f4241b0c82b0
+	github.com/tikv/pd/client v0.0.0-20230525062939-ccb0bba4e10b
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.2
 	go.etcd.io/etcd/client/v3 v3.5.2
@@ -72,5 +72,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
-
-replace github.com/tikv/pd/client => github.com/ystaticy/pd/client v0.0.0-20230523125600-7bc803e2c7af
