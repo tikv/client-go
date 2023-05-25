@@ -72,18 +72,15 @@ type pdClient struct {
 }
 
 func (c *pdClient) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, safePoint uint64) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
+	panic("unimplemented")
 }
 
 func (c *pdClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	//TODO implement me
-	panic("implement me")
+	panic("unimplemented")
 }
 
 func (c *pdClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
-	//TODO implement me
-	panic("implement me")
+	panic("unimplemented")
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
