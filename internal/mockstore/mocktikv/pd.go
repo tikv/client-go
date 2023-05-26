@@ -71,6 +71,22 @@ type pdClient struct {
 	externalTimestamp atomic.Uint64
 }
 
+func (c *pdClient) GetMinTS(ctx context.Context) (int64, int64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
+	panic("unimplemented")
+}
+
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
 // from a Cluster.
 func NewPDClient(cluster *Cluster) pd.Client {

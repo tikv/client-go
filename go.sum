@@ -206,6 +206,8 @@ github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
 github.com/tikv/pd/client v0.0.0-20230419105719-9e7b8e8c95fd h1:XeTbaUB5ZpZA1wOOCMJe4MCNwbfONdx7xgsCKsCx3ko=
 github.com/tikv/pd/client v0.0.0-20230419105719-9e7b8e8c95fd/go.mod h1:5vgcvO020ZCdMZkTrRdS/wFZQUab82BSfKE38T61ro0=
+github.com/tikv/pd/client v0.0.0-20230525083540-99e241955eee h1:SDC0fTH1sdnAlgo8Ndqr2R1FtO0QWDYjrF0AA9LWde8=
+github.com/tikv/pd/client v0.0.0-20230525083540-99e241955eee/go.mod h1:0XDYjg3SIU19VYiqWzHygabCpZP1RIqB2SlxNOLYhdw=
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
 github.com/twmb/murmur3 v1.1.3/go.mod h1:Qq/R7NUyOfr65zD+6Q5IHKsJLwP7exErjN6lyyq3OSQ=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
