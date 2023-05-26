@@ -275,8 +275,8 @@ func (req *Request) EnableStaleRead() {
 	req.ReplicaRead = false
 }
 
-// DisableStaleRead is called when stale-read fallbacks to leader read after meeting key-is-locked error.
-func (req *Request) DisableStaleRead() {
+// DisableStaleReadMeetLock is called when stale-read fallbacks to leader read after meeting key-is-locked error.
+func (req *Request) DisableStaleReadMeetLock() {
 	req.StaleRead = false
 	req.ReplicaReadType = kv.ReplicaReadLeader
 }

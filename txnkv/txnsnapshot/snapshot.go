@@ -702,7 +702,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			if firstLock == nil {
 				// we need to read from leader after resolving the lock.
 				if isStaleness {
-					req.DisableStaleRead()
+					req.DisableStaleReadMeetLock()
 					req.BusyThresholdMs = 0
 				}
 				firstLock = lock
