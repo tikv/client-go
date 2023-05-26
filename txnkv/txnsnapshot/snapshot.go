@@ -381,6 +381,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			s.mergeRegionRequestStats(cli.Stats)
 		}()
 	}
+	isStaleness := s.mu.isStaleness
+	busyThresholdMs := s.mu.busyThreshold.Milliseconds()
 	s.mu.RUnlock()
 
 	pending := batch.keys
@@ -400,13 +402,12 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.mu.resourceGroupName,
 			},
-			BusyThresholdMs: uint32(s.mu.busyThreshold.Milliseconds()),
+			BusyThresholdMs: uint32(busyThresholdMs),
 		})
 		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 			s.mu.resourceGroupTagger(req)
 		}
 		scope := s.mu.readReplicaScope
-		isStaleness := s.mu.isStaleness
 		matchStoreLabels := s.mu.matchStoreLabels
 		replicaAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
@@ -503,6 +504,11 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
 			} else {
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
+			// we need to read from leader after resolving the lock.
+			if isStaleness {
+				isStaleness = false
+				busyThresholdMs = 0
 			}
 			resolveLocksOpts := txnlock.ResolveLocksOptions{
 				CallerStartTS: s.version,
@@ -694,6 +700,11 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				return nil, err
 			}
 			if firstLock == nil {
+				// we need to read from leader after resolving the lock.
+				if isStaleness {
+					req.DisableStaleReadMeetLock()
+					req.BusyThresholdMs = 0
+				}
 				firstLock = lock
 			} else if s.version == maxTimestamp && firstLock.TxnID != lock.TxnID {
 				// If it is an autocommit point get, it needs to be blocked only
