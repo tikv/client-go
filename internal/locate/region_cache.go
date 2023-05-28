@@ -272,12 +272,12 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	// regionStore pull used store from global store map
 	// to avoid acquire storeMu in later access.
 	rs := &regionStore{
-		workTiKVIdx:  0,
-		proxyTiKVIdx: -1,
-		stores:       make([]*Store, 0, len(r.meta.Peers)),
+		workTiKVIdx:              0,
+		proxyTiKVIdx:             -1,
+		stores:                   make([]*Store, 0, len(r.meta.Peers)),
 		pendingTiFlashPeerStores: map[uint64]uint64{},
-		storeEpochs:  make([]uint32, 0, len(r.meta.Peers)),
-		buckets:      pdRegion.Buckets,
+		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
+		buckets:                  pdRegion.Buckets,
 	}
 
 	leader := pdRegion.Leader
