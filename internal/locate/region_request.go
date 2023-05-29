@@ -56,6 +56,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -1275,7 +1276,7 @@ func (s *RegionRequestSender) getRPCContext(
 	opts ...StoreSelectorOption,
 ) (*RPCContext, error) {
 	switch et {
-	case tikvrpc.TiKV:
+	case tikvrpc.TiKV, tikvrpc.TiKVRemoteCoprocessor:
 		if s.replicaSelector == nil {
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if selector == nil || err != nil {
@@ -1633,6 +1634,9 @@ func (s *RegionRequestSender) sendReqToRegion(
 	} else {
 		req.ForwardedHost = rpcCtx.Addr
 		sendToAddr = rpcCtx.ProxyAddr
+	}
+	if req.StoreTp == tikvrpc.TiKVRemoteCoprocessor {
+		sendToAddr = config.GetGlobalConfig().TiKVClient.RemoteCoprocessorAddr
 	}
 
 	// Count the replica number as the RU cost factor.
