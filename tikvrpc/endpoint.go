@@ -45,6 +45,7 @@ const (
 	TiFlash
 	TiDB
 	TiFlashCompute
+	TiKVRemoteCoprocessor
 )
 
 // Name returns the name of endpoint type.
@@ -58,6 +59,8 @@ func (t EndpointType) Name() string {
 		return "tidb"
 	case TiFlashCompute:
 		return "tiflash_compute"
+	case TiKVRemoteCoprocessor:
+		return "tikv-remote-coprocessor"
 	}
 	return "unspecified"
 }
