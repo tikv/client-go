@@ -365,6 +365,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			s.mergeRegionRequestStats(cli.Stats)
 		}()
 	}
+	isStaleness := s.mu.isStaleness
 	s.mu.RUnlock()
 
 	pending := batch.keys
@@ -386,7 +387,6 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			s.mu.resourceGroupTagger(req)
 		}
 		scope := s.mu.readReplicaScope
-		isStaleness := s.mu.isStaleness
 		matchStoreLabels := s.mu.matchStoreLabels
 		replicaAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
@@ -478,6 +478,10 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
 			} else {
 				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
+			// we need to read from leader after resolving the lock.
+			if isStaleness {
+				isStaleness = false
 			}
 			resolveLocksOpts := txnlock.ResolveLocksOptions{
 				CallerStartTS: s.version,
@@ -656,6 +660,10 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				return nil, err
 			}
 			if firstLock == nil {
+				// we need to read from leader after resolving the lock.
+				if isStaleness {
+					req.DisableStaleReadMeetLock()
+				}
 				firstLock = lock
 			} else if s.version == maxTimestamp && firstLock.TxnID != lock.TxnID {
 				// If it is an autocommit point get, it needs to be blocked only

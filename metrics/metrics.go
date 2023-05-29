@@ -96,6 +96,7 @@ var (
 	TiKVReadThroughput                       prometheus.Histogram
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
+	TiKVStaleReadSizeSummary                 *prometheus.SummaryVec
 )
 
 // Label constants.
@@ -116,6 +117,7 @@ const (
 	LblToStore         = "to_store"
 	LblStaleRead       = "stale_read"
 	LblSource          = "source"
+	LblDirection       = "direction"
 )
 
 func initMetrics(namespace, subsystem string) {
@@ -589,6 +591,14 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of assertions used in prewrite requests",
 		}, []string{LblType})
 
+	TiKVStaleReadSizeSummary = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_read_bytes",
+			Help:      "Size of stale read.",
+		}, []string{LblResult, LblDirection})
+
 	initShortcuts()
 }
 
@@ -659,6 +669,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadThroughput)
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
+	prometheus.MustRegister(TiKVStaleReadSizeSummary)
 }
 
 // readCounter reads the value of a prometheus.Counter.

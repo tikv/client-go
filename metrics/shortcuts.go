@@ -135,6 +135,11 @@ var (
 	PrewriteAssertionUsageCounterExist    prometheus.Counter
 	PrewriteAssertionUsageCounterNotExist prometheus.Counter
 	PrewriteAssertionUsageCounterUnknown  prometheus.Counter
+
+	StaleReadHitInTraffic   prometheus.Observer
+	StaleReadHitOutTraffic  prometheus.Observer
+	StaleReadMissInTraffic  prometheus.Observer
+	StaleReadMissOutTraffic prometheus.Observer
 )
 
 func initShortcuts() {
@@ -235,4 +240,9 @@ func initShortcuts() {
 	PrewriteAssertionUsageCounterExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("exist")
 	PrewriteAssertionUsageCounterNotExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("not-exist")
 	PrewriteAssertionUsageCounterUnknown = TiKVPrewriteAssertionUsageCounter.WithLabelValues("unknown")
+
+	StaleReadHitInTraffic = TiKVStaleReadSizeSummary.WithLabelValues("hit", "in")
+	StaleReadHitOutTraffic = TiKVStaleReadSizeSummary.WithLabelValues("hit", "out")
+	StaleReadMissInTraffic = TiKVStaleReadSizeSummary.WithLabelValues("miss", "in")
+	StaleReadMissOutTraffic = TiKVStaleReadSizeSummary.WithLabelValues("miss", "out")
 }
