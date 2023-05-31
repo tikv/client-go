@@ -31,9 +31,9 @@ import (
 type RequestInfo struct {
 	// writeBytes is the actual write size if the request is a write request,
 	// or -1 if it's a read request.
-	writeBytes  int64
-	storeID     uint64
-	replicaNums int64
+	writeBytes    int64
+	storeID       uint64
+	replicaNumber int64
 }
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
@@ -57,7 +57,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			writeBytes += int64(len(k))
 		}
 	}
-	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId, replicaNums: req.ReplicaNumber}
+	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId, replicaNumber: req.ReplicaNumber}
 }
 
 // IsWrite returns whether the request is a write request.
@@ -71,8 +71,8 @@ func (req *RequestInfo) WriteBytes() uint64 {
 	return uint64(req.writeBytes)
 }
 
-func (req *RequestInfo) ReplicaNums() int64 {
-	return req.replicaNums
+func (req *RequestInfo) ReplicaNumber() int64 {
+	return req.replicaNumber
 }
 
 func (req *RequestInfo) StoreID() uint64 {
