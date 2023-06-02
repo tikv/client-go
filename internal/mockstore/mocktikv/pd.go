@@ -371,3 +371,7 @@ func (c *pdClient) Get(ctx context.Context, key []byte, opts ...pd.OpOption) (*m
 func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd.OpOption) (*meta_storagepb.PutResponse, error) {
 	return nil, nil
 }
+
+func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
+	return nil, 0, nil
+}
