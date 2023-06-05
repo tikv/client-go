@@ -93,7 +93,7 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 		query := fmt.Sprintf("%s/%d", storeMinResolvedTSPrefix, storeID)
 		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
 		if e != nil {
-			logutil.BgLogger().Warn("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
+			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			err = e
 			continue
 		}
