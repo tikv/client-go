@@ -508,6 +508,10 @@ func (s *mockTikvGrpcServer) GetDisaggConfig(context.Context, *disaggregated.Get
 	return nil, errors.New("unreachable")
 }
 
+func (s *mockTikvGrpcServer) CancelDisaggTask(context.Context, *disaggregated.CancelDisaggTaskRequest) (*disaggregated.CancelDisaggTaskResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCanceled() {
 	// prepare a mock tikv grpc server
 	addr := "localhost:56341"

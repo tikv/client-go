@@ -25,6 +25,9 @@ var (
 	txnModePrefix     byte = 'x'
 	keyspacePrefixLen      = 4
 
+	// maxKeyspaceID is the maximum value of keyspaceID, its value is uint24Max.
+	maxKeyspaceID = uint32(0xFFFFFF)
+
 	// errKeyOutOfBound happens when key to be decoded lies outside the keyspace's range.
 	errKeyOutOfBound = errors.New("given key does not belong to the keyspace")
 )
@@ -46,21 +49,27 @@ func BuildKeyspaceName(name string) string {
 
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
-	prefix   []byte
-	endKey   []byte
-	memCodec memCodec
+	keyspaceID KeyspaceID
+	prefix     []byte
+	endKey     []byte
+	memCodec   memCodec
 }
 
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
 func NewCodecV2(mode Mode, keyspaceID uint32) (Codec, error) {
+	if keyspaceID > maxKeyspaceID {
+		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
+	}
 	prefix, err := getIDByte(keyspaceID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Region keys in CodecV2 are always encoded in memory comparable form.
-	codec := &codecV2{memCodec: &memComparableCodec{}}
+	codec := &codecV2{
+		keyspaceID: KeyspaceID(keyspaceID),
+		// Region keys in CodecV2 are always encoded in memory comparable form.
+		memCodec: &memComparableCodec{},
+	}
 	codec.prefix = make([]byte, 4)
 	codec.endKey = make([]byte, 4)
 	switch mode {
@@ -97,9 +106,7 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	prefix := append([]byte{}, c.prefix...)
-	prefix[0] = 0
-	return KeyspaceID(binary.BigEndian.Uint32(prefix))
+	return c.keyspaceID
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
