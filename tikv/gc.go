@@ -50,13 +50,34 @@ import (
 //
 // GC is a simplified version of [GC in TiDB](https://docs.pingcap.com/tidb/stable/garbage-collection-overview).
 // We skip the second step "delete ranges" which is an optimization for TiDB.
-func (s *KVStore) GC(ctx context.Context, safepoint uint64) (newSafePoint uint64, err error) {
-	err = s.resolveLocks(ctx, safepoint, 8)
+func (s *KVStore) GC(ctx context.Context, safepoint uint64, opts ...GCOpt) (newSafePoint uint64, err error) {
+	// default concurrency 8
+	opt := &gcOption{concurrency: 8}
+	// Apply gc options.
+	for _, o := range opts {
+		o(opt)
+	}
+
+	err = s.resolveLocks(ctx, safepoint, opt.concurrency)
 	if err != nil {
 		return
 	}
 
 	return s.pdClient.UpdateGCSafePoint(ctx, safepoint)
+}
+
+type gcOption struct {
+	concurrency int
+}
+
+// GCOpt gc options
+type GCOpt func(*gcOption)
+
+// WithConcurrency is used to set gc RangeTaskRunner concurrency.
+func WithConcurrency(concurrency int) GCOpt {
+	return func(opt *gcOption) {
+		opt.concurrency = concurrency
+	}
 }
 
 func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrency int) error {
