@@ -555,6 +555,8 @@ func (c *batchCommandsClient) waitConnReady() (err error) {
 			cancel()
 			break
 		}
+		// Trigger idle connection to reconnection
+		c.conn.Connect()
 		if !c.conn.WaitForStateChange(dialCtx, s) {
 			cancel()
 			err = dialCtx.Err()
