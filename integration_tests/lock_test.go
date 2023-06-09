@@ -1530,3 +1530,541 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	s.NoError(err)
 	s.Equal(v3, v)
 }
+
+func (s *testLockWithTiKVSuite) TestPessimisticLockAllowLockWithConflict() {
+	key := []byte("key")
+
+	txn0, err := s.store.Begin()
+	s.NoError(err)
+	txn0.SetPessimistic(true)
+	s.Nil(txn0.Set(key, key))
+	s.Nil(txn0.Commit(context.Background()))
+
+	// No conflict cases
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			txn, err := s.store.Begin()
+			s.NoError(err)
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+			if checkExistence || returnValues {
+				s.Len(lockCtx.Values, 1)
+				s.True(lockCtx.Values[string(key)].Exists)
+			} else {
+				s.Len(lockCtx.Values, 0)
+			}
+			if returnValues {
+				s.Equal(key, lockCtx.Values[string(key)].Value)
+			} else {
+				s.Len(lockCtx.Values[string(key)].Value, 0)
+			}
+			s.Equal(uint64(0), lockCtx.Values[string(key)].LockedWithConflictTS)
+			s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
+
+			txn.DoneAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+
+	// Conflicting cases
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			// Make different values
+			value := []byte(fmt.Sprintf("value-%v-%v", returnValues, checkExistence))
+			txn0, err := s.store.Begin()
+			s.NoError(err)
+			txn0.SetPessimistic(true)
+			s.Nil(txn0.Set(key, value))
+
+			txn, err := s.store.Begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+
+			s.Nil(txn0.Commit(context.Background()))
+			s.Greater(txn0.GetCommitTS(), txn.StartTS())
+
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+
+			s.Equal(txn0.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+			v := lockCtx.Values[string(key)]
+			s.Equal(txn0.GetCommitTS(), v.LockedWithConflictTS)
+			s.True(v.Exists)
+			s.Equal(value, v.Value)
+
+			txn.CancelAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+}
+
+func (s *testLockWithTiKVSuite) TestPessimisticLockAllowLockWithConflictError() {
+	key := []byte("key")
+
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			// Another transaction locked the key.
+			txn0, err := s.store.Begin()
+			s.NoError(err)
+			txn0.SetPessimistic(true)
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn0.StartTS(), WaitStartTime: time.Now()}
+			s.Nil(txn0.LockKeys(context.Background(), lockCtx, key))
+
+			// Test key is locked
+			txn, err := s.store.Begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+			lockCtx = kv.NewLockCtx(txn.StartTS(), 10, time.Now())
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			err = txn.LockKeys(context.Background(), lockCtx, key)
+			s.NotNil(err)
+			s.Equal(tikverr.ErrLockWaitTimeout.Error(), err.Error())
+			s.Equal([]string{}, txn.GetAggressiveLockingKeys())
+
+			// Abort the blocking transaction.
+			s.Nil(txn0.Rollback())
+
+			// Test region error
+			s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("PessimisticLockNotLeader")`))
+			err = txn.LockKeys(context.Background(), lockCtx, key)
+			s.Nil(err)
+			s.Nil(failpoint.Disable("tikvclient/tikvStoreSendReqResult"))
+			s.Equal([]string{"key"}, txn.GetAggressiveLockingKeys())
+			txn.CancelAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+}
+
+func (s *testLockWithTiKVSuite) TestAggressiveLocking() {
+	for _, finalIsDone := range []bool{false, true} {
+		txn, err := s.store.Begin()
+		s.NoError(err)
+		txn.SetPessimistic(true)
+		s.False(txn.IsInAggressiveLockingMode())
+
+		// Lock some keys in normal way.
+		lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+		s.checkIsKeyLocked([]byte("k1"), true)
+		s.checkIsKeyLocked([]byte("k2"), true)
+
+		// Enter aggressive locking mode and lock some keys.
+		txn.StartAggressiveLocking()
+		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		for _, key := range []string{"k2", "k3", "k4"} {
+			s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte(key)))
+			s.checkIsKeyLocked([]byte(key), true)
+		}
+		s.True(!txn.IsInAggressiveLockingStage([]byte("k2")))
+		s.True(txn.IsInAggressiveLockingStage([]byte("k3")))
+		s.True(txn.IsInAggressiveLockingStage([]byte("k4")))
+
+		// Retry and change some of the keys to be locked.
+		txn.RetryAggressiveLocking(context.Background())
+		s.checkIsKeyLocked([]byte("k1"), true)
+		s.checkIsKeyLocked([]byte("k2"), true)
+		s.checkIsKeyLocked([]byte("k3"), true)
+		s.checkIsKeyLocked([]byte("k4"), true)
+		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+		s.checkIsKeyLocked([]byte("k4"), true)
+		s.checkIsKeyLocked([]byte("k5"), true)
+
+		// Retry again, then the unnecessary locks acquired in the previous stage should be released.
+		txn.RetryAggressiveLocking(context.Background())
+		s.checkIsKeyLocked([]byte("k1"), true)
+		s.checkIsKeyLocked([]byte("k2"), true)
+		s.checkIsKeyLocked([]byte("k3"), false)
+		s.checkIsKeyLocked([]byte("k4"), true)
+		s.checkIsKeyLocked([]byte("k5"), true)
+
+		// Lock some different keys again and then done or cancel.
+		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+
+		if finalIsDone {
+			txn.DoneAggressiveLocking(context.Background())
+			time.Sleep(time.Millisecond * 50)
+			s.checkIsKeyLocked([]byte("k1"), true)
+			s.checkIsKeyLocked([]byte("k2"), true)
+			s.checkIsKeyLocked([]byte("k3"), false)
+			s.checkIsKeyLocked([]byte("k4"), false)
+			s.checkIsKeyLocked([]byte("k5"), true)
+			s.checkIsKeyLocked([]byte("k6"), true)
+		} else {
+			txn.CancelAggressiveLocking(context.Background())
+			time.Sleep(time.Millisecond * 50)
+			s.checkIsKeyLocked([]byte("k1"), true)
+			s.checkIsKeyLocked([]byte("k2"), true)
+			s.checkIsKeyLocked([]byte("k3"), false)
+			s.checkIsKeyLocked([]byte("k4"), false)
+			s.checkIsKeyLocked([]byte("k5"), false)
+			s.checkIsKeyLocked([]byte("k6"), false)
+		}
+
+		s.NoError(txn.Rollback())
+	}
+}
+
+func (s *testLockWithTiKVSuite) TestAggressiveLockingInsert() {
+	txn0, err := s.store.Begin()
+	s.NoError(err)
+	s.NoError(txn0.Set([]byte("k1"), []byte("v1")))
+	s.NoError(txn0.Set([]byte("k3"), []byte("v3")))
+	s.NoError(txn0.Set([]byte("k6"), []byte("v6")))
+	s.NoError(txn0.Set([]byte("k8"), []byte("v8")))
+	s.NoError(txn0.Commit(context.Background()))
+
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	txn.SetPessimistic(true)
+
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitReturnValues(2)
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+	s.NoError(txn.Set([]byte("k5"), []byte("v5")))
+	s.NoError(txn.Delete([]byte("k6")))
+
+	insertPessimisticLock := func(lockCtx *kv.LockCtx, key string) error {
+		txn.GetMemBuffer().UpdateFlags([]byte(key), kv.SetPresumeKeyNotExists)
+		if lockCtx == nil {
+			lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		}
+		return txn.LockKeys(context.Background(), lockCtx, []byte(key))
+	}
+
+	mustAlreadyExist := func(err error) {
+		if _, ok := errors.Cause(err).(*tikverr.ErrKeyExist); !ok {
+			s.Fail(fmt.Sprintf("expected KeyExist error, but got: %+q", err))
+		}
+	}
+
+	txn.StartAggressiveLocking()
+	// Already-locked before aggressive locking.
+	mustAlreadyExist(insertPessimisticLock(nil, "k1"))
+	s.NoError(insertPessimisticLock(nil, "k2"))
+	// Acquiring new locks normally.
+	mustAlreadyExist(insertPessimisticLock(nil, "k3"))
+	s.NoError(insertPessimisticLock(nil, "k4"))
+	// The key added or deleted in the same transaction before entering aggressive locking.
+	// Since TiDB can detect it before invoking LockKeys, client-go actually didn't handle this case for now (no matter
+	// if in aggressive locking or not). So skip this test case here, and it can be uncommented if someday client-go
+	// supports such check.
+	// mustAlreadyExist(insertPessimisticLock(nil, "k5"))
+	// s.NoError(insertPessimisticLock(nil, "k6"))
+
+	// Locked with conflict and then do pessimistic retry.
+	txn2, err := s.store.Begin()
+	s.NoError(err)
+	s.NoError(txn2.Set([]byte("k7"), []byte("v7")))
+	s.NoError(txn2.Delete([]byte("k8")))
+	s.NoError(txn2.Commit(context.Background()))
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	err = insertPessimisticLock(lockCtx, "k7")
+	s.IsType(errors.Cause(err), &tikverr.ErrWriteConflict{})
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(insertPessimisticLock(lockCtx, "k8"))
+	s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+	s.Equal(txn2.GetCommitTS(), lockCtx.Values["k8"].LockedWithConflictTS)
+	// Update forUpdateTS to simulate a pessimistic retry.
+	newForUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.Nil(err)
+	s.GreaterOrEqual(newForUpdateTS, txn2.GetCommitTS())
+	lockCtx = &kv.LockCtx{ForUpdateTS: newForUpdateTS, WaitStartTime: time.Now()}
+	mustAlreadyExist(insertPessimisticLock(lockCtx, "k7"))
+	s.NoError(insertPessimisticLock(lockCtx, "k8"))
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+}
+
+func (s *testLockWithTiKVSuite) TestAggressiveLockingLockOnlyIfExists() {
+	// txn conflicts with txn0, key exists
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	txn.SetPessimistic(true)
+
+	txn0, err := s.store.Begin()
+	s.NoError(err)
+	s.NoError(txn0.Set([]byte("k1"), []byte("v1")))
+	s.NoError(txn0.Commit(context.Background()))
+	txn0CommitTS := txn0.GetCommitTS()
+
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.True(lockCtx.Values["k1"].Exists)
+	s.False(lockCtx.Values["k1"].AlreadyLocked)
+	s.Equal(lockCtx.Values["k1"].Value, []byte("v1"))
+	s.Equal(lockCtx.Values["k1"].LockedWithConflictTS, txn0CommitTS)
+	s.Equal(txn.GetAggressiveLockingKeys(), []string{"k1"})
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+
+	// txn conflicts with txn0, key doesn't exist. Returns WriteConflict error.
+	txn, err = s.store.Begin()
+	s.NoError(err)
+	txn.SetPessimistic(true)
+
+	txn0, err = s.store.Begin()
+	s.NoError(err)
+	s.NoError(txn0.Delete([]byte("k1")))
+	s.NoError(txn0.Commit(context.Background()))
+	txn0CommitTS = txn0.GetCommitTS()
+
+	txn.StartAggressiveLocking()
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
+	err = txn.LockKeys(context.Background(), lockCtx, []byte("k1"))
+	s.NotNil(err)
+	s.IsType(errors.Cause(err), &tikverr.ErrWriteConflict{})
+	s.NotContains(lockCtx.Values, "k1")
+	s.Equal(txn.GetAggressiveLockingKeys(), []string{})
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+}
+
+func (s *testLockWithTiKVSuite) getLockInfo(key []byte) *kvrpcpb.LockInfo {
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	err = txn.Set(key, key)
+	s.Nil(err)
+	committer, err := txn.NewCommitter(1)
+	s.Nil(err)
+	bo := tikv.NewBackofferWithVars(context.Background(), 5000, nil)
+	loc, err := s.store.GetRegionCache().LocateKey(bo, key)
+	s.Nil(err)
+	req := committer.BuildPrewriteRequest(loc.Region.GetID(), loc.Region.GetConfVer(), loc.Region.GetVer(), committer.GetMutations().Slice(0, 1), 1)
+	resp, err := s.store.SendReq(bo, req, loc.Region, 5000)
+	s.Nil(err)
+	s.NotNil(resp.Resp)
+	keyErrs := (resp.Resp.(*kvrpcpb.PrewriteResponse)).Errors
+	s.Len(keyErrs, 1)
+	locked := keyErrs[0].Locked
+	s.NotNil(locked)
+	return locked
+}
+
+func (s *testLockWithTiKVSuite) TestAggressiveLockingSwitchPrimary() {
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	txn.SetPessimistic(true)
+	checkPrimary := func(key string, expectedPrimary string) {
+		lockInfo := s.getLockInfo([]byte(key))
+		s.Equal(kvrpcpb.Op_PessimisticLock, lockInfo.LockType)
+		s.Equal(expectedPrimary, string(lockInfo.PrimaryLock))
+	}
+
+	forUpdateTS := txn.StartTS()
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	checkPrimary("k1", "k1")
+	checkPrimary("k2", "k1")
+
+	// Primary not changed.
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	checkPrimary("k1", "k1")
+	checkPrimary("k3", "k1")
+
+	// Primary changed and is not in the set of previously locked keys.
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	checkPrimary("k4", "k4")
+	checkPrimary("k5", "k4")
+	// Previously locked keys that are not in the most recent aggressive locking stage will be released.
+	s.checkIsKeyLocked([]byte("k2"), false)
+
+	// Primary changed and is in the set of previously locked keys.
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+	checkPrimary("k5", "k5")
+	checkPrimary("k6", "k5")
+	s.checkIsKeyLocked([]byte("k1"), false)
+	s.checkIsKeyLocked([]byte("k3"), false)
+
+	// Primary changed and is locked *before* the previous aggressive locking stage (suppose it's the n-th retry,
+	// the expected primary is locked during the (n-2)-th retry).
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k7")))
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	checkPrimary("k5", "k6")
+	checkPrimary("k6", "k6")
+
+	txn.CancelAggressiveLocking(context.Background())
+	// Check all released.
+	for i := 0; i < 6; i++ {
+		key := []byte{byte('k'), byte('1') + byte(i)}
+		s.checkIsKeyLocked(key, false)
+	}
+	s.NoError(txn.Rollback())
+
+	// Also test the primary-switching logic won't misbehave when the primary is already selected before entering
+	// aggressive locking.
+	txn, err = s.store.Begin()
+	txn.SetPessimistic(true)
+	forUpdateTS = txn.StartTS()
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+	checkPrimary("k1", "k1")
+	checkPrimary("k2", "k1")
+
+	txn.StartAggressiveLocking()
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	checkPrimary("k2", "k1")
+	checkPrimary("k3", "k1")
+
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
+	checkPrimary("k3", "k1")
+	checkPrimary("k4", "k1")
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.checkIsKeyLocked([]byte("k1"), true)
+	s.checkIsKeyLocked([]byte("k2"), true)
+	s.checkIsKeyLocked([]byte("k3"), false)
+	s.checkIsKeyLocked([]byte("k4"), false)
+	s.NoError(txn.Rollback())
+	s.checkIsKeyLocked([]byte("k1"), false)
+	s.checkIsKeyLocked([]byte("k2"), false)
+
+}
+
+func (s *testLockWithTiKVSuite) TestAggressiveLockingLoadValueOptionChanges() {
+	txn0, err := s.store.Begin()
+	s.NoError(err)
+	s.NoError(txn0.Set([]byte("k2"), []byte("v2")))
+	s.NoError(txn0.Commit(context.Background()))
+
+	for _, firstAttemptLockedWithConflict := range []bool{false, true} {
+		txn, err := s.store.Begin()
+		s.NoError(err)
+		txn.SetPessimistic(true)
+
+		// Make the primary deterministic to avoid the following test code involves primary re-selecting logic.
+		lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k0")))
+
+		forUpdateTS := txn.StartTS()
+		txn.StartAggressiveLocking()
+		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+
+		var txn2 transaction.TxnProbe
+		if firstAttemptLockedWithConflict {
+			txn2, err = s.store.Begin()
+			s.NoError(err)
+			s.NoError(txn2.Delete([]byte("k1")))
+			s.NoError(txn2.Set([]byte("k2"), []byte("v2")))
+			s.NoError(txn2.Commit(context.Background()))
+		}
+
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+
+		if firstAttemptLockedWithConflict {
+			s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+			s.Equal(txn2.GetCommitTS(), lockCtx.Values["k1"].LockedWithConflictTS)
+			s.Equal(txn2.GetCommitTS(), lockCtx.Values["k2"].LockedWithConflictTS)
+		}
+
+		if firstAttemptLockedWithConflict {
+			forUpdateTS = txn2.GetCommitTS() + 1
+		} else {
+			forUpdateTS++
+		}
+		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+		lockCtx.InitCheckExistence(2)
+		txn.RetryAggressiveLocking(context.Background())
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
+		s.Equal(false, lockCtx.Values["k1"].Exists)
+		s.Equal(true, lockCtx.Values["k2"].Exists)
+
+		forUpdateTS++
+		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+		lockCtx.InitReturnValues(2)
+		txn.RetryAggressiveLocking(context.Background())
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
+		s.Equal(false, lockCtx.Values["k1"].Exists)
+		s.Equal(true, lockCtx.Values["k2"].Exists)
+		s.Equal([]byte("v2"), lockCtx.Values["k2"].Value)
+
+		txn.CancelAggressiveLocking(context.Background())
+		s.NoError(txn.Rollback())
+	}
+}
+
+func (s *testLockWithTiKVSuite) TestAggressiveLockingExitIfInapplicable() {
+	txn, err := s.store.Begin()
+	s.NoError(err)
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	s.True(txn.IsInAggressiveLockingMode())
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	s.True(txn.IsInAggressiveLockingMode())
+
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3"), []byte("k4")))
+	s.False(txn.IsInAggressiveLockingMode())
+	s.checkIsKeyLocked([]byte("k1"), false)
+	s.checkIsKeyLocked([]byte("k2"), true)
+	s.checkIsKeyLocked([]byte("k3"), true)
+	s.checkIsKeyLocked([]byte("k4"), true)
+
+	s.NoError(txn.Rollback())
+}
+
