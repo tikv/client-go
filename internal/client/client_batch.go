@@ -551,7 +551,9 @@ func (c *batchCommandsClient) waitConnReady() (err error) {
 	dialCtx, cancel := context.WithTimeout(context.Background(), c.dialTimeout)
 	// Trigger idle connection to reconnection
 	// Put it outside loop to avoid unnecessary reconnecting.
-	c.conn.Connect()
+	if c.conn.GetState() == connectivity.Idle {
+		c.conn.Connect()
+	}
 	for {
 		s := c.conn.GetState()
 		if s == connectivity.Ready {
