@@ -549,14 +549,15 @@ func (c *batchCommandsClient) waitConnReady() (err error) {
 		metrics.TiKVBatchClientWaitEstablish.Observe(time.Since(start).Seconds())
 	}()
 	dialCtx, cancel := context.WithTimeout(context.Background(), c.dialTimeout)
+	// Trigger idle connection to reconnection
+	// Put it outside loop to avoid unnecessary reconnecting.
+	c.conn.Connect()
 	for {
 		s := c.conn.GetState()
 		if s == connectivity.Ready {
 			cancel()
 			break
 		}
-		// Trigger idle connection to reconnection
-		c.conn.Connect()
 		if !c.conn.WaitForStateChange(dialCtx, s) {
 			cancel()
 			err = dialCtx.Err()
