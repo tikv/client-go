@@ -541,7 +541,8 @@ func (c *batchCommandsClient) failPendingRequests(err error) {
 }
 
 func (c *batchCommandsClient) waitConnReady() (err error) {
-	if c.conn.GetState() == connectivity.Ready {
+	state := c.conn.GetState()
+	if state == connectivity.Ready {
 		return
 	}
 	start := time.Now()
@@ -551,7 +552,7 @@ func (c *batchCommandsClient) waitConnReady() (err error) {
 	dialCtx, cancel := context.WithTimeout(context.Background(), c.dialTimeout)
 	// Trigger idle connection to reconnection
 	// Put it outside loop to avoid unnecessary reconnecting.
-	if c.conn.GetState() == connectivity.Idle {
+	if state == connectivity.Idle {
 		c.conn.Connect()
 	}
 	for {
