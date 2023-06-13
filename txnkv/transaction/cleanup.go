@@ -73,6 +73,7 @@ func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Ba
 		RequestSource:          c.txn.GetRequestSource(),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: c.resourceGroupName,
+			IsBackground:      c.txn.IsBackground(),
 		},
 	})
 	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {

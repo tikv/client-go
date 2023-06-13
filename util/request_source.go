@@ -23,6 +23,9 @@ const (
 	InternalTxnOthers = "others"
 	// InternalTxnGC is the type of GC txn.
 	InternalTxnGC = "gc"
+	// InternalTxnTools is the type of tools usage of TiDB.
+	// Do not classify different tools by now.
+	InternalTxnTools = "tools"
 	// InternalTxnMeta is the type of the miscellaneous meta usage.
 	InternalTxnMeta = InternalTxnOthers
 )
@@ -50,6 +53,12 @@ func (r *RequestSource) SetRequestSourceInternal(internal bool) {
 // SetRequestSourceType sets the type of the request source.
 func (r *RequestSource) SetRequestSourceType(tp string) {
 	r.RequestSourceType = tp
+}
+
+// IsBackground checks whether the request is a background job.
+func (r *RequestSource) IsBackground() bool {
+	// TODO: supports set as background by user in the future.
+	return r.RequestSourceType == InternalTxnTools
 }
 
 // WithInternalSourceType create context with internal source.
@@ -89,6 +98,15 @@ func RequestSourceFromCtx(ctx context.Context) string {
 		return rs.GetRequestSource()
 	}
 	return SourceUnknown
+}
+
+// IsBackgroundFromCtx checks whether the request is a background job.
+func IsBackgroundFromCtx(ctx context.Context) bool {
+	if source := ctx.Value(RequestSourceKey); source != nil {
+		rs := source.(RequestSource)
+		return rs.IsBackground()
+	}
+	return false
 }
 
 // IsInternalRequest returns the type of the request source.

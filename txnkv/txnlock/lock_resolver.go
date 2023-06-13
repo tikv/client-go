@@ -301,13 +301,13 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			Status: status,
 		})
 	}
-
 	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{TxnInfos: listTxnInfos},
 		kvrpcpb.Context{
 			// TODO: how to pass the `start_ts`	here?
 			RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
+				IsBackground:      util.IsBackgroundFromCtx(bo.GetCtx()),
 			},
 		},
 	)
@@ -747,6 +747,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
+			IsBackground:      util.IsBackgroundFromCtx(bo.GetCtx()),
 		},
 	})
 	for {
@@ -899,6 +900,7 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
+			IsBackground:      util.IsBackgroundFromCtx(bo.GetCtx()),
 		},
 	})
 	metrics.LockResolverCountWithQueryCheckSecondaryLocks.Inc()
@@ -1057,6 +1059,7 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
+			IsBackground:      util.IsBackgroundFromCtx(bo.GetCtx()),
 		},
 	})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -1137,6 +1140,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
+				IsBackground:      util.IsBackgroundFromCtx(bo.GetCtx()),
 			},
 		})
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
@@ -1195,6 +1199,7 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) err
 		req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, pessimisticRollbackReq, kvrpcpb.Context{
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: util.ResourceGroupNameFromCtx(bo.GetCtx()),
+				IsBackground:      util.IsBackgroundFromCtx(bo.GetCtx()),
 			},
 		})
 		req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
