@@ -713,7 +713,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 			require.Fail(t, "wait batch client reconnect timeout")
 		}
 		logutil.BgLogger().Info("goroutine count", zap.Int("count", runtime.NumGoroutine()))
-		time.Sleep(time.Millisecond * 50)
+		time.Sleep(time.Millisecond * 100)
 	}
 
 	// send some request, it should be success again.
