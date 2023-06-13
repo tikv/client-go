@@ -908,7 +908,7 @@ func (s *KVSnapshot) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.interceptor == nil {
-		s.SetRPCInterceptor(it)
+		s.mu.interceptor = it
 		return
 	}
 	s.mu.interceptor = interceptor.ChainRPCInterceptors(s.mu.interceptor, it)
