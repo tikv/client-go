@@ -56,7 +56,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 		}
 	}
 	if finalInterceptor != nil {
-		return finalInterceptor(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+		return finalInterceptor.Wrap(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			return r.Client.SendRequest(ctx, target, req, timeout)
 		})(addr, req)
 	}
@@ -102,7 +102,7 @@ func buildResourceControlInterceptor(
 	// Make the request info.
 	reqInfo := resourcecontrol.MakeRequestInfo(req)
 	// Build the interceptor.
-	return func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+	interceptFn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			consumption, penalty, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
@@ -122,4 +122,5 @@ func buildResourceControlInterceptor(
 			return resp, err
 		}
 	}
+	return interceptor.NewRPCInterceptor("resource_control", interceptFn)
 }

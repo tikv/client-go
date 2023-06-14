@@ -37,6 +37,8 @@ package client
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,7 +55,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 )
@@ -637,5 +641,84 @@ func TestTraceExecDetails(t *testing.T) {
 			info.addTo(tracer.StartSpan("root"), baseTime)
 			assert.Equal(t, tt.traceOut, fmtMockTracer(tracer))
 		})
+	}
+}
+
+func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 128
+	})()
+
+	server, port := startMockTikvService()
+	require.True(t, port > 0)
+	require.True(t, server.IsRunning())
+	addr := server.addr
+	client := NewRPCClient()
+	defer func() {
+		err := client.Close()
+		require.NoError(t, err)
+		server.Stop()
+	}()
+
+	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
+	conn, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	// send some request, it should be success.
+	for i := 0; i < 100; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		require.NoError(t, err)
+	}
+
+	logutil.BgLogger().Info("stop mock tikv server")
+	server.Stop()
+	require.False(t, server.IsRunning())
+
+	// send some request, it should be failed since server is down.
+	for i := 0; i < 200; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		require.Error(t, err)
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
+		grpcConn := conn.Get()
+		require.NotNil(t, grpcConn)
+		logutil.BgLogger().Info("conn state",
+			zap.String("state", grpcConn.GetState().String()),
+			zap.Int("idx", i),
+			zap.Int("goroutine-count", runtime.NumGoroutine()))
+	}
+
+	logutil.BgLogger().Info("restart mock tikv server")
+	server.Start(addr)
+	require.True(t, server.IsRunning())
+	require.Equal(t, addr, server.addr)
+
+	// Wait batch client to auto reconnect.
+	start := time.Now()
+	for {
+		grpcConn := conn.Get()
+		require.NotNil(t, grpcConn)
+		var cli *batchCommandsClient
+		for i := range conn.batchConn.batchCommandsClients {
+			if conn.batchConn.batchCommandsClients[i].tryLockForSend() {
+				cli = conn.batchConn.batchCommandsClients[i]
+				break
+			}
+		}
+		// Wait for the connection to be ready,
+		if cli != nil {
+			cli.unlockForSend()
+			break
+		}
+		if time.Since(start) > time.Second*5 {
+			// It shouldn't take too long for batch_client to reconnect.
+			require.Fail(t, "wait batch client reconnect timeout")
+		}
+		logutil.BgLogger().Info("goroutine count", zap.Int("count", runtime.NumGoroutine()))
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	// send some request, it should be success again.
+	for i := 0; i < 100; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		require.NoError(t, err)
 	}
 }

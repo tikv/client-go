@@ -38,6 +38,7 @@
 package unionstore
 
 import (
+	rand2 "crypto/rand"
 	"encoding/binary"
 	"math/rand"
 	"testing"
@@ -55,7 +56,7 @@ func TestRandom(t *testing.T) {
 	keys := make([][]byte, cnt)
 	for i := range keys {
 		keys[i] = make([]byte, rand.Intn(19)+1)
-		rand.Read(keys[i])
+		rand2.Read(keys[i])
 	}
 
 	p1 := newMemDB()
@@ -77,7 +78,7 @@ func TestRandom(t *testing.T) {
 			p2.Delete(k)
 		} else {
 			newValue := make([]byte, rand.Intn(19)+1)
-			rand.Read(newValue)
+			rand2.Read(newValue)
 			p1.Set(k, newValue)
 			_ = p2.Put(k, newValue)
 		}
@@ -106,7 +107,7 @@ func testRandomDeriveRecur(t *testing.T, db *MemDB, golden *leveldb.DB, depth in
 		keys = make([][]byte, rand.Intn(512)+512)
 		for i := range keys {
 			keys[i] = make([]byte, rand.Intn(19)+1)
-			rand.Read(keys[i])
+			rand2.Read(keys[i])
 		}
 	} else {
 		keys = make([][]byte, 512)
@@ -119,7 +120,7 @@ func testRandomDeriveRecur(t *testing.T, db *MemDB, golden *leveldb.DB, depth in
 	vals := make([][]byte, len(keys))
 	for i := range vals {
 		vals[i] = make([]byte, rand.Intn(255)+1)
-		rand.Read(vals[i])
+		rand2.Read(vals[i])
 	}
 
 	h := db.Staging()
