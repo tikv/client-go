@@ -248,7 +248,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			RequestSource:    s.snapshot.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.snapshot.mu.resourceGroupName,
-				IsBackground:      s.snapshot.IsBackground(),
+				IsBackground:      s.snapshot.RunInBackground,
 			},
 			BusyThresholdMs: uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 		})

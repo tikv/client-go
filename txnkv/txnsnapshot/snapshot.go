@@ -401,7 +401,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			RequestSource:    s.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.mu.resourceGroupName,
-				IsBackground:      s.IsBackground(),
+				IsBackground:      s.RunInBackground,
 			},
 			BusyThresholdMs: uint32(busyThresholdMs),
 		})
@@ -622,7 +622,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			RequestSource:    s.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.mu.resourceGroupName,
-				IsBackground:      s.IsBackground(),
+				IsBackground:      s.RunInBackground,
 			},
 			BusyThresholdMs: uint32(s.mu.busyThreshold.Milliseconds()),
 		})

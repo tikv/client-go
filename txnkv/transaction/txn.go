@@ -1450,3 +1450,8 @@ func (txn *KVTxn) SetRequestSourceInternal(internal bool) {
 func (txn *KVTxn) SetRequestSourceType(tp string) {
 	txn.RequestSource.SetRequestSourceType(tp)
 }
+
+// SetRunInBackground sets whether the request runs in background.
+func (txn *KVTxn) SetRunInBackground(runInBackground bool) {
+	txn.RequestSource.SetRunInBackground(runInBackground)
+}

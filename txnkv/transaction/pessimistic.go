@@ -143,7 +143,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			RequestSource:          c.txn.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: c.resourceGroupName,
-				IsBackground:      c.txn.IsBackground(),
+				IsBackground:      c.txn.RunInBackground,
 			},
 		},
 	)

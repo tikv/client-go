@@ -43,6 +43,7 @@ const (
 type RequestSource struct {
 	RequestSourceInternal bool
 	RequestSourceType     string
+	RunInBackground       bool
 }
 
 // SetRequestSourceInternal sets the scope of the request source.
@@ -55,18 +56,29 @@ func (r *RequestSource) SetRequestSourceType(tp string) {
 	r.RequestSourceType = tp
 }
 
-// IsBackground checks whether the request is a background job.
-func (r *RequestSource) IsBackground() bool {
-	// TODO: supports set as background by user in the future.
-	return r.RequestSourceType == InternalTxnTools
+// SetRunInBackground sets the request to run in background.
+func (r *RequestSource) SetRunInBackground(background bool) {
+	r.RunInBackground = background
+}
+
+// RequestSourceOption is used to set the request source.
+type RequestSourceOption func(*RequestSource)
+
+// RequestRunInBackground sets the request to run in background.
+var RequestRunInBackgrounOption = func(rs *RequestSource) {
+	rs.SetRunInBackground(true)
 }
 
 // WithInternalSourceType create context with internal source.
-func WithInternalSourceType(ctx context.Context, source string) context.Context {
-	return context.WithValue(ctx, RequestSourceKey, RequestSource{
+func WithInternalSourceType(ctx context.Context, source string, opts ...RequestSourceOption) context.Context {
+	rs := &RequestSource{
 		RequestSourceInternal: true,
 		RequestSourceType:     source,
-	})
+	}
+	for _, opt := range opts {
+		opt(rs)
+	}
+	return context.WithValue(ctx, RequestSourceKey, *rs)
 }
 
 // IsRequestSourceInternal checks whether the input request source type is internal type.
@@ -104,7 +116,7 @@ func RequestSourceFromCtx(ctx context.Context) string {
 func IsBackgroundFromCtx(ctx context.Context) bool {
 	if source := ctx.Value(RequestSourceKey); source != nil {
 		rs := source.(RequestSource)
-		return rs.IsBackground()
+		return rs.RunInBackground
 	}
 	return false
 }

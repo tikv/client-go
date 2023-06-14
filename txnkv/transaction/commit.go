@@ -86,7 +86,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 		RequestSource:          c.txn.GetRequestSource(),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: c.resourceGroupName,
-			IsBackground:      c.txn.IsBackground(),
+			IsBackground:      c.txn.RunInBackground,
 		},
 	})
 	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
