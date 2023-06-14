@@ -46,7 +46,6 @@ require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
-	github.com/influxdata/tdigest v0.0.1 // indirect
 	github.com/klauspost/compress v1.16.5 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
@@ -106,6 +105,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/tikv/client-go/v2 => ../
-
-replace github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+replace (
+	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+	github.com/pingcap/tidb => github.com/glorv/tidb v1.1.0-beta.0.20230609065903-a93eafb17c59
+	github.com/pingcap/tidb/parser => github.com/glorv/tidb/parser v0.0.0-20230609065903-a93eafb17c59
+	github.com/tikv/client-go/v2 => ../
+)

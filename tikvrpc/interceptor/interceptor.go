@@ -42,7 +42,7 @@ import (
 //	    }
 //	}
 //
-// txn.SetRPCInterceptor(LogInterceptor)
+// txn.SetRPCInterceptor(NewRPCInterceptor("log", LogInterceptor))
 // ```
 //
 // Or you want to inject some dependent modules:
@@ -59,7 +59,7 @@ import (
 //	    }
 //	}
 //
-// txn.SetRPCInterceptor(GetLogInterceptor())
+// txn.SetRPCInterceptor(NewRPCInterceptor("log", GetLogInterceptor()))
 // ```
 //
 // NOTE: Interceptor calls may not correspond one-to-one with the underlying gRPC requests.
@@ -69,7 +69,33 @@ import (
 //
 //	tikv/kv.go#NewKVStore()
 //	internal/client/client_interceptor.go#SendRequest.
-type RPCInterceptor func(next RPCInterceptorFunc) RPCInterceptorFunc
+type RPCInterceptor interface {
+	// Name returns the name of this interceptor
+	Name() string
+	// Wrap returns a callable interecpt function.
+	Wrap(next RPCInterceptorFunc) RPCInterceptorFunc
+}
+
+type rpcInterceptorWrapper struct {
+	name string
+	fn   func(next RPCInterceptorFunc) RPCInterceptorFunc
+}
+
+func (i *rpcInterceptorWrapper) Name() string {
+	return i.name
+}
+
+func (i *rpcInterceptorWrapper) Wrap(next RPCInterceptorFunc) RPCInterceptorFunc {
+	return i.fn(next)
+}
+
+// NewRPCInterceptor build a RPCInterceptor by its name and intercept func.
+func NewRPCInterceptor(name string, fn func(next RPCInterceptorFunc) RPCInterceptorFunc) RPCInterceptor {
+	return &rpcInterceptorWrapper{
+		name: name,
+		fn:   fn,
+	}
+}
 
 // RPCInterceptorFunc is a callable function used to initiate a request to TiKV.
 // It is mainly used as the parameter and return value of RPCInterceptor.
@@ -79,6 +105,9 @@ type RPCInterceptorFunc func(target string, req *tikvrpc.Request) (*tikvrpc.Resp
 // Multiple interceptors will be executed in the order of link time, but are more
 // similar to the onion model: The earlier the interceptor is executed, the later
 // it will return.
+//
+// If multiple interceptors with the same name is added to the chain, only the last
+// will be kept.
 //
 // We can use RPCInterceptorChain like this:
 // ```
@@ -99,7 +128,8 @@ type RPCInterceptorFunc func(target string, req *tikvrpc.Request) (*tikvrpc.Resp
 //	    }
 //	}
 //
-// txn.SetRPCInterceptor(NewRPCInterceptorChain().Link(Interceptor1).Link(Interceptor2).Build())
+// txn.SetRPCInterceptor(NewRPCInterceptorChain().Link(NewRPCInterceptor("log1", Interceptor1)).Link(NewRPCInterceptor("log2", Interceptor2)).Build())
+//
 // ```
 //
 // Then every time an RPC request is initiated, the following text will be printed:
@@ -114,6 +144,11 @@ type RPCInterceptorChain struct {
 	chain []RPCInterceptor
 }
 
+// return the number of sub interceptors, used for test.
+func (c *RPCInterceptorChain) Len() int {
+	return len(c.chain)
+}
+
 // NewRPCInterceptorChain creates an empty RPCInterceptorChain.
 func NewRPCInterceptorChain() *RPCInterceptorChain {
 	return &RPCInterceptorChain{}
@@ -121,30 +156,52 @@ func NewRPCInterceptorChain() *RPCInterceptorChain {
 
 // Link is used to link the next RPCInterceptor.
 // Multiple interceptors will be executed in the order of link time.
+// If multiple interceptors with the same name is added to the chain,
+// only the last is kept.
 func (c *RPCInterceptorChain) Link(it RPCInterceptor) *RPCInterceptorChain {
+	if chain, ok := it.(*RPCInterceptorChain); ok {
+		for _, i := range chain.chain {
+			c.Link(i)
+		}
+		return c
+	}
+	for i := range c.chain {
+		if c.chain[i].Name() == it.Name() {
+			c.chain = append(c.chain[:i], c.chain[i+1:]...)
+			break
+		}
+	}
 	c.chain = append(c.chain, it)
 	return c
 }
 
-// Build merges the previously linked interceptors into one.
-func (c *RPCInterceptorChain) Build() RPCInterceptor {
-	return func(next RPCInterceptorFunc) RPCInterceptorFunc {
-		for n := len(c.chain) - 1; n >= 0; n-- {
-			next = c.chain[n](next)
-		}
-		return next
+func (c *RPCInterceptorChain) Name() string {
+	return "interceptor-chain"
+}
+
+func (c *RPCInterceptorChain) Wrap(next RPCInterceptorFunc) RPCInterceptorFunc {
+	for n := len(c.chain) - 1; n >= 0; n-- {
+		next = c.chain[n].Wrap(next)
 	}
+	return next
 }
 
 // ChainRPCInterceptors chains multiple RPCInterceptors into one.
 // Multiple RPCInterceptors will be executed in the order of their parameters.
 // See RPCInterceptorChain for more information.
-func ChainRPCInterceptors(its ...RPCInterceptor) RPCInterceptor {
-	chain := NewRPCInterceptorChain()
-	for _, it := range its {
+func ChainRPCInterceptors(first RPCInterceptor, rest ...RPCInterceptor) RPCInterceptor {
+	var chain *RPCInterceptorChain
+	if ch, ok := first.(*RPCInterceptorChain); ok {
+		chain = ch
+	} else {
+		chain = NewRPCInterceptorChain()
+		chain.Link(first)
+	}
+
+	for _, it := range rest {
 		chain.Link(it)
 	}
-	return chain.Build()
+	return chain
 }
 
 type interceptorCtxKeyType struct{}
@@ -182,7 +239,7 @@ func NewMockInterceptorManager() *MockInterceptorManager {
 
 // CreateMockInterceptor creates an RPCInterceptor for testing.
 func (m *MockInterceptorManager) CreateMockInterceptor(name string) RPCInterceptor {
-	return func(next RPCInterceptorFunc) RPCInterceptorFunc {
+	fn := func(next RPCInterceptorFunc) RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			m.execLog = append(m.execLog, name)
 			atomic.AddInt32(&m.begin, 1)
@@ -190,6 +247,7 @@ func (m *MockInterceptorManager) CreateMockInterceptor(name string) RPCIntercept
 			return next(target, req)
 		}
 	}
+	return NewRPCInterceptor(name, fn)
 }
 
 // Reset clear all counters.
