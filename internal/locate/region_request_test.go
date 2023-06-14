@@ -403,6 +403,10 @@ func (s *mockTikvGrpcServer) DispatchMPPTask(context.Context, *mpp.DispatchTaskR
 	return nil, errors.New("unreachable")
 }
 
+func (s *mockTikvGrpcServer) ReportMPPTaskStatus(context.Context, *mpp.ReportTaskStatusRequest) (*mpp.ReportTaskStatusResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) IsAlive(context.Context, *mpp.IsAliveRequest) (*mpp.IsAliveResponse, error) {
 	return nil, errors.New("unreachable")
 }

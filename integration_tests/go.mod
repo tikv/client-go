@@ -6,7 +6,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230530111525-e4919c190b46
+	github.com/pingcap/kvproto v0.0.0-20230614060533-961f64db1b7b
 	github.com/pingcap/tidb v1.1.0-beta.0.20230428082552-991d99c1e0b9
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.2
