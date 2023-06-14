@@ -106,6 +106,9 @@ type RPCInterceptorFunc func(target string, req *tikvrpc.Request) (*tikvrpc.Resp
 // similar to the onion model: The earlier the interceptor is executed, the later
 // it will return.
 //
+// If multiple interceptors with the same name is added to the chain, only the last
+// will be kept.
+//
 // We can use RPCInterceptorChain like this:
 // ```
 //
@@ -125,7 +128,12 @@ type RPCInterceptorFunc func(target string, req *tikvrpc.Request) (*tikvrpc.Resp
 //	    }
 //	}
 //
-// txn.SetRPCInterceptor(NewRPCInterceptorChain().Link(Interceptor1).Link(Interceptor2).Build())
+// txn.SetRPCInterceptor(NewRPCInterceptorChain()
+//
+//	.Link(NewRPCInterceptor("log1", Interceptor1))
+//	.Link(NewRPCInterceptor("log2", Interceptor2))
+//	.Build())
+//
 // ```
 //
 // Then every time an RPC request is initiated, the following text will be printed:
@@ -152,6 +160,8 @@ func NewRPCInterceptorChain() *RPCInterceptorChain {
 
 // Link is used to link the next RPCInterceptor.
 // Multiple interceptors will be executed in the order of link time.
+// If multiple interceptors with the same name is added to the chain,
+// only the last is kept.
 func (c *RPCInterceptorChain) Link(it RPCInterceptor) *RPCInterceptorChain {
 	if chain, ok := it.(*RPCInterceptorChain); ok {
 		for _, i := range chain.chain {
