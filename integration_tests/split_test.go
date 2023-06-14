@@ -375,14 +375,14 @@ func (c *mockPDClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.Resource
 	return nil, 0, nil
 }
 
-func (c *mockPDClient) UpdateGCSafePointV2(ctx context.Context, ttl uint32, safePoint uint64) (uint64, error) {
-	return 0, nil
+func (c *mockPDClient) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
 }
 
 func (c *mockPDClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	return 0, nil
+	panic("unimplemented")
 }
 
 func (c *mockPDClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
-	return nil, nil
+	panic("unimplemented")
 }

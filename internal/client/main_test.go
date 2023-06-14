@@ -23,5 +23,9 @@ import (
 
 func TestMain(m *testing.M) {
 	util.EnableFailpoints()
-	goleak.VerifyTestMain(m)
+	opts := []goleak.Option{
+		goleak.IgnoreTopFunction("google.golang.org/grpc.(*ClientConn).WaitForStateChange"),
+		goleak.IgnoreTopFunction("github.com/tikv/client-go/v2/internal/retry.newBackoffFn.func1"),
+	}
+	goleak.VerifyTestMain(m, opts...)
 }

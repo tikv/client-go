@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
@@ -38,6 +39,8 @@ import (
 type server struct {
 	tikvpb.TikvServer
 	grpcServer *grpc.Server
+	addr       string
+	running    int64 // 0: not running, 1: running
 	// metaChecker check the metadata of each request. Now only requests
 	// which need redirection set it.
 	metaChecker struct {
@@ -106,32 +109,48 @@ func (s *server) checkMetadata(ctx context.Context) error {
 	return nil
 }
 
-func (s *server) Stop() {
-	s.grpcServer.Stop()
+func (s *server) IsRunning() bool {
+	return atomic.LoadInt64(&s.running) == 1
 }
 
-// Try to start a gRPC server and retrun the server instance and binded port.
-func startMockTikvService() (*server, int) {
+func (s *server) Stop() {
+	s.grpcServer.Stop()
+	atomic.StoreInt64(&s.running, 0)
+}
+
+func (s *server) Start(addr string) int {
+	if addr == "" {
+		addr = fmt.Sprintf("%s:%d", "127.0.0.1", 0)
+	}
 	port := -1
-	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", "127.0.0.1", 0))
+	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		logutil.BgLogger().Error("can't listen", zap.Error(err))
 		logutil.BgLogger().Error("can't start mock tikv service because no available ports")
-		return nil, port
+		return port
 	}
 	port = lis.Addr().(*net.TCPAddr).Port
 
-	server := &server{}
-	s := grpc.NewServer(grpc.ConnectionTimeout(time.Minute))
-	tikvpb.RegisterTikvServer(s, server)
-	server.grpcServer = s
+	grpcServer := grpc.NewServer(grpc.ConnectionTimeout(time.Minute))
+	tikvpb.RegisterTikvServer(grpcServer, s)
+	s.grpcServer = grpcServer
 	go func() {
-		if err = s.Serve(lis); err != nil {
+		if err = grpcServer.Serve(lis); err != nil {
 			logutil.BgLogger().Error(
 				"can't serve gRPC requests",
 				zap.Error(err),
 			)
 		}
 	}()
+	atomic.StoreInt64(&s.running, 1)
+	s.addr = fmt.Sprintf("%s:%d", "127.0.0.1", port)
+	logutil.BgLogger().Info("mock server started", zap.String("addr", s.addr))
+	return port
+}
+
+// Try to start a gRPC server and retrun the server instance and binded port.
+func startMockTikvService() (*server, int) {
+	server := &server{}
+	port := server.Start("")
 	return server, port
 }
