@@ -128,11 +128,7 @@ type RPCInterceptorFunc func(target string, req *tikvrpc.Request) (*tikvrpc.Resp
 //	    }
 //	}
 //
-// txn.SetRPCInterceptor(NewRPCInterceptorChain()
-//
-//	.Link(NewRPCInterceptor("log1", Interceptor1))
-//	.Link(NewRPCInterceptor("log2", Interceptor2))
-//	.Build())
+// txn.SetRPCInterceptor(NewRPCInterceptorChain().Link(NewRPCInterceptor("log1", Interceptor1)).Link(NewRPCInterceptor("log2", Interceptor2)).Build())
 //
 // ```
 //
