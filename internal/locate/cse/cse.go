@@ -224,8 +224,8 @@ type result struct {
 	index int
 }
 
-func mkOK(ok []*pdcore.RegionInfo) result {
-	return result{ok: ok}
+func mkOK(idx int, ok []*pdcore.RegionInfo) result {
+	return result{ok: ok, index: idx}
 }
 
 func mkErr(idx int, err error) result {
@@ -245,6 +245,11 @@ func (c *Client) fanout(ctx context.Context, tag, method, endpoint string, req a
 	}()
 
 	stores := c.getAliveTiKVStores()
+	ss := make([]string, 0, len(stores))
+	for _, s := range stores {
+		ss = append(ss, s.GetStatusAddress())
+	}
+	log.Info("sync region from", zap.Strings("stores", ss), zap.Uint64("req", reqID))
 	rchan := make(chan result, len(stores))
 	for i, s := range stores {
 		store := *s
@@ -313,7 +318,7 @@ func (c *Client) fanout(ctx context.Context, tag, method, endpoint string, req a
 					regionInfos = append(regionInfos, regionInfo)
 				}
 			}
-			rchan <- mkOK(regionInfos)
+			rchan <- mkOK(index, regionInfos)
 		})
 	}
 
@@ -334,7 +339,7 @@ func (c *Client) fanout(ctx context.Context, tag, method, endpoint string, req a
 			for _, regionInfo := range r.ok {
 				log.Info("sync region from cse",
 					zap.String("type", tag),
-					zap.Uint64("region-id", regionInfo.GetID()),
+					zap.String("region", regionInfo.GetMeta().String()),
 					zap.String("store", stores[r.index].StatusAddress),
 					zap.Uint64("req", reqID),
 				)
