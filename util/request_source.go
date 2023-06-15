@@ -64,8 +64,8 @@ func (r *RequestSource) SetRunInBackground(background bool) {
 // RequestSourceOption is used to set the request source.
 type RequestSourceOption func(*RequestSource)
 
-// RequestRunInBackground sets the request to run in background.
-var RequestRunInBackgrounOption = func(rs *RequestSource) {
+// RequestRunInBackgroundOption sets the request to run in background.
+var RequestRunInBackgroundOption = func(rs *RequestSource) {
 	rs.SetRunInBackground(true)
 }
 
@@ -132,9 +132,9 @@ type resourceGroupNameKeyType struct{}
 // ResourceGroupNameKey is used as the key of request source type in context.
 var resourceGroupNameKey = resourceGroupNameKeyType{}
 
-// WithResouceGroupName return a copy of the given context with a associated
-// reosurce group name.
-func WithResouceGroupName(ctx context.Context, groupName string) context.Context {
+// WithResourceGroupName return a copy of the given context with an associated
+// resource group name.
+func WithResourceGroupName(ctx context.Context, groupName string) context.Context {
 	return context.WithValue(ctx, resourceGroupNameKey, groupName)
 }
 
