@@ -33,12 +33,16 @@ var (
 var (
 	StoresRefreshInterval = time.Second * 5
 	SyncRegionTimeout     = time.Second * 2
-
-	reqIDKey = "cse-req-id"
 )
 
 var (
 	ErrRegionNotFound = errors.New("region not found")
+)
+
+type ctxKey string
+
+var (
+	reqIDKey ctxKey = "cse-req-id"
 )
 
 type store struct {
