@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -32,6 +33,8 @@ var (
 var (
 	StoresRefreshInterval = time.Second * 5
 	SyncRegionTimeout     = time.Second * 2
+
+	reqIDKey = "cse-req-id"
 )
 
 var (
@@ -233,6 +236,7 @@ func mkErr(idx int, err error) result {
 // Then, collect the region results, and merge them into a BTreeMap: RegionsInfo provided by the PD.
 // Finally, return the RegionsInfo.
 func (c *Client) fanout(ctx context.Context, tag, method, endpoint string, req any) (*pdcore.RegionsInfo, error) {
+	reqID := getReqID(ctx)
 	start := time.Now()
 	defer func() {
 		metrics.TiKVSyncRegionDuration.
@@ -317,12 +321,23 @@ func (c *Client) fanout(ctx context.Context, tag, method, endpoint string, req a
 	for i := 0; i < len(stores); i++ {
 		select {
 		case <-ctx.Done():
+			log.Warn("context canceled when syncing regions from cse",
+				zap.Error(ctx.Err()), zap.Uint64("req", reqID))
 			return nil, ctx.Err()
 		case r := <-rchan:
 			if err := r.err; err != nil {
-				log.Warn("failed to sync regions from cse", zap.Error(err), zap.String("store", stores[r.index].StatusAddress))
+				log.Warn("failed to sync regions from cse",
+					zap.Error(err),
+					zap.String("store", stores[r.index].StatusAddress),
+					zap.Uint64("req", reqID))
 			}
 			for _, regionInfo := range r.ok {
+				log.Info("sync region from cse",
+					zap.String("type", tag),
+					zap.Uint64("region-id", regionInfo.GetID()),
+					zap.String("store", stores[r.index].StatusAddress),
+					zap.Uint64("req", reqID),
+				)
 				regionsInfo.CheckAndPutRegion(regionInfo)
 			}
 		}
@@ -347,7 +362,20 @@ func mkPDRegions(regions ...*pdcore.RegionInfo) []*pd.Region {
 	return rs
 }
 
+func withReqID(ctx context.Context) context.Context {
+	return context.WithValue(ctx, reqIDKey, rand.Uint64())
+}
+
+func getReqID(ctx context.Context) uint64 {
+	if id, ok := ctx.Value(reqIDKey).(uint64); ok {
+		return id
+	}
+	return 0
+}
+
 func (c *Client) GetRegion(ctx context.Context, key []byte, _ ...pd.GetRegionOption) (*pd.Region, error) {
+	ctx = withReqID(ctx)
+	reqID := getReqID(ctx)
 	_, start, err := codec.DecodeBytes(key, nil)
 	if err != nil {
 		return nil, err
@@ -362,6 +390,9 @@ func (c *Client) GetRegion(ctx context.Context, key []byte, _ ...pd.GetRegionOpt
 	}
 	region := regionsInfo.GetRegionByKey(key)
 	if region == nil {
+		log.Warn("region not found",
+			zap.String("key", hex.EncodeToString(key)),
+			zap.Uint64("req", reqID))
 		return nil, ErrRegionNotFound
 	}
 	resp := mkPDRegions(region)[0]
@@ -369,6 +400,8 @@ func (c *Client) GetRegion(ctx context.Context, key []byte, _ ...pd.GetRegionOpt
 }
 
 func (c *Client) GetPrevRegion(ctx context.Context, key []byte, _ ...pd.GetRegionOption) (*pd.Region, error) {
+	ctx = withReqID(ctx)
+	reqID := getReqID(ctx)
 	_, start, err := codec.DecodeBytes(key, nil)
 	if err != nil {
 		return nil, err
@@ -386,12 +419,17 @@ func (c *Client) GetPrevRegion(ctx context.Context, key []byte, _ ...pd.GetRegio
 	}
 	region := regionsInfo.GetPrevRegionByKey(key)
 	if region == nil {
+		log.Warn("region not found",
+			zap.String("key", hex.EncodeToString(key)),
+			zap.Uint64("req", reqID))
 		return nil, ErrRegionNotFound
 	}
 	return mkPDRegions(region)[0], nil
 }
 
 func (c *Client) GetRegionByID(ctx context.Context, regionID uint64, _ ...pd.GetRegionOption) (*pd.Region, error) {
+	ctx = withReqID(ctx)
+	reqID := getReqID(ctx)
 	regionsInfo, err := c.fanout(ctx, "GetRegionByID", http.MethodGet, "sync_region_by_id", &SyncRegionByIDRequest{
 		RegionID: regionID,
 	})
@@ -400,12 +438,17 @@ func (c *Client) GetRegionByID(ctx context.Context, regionID uint64, _ ...pd.Get
 	}
 	region := regionsInfo.GetRegion(regionID)
 	if region == nil {
+		log.Warn("region not found",
+			zap.Uint64("id", regionID),
+			zap.Uint64("req", reqID))
 		return nil, ErrRegionNotFound
 	}
 	return mkPDRegions(region)[0], nil
 }
 
 func (c *Client) ScanRegions(ctx context.Context, startKey, endKey []byte, limit int) ([]*pd.Region, error) {
+	ctx = withReqID(ctx)
+	reqID := getReqID(ctx)
 	if limit <= 0 {
 		limit = 0
 	}
@@ -427,6 +470,10 @@ func (c *Client) ScanRegions(ctx context.Context, startKey, endKey []byte, limit
 	}
 	regions := regionsInfo.ScanRange(startKey, endKey, limit)
 	if len(regions) == 0 {
+		log.Warn("region not found",
+			zap.String("start", hex.EncodeToString(startKey)),
+			zap.String("end", hex.EncodeToString(endKey)),
+			zap.Uint64("req", reqID))
 		return nil, ErrRegionNotFound
 	}
 	return mkPDRegions(regions...), nil
