@@ -153,6 +153,7 @@ type Region struct {
 	syncFlag      int32          // region need be sync in next turn
 	lastAccess    int64          // last region access time, see checkRegionCacheTTL
 	invalidReason InvalidReason  // the reason why the region is invalidated
+	asyncReload   atomic.Bool    // the region need to be reloaded in async mode
 }
 
 // AccessIndex represent the index for accessIndex array
@@ -1226,6 +1227,36 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 	}, nil
 }
 
+func (c *RegionCache) asyncReloadRegion(region *Region) {
+	if region == nil || !region.asyncReload.CompareAndSwap(false, true) {
+		// async reload triggered by other thread.
+		return
+	}
+	go func() {
+		// wait a while for two reasons:
+		// 1. there may an unavailable duration while recreating the connection.
+		// 2. the store may just be started, and wait safe ts synced to avoid the
+		// possible dataIsNotReady error.
+		time.Sleep(10 * time.Second)
+		regionID := region.GetID()
+		if regionID == 0 {
+			return
+		}
+		bo := retry.NewNoopBackoff(context.Background())
+		lr, err := c.loadRegionByID(bo, regionID)
+		if err != nil {
+			// ignore error and use old region info.
+			logutil.Logger(bo.GetCtx()).Error("load region failure",
+				zap.Uint64("regionID", regionID), zap.Error(err))
+			region.asyncReload.Store(false)
+			return
+		}
+		c.mu.Lock()
+		c.insertRegionToCache(lr)
+		c.mu.Unlock()
+	}()
+}
+
 // GroupKeysByRegion separates keys into groups by their belonging Regions.
 // Specially it also returns the first key's region which may be used as the
 // 'PrimaryLockKey' and should be committed ahead of others.
@@ -1399,8 +1430,11 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region) {
 		if InvalidReason(atomic.LoadInt32((*int32)(&oldRegion.invalidReason))) == NoLeader {
 			store.workTiKVIdx = (oldRegionStore.workTiKVIdx + 1) % AccessIndex(store.accessStoreNum(tiKVOnly))
 		}
-		// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
-		oldRegion.invalidate(Other)
+		// If the region info is async reloaded, the old region is still valid.
+		if !oldRegion.asyncReload.Load() {
+			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
+			oldRegion.invalidate(Other)
+		}
 		// Don't refresh TiFlash work idx for region. Otherwise, it will always goto a invalid store which
 		// is under transferring regions.
 		store.workTiFlashIdx.Store(oldRegionStore.workTiFlashIdx.Load())
@@ -2507,8 +2541,8 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 }
 
 func (s *Store) getResolveState() resolveState {
-	var state resolveState
 	if s == nil {
+		var state resolveState
 		return state
 	}
 	return resolveState(atomic.LoadUint64(&s.state))

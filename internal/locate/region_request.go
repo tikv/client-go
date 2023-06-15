@@ -573,17 +573,19 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	if state.option.preferLeader {
 		state.lastIdx = state.leaderIdx
 	}
+	offset := rand.Intn(len(selector.replicas))
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % replicaSize)
-		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
-		// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
-		for cnt := 0; cnt < replicaSize && !state.isCandidate(idx, selector.replicas[idx]); cnt++ {
-			idx = AccessIndex((int(idx) + rand.Intn(replicaSize)) % replicaSize)
-		}
-		if state.isCandidate(idx, selector.replicas[idx]) {
+		idx := AccessIndex((int(state.lastIdx) + i + offset) % replicaSize)
+		selectReplica := selector.replicas[idx]
+		if state.isCandidate(idx, selectReplica) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
+		}
+		if selectReplica.isEpochStale() &&
+			selectReplica.store.getResolveState() == resolved &&
+			selectReplica.store.getLivenessState() == reachable {
+			selector.regionCache.asyncReloadRegion(selector.region)
 		}
 	}
 	// If there is no candidate, fallback to the leader.
