@@ -37,11 +37,16 @@ package client
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -50,7 +55,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -60,6 +68,7 @@ func TestConn(t *testing.T) {
 	})()
 
 	client := NewRPCClient()
+	defer client.Close()
 
 	addr := "127.0.0.1:6379"
 	conn1, err := client.getConnArray(addr, true)
@@ -69,10 +78,30 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
-	client.Close()
+	assert.Nil(t, client.CloseAddr(addr))
+	_, ok := client.conns[addr]
+	assert.False(t, ok)
 	conn3, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	assert.NotNil(t, conn3)
+
+	client.Close()
+	conn4, err := client.getConnArray(addr, true)
 	assert.NotNil(t, err)
-	assert.Nil(t, conn3)
+	assert.Nil(t, conn4)
+}
+
+func TestGetConnAfterClose(t *testing.T) {
+	client := NewRPCClient()
+	defer client.Close()
+
+	addr := "127.0.0.1:6379"
+	connArray, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	assert.Nil(t, client.CloseAddr(addr))
+	conn := connArray.Get()
+	state := conn.GetState()
+	assert.True(t, state == connectivity.Shutdown)
 }
 
 func TestCancelTimeoutRetErr(t *testing.T) {
@@ -93,6 +122,7 @@ func TestSendWhenReconnect(t *testing.T) {
 	require.True(t, port > 0)
 
 	rpcClient := NewRPCClient()
+	defer rpcClient.Close()
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
 	conn, err := rpcClient.getConnArray(addr, true)
 	assert.Nil(t, err)
@@ -105,7 +135,6 @@ func TestSendWhenReconnect(t *testing.T) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 100*time.Second)
 	assert.True(t, err.Error() == "no available connections")
-	conn.Close()
 	server.Stop()
 }
 
@@ -116,6 +145,10 @@ type chanClient struct {
 }
 
 func (c *chanClient) Close() error {
+	return nil
+}
+
+func (c *chanClient) CloseAddr(addr string) error {
 	return nil
 }
 
@@ -220,7 +253,7 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
 	rpcClient := NewRPCClient()
-	defer rpcClient.closeConns()
+	defer rpcClient.Close()
 
 	var checkCnt uint64
 	// Check no corresponding metadata if ForwardedHost is empty.
@@ -289,7 +322,7 @@ func TestForwardMetadataByBatchCommands(t *testing.T) {
 		conf.TiKVClient.GrpcConnectionCount = 1
 	})()
 	rpcClient := NewRPCClient()
-	defer rpcClient.closeConns()
+	defer rpcClient.Close()
 
 	var checkCnt uint64
 	setCheckHandler := func(forwardedHost string) {
@@ -446,4 +479,246 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	assert.Equal(t, len(builder.requestIDs), 0)
 	assert.Equal(t, len(builder.forwardingReqs), 0)
 	assert.NotEqual(t, builder.idAlloc, 0)
+}
+
+func TestTraceExecDetails(t *testing.T) {
+
+	assert.Nil(t, buildSpanInfoFromResp(nil))
+	assert.Nil(t, buildSpanInfoFromResp(&tikvrpc.Response{}))
+	assert.Nil(t, buildSpanInfoFromResp(&tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}))
+	assert.Nil(t, buildSpanInfoFromResp(&tikvrpc.Response{Resp: &kvrpcpb.GetResponse{ExecDetailsV2: &kvrpcpb.ExecDetailsV2{}}}))
+
+	buildSpanInfo := func(details *kvrpcpb.ExecDetailsV2) *spanInfo {
+		return buildSpanInfoFromResp(&tikvrpc.Response{Resp: &kvrpcpb.GetResponse{ExecDetailsV2: details}})
+	}
+	fmtMockTracer := func(tracer *mocktracer.MockTracer) string {
+		buf := new(strings.Builder)
+		for i, span := range tracer.FinishedSpans() {
+			if i > 0 {
+				buf.WriteString("\n")
+			}
+			buf.WriteString("[")
+			buf.WriteString(span.StartTime.Format("05.000"))
+			buf.WriteString(",")
+			buf.WriteString(span.FinishTime.Format("05.000"))
+			buf.WriteString("] ")
+			buf.WriteString(span.OperationName)
+			if span.Tag("async") != nil {
+				buf.WriteString("'")
+			}
+		}
+		return buf.String()
+	}
+	baseTime := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+	assert.Equal(t, baseTime, (&spanInfo{}).addTo(nil, baseTime))
+
+	for i, tt := range []struct {
+		details  *kvrpcpb.ExecDetailsV2
+		infoOut  string
+		traceOut string
+	}{
+		{
+			&kvrpcpb.ExecDetailsV2{
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{TotalRpcWallTimeNs: uint64(time.Second)},
+			},
+			"tikv.RPC[1s]{ tikv.Wait tikv.Process tikv.Suspend }",
+			"[00.000,01.000] tikv.RPC",
+		},
+		{
+			&kvrpcpb.ExecDetailsV2{
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
+					TotalRpcWallTimeNs:       uint64(time.Second),
+					WaitWallTimeNs:           100000000,
+					ProcessWallTimeNs:        500000000,
+					ProcessSuspendWallTimeNs: 50000000,
+				},
+			},
+			"tikv.RPC[1s]{ tikv.Wait[100ms] tikv.Process[500ms] tikv.Suspend[50ms] }",
+			strings.Join([]string{
+				"[00.000,00.100] tikv.Wait",
+				"[00.100,00.600] tikv.Process",
+				"[00.600,00.650] tikv.Suspend",
+				"[00.000,01.000] tikv.RPC",
+			}, "\n"),
+		},
+		{
+			&kvrpcpb.ExecDetailsV2{
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
+					TotalRpcWallTimeNs:       uint64(time.Second),
+					WaitWallTimeNs:           100000000,
+					ProcessWallTimeNs:        500000000,
+					ProcessSuspendWallTimeNs: 50000000,
+				},
+				ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					GetSnapshotNanos:      uint64(80 * time.Millisecond),
+					RocksdbBlockReadNanos: uint64(200 * time.Millisecond),
+				},
+			},
+			"tikv.RPC[1s]{ tikv.Wait[100ms]{ tikv.GetSnapshot[80ms] } tikv.Process[500ms]{ tikv.RocksDBBlockRead[200ms] } tikv.Suspend[50ms] }",
+			strings.Join([]string{
+				"[00.000,00.080] tikv.GetSnapshot",
+				"[00.000,00.100] tikv.Wait",
+				"[00.100,00.300] tikv.RocksDBBlockRead",
+				"[00.100,00.600] tikv.Process",
+				"[00.600,00.650] tikv.Suspend",
+				"[00.000,01.000] tikv.RPC",
+			}, "\n"),
+		},
+		{
+			// WriteDetail hides RocksDBBlockRead
+			&kvrpcpb.ExecDetailsV2{
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
+					TotalRpcWallTimeNs:       uint64(time.Second),
+					WaitWallTimeNs:           100000000,
+					ProcessWallTimeNs:        500000000,
+					ProcessSuspendWallTimeNs: 50000000,
+				},
+				ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					GetSnapshotNanos:      uint64(80 * time.Millisecond),
+					RocksdbBlockReadNanos: uint64(200 * time.Millisecond),
+				},
+				WriteDetail: &kvrpcpb.WriteDetail{},
+			},
+			"tikv.RPC[1s]{ tikv.Wait[100ms]{ tikv.GetSnapshot[80ms] } tikv.Process[500ms] tikv.Suspend[50ms] tikv.AsyncWrite{ tikv.StoreBatchWait tikv.ProposeSendWait tikv.PersistLog'{ tikv.RaftDBWriteWait tikv.RaftDBWriteWAL tikv.RaftDBWriteMemtable } tikv.CommitLog tikv.ApplyBatchWait tikv.ApplyLog{ tikv.ApplyMutexLock tikv.ApplyWriteLeaderWait tikv.ApplyWriteWAL tikv.ApplyWriteMemtable } } }",
+			strings.Join([]string{
+				"[00.000,00.080] tikv.GetSnapshot",
+				"[00.000,00.100] tikv.Wait",
+				"[00.100,00.600] tikv.Process",
+				"[00.600,00.650] tikv.Suspend",
+				"[00.000,01.000] tikv.RPC",
+			}, "\n"),
+		},
+		{
+			&kvrpcpb.ExecDetailsV2{
+				TimeDetailV2: &kvrpcpb.TimeDetailV2{
+					TotalRpcWallTimeNs: uint64(time.Second),
+				},
+				ScanDetailV2: &kvrpcpb.ScanDetailV2{
+					GetSnapshotNanos: uint64(80 * time.Millisecond),
+				},
+				WriteDetail: &kvrpcpb.WriteDetail{
+					StoreBatchWaitNanos:        uint64(10 * time.Millisecond),
+					ProposeSendWaitNanos:       uint64(10 * time.Millisecond),
+					PersistLogNanos:            uint64(100 * time.Millisecond),
+					RaftDbWriteLeaderWaitNanos: uint64(20 * time.Millisecond),
+					RaftDbSyncLogNanos:         uint64(30 * time.Millisecond),
+					RaftDbWriteMemtableNanos:   uint64(30 * time.Millisecond),
+					CommitLogNanos:             uint64(200 * time.Millisecond),
+					ApplyBatchWaitNanos:        uint64(20 * time.Millisecond),
+					ApplyLogNanos:              uint64(300 * time.Millisecond),
+					ApplyMutexLockNanos:        uint64(10 * time.Millisecond),
+					ApplyWriteLeaderWaitNanos:  uint64(10 * time.Millisecond),
+					ApplyWriteWalNanos:         uint64(80 * time.Millisecond),
+					ApplyWriteMemtableNanos:    uint64(50 * time.Millisecond),
+				},
+			},
+			"tikv.RPC[1s]{ tikv.Wait{ tikv.GetSnapshot[80ms] } tikv.Process tikv.Suspend tikv.AsyncWrite{ tikv.StoreBatchWait[10ms] tikv.ProposeSendWait[10ms] tikv.PersistLog'[100ms]{ tikv.RaftDBWriteWait[20ms] tikv.RaftDBWriteWAL[30ms] tikv.RaftDBWriteMemtable[30ms] } tikv.CommitLog[200ms] tikv.ApplyBatchWait[20ms] tikv.ApplyLog[300ms]{ tikv.ApplyMutexLock[10ms] tikv.ApplyWriteLeaderWait[10ms] tikv.ApplyWriteWAL[80ms] tikv.ApplyWriteMemtable[50ms] } } }",
+			strings.Join([]string{
+				"[00.000,00.080] tikv.GetSnapshot",
+				"[00.000,00.080] tikv.Wait",
+				"[00.080,00.090] tikv.StoreBatchWait",
+				"[00.090,00.100] tikv.ProposeSendWait",
+				"[00.100,00.120] tikv.RaftDBWriteWait",
+				"[00.120,00.150] tikv.RaftDBWriteWAL",
+				"[00.150,00.180] tikv.RaftDBWriteMemtable",
+				"[00.100,00.200] tikv.PersistLog'",
+				"[00.100,00.300] tikv.CommitLog",
+				"[00.300,00.320] tikv.ApplyBatchWait",
+				"[00.320,00.330] tikv.ApplyMutexLock",
+				"[00.330,00.340] tikv.ApplyWriteLeaderWait",
+				"[00.340,00.420] tikv.ApplyWriteWAL",
+				"[00.420,00.470] tikv.ApplyWriteMemtable",
+				"[00.320,00.620] tikv.ApplyLog",
+				"[00.080,00.620] tikv.AsyncWrite",
+				"[00.000,01.000] tikv.RPC",
+			}, "\n"),
+		},
+	} {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			info := buildSpanInfo(tt.details)
+			assert.Equal(t, tt.infoOut, info.String())
+			tracer := mocktracer.New()
+			info.addTo(tracer.StartSpan("root"), baseTime)
+			assert.Equal(t, tt.traceOut, fmtMockTracer(tracer))
+		})
+	}
+}
+
+func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 128
+	})()
+
+	server, port := startMockTikvService()
+	require.True(t, port > 0)
+	require.True(t, server.IsRunning())
+	addr := server.addr
+	client := NewRPCClient()
+	defer func() {
+		err := client.Close()
+		require.NoError(t, err)
+		server.Stop()
+	}()
+
+	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
+	conn, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	// send some request, it should be success.
+	for i := 0; i < 100; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		require.NoError(t, err)
+	}
+
+	logutil.BgLogger().Info("stop mock tikv server")
+	server.Stop()
+	require.False(t, server.IsRunning())
+
+	// send some request, it should be failed since server is down.
+	for i := 0; i < 200; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		require.Error(t, err)
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
+		grpcConn := conn.Get()
+		require.NotNil(t, grpcConn)
+		logutil.BgLogger().Info("conn state",
+			zap.String("state", grpcConn.GetState().String()),
+			zap.Int("idx", i),
+			zap.Int("goroutine-count", runtime.NumGoroutine()))
+	}
+
+	logutil.BgLogger().Info("restart mock tikv server")
+	server.Start(addr)
+	require.True(t, server.IsRunning())
+	require.Equal(t, addr, server.addr)
+
+	// Wait batch client to auto reconnect.
+	start := time.Now()
+	for {
+		grpcConn := conn.Get()
+		require.NotNil(t, grpcConn)
+		var cli *batchCommandsClient
+		for i := range conn.batchConn.batchCommandsClients {
+			if conn.batchConn.batchCommandsClients[i].tryLockForSend() {
+				cli = conn.batchConn.batchCommandsClients[i]
+				break
+			}
+		}
+		// Wait for the connection to be ready,
+		if cli != nil {
+			cli.unlockForSend()
+			break
+		}
+		if time.Since(start) > time.Second*5 {
+			// It shouldn't take too long for batch_client to reconnect.
+			require.Fail(t, "wait batch client reconnect timeout")
+		}
+		logutil.BgLogger().Info("goroutine count", zap.Int("count", runtime.NumGoroutine()))
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	// send some request, it should be success again.
+	for i := 0; i < 100; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		require.NoError(t, err)
+	}
 }

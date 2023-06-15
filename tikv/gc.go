@@ -37,7 +37,9 @@ import (
 
 // GC does garbage collection (GC) of the TiKV cluster.
 // GC deletes MVCC records whose timestamp is lower than the given `safepoint`. We must guarantee
-//  that all transactions started before this timestamp had committed. We can keep an active
+//
+//	that all transactions started before this timestamp had committed. We can keep an active
+//
 // transaction list in application to decide which is the minimal start timestamp of them.
 //
 // For each key, the last mutation record (unless it's a deletion) before `safepoint` is retained.
@@ -275,7 +277,7 @@ func (s *KVStore) listStoresForUnsafeDestory(ctx context.Context) ([]*metapb.Sto
 		if store.State == metapb.StoreState_Tombstone {
 			continue
 		}
-		if tikvrpc.GetStoreTypeByMeta(store) == tikvrpc.TiFlash {
+		if tikvrpc.GetStoreTypeByMeta(store).IsTiFlashRelatedType() {
 			continue
 		}
 		upStores = append(upStores, store)

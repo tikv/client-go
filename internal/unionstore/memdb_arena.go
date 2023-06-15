@@ -39,7 +39,10 @@ import (
 	"math"
 	"unsafe"
 
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
+	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 const (
@@ -61,7 +64,17 @@ type memdbArenaAddr struct {
 }
 
 func (addr memdbArenaAddr) isNull() bool {
-	return addr == nullAddr
+	if addr == nullAddr {
+		return true
+	}
+	if addr.idx == math.MaxUint32 || addr.off == math.MaxUint32 {
+		// defensive programming, the code should never run to here.
+		// it always means something wrong... (maybe caused by data race?)
+		// because we never set part of idx/off to math.MaxUint64
+		logutil.BgLogger().Warn("Invalid memdbArenaAddr", zap.Uint32("idx", addr.idx), zap.Uint32("off", addr.off))
+		return true
+	}
+	return false
 }
 
 // store and load is used by vlog, due to pointer in vlog is not aligned.
@@ -79,6 +92,10 @@ func (addr *memdbArenaAddr) load(src []byte) {
 type memdbArena struct {
 	blockSize int
 	blocks    []memdbArenaBlock
+	// the total size of all blocks, also the approximate memory footprint of the arena.
+	capacity uint64
+	// when it enlarges or shrinks, call this function with the current memory footprint (in bytes)
+	memChangeHook atomic.Pointer[func()]
 }
 
 func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
@@ -111,6 +128,18 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 	a.blocks = append(a.blocks, memdbArenaBlock{
 		buf: make([]byte, a.blockSize),
 	})
+	a.capacity += uint64(a.blockSize)
+	// We shall not call a.onMemChange() here, since it will make the latest block empty, which breaks a precondition
+	// for some operations (e.g. revertToCheckpoint)
+}
+
+// onMemChange should only be called right before exiting memdb.
+// This is because the hook can lead to a panic, and leave memdb in an inconsistent state.
+func (a *memdbArena) onMemChange() {
+	hook := a.memChangeHook.Load()
+	if hook != nil {
+		(*hook)()
+	}
 }
 
 func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []byte) {
@@ -128,6 +157,8 @@ func (a *memdbArena) reset() {
 	}
 	a.blocks = a.blocks[:0]
 	a.blockSize = 0
+	a.capacity = 0
+	a.onMemChange()
 }
 
 type memdbArenaBlock struct {
@@ -155,18 +186,19 @@ func (a *memdbArenaBlock) reset() {
 	a.length = 0
 }
 
-type memdbCheckpoint struct {
+// MemDBCheckpoint is the checkpoint of memory DB.
+type MemDBCheckpoint struct {
 	blockSize     int
 	blocks        int
 	offsetInBlock int
 }
 
-func (cp *memdbCheckpoint) isSamePosition(other *memdbCheckpoint) bool {
+func (cp *MemDBCheckpoint) isSamePosition(other *MemDBCheckpoint) bool {
 	return cp.blocks == other.blocks && cp.offsetInBlock == other.offsetInBlock
 }
 
-func (a *memdbArena) checkpoint() memdbCheckpoint {
-	snap := memdbCheckpoint{
+func (a *memdbArena) checkpoint() MemDBCheckpoint {
+	snap := MemDBCheckpoint{
 		blockSize: a.blockSize,
 		blocks:    len(a.blocks),
 	}
@@ -176,7 +208,7 @@ func (a *memdbArena) checkpoint() memdbCheckpoint {
 	return snap
 }
 
-func (a *memdbArena) truncate(snap *memdbCheckpoint) {
+func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 	for i := snap.blocks; i < len(a.blocks); i++ {
 		a.blocks[i] = memdbArenaBlock{}
 	}
@@ -185,6 +217,12 @@ func (a *memdbArena) truncate(snap *memdbCheckpoint) {
 		a.blocks[len(a.blocks)-1].length = snap.offsetInBlock
 	}
 	a.blockSize = snap.blockSize
+
+	a.capacity = 0
+	for _, block := range a.blocks {
+		a.capacity += uint64(block.length)
+	}
+	// We shall not call a.onMemChange() here, since it may cause a panic and leave memdb in an inconsistent state
 }
 
 type nodeAllocator struct {
@@ -215,11 +253,15 @@ func (a *nodeAllocator) getNode(addr memdbArenaAddr) *memdbNode {
 
 func (a *nodeAllocator) allocNode(key []byte) (memdbArenaAddr, *memdbNode) {
 	nodeSize := 8*4 + 2 + kv.FlagBytes + len(key)
+	prevBlocks := len(a.blocks)
 	addr, mem := a.alloc(nodeSize, true)
 	n := (*memdbNode)(unsafe.Pointer(&mem[0]))
 	n.vptr = nullAddr
 	n.klen = uint16(len(key))
 	copy(n.getKey(), key)
+	if prevBlocks != len(a.blocks) {
+		a.onMemChange()
+	}
 	return addr, n
 }
 
@@ -247,6 +289,7 @@ func (a *nodeAllocator) reset() {
 
 type memdbVlog struct {
 	memdbArena
+	memdb *MemDB
 }
 
 const memdbVlogHdrSize = 8 + 8 + 4
@@ -277,6 +320,7 @@ func (hdr *memdbVlogHdr) load(src []byte) {
 
 func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr, value []byte) memdbArenaAddr {
 	size := memdbVlogHdrSize + len(value)
+	prevBlocks := len(l.blocks)
 	addr, mem := l.alloc(size, false)
 
 	copy(mem, value)
@@ -284,9 +328,13 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 	hdr.store(mem[len(value):])
 
 	addr.off += uint32(size)
+	if prevBlocks != len(l.blocks) {
+		l.onMemChange()
+	}
 	return addr
 }
 
+// A pure function that gets a value.
 func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
 	lenOff := addr.off - memdbVlogHdrSize
 	block := l.blocks[addr.idx].buf
@@ -298,7 +346,7 @@ func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
 	return block[valueOff:lenOff:lenOff]
 }
 
-func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *memdbCheckpoint) ([]byte, bool) {
+func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint) ([]byte, bool) {
 	result := l.selectValueHistory(addr, func(addr memdbArenaAddr) bool {
 		return !l.canModify(snap, addr)
 	})
@@ -320,7 +368,7 @@ func (l *memdbVlog) selectValueHistory(addr memdbArenaAddr, predicate func(memdb
 	return nullAddr
 }
 
-func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *memdbCheckpoint) {
+func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *MemDBCheckpoint) {
 	cursor := l.checkpoint()
 	for !cp.isSamePosition(&cursor) {
 		hdrOff := cursor.offsetInBlock - memdbVlogHdrSize
@@ -349,7 +397,7 @@ func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *memdbCheckpoint) {
 	}
 }
 
-func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *memdbCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
+func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *MemDBCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
 	cursor := *tail
 	for !head.isSamePosition(&cursor) {
 		cursorAddr := memdbArenaAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
@@ -369,7 +417,7 @@ func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *memdbCheckpoint, f fun
 	}
 }
 
-func (l *memdbVlog) moveBackCursor(cursor *memdbCheckpoint, hdr *memdbVlogHdr) {
+func (l *memdbVlog) moveBackCursor(cursor *MemDBCheckpoint, hdr *memdbVlogHdr) {
 	cursor.offsetInBlock -= (memdbVlogHdrSize + int(hdr.valueLen))
 	if cursor.offsetInBlock == 0 {
 		cursor.blocks--
@@ -379,7 +427,7 @@ func (l *memdbVlog) moveBackCursor(cursor *memdbCheckpoint, hdr *memdbVlogHdr) {
 	}
 }
 
-func (l *memdbVlog) canModify(cp *memdbCheckpoint, addr memdbArenaAddr) bool {
+func (l *memdbVlog) canModify(cp *MemDBCheckpoint, addr memdbArenaAddr) bool {
 	if cp == nil {
 		return true
 	}

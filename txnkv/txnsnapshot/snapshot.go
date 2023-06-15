@@ -44,7 +44,6 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
@@ -58,6 +57,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
@@ -65,7 +65,8 @@ import (
 )
 
 const (
-	defaultScanBatchSize = 256
+	// DefaultScanBatchSize is the default scan batch size.
+	DefaultScanBatchSize = 256
 	batchGetSize         = 5120
 	maxTimestamp         = math.MaxUint64
 )
@@ -78,6 +79,8 @@ const (
 	SI IsoLevel = IsoLevel(kvrpcpb.IsolationLevel_SI)
 	// RC stands for 'read committed'.
 	RC IsoLevel = IsoLevel(kvrpcpb.IsolationLevel_RC)
+	// RCCheckTS stands for 'read consistency' with ts check.
+	RCCheckTS IsoLevel = IsoLevel(kvrpcpb.IsolationLevel_RCCheckTS)
 )
 
 // ToPB converts isolation level to wire type.
@@ -98,6 +101,10 @@ type kvstore interface {
 	GetOracle() oracle.Oracle
 }
 
+// ReplicaReadAdjuster is a function that adjust the StoreSelectorOption and ReplicaReadType
+// based on the keys count for BatchPointGet and PointGet
+type ReplicaReadAdjuster func(int) (locate.StoreSelectorOption, kv.ReplicaReadType)
+
 // KVSnapshot implements the tidbkv.Snapshot interface.
 type KVSnapshot struct {
 	store           kvstore
@@ -109,6 +116,7 @@ type KVSnapshot struct {
 	vars            *kv.Variables
 	replicaReadSeed uint32
 	resolvedLocks   util.TSSet
+	committedLocks  util.TSSet
 	scanBatchSize   int
 
 	// Cache the result of BatchGet.
@@ -127,13 +135,23 @@ type KVSnapshot struct {
 		replicaRead      kv.ReplicaReadType
 		taskID           uint64
 		isStaleness      bool
+		busyThreshold    time.Duration
 		readReplicaScope string
+		// replicaReadAdjuster check and adjust the replica read type and store match labels.
+		replicaReadAdjuster ReplicaReadAdjuster
 		// MatchStoreLabels indicates the labels the store should be matched
 		matchStoreLabels []*metapb.StoreLabel
+		// resourceGroupTag is use to set the kv request resource group tag.
+		resourceGroupTag []byte
+		// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
+		resourceGroupTagger tikvrpc.ResourceGroupTagger
+		// interceptor is used to decorate the RPC request logic related to the snapshot.
+		interceptor interceptor.RPCInterceptor
+		// resourceGroupName is used to bind the request to specified resource group.
+		resourceGroupName string
 	}
 	sampleStep uint32
-	// resourceGroupTag is use to set the kv request resource group tag.
-	resourceGroupTag []byte
+	*util.RequestSource
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -146,14 +164,15 @@ func NewTiKVSnapshot(store kvstore, ts uint64, replicaReadSeed uint32) *KVSnapsh
 	return &KVSnapshot{
 		store:           store,
 		version:         ts,
-		scanBatchSize:   defaultScanBatchSize,
+		scanBatchSize:   DefaultScanBatchSize,
 		priority:        txnutil.PriorityNormal,
 		vars:            kv.DefaultVars,
 		replicaReadSeed: replicaReadSeed,
+		RequestSource:   &util.RequestSource{},
 	}
 }
 
-const batchGetMaxBackoff = 600000 // 10 minutes
+const batchGetMaxBackoff = 20000
 
 // SetSnapshotTS resets the timestamp for reads.
 func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
@@ -169,6 +188,11 @@ func (s *KVSnapshot) SetSnapshotTS(ts uint64) {
 	s.mu.Unlock()
 	// And also remove the minCommitTS pushed information.
 	s.resolvedLocks = util.TSSet{}
+}
+
+// IsInternal returns if the KvSnapshot is used by internal executions.
+func (s *KVSnapshot) IsInternal() bool {
+	return util.IsRequestSourceInternal(s.RequestSource)
 }
 
 // BatchGet gets all the keys' value from kv-server and returns a map contains key/value pairs.
@@ -199,8 +223,18 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	}
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
+	if ctx.Value(util.RequestSourceKey) == nil {
+		ctx = context.WithValue(ctx, util.RequestSourceKey, *s.RequestSource)
+	}
 	bo := retry.NewBackofferWithVars(ctx, batchGetMaxBackoff, s.vars)
-
+	s.mu.RLock()
+	if s.mu.interceptor != nil {
+		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.mu.interceptor))
+	}
+	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
 	err := s.batchGetKeysByRegions(bo, keys, func(k, v []byte) {
@@ -290,14 +324,22 @@ func appendBatchKeysBySize(b []batchKeys, region locate.RegionVerID, keys [][]by
 
 func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, collectF func(k, v []byte)) error {
 	defer func(start time.Time) {
-		metrics.TxnCmdHistogramWithBatchGet.Observe(time.Since(start).Seconds())
+		if s.IsInternal() {
+			metrics.TxnCmdHistogramWithBatchGetInternal.Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithBatchGetGeneral.Observe(time.Since(start).Seconds())
+		}
 	}(time.Now())
 	groups, _, err := s.store.GetRegionCache().GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
 		return err
 	}
 
-	metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	if s.IsInternal() {
+		metrics.TxnRegionsNumHistogramWithSnapshotInternal.Observe(float64(len(groups)))
+	} else {
+		metrics.TxnRegionsNumHistogramWithSnapshot.Observe(float64(len(groups)))
+	}
 
 	var batches []batchKeys
 	for id, g := range groups {
@@ -331,7 +373,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 }
 
 func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, collectF func(k, v []byte)) error {
-	cli := NewClientHelper(s.store, &s.resolvedLocks, false)
+	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
 		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
@@ -339,9 +381,12 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			s.mergeRegionRequestStats(cli.Stats)
 		}()
 	}
+	isStaleness := s.mu.isStaleness
+	busyThresholdMs := s.mu.busyThreshold.Milliseconds()
 	s.mu.RUnlock()
 
 	pending := batch.keys
+	var resolvingRecordToken *int
 	for {
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
@@ -351,11 +396,20 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTag,
+			ResourceGroupTag: s.mu.resourceGroupTag,
+			IsolationLevel:   s.isolationLevel.ToPB(),
+			RequestSource:    s.GetRequestSource(),
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{
+				ResourceGroupName: s.mu.resourceGroupName,
+			},
+			BusyThresholdMs: uint32(busyThresholdMs),
 		})
+		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
+			s.mu.resourceGroupTagger(req)
+		}
 		scope := s.mu.readReplicaScope
-		isStaleness := s.mu.isStaleness
 		matchStoreLabels := s.mu.matchStoreLabels
+		replicaAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
 		req.TxnScope = scope
 		req.ReadReplicaScope = scope
@@ -365,6 +419,13 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		ops := make([]locate.StoreSelectorOption, 0, 2)
 		if len(matchStoreLabels) > 0 {
 			ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
+		}
+		if req.ReplicaReadType.IsFollowerRead() && replicaAdjuster != nil {
+			op, readType := replicaAdjuster(len(pending))
+			if op != nil {
+				ops = append(ops, op)
+			}
+			req.ReplicaReadType = readType
 		}
 		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, client.ReadTimeoutMedium, tikvrpc.TiKV, "", ops...)
 		if err != nil {
@@ -426,13 +487,36 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		if batchGetResp.ExecDetailsV2 != nil {
 			readKeys := len(batchGetResp.Pairs)
-			readTime := float64(batchGetResp.ExecDetailsV2.GetTimeDetail().GetKvReadWallTimeMs() / 1000)
+			var readTime float64
+			if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
+			} else if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetail(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
+			}
 			readSize := float64(batchGetResp.ExecDetailsV2.GetScanDetailV2().GetProcessedVersionsSize())
 			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
 			s.mergeExecDetail(batchGetResp.ExecDetailsV2)
 		}
 		if len(lockedKeys) > 0 {
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, locks)
+			if resolvingRecordToken == nil {
+				token := cli.RecordResolvingLocks(locks, s.version)
+				resolvingRecordToken = &token
+				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
+			} else {
+				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
+			// we need to read from leader after resolving the lock.
+			if isStaleness {
+				isStaleness = false
+				busyThresholdMs = 0
+			}
+			resolveLocksOpts := txnlock.ResolveLocksOptions{
+				CallerStartTS: s.version,
+				Locks:         locks,
+				Detail:        s.getResolveLockDetail(),
+			}
+			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
+			msBeforeExpired := resolveLocksRes.TTL
 			if err != nil {
 				return err
 			}
@@ -453,16 +537,31 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	}
 }
 
-const getMaxBackoff = 600000 // 10 minutes
+const getMaxBackoff = 20000
 
 // Get gets the value for key k from snapshot.
 func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	defer func(start time.Time) {
-		metrics.TxnCmdHistogramWithGet.Observe(time.Since(start).Seconds())
+		if s.IsInternal() {
+			metrics.TxnCmdHistogramWithGetInternal.Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TxnCmdHistogramWithGetGeneral.Observe(time.Since(start).Seconds())
+		}
 	}(time.Now())
 
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
+	if ctx.Value(util.RequestSourceKey) == nil {
+		ctx = context.WithValue(ctx, util.RequestSourceKey, *s.RequestSource)
+	}
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
+	s.mu.RLock()
+	if s.mu.interceptor != nil {
+		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.mu.interceptor))
+	}
+	s.mu.RUnlock()
 	val, err := s.get(ctx, bo, k)
 	s.recordBackoffInfo(bo)
 	if err != nil {
@@ -489,21 +588,20 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			return value, nil
 		}
 	}
-	s.mu.RUnlock()
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("tikvSnapshot.get", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		opentracing.ContextWithSpan(ctx, span1)
 	}
-	failpoint.Inject("snapshot-get-cache-fail", func(_ failpoint.Value) {
+	if _, err := util.EvalFailpoint("snapshot-get-cache-fail"); err == nil {
 		if bo.GetCtx().Value("TestSnapshotCache") != nil {
+			s.mu.RUnlock()
 			panic("cache miss")
 		}
-	})
+	}
 
-	cli := NewClientHelper(s.store, &s.resolvedLocks, true)
+	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, true)
 
-	s.mu.RLock()
 	if s.mu.stats != nil {
 		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
 		defer func() {
@@ -518,11 +616,21 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			Priority:         s.priority.ToPB(),
 			NotFillCache:     s.notFillCache,
 			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.resourceGroupTag,
+			ResourceGroupTag: s.mu.resourceGroupTag,
+			IsolationLevel:   s.isolationLevel.ToPB(),
+			RequestSource:    s.GetRequestSource(),
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{
+				ResourceGroupName: s.mu.resourceGroupName,
+			},
+			BusyThresholdMs: uint32(s.mu.busyThreshold.Milliseconds()),
 		})
+	if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
+		s.mu.resourceGroupTagger(req)
+	}
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
 	scope := s.mu.readReplicaScope
+	replicaAdjuster := s.mu.replicaReadAdjuster
 	s.mu.RUnlock()
 	req.TxnScope = scope
 	req.ReadReplicaScope = scope
@@ -533,8 +641,16 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	if len(matchStoreLabels) > 0 {
 		ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
 	}
+	if req.ReplicaReadType.IsFollowerRead() && replicaAdjuster != nil {
+		op, readType := replicaAdjuster(1)
+		if op != nil {
+			ops = append(ops, op)
+		}
+		req.ReplicaReadType = readType
+	}
 
 	var firstLock *txnlock.Lock
+	var resolvingRecordToken *int
 	for {
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.GetRegionCache().LocateKey(bo, k)
@@ -567,7 +683,12 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		cmdGetResp := resp.Resp.(*kvrpcpb.GetResponse)
 		if cmdGetResp.ExecDetailsV2 != nil {
 			readKeys := len(cmdGetResp.Value)
-			readTime := float64(cmdGetResp.ExecDetailsV2.GetTimeDetail().GetKvReadWallTimeMs() / 1000)
+			var readTime float64
+			if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
+			} else if timeDetail := cmdGetResp.ExecDetailsV2.GetTimeDetail(); timeDetail != nil {
+				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
+			}
 			readSize := float64(cmdGetResp.ExecDetailsV2.GetScanDetailV2().GetProcessedVersionsSize())
 			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
 			s.mergeExecDetail(cmdGetResp.ExecDetailsV2)
@@ -579,6 +700,11 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				return nil, err
 			}
 			if firstLock == nil {
+				// we need to read from leader after resolving the lock.
+				if isStaleness {
+					req.DisableStaleReadMeetLock()
+					req.BusyThresholdMs = 0
+				}
 				firstLock = lock
 			} else if s.version == maxTimestamp && firstLock.TxnID != lock.TxnID {
 				// If it is an autocommit point get, it needs to be blocked only
@@ -587,11 +713,24 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				cli.resolvedLocks.Put(lock.TxnID)
 				continue
 			}
-
-			msBeforeExpired, err := cli.ResolveLocks(bo, s.version, []*txnlock.Lock{lock})
+			locks := []*txnlock.Lock{lock}
+			if resolvingRecordToken == nil {
+				token := cli.RecordResolvingLocks(locks, s.version)
+				resolvingRecordToken = &token
+				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
+			} else {
+				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+			}
+			resolveLocksOpts := txnlock.ResolveLocksOptions{
+				CallerStartTS: s.version,
+				Locks:         locks,
+				Detail:        s.getResolveLockDetail(),
+			}
+			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 			if err != nil {
 				return nil, err
 			}
+			msBeforeExpired := resolveLocksRes.TTL
 			if msBeforeExpired > 0 {
 				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.New(keyErr.String()))
 				if err != nil {
@@ -610,14 +749,19 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 	if detail == nil || s.mu.stats == nil {
 		return
 	}
+	if s.mu.stats.resolveLockDetail == nil {
+		s.mu.stats.resolveLockDetail = &util.ResolveLockDetail{}
+	}
 	if s.mu.stats.scanDetail == nil {
-		s.mu.stats.scanDetail = &util.ScanDetail{}
+		s.mu.stats.scanDetail = &util.ScanDetail{
+			ResolveLock: s.mu.stats.resolveLockDetail,
+		}
 	}
 	if s.mu.stats.timeDetail == nil {
 		s.mu.stats.timeDetail = &util.TimeDetail{}
 	}
 	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.ScanDetailV2)
-	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetail)
+	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetailV2, detail.TimeDetail)
 }
 
 // Iter return a list of key-value pair after `k`.
@@ -700,8 +844,27 @@ func (s *KVSnapshot) SetReadReplicaScope(scope string) {
 	s.mu.readReplicaScope = scope
 }
 
-// SetIsStatenessReadOnly indicates whether the transaction is staleness read only transaction
-func (s *KVSnapshot) SetIsStatenessReadOnly(b bool) {
+// SetReplicaReadAdjuster set replica read adjust function
+func (s *KVSnapshot) SetReplicaReadAdjuster(f ReplicaReadAdjuster) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.replicaReadAdjuster = f
+}
+
+// SetLoadBasedReplicaReadThreshold sets the TiKV wait duration threshold of
+// enabling replica read automatically
+func (s *KVSnapshot) SetLoadBasedReplicaReadThreshold(busyThreshold time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if busyThreshold <= 0 || busyThreshold.Milliseconds() > math.MaxUint32 {
+		s.mu.busyThreshold = 0
+	} else {
+		s.mu.busyThreshold = busyThreshold
+	}
+}
+
+// SetIsStalenessReadOnly indicates whether the transaction is staleness read only transaction
+func (s *KVSnapshot) SetIsStalenessReadOnly(b bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mu.isStaleness = b
@@ -714,9 +877,48 @@ func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
 	s.mu.matchStoreLabels = labels
 }
 
-// SetResourceGroupTag sets resource group of the kv request.
+// SetResourceGroupTag sets resource group tag of the kv request.
 func (s *KVSnapshot) SetResourceGroupTag(tag []byte) {
-	s.resourceGroupTag = tag
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.resourceGroupTag = tag
+}
+
+// SetResourceGroupTagger sets resource group tagger of the kv request.
+// Before sending the request, if resourceGroupTag is not nil, use
+// resourceGroupTag directly, otherwise use resourceGroupTagger.
+func (s *KVSnapshot) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.resourceGroupTagger = tagger
+}
+
+// SetRPCInterceptor sets interceptor.RPCInterceptor for the snapshot.
+// interceptor.RPCInterceptor will be executed before each RPC request is initiated.
+// Note that SetRPCInterceptor will replace the previously set interceptor.
+func (s *KVSnapshot) SetRPCInterceptor(it interceptor.RPCInterceptor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.interceptor = it
+}
+
+// AddRPCInterceptor adds an interceptor, the order of addition is the order of execution.
+// the chained interceptors will be dedupcated by its name.
+func (s *KVSnapshot) AddRPCInterceptor(it interceptor.RPCInterceptor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.interceptor == nil {
+		s.mu.interceptor = it
+		return
+	}
+	s.mu.interceptor = interceptor.ChainRPCInterceptors(s.mu.interceptor, it)
+}
+
+// SetResourceGroupName set resource group name of the kv request.
+func (s *KVSnapshot) SetResourceGroupName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.resourceGroupName = name
 }
 
 // SnapCacheHitCount gets the snapshot cache hit count. Only for test.
@@ -782,13 +984,23 @@ func (s *KVSnapshot) mergeRegionRequestStats(stats map[tikvrpc.CmdType]*locate.R
 	}
 }
 
+func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.stats == nil {
+		return nil
+	}
+	return s.mu.stats.resolveLockDetail
+}
+
 // SnapshotRuntimeStats records the runtime stats of snapshot.
 type SnapshotRuntimeStats struct {
-	rpcStats       locate.RegionRequestRuntimeStats
-	backoffSleepMS map[string]int
-	backoffTimes   map[string]int
-	scanDetail     *util.ScanDetail
-	timeDetail     *util.TimeDetail
+	rpcStats          locate.RegionRequestRuntimeStats
+	backoffSleepMS    map[string]int
+	backoffTimes      map[string]int
+	scanDetail        *util.ScanDetail
+	timeDetail        *util.TimeDetail
+	resolveLockDetail *util.ResolveLockDetail
 }
 
 // Clone implements the RuntimeStats interface.
@@ -809,6 +1021,19 @@ func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
 			newRs.backoffTimes[k] += v
 		}
 	}
+
+	if rs.scanDetail != nil {
+		newRs.scanDetail = rs.scanDetail
+	}
+
+	if rs.timeDetail != nil {
+		newRs.timeDetail = rs.timeDetail
+	}
+
+	if rs.resolveLockDetail != nil {
+		newRs.resolveLockDetail = rs.resolveLockDetail
+	}
+
 	return &newRs
 }
 

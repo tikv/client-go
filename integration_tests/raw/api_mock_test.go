@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/rawkv"
 	"github.com/tikv/client-go/v2/testutils"
@@ -59,9 +58,10 @@ type testRawKVSuite struct {
 }
 
 func (s *testRawKVSuite) SetupTest() {
-	client, pdClient, cluster, err := unistore.New("")
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	s.Require().NoError(err)
 	s.Require().Nil(err)
-	unistore.BootstrapWithSingleStore(cluster)
+	testutils.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
 	s.client = rawkv.ClientProbe{Client: &rawkv.Client{}}
 	s.client.SetPDClient(pdClient)
@@ -113,7 +113,7 @@ func (s *testRawKVSuite) mustPut(key, value []byte) {
 }
 
 func (s *testRawKVSuite) mustBatchPut(keys, values [][]byte) {
-	err := s.client.BatchPut(context.Background(), keys, values, nil)
+	err := s.client.BatchPut(context.Background(), keys, values)
 	s.Nil(err)
 }
 
@@ -209,7 +209,7 @@ func (s *testRawKVSuite) TestSimple() {
 	s.mustDelete([]byte("key"))
 	s.mustNotExist([]byte("key"))
 	err := s.client.Put(context.Background(), []byte("key"), []byte(""))
-	s.NotNil(err)
+	s.Nil(err) // empty value is legal
 }
 
 func (s *testRawKVSuite) TestRawBatch() {

@@ -23,6 +23,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
@@ -91,12 +92,61 @@ func (txn TxnProbe) GetStartTime() time.Time {
 	return txn.startTime
 }
 
+// GetLockedCount returns the count of locks acquired by the transaction
+func (txn TxnProbe) GetLockedCount() int {
+	return txn.lockedCnt
+}
+
+// GetAggressiveLockingKeys returns the keys that are in the current aggressive locking stage.
+func (txn TxnProbe) GetAggressiveLockingKeys() []string {
+	info := txn.GetAggressiveLockingKeysInfo()
+	keys := make([]string, 0, len(info))
+	for _, info := range info {
+		keys = append(keys, string(info.key))
+	}
+	return keys
+}
+
+// GetAggressiveLockingPreviousKeys returns the keys that were locked in the previous aggressive locking stage.
+func (txn TxnProbe) GetAggressiveLockingPreviousKeys() []string {
+	info := txn.GetAggressiveLockingPreviousKeysInfo()
+	keys := make([]string, 0, len(info))
+	for _, info := range info {
+		keys = append(keys, string(info.key))
+	}
+	return keys
+}
+
+// GetAggressiveLockingKeysInfo returns the keys and their internal states that are in the current aggressive locking stage.
+func (txn TxnProbe) GetAggressiveLockingKeysInfo() []AggressiveLockedKeyInfo {
+	keys := make([]AggressiveLockedKeyInfo, 0, len(txn.aggressiveLockingContext.currentLockedKeys))
+	for k, v := range txn.aggressiveLockingContext.currentLockedKeys {
+		keys = append(keys, AggressiveLockedKeyInfo{
+			key:   []byte(k),
+			entry: v,
+		})
+	}
+	return keys
+}
+
+// GetAggressiveLockingPreviousKeysInfo returns the keys and their internal states that were locked in the previous aggressive locking stage.
+func (txn TxnProbe) GetAggressiveLockingPreviousKeysInfo() []AggressiveLockedKeyInfo {
+	keys := make([]AggressiveLockedKeyInfo, 0, len(txn.aggressiveLockingContext.lastRetryUnnecessaryLocks))
+	for k, v := range txn.aggressiveLockingContext.lastRetryUnnecessaryLocks {
+		keys = append(keys, AggressiveLockedKeyInfo{
+			key:   []byte(k),
+			entry: v,
+		})
+	}
+	return keys
+}
+
 func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	c, err := newTwoPhaseCommitter(txn, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if err = c.initKeysAndMutations(); err != nil {
+	if err = c.initKeysAndMutations(context.Background()); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -109,7 +159,7 @@ type CommitterProbe struct {
 
 // InitKeysAndMutations prepares the committer for commit.
 func (c CommitterProbe) InitKeysAndMutations() error {
-	return c.initKeysAndMutations()
+	return c.initKeysAndMutations(context.Background())
 }
 
 // SetPrimaryKey resets the committer's commit ts.
@@ -215,7 +265,7 @@ func (c CommitterProbe) PrewriteAllMutations(ctx context.Context) error {
 
 // PrewriteMutations performs the first phase of commit for given keys.
 func (c CommitterProbe) PrewriteMutations(ctx context.Context, mutations CommitterMutations) error {
-	return c.prewriteMutations(retry.NewBackofferWithVars(ctx, PrewriteMaxBackoff, nil), mutations)
+	return c.prewriteMutations(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), nil), mutations)
 }
 
 // CommitMutations performs the second phase of commit.
@@ -329,7 +379,7 @@ type ConfigProbe struct{}
 
 // GetTxnCommitBatchSize returns the batch size to commit txn.
 func (c ConfigProbe) GetTxnCommitBatchSize() uint64 {
-	return txnCommitBatchSize
+	return kv.TxnCommitBatchSize.Load()
 }
 
 // GetPessimisticLockMaxBackoff returns pessimisticLockMaxBackoff
@@ -365,4 +415,39 @@ func (c ConfigProbe) LoadPreSplitSizeThreshold() uint32 {
 // StorePreSplitSizeThreshold updates presplit size threshold config.
 func (c ConfigProbe) StorePreSplitSizeThreshold(v uint32) {
 	atomic.StoreUint32(&preSplitSizeThreshold, v)
+}
+
+// MemBufferMutationsProbe exports memBufferMutations for test purposes.
+type MemBufferMutationsProbe struct {
+	*memBufferMutations
+}
+
+// NewMemBufferMutationsProbe creates a new memBufferMutations instance for testing purpose.
+func NewMemBufferMutationsProbe(sizeHint int, storage *unionstore.MemDB) MemBufferMutationsProbe {
+	return MemBufferMutationsProbe{newMemBufferMutations(sizeHint, storage)}
+}
+
+type AggressiveLockedKeyInfo struct {
+	key   []byte
+	entry tempLockBufferEntry
+}
+
+func (i *AggressiveLockedKeyInfo) Key() []byte {
+	return i.key
+}
+
+func (i *AggressiveLockedKeyInfo) HasCheckExistence() bool {
+	return i.entry.HasCheckExistence
+}
+
+func (i *AggressiveLockedKeyInfo) HasReturnValues() bool {
+	return i.entry.HasReturnValue
+}
+
+func (i *AggressiveLockedKeyInfo) Value() kv.ReturnedValue {
+	return i.entry.Value
+}
+
+func (i *AggressiveLockedKeyInfo) ActualLockForUpdateTS() uint64 {
+	return i.entry.ActualLockForUpdateTS
 }

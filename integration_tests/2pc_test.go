@@ -39,6 +39,7 @@ package tikv_test
 import (
 	"bytes"
 	"context"
+	stderrs "errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -50,7 +51,6 @@ import (
 	"github.com/ninedraft/israce"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	drivertxn "github.com/pingcap/tidb/store/driver/txn"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
@@ -83,9 +83,11 @@ type testCommitterSuite struct {
 func (s *testCommitterSuite) SetupSuite() {
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 3000) // 3s
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 1000)
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("reachable")`))
 }
 
 func (s *testCommitterSuite) TearDownSuite() {
+	s.Nil(failpoint.Disable("tikvclient/injectLiveness"))
 	atomic.StoreUint64(&transaction.CommitMaxBackoff, 20000)
 }
 
@@ -94,12 +96,11 @@ func (s *testCommitterSuite) SetupTest() {
 	s.Require().Nil(err)
 	testutils.BootstrapWithMultiRegions(cluster, []byte("a"), []byte("b"), []byte("c"))
 	s.cluster = cluster
-	pdCli := &tikv.CodecPDClient{Client: pdClient}
+	pdCli := tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 	spkv := tikv.NewMockSafePointKV()
 	store, err := tikv.NewKVStore("mocktikv-store", pdCli, spkv, client)
 	store.EnableTxnLocalLatches(8096)
 	s.Require().Nil(err)
-
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 
@@ -230,7 +231,9 @@ func (s *testCommitterSuite) TestCommitOnTiKVDiskFullOpt() {
 	s.Nil(failpoint.Enable("tikvclient/rpcAllowedOnAlmostFull", `return("true")`))
 	txn = s.begin()
 	txn.Set([]byte("c"), []byte("c1"))
-	err = txn.Commit(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err = txn.Commit(ctx)
 	s.NotNil(err)
 	s.Nil(failpoint.Disable("tikvclient/rpcAllowedOnAlmostFull"))
 }
@@ -308,7 +311,7 @@ func (s *testCommitterSuite) TestContextCancel2() {
 	cancel()
 	// Secondary keys should not be canceled.
 	s.Eventually(func() bool {
-		return !s.isKeyLocked([]byte("b"))
+		return !s.isKeyOptimisticLocked([]byte("b"))
 	}, 2*time.Second, 20*time.Millisecond, "Secondary locks are not committed after 2 seconds")
 }
 
@@ -368,7 +371,7 @@ func (s *testCommitterSuite) mustGetRegionID(key []byte) uint64 {
 	return loc.Region.GetID()
 }
 
-func (s *testCommitterSuite) isKeyLocked(key []byte) bool {
+func (s *testCommitterSuite) isKeyOptimisticLocked(key []byte) bool {
 	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), 500, nil)
@@ -383,6 +386,34 @@ func (s *testCommitterSuite) isKeyLocked(key []byte) bool {
 	s.NotNil(resp.Resp)
 	keyErr := (resp.Resp.(*kvrpcpb.GetResponse)).GetError()
 	return keyErr.GetLocked() != nil
+}
+
+func (s *testCommitterSuite) checkIsKeyLocked(key []byte, expectedLocked bool) {
+	// To be aware of the result of async operations (e.g. async pessimistic rollback), retry if the check fails.
+	for i := 0; i < 5; i++ {
+		txn := s.begin()
+		txn.SetPessimistic(true)
+
+		lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
+		err := txn.LockKeys(context.Background(), lockCtx, key)
+
+		var isCheckSuccess bool
+		if err != nil && stderrs.Is(err, tikverr.ErrLockAcquireFailAndNoWaitSet) {
+			isCheckSuccess = expectedLocked
+		} else {
+			s.Nil(err)
+			isCheckSuccess = !expectedLocked
+		}
+
+		if isCheckSuccess {
+			s.Nil(txn.Rollback())
+			return
+		}
+
+		s.Nil(txn.Rollback())
+		time.Sleep(time.Millisecond * 50)
+	}
+	s.Fail(fmt.Sprintf("expected key %q locked = %v, but the actual result not match", string(key), expectedLocked))
 }
 
 func (s *testCommitterSuite) TestPrewriteCancel() {
@@ -414,7 +445,7 @@ func (s *testCommitterSuite) TestPrewriteCancel() {
 	s.NotNil(err)
 	// "c" should be cleaned up in reasonable time.
 	s.Eventually(func() bool {
-		return !s.isKeyLocked([]byte("c"))
+		return !s.isKeyOptimisticLocked([]byte("c"))
 	}, 500*time.Millisecond, 10*time.Millisecond)
 }
 
@@ -528,7 +559,7 @@ func (s *testCommitterSuite) TestPrewritePrimaryKeyFailed() {
 func (s *testCommitterSuite) TestWrittenKeysOnConflict() {
 	// This test checks that when there is a write conflict, written keys is collected,
 	// so we can use it to clean up keys.
-	region, _ := s.cluster.GetRegionByKey([]byte("x"))
+	region, _, _ := s.cluster.GetRegionByKey([]byte("x"))
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
 	s.cluster.Split(region.Id, newRegionID, []byte("y"), []uint64{newPeerID}, newPeerID)
@@ -559,7 +590,7 @@ func (s *testCommitterSuite) TestWrittenKeysOnConflict() {
 
 func (s *testCommitterSuite) TestPrewriteTxnSize() {
 	// Prepare two regions first: (, 100) and [100, )
-	region, _ := s.cluster.GetRegionByKey([]byte{50})
+	region, _, _ := s.cluster.GetRegionByKey([]byte{50})
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
 	s.cluster.Split(region.Id, newRegionID, []byte{100}, []uint64{newPeerID}, newPeerID)
@@ -651,7 +682,7 @@ func (s *testCommitterSuite) TestPessimisticPrewriteRequest() {
 	s.Nil(err)
 	committer.SetForUpdateTS(100)
 	req := committer.BuildPrewriteRequest(1, 1, 1, committer.GetMutations().Slice(0, 1), 1)
-	s.Greater(len(req.Prewrite().IsPessimisticLock), 0)
+	s.Greater(len(req.Prewrite().PessimisticActions), 0)
 	s.Equal(req.Prewrite().ForUpdateTs, uint64(100))
 }
 
@@ -744,6 +775,749 @@ func (s *testCommitterSuite) TestPessimisticLockReturnValues() {
 	s.Len(lockCtx.Values, 2)
 	s.Equal(lockCtx.Values[string(key)].Value, key)
 	s.Equal(lockCtx.Values[string(key2)].Value, key2)
+}
+
+func lockOneKey(s *testCommitterSuite, txn transaction.TxnProbe, key []byte) {
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+}
+
+func getLockOnlyIfExistsCtx(txn transaction.TxnProbe, keyCount int) *kv.LockCtx {
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitReturnValues(keyCount)
+	lockCtx.LockOnlyIfExists = true
+	return lockCtx
+}
+
+func checkLockKeyResult(s *testCommitterSuite, txn transaction.TxnProbe, lockCtx *kv.LockCtx,
+	key []byte, value []byte, lockCtxValLen int, primaryKey []byte) {
+	s.Len(lockCtx.Values, lockCtxValLen)
+	if value != nil {
+		s.Equal(lockCtx.Values[string(key)].Value, key)
+	} else {
+		s.Equal(lockCtx.Values[string(key)].Exists, false)
+	}
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), primaryKey)
+}
+
+func getMembufferFlags(s *testCommitterSuite, txn transaction.TxnProbe, key []byte, errStr string) kv.KeyFlags {
+	memBuf := txn.GetMemBuffer()
+	flags, err := memBuf.GetFlags(key)
+	if len(errStr) != 0 {
+		s.Equal(err.Error(), errStr)
+	} else {
+		s.Nil(err)
+	}
+	return flags
+}
+
+func (s *testCommitterSuite) TestPessimisticLockIfExists() {
+	key0 := []byte("jkey")
+	key := []byte("key")
+	key2 := []byte("key2")
+	key3 := []byte("key3")
+	txn := s.begin()
+	s.Nil(txn.Set(key, key))
+	s.Nil(txn.Set(key3, key3))
+	s.Nil(txn.Commit(context.Background()))
+
+	// Lcoked "key" successfully.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key0)
+	lockCtx := getLockOnlyIfExistsCtx(txn, 1)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+	checkLockKeyResult(s, txn, lockCtx, key, key, 1, key0)
+	flags := getMembufferFlags(s, txn, key, "")
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLockedCount(), 2)
+	s.Nil(txn.Rollback())
+
+	// Locked "key2" unsuccessfully.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key0)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	checkLockKeyResult(s, txn, lockCtx, key2, nil, 1, key0)
+	flags = getMembufferFlags(s, txn, key, "not exist")
+	s.Equal(txn.GetLockedCount(), 1)
+	s.Nil(txn.Rollback())
+
+	// Lock order is key, key2, key3.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key0)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 3)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2, key3))
+	s.Len(lockCtx.Values, 3)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	s.Equal(lockCtx.Values[string(key2)].Exists, false)
+	s.Equal(lockCtx.Values[string(key3)].Value, key3)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0)
+	memBuf := txn.GetMemBuffer()
+	flags, err := memBuf.GetFlags(key)
+	s.Equal(flags.HasLockedValueExists(), true)
+	flags, err = memBuf.GetFlags(key2)
+	s.Equal(err.Error(), "not exist")
+	flags, err = memBuf.GetFlags(key3)
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLockedCount(), 3)
+	s.Nil(txn.Rollback())
+
+	// Lock order is key2, key, key3.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key0)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 3)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2, key, key3))
+	s.Len(lockCtx.Values, 3)
+	s.Equal(lockCtx.Values[string(key2)].Exists, false)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	s.Equal(lockCtx.Values[string(key3)].Value, key3)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0) // key is sorted in LockKeys()
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key)
+	s.Equal(flags.HasLockedValueExists(), true)
+	flags, err = memBuf.GetFlags(key2)
+	s.Equal(err.Error(), "not exist")
+	flags, err = memBuf.GetFlags(key3)
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLockedCount(), 3)
+	s.Nil(txn.Commit(context.Background()))
+
+	// LockKeys(key2), LockKeys(key3, key).
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key0)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	lockCtx = getLockOnlyIfExistsCtx(txn, 2)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key3, key))
+	s.Equal(lockCtx.Values[string(key3)].Value, key3)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0)
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key)
+	s.Equal(flags.HasLockedValueExists(), true)
+	flags, err = memBuf.GetFlags(key2)
+	s.Equal(err.Error(), "not exist")
+	flags, err = memBuf.GetFlags(key3)
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLockedCount(), 3)
+	s.Nil(txn.Commit(context.Background()))
+
+	// Lock order is key0, key, key3.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key0)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 3)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key0, key, key3))
+	s.Len(lockCtx.Values, 3)
+	key0Val, ok := lockCtx.Values[string(key0)]
+	s.Equal(ok, true)
+	s.Equal(key0Val.AlreadyLocked, true)
+	s.Equal(key0Val.Exists, false)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	s.Equal(lockCtx.Values[string(key3)].Value, key3)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key0)
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key)
+	s.Equal(flags.HasLockedValueExists(), true)
+	flags, err = memBuf.GetFlags(key0)
+	s.Equal(true, flags.HasLockedValueExists()) // in fact, there is no value
+	s.Equal(flags.HasLocked(), true)
+	flags, err = memBuf.GetFlags(key3)
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLockedCount(), 3)
+	s.Nil(txn.Commit(context.Background()))
+
+	// Primary key is not selected, but here is only one key.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key)
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key)
+	s.Equal(flags.HasLockedValueExists(), true)
+	s.Equal(txn.GetLockedCount(), 1)
+	s.Equal(txn.GetCommitter().GetPrimaryKey(), key)
+	s.Nil(txn.Commit(context.Background()))
+
+	// Primary key is not selected, here is only one key to be locked, and the key doesn't exist.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key2))
+	memBuf = txn.GetMemBuffer()
+	flags, err = memBuf.GetFlags(key2)
+	s.Equal(flags.HasLockedValueExists(), false)
+	s.Equal(txn.GetLockedCount(), 0)
+	s.Nil(txn.GetCommitter().GetPrimaryKey())
+	s.Equal(err.Error(), "not exist")
+	s.Nil(txn.Commit(context.Background()))
+
+	// When the primary key is not selected, it can't send a lock request with LockOnlyIfExists mode
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = getLockOnlyIfExistsCtx(txn, 1)
+	err = txn.LockKeys(context.Background(), lockCtx, key, key2)
+	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoPrimaryKey)
+	s.Equal(ok, true)
+	s.Nil(txn.Rollback())
+
+	// When LockOnlyIfExists is true, ReturnValue must be true too.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.LockOnlyIfExists = true
+	err = txn.LockKeys(context.Background(), lockCtx, key2)
+	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoReturnValue)
+	s.Equal(ok, true)
+	s.Nil(txn.Rollback())
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockOneKey(s, txn, key)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.LockOnlyIfExists = true
+	err = txn.LockKeys(context.Background(), lockCtx)
+	err, ok = err.(*tikverr.ErrLockOnlyIfExistsNoReturnValue)
+	s.Equal(ok, false)
+	s.Nil(txn.Rollback())
+}
+
+func (s *testCommitterSuite) TestPessimisticLockCheckExistence() {
+	key := []byte("key")
+	key2 := []byte("key2")
+	txn := s.begin()
+	s.Nil(txn.Set(key, key))
+	s.Nil(txn.Commit(context.Background()))
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitCheckExistence(2)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Len(lockCtx.Values, 2)
+	s.Empty(lockCtx.Values[string(key)].Value)
+	s.True(lockCtx.Values[string(key)].Exists)
+	s.Empty(lockCtx.Values[string(key2)].Value)
+	s.False(lockCtx.Values[string(key2)].Exists)
+	s.Nil(txn.Rollback())
+
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitCheckExistence(2)
+	lockCtx.InitReturnValues(2)
+	s.Nil(txn.LockKeys(context.Background(), lockCtx, key, key2))
+	s.Len(lockCtx.Values, 2)
+	s.Equal(lockCtx.Values[string(key)].Value, key)
+	s.True(lockCtx.Values[string(key)].Exists)
+	s.Empty(lockCtx.Values[string(key2)].Value)
+	s.False(lockCtx.Values[string(key2)].Exists)
+	s.Nil(txn.Rollback())
+}
+
+func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflict() {
+	key := []byte("key")
+
+	txn0 := s.begin()
+	txn0.SetPessimistic(true)
+	s.Nil(txn0.Set(key, key))
+	s.Nil(txn0.Commit(context.Background()))
+
+	// No conflict cases
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			txn := s.begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+			if checkExistence || returnValues {
+				s.Len(lockCtx.Values, 1)
+				s.True(lockCtx.Values[string(key)].Exists)
+			} else {
+				s.Len(lockCtx.Values, 0)
+			}
+			if returnValues {
+				s.Equal(key, lockCtx.Values[string(key)].Value)
+			} else {
+				s.Len(lockCtx.Values[string(key)].Value, 0)
+			}
+			s.Equal(uint64(0), lockCtx.Values[string(key)].LockedWithConflictTS)
+			s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
+
+			txn.DoneAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+
+	// Conflicting cases
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			// Make different values
+			value := []byte(fmt.Sprintf("value-%v-%v", returnValues, checkExistence))
+			txn0 := s.begin()
+			txn0.SetPessimistic(true)
+			s.Nil(txn0.Set(key, value))
+
+			txn := s.begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+
+			s.Nil(txn0.Commit(context.Background()))
+			s.Greater(txn0.GetCommitTS(), txn.StartTS())
+
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
+
+			s.Equal(txn0.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+			v := lockCtx.Values[string(key)]
+			s.Equal(txn0.GetCommitTS(), v.LockedWithConflictTS)
+			s.True(v.Exists)
+			s.Equal(value, v.Value)
+
+			txn.CancelAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+}
+
+func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflictError() {
+	key := []byte("key")
+
+	for _, returnValues := range []bool{false, true} {
+		for _, checkExistence := range []bool{false, true} {
+			// Another transaction locked the key.
+			txn0 := s.begin()
+			txn0.SetPessimistic(true)
+			lockCtx := &kv.LockCtx{ForUpdateTS: txn0.StartTS(), WaitStartTime: time.Now()}
+			s.Nil(txn0.LockKeys(context.Background(), lockCtx, key))
+
+			// Test key is locked
+			txn := s.begin()
+			txn.SetPessimistic(true)
+			txn.StartAggressiveLocking()
+			lockCtx = kv.NewLockCtx(txn.StartTS(), 10, time.Now())
+			if checkExistence {
+				lockCtx.InitCheckExistence(1)
+			}
+			if returnValues {
+				lockCtx.InitReturnValues(1)
+			}
+			err := txn.LockKeys(context.Background(), lockCtx, key)
+			s.NotNil(err)
+			s.Equal(tikverr.ErrLockWaitTimeout.Error(), err.Error())
+			s.Equal([]string{}, txn.GetAggressiveLockingKeys())
+
+			// Abort the blocking transaction.
+			s.Nil(txn0.Rollback())
+
+			// Test region error
+			s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("PessimisticLockNotLeader")`))
+			err = txn.LockKeys(context.Background(), lockCtx, key)
+			s.Nil(err)
+			s.Nil(failpoint.Disable("tikvclient/tikvStoreSendReqResult"))
+			s.Equal([]string{"key"}, txn.GetAggressiveLockingKeys())
+			txn.CancelAggressiveLocking(context.Background())
+			s.Nil(txn.Rollback())
+		}
+	}
+}
+
+func (s *testCommitterSuite) TestAggressiveLocking() {
+	for _, finalIsDone := range []bool{false, true} {
+		txn := s.begin()
+		txn.SetPessimistic(true)
+		s.False(txn.IsInAggressiveLockingMode())
+
+		// Lock some keys in normal way.
+		lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+		s.checkIsKeyLocked([]byte("k1"), true)
+		s.checkIsKeyLocked([]byte("k2"), true)
+
+		// Enter aggressive locking mode and lock some keys.
+		txn.StartAggressiveLocking()
+		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		for _, key := range []string{"k2", "k3", "k4"} {
+			s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte(key)))
+			s.checkIsKeyLocked([]byte(key), true)
+		}
+		s.True(!txn.IsInAggressiveLockingStage([]byte("k2")))
+		s.True(txn.IsInAggressiveLockingStage([]byte("k3")))
+		s.True(txn.IsInAggressiveLockingStage([]byte("k4")))
+
+		// Retry and change some of the keys to be locked.
+		txn.RetryAggressiveLocking(context.Background())
+		s.checkIsKeyLocked([]byte("k1"), true)
+		s.checkIsKeyLocked([]byte("k2"), true)
+		s.checkIsKeyLocked([]byte("k3"), true)
+		s.checkIsKeyLocked([]byte("k4"), true)
+		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+		s.checkIsKeyLocked([]byte("k4"), true)
+		s.checkIsKeyLocked([]byte("k5"), true)
+
+		// Retry again, then the unnecessary locks acquired in the previous stage should be released.
+		txn.RetryAggressiveLocking(context.Background())
+		s.checkIsKeyLocked([]byte("k1"), true)
+		s.checkIsKeyLocked([]byte("k2"), true)
+		s.checkIsKeyLocked([]byte("k3"), false)
+		s.checkIsKeyLocked([]byte("k4"), true)
+		s.checkIsKeyLocked([]byte("k5"), true)
+
+		// Lock some different keys again and then done or cancel.
+		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+
+		if finalIsDone {
+			txn.DoneAggressiveLocking(context.Background())
+			time.Sleep(time.Millisecond * 50)
+			s.checkIsKeyLocked([]byte("k1"), true)
+			s.checkIsKeyLocked([]byte("k2"), true)
+			s.checkIsKeyLocked([]byte("k3"), false)
+			s.checkIsKeyLocked([]byte("k4"), false)
+			s.checkIsKeyLocked([]byte("k5"), true)
+			s.checkIsKeyLocked([]byte("k6"), true)
+		} else {
+			txn.CancelAggressiveLocking(context.Background())
+			time.Sleep(time.Millisecond * 50)
+			s.checkIsKeyLocked([]byte("k1"), true)
+			s.checkIsKeyLocked([]byte("k2"), true)
+			s.checkIsKeyLocked([]byte("k3"), false)
+			s.checkIsKeyLocked([]byte("k4"), false)
+			s.checkIsKeyLocked([]byte("k5"), false)
+			s.checkIsKeyLocked([]byte("k6"), false)
+		}
+
+		s.NoError(txn.Rollback())
+	}
+}
+
+func (s *testCommitterSuite) TestAggressiveLockingInsert() {
+	txn0 := s.begin()
+	s.NoError(txn0.Set([]byte("k1"), []byte("v1")))
+	s.NoError(txn0.Set([]byte("k3"), []byte("v3")))
+	s.NoError(txn0.Set([]byte("k6"), []byte("v6")))
+	s.NoError(txn0.Set([]byte("k8"), []byte("v8")))
+	s.NoError(txn0.Commit(context.Background()))
+
+	txn := s.begin()
+	txn.SetPessimistic(true)
+
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	lockCtx.InitReturnValues(2)
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+	s.NoError(txn.Set([]byte("k5"), []byte("v5")))
+	s.NoError(txn.Delete([]byte("k6")))
+
+	insertPessimisticLock := func(lockCtx *kv.LockCtx, key string) error {
+		txn.GetMemBuffer().UpdateFlags([]byte(key), kv.SetPresumeKeyNotExists)
+		if lockCtx == nil {
+			lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		}
+		return txn.LockKeys(context.Background(), lockCtx, []byte(key))
+	}
+
+	mustAlreadyExist := func(err error) {
+		if _, ok := errors.Cause(err).(*tikverr.ErrKeyExist); !ok {
+			s.Fail(fmt.Sprintf("expected KeyExist error, but got: %+q", err))
+		}
+	}
+
+	txn.StartAggressiveLocking()
+	// Already-locked before aggressive locking.
+	mustAlreadyExist(insertPessimisticLock(nil, "k1"))
+	s.NoError(insertPessimisticLock(nil, "k2"))
+	// Acquiring new locks normally.
+	mustAlreadyExist(insertPessimisticLock(nil, "k3"))
+	s.NoError(insertPessimisticLock(nil, "k4"))
+	// The key added or deleted in the same transaction before entering aggressive locking.
+	// Since TiDB can detect it before invoking LockKeys, client-go actually didn't handle this case for now (no matter
+	// if in aggressive locking or not). So skip this test case here, and it can be uncommented if someday client-go
+	// supports such check.
+	// mustAlreadyExist(insertPessimisticLock(nil, "k5"))
+	// s.NoError(insertPessimisticLock(nil, "k6"))
+
+	// Locked with conflict and then do pessimistic retry.
+	txn2 := s.begin()
+	s.NoError(txn2.Set([]byte("k7"), []byte("v7")))
+	s.NoError(txn2.Delete([]byte("k8")))
+	s.NoError(txn2.Commit(context.Background()))
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	err := insertPessimisticLock(lockCtx, "k7")
+	s.IsType(errors.Cause(err), &tikverr.ErrWriteConflict{})
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(insertPessimisticLock(lockCtx, "k8"))
+	s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+	s.Equal(txn2.GetCommitTS(), lockCtx.Values["k8"].LockedWithConflictTS)
+	// Update forUpdateTS to simulate a pessimistic retry.
+	newForUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.Nil(err)
+	s.GreaterOrEqual(newForUpdateTS, txn2.GetCommitTS())
+	lockCtx = &kv.LockCtx{ForUpdateTS: newForUpdateTS, WaitStartTime: time.Now()}
+	mustAlreadyExist(insertPessimisticLock(lockCtx, "k7"))
+	s.NoError(insertPessimisticLock(lockCtx, "k8"))
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+}
+
+func (s *testCommitterSuite) TestAggressiveLockingLockOnlyIfExists() {
+	// txn conflicts with txn0, key exists
+	txn := s.begin()
+	txn.SetPessimistic(true)
+
+	txn0 := s.begin()
+	s.NoError(txn0.Set([]byte("k1"), []byte("v1")))
+	s.NoError(txn0.Commit(context.Background()))
+	txn0CommitTS := txn0.GetCommitTS()
+
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.True(lockCtx.Values["k1"].Exists)
+	s.False(lockCtx.Values["k1"].AlreadyLocked)
+	s.Equal(lockCtx.Values["k1"].Value, []byte("v1"))
+	s.Equal(lockCtx.Values["k1"].LockedWithConflictTS, txn0CommitTS)
+	s.Equal(txn.GetAggressiveLockingKeys(), []string{"k1"})
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+
+	// txn conflicts with txn0, key doesn't exist. Returns WriteConflict error.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+
+	txn0 = s.begin()
+	s.NoError(txn0.Delete([]byte("k1")))
+	s.NoError(txn0.Commit(context.Background()))
+	txn0CommitTS = txn0.GetCommitTS()
+
+	txn.StartAggressiveLocking()
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
+	err := txn.LockKeys(context.Background(), lockCtx, []byte("k1"))
+	s.NotNil(err)
+	s.IsType(errors.Cause(err), &tikverr.ErrWriteConflict{})
+	s.NotContains(lockCtx.Values, "k1")
+	s.Equal(txn.GetAggressiveLockingKeys(), []string{})
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.NoError(txn.Rollback())
+}
+
+func (s *testCommitterSuite) TestAggressiveLockingSwitchPrimary() {
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	checkPrimary := func(key string, expectedPrimary string) {
+		lockInfo := s.getLockInfo([]byte(key))
+		s.Equal(kvrpcpb.Op_PessimisticLock, lockInfo.LockType)
+		s.Equal(expectedPrimary, string(lockInfo.PrimaryLock))
+	}
+
+	forUpdateTS := txn.StartTS()
+	txn.StartAggressiveLocking()
+	lockCtx := &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	checkPrimary("k1", "k1")
+	checkPrimary("k2", "k1")
+
+	// Primary not changed.
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	checkPrimary("k1", "k1")
+	checkPrimary("k3", "k1")
+
+	// Primary changed and is not in the set of previously locked keys.
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	checkPrimary("k4", "k4")
+	checkPrimary("k5", "k4")
+	// Previously locked keys that are not in the most recent aggressive locking stage will be released.
+	s.checkIsKeyLocked([]byte("k2"), false)
+
+	// Primary changed and is in the set of previously locked keys.
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+	checkPrimary("k5", "k5")
+	checkPrimary("k6", "k5")
+	s.checkIsKeyLocked([]byte("k1"), false)
+	s.checkIsKeyLocked([]byte("k3"), false)
+
+	// Primary changed and is locked *before* the previous aggressive locking stage (suppose it's the n-th retry,
+	// the expected primary is locked during the (n-2)-th retry).
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k7")))
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k6")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k5")))
+	checkPrimary("k5", "k6")
+	checkPrimary("k6", "k6")
+
+	txn.CancelAggressiveLocking(context.Background())
+	// Check all released.
+	for i := 0; i < 6; i++ {
+		key := []byte{byte('k'), byte('1') + byte(i)}
+		s.checkIsKeyLocked(key, false)
+	}
+	s.NoError(txn.Rollback())
+
+	// Also test the primary-switching logic won't misbehave when the primary is already selected before entering
+	// aggressive locking.
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	forUpdateTS = txn.StartTS()
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1"), []byte("k2")))
+	checkPrimary("k1", "k1")
+	checkPrimary("k2", "k1")
+
+	txn.StartAggressiveLocking()
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	checkPrimary("k2", "k1")
+	checkPrimary("k3", "k1")
+
+	forUpdateTS++
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3")))
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k4")))
+	checkPrimary("k3", "k1")
+	checkPrimary("k4", "k1")
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.checkIsKeyLocked([]byte("k1"), true)
+	s.checkIsKeyLocked([]byte("k2"), true)
+	s.checkIsKeyLocked([]byte("k3"), false)
+	s.checkIsKeyLocked([]byte("k4"), false)
+	s.NoError(txn.Rollback())
+	s.checkIsKeyLocked([]byte("k1"), false)
+	s.checkIsKeyLocked([]byte("k2"), false)
+
+}
+
+func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
+	txn0 := s.begin()
+	s.NoError(txn0.Set([]byte("k2"), []byte("v2")))
+	s.NoError(txn0.Commit(context.Background()))
+
+	for _, firstAttemptLockedWithConflict := range []bool{false, true} {
+		txn := s.begin()
+		txn.SetPessimistic(true)
+
+		// Make the primary deterministic to avoid the following test code involves primary re-selecting logic.
+		lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k0")))
+
+		forUpdateTS := txn.StartTS()
+		txn.StartAggressiveLocking()
+		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+
+		var txn2 transaction.TxnProbe
+		if firstAttemptLockedWithConflict {
+			txn2 = s.begin()
+			s.NoError(txn2.Delete([]byte("k1")))
+			s.NoError(txn2.Set([]byte("k2"), []byte("v2")))
+			s.NoError(txn2.Commit(context.Background()))
+		}
+
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+
+		if firstAttemptLockedWithConflict {
+			s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+			s.Equal(txn2.GetCommitTS(), lockCtx.Values["k1"].LockedWithConflictTS)
+			s.Equal(txn2.GetCommitTS(), lockCtx.Values["k2"].LockedWithConflictTS)
+		}
+
+		if firstAttemptLockedWithConflict {
+			forUpdateTS = txn2.GetCommitTS() + 1
+		} else {
+			forUpdateTS++
+		}
+		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+		lockCtx.InitCheckExistence(2)
+		txn.RetryAggressiveLocking(context.Background())
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
+		s.Equal(false, lockCtx.Values["k1"].Exists)
+		s.Equal(true, lockCtx.Values["k2"].Exists)
+
+		forUpdateTS++
+		lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+		lockCtx.InitReturnValues(2)
+		txn.RetryAggressiveLocking(context.Background())
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+		s.Equal(uint64(0), lockCtx.MaxLockedWithConflictTS)
+		s.Equal(false, lockCtx.Values["k1"].Exists)
+		s.Equal(true, lockCtx.Values["k2"].Exists)
+		s.Equal([]byte("v2"), lockCtx.Values["k2"].Value)
+
+		txn.CancelAggressiveLocking(context.Background())
+		s.NoError(txn.Rollback())
+	}
+}
+
+func (s *testCommitterSuite) TestAggressiveLockingExitIfInapplicable() {
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	s.True(txn.IsInAggressiveLockingMode())
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+
+	txn.RetryAggressiveLocking(context.Background())
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
+	s.True(txn.IsInAggressiveLockingMode())
+
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k3"), []byte("k4")))
+	s.False(txn.IsInAggressiveLockingMode())
+	s.checkIsKeyLocked([]byte("k1"), false)
+	s.checkIsKeyLocked([]byte("k2"), true)
+	s.checkIsKeyLocked([]byte("k3"), true)
+	s.checkIsKeyLocked([]byte("k4"), true)
+
+	s.NoError(txn.Rollback())
 }
 
 // TestElapsedTTL tests that elapsed time is correct even if ts physical time is greater than local time.
@@ -1054,12 +1828,23 @@ func (s *testCommitterSuite) TestPessimisticLockPrimary() {
 	s.Equal(tikverr.ErrLockWaitTimeout, errors.Unwrap(waitErr))
 }
 
+type kvFilter struct{}
+
+func (f kvFilter) IsUnnecessaryKeyValue(key, value []byte, flags kv.KeyFlags) (bool, error) {
+	untouched := bytes.Equal(key, []byte("t00000001_i000000001"))
+	if untouched && flags.HasPresumeKeyNotExists() {
+		return false, errors.New("unexpected path the untouched key value with PresumeKeyNotExists flag")
+	}
+	return untouched, nil
+}
+
 func (s *testCommitterSuite) TestResolvePessimisticLock() {
 	untouchedIndexKey := []byte("t00000001_i000000001")
 	untouchedIndexValue := []byte{0, 0, 0, 0, 0, 0, 0, 1, 49}
 	noValueIndexKey := []byte("t00000001_i000000002")
+
 	txn := s.begin()
-	txn.SetKVFilter(drivertxn.TiDBKVFilter{})
+	txn.SetKVFilter(kvFilter{})
 	err := txn.Set(untouchedIndexKey, untouchedIndexValue)
 	s.Nil(err)
 	lockCtx := kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now())
@@ -1083,8 +1868,8 @@ func (s *testCommitterSuite) TestCommitDeadLock() {
 	k1 := []byte("a_deadlock_k1")
 	k2 := []byte("y_deadlock_k2")
 
-	region1, _ := s.cluster.GetRegionByKey(k1)
-	region2, _ := s.cluster.GetRegionByKey(k2)
+	region1, _, _ := s.cluster.GetRegionByKey(k1)
+	region2, _, _ := s.cluster.GetRegionByKey(k2)
 	s.True(region1.Id != region2.Id)
 
 	txn1 := s.begin()
@@ -1215,7 +2000,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 	// stop txn ttl manager and remove primary key, make the other keys left behind
 	committer.CloseTTLManager()
 	muts := transaction.NewPlainMutations(1)
-	muts.Push(kvrpcpb.Op_Lock, pk, nil, true)
+	muts.Push(kvrpcpb.Op_Lock, pk, nil, true, false, false, false)
 	err = committer.PessimisticRollbackMutations(context.Background(), &muts)
 	s.Nil(err)
 
@@ -1244,7 +2029,7 @@ func (s *testCommitterSuite) TestResolveMixed() {
 // accurate list of secondary keys.
 func (s *testCommitterSuite) TestPrewriteSecondaryKeys() {
 	// Prepare two regions first: (, 100) and [100, )
-	region, _ := s.cluster.GetRegionByKey([]byte{50})
+	region, _, _ := s.cluster.GetRegionByKey([]byte{50})
 	newRegionID := s.cluster.AllocID()
 	newPeerID := s.cluster.AllocID()
 	s.cluster.Split(region.Id, newRegionID, []byte{100}, []uint64{newPeerID}, newPeerID)
@@ -1264,7 +2049,7 @@ func (s *testCommitterSuite) TestPrewriteSecondaryKeys() {
 	committer, err := txn.NewCommitter(1)
 	s.Nil(err)
 
-	mock := mockClient{inner: s.store.GetTiKVClient()}
+	mock := mockClient{Client: s.store.GetTiKVClient()}
 	s.store.SetTiKVClient(&mock)
 	ctx := context.Background()
 	// TODO remove this when minCommitTS is returned from mockStore prewrite response.
@@ -1298,6 +2083,55 @@ func (s *testCommitterSuite) TestAsyncCommit() {
 		string(pk): string(pkVal),
 		string(k1): string(k1Val),
 	})
+}
+
+func (s *testCommitterSuite) TestRetryPushTTL() {
+	ctx := context.Background()
+	k := []byte("a")
+
+	txn1 := s.begin()
+	txn1.SetPessimistic(true)
+	// txn1 lock k
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn1.StartTS(), WaitStartTime: time.Now()}
+	err := txn1.LockKeys(ctx, lockCtx, k)
+	s.Nil(err)
+	txn2 := s.begin()
+	txn2.SetPessimistic(true)
+	txn2GotLock := make(chan struct{})
+	txn3GotLock := make(chan struct{})
+	go func() {
+		// txn2 tries to lock k, will blocked by txn1
+		lockCtx := &kv.LockCtx{ForUpdateTS: txn2.StartTS(), WaitStartTime: time.Now()}
+		// after txn1 rolled back, txn2 should acquire its lock successfully
+		// with the **latest** ttl
+		err := txn2.LockKeys(ctx, lockCtx, k)
+		s.Nil(err)
+		txn2GotLock <- struct{}{}
+	}()
+	time.Sleep(time.Second * 2)
+	txn1.Rollback()
+	<-txn2GotLock
+	txn3 := s.begin()
+	txn3.SetPessimistic(true)
+	lockCtx = &kv.LockCtx{ForUpdateTS: txn3.StartTS(), WaitStartTime: time.Now()}
+	done := make(chan struct{})
+	go func() {
+		// if txn2 use the old ttl calculation method, here txn3 can resolve its lock and
+		// get lock successfully here, which is not expected behavior
+		txn3.LockKeys(ctx, lockCtx, k)
+		txn3GotLock <- struct{}{}
+		txn3.Rollback()
+		done <- struct{}{}
+	}()
+	select {
+	case <-txn3GotLock:
+		s.Fail("txn3 should not get lock at this time")
+	case <-time.After(time.Second * 2):
+		break
+	}
+	txn2.Rollback()
+	<-txn3GotLock
+	<-done
 }
 
 func updateGlobalConfig(f func(conf *config.Config)) {
@@ -1348,7 +2182,7 @@ func (s *testCommitterSuite) TestAsyncCommitCheck() {
 }
 
 type mockClient struct {
-	inner            tikv.Client
+	tikv.Client
 	seenPrimaryReq   uint32
 	seenSecondaryReq uint32
 }
@@ -1370,11 +2204,7 @@ func (m *mockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.
 			}
 		}
 	}
-	return m.inner.SendRequest(ctx, addr, req, timeout)
-}
-
-func (m *mockClient) Close() error {
-	return m.inner.Close()
+	return m.Client.SendRequest(ctx, addr, req, timeout)
 }
 
 func isPrimary(req *kvrpcpb.PrewriteRequest) bool {
@@ -1549,4 +2379,126 @@ func (s *testCommitterSuite) TestCommitMultipleRegions() {
 		m[k] = v
 	}
 	s.mustCommit(m)
+}
+
+func (s *testCommitterSuite) TestNewlyInsertedMemDBFlag() {
+	ctx := context.Background()
+	txn := s.begin()
+	memdb := txn.GetMemBuffer()
+	k0 := []byte("k0")
+	v0 := []byte("v0")
+	k1 := []byte("k1")
+	k2 := []byte("k2")
+	v1 := []byte("v1")
+	v2 := []byte("v2")
+
+	// Insert after delete, the newly inserted flag should not exist.
+	err := txn.Delete(k0)
+	s.Nil(err)
+	err = txn.Set(k0, v0)
+	s.Nil(err)
+	flags, err := memdb.GetFlags(k0)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+
+	// Lock then insert, the newly inserted flag should exist.
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	err = txn.LockKeys(context.Background(), lockCtx, k1)
+	s.Nil(err)
+	err = txn.GetMemBuffer().SetWithFlags(k1, v1, kv.SetNewlyInserted)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k1)
+	s.Nil(err)
+	s.True(flags.HasNewlyInserted())
+
+	// Lock then delete and insert, the newly inserted flag should not exist.
+	err = txn.LockKeys(ctx, lockCtx, k2)
+	s.Nil(err)
+	err = txn.Delete(k2)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k2)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+	err = txn.Set(k2, v2)
+	s.Nil(err)
+	flags, err = memdb.GetFlags(k2)
+	s.Nil(err)
+	s.False(flags.HasNewlyInserted())
+
+	err = txn.Commit(ctx)
+	s.Nil(err)
+}
+
+func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
+	// Get a MemDB object from a transaction object.
+	db := s.begin().GetMemBuffer()
+
+	// A helper for iterating all cases.
+	forEachCase := func(f func(op kvrpcpb.Op, key []byte, value []byte, index int, isPessimisticLock, assertExist, assertNotExist bool)) {
+		keyIndex := 0
+		for _, op := range []kvrpcpb.Op{kvrpcpb.Op_Put, kvrpcpb.Op_Del, kvrpcpb.Op_CheckNotExists} {
+			for flags := 0; flags < (1 << 3); flags++ {
+				key := []byte(fmt.Sprintf("k%05d", keyIndex))
+				value := []byte(fmt.Sprintf("v%05d", keyIndex))
+
+				// `flag` Iterates all combinations of flags in binary.
+				isPessimisticLock := (flags & 0x4) != 0
+				assertExist := (flags & 0x2) != 0
+				assertNotExist := (flags & 0x1) != 0
+
+				f(op, key, value, keyIndex, isPessimisticLock, assertExist, assertNotExist)
+				keyIndex++
+			}
+		}
+	}
+
+	// Put some keys to the MemDB
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		if op == kvrpcpb.Op_Put {
+			err := db.Set(key, value)
+			s.Nil(err)
+		} else if op == kvrpcpb.Op_Del {
+			err := db.Delete(key)
+			s.Nil(err)
+		} else {
+			db.UpdateFlags(key, kv.SetPresumeKeyNotExists)
+		}
+	})
+
+	// Create memBufferMutations object and add keys with flags to it.
+	mutations := transaction.NewMemBufferMutationsProbe(db.Len(), db)
+
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		handle := db.IterWithFlags(key, nil).Handle()
+		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, false, handle)
+	})
+
+	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
+		s.Equal(key, mutations.GetKey(i))
+		s.Equal(op, mutations.GetOp(i))
+		s.Equal(isPessimisticLock, mutations.IsPessimisticLock(i))
+		s.Equal(assertExist, mutations.IsAssertExists(i))
+		s.Equal(assertNotExist, mutations.IsAssertNotExist(i))
+	})
+}
+
+func (s *testCommitterSuite) TestExtractKeyExistsErr() {
+	txn := s.begin()
+	err := txn.Set([]byte("de"), []byte("ef"))
+	s.Nil(err)
+	err = txn.Commit(context.Background())
+	s.Nil(err)
+
+	txn = s.begin()
+	err = txn.GetMemBuffer().SetWithFlags([]byte("de"), []byte("fg"), kv.SetPresumeKeyNotExists)
+	s.Nil(err)
+	committer, err := txn.NewCommitter(0)
+	s.Nil(err)
+	// Forcibly construct a case when Op_Insert is prewritten while not having KeyNotExists flag.
+	// In real use cases, it should only happen when enabling amending transactions.
+	txn.GetMemBuffer().UpdateFlags([]byte("de"), kv.DelPresumeKeyNotExists)
+	err = committer.PrewriteAllMutations(context.Background())
+	s.ErrorContains(err, "existErr")
+	s.True(txn.GetMemBuffer().TryLock())
+	txn.GetMemBuffer().Unlock()
 }

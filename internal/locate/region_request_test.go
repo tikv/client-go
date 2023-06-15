@@ -44,6 +44,7 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
+	"github.com/pingcap/kvproto/pkg/disaggregated"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -51,6 +52,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
@@ -78,7 +80,7 @@ func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
 	s.mvccStore = mocktikv.MustNewMVCCStore()
 	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.store, s.peer, s.region = mocktikv.BootstrapWithSingleStore(s.cluster)
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
@@ -91,10 +93,16 @@ func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 }
 
 type fnClient struct {
-	fn func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+	fn         func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+	closedAddr string
 }
 
 func (f *fnClient) Close() error {
+	return nil
+}
+
+func (f *fnClient) CloseAddr(addr string) error {
+	f.closedAddr = addr
 	return nil
 }
 
@@ -117,14 +125,14 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 		defer func() {
 			s.regionRequestSender.client = oc
 		}()
-		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			staleResp := &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
 				RegionError: &errorpb.Error{StaleCommand: &errorpb.StaleCommand{}},
 			}}
 			return staleResp, nil
 		}}
 		bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
-		resp, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+		resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.NotNil(resp)
 		regionErr, _ := resp.GetRegionError()
@@ -140,14 +148,14 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart()
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
-	resp, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	resp, _, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 	s.Nil(s.regionRequestSender.rpcError)
 
 	// stop store.
 	s.cluster.StopStore(s.store)
-	_, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	_, _, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.NotNil(err)
 	// The RPC error shouldn't be nil since it failed to sent the request.
 	s.NotNil(s.regionRequestSender.rpcError)
@@ -161,7 +169,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart()
 	s.Nil(err)
 	s.NotNil(region)
 	s.NotNil(s.regionRequestSender.rpcError)
-	resp, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	resp, _, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 }
@@ -182,7 +190,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStor
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
-	resp, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	resp, _, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 
@@ -192,7 +200,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStor
 
 	// send to store2 fail and send to new leader store1.
 	bo2 := retry.NewBackofferWithVars(context.Background(), 100, nil)
-	resp, err = s.regionRequestSender.SendReq(bo2, req, region.Region, time.Second)
+	resp, _, err = s.regionRequestSender.SendReq(bo2, req, region.Region, time.Second)
 	s.Nil(err)
 	regionErr, err := resp.GetRegionError()
 	s.Nil(err)
@@ -208,12 +216,12 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqCtx() {
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
-	resp, ctx, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 	s.NotNil(ctx)
 	req.ReplicaRead = true
-	resp, ctx, err = s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 	s.NotNil(ctx)
@@ -227,7 +235,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
-	resp, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	resp, _, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 
@@ -235,7 +243,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
 	s.cluster.CancelStore(s.store)
 	// locate region again is needed
 	// since last request on the region failed and region's info had been cleared.
-	_, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	_, _, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.NotNil(err)
 	s.Equal(errors.Cause(err), context.Canceled)
 
@@ -244,7 +252,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
-	resp, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
+	resp, _, err = s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp.Resp)
 }
@@ -262,7 +270,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionWhenCtxCanceled(
 	bo, cancel := s.bo.Fork()
 	cancel()
 	// Call SendKVReq with a canceled context.
-	_, err = sender.SendReq(bo, req, region.Region, time.Second)
+	_, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	// Check this kind of error won't cause region cache drop.
 	s.Equal(errors.Cause(err), context.Canceled)
 	s.NotNil(sender.regionCache.getRegionByIDFromCache(s.region))
@@ -282,6 +290,8 @@ func (c *cancelContextClient) SendRequest(ctx context.Context, addr string, req 
 
 // mockTikvGrpcServer mock a tikv gprc server for testing.
 type mockTikvGrpcServer struct{}
+
+var _ tikvpb.TikvServer = &mockTikvGrpcServer{}
 
 // KvGet commands with mvcc/txn supported.
 func (s *mockTikvGrpcServer) KvGet(context.Context, *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, error) {
@@ -454,6 +464,54 @@ func (s *mockTikvGrpcServer) RawChecksum(context.Context, *kvrpcpb.RawChecksumRe
 	return nil, errors.New("unreachable")
 }
 
+func (s *mockTikvGrpcServer) Compact(ctx context.Context, request *kvrpcpb.CompactRequest) (*kvrpcpb.CompactResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) GetLockWaitHistory(ctx context.Context, request *kvrpcpb.GetLockWaitHistoryRequest) (*kvrpcpb.GetLockWaitHistoryResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) TryAddLock(context.Context, *disaggregated.TryAddLockRequest) (*disaggregated.TryAddLockResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) TryMarkDelete(context.Context, *disaggregated.TryMarkDeleteRequest) (*disaggregated.TryMarkDeleteResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) KvFlashbackToVersion(context.Context, *kvrpcpb.FlashbackToVersionRequest) (*kvrpcpb.FlashbackToVersionResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) KvPrepareFlashbackToVersion(context.Context, *kvrpcpb.PrepareFlashbackToVersionRequest) (*kvrpcpb.PrepareFlashbackToVersionResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) EstablishDisaggTask(context.Context, *disaggregated.EstablishDisaggTaskRequest) (*disaggregated.EstablishDisaggTaskResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) FetchDisaggPages(*disaggregated.FetchDisaggPagesRequest, tikvpb.Tikv_FetchDisaggPagesServer) error {
+	return errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) TabletSnapshot(_ tikvpb.Tikv_TabletSnapshotServer) error {
+	return errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) GetTiFlashSystemTable(context.Context, *kvrpcpb.TiFlashSystemTableRequest) (*kvrpcpb.TiFlashSystemTableResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) GetDisaggConfig(context.Context, *disaggregated.GetDisaggConfigRequest) (*disaggregated.GetDisaggConfigResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) CancelDisaggTask(context.Context, *disaggregated.CancelDisaggTaskRequest) (*disaggregated.CancelDisaggTaskResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCanceled() {
 	// prepare a mock tikv grpc server
 	addr := "localhost:56341"
@@ -479,7 +537,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 
 	bo, cancel := s.bo.Fork()
 	cancel()
-	_, err = sender.SendReq(bo, req, region.Region, 3*time.Second)
+	_, _, err = sender.SendReq(bo, req, region.Region, 3*time.Second)
 	s.Equal(errors.Cause(err), context.Canceled)
 	s.NotNil(s.cache.getRegionByIDFromCache(s.region))
 
@@ -511,7 +569,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnMaxTimestampNotSyncedError()
 			s.regionRequestSender.client = oc
 		}()
 		count := 0
-		s.regionRequestSender.client = &fnClient{func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			count++
 			var resp *tikvrpc.Response
 			if count < 3 {
@@ -524,7 +582,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnMaxTimestampNotSyncedError()
 			return resp, nil
 		}}
 		bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
-		resp, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+		resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.NotNil(resp)
 	}()
@@ -566,4 +624,36 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	s.NotNil(region)
 	s.Equal(region.Region.confVer, region.Region.confVer)
 	s.Equal(region.Region.ver, v3)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestCloseConnectionOnStoreNotMatch() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+
+	oc := s.regionRequestSender.client
+	defer func() {
+		s.regionRequestSender.client = oc
+	}()
+
+	var target string
+	client := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		target = addr
+		resp := &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			RegionError: &errorpb.Error{StoreNotMatch: &errorpb.StoreNotMatch{}},
+		}}
+		return resp, nil
+	}}
+
+	s.regionRequestSender.client = client
+	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.NotNil(regionErr)
+	s.Equal(target, client.closedAddr)
 }

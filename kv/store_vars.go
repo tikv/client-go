@@ -41,6 +41,17 @@ import (
 // StoreLimit will update from config reload and global variable set.
 var StoreLimit atomic.Int64
 
+// DefTxnCommitBatchSize is the default value of TxnCommitBatchSize.
+const DefTxnCommitBatchSize uint64 = 16 * 1024
+
+// TxnCommitBatchSize controls the batch size of transaction commit related requests sent by client to TiKV,
+// TiKV recommends each RPC packet should be less than ~1MB.
+var TxnCommitBatchSize atomic.Uint64
+
+func init() {
+	TxnCommitBatchSize.Store(DefTxnCommitBatchSize)
+}
+
 // ReplicaReadType is the type of replica to read data from
 type ReplicaReadType byte
 
@@ -51,6 +62,10 @@ const (
 	ReplicaReadFollower
 	// ReplicaReadMixed stands for 'read from leader and follower and learner'.
 	ReplicaReadMixed
+	// ReplicaReadLearner stands for 'read from learner'.
+	ReplicaReadLearner
+	// ReplicaReadPreferLeader stands for 'read from leader and auto-turn to followers if leader is abnormal'.
+	ReplicaReadPreferLeader
 )
 
 // IsFollowerRead checks if follower is going to be used to read data.

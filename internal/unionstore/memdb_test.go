@@ -53,16 +53,6 @@ func init() {
 	testMode = true
 }
 
-// DeleteKey is used in test to verify the `deleteNode` used in `vlog.revertToCheckpoint`.
-func (db *MemDB) DeleteKey(key []byte) {
-	x := db.traverse(key, false)
-	if x.isNull() {
-		return
-	}
-	db.size -= len(db.vlog.getValue(x.vptr))
-	db.deleteNode(x)
-}
-
 func TestGetSet(t *testing.T) {
 	require := require.New(t)
 
@@ -837,4 +827,16 @@ func TestBufferLimit(t *testing.T) {
 
 	err = buffer.Delete(make([]byte, 500))
 	assert.NotNil(err)
+}
+
+func TestUnsetTemporaryFlag(t *testing.T) {
+	require := require.New(t)
+	db := newMemDB()
+	key := []byte{1}
+	value := []byte{2}
+	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
+	db.Set(key, value)
+	flags, err := db.GetFlags(key)
+	require.Nil(err)
+	require.False(flags.HasNeedConstraintCheckInPrewrite())
 }

@@ -52,49 +52,86 @@ import (
 // call ResolveLock, and if the lock belongs to a large transaction, we may retry
 // the request. If there is no context information about the resolved locks, we'll
 // meet the secondary lock again and run into a deadloop.
+//
+// ClientHelper is only used for read operations because these optimizations don't apply
+// to write operations.
 type ClientHelper struct {
-	lockResolver  *txnlock.LockResolver
-	regionCache   *locate.RegionCache
-	resolvedLocks *util.TSSet
-	client        client.Client
-	resolveLite   bool
+	lockResolver   *txnlock.LockResolver
+	regionCache    *locate.RegionCache
+	resolvedLocks  *util.TSSet
+	committedLocks *util.TSSet
+	client         client.Client
+	resolveLite    bool
 	locate.RegionRequestRuntimeStats
 }
 
 // NewClientHelper creates a helper instance.
-func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, resolveLite bool) *ClientHelper {
+func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, committedLocks *util.TSSet, resolveLite bool) *ClientHelper {
 	return &ClientHelper{
-		lockResolver:  store.GetLockResolver(),
-		regionCache:   store.GetRegionCache(),
-		resolvedLocks: resolvedLocks,
-		client:        store.GetTiKVClient(),
-		resolveLite:   resolveLite,
+		lockResolver:   store.GetLockResolver(),
+		regionCache:    store.GetRegionCache(),
+		resolvedLocks:  resolvedLocks,
+		committedLocks: committedLocks,
+		client:         store.GetTiKVClient(),
+		resolveLite:    resolveLite,
 	}
 }
 
-// ResolveLocks wraps the ResolveLocks function and store the resolved result.
-func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*txnlock.Lock) (int64, error) {
-	var err error
-	var resolvedLocks []uint64
-	var msBeforeTxnExpired int64
+// ResolveLocksWithOpts wraps the ResolveLocksWithOpts function and store the resolved result.
+func (ch *ClientHelper) ResolveLocksWithOpts(bo *retry.Backoffer, opts txnlock.ResolveLocksOptions) (txnlock.ResolveLockResult, error) {
 	if ch.Stats != nil {
 		defer func(start time.Time) {
 			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
 		}(time.Now())
 	}
-	if ch.resolveLite {
-		msBeforeTxnExpired, resolvedLocks, err = ch.lockResolver.ResolveLocksLite(bo, callerStartTS, locks)
-	} else {
-		msBeforeTxnExpired, resolvedLocks, err = ch.lockResolver.ResolveLocks(bo, callerStartTS, locks)
+	opts.ForRead = true
+	opts.Lite = ch.resolveLite
+	res, err := ch.lockResolver.ResolveLocksWithOpts(bo, opts)
+	if err != nil {
+		return res, err
 	}
+	if len(res.IgnoreLocks) > 0 {
+		ch.resolvedLocks.Put(res.IgnoreLocks...)
+	}
+	if len(res.AccessLocks) > 0 {
+		ch.committedLocks.Put(res.AccessLocks...)
+	}
+	return res, nil
+}
+
+// ResolveLocks wraps the ResolveLocks function and store the resolved result.
+func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*txnlock.Lock) (int64, error) {
+	if ch.Stats != nil {
+		defer func(start time.Time) {
+			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
+		}(time.Now())
+	}
+	msBeforeTxnExpired, resolvedLocks, committedLocks, err := ch.lockResolver.ResolveLocksForRead(bo, callerStartTS, locks, ch.resolveLite)
 	if err != nil {
 		return msBeforeTxnExpired, err
 	}
 	if len(resolvedLocks) > 0 {
 		ch.resolvedLocks.Put(resolvedLocks...)
-		return 0, nil
+	}
+	if len(committedLocks) > 0 {
+		ch.committedLocks.Put(committedLocks...)
 	}
 	return msBeforeTxnExpired, nil
+}
+
+// UpdateResolvingLocks wraps the UpdateResolvingLocks function
+func (ch *ClientHelper) UpdateResolvingLocks(locks []*txnlock.Lock, callerStartTS uint64, token int) {
+	ch.lockResolver.UpdateResolvingLocks(locks, callerStartTS, token)
+}
+
+// RecordResolvingLocks wraps the RecordResolvingLocks function
+func (ch *ClientHelper) RecordResolvingLocks(locks []*txnlock.Lock, callerStartTS uint64) int {
+	return ch.lockResolver.RecordResolvingLocks(locks, callerStartTS)
+}
+
+// ResolveLocksDone wraps the ResolveLocksDone function
+func (ch *ClientHelper) ResolveLocksDone(callerStartTS uint64, token int) {
+	ch.lockResolver.ResolveLocksDone(callerStartTS, token)
 }
 
 // SendReqCtx wraps the SendReqCtx function and use the resolved lock result in the kvrpcpb.Context.
@@ -105,6 +142,7 @@ func (ch *ClientHelper) SendReqCtx(bo *retry.Backoffer, req *tikvrpc.Request, re
 	}
 	sender.Stats = ch.Stats
 	req.Context.ResolvedLocks = ch.resolvedLocks.GetAll()
-	resp, ctx, err := sender.SendReqCtx(bo, req, regionID, timeout, et, opts...)
+	req.Context.CommittedLocks = ch.committedLocks.GetAll()
+	resp, ctx, _, err := sender.SendReqCtx(bo, req, regionID, timeout, et, opts...)
 	return resp, ctx, sender.GetStoreAddr(), err
 }

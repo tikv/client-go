@@ -71,6 +71,15 @@ type testAsyncCommitCommon struct {
 	store   *tikv.KVStore
 }
 
+// TODO(youjiali1995): remove it after updating TiDB.
+type unistoreClientWrapper struct {
+	*unistore.RPCClient
+}
+
+func (c *unistoreClientWrapper) CloseAddr(addr string) error {
+	return nil
+}
+
 func (s *testAsyncCommitCommon) setUpTest() {
 	if *withTiKV {
 		s.store = NewTestStore(s.T())
@@ -82,7 +91,7 @@ func (s *testAsyncCommitCommon) setUpTest() {
 
 	unistore.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
-	store, err := tikv.NewTestTiKVStore(fpClient{Client: client}, pdClient, nil, nil, 0)
+	store, err := tikv.NewTestTiKVStore(fpClient{Client: &unistoreClientWrapper{client}}, pdClient, nil, nil, 0)
 	s.Require().Nil(err)
 
 	s.store = store
@@ -255,7 +264,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	status := lockutil.NewLockStatus(nil, true, ts)
 
 	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
-	err = resolver.ResolveLockAsync(s.bo, lock, status)
+	err = resolver.ResolveAsyncCommitLock(s.bo, lock, status)
 	s.Nil(err)
 	currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	s.Nil(err)
@@ -274,7 +283,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	gotResolve := int64(0)
 	gotOther := int64(0)
 	mock := mockResolveClient{
-		inner: s.store.GetTiKVClient(),
+		Client: s.store.GetTiKVClient(),
 		onCheckSecondaries: func(req *kvrpcpb.CheckSecondaryLocksRequest) (*tikvrpc.Response, error) {
 			if req.StartVersion != ts {
 				return nil, errors.Errorf("Bad start version: %d, expected: %d", req.StartVersion, ts)
@@ -334,7 +343,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 
 	_ = s.beginAsyncCommit()
 
-	err = resolver.ResolveLockAsync(s.bo, lock, status)
+	err = resolver.ResolveAsyncCommitLock(s.bo, lock, status)
 	s.Nil(err)
 	s.Equal(gotCheckA, int64(1))
 	s.Equal(gotCheckB, int64(1))
@@ -371,7 +380,7 @@ func (s *testAsyncCommitSuite) TestCheckSecondaries() {
 	lock.TxnID = ts
 	lock.MinCommitTS = ts + 5
 
-	err = resolver.ResolveLockAsync(s.bo, lock, status)
+	err = resolver.ResolveAsyncCommitLock(s.bo, lock, status)
 	s.Nil(err)
 	s.Equal(gotCheckA, int64(1))
 	s.Equal(gotCheckB, int64(1))
@@ -552,7 +561,7 @@ func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 }
 
 type mockResolveClient struct {
-	inner              tikv.Client
+	tikv.Client
 	onResolveLock      func(*kvrpcpb.ResolveLockRequest) (*tikvrpc.Response, error)
 	onCheckSecondaries func(*kvrpcpb.CheckSecondaryLocksRequest) (*tikvrpc.Response, error)
 }
@@ -571,11 +580,7 @@ func (m *mockResolveClient) SendRequest(ctx context.Context, addr string, req *t
 			return result, err
 		}
 	}
-	return m.inner.SendRequest(ctx, addr, req, timeout)
-}
-
-func (m *mockResolveClient) Close() error {
-	return m.inner.Close()
+	return m.Client.SendRequest(ctx, addr, req, timeout)
 }
 
 // TestPessimisticTxnResolveAsyncCommitLock tests that pessimistic transactions resolve non-expired async-commit locks during the prewrite phase.
@@ -585,16 +590,47 @@ func (s *testAsyncCommitSuite) TestPessimisticTxnResolveAsyncCommitLock() {
 	ctx := context.Background()
 	k := []byte("k")
 
+	// Lock the key with an async-commit lock.
+	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, k, k, false)
+
 	txn, err := s.store.Begin()
 	s.Nil(err)
 	txn.SetPessimistic(true)
 	err = txn.LockKeys(ctx, &kv.LockCtx{ForUpdateTS: txn.StartTS()}, []byte("k1"))
 	s.Nil(err)
 
-	// Lock the key with a async-commit lock.
-	s.lockKeysWithAsyncCommit([][]byte{}, [][]byte{}, k, k, false)
-
 	txn.Set(k, k)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
+}
+
+func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
+	// This test doesn't support tikv mode.
+
+	t1 := s.beginAsyncCommit()
+	t1.SetPessimistic(true)
+	t1.Set([]byte("a"), []byte("a"))
+	t1.Set([]byte("z"), []byte("z"))
+	committer, err := t1.NewCommitter(1)
+	s.Nil(err)
+	committer.SetUseAsyncCommit()
+	committer.SetLockTTL(1000)
+	committer.SetMaxCommitTS(oracle.ComposeTS(oracle.ExtractPhysical(committer.GetStartTS())+1500, 0))
+	committer.PrewriteMutations(context.Background(), committer.GetMutations().Slice(0, 1))
+	s.True(committer.IsAsyncCommit())
+	lock := s.mustGetLock([]byte("a"))
+	resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
+	for {
+		currentTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		s.Nil(err)
+		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("a"), currentTS, currentTS, false, false, nil)
+		s.Nil(err)
+		if status.IsRolledBack() {
+			break
+		}
+		time.Sleep(time.Millisecond * 30)
+	}
+	s.True(committer.IsAsyncCommit())
+	committer.PrewriteMutations(context.Background(), committer.GetMutations().Slice(1, 2))
+	s.False(committer.IsAsyncCommit())
 }

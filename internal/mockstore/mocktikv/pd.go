@@ -41,10 +41,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 )
 
 // Use global variables to prevent pdClients from creating duplicate timestamps.
@@ -62,6 +67,8 @@ type pdClient struct {
 	// in GC.
 	serviceSafePoints map[string]uint64
 	gcSafePointMu     sync.Mutex
+
+	externalTimestamp atomic.Uint64
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
@@ -71,6 +78,18 @@ func NewPDClient(cluster *Cluster) pd.Client {
 		cluster:           cluster,
 		serviceSafePoints: make(map[string]uint64),
 	}
+}
+
+func (c *pdClient) LoadGlobalConfig(ctx context.Context, names []string, configPath string) ([]pd.GlobalConfigItem, int64, error) {
+	return nil, 0, nil
+}
+
+func (c *pdClient) StoreGlobalConfig(ctx context.Context, configPath string, items []pd.GlobalConfigItem) error {
+	return nil
+}
+
+func (c *pdClient) WatchGlobalConfig(ctx context.Context, configPath string, revision int64) (chan []pd.GlobalConfigItem, error) {
+	return nil, nil
 }
 
 func (c *pdClient) GetClusterID(ctx context.Context) uint64 {
@@ -91,6 +110,23 @@ func (c *pdClient) GetTS(context.Context) (int64, int64, error) {
 	return tsMu.physicalTS, tsMu.logicalTS, nil
 }
 
+// GetMinTS returns the minimal ts.
+func (c *pdClient) GetMinTS(ctx context.Context) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *pdClient) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
+	panic("unimplemented")
+}
+
 func (c *pdClient) GetLocalTS(ctx context.Context, dcLocation string) (int64, int64, error) {
 	return c.GetTS(ctx)
 }
@@ -101,6 +137,34 @@ func (c *pdClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 
 func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
 	return c.GetTSAsync(ctx)
+}
+
+func (c *pdClient) SetExternalTimestamp(ctx context.Context, newTimestamp uint64) error {
+	p, l, err := c.GetTS(ctx)
+	if err != nil {
+		return err
+	}
+
+	currentTSO := oracle.ComposeTS(p, l)
+	if newTimestamp > currentTSO {
+		return errors.New("external timestamp is greater than global tso")
+	}
+	for {
+		externalTimestamp := c.externalTimestamp.Load()
+		if externalTimestamp > newTimestamp {
+			return errors.New("cannot decrease the external timestamp")
+		} else if externalTimestamp == newTimestamp {
+			return nil
+		}
+
+		if c.externalTimestamp.CompareAndSwap(externalTimestamp, newTimestamp) {
+			return nil
+		}
+	}
+}
+
+func (c *pdClient) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	return c.externalTimestamp.Load(), nil
 }
 
 type mockTSFuture struct {
@@ -117,23 +181,29 @@ func (m *mockTSFuture) Wait() (int64, int64, error) {
 	return m.pdc.GetTS(m.ctx)
 }
 
-func (c *pdClient) GetRegion(ctx context.Context, key []byte) (*pd.Region, error) {
-	region, peer := c.cluster.GetRegionByKey(key)
-	return &pd.Region{Meta: region, Leader: peer}, nil
+func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	region, peer, buckets := c.cluster.GetRegionByKey(key)
+	if len(opts) == 0 {
+		buckets = nil
+	}
+	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets}, nil
 }
 
 func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string) (*pd.Region, error) {
 	return &pd.Region{}, nil
 }
 
-func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte) (*pd.Region, error) {
-	region, peer := c.cluster.GetPrevRegionByKey(key)
-	return &pd.Region{Meta: region, Leader: peer}, nil
+func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	region, peer, buckets := c.cluster.GetPrevRegionByKey(key)
+	if len(opts) == 0 {
+		buckets = nil
+	}
+	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets}, nil
 }
 
-func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64) (*pd.Region, error) {
-	region, peer := c.cluster.GetRegionByID(regionID)
-	return &pd.Region{Meta: region, Leader: peer}, nil
+func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	region, peer, buckets := c.cluster.GetRegionByID(regionID)
+	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets}, nil
 }
 
 func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int) ([]*pd.Region, error) {
@@ -220,6 +290,10 @@ func (c *pdClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetO
 	return &pdpb.GetOperatorResponse{Status: pdpb.OperatorStatus_SUCCESS}, nil
 }
 
+func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
+	return nil, nil
+}
+
 func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
 	return nil, nil
 }
@@ -228,4 +302,76 @@ func (c *pdClient) GetLeaderAddr() string { return "mockpd" }
 
 func (c *pdClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
 	return nil
+}
+
+func (c *pdClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *pdClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *pdClient) UpdateKeyspaceState(ctx context.Context, id uint32, state keyspacepb.KeyspaceState) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *pdClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *pdClient) AddResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {
+	return "", nil
+}
+
+func (c *pdClient) ModifyResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {
+	return "", nil
+}
+
+func (c *pdClient) DeleteResourceGroup(ctx context.Context, resourceGroupName string) (string, error) {
+	return "", nil
+}
+
+func (c *pdClient) WatchResourceGroup(ctx context.Context, revision int64) (chan []*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *pdClient) AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBucketsRequest) ([]*rmpb.TokenBucketResponse, error) {
+	return nil, nil
+}
+
+func (c *pdClient) GetTSWithinKeyspace(ctx context.Context, keyspaceID uint32) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *pdClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) pd.TSFuture {
+	return nil
+}
+
+func (c *pdClient) GetLocalTSWithinKeyspace(ctx context.Context, dcLocation string, keyspaceID uint32) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *pdClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) pd.TSFuture {
+	return nil
+}
+
+func (c *pdClient) Watch(ctx context.Context, key []byte, opts ...pd.OpOption) (chan []*meta_storagepb.Event, error) {
+	return nil, nil
+}
+
+func (c *pdClient) Get(ctx context.Context, key []byte, opts ...pd.OpOption) (*meta_storagepb.GetResponse, error) {
+	return nil, nil
+}
+
+func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd.OpOption) (*meta_storagepb.PutResponse, error) {
+	return nil, nil
+}
+
+func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
+	return nil, 0, nil
 }

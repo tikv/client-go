@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"go.uber.org/zap"
 )
@@ -71,7 +72,7 @@ type Scanner struct {
 func newScanner(snapshot *KVSnapshot, startKey []byte, endKey []byte, batchSize int, reverse bool) (*Scanner, error) {
 	// It must be > 1. Otherwise scanner won't skipFirst.
 	if batchSize <= 1 {
-		batchSize = defaultScanBatchSize
+		batchSize = DefaultScanBatchSize
 	}
 	scanner := &Scanner{
 		snapshot:     snapshot,
@@ -110,7 +111,7 @@ func (s *Scanner) Value() []byte {
 	return nil
 }
 
-const scannerNextMaxBackoff = 600000 // 10 minutes
+const scannerNextMaxBackoff = 20000
 
 // Next return next element.
 func (s *Scanner) Next() error {
@@ -118,6 +119,14 @@ func (s *Scanner) Next() error {
 	if !s.valid {
 		return errors.New("scanner iterator is invalid")
 	}
+	s.snapshot.mu.RLock()
+	if s.snapshot.mu.interceptor != nil {
+		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
+		// need to bind it to ctx so that the internal client can perceive and execute
+		// it before initiating an RPC request.
+		bo.SetCtx(interceptor.WithRPCInterceptor(bo.GetCtx(), s.snapshot.mu.interceptor))
+	}
+	s.snapshot.mu.RUnlock()
 	var err error
 	for {
 		s.idx++
@@ -191,6 +200,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient())
 	var reqEndKey, reqStartKey []byte
 	var loc *locate.KeyLocation
+	var resolvingRecordToken *int
 	var err error
 	for {
 		if !s.reverse {
@@ -204,7 +214,8 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 
 		if !s.reverse {
 			reqEndKey = s.endKey
-			if len(reqEndKey) > 0 && len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, reqEndKey) < 0 {
+			if len(reqEndKey) == 0 ||
+				(len(loc.EndKey) > 0 && bytes.Compare(loc.EndKey, reqEndKey) < 0) {
 				reqEndKey = loc.EndKey
 			}
 		} else {
@@ -215,12 +226,6 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			}
 		}
 		sreq := &kvrpcpb.ScanRequest{
-			Context: &kvrpcpb.Context{
-				Priority:         s.snapshot.priority.ToPB(),
-				NotFillCache:     s.snapshot.notFillCache,
-				IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
-				ResourceGroupTag: s.snapshot.resourceGroupTag,
-			},
 			StartKey:   s.nextStartKey,
 			EndKey:     reqEndKey,
 			Limit:      uint32(s.batchSize),
@@ -238,10 +243,19 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			Priority:         s.snapshot.priority.ToPB(),
 			NotFillCache:     s.snapshot.notFillCache,
 			TaskId:           s.snapshot.mu.taskID,
-			ResourceGroupTag: s.snapshot.resourceGroupTag,
+			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
+			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
+			RequestSource:    s.snapshot.GetRequestSource(),
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{
+				ResourceGroupName: s.snapshot.mu.resourceGroupName,
+			},
+			BusyThresholdMs: uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 		})
+		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
+			s.snapshot.mu.resourceGroupTagger(req)
+		}
 		s.snapshot.mu.RUnlock()
-		resp, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
+		resp, _, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutMedium)
 		if err != nil {
 			return err
 		}
@@ -280,7 +294,15 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			if err != nil {
 				return err
 			}
-			msBeforeExpired, _, err := txnlock.NewLockResolver(s.snapshot.store).ResolveLocks(bo, s.snapshot.version, []*txnlock.Lock{lock})
+			locks := []*txnlock.Lock{lock}
+			if resolvingRecordToken == nil {
+				token := s.snapshot.store.GetLockResolver().RecordResolvingLocks(locks, s.snapshot.version)
+				resolvingRecordToken = &token
+				defer s.snapshot.store.GetLockResolver().ResolveLocksDone(s.snapshot.version, *resolvingRecordToken)
+			} else {
+				s.snapshot.store.GetLockResolver().UpdateResolvingLocks(locks, s.snapshot.version, *resolvingRecordToken)
+			}
+			msBeforeExpired, err := s.snapshot.store.GetLockResolver().ResolveLocks(bo, s.snapshot.version, locks)
 			if err != nil {
 				return err
 			}

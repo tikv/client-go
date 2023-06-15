@@ -52,27 +52,45 @@ import (
 	"go.uber.org/zap"
 )
 
-type actionCommit struct{ retry bool }
+type actionCommit struct {
+	retry      bool
+	isInternal bool
+}
 
 var _ twoPhaseCommitAction = actionCommit{}
 
-func (actionCommit) String() string {
+func (action actionCommit) String() string {
 	return "commit"
 }
 
-func (actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+func (action actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+	if action.isInternal {
+		return metrics.TxnRegionsNumHistogramCommitInternal
+	}
 	return metrics.TxnRegionsNumHistogramCommit
 }
 
-func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	keys := batch.mutations.GetKeys()
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		StartVersion:  c.startTS,
 		Keys:          keys,
 		CommitVersion: c.commitTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog,
-		ResourceGroupTag: c.resourceGroupTag, DiskFullOpt: c.diskFullOpt,
-		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	}, kvrpcpb.Context{
+		Priority:               c.priority,
+		SyncLog:                c.syncLog,
+		ResourceGroupTag:       c.resourceGroupTag,
+		DiskFullOpt:            c.diskFullOpt,
+		TxnSource:              c.txnSource,
+		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+		RequestSource:          c.txn.GetRequestSource(),
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
+			ResourceGroupName: c.resourceGroupName,
+		},
+	})
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(req)
+	}
 
 	tBegin := time.Now()
 	attempts := 0
@@ -80,12 +98,13 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 	for {
 		attempts++
-		if time.Since(tBegin) > slowRequestThreshold {
+		reqBegin := time.Now()
+		if reqBegin.Sub(tBegin) > slowRequestThreshold {
 			logutil.BgLogger().Warn("slow commit request", zap.Uint64("startTS", c.startTS), zap.Stringer("region", &batch.region), zap.Int("attempts", attempts))
 			tBegin = time.Now()
 		}
 
-		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		// If we fail to receive response for the request that commits primary key, it will be undetermined whether this
 		// transaction has been successfully committed.
 		// Under this circumstance, we can not declare the commit is complete (may lead to data lost), nor can we throw
@@ -121,7 +140,7 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 			if same {
 				continue
 			}
-			return c.doActionOnMutations(bo, actionCommit{true}, batch.mutations)
+			return c.doActionOnMutations(bo, actionCommit{true, action.isInternal}, batch.mutations)
 		}
 
 		if resp.Resp == nil {
@@ -132,6 +151,8 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer,
 		// we can clean undetermined error.
 		if batch.isPrimary && !c.isAsyncCommit() {
 			c.setUndeterminedErr(nil)
+			reqDuration := time.Since(reqBegin)
+			c.getDetail().MergeCommitReqDetails(reqDuration, batch.region.GetID(), sender.GetStoreAddr(), commitResp.ExecDetailsV2)
 		}
 		if keyErr := commitResp.GetError(); keyErr != nil {
 			if rejected := keyErr.GetCommitTsExpired(); rejected != nil {
@@ -207,5 +228,5 @@ func (c *twoPhaseCommitter) commitMutations(bo *retry.Backoffer, mutations Commi
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
-	return c.doActionOnMutations(bo, actionCommit{}, mutations)
+	return c.doActionOnMutations(bo, actionCommit{isInternal: c.txn.isInternal()}, mutations)
 }

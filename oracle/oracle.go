@@ -54,6 +54,9 @@ type Oracle interface {
 	IsExpired(lockTimestamp, TTL uint64, opt *Option) bool
 	UntilExpired(lockTimeStamp, TTL uint64, opt *Option) int64
 	Close()
+
+	GetExternalTimestamp(ctx context.Context) (uint64, error)
+	SetExternalTimestamp(ctx context.Context, ts uint64) error
 }
 
 // Future is a future which promises to return a timestamp.
@@ -64,7 +67,7 @@ type Future interface {
 const (
 	physicalShiftBits = 18
 	logicalBits       = (1 << physicalShiftBits) - 1
-	// GlobalTxnScope is the default transaction scope for a Oracle service.
+	// GlobalTxnScope is the default transaction scope for an Oracle service.
 	GlobalTxnScope = "global"
 )
 

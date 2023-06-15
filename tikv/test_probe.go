@@ -46,7 +46,7 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-// StoreProbe wraps KVSTore and exposes internal states for testing purpose.
+// StoreProbe wraps KVStore and exposes internal states for testing purpose.
 type StoreProbe struct {
 	*KVStore
 }
@@ -84,7 +84,7 @@ func (s StoreProbe) ClearTxnLatches() {
 
 // SendTxnHeartbeat renews a txn's ttl.
 func (s StoreProbe) SendTxnHeartbeat(ctx context.Context, key []byte, startTS uint64, ttl uint64) (uint64, error) {
-	bo := retry.NewBackofferWithVars(ctx, transaction.PrewriteMaxBackoff, nil)
+	bo := retry.NewBackofferWithVars(ctx, int(transaction.PrewriteMaxBackoff.Load()), nil)
 	newTTL, _, err := transaction.SendTxnHeartBeat(bo, s.KVStore, key, startTS, ttl)
 	return newTTL, err
 }
@@ -101,12 +101,17 @@ func (s StoreProbe) SaveSafePoint(v uint64) error {
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
 func (s StoreProbe) SetRegionCacheStore(id uint64, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
-	s.regionCache.SetRegionCacheStore(id, storeType, state, labels)
+	s.regionCache.SetRegionCacheStore(id, "", "", storeType, state, labels)
 }
 
 // SetSafeTS is used to set safeTS for the store with `storeID`
 func (s StoreProbe) SetSafeTS(storeID, safeTS uint64) {
 	s.setSafeTS(storeID, safeTS)
+}
+
+// GCResolveLockPhase performs the resolve-locks phase of GC, which scans all locks and resolves them.
+func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, concurrency int) error {
+	return s.resolveLocks(ctx, safepoint, concurrency)
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
@@ -118,6 +123,15 @@ type LockResolverProbe struct {
 func NewLockResolverProb(r *txnlock.LockResolver) *LockResolverProbe {
 	resolver := txnlock.LockResolverProbe{LockResolver: r}
 	return &LockResolverProbe{&resolver}
+}
+
+// ForceResolveLock forces to resolve a single lock. It's a helper function only for writing test.
+func (l LockResolverProbe) ForceResolveLock(ctx context.Context, lock *txnlock.Lock) error {
+	bo := retry.NewBackofferWithVars(ctx, transaction.ConfigProbe{}.GetPessimisticLockMaxBackoff(), nil)
+	// make use of forcing resolving lock
+	lock.TTL = 0
+	_, err := l.LockResolverProbe.ResolveLocks(bo, 0, []*txnlock.Lock{lock})
+	return err
 }
 
 // ResolveLock resolves single lock.

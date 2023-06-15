@@ -39,9 +39,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
+	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
-	"github.com/pingcap/tidb/store/mockstore/mockcopr"
+	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/testutils"
@@ -62,7 +64,7 @@ type testSplitSuite struct {
 }
 
 func (s *testSplitSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", mockcopr.NewCoprRPCHandler())
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster
@@ -141,6 +143,18 @@ type mockPDClient struct {
 	stop   bool
 }
 
+func (c *mockPDClient) LoadGlobalConfig(ctx context.Context, names []string, configPath string) ([]pd.GlobalConfigItem, int64, error) {
+	return nil, 0, nil
+}
+
+func (c *mockPDClient) StoreGlobalConfig(ctx context.Context, configPath string, items []pd.GlobalConfigItem) error {
+	return nil
+}
+
+func (c *mockPDClient) WatchGlobalConfig(ctx context.Context, configPath string, revision int64) (chan []pd.GlobalConfigItem, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) disable() {
 	c.Lock()
 	defer c.Unlock()
@@ -177,38 +191,38 @@ func (c *mockPDClient) GetLocalTSAsync(ctx context.Context, dcLocation string) p
 	return nil
 }
 
-func (c *mockPDClient) GetRegion(ctx context.Context, key []byte) (*pd.Region, error) {
+func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return nil, errors.WithStack(errStopped)
 	}
-	return c.client.GetRegion(ctx, key)
+	return c.client.GetRegion(ctx, key, opts...)
 }
 
 func (c *mockPDClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string) (*pd.Region, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte) (*pd.Region, error) {
+func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return nil, errors.WithStack(errStopped)
 	}
-	return c.client.GetPrevRegion(ctx, key)
+	return c.client.GetPrevRegion(ctx, key, opts...)
 }
 
-func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64) (*pd.Region, error) {
+func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
 	if c.stop {
 		return nil, errors.WithStack(errStopped)
 	}
-	return c.client.GetRegionByID(ctx, regionID)
+	return c.client.GetRegionByID(ctx, regionID, opts...)
 }
 
 func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int) ([]*pd.Region, error) {
@@ -263,6 +277,10 @@ func (c *mockPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opt
 	return nil, nil
 }
 
+func (c *mockPDClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetOperatorResponse, error) {
 	return &pdpb.GetOperatorResponse{Status: pdpb.OperatorStatus_SUCCESS}, nil
 }
@@ -271,4 +289,100 @@ func (c *mockPDClient) GetLeaderAddr() string { return "mockpd" }
 
 func (c *mockPDClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
 	return nil
+}
+
+func (c *mockPDClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) WatchKeyspaces(ctx context.Context) (chan []*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) UpdateKeyspaceState(ctx context.Context, id uint32, state keyspacepb.KeyspaceState) (*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) AddResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {
+	return "", nil
+}
+
+func (c *mockPDClient) ModifyResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {
+	return "", nil
+}
+
+func (c *mockPDClient) DeleteResourceGroup(ctx context.Context, resourceGroupName string) (string, error) {
+	return "", nil
+}
+
+func (c *mockPDClient) WatchResourceGroup(ctx context.Context, revision int64) (chan []*rmpb.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) AcquireTokenBuckets(ctx context.Context, request *rmpb.TokenBucketsRequest) ([]*rmpb.TokenBucketResponse, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) SetExternalTimestamp(ctx context.Context, tso uint64) error {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) GetTSWithinKeyspace(ctx context.Context, keyspaceID uint32) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *mockPDClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) pd.TSFuture {
+	return nil
+}
+
+func (c *mockPDClient) GetLocalTSWithinKeyspace(ctx context.Context, dcLocation string, keyspaceID uint32) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *mockPDClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) pd.TSFuture {
+	return nil
+}
+
+func (c *mockPDClient) Watch(ctx context.Context, key []byte, opts ...pd.OpOption) (chan []*meta_storagepb.Event, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) Get(ctx context.Context, key []byte, opts ...pd.OpOption) (*meta_storagepb.GetResponse, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd.OpOption) (*meta_storagepb.PutResponse, error) {
+	return nil, nil
+}
+
+func (c *mockPDClient) GetMinTS(ctx context.Context) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (c *mockPDClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
+	return nil, 0, nil
+}
+
+func (c *mockPDClient) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
+	panic("unimplemented")
 }

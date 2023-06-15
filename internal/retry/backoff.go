@@ -138,10 +138,11 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		return errors.WithStack(err)
 	default:
 	}
-
-	b.errors = append(b.errors, errors.Errorf("%s at %s", err.Error(), time.Now().Format(time.RFC3339Nano)))
-	b.configs = append(b.configs, cfg)
-	if b.noop || (b.maxSleep > 0 && (b.totalSleep-b.excludedSleep) >= b.maxSleep) {
+	if b.noop {
+		return err
+	}
+	if b.maxSleep > 0 && (b.totalSleep-b.excludedSleep) >= b.maxSleep {
+		longestSleepCfg, longestSleepTime := b.longestSleepCfg()
 		errMsg := fmt.Sprintf("%s backoffer.maxSleep %dms is exceeded, errors:", cfg.String(), b.maxSleep)
 		for i, err := range b.errors {
 			// Print only last 3 errors for non-DEBUG log levels.
@@ -149,10 +150,17 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 				errMsg += "\n" + err.Error()
 			}
 		}
+		returnedErr := err
+		if longestSleepCfg != nil {
+			errMsg += fmt.Sprintf("\nlongest sleep type: %s, time: %dms", longestSleepCfg.String(), longestSleepTime)
+			returnedErr = longestSleepCfg.err
+		}
 		logutil.BgLogger().Warn(errMsg)
-		// Use the first backoff type to generate a MySQL error.
-		return errors.WithStack(b.configs[0].err)
+		// Use the backoff type that contributes most to the timeout to generate a MySQL error.
+		return errors.WithStack(returnedErr)
 	}
+	b.errors = append(b.errors, errors.Errorf("%s at %s", err.Error(), time.Now().Format(time.RFC3339Nano)))
+	b.configs = append(b.configs, cfg)
 
 	// Lazy initialize.
 	if b.fn == nil {
@@ -169,7 +177,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	}
 
 	b.totalSleep += realSleep
-	if _, ok := isSleepExcluded[cfg]; ok {
+	if _, ok := isSleepExcluded[cfg.name]; ok {
 		b.excludedSleep += realSleep
 	}
 	if b.backoffSleepMS == nil {
@@ -215,32 +223,51 @@ func (b *Backoffer) String() string {
 	return fmt.Sprintf(" backoff(%dms %v)", b.totalSleep, b.configs)
 }
 
+// copyMapWithoutRecursive is only used to deep copy map fields in the Backoffer type.
+func copyMapWithoutRecursive(srcMap map[string]int) map[string]int {
+	result := map[string]int{}
+	for k, v := range srcMap {
+		result[k] = v
+	}
+	return result
+}
+
 // Clone creates a new Backoffer which keeps current Backoffer's sleep time and errors, and shares
 // current Backoffer's context.
+// Some fields like `configs` and `vars` are concurrently used by all the backoffers in different threads,
+// try not to modify the referenced content directly.
 func (b *Backoffer) Clone() *Backoffer {
 	return &Backoffer{
-		ctx:           b.ctx,
-		maxSleep:      b.maxSleep,
-		totalSleep:    b.totalSleep,
-		excludedSleep: b.excludedSleep,
-		errors:        b.errors,
-		vars:          b.vars,
-		parent:        b.parent,
+		ctx:            b.ctx,
+		maxSleep:       b.maxSleep,
+		totalSleep:     b.totalSleep,
+		excludedSleep:  b.excludedSleep,
+		vars:           b.vars,
+		errors:         append([]error{}, b.errors...),
+		configs:        append([]*Config{}, b.configs...),
+		backoffSleepMS: copyMapWithoutRecursive(b.backoffSleepMS),
+		backoffTimes:   copyMapWithoutRecursive(b.backoffTimes),
+		parent:         b.parent,
 	}
 }
 
 // Fork creates a new Backoffer which keeps current Backoffer's sleep time and errors, and holds
 // a child context of current Backoffer's context.
+// Some fields like `configs` and `vars` are concurrently used by all the backoffers in different threads,
+// try not to modify the referenced content directly.
 func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(b.ctx)
 	return &Backoffer{
-		ctx:           ctx,
-		maxSleep:      b.maxSleep,
-		totalSleep:    b.totalSleep,
-		excludedSleep: b.excludedSleep,
-		errors:        b.errors,
-		vars:          b.vars,
-		parent:        b,
+		ctx:            ctx,
+		maxSleep:       b.maxSleep,
+		totalSleep:     b.totalSleep,
+		excludedSleep:  b.excludedSleep,
+		errors:         append([]error{}, b.errors...),
+		configs:        append([]*Config{}, b.configs...),
+		backoffSleepMS: copyMapWithoutRecursive(b.backoffSleepMS),
+		backoffTimes:   copyMapWithoutRecursive(b.backoffTimes),
+		vars:           b.vars,
+		parent:         b,
 	}, cancel
 }
 
@@ -316,4 +343,21 @@ func (b *Backoffer) ResetMaxSleep(maxSleep int) {
 	b.Reset()
 	b.maxSleep = maxSleep
 	b.withVars(b.vars)
+}
+
+func (b *Backoffer) longestSleepCfg() (*Config, int) {
+	candidate := ""
+	maxSleep := 0
+	for cfgName, sleepTime := range b.backoffSleepMS {
+		if _, ok := isSleepExcluded[cfgName]; sleepTime > maxSleep && !ok {
+			maxSleep = sleepTime
+			candidate = cfgName
+		}
+	}
+	for _, cfg := range b.configs {
+		if cfg.name == candidate {
+			return cfg, maxSleep
+		}
+	}
+	return nil, 0
 }

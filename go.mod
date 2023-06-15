@@ -1,45 +1,63 @@
 module github.com/tikv/client-go/v2
 
-go 1.15
+go 1.20
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
-	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/gogo/protobuf v1.3.2
-	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e // indirect
-	github.com/golang/protobuf v1.3.4
-	github.com/golang/snappy v0.0.2-0.20190904063534-ff6b7dc882cf // indirect
-	github.com/google/btree v1.0.0
-	github.com/google/go-cmp v0.5.2 // indirect
-	github.com/google/uuid v1.1.1
+	github.com/golang/protobuf v1.5.3
+	github.com/google/btree v1.1.2
+	github.com/google/uuid v1.3.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0
-	github.com/opentracing/opentracing-go v1.1.0
-	github.com/pingcap/failpoint v0.0.0-20210316064728-7acb0f0a3dfd
+	github.com/opentracing/opentracing-go v1.2.0
+	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
+	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20210915062418-0f5764a128ad
-	github.com/pingcap/log v0.0.0-20210625125904-98ed8e2eb1c7
+	github.com/pingcap/kvproto v0.0.0-20230530111525-e4919c190b46
+	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
-	github.com/prometheus/client_golang v1.5.1
-	github.com/prometheus/client_model v0.2.0
-	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
-	github.com/sirupsen/logrus v1.6.0 // indirect
-	github.com/stretchr/testify v1.7.0
-	github.com/tikv/pd v1.1.0-beta.0.20211029083450-e65f0c55b6ae
+	github.com/prometheus/client_golang v1.15.1
+	github.com/prometheus/client_model v0.3.0
+	github.com/stretchr/testify v1.8.2
+	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
+	github.com/tikv/pd/client v0.0.0-20230608061541-026ddf08a351
 	github.com/twmb/murmur3 v1.1.3
-	go.etcd.io/etcd v0.5.0-alpha.5.0.20200824191128-ae9734ed278b
-	go.uber.org/atomic v1.7.0
-	go.uber.org/goleak v1.1.10
-	go.uber.org/multierr v1.7.0 // indirect
-	go.uber.org/zap v1.16.0
-	golang.org/x/crypto v0.0.0-20200820211705-5c72a883971a // indirect
-	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616 // indirect
-	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/text v0.3.6 // indirect
-	golang.org/x/time v0.0.0-20191024005414-555d28b269f0 // indirect
-	golang.org/x/tools v0.1.4 // indirect
-	google.golang.org/genproto v0.0.0-20200224152610-e50cd9704f63 // indirect
-	google.golang.org/grpc v1.27.1
-	gopkg.in/yaml.v2 v2.4.0 // indirect
-	honnef.co/go/tools v0.2.0 // indirect
+	go.etcd.io/etcd/api/v3 v3.5.2
+	go.etcd.io/etcd/client/v3 v3.5.2
+	go.uber.org/atomic v1.11.0
+	go.uber.org/goleak v1.1.12
+	go.uber.org/zap v1.24.0
+	golang.org/x/sync v0.2.0
+	google.golang.org/grpc v1.54.0
+)
+
+require (
+	github.com/benbjohnson/clock v1.3.0 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/coreos/go-semver v0.3.0 // indirect
+	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/elastic/gosigar v0.14.2 // indirect
+	github.com/golang/snappy v0.0.4 // indirect
+	github.com/kr/text v0.2.0 // indirect
+	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
+	github.com/onsi/ginkgo v1.16.5 // indirect
+	github.com/onsi/gomega v1.20.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/prometheus/common v0.42.0 // indirect
+	github.com/prometheus/procfs v0.9.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
+	github.com/rogpeppe/go-internal v1.9.0 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.5.2 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/net v0.10.0 // indirect
+	golang.org/x/sys v0.8.0 // indirect
+	golang.org/x/text v0.9.0 // indirect
+	golang.org/x/tools v0.9.1 // indirect
+	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
+	google.golang.org/protobuf v1.30.0 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

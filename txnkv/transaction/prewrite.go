@@ -52,35 +52,68 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
-type actionPrewrite struct{ retry bool }
+type actionPrewrite struct {
+	retry         bool
+	isInternal    bool
+	hasRpcRetries bool // RPC tried more than once => we need to set is_retry_request
+}
 
 var _ twoPhaseCommitAction = actionPrewrite{}
 
-func (actionPrewrite) String() string {
+func (action actionPrewrite) String() string {
 	return "prewrite"
 }
 
-func (actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+func (action actionPrewrite) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+	if action.isInternal {
+		return metrics.TxnRegionsNumHistogramPrewriteInternal
+	}
 	return metrics.TxnRegionsNumHistogramPrewrite
 }
 
 func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize uint64) *tikvrpc.Request {
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
-	isPessimisticLock := make([]bool, m.Len())
+	pessimisticActions := make([]kvrpcpb.PrewriteRequest_PessimisticAction, m.Len())
+	var forUpdateTSConstraints []*kvrpcpb.PrewriteRequest_ForUpdateTSConstraint
+
 	for i := 0; i < m.Len(); i++ {
-		mutations[i] = &kvrpcpb.Mutation{
-			Op:    m.GetOp(i),
-			Key:   m.GetKey(i),
-			Value: m.GetValue(i),
+		assertion := kvrpcpb.Assertion_None
+		if m.IsAssertExists(i) {
+			assertion = kvrpcpb.Assertion_Exist
 		}
-		isPessimisticLock[i] = m.IsPessimisticLock(i)
+		if m.IsAssertNotExist(i) {
+			assertion = kvrpcpb.Assertion_NotExist
+		}
+		mutations[i] = &kvrpcpb.Mutation{
+			Op:        m.GetOp(i),
+			Key:       m.GetKey(i),
+			Value:     m.GetValue(i),
+			Assertion: assertion,
+		}
+		if m.IsPessimisticLock(i) {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
+		} else if m.NeedConstraintCheckInPrewrite(i) {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
+		} else {
+			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
+		}
+
+		if c.forUpdateTSConstraints != nil {
+			if actualLockForUpdateTS, ok := c.forUpdateTSConstraints[string(mutations[i].Key)]; ok {
+				forUpdateTSConstraints = append(forUpdateTSConstraints, &kvrpcpb.PrewriteRequest_ForUpdateTSConstraint{
+					Index:               uint32(i),
+					ExpectedForUpdateTs: actualLockForUpdateTS,
+				})
+			}
+		}
 	}
 	c.mu.Lock()
 	minCommitTS := c.minCommitTS
@@ -100,6 +133,20 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 
 	ttl := c.lockTTL
 
+	// ref: https://github.com/pingcap/tidb/issues/33641
+	// we make the TTL satisfy the following condition:
+	// 	max_commit_ts.physical < start_ts.physical + TTL < (current_ts of some check_txn_status that wants to resolve this lock).physical
+	// and we have:
+	//  current_ts <= max_ts <= min_commit_ts of this lock
+	// such that
+	// 	max_commit_ts < min_commit_ts, so if this lock is resolved, it will be forced to fall back to normal 2PC, thus resolving the issue.
+	if c.isAsyncCommit() && c.isPessimistic {
+		safeTTL := uint64(oracle.ExtractPhysical(c.maxCommitTS)-oracle.ExtractPhysical(c.startTS)) + 1
+		if safeTTL > ttl {
+			ttl = safeTTL
+		}
+	}
+
 	if c.sessionID > 0 {
 		if _, err := util.EvalFailpoint("twoPCShortLockTTL"); err == nil {
 			ttl = 1
@@ -107,21 +154,30 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			for _, m := range mutations {
 				keys = append(keys, hex.EncodeToString(m.Key))
 			}
-			logutil.BgLogger().Info("[failpoint] injected lock ttl = 1 on prewrite",
-				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys))
+			logutil.BgLogger().Info(
+				"[failpoint] injected lock ttl = 1 on prewrite",
+				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys),
+			)
 		}
 	}
 
+	assertionLevel := c.txn.assertionLevel
+	if _, err := util.EvalFailpoint("assertionSkipCheckFromPrewrite"); err == nil {
+		assertionLevel = kvrpcpb.AssertionLevel_Off
+	}
+
 	req := &kvrpcpb.PrewriteRequest{
-		Mutations:         mutations,
-		PrimaryLock:       c.primary(),
-		StartVersion:      c.startTS,
-		LockTtl:           ttl,
-		IsPessimisticLock: isPessimisticLock,
-		ForUpdateTs:       c.forUpdateTS,
-		TxnSize:           txnSize,
-		MinCommitTs:       minCommitTS,
-		MaxCommitTs:       c.maxCommitTS,
+		Mutations:              mutations,
+		PrimaryLock:            c.primary(),
+		StartVersion:           c.startTS,
+		LockTtl:                ttl,
+		PessimisticActions:     pessimisticActions,
+		ForUpdateTs:            c.forUpdateTS,
+		TxnSize:                txnSize,
+		MinCommitTs:            minCommitTS,
+		MaxCommitTs:            c.maxCommitTS,
+		AssertionLevel:         assertionLevel,
+		ForUpdateTsConstraints: forUpdateTSConstraints,
 	}
 
 	if _, err := util.EvalFailpoint("invalidMaxCommitTS"); err == nil {
@@ -141,12 +197,29 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		req.TryOnePc = true
 	}
 
-	return tikvrpc.NewRequest(tikvrpc.CmdPrewrite, req,
-		kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag,
-			DiskFullOpt: c.diskFullOpt, MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	r := tikvrpc.NewRequest(
+		tikvrpc.CmdPrewrite, req, kvrpcpb.Context{
+			Priority:               c.priority,
+			SyncLog:                c.syncLog,
+			ResourceGroupTag:       c.resourceGroupTag,
+			DiskFullOpt:            c.diskFullOpt,
+			TxnSource:              c.txnSource,
+			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+			RequestSource:          c.txn.GetRequestSource(),
+			ResourceControlContext: &kvrpcpb.ResourceControlContext{
+				ResourceGroupName: c.resourceGroupName,
+			},
+		},
+	)
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(r)
+	}
+	return r
 }
 
-func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) (err error) {
+func (action actionPrewrite) handleSingleBatch(
+	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
+) (err error) {
 	// WARNING: This function only tries to send a single request to a single region, so it don't
 	// need to unset the `useOnePC` flag when it fails. A special case is that when TiKV returns
 	// regionErr, it's uncertain if the request will be splitted into multiple and sent to multiple
@@ -158,8 +231,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if _, err := util.EvalFailpoint("prewritePrimaryFail"); err == nil {
 				// Delay to avoid cancelling other normally ongoing prewrite requests.
 				time.Sleep(time.Millisecond * 50)
-				logutil.Logger(bo.GetCtx()).Info("[failpoint] injected error on prewriting primary batch",
-					zap.Uint64("txnStartTS", c.startTS))
+				logutil.Logger(bo.GetCtx()).Info(
+					"[failpoint] injected error on prewriting primary batch",
+					zap.Uint64("txnStartTS", c.startTS),
+				)
 				return errors.New("injected error on prewriting primary batch")
 			}
 			util.EvalFailpoint("prewritePrimary") // for other failures like sleep or pause
@@ -167,11 +242,18 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if _, err := util.EvalFailpoint("prewriteSecondaryFail"); err == nil {
 				// Delay to avoid cancelling other normally ongoing prewrite requests.
 				time.Sleep(time.Millisecond * 50)
-				logutil.Logger(bo.GetCtx()).Info("[failpoint] injected error on prewriting secondary batch",
-					zap.Uint64("txnStartTS", c.startTS))
+				logutil.Logger(bo.GetCtx()).Info(
+					"[failpoint] injected error on prewriting secondary batch",
+					zap.Uint64("txnStartTS", c.startTS),
+				)
 				return errors.New("injected error on prewriting secondary batch")
 			}
 			util.EvalFailpoint("prewriteSecondary") // for other failures like sleep or pause
+			// concurrent failpoint sleep doesn't work as expected. So we need a separate fail point.
+			// `1*sleep()` can block multiple concurrent threads that meet the failpoint.
+			if val, err := util.EvalFailpoint("prewriteSecondarySleep"); err == nil {
+				time.Sleep(time.Millisecond * time.Duration(val.(int)))
+			}
 		}
 	}
 
@@ -187,6 +269,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 
 	req := c.buildPrewriteRequest(batch, txnSize)
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	var resolvingRecordToken *int
 	defer func() {
 		if err != nil {
 			// If we fail to receive response for async commit prewrite, it will be undetermined whether this
@@ -200,15 +283,27 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 	}()
 	for {
 		attempts++
-		if time.Since(tBegin) > slowRequestThreshold {
-			logutil.BgLogger().Warn("slow prewrite request", zap.Uint64("startTS", c.startTS), zap.Stringer("region", &batch.region), zap.Int("attempts", attempts))
+		if action.hasRpcRetries {
+			req.IsRetryRequest = true
+		}
+		reqBegin := time.Now()
+		if reqBegin.Sub(tBegin) > slowRequestThreshold {
+			logutil.BgLogger().Warn(
+				"slow prewrite request",
+				zap.Uint64("startTS", c.startTS),
+				zap.Stringer("region", &batch.region),
+				zap.Int("attempts", attempts),
+			)
 			tBegin = time.Now()
 		}
 
-		resp, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, retryTimes, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		// Unexpected error occurs, return it
 		if err != nil {
 			return err
+		}
+		if retryTimes > 0 {
+			action.hasRpcRetries = true
 		}
 
 		regionErr, err := resp.GetRegionError()
@@ -232,9 +327,11 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					desc += strconv.FormatUint(i, 10) + " "
 				}
 
-				logutil.Logger(bo.GetCtx()).Error("Request failed cause of TiKV disk full",
+				logutil.Logger(bo.GetCtx()).Error(
+					"Request failed cause of TiKV disk full",
 					zap.String("store_id", desc),
-					zap.String("reason", regionErr.GetDiskFull().GetReason()))
+					zap.String("reason", regionErr.GetDiskFull().GetReason()),
+				)
 
 				return errors.New(regionErr.String())
 			}
@@ -245,7 +342,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if same {
 				continue
 			}
-			err = c.doActionOnMutations(bo, actionPrewrite{true}, batch.mutations)
+			err = c.doActionOnMutations(bo, actionPrewrite{true, action.isInternal, action.hasRpcRetries}, batch.mutations)
 			return err
 		}
 
@@ -257,6 +354,15 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 		if len(keyErrs) == 0 {
 			// Clear the RPC Error since the request is evaluated successfully.
 			sender.SetRPCError(nil)
+
+			// Update CommitDetails
+			reqDuration := time.Since(reqBegin)
+			c.getDetail().MergePrewriteReqDetails(
+				reqDuration,
+				batch.region.GetID(),
+				sender.GetStoreAddr(),
+				prewriteResp.ExecDetailsV2,
+			)
 
 			if batch.isPrimary {
 				// After writing the primary key, if the size of the transaction is larger than 32M,
@@ -273,8 +379,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					if prewriteResp.MinCommitTs != 0 {
 						return errors.New("MinCommitTs must be 0 when 1pc falls back to 2pc")
 					}
-					logutil.Logger(bo.GetCtx()).Warn("1pc failed and fallbacks to normal commit procedure",
-						zap.Uint64("startTS", c.startTS))
+					logutil.Logger(bo.GetCtx()).Warn(
+						"1pc failed and fallbacks to normal commit procedure",
+						zap.Uint64("startTS", c.startTS),
+					)
 					metrics.OnePCTxnCounterFallback.Inc()
 					c.setOnePC(false)
 					c.setAsyncCommit(false)
@@ -282,15 +390,19 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					// For 1PC, there's no racing to access to access `onePCCommmitTS` so it's safe
 					// not to lock the mutex.
 					if c.onePCCommitTS != 0 {
-						logutil.Logger(bo.GetCtx()).Fatal("one pc happened multiple times",
-							zap.Uint64("startTS", c.startTS))
+						logutil.Logger(bo.GetCtx()).Fatal(
+							"one pc happened multiple times",
+							zap.Uint64("startTS", c.startTS),
+						)
 					}
 					c.onePCCommitTS = prewriteResp.OnePcCommitTs
 				}
 				return nil
 			} else if prewriteResp.OnePcCommitTs != 0 {
-				logutil.Logger(bo.GetCtx()).Fatal("tikv committed a non-1pc transaction with 1pc protocol",
-					zap.Uint64("startTS", c.startTS))
+				logutil.Logger(bo.GetCtx()).Fatal(
+					"tikv committed a non-1pc transaction with 1pc protocol",
+					zap.Uint64("startTS", c.startTS),
+				)
 			}
 			if c.isAsyncCommit() {
 				// 0 if the min_commit_ts is not ready or any other reason that async
@@ -300,8 +412,10 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					if c.testingKnobs.noFallBack {
 						return nil
 					}
-					logutil.Logger(bo.GetCtx()).Warn("async commit cannot proceed since the returned minCommitTS is zero, "+
-						"fallback to normal path", zap.Uint64("startTS", c.startTS))
+					logutil.Logger(bo.GetCtx()).Warn(
+						"async commit cannot proceed since the returned minCommitTS is zero, "+
+							"fallback to normal path", zap.Uint64("startTS", c.startTS),
+					)
 					c.setAsyncCommit(false)
 				} else {
 					c.mu.Lock()
@@ -311,6 +425,7 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 					c.mu.Unlock()
 				}
 			}
+
 			return nil
 		}
 		var locks []*txnlock.Lock
@@ -326,28 +441,51 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 			if err1 != nil {
 				return err1
 			}
-			logutil.BgLogger().Info("prewrite encounters lock",
+			logutil.BgLogger().Info(
+				"prewrite encounters lock",
 				zap.Uint64("session", c.sessionID),
 				zap.Uint64("txnID", c.startTS),
-				zap.Stringer("lock", lock))
+				zap.Stringer("lock", lock),
+			)
 			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
 			// fail due to a WriteConflict error. So we can construct and return an error here early.
 			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if lock.TxnID > c.startTS && !c.isPessimistic {
-				return tikverr.NewErrWriteConfictWithArgs(c.startTS, lock.TxnID, 0, lock.Key)
+				return tikverr.NewErrWriteConflictWithArgs(
+					c.startTS,
+					lock.TxnID,
+					0,
+					lock.Key,
+					kvrpcpb.WriteConflict_Optimistic,
+				)
 			}
 			locks = append(locks, lock)
 		}
-		start := time.Now()
-		msBeforeExpired, err := c.store.GetLockResolver().ResolveLocksForWrite(bo, c.startTS, c.forUpdateTS, locks)
+		if resolvingRecordToken == nil {
+			token := c.store.GetLockResolver().RecordResolvingLocks(locks, c.startTS)
+			resolvingRecordToken = &token
+			defer c.store.GetLockResolver().ResolveLocksDone(c.startTS, *resolvingRecordToken)
+		} else {
+			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
+		}
+		resolveLockOpts := txnlock.ResolveLocksOptions{
+			CallerStartTS: c.startTS,
+			Locks:         locks,
+			Detail:        &c.getDetail().ResolveLock,
+		}
+		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
 			return err
 		}
-		atomic.AddInt64(&c.getDetail().ResolveLockTime, int64(time.Since(start)))
+		msBeforeExpired := resolveLockRes.TTL
 		if msBeforeExpired > 0 {
-			err = bo.BackoffWithCfgAndMaxSleep(retry.BoTxnLock, int(msBeforeExpired), errors.Errorf("2PC prewrite lockedKeys: %d", len(locks)))
+			err = bo.BackoffWithCfgAndMaxSleep(
+				retry.BoTxnLock,
+				int(msBeforeExpired),
+				errors.Errorf("2PC prewrite lockedKeys: %d", len(locks)),
+			)
 			if err != nil {
 				return err
 			}
@@ -363,5 +501,5 @@ func (c *twoPhaseCommitter) prewriteMutations(bo *retry.Backoffer, mutations Com
 	}
 
 	// `doActionOnMutations` will unset `useOnePC` if the mutations is splitted into multiple batches.
-	return c.doActionOnMutations(bo, actionPrewrite{}, mutations)
+	return c.doActionOnMutations(bo, actionPrewrite{isInternal: c.txn.isInternal()}, mutations)
 }

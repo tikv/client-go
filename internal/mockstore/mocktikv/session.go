@@ -131,7 +131,7 @@ func (s *Session) CheckRequestContext(ctx *kvrpcpb.Context) *errorpb.Error {
 		}
 	}
 	// The Peer on the Store is not leader. If it's tiflash store , we pass this check.
-	if storePeer.GetId() != leaderPeer.GetId() && !isTiFlashStore(s.cluster.GetStore(storePeer.GetStoreId())) {
+	if storePeer.GetId() != leaderPeer.GetId() && !isTiFlashRelatedStore(s.cluster.GetStore(storePeer.GetStoreId())) {
 		return &errorpb.Error{
 			Message: *proto.String("not leader"),
 			NotLeader: &errorpb.NotLeader{
@@ -142,7 +142,7 @@ func (s *Session) CheckRequestContext(ctx *kvrpcpb.Context) *errorpb.Error {
 	}
 	// Region epoch does not match.
 	if !proto.Equal(region.GetRegionEpoch(), ctx.GetRegionEpoch()) {
-		nextRegion, _ := s.cluster.GetRegionByKey(region.GetEndKey())
+		nextRegion, _, _ := s.cluster.GetRegionByKey(region.GetEndKey())
 		currentRegions := []*metapb.Region{region}
 		if nextRegion != nil {
 			currentRegions = append(currentRegions, nextRegion)
@@ -182,9 +182,9 @@ func (s *Session) checkKeyInRegion(key []byte) bool {
 	return regionContains(s.startKey, s.endKey, NewMvccKey(key))
 }
 
-func isTiFlashStore(store *metapb.Store) bool {
+func isTiFlashRelatedStore(store *metapb.Store) bool {
 	for _, l := range store.GetLabels() {
-		if l.GetKey() == "engine" && l.GetValue() == "tiflash" {
+		if l.GetKey() == "engine" && (l.GetValue() == "tiflash" || l.GetValue() == "tiflash_mpp") {
 			return true
 		}
 	}

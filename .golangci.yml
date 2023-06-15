@@ -1,13 +1,13 @@
+run:
+  timeout: 5m
 linters:
   disable-all: true
   enable:
     - bodyclose
-    - deadcode
     - depguard
     - exportloopref
     - gofmt
     - goimports
-    - golint
     - goprintffuncname
     - gosimple
     - govet
@@ -15,14 +15,7 @@ linters:
     - misspell
     - noctx
     - nolintlint
-    - rowserrcheck
     - staticcheck
-    - structcheck
     - typecheck
     - unconvert
     - unused
-    - varcheck
-
-issues:
-  include:
-    - EXC0002 # disable excluding of issues about comments from golint

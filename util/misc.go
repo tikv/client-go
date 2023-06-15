@@ -36,10 +36,13 @@ package util
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -47,20 +50,24 @@ import (
 )
 
 // GCTimeFormat is the format that gc_worker used to store times.
-const GCTimeFormat = "20060102-15:04:05 -0700"
+const GCTimeFormat = "20060102-15:04:05.000 -0700"
+
+// gcTimeFormatOld is the format that gc_worker used to store times before, for compatibility we keep it.
+const gcTimeFormatOld = "20060102-15:04:05 -0700"
 
 // CompatibleParseGCTime parses a string with `GCTimeFormat` and returns a time.Time. If `value` can't be parsed as that
 // format, truncate to last space and try again. This function is only useful when loading times that saved by
 // gc_worker. We have changed the format that gc_worker saves time (removed the last field), but when loading times it
 // should be compatible with the old format.
 func CompatibleParseGCTime(value string) (time.Time, error) {
-	t, err := time.Parse(GCTimeFormat, value)
-
+	// The old format could parse the value with new format,
+	// let `GCTimeFormat` only be used when store the time.
+	t, err := time.Parse(gcTimeFormatOld, value)
 	if err != nil {
 		// Remove the last field that separated by space
 		parts := strings.Split(value, " ")
 		prefix := strings.Join(parts[:len(parts)-1], " ")
-		t, err = time.Parse(GCTimeFormat, prefix)
+		t, err = time.Parse(gcTimeFormatOld, prefix)
 	}
 
 	if err != nil {
@@ -71,8 +78,9 @@ func CompatibleParseGCTime(value string) (time.Time, error) {
 
 // WithRecovery wraps goroutine startup call with force recovery.
 // it will dump current goroutine stack into log if catch any recover result.
-//   exec:      execute logic function.
-//   recoverFn: handler will be called after recover and before dump stack, passing `nil` means noop.
+//
+//	exec:      execute logic function.
+//	recoverFn: handler will be called after recover and before dump stack, passing `nil` means noop.
 func WithRecovery(exec func(), recoverFn func(r interface{})) {
 	defer func() {
 		r := recover()
@@ -153,4 +161,57 @@ func BytesToString(numBytes int64) string {
 	}
 
 	return fmt.Sprintf("%v Bytes", numBytes)
+}
+
+// String converts slice of bytes to string without copy.
+func String(b []byte) (s string) {
+	if len(b) == 0 {
+		return ""
+	}
+	pbytes := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	pstring := (*reflect.StringHeader)(unsafe.Pointer(&s))
+	pstring.Data = pbytes.Data
+	pstring.Len = pbytes.Len
+	return
+}
+
+// ToUpperASCIIInplace bytes.ToUpper but zero-cost
+func ToUpperASCIIInplace(s []byte) []byte {
+	hasLower := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		hasLower = hasLower || ('a' <= c && c <= 'z')
+	}
+
+	if !hasLower {
+		return s
+	}
+	var c byte
+	for i := 0; i < len(s); i++ {
+		c = s[i]
+		if 'a' <= c && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		s[i] = c
+	}
+	return s
+}
+
+// EncodeToString overrides hex.EncodeToString implementation. Difference: returns []byte, not string
+func EncodeToString(src []byte) []byte {
+	dst := make([]byte, hex.EncodedLen(len(src)))
+	hex.Encode(dst, src)
+	return dst
+}
+
+// HexRegionKey converts region key to hex format. Used for formating region in
+// logs.
+func HexRegionKey(key []byte) []byte {
+	return ToUpperASCIIInplace(EncodeToString(key))
+}
+
+// HexRegionKeyStr converts region key to hex format. Used for formating region in
+// logs.
+func HexRegionKeyStr(key []byte) string {
+	return String(HexRegionKey(key))
 }

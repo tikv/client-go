@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 func TestSnapshot(t *testing.T) {
@@ -293,12 +294,12 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	bo := tikv.NewBackofferWithVars(context.Background(), 2000, nil)
-	err := bo.BackoffWithMaxSleepTxnLockFast(30, errors.New("test"))
+	err := bo.BackoffWithMaxSleepTxnLockFast(5, errors.New("test"))
 	s.Nil(err)
 	snapshot.RecordBackoffInfo(bo)
 	snapshot.RecordBackoffInfo(bo)
-	expect := "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}"
-	s.Equal(snapshot.FormatStats(), expect)
+	expect := "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}"
+	s.Equal(expect, snapshot.FormatStats())
 	detail := &kvrpcpb.ExecDetailsV2{
 		TimeDetail: &kvrpcpb.TimeDetail{
 			WaitWallTimeMs:    100,
@@ -308,6 +309,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 			ProcessedVersions:         10,
 			ProcessedVersionsSize:     10,
 			TotalVersions:             15,
+			GetSnapshotNanos:          500,
 			RocksdbBlockReadCount:     20,
 			RocksdbBlockReadByte:      15,
 			RocksdbDeleteSkippedCount: 5,
@@ -316,23 +318,73 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		},
 	}
 	snapshot.MergeExecDetail(detail)
-	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
+	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
 		"total_process_time: 100ms, total_wait_time: 100ms, " +
 		"scan_detail: {total_process_keys: 10, " +
 		"total_process_keys_size: 10, " +
 		"total_keys: 15, " +
+		"get_snapshot_time: 500ns, " +
 		"rocksdb: {delete_skipped_count: 5, " +
 		"key_skipped_count: 1, " +
 		"block: {cache_hit_count: 10, read_count: 20, read_byte: 15 Bytes}}}"
-	s.Equal(snapshot.FormatStats(), expect)
+	s.Equal(expect, snapshot.FormatStats())
 	snapshot.MergeExecDetail(detail)
-	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:60ms}, " +
+	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
 		"total_process_time: 200ms, total_wait_time: 200ms, " +
 		"scan_detail: {total_process_keys: 20, " +
 		"total_process_keys_size: 20, " +
 		"total_keys: 30, " +
+		"get_snapshot_time: 1µs, " +
 		"rocksdb: {delete_skipped_count: 10, " +
 		"key_skipped_count: 2, " +
 		"block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
-	s.Equal(snapshot.FormatStats(), expect)
+	s.Equal(expect, snapshot.FormatStats())
+}
+
+func (s *testSnapshotSuite) TestRCRead() {
+	for _, rowNum := range s.rowNums {
+		s.T().Logf("test RC Read, length=%v", rowNum)
+		txn := s.beginTxn()
+		keys := makeKeys(rowNum, s.prefix)
+		for i, k := range keys {
+			err := txn.Set(k, valueBytes(i))
+			s.Nil(err)
+		}
+		err := txn.Commit(context.Background())
+		s.Nil(err)
+
+		key0 := encodeKey(s.prefix, s08d("key", 0))
+		txn1 := s.beginTxn()
+		txn1.Set(key0, valueBytes(1))
+		committer1, err := txn1.NewCommitter(1)
+		s.Nil(err)
+		err = committer1.PrewriteAllMutations(context.Background())
+		s.Nil(err)
+
+		var meetLocks []*txnkv.Lock
+		resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
+		resolver.SetMeetLockCallback(func(locks []*txnkv.Lock) {
+			meetLocks = append(meetLocks, locks...)
+		})
+		// RC read
+		txn2 := s.beginTxn()
+		snapshot := txn2.GetSnapshot()
+		snapshot.SetIsolationLevel(txnsnapshot.RC)
+		// get
+		v, err := snapshot.Get(context.Background(), key0)
+		s.Nil(err)
+		s.Equal(len(meetLocks), 0)
+		s.Equal(v, valueBytes(0))
+		// batch get
+		m, err := snapshot.BatchGet(context.Background(), keys)
+		s.Nil(err)
+		s.Equal(len(meetLocks), 0)
+		s.Equal(len(m), rowNum)
+		for i, k := range keys {
+			s.Equal(m[string(k)], valueBytes(i))
+		}
+
+		committer1.Cleanup(context.Background())
+		s.deleteKeys(keys)
+	}
 }

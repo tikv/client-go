@@ -36,13 +36,14 @@ package tikv_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ninedraft/israce"
-	"github.com/pingcap/tidb/kv"
 	"github.com/stretchr/testify/suite"
+	kverr "github.com/tikv/client-go/v2/error"
 	tikvstore "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -68,8 +69,9 @@ func (s *testTiclientSuite) TearDownSuite() {
 	// Clean all data, or it may pollute other data.
 	txn := s.beginTxn()
 	scanner, err := txn.Iter(encodeKey(s.prefix, ""), nil)
-	s.Require().Nil(err)
-	s.Require().NotNil(scanner)
+	require := s.Require()
+	require.Nil(err)
+	require.NotNil(scanner)
 	for scanner.Valid() {
 		k := scanner.Key()
 		err = txn.Delete(k)
@@ -77,9 +79,9 @@ func (s *testTiclientSuite) TearDownSuite() {
 		scanner.Next()
 	}
 	err = txn.Commit(context.Background())
-	s.Require().Nil(err)
+	require.Nil(err)
 	err = s.store.Close()
-	s.Require().Nil(err)
+	require.Nil(err)
 }
 
 func (s *testTiclientSuite) beginTxn() *tikv.KVTxn {
@@ -150,7 +152,8 @@ func (s *testTiclientSuite) TestLargeRequest() {
 	s.NotNil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
-	s.False(kv.IsTxnRetryableError(err))
+	var retryableErr *kverr.ErrRetryable
+	s.False(errors.As(err, &retryableErr))
 }
 
 func (s *testTiclientSuite) TestSplitRegionIn2PC() {
@@ -199,7 +202,7 @@ func (s *testTiclientSuite) TestSplitRegionIn2PC() {
 		txn := s.beginTxn()
 		if m == "pessimistic" {
 			txn.SetPessimistic(true)
-			lockCtx := &kv.LockCtx{}
+			lockCtx := &tikvstore.LockCtx{}
 			lockCtx.ForUpdateTS = txn.StartTS()
 			keys := make([][]byte, 0, preSplitThresholdInTest)
 			for i := 0; i < preSplitThresholdInTest; i++ {

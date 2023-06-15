@@ -286,15 +286,17 @@ type MVCCStore interface {
 
 // RawKV is a key-value storage. MVCCStore can be implemented upon it with timestamp encoded into key.
 type RawKV interface {
-	RawGet(key []byte) []byte
-	RawBatchGet(keys [][]byte) [][]byte
-	RawScan(startKey, endKey []byte, limit int) []Pair        // Scan the range of [startKey, endKey)
-	RawReverseScan(startKey, endKey []byte, limit int) []Pair // Scan the range of [endKey, startKey)
-	RawPut(key, value []byte)
-	RawBatchPut(keys, values [][]byte)
-	RawDelete(key []byte)
-	RawBatchDelete(keys [][]byte)
-	RawDeleteRange(startKey, endKey []byte)
+	RawGet(cf string, key []byte) []byte
+	RawBatchGet(cf string, keys [][]byte) [][]byte
+	RawScan(cf string, startKey, endKey []byte, limit int) []Pair        // Scan the range of [startKey, endKey)
+	RawReverseScan(cf string, startKey, endKey []byte, limit int) []Pair // Scan the range of [endKey, startKey)
+	RawPut(cf string, key, value []byte)
+	RawBatchPut(cf string, keys, values [][]byte)
+	RawDelete(cf string, key []byte)
+	RawBatchDelete(cf string, keys [][]byte)
+	RawDeleteRange(cf string, startKey, endKey []byte)
+	RawCompareAndSwap(cf string, key, expectedValue, newvalue []byte) ([]byte, bool, error)
+	RawChecksum(cf string, startKey, endKey []byte) (uint64, uint64, uint64, error)
 }
 
 // MVCCDebugger is for debugging.

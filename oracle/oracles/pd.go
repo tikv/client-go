@@ -327,3 +327,11 @@ func (o *pdOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevS
 	}
 	return ts, nil
 }
+
+func (o *pdOracle) SetExternalTimestamp(ctx context.Context, ts uint64) error {
+	return o.c.SetExternalTimestamp(ctx, ts)
+}
+
+func (o *pdOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
+	return o.c.GetExternalTimestamp(ctx)
+}

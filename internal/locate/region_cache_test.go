@@ -39,13 +39,17 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
-	"github.com/google/btree"
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
@@ -78,7 +82,7 @@ func (s *testRegionCacheSuite) SetupTest() {
 	s.store2 = storeIDs[1]
 	s.peer1 = peerIDs[0]
 	s.peer2 = peerIDs[1]
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
@@ -96,7 +100,7 @@ func (s *testRegionCacheSuite) checkCache(len int) {
 	ts := time.Now().Unix()
 	s.Equal(validRegions(s.cache.mu.regions, ts), len)
 	s.Equal(validRegionsSearchedByVersions(s.cache.mu.latestVersions, s.cache.mu.regions, ts), len)
-	s.Equal(validRegionsInBtree(s.cache.mu.sorted, ts), len)
+	s.Equal(s.cache.mu.sorted.ValidRegionsInBtree(ts), len)
 }
 
 func validRegionsSearchedByVersions(
@@ -121,18 +125,6 @@ func validRegions(regions map[RegionVerID]*Region, ts int64) (len int) {
 		}
 		len++
 	}
-	return
-}
-
-func validRegionsInBtree(t *btree.BTree, ts int64) (len int) {
-	t.Descend(func(item btree.Item) bool {
-		r := item.(*btreeItem).cachedRegion
-		if !r.checkRegionCacheTTL(ts) {
-			return true
-		}
-		len++
-		return true
-	})
 	return
 }
 
@@ -967,7 +959,7 @@ func (s *testRegionCacheSuite) TestReconnect() {
 
 func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	// Create a separated region cache to do this test.
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster)}
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	cache := NewRegionCache(pdCli)
 	defer cache.Close()
 
@@ -1006,7 +998,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	s.Equal(lctx.Peer.Id, peer3)
 
 	// epoch-not-match on tiflash
-	ctxTiFlash, err := s.cache.GetTiFlashRPCContext(s.bo, loc1.Region, true)
+	ctxTiFlash, err := s.cache.GetTiFlashRPCContext(s.bo, loc1.Region, true, LabelFilterNoTiFlashWriteNode)
 	s.Nil(err)
 	s.Equal(ctxTiFlash.Peer.Id, s.peer1)
 	ctxTiFlash.Peer.Role = metapb.PeerRole_Learner
@@ -1263,8 +1255,43 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 		DownPeers: []*metapb.Peer{{Id: s.peer1, StoreId: s.store1}},
 	}
 	filterUnavailablePeers(cpRegion)
-	region := &Region{meta: cpRegion.Meta}
-	err = region.init(s.bo, s.cache)
+	region, err := newRegion(s.bo, s.cache, cpRegion)
+	s.Nil(err)
+	s.cache.insertRegionToCache(region)
+
+	// OnSendFail should not panic
+	s.cache.OnSendFail(retry.NewNoopBackoff(context.Background()), ctx, false, errors.New("send fail"))
+}
+
+func (s *testRegionCacheSuite) TestPeersLenChangedByWitness() {
+	// 2 peers [peer1, peer2] and let peer2 become leader
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.cache.UpdateLeader(loc.Region, &metapb.Peer{Id: s.peer2, StoreId: s.store2}, 0)
+
+	// current leader is peer2 in [peer1, peer2]
+	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	ctx, err := s.cache.GetTiKVRPCContext(s.bo, loc.Region, kv.ReplicaReadLeader, 0)
+	s.Nil(err)
+	s.Equal(ctx.Peer.StoreId, s.store2)
+
+	// simulate peer1 become witness in kv heartbeat and loaded before response back.
+	cpMeta := &metapb.Region{
+		Id:          ctx.Meta.Id,
+		StartKey:    ctx.Meta.StartKey,
+		EndKey:      ctx.Meta.EndKey,
+		RegionEpoch: ctx.Meta.RegionEpoch,
+		Peers:       make([]*metapb.Peer, len(ctx.Meta.Peers)),
+	}
+	copy(cpMeta.Peers, ctx.Meta.Peers)
+	for _, peer := range cpMeta.Peers {
+		if peer.Id == s.peer1 {
+			peer.IsWitness = true
+		}
+	}
+	cpRegion := &pd.Region{Meta: cpMeta}
+	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
 	s.cache.insertRegionToCache(region)
 
@@ -1384,4 +1411,365 @@ func (s *testRegionCacheSuite) TestNoBackoffWhenFailToDecodeRegion() {
 	_, err = s.cache.scanRegions(s.bo, []byte{}, []byte{}, 10)
 	s.NotNil(err)
 	s.Equal(0, s.bo.GetTotalBackoffTimes())
+}
+
+func (s *testRegionCacheSuite) TestBuckets() {
+	// proto.Clone clones []byte{} to nil and [][]byte{nil or []byte{}} to [][]byte{[]byte{}}.
+	// nilToEmtpyBytes unifies it for tests.
+	nilToEmtpyBytes := func(s []byte) []byte {
+		if s == nil {
+			s = []byte{}
+		}
+		return s
+	}
+
+	// 1. cached region contains buckets information fetched from PD.
+	r, _ := s.cluster.GetRegion(s.region1)
+	defaultBuckets := &metapb.Buckets{
+		RegionId: s.region1,
+		Version:  uint64(time.Now().Nanosecond()),
+		Keys:     [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), []byte("b"), nilToEmtpyBytes(r.GetEndKey())},
+	}
+	s.cluster.SplitRegionBuckets(s.region1, defaultBuckets.Keys, defaultBuckets.Version)
+
+	cachedRegion := s.getRegion([]byte("a"))
+	s.Equal(s.region1, cachedRegion.GetID())
+	buckets := cachedRegion.getStore().buckets
+	s.Equal(defaultBuckets, buckets)
+
+	// test locateBucket
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.Nil(err)
+	s.Equal(buckets, loc.Buckets)
+	s.Equal(buckets.GetVersion(), loc.GetBucketVersion())
+	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
+		b := loc.locateBucket(key)
+		s.NotNil(b)
+		s.True(b.Contains(key))
+	}
+	// Modify the buckets manually to mock stale information.
+	loc.Buckets = proto.Clone(loc.Buckets).(*metapb.Buckets)
+	loc.Buckets.Keys = [][]byte{[]byte("b"), []byte("c"), []byte("d")}
+	for _, key := range [][]byte{[]byte("a"), []byte("d"), []byte("e")} {
+		b := loc.locateBucket(key)
+		s.Nil(b)
+	}
+
+	// 2. insertRegionToCache keeps old buckets information if needed.
+	fakeRegion := &Region{
+		meta:          cachedRegion.meta,
+		syncFlag:      cachedRegion.syncFlag,
+		lastAccess:    cachedRegion.lastAccess,
+		invalidReason: cachedRegion.invalidReason,
+	}
+	fakeRegion.setStore(cachedRegion.getStore().clone())
+	// no buckets
+	fakeRegion.getStore().buckets = nil
+	s.cache.insertRegionToCache(fakeRegion)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
+	// stale buckets
+	fakeRegion.getStore().buckets = &metapb.Buckets{Version: defaultBuckets.Version - 1}
+	s.cache.insertRegionToCache(fakeRegion)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
+	// new buckets
+	newBuckets := &metapb.Buckets{
+		RegionId: buckets.RegionId,
+		Version:  defaultBuckets.Version + 1,
+		Keys:     buckets.Keys,
+	}
+	fakeRegion.getStore().buckets = newBuckets
+	s.cache.insertRegionToCache(fakeRegion)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(newBuckets, cachedRegion.getStore().buckets)
+
+	// 3. epochNotMatch keeps old buckets information.
+	cachedRegion = s.getRegion([]byte("a"))
+	newMeta := proto.Clone(cachedRegion.meta).(*metapb.Region)
+	newMeta.RegionEpoch.Version++
+	newMeta.RegionEpoch.ConfVer++
+	_, err = s.cache.OnRegionEpochNotMatch(s.bo, &RPCContext{Region: cachedRegion.VerID(), Store: s.cache.getStoreByStoreID(s.store1)}, []*metapb.Region{newMeta})
+	s.Nil(err)
+	cachedRegion = s.getRegion([]byte("a"))
+	s.Equal(newBuckets, cachedRegion.getStore().buckets)
+
+	// 4. test UpdateBuckets
+	waitUpdateBuckets := func(expected *metapb.Buckets, key []byte) {
+		var buckets *metapb.Buckets
+		for i := 0; i < 10; i++ {
+			buckets = s.getRegion(key).getStore().buckets
+			if reflect.DeepEqual(expected, buckets) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		s.Equal(expected, buckets)
+	}
+
+	cachedRegion = s.getRegion([]byte("a"))
+	buckets = cachedRegion.getStore().buckets
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), buckets.GetVersion()-1)
+	// don't update bucket if the new one's version is stale.
+	waitUpdateBuckets(buckets, []byte("a"))
+
+	// update buckets if it's nil.
+	cachedRegion.getStore().buckets = nil
+	s.cluster.SplitRegionBuckets(cachedRegion.GetID(), defaultBuckets.Keys, defaultBuckets.Version)
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), defaultBuckets.GetVersion())
+	waitUpdateBuckets(defaultBuckets, []byte("a"))
+
+	// update buckets if the new one's version is greater than old one's.
+	cachedRegion = s.getRegion([]byte("a"))
+	newBuckets = &metapb.Buckets{
+		RegionId: cachedRegion.GetID(),
+		Version:  defaultBuckets.Version + 1,
+		Keys:     [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), nilToEmtpyBytes(r.GetEndKey())},
+	}
+	s.cluster.SplitRegionBuckets(newBuckets.RegionId, newBuckets.Keys, newBuckets.Version)
+	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), newBuckets.GetVersion())
+	waitUpdateBuckets(newBuckets, []byte("a"))
+}
+
+func (s *testRegionCacheSuite) TestLocateBucket() {
+	// proto.Clone clones []byte{} to nil and [][]byte{nil or []byte{}} to [][]byte{[]byte{}}.
+	// nilToEmtpyBytes unifies it for tests.
+	nilToEmtpyBytes := func(s []byte) []byte {
+		if s == nil {
+			s = []byte{}
+		}
+		return s
+	}
+	r, _ := s.cluster.GetRegion(s.region1)
+
+	// First test normal case: region start equals to the first bucket keys and
+	// region end equals to the last bucket key
+	bucketKeys := [][]byte{nilToEmtpyBytes(r.GetStartKey()), []byte("a"), []byte("b"), nilToEmtpyBytes(r.GetEndKey())}
+	s.cluster.SplitRegionBuckets(s.region1, bucketKeys, uint64(time.Now().Nanosecond()))
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.Nil(err)
+	for _, key := range [][]byte{{}, {'a' - 1}, []byte("a"), []byte("a0"), []byte("b"), []byte("c")} {
+		b := loc.locateBucket(key)
+		s.NotNil(b)
+		s.True(b.Contains(key))
+	}
+
+	// Then test cases where there's some holes in region start and the first bucket key
+	// and in the last bucket key and region end
+	bucketKeys = [][]byte{[]byte("a"), []byte("b")}
+	bucketVersion := uint64(time.Now().Nanosecond())
+	s.cluster.SplitRegionBuckets(s.region1, bucketKeys, bucketVersion)
+	s.cache.UpdateBucketsIfNeeded(s.getRegion([]byte("a")).VerID(), bucketVersion)
+	// wait for region update
+	time.Sleep(300 * time.Millisecond)
+	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.Nil(err)
+	for _, key := range [][]byte{{'a' - 1}, []byte("c")} {
+		b := loc.locateBucket(key)
+		s.Nil(b)
+		b = loc.LocateBucket(key)
+		s.NotNil(b)
+		s.True(b.Contains(key))
+	}
+}
+
+func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
+	// Split at "b", "c", "d", "e"
+	regions := s.cluster.AllocIDs(4)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 4; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 4; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'b' + byte(i)}, peers[i+1], peers[i+1][0])
+	}
+
+	for c := 'a'; c <= 'e'; c++ {
+		loc, err := s.cache.LocateKey(s.bo, []byte{byte(c)})
+		s.Nil(err)
+		s.Equal(loc.Region.GetID(), regions[c-'a'])
+	}
+
+	// merge all except the last region together
+	for i := 1; i <= 3; i++ {
+		s.cluster.Merge(regions[0], regions[i])
+	}
+
+	// Now the region cache contains stale information
+	loc, err := s.cache.LocateKey(s.bo, []byte{'c'})
+	s.Nil(err)
+	s.NotEqual(loc.Region.GetID(), regions[0]) // This is incorrect, but is expected
+	loc, err = s.cache.LocateKey(s.bo, []byte{'e'})
+	s.Nil(err)
+	s.Equal(loc.Region.GetID(), regions[4]) // 'e' is not merged yet, so it's still correct
+
+	// If we insert the new region into the cache, the old intersecting regions will be removed.
+	// And the result will be correct.
+	region, err := s.cache.loadRegion(s.bo, []byte("c"), false)
+	s.Nil(err)
+	s.Equal(region.GetID(), regions[0])
+	s.cache.insertRegionToCache(region)
+	loc, err = s.cache.LocateKey(s.bo, []byte{'c'})
+	s.Nil(err)
+	s.Equal(loc.Region.GetID(), regions[0])
+	s.checkCache(2)
+
+	// Now, we merge the last region. This case tests against how we handle the empty end_key.
+	s.cluster.Merge(regions[0], regions[4])
+	region, err = s.cache.loadRegion(s.bo, []byte("e"), false)
+	s.Nil(err)
+	s.Equal(region.GetID(), regions[0])
+	s.cache.insertRegionToCache(region)
+	loc, err = s.cache.LocateKey(s.bo, []byte{'e'})
+	s.Nil(err)
+	s.Equal(loc.Region.GetID(), regions[0])
+	s.checkCache(1)
+}
+
+func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NotNil(loc)
+	s.NoError(err)
+	ctx, err := s.cache.GetTiKVRPCContext(retry.NewBackofferWithVars(context.Background(), 100, nil), loc.Region, kv.ReplicaReadLeader, 0)
+	s.NotNil(ctx)
+	s.NoError(err)
+	reqSend := NewRegionRequestSender(s.cache, nil)
+	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
+	s.Error(err)
+	s.False(shouldRetry)
+	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
+	s.Error(err)
+	s.False(shouldRetry)
+}
+
+func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
+	// Prepare 100 regions
+	regionCnt := 100
+	regions := s.cluster.AllocIDs(regionCnt)
+	regions = append([]uint64{s.region1}, regions...)
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < regionCnt; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+	for i := 0; i < regionCnt; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte(fmt.Sprintf(regionSplitKeyFormat, i)), peers[i+1], peers[i+1][0])
+	}
+	loadRegionsToCache(s.cache, regionCnt)
+	s.checkCache(regionCnt)
+
+	// Make parts of the regions stale
+	remaining := 0
+	s.cache.mu.Lock()
+	now := time.Now().Unix()
+	for verID, r := range s.cache.mu.regions {
+		if verID.id%3 == 0 {
+			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+		} else {
+			remaining++
+		}
+	}
+	s.cache.mu.Unlock()
+
+	s.Eventually(func() bool {
+		s.cache.mu.RLock()
+		defer s.cache.mu.RUnlock()
+		return len(s.cache.mu.regions) == remaining
+	}, 3*time.Second, 200*time.Millisecond)
+	s.checkCache(remaining)
+
+	// Make another part of the regions stale
+	remaining = 0
+	s.cache.mu.Lock()
+	now = time.Now().Unix()
+	for verID, r := range s.cache.mu.regions {
+		if verID.id%3 == 1 {
+			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+		} else {
+			remaining++
+		}
+	}
+	s.cache.mu.Unlock()
+
+	s.Eventually(func() bool {
+		s.cache.mu.RLock()
+		defer s.cache.mu.RUnlock()
+		return len(s.cache.mu.regions) == remaining
+	}, 3*time.Second, 200*time.Millisecond)
+	s.checkCache(remaining)
+}
+
+func (s *testRegionCacheSuite) TestSlowScoreStat() {
+	slowScore := SlowScoreStat{
+		avgScore: 1,
+	}
+	s.False(slowScore.isSlow())
+	slowScore.recordSlowScoreStat(time.Millisecond * 1)
+	slowScore.updateSlowScore()
+	s.False(slowScore.isSlow())
+	for i := 2; i <= 100; i++ {
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	for i := 100; i >= 2; i-- {
+		slowScore.recordSlowScoreStat(time.Millisecond * time.Duration(i))
+		if i%5 == 0 {
+			slowScore.updateSlowScore()
+			s.False(slowScore.isSlow())
+		}
+	}
+	slowScore.markAlreadySlow()
+	s.True(slowScore.isSlow())
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+
+	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
+	v2 := region.Region.confVer + 1
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	st := &Store{storeID: s.store}
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()})
+
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 2)
+
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func(cache *RegionCache) {
+		for {
+			_ = cache.refreshRegionIndex(retry.NewNoopBackoff(context.Background()))
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}(s.cache)
+
+	regionID := s.region
+	go func(cache *RegionCache) {
+		for {
+			_, _ = cache.LocateRegionByID(retry.NewNoopBackoff(context.Background()), regionID)
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}(s.cache)
+	time.Sleep(5 * time.Second)
+
+	cancel()
 }

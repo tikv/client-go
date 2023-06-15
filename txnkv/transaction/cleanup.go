@@ -46,24 +46,38 @@ import (
 	"go.uber.org/zap"
 )
 
-type actionCleanup struct{}
+type actionCleanup struct{ isInternal bool }
 
 var _ twoPhaseCommitAction = actionCleanup{}
 
-func (actionCleanup) String() string {
+func (action actionCleanup) String() string {
 	return "cleanup"
 }
 
-func (actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+func (action actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
+	if action.isInternal {
+		return metrics.TxnRegionsNumHistogramCleanupInternal
+	}
 	return metrics.TxnRegionsNumHistogramCleanup
 }
 
-func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
 		Keys:         batch.mutations.GetKeys(),
 		StartVersion: c.startTS,
-	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag,
-		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds())})
+	}, kvrpcpb.Context{
+		Priority:               c.priority,
+		SyncLog:                c.syncLog,
+		ResourceGroupTag:       c.resourceGroupTag,
+		MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
+		RequestSource:          c.txn.GetRequestSource(),
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
+			ResourceGroupName: c.resourceGroupName,
+		},
+	})
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(req)
+	}
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {
 		return err
@@ -90,5 +104,5 @@ func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer
 }
 
 func (c *twoPhaseCommitter) cleanupMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
-	return c.doActionOnMutations(bo, actionCleanup{}, mutations)
+	return c.doActionOnMutations(bo, actionCleanup{isInternal: c.txn.isInternal()}, mutations)
 }
