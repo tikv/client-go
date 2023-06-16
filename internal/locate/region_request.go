@@ -1190,6 +1190,11 @@ func (s *RegionRequestSender) SendReqCtx(
 		if retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
+		if err != nil {
+			logutil.Logger(bo.GetCtx()).Warn( "backoff error message",
+				zap.Uint64("region", regionID.GetID()),
+				zap.Errors("error", bo.Errors()))
+		}
 	}()
 
 	var staleReadCollector *staleReadMetricsCollector
