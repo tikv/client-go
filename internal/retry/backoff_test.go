@@ -37,7 +37,9 @@ package retry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -48,6 +50,26 @@ func TestBackoffWithMax(t *testing.T) {
 
 	assert.Nil(t, err)
 	assert.Equal(t, 5, b.totalSleep)
+}
+
+func TestBackoffPrintErrors(t *testing.T) {
+	ctx, _ := context.WithTimeout(context.Background(), 1*time.Second) // timeout with 1s
+	// do not invoke cancel() to avoid causing Backoff return error
+	bo := NewBackoffer(ctx,2000) // backoff with 2s
+
+	go func() {
+		for i := 0; ; i++ {
+			if err := bo.Backoff(BoRegionMiss, fmt.Errorf("times=%v, region miss", i)); err != nil {
+				t.Fatalf("should not return error in backoff: err=%v", err)
+			}
+		}
+	}()
+	time.Sleep(200*time.Millisecond)
+
+	assert.Greater(t, bo.ErrorsNum(), 0)
+	for _, e := range bo.Errors() {
+		t.Logf("error: %v", e)
+	}
 }
 
 func TestBackoffErrorType(t *testing.T) {

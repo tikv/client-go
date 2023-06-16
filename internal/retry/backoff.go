@@ -322,6 +322,11 @@ func (b *Backoffer) GetBackoffSleepMS() map[string]int {
 	return b.backoffSleepMS
 }
 
+// Errors returns collected errors of each backoff.
+func (b *Backoffer) Errors() []error {
+	return b.errors
+}
+
 // ErrorsNum returns the number of errors.
 func (b *Backoffer) ErrorsNum() int {
 	return len(b.errors)
