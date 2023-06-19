@@ -1,6 +1,6 @@
 module 1pc_txn
 
-go 1.19
+go 1.20
 
 require github.com/tikv/client-go/v2 v2.0.0
 

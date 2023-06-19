@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -41,12 +42,55 @@ func (c emptyClient) CloseAddr(addr string) error {
 func TestInterceptedClient(t *testing.T) {
 	executed := false
 	client := NewInterceptedClient(emptyClient{}, nil)
-	ctx := interceptor.WithRPCInterceptor(context.Background(), func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+	ctx := interceptor.WithRPCInterceptor(context.Background(), interceptor.NewRPCInterceptor("test", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			executed = true
 			return next(target, req)
 		}
-	})
+	}))
 	_, _ = client.SendRequest(ctx, "", &tikvrpc.Request{}, 0)
 	assert.True(t, executed)
+}
+
+func TestAppendChainedInterceptor(t *testing.T) {
+	executed := make([]int, 0, 10)
+	client := NewInterceptedClient(emptyClient{}, nil)
+
+	mkInterceptorFn := func(i int) interceptor.RPCInterceptor {
+		return interceptor.NewRPCInterceptor(fmt.Sprintf("%d", i), func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+			return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+				executed = append(executed, i)
+				return next(target, req)
+			}
+		})
+	}
+
+	checkChained := func(it interceptor.RPCInterceptor, count int, expected []int) {
+		chain, ok := it.(*interceptor.RPCInterceptorChain)
+		assert.True(t, ok)
+		assert.Equal(t, chain.Len(), count)
+
+		executed = executed[:0]
+		ctx := interceptor.WithRPCInterceptor(context.Background(), it)
+		_, _ = client.SendRequest(ctx, "", &tikvrpc.Request{}, 0)
+		assert.Equal(t, executed, expected)
+	}
+
+	it := mkInterceptorFn(0)
+	expected := []int{0}
+	for i := 1; i < 3; i++ {
+		it = interceptor.ChainRPCInterceptors(it, mkInterceptorFn(i))
+		expected = append(expected, i)
+		checkChained(it, i+1, expected)
+	}
+
+	it2 := interceptor.ChainRPCInterceptors(mkInterceptorFn(3), mkInterceptorFn(4))
+	checkChained(it2, 2, []int{3, 4})
+
+	chain := interceptor.ChainRPCInterceptors(it, it2)
+	checkChained(chain, 5, []int{0, 1, 2, 3, 4})
+
+	// add duplciated
+	chain = interceptor.ChainRPCInterceptors(chain, mkInterceptorFn(1))
+	checkChained(chain, 5, []int{0, 2, 3, 4, 1})
 }
