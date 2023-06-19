@@ -574,10 +574,25 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx = state.leaderIdx
 	}
 	offset := rand.Intn(replicaSize)
+	reloadRegion := false
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
-		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
-		// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
-		idx := AccessIndex((int(state.lastIdx) + i + offset) % replicaSize)
+		var idx AccessIndex
+		if i == 0 {
+			if state.option.preferLeader {
+				// In prefer leader mode, the selector choose leader firstly, then randomly choose other followers.
+				idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
+			} else {
+				idx = AccessIndex((int(state.lastIdx) + i + offset) % replicaSize)
+			}
+		} else {
+			if state.option.preferLeader && (i+offset)%replicaSize == 0 {
+				// skip leader because prefer leader already tried it.
+				offset++
+			}
+			// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
+			// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
+			idx = AccessIndex((int(state.lastIdx) + i + offset) % replicaSize)
+		}
 		selectReplica := selector.replicas[idx]
 		if state.isCandidate(idx, selectReplica) {
 			state.lastIdx = idx
@@ -587,8 +602,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		if selectReplica.isEpochStale() &&
 			selectReplica.store.getResolveState() == resolved &&
 			selectReplica.store.getLivenessState() == reachable {
-			selector.regionCache.asyncReloadRegion(selector.region)
+			reloadRegion = true
 		}
+	}
+	if reloadRegion {
+		selector.regionCache.asyncReloadRegion(selector.region)
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
