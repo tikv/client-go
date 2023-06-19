@@ -577,18 +577,18 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	reloadRegion := false
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		var idx AccessIndex
-		if i == 0 {
-			if state.option.preferLeader {
+		if state.option.preferLeader {
+			if i == 0 {
 				// In prefer leader mode, the selector choose leader firstly, then randomly choose other followers.
 				idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
 			} else {
+				if state.option.preferLeader && (i+offset)%replicaSize == 0 {
+					// skip leader because prefer leader already tried it.
+					offset++
+				}
 				idx = AccessIndex((int(state.lastIdx) + i + offset) % replicaSize)
 			}
 		} else {
-			if state.option.preferLeader && (i+offset)%replicaSize == 0 {
-				// skip leader because prefer leader already tried it.
-				offset++
-			}
 			// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
 			// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
 			idx = AccessIndex((int(state.lastIdx) + i + offset) % replicaSize)
