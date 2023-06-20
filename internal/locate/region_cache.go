@@ -1348,7 +1348,7 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 			store.workTiKVIdx = (oldRegionStore.workTiKVIdx + 1) % AccessIndex(store.accessStoreNum(tiKVOnly))
 		}
 		// If the region info is async reloaded, the old region is still valid.
-		if !oldRegion.asyncReload.Load() {
+		if atomic.LoadInt32(&oldRegion.asyncReload) == 0 {
 			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
 			oldRegion.invalidate(Other)
 		}
