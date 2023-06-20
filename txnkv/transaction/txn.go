@@ -206,7 +206,7 @@ func (txn *KVTxn) GetVars() *tikv.Variables {
 func (txn *KVTxn) Get(ctx context.Context, k []byte) ([]byte, error) {
 	ret, err := txn.us.Get(ctx, k)
 	if tikverr.IsErrNotFound(err) {
-		return nil, err
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
