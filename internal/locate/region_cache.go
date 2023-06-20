@@ -126,7 +126,7 @@ type Region struct {
 	syncFlag      int32          // region need be sync in next turn
 	lastAccess    int64          // last region access time, see checkRegionCacheTTL
 	invalidReason InvalidReason  // the reason why the region is invalidated
-	asyncReload   atomic.Bool    // the region need to be reloaded in async mode
+	asyncReload   int32          // the region need to be reloaded in async mode
 }
 
 // AccessIndex represent the index for accessIndex array
@@ -420,6 +420,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.tiflashComputeStoreMu.needReload = true
 	c.tiflashComputeStoreMu.stores = make([]*Store, 0)
 	c.notifyCheckCh = make(chan struct{}, 1)
+	//c.notifyReloadRegion
 	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
@@ -1144,7 +1145,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 }
 
 func (c *RegionCache) asyncReloadRegion(region *Region) {
-	if region == nil || !region.asyncReload.CompareAndSwap(false, true) {
+	if region == nil || !atomic.CompareAndSwapInt32(&region.asyncReload, 0, 1) {
 		// async reload triggered by other thread.
 		return
 	}
@@ -1164,7 +1165,7 @@ func (c *RegionCache) asyncReloadRegion(region *Region) {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
 				zap.Uint64("regionID", regionID), zap.Error(err))
-			region.asyncReload.Store(false)
+			atomic.StoreInt32(&region.asyncReload, 0)
 			return
 		}
 		c.mu.Lock()
