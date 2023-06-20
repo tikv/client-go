@@ -458,6 +458,12 @@ type RegionCache struct {
 		// requestLiveness always returns unreachable.
 		mockRequestLiveness atomic.Pointer[livenessFunc]
 	}
+
+	regionsNeedReload struct {
+		sync.Mutex
+		regions  []uint64
+		toReload map[uint64]struct{}
+	}
 }
 
 // NewRegionCache creates a RegionCache.
@@ -523,7 +529,11 @@ func (c *RegionCache) Close() {
 // asyncCheckAndResolveLoop with
 func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	reloadRegionTicker := time.NewTicker(10 * time.Second)
+	defer func() {
+		ticker.Stop()
+		reloadRegionTicker.Stop()
+	}()
 	var needCheckStores []*Store
 	for {
 		needCheckStores = needCheckStores[:0]
@@ -542,6 +552,21 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 				// there's a deleted store in the stores map which guaranteed by reReslve().
 				return state != unresolved && state != tombstone && state != deleted
 			})
+		case <-reloadRegionTicker.C:
+			for regionID := range c.regionsNeedReload.toReload {
+				c.reloadRegion(regionID)
+				delete(c.regionsNeedReload.toReload, regionID)
+			}
+			c.regionsNeedReload.Lock()
+			for _, regionID := range c.regionsNeedReload.regions {
+				// will reload in next tick, wait a while for two reasons:
+				// 1. there may an unavailable duration while recreating the connection.
+				// 2. the store may just be started, and wait safe ts synced to avoid the
+				// possible dataIsNotReady error.
+				c.regionsNeedReload.toReload[regionID] = struct{}{}
+			}
+			c.regionsNeedReload.regions = c.regionsNeedReload.regions[:0]
+			c.regionsNeedReload.Unlock()
 		}
 	}
 }
@@ -1227,34 +1252,34 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 	}, nil
 }
 
-func (c *RegionCache) asyncReloadRegion(region *Region) {
+func (c *RegionCache) scheduleReloadRegion(region *Region) {
 	if region == nil || !region.asyncReload.CompareAndSwap(false, true) {
-		// async reload triggered by other thread.
+		// async reload scheduled by other thread.
 		return
 	}
-	go func() {
-		// wait a while for two reasons:
-		// 1. there may an unavailable duration while recreating the connection.
-		// 2. the store may just be started, and wait safe ts synced to avoid the
-		// possible dataIsNotReady error.
-		time.Sleep(10 * time.Second)
-		regionID := region.GetID()
-		if regionID == 0 {
-			return
+	regionID := region.GetID()
+	if regionID > 0 {
+		c.regionsNeedReload.Lock()
+		c.regionsNeedReload.regions = append(c.regionsNeedReload.regions, regionID)
+		c.regionsNeedReload.Unlock()
+	}
+}
+
+func (c *RegionCache) reloadRegion(regionID uint64) {
+	bo := retry.NewNoopBackoff(context.Background())
+	lr, err := c.loadRegionByID(bo, regionID)
+	if err != nil {
+		// ignore error and use old region info.
+		logutil.Logger(bo.GetCtx()).Error("load region failure",
+			zap.Uint64("regionID", regionID), zap.Error(err))
+		if oldRegion := c.getRegionByIDFromCache(regionID); oldRegion != nil {
+			oldRegion.asyncReload.Store(false)
 		}
-		bo := retry.NewNoopBackoff(context.Background())
-		lr, err := c.loadRegionByID(bo, regionID)
-		if err != nil {
-			// ignore error and use old region info.
-			logutil.Logger(bo.GetCtx()).Error("load region failure",
-				zap.Uint64("regionID", regionID), zap.Error(err))
-			region.asyncReload.Store(false)
-			return
-		}
-		c.mu.Lock()
-		c.insertRegionToCache(lr)
-		c.mu.Unlock()
-	}()
+		return
+	}
+	c.mu.Lock()
+	c.insertRegionToCache(lr)
+	c.mu.Unlock()
 }
 
 // GroupKeysByRegion separates keys into groups by their belonging Regions.
