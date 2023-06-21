@@ -119,6 +119,7 @@ func (c *Client) updateStores(stores []*metapb.Store) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// remove tombstone stores.
 	for id, s := range c.mu.stores {
 		if _, ok := latestStores[id]; !ok {
 			s.breaker.Close()
@@ -126,6 +127,7 @@ func (c *Client) updateStores(stores []*metapb.Store) {
 		}
 	}
 
+	// update stores.
 	for id, latest := range latestStores {
 		s, ok := c.mu.stores[id]
 		if ok {
@@ -151,6 +153,7 @@ func (c *Client) updateStores(stores []*metapb.Store) {
 				return c.probeStoreStatus(name, addr, 1*time.Second)
 			},
 		}
+		// init circuit breaker for the store.
 		s.breaker = newAsyncBreaker(settings)
 
 		c.mu.stores[id] = s
@@ -212,8 +215,9 @@ func (c *Client) getAliveTiKVStores() []*store {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	var tikvStores []*store
+	// the stores we cached are filtered out the tombstone store.
 	for _, s := range c.mu.stores {
-		if tikvrpc.GetStoreTypeByMeta(s.Store) == tikvrpc.TiKV && s.GetNodeState() != metapb.NodeState_Removed {
+		if tikvrpc.GetStoreTypeByMeta(s.Store) == tikvrpc.TiKV {
 			tikvStores = append(tikvStores, s)
 		}
 	}
@@ -498,6 +502,7 @@ func (c *Client) ScanRegions(ctx context.Context, startKey, endKey []byte, limit
 	return mkPDRegions(regions...), nil
 }
 
+// GetAllStores returns all stores in the cluster except tombstone stores.
 func (c *Client) GetAllStores(context.Context, ...pd.GetStoreOption) ([]*metapb.Store, error) {
 	return c.getAllStores(), nil
 }
