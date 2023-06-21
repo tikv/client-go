@@ -705,12 +705,12 @@ func DisableResourceControl() {
 
 // SetResourceControlInterceptor sets the interceptor for resource control.
 func SetResourceControlInterceptor(interceptor resourceControlClient.ResourceGroupKVInterceptor) {
-	client.ResourceControlInterceptor = interceptor
+	client.ResourceControlInterceptor.Store(&interceptor)
 }
 
 // UnsetResourceControlInterceptor un-sets the interceptor for resource control.
 func UnsetResourceControlInterceptor() {
-	client.ResourceControlInterceptor = nil
+	client.ResourceControlInterceptor.Store(nil)
 }
 
 // Variables defines the variables used by TiKV storage.
