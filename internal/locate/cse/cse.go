@@ -112,38 +112,48 @@ func (c *Client) probeStoreStatus(name string, addr string, timeout time.Duratio
 }
 
 func (c *Client) updateStores(stores []*metapb.Store) {
+	latestStores := make(map[uint64]*metapb.Store)
+	for _, s := range stores {
+		latestStores[s.Id] = s
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, s := range stores {
-		if origin, ok := c.mu.stores[s.Id]; !ok {
-			s := &store{
-				Store: s,
-			}
-			settings := settings{
-				Name:          fmt.Sprintf("store-%d", s.GetId()),
-				Interval:      c.cbOpt.Interval,
-				Timeout:       c.cbOpt.Timeout,
-				ProbeInterval: c.cbOpt.ProbeInterval,
-				ReadyToTrip:   c.cbOpt.ReadyToTrip,
-				Probe: func(name string) error {
-					addr := s.GetStatusAddress()
-					log.Warn("store is marked as unavailable, probing",
-						zap.String("name", name),
-						zap.String("store", addr))
-					return c.probeStoreStatus(name, addr, 1*time.Second)
-				},
-			}
-			s.breaker = newAsyncBreaker(settings)
-			c.mu.stores[s.GetId()] = s
-		} else {
-			// Remove the store from the map if it's tombstone.
-			if s.GetState() == metapb.StoreState_Tombstone {
-				origin.breaker.Close()
-				delete(c.mu.stores, s.GetId())
-				continue
-			}
-			origin.Store = s
+	for id, s := range c.mu.stores {
+		if _, ok := latestStores[id]; !ok {
+			s.breaker.Close()
+			delete(c.mu.stores, id)
 		}
+	}
+
+	for id, latest := range latestStores {
+		s, ok := c.mu.stores[id]
+		if ok {
+			s.Store = latest
+			continue
+		}
+
+		s = &store{
+			Store: latest,
+		}
+
+		settings := settings{
+			Name:          fmt.Sprintf("store-%d", id),
+			Interval:      c.cbOpt.Interval,
+			Timeout:       c.cbOpt.Timeout,
+			ProbeInterval: c.cbOpt.ProbeInterval,
+			ReadyToTrip:   c.cbOpt.ReadyToTrip,
+			Probe: func(name string) error {
+				addr := s.GetStatusAddress()
+				log.Warn("store is marked as unavailable, probing",
+					zap.String("name", name),
+					zap.String("store", addr))
+				return c.probeStoreStatus(name, addr, 1*time.Second)
+			},
+		}
+		s.breaker = newAsyncBreaker(settings)
+
+		c.mu.stores[id] = s
 	}
 }
 
@@ -203,7 +213,7 @@ func (c *Client) getAliveTiKVStores() []*store {
 	defer c.mu.RUnlock()
 	var tikvStores []*store
 	for _, s := range c.mu.stores {
-		if s.GetState() == metapb.StoreState_Up && tikvrpc.GetStoreTypeByMeta(s.Store) == tikvrpc.TiKV {
+		if tikvrpc.GetStoreTypeByMeta(s.Store) == tikvrpc.TiKV && s.GetNodeState() != metapb.NodeState_Removed {
 			tikvStores = append(tikvStores, s)
 		}
 	}
