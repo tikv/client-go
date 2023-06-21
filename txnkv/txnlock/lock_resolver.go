@@ -687,6 +687,7 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 		// success before the primary region.
 		if err := bo.Backoff(retry.BoTxnNotFound, err); err != nil {
 			logutil.Logger(bo.GetCtx()).Warn("getTxnStatusFromLock backoff fail", zap.Error(err))
+			return TxnStatus{}, err
 		}
 	}
 }
