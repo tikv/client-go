@@ -236,8 +236,8 @@ github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
 github.com/tikv/pd v0.0.0-20230420042919-0e0313adef1f h1:1BBlbLSCua+oK3xngEjPO2dj1oLcItJxhCzqYG6XANA=
 github.com/tikv/pd v0.0.0-20230420042919-0e0313adef1f/go.mod h1:2hGdvUNGLaCKLbEXC8JMiQz2JsbxEDCKGDOBGJTt0NQ=
-github.com/tikv/pd/client v0.0.0-20230616092310-1c5ca17da988 h1:GTkfMcMvRh4yP5WbC36t6NiI08jJeKiAzW7uoLEgjOI=
-github.com/tikv/pd/client v0.0.0-20230616092310-1c5ca17da988/go.mod h1:YmNkj9UT8IjwFov9k3oquH0UgIUHniUaQT3jXKgZYbM=
+github.com/tikv/pd/client v0.0.0-20230621093113-ac31f8730bab h1:iFMKcWYLCjcTRdJw+jsFJyhjQR6gA0NfT6yt96nMtXc=
+github.com/tikv/pd/client v0.0.0-20230621093113-ac31f8730bab/go.mod h1:YmNkj9UT8IjwFov9k3oquH0UgIUHniUaQT3jXKgZYbM=
 github.com/tmc/grpc-websocket-proxy v0.0.0-20200427203606-3cfed13b9966 h1:j6JEOq5QWFker+d7mFQYOhjTZonQ7YkLTHm56dbn+yM=
 github.com/twmb/murmur3 v1.1.3 h1:D83U0XYKcHRYwYIpBKf3Pks91Z0Byda/9SJ8B6EMRcA=
 github.com/twmb/murmur3 v1.1.3/go.mod h1:Qq/R7NUyOfr65zD+6Q5IHKsJLwP7exErjN6lyyq3OSQ=
