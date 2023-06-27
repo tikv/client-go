@@ -190,14 +190,9 @@ func (c *RPCInterceptorChain) Wrap(next RPCInterceptorFunc) RPCInterceptorFunc {
 // Multiple RPCInterceptors will be executed in the order of their parameters.
 // See RPCInterceptorChain for more information.
 func ChainRPCInterceptors(first RPCInterceptor, rest ...RPCInterceptor) RPCInterceptor {
-	var chain *RPCInterceptorChain
-	if ch, ok := first.(*RPCInterceptorChain); ok {
-		chain = ch
-	} else {
-		chain = NewRPCInterceptorChain()
-		chain.Link(first)
-	}
-
+	// always build a new interceptor to avoid potential data race
+	chain := NewRPCInterceptorChain()
+	chain.Link(first)
 	for _, it := range rest {
 		chain.Link(it)
 	}
