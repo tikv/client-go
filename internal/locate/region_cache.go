@@ -403,8 +403,7 @@ type RegionCache struct {
 
 	regionsNeedReload struct {
 		sync.Mutex
-		regions  []uint64
-		toReload map[uint64]struct{}
+		regions []uint64
 	}
 }
 
@@ -428,7 +427,6 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.tiflashComputeStoreMu.needReload = true
 	c.tiflashComputeStoreMu.stores = make([]*Store, 0)
 	c.notifyCheckCh = make(chan struct{}, 1)
-	c.regionsNeedReload.toReload = make(map[uint64]struct{})
 	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
 	interval := config.GetGlobalConfig().StoresRefreshInterval
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
@@ -463,6 +461,7 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 		reloadRegionTicker.Stop()
 	}()
 	var needCheckStores []*Store
+	reloadNextLoop := make(map[uint64]struct{})
 	for {
 		needCheckStores = needCheckStores[:0]
 		select {
@@ -482,9 +481,9 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 			})
 
 		case <-reloadRegionTicker.C:
-			for regionID := range c.regionsNeedReload.toReload {
+			for regionID := range reloadNextLoop {
 				c.reloadRegion(regionID)
-				delete(c.regionsNeedReload.toReload, regionID)
+				delete(reloadNextLoop, regionID)
 			}
 			c.regionsNeedReload.Lock()
 			for _, regionID := range c.regionsNeedReload.regions {
@@ -492,7 +491,7 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 				// 1. there may an unavailable duration while recreating the connection.
 				// 2. the store may just be started, and wait safe ts synced to avoid the
 				// possible dataIsNotReady error.
-				c.regionsNeedReload.toReload[regionID] = struct{}{}
+				reloadNextLoop[regionID] = struct{}{}
 			}
 			c.regionsNeedReload.regions = c.regionsNeedReload.regions[:0]
 			c.regionsNeedReload.Unlock()
