@@ -580,14 +580,17 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	reloadRegion := false
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		var idx AccessIndex
-		if state.lastIdx == state.leaderIdx && i == 0 {
-			idx = state.lastIdx
-		} else {
-			// randomly select next replica, but skip state.lastIdx
-			if (i+offset)%replicaSize == 0 {
-				offset++
+		if state.option.preferLeader {
+			if i == 0 {
+				idx = state.lastIdx
+			} else {
+				// randomly select next replica, but skip state.lastIdx
+				if (i+offset)%replicaSize == 0 {
+					offset++
+				}
 			}
-			idx = AccessIndex((int(state.lastIdx) + i + offset) % replicaSize)
+		} else {
+			idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
 		}
 		selectReplica := selector.replicas[idx]
 		if state.isCandidate(idx, selectReplica) {
