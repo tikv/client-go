@@ -2435,8 +2435,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 
 func (s *Store) getResolveState() resolveState {
 	if s == nil {
-		var state resolveState
-		return state
+		return unresolved
 	}
 	return resolveState(atomic.LoadUint64(&s.state))
 }
