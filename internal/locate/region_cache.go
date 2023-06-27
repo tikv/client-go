@@ -398,7 +398,7 @@ type RegionCache struct {
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
 		// requestLiveness always returns unreachable.
-		mockRequestLiveness atomic.Pointer[livenessFunc]
+		mockRequestLiveness atomic.Value
 	}
 
 	regionsNeedReload struct {
@@ -2609,9 +2609,9 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 	}
 
 	if c != nil {
-		livenessFunc := c.testingKnobs.mockRequestLiveness.Load()
-		if livenessFunc != nil {
-			return (*livenessFunc)(s, bo)
+		lf := c.testingKnobs.mockRequestLiveness.Load()
+		if lf != nil {
+			return (*lf.(*livenessFunc))(s, bo)
 		}
 	}
 
