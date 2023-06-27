@@ -29,7 +29,6 @@ import (
 
 func init() {
 	ResourceControlSwitch.Store(false)
-	ResourceControlInterceptor = nil
 }
 
 var _ Client = interceptedClient{}
@@ -77,7 +76,7 @@ var (
 	// ResourceControlSwitch is used to control whether to enable the resource control.
 	ResourceControlSwitch atomic.Value
 	// ResourceControlInterceptor is used to build the resource control interceptor.
-	ResourceControlInterceptor resourceControlClient.ResourceGroupKVInterceptor
+	ResourceControlInterceptor atomic.Pointer[resourceControlClient.ResourceGroupKVInterceptor]
 )
 
 // buildResourceControlInterceptor builds a resource control interceptor with
@@ -95,16 +94,20 @@ func buildResourceControlInterceptor(
 	if len(resourceGroupName) == 0 {
 		return nil
 	}
+
+	rcInterceptor := ResourceControlInterceptor.Load()
 	// No resource group interceptor is set.
-	if ResourceControlInterceptor == nil {
+	if rcInterceptor == nil {
 		return nil
 	}
+	resourceControlInterceptor := *rcInterceptor
+
 	// Make the request info.
 	reqInfo := resourcecontrol.MakeRequestInfo(req)
 	// Build the interceptor.
 	interceptFn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			consumption, penalty, err := ResourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, penalty, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -113,7 +116,7 @@ func buildResourceControlInterceptor(
 			resp, err := next(target, req)
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				consumption, err = ResourceControlInterceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
+				consumption, err = resourceControlInterceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
 				if err != nil {
 					return nil, err
 				}
