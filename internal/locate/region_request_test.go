@@ -639,8 +639,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
 		s.regionRequestSender.client = oc
 	}()
 
-	client := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		if req.StaleRead {
+			// Mock for stale-read request always return DataIsNotReady error when tikv `ResolvedTS` is blocked.
 			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
 				RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}},
 			}}
@@ -650,7 +651,6 @@ func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
 		return response, nil
 	}}
 
-	s.regionRequestSender.client = client
 	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
 	resp, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
