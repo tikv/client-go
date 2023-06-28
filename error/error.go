@@ -244,7 +244,7 @@ type ErrAssertionFailed struct {
 	*kvrpcpb.AssertionFailed
 }
 
-// ErrLockOnlyIfExistsNoReturnValue is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but `ReturnValues`` is not.
+// ErrLockOnlyIfExistsNoReturnValue is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but `ReturnValues` is not.
 type ErrLockOnlyIfExistsNoReturnValue struct {
 	StartTS     uint64
 	ForUpdateTs uint64
