@@ -306,14 +306,14 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
 	cache.mu.Lock()
-	cache.insertRegionToCache(region)
+	cache.insertRegionToCache(region, true)
 	cache.mu.Unlock()
 
 	// Verify creating the replicaSelector.
 	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
-	s.Equal(replicaSelector.region, region)
+	s.Equal(replicaSelector.region, region, true)
 	// Should only contain TiKV stores.
 	s.Equal(len(replicaSelector.replicas), regionStore.accessStoreNum(tiKVOnly))
 	s.Equal(len(replicaSelector.replicas), len(regionStore.stores)-1)
