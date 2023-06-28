@@ -964,7 +964,7 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	region := createSampleRegion([]byte("k1"), []byte("k2"))
 	region.meta.Id = 1
 	region.meta.RegionEpoch = &metapb.RegionEpoch{Version: 10, ConfVer: 10}
-	cache.insertRegionToCache(region)
+	cache.insertRegionToCache(region, true)
 
 	r1 := metapb.Region{Id: 1, RegionEpoch: &metapb.RegionEpoch{Version: 9, ConfVer: 10}}
 	r2 := metapb.Region{Id: 1, RegionEpoch: &metapb.RegionEpoch{Version: 10, ConfVer: 9}}
@@ -1255,7 +1255,7 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 	filterUnavailablePeers(cpRegion)
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
-	s.cache.insertRegionToCache(region)
+	s.cache.insertRegionToCache(region, true)
 
 	// OnSendFail should not panic
 	s.cache.OnSendFail(retry.NewNoopBackoff(context.Background()), ctx, false, errors.New("send fail"))
@@ -1428,12 +1428,12 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	fakeRegion.setStore(cachedRegion.getStore().clone())
 	// no buckets
 	fakeRegion.getStore().buckets = nil
-	s.cache.insertRegionToCache(fakeRegion)
+	s.cache.insertRegionToCache(fakeRegion, true)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
 	// stale buckets
 	fakeRegion.getStore().buckets = &metapb.Buckets{Version: defaultBuckets.Version - 1}
-	s.cache.insertRegionToCache(fakeRegion)
+	s.cache.insertRegionToCache(fakeRegion, true)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
 	// new buckets
@@ -1443,7 +1443,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 		Keys:     buckets.Keys,
 	}
 	fakeRegion.getStore().buckets = newBuckets
-	s.cache.insertRegionToCache(fakeRegion)
+	s.cache.insertRegionToCache(fakeRegion, true)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(newBuckets, cachedRegion.getStore().buckets)
 
@@ -1576,7 +1576,7 @@ func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	region, err := s.cache.loadRegion(s.bo, []byte("c"), false)
 	s.Nil(err)
 	s.Equal(region.GetID(), regions[0])
-	s.cache.insertRegionToCache(region)
+	s.cache.insertRegionToCache(region, true)
 	loc, err = s.cache.LocateKey(s.bo, []byte{'c'})
 	s.Nil(err)
 	s.Equal(loc.Region.GetID(), regions[0])
@@ -1587,7 +1587,7 @@ func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	region, err = s.cache.loadRegion(s.bo, []byte("e"), false)
 	s.Nil(err)
 	s.Equal(region.GetID(), regions[0])
-	s.cache.insertRegionToCache(region)
+	s.cache.insertRegionToCache(region, true)
 	loc, err = s.cache.LocateKey(s.bo, []byte{'e'})
 	s.Nil(err)
 	s.Equal(loc.Region.GetID(), regions[0])

@@ -549,13 +549,23 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		state.lastIdx++
 	}
 
+	reloadRegion := false
 	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
-		if state.isCandidate(idx, selector.replicas[idx]) {
+		selectReplica := selector.replicas[idx]
+		if state.isCandidate(idx, selectReplica) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
 		}
+		if selectReplica.isEpochStale() &&
+			selectReplica.store.getResolveState() == resolved &&
+			selectReplica.store.getLivenessState() == reachable {
+			reloadRegion = true
+		}
+	}
+	if reloadRegion {
+		selector.regionCache.scheduleReloadRegion(selector.region)
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {

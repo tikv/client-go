@@ -164,12 +164,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		return innerClient.SendRequest(ctx, addr, req, timeout)
 	}}
 	var storeState = uint32(unreachable)
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
 		if s.addr == leaderAddr {
 			return livenessState(atomic.LoadUint32(&storeState))
 		}
 		return reachable
 	}
+	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 
 	loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("k"))
 	s.Nil(err)
@@ -298,21 +299,21 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	region = &Region{
 		meta: region.GetMeta(),
 	}
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	region.meta.Peers = append(region.meta.Peers, peer)
 	atomic.StorePointer(&region.store, unsafe.Pointer(regionStore))
 
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
 	cache.mu.Lock()
-	cache.insertRegionToCache(region)
+	cache.insertRegionToCache(region, true)
 	cache.mu.Unlock()
 
 	// Verify creating the replicaSelector.
 	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
-	s.Equal(replicaSelector.region, region)
+	s.Equal(replicaSelector.region, region, true)
 	// Should only contain TiKV stores.
 	s.Equal(len(replicaSelector.replicas), regionStore.accessStoreNum(tiKVOnly))
 	s.Equal(len(replicaSelector.replicas), len(regionStore.stores)-1)
@@ -373,13 +374,14 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.False(replicaSelector.region.isValid())
 
 	// Test switching to tryFollower if leader is unreachable
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
-	cache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
 		return unreachable
 	}
+	cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 	s.IsType(&accessKnownLeader{}, replicaSelector.state)
 	_, err = replicaSelector.next(s.bo)
 	s.Nil(err)
@@ -415,9 +417,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Do not try to use proxy if livenessState is unknown instead of unreachable.
 	refreshEpochs(regionStore)
 	cache.enableForwarding = true
-	cache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+	tf = func(s *Store, bo *retry.Backoffer) livenessState {
 		return unknown
 	}
+	cache.testingKnobs.mockRequestLiveness.Store(
+		(*livenessFunc)(&tf))
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
@@ -439,9 +443,10 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
-	cache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+	tf = func(s *Store, bo *retry.Backoffer) livenessState {
 		return unreachable
 	}
+	cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 	s.Eventually(func() bool {
 		return regionStore.stores[regionStore.workTiKVIdx].getLivenessState() == unreachable
 	}, 3*time.Second, 200*time.Millisecond)
@@ -558,7 +563,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	assertRPCCtxEqual(rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
 
 	// Test accessFollower state filtering label-not-match stores.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	labels := []*metapb.StoreLabel{
 		{
@@ -580,7 +585,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	}
 
 	// Test accessFollower state with leaderOnly option
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	for i := 0; i < 5; i++ {
 		replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req, WithLeaderOnly())
@@ -593,7 +598,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	}
 
 	// Test accessFollower state with kv.ReplicaReadMixed request type.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	refreshEpochs(regionStore)
 	req.ReplicaReadType = kv.ReplicaReadMixed
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
@@ -601,7 +606,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Nil(err)
 
 	// Invalidate the region if the leader is not in the region.
-	region.lastAccess = time.Now().Unix()
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	replicaSelector.updateLeader(&metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID()})
 	s.False(region.isValid())
 	// Don't try next replica if the region is invalidated.
@@ -695,9 +700,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
 
 	// The leader store is alive but can't provide service.
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
 		return reachable
 	}
+	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 	s.Eventually(func() bool {
 		stores := s.regionRequestSender.replicaSelector.regionStore.stores
 		return stores[0].getLivenessState() == reachable &&
@@ -823,9 +830,10 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	}
 
 	// Runs out of all replicas and then returns a send error.
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness = func(s *Store, bo *retry.Backoffer) livenessState {
+	tf = func(s *Store, bo *retry.Backoffer) livenessState {
 		return unreachable
 	}
+	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 	reloadRegion()
 	for _, store := range s.storeIDs {
 		s.cluster.StopStore(store)

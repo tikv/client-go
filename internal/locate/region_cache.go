@@ -126,6 +126,7 @@ type Region struct {
 	syncFlag      int32          // region need be sync in next turn
 	lastAccess    int64          // last region access time, see checkRegionCacheTTL
 	invalidReason InvalidReason  // the reason why the region is invalidated
+	asyncReload   int32          // the region need to be reloaded in async mode
 }
 
 // AccessIndex represent the index for accessIndex array
@@ -363,6 +364,8 @@ func (r *Region) isValid() bool {
 	return r != nil && !r.checkNeedReload() && r.checkRegionCacheTTL(time.Now().Unix())
 }
 
+type livenessFunc func(s *Store, bo *retry.Backoffer) livenessState
+
 // RegionCache caches Regions loaded from PD.
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
@@ -395,7 +398,12 @@ type RegionCache struct {
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
 		// requestLiveness always returns unreachable.
-		mockRequestLiveness func(s *Store, bo *retry.Backoffer) livenessState
+		mockRequestLiveness atomic.Value
+	}
+
+	regionsNeedReload struct {
+		sync.Mutex
+		regions []uint64
 	}
 }
 
@@ -447,8 +455,13 @@ func (c *RegionCache) Close() {
 // asyncCheckAndResolveLoop with
 func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	reloadRegionTicker := time.NewTicker(10 * time.Second)
+	defer func() {
+		ticker.Stop()
+		reloadRegionTicker.Stop()
+	}()
 	var needCheckStores []*Store
+	reloadNextLoop := make(map[uint64]struct{})
 	for {
 		needCheckStores = needCheckStores[:0]
 		select {
@@ -466,6 +479,22 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 				// there's a deleted store in the stores map which guaranteed by reReslve().
 				return state != unresolved && state != tombstone && state != deleted
 			})
+
+		case <-reloadRegionTicker.C:
+			for regionID := range reloadNextLoop {
+				c.reloadRegion(regionID)
+				delete(reloadNextLoop, regionID)
+			}
+			c.regionsNeedReload.Lock()
+			for _, regionID := range c.regionsNeedReload.regions {
+				// will reload in next tick, wait a while for two reasons:
+				// 1. there may an unavailable duration while recreating the connection.
+				// 2. the store may just be started, and wait safe ts synced to avoid the
+				// possible dataIsNotReady error.
+				reloadNextLoop[regionID] = struct{}{}
+			}
+			c.regionsNeedReload.regions = c.regionsNeedReload.regions[:0]
+			c.regionsNeedReload.Unlock()
 		}
 	}
 }
@@ -967,7 +996,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to cache-miss", lr.GetID())
 		r = lr
 		c.mu.Lock()
-		c.insertRegionToCache(r)
+		c.insertRegionToCache(r, true)
 		c.mu.Unlock()
 	} else if r.checkNeedReloadAndMarkUpdated() {
 		// load region when it be marked as need reload.
@@ -980,7 +1009,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			r = lr
 			c.mu.Lock()
-			c.insertRegionToCache(r)
+			c.insertRegionToCache(r, true)
 			c.mu.Unlock()
 		}
 	}
@@ -1113,7 +1142,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 			} else {
 				r = lr
 				c.mu.Lock()
-				c.insertRegionToCache(r)
+				c.insertRegionToCache(r, true)
 				c.mu.Unlock()
 			}
 		}
@@ -1132,7 +1161,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 	}
 
 	c.mu.Lock()
-	c.insertRegionToCache(r)
+	c.insertRegionToCache(r, true)
 	c.mu.Unlock()
 	return &KeyLocation{
 		Region:   r.VerID(),
@@ -1140,6 +1169,36 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 		EndKey:   r.EndKey(),
 		Buckets:  r.getStore().buckets,
 	}, nil
+}
+
+func (c *RegionCache) scheduleReloadRegion(region *Region) {
+	if region == nil || !atomic.CompareAndSwapInt32(&region.asyncReload, 0, 1) {
+		// async reload triggered by other thread.
+		return
+	}
+	regionID := region.GetID()
+	if regionID > 0 {
+		c.regionsNeedReload.Lock()
+		c.regionsNeedReload.regions = append(c.regionsNeedReload.regions, regionID)
+		c.regionsNeedReload.Unlock()
+	}
+}
+
+func (c *RegionCache) reloadRegion(regionID uint64) {
+	bo := retry.NewNoopBackoff(c.ctx)
+	lr, err := c.loadRegionByID(bo, regionID)
+	if err != nil {
+		// ignore error and use old region info.
+		logutil.Logger(bo.GetCtx()).Error("load region failure",
+			zap.Uint64("regionID", regionID), zap.Error(err))
+		if oldRegion := c.getRegionByIDFromCache(regionID); oldRegion != nil {
+			atomic.StoreInt32(&oldRegion.asyncReload, 0)
+		}
+		return
+	}
+	c.mu.Lock()
+	c.insertRegionToCache(lr, false)
+	c.mu.Unlock()
 }
 
 // GroupKeysByRegion separates keys into groups by their belonging Regions.
@@ -1226,7 +1285,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	// TODO(youjiali1995): scanRegions always fetch regions from PD and these regions don't contain buckets information
 	// for less traffic, so newly inserted regions in region cache don't have buckets information. We should improve it.
 	for _, region := range regions {
-		c.insertRegionToCache(region)
+		c.insertRegionToCache(region, true)
 	}
 
 	return
@@ -1300,7 +1359,7 @@ func (c *RegionCache) removeVersionFromCache(oldVer RegionVerID, regionID uint64
 
 // insertRegionToCache tries to insert the Region to cache.
 // It should be protected by c.mu.Lock().
-func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
+func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool) {
 	oldRegion := c.mu.sorted.ReplaceOrInsert(cachedRegion)
 	if oldRegion != nil {
 		store := cachedRegion.getStore()
@@ -1315,8 +1374,11 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region) {
 		if InvalidReason(atomic.LoadInt32((*int32)(&oldRegion.invalidReason))) == NoLeader {
 			store.workTiKVIdx = (oldRegionStore.workTiKVIdx + 1) % AccessIndex(store.accessStoreNum(tiKVOnly))
 		}
-		// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
-		oldRegion.invalidate(Other)
+		// If the region info is async reloaded, the old region is still valid.
+		if invalidateOldRegion {
+			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
+			oldRegion.invalidate(Other)
+		}
 		// Don't refresh TiFlash work idx for region. Otherwise, it will always goto a invalid store which
 		// is under transferring regions.
 		store.workTiFlashIdx.Store(oldRegionStore.workTiFlashIdx.Load())
@@ -1804,7 +1866,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 
 	c.mu.Lock()
 	for _, region := range newRegions {
-		c.insertRegionToCache(region)
+		c.insertRegionToCache(region, true)
 	}
 	c.mu.Unlock()
 
@@ -1918,7 +1980,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 				return
 			}
 			c.mu.Lock()
-			c.insertRegionToCache(new)
+			c.insertRegionToCache(new, true)
 			c.mu.Unlock()
 		}()
 	}
@@ -2371,9 +2433,8 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 }
 
 func (s *Store) getResolveState() resolveState {
-	var state resolveState
 	if s == nil {
-		return state
+		return unresolved
 	}
 	return resolveState(atomic.LoadUint64(&s.state))
 }
@@ -2544,8 +2605,12 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 			return unknown
 		}
 	}
-	if c != nil && c.testingKnobs.mockRequestLiveness != nil {
-		return c.testingKnobs.mockRequestLiveness(s, bo)
+
+	if c != nil {
+		lf := c.testingKnobs.mockRequestLiveness.Load()
+		if lf != nil {
+			return (*lf.(*livenessFunc))(s, bo)
+		}
 	}
 
 	if storeLivenessTimeout == 0 {
