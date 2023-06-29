@@ -1752,6 +1752,9 @@ func (s *RegionRequestSender) onRegionError(
 				return true, nil
 			}
 		}
+		logutil.BgLogger().Error("Region is in flashback progress",
+			zap.Stringer("req", req),
+			zap.Stringer("ctx", ctx))
 		return false, errors.Errorf(
 			"region %d is in flashback progress, FlashbackStartTS is %d",
 			flashbackInProgress.GetRegionId(), flashbackInProgress.GetFlashbackStartTs(),
