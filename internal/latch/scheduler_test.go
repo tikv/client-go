@@ -39,13 +39,11 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestWithConcurrency(t *testing.T) {
 	sched := NewScheduler(7)
 	defer sched.Close()
-	rand.Seed(time.Now().Unix())
 
 	ch := make(chan [][]byte, 100)
 	const workerCount = 10
