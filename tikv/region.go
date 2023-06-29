@@ -41,7 +41,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/locate/cse"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )
@@ -98,15 +97,6 @@ var NewCodecPDClient = locate.NewCodecPDClient
 
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
 var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
-
-// NewCSEClient is a constructor for CSEClient
-var NewCSEClient = cse.NewCSEClient
-
-// NewClientWithFallback is a constructor for ClientWithFallback
-var NewClientWithFallback = cse.NewClientWithFallback
-
-// CBOptions is the circuit breaker options for CSEClient/ClientWithFallback
-type CBOptions = cse.CBOptions
 
 // NewCodecV1 is a constructor for v1 Codec.
 var NewCodecV1 = apicodec.NewCodecV1

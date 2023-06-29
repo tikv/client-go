@@ -101,7 +101,6 @@ var (
 	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 	TiKVPreferLeaderFlowsGauge               *prometheus.GaugeVec
-	TiKVSyncRegionDuration                   *prometheus.HistogramVec
 	TiKVStaleReadSizeSummary                 *prometheus.SummaryVec
 )
 
@@ -701,16 +700,6 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
 
-	TiKVSyncRegionDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "sync_region_duration",
-			Help:        "Bucketed histogram of the duration of sync region.",
-			ConstLabels: constLabels,
-			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 28),
-		}, []string{LblType})
-
 	TiKVStaleReadSizeSummary = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace: namespace,
@@ -799,7 +788,6 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVPreferLeaderFlowsGauge)
-	prometheus.MustRegister(TiKVSyncRegionDuration)
 	prometheus.MustRegister(TiKVStaleReadSizeSummary)
 }
 
