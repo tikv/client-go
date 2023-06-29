@@ -59,6 +59,8 @@ var tsMu = struct {
 	logicalTS  int64
 }{}
 
+const defaultResourceGroupName = "default"
+
 type pdClient struct {
 	cluster *Cluster
 	// SafePoint set by `UpdateGCSafePoint`. Not to be confused with SafePointKV.
@@ -69,27 +71,33 @@ type pdClient struct {
 	gcSafePointMu     sync.Mutex
 
 	externalTimestamp atomic.Uint64
-}
 
-func (c *pdClient) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, safePoint uint64) (uint64, error) {
-	panic("unimplemented")
-}
-
-func (c *pdClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	panic("unimplemented")
-}
-
-func (c *pdClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
-	panic("unimplemented")
+	groups map[string]*rmpb.ResourceGroup
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
 // from a Cluster.
 func NewPDClient(cluster *Cluster) pd.Client {
-	return &pdClient{
+	mockCli := &pdClient{
 		cluster:           cluster,
 		serviceSafePoints: make(map[string]uint64),
+		groups:            make(map[string]*rmpb.ResourceGroup),
 	}
+
+	mockCli.groups[defaultResourceGroupName] = &rmpb.ResourceGroup{
+		Name: defaultResourceGroupName,
+		Mode: rmpb.GroupMode_RUMode,
+		RUSettings: &rmpb.GroupRequestUnitSettings{
+			RU: &rmpb.TokenBucket{
+				Settings: &rmpb.TokenLimitSettings{
+					FillRate:   math.MaxInt32,
+					BurstLimit: -1,
+				},
+			},
+		},
+		Priority: 8,
+	}
+	return mockCli
 }
 
 func (c *pdClient) LoadGlobalConfig(ctx context.Context, names []string, configPath string) ([]pd.GlobalConfigItem, int64, error) {
@@ -120,6 +128,18 @@ func (c *pdClient) GetTS(context.Context) (int64, int64, error) {
 		tsMu.logicalTS = 0
 	}
 	return tsMu.physicalTS, tsMu.logicalTS, nil
+}
+
+func (c *pdClient) UpdateGCSafePointV2(ctx context.Context, keyspaceID uint32, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	panic("unimplemented")
+}
+
+func (c *pdClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
+	panic("unimplemented")
 }
 
 func (c *pdClient) GetLocalTS(ctx context.Context, dcLocation string) (int64, int64, error) {
@@ -320,7 +340,11 @@ func (c *pdClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 }
 
 func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
-	return nil, nil
+	group, ok := c.groups[resourceGroupName]
+	if !ok {
+		return nil, fmt.Errorf("the group %s does not exist", resourceGroupName)
+	}
+	return group, nil
 }
 
 func (c *pdClient) AddResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {

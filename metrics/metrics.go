@@ -702,10 +702,11 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 
 	TiKVStaleReadSizeSummary = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_read_bytes",
-			Help:      "Size of stale read.",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_read_bytes",
+			Help:        "Size of stale read.",
+			ConstLabels: constLabels,
 		}, []string{LblResult, LblDirection})
 
 	initShortcuts()
