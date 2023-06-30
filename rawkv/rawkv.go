@@ -200,32 +200,33 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		o(opt)
 	}
 
-	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
-		CAPath:   opt.security.ClusterSSLCA,
-		CertPath: opt.security.ClusterSSLCert,
-		KeyPath:  opt.security.ClusterSSLKey,
-	}, opt.pdOptions...)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	// Build a CodecPDClient
-	var codecCli *tikv.CodecPDClient
+	var (
+		pdClient pd.Client
+		codecCli *tikv.CodecPDClient
+		err      error
+	)
 
 	switch opt.apiVersion {
 	case kvrpcpb.APIVersion_V1, kvrpcpb.APIVersion_V1TTL:
-		codecCli = locate.NewCodecPDClient(tikv.ModeRaw, pdCli)
+		pdClient, err = tikv.NewPDClientWithAPIContext(pdAddrs, pd.NewAPIContextV1())
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		codecCli = locate.NewCodecPDClient(tikv.ModeRaw, pdClient)
 	case kvrpcpb.APIVersion_V2:
-		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdCli, opt.keyspace)
+		pdClient, err = tikv.NewPDClientWithAPIContext(pdAddrs, pd.NewAPIContextV2(opt.keyspace))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdClient, opt.keyspace)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		return nil, errors.Errorf("unknown api version: %d", opt.apiVersion)
+		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
 	}
 
-	pdCli = codecCli
+	pdClient = codecCli
 
 	rpcCli := client.NewRPCClient(
 		client.WithSecurity(opt.security),
@@ -235,9 +236,9 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 
 	return &Client{
 		apiVersion:  opt.apiVersion,
-		clusterID:   pdCli.GetClusterID(ctx),
-		regionCache: locate.NewRegionCache(pdCli),
-		pdClient:    pdCli,
+		clusterID:   pdClient.GetClusterID(ctx),
+		regionCache: locate.NewRegionCache(pdClient),
+		pdClient:    pdClient,
 		rpcClient:   rpcCli,
 	}, nil
 }

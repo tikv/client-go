@@ -657,3 +657,43 @@ func (s *testRegionRequestToSingleStoreSuite) TestCloseConnectionOnStoreNotMatch
 	s.NotNil(regionErr)
 	s.Equal(target, client.closedAddr)
 }
+
+func (s *testRegionRequestToSingleStoreSuite) TestCountReplicaNumber() {
+	fmt.Println("TestCountReplicaNumber")
+	fmt.Println(s.cache.storeMu.stores)
+	tikvLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tikv"}}
+	tiflashLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tiflash"}}
+	tiflashWNLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tiflash"}, {Key: "engine_role", Value: "write"}}
+
+	s.cache.SetRegionCacheStore(1, "", "", tikvrpc.TiKV, 0, tikvLabels)
+	s.cache.SetRegionCacheStore(2, "", "", tikvrpc.TiKV, 0, tikvLabels)
+	s.cache.SetRegionCacheStore(3, "", "", tikvrpc.TiKV, 0, tikvLabels)
+	s.cache.SetRegionCacheStore(4, "", "", tikvrpc.TiFlash, 0, tiflashLabels)
+	s.cache.SetRegionCacheStore(5, "", "", tikvrpc.TiFlash, 0, tiflashLabels)
+	{
+		peers := []*metapb.Peer{{StoreId: 1, Role: metapb.PeerRole_Voter}}
+		s.Equal(1, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 2, Role: metapb.PeerRole_Voter})
+		s.Equal(2, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 3, Role: metapb.PeerRole_Voter})
+		s.Equal(3, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 4, Role: metapb.PeerRole_Learner})
+		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
+		s.Equal(5, s.regionRequestSender.countReplicaNumber(peers))
+	}
+	s.cache.SetRegionCacheStore(4, "", "", tikvrpc.TiFlash, 0, tiflashWNLabels)
+	s.cache.SetRegionCacheStore(5, "", "", tikvrpc.TiFlash, 0, tiflashWNLabels)
+	{
+		peers := []*metapb.Peer{{StoreId: 1, Role: metapb.PeerRole_Voter}}
+		s.Equal(1, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 2, Role: metapb.PeerRole_Voter})
+		s.Equal(2, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 3, Role: metapb.PeerRole_Voter})
+		s.Equal(3, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 4, Role: metapb.PeerRole_Learner})
+		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
+		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers)) // Only count 1 tiflash replica for tiflash write-nodes.
+	}
+}
