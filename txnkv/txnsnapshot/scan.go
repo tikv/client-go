@@ -246,6 +246,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
 			RequestSource:    s.snapshot.GetRequestSource(),
+			RequestSourceV2:  s.snapshot.GetRequestSourceV2(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.snapshot.mu.resourceGroupName,
 			},

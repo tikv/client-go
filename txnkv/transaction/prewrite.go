@@ -206,6 +206,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			TxnSource:              c.txnSource,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 			RequestSource:          c.txn.GetRequestSource(),
+			RequestSourceV2:        c.txn.GetRequestSourceV2(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: c.resourceGroupName,
 			},

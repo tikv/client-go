@@ -399,6 +399,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
 			RequestSource:    s.GetRequestSource(),
+			RequestSourceV2:  s.GetRequestSourceV2(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.mu.resourceGroupName,
 			},
@@ -619,6 +620,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
 			RequestSource:    s.GetRequestSource(),
+			RequestSourceV2:  s.GetRequestSourceV2(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.mu.resourceGroupName,
 			},
