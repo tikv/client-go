@@ -72,6 +72,10 @@ func TestLock(t *testing.T) {
 	suite.Run(t, new(testLockSuite))
 }
 
+func TestLockWithTiKV(t *testing.T) {
+	suite.Run(t, new(testLockWithTiKVSuite))
+}
+
 type testLockSuite struct {
 	suite.Suite
 	store tikv.StoreProbe
