@@ -1300,7 +1300,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 		return
 	}
 	if len(regions) == 0 {
-		err = errors.New("PD returned no region")
+		err = errors.Errorf("PD returned no region, startKey: %q, endKey: %q", startKey, endKey)
 		return
 	}
 
@@ -1719,7 +1719,10 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		metrics.RegionCacheCounterWithScanRegionsOK.Inc()
 
 		if len(regionsInfo) == 0 {
-			return nil, errors.New("PD returned no region")
+			return nil, errors.Errorf(
+				"PD returned no region, startKey: %q, endKey: %q, limit: %q",
+				startKey, endKey, limit,
+			)
 		}
 		regions := make([]*Region, 0, len(regionsInfo))
 		for _, r := range regionsInfo {
