@@ -2,9 +2,9 @@ name: Integration Test
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, tidb-6.1 ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, tidb-6.1 ]
 
 jobs:
 
@@ -53,14 +53,14 @@ jobs:
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
-          image: pingcap/pd:nightly
+          image: pingcap/pd:v6.1.6
           path: /pd-server
 
       - name: Fetch TiKV
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: pingcap/tikv:nightly
+          image: pingcap/tikv:v6.1.6
           path: /tikv-server
 
       - name: Run PD & TiKV
@@ -92,14 +92,14 @@ jobs:
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
-          image: pingcap/pd:nightly
+          image: pingcap/pd:v6.1.6
           path: /pd-server
 
       - name: Fetch TiKV
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: pingcap/tikv:nightly
+          image: pingcap/tikv:v6.1.6
           path: /tikv-server
 
       - name: Run PD & TiKV
