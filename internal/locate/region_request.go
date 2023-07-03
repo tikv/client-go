@@ -532,31 +532,20 @@ func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
 type accessFollower struct {
 	stateBase
 	// If tryLeader is true, the request can also be sent to the leader when !leader.isSlow()
-	tryLeader   bool
-	isStaleRead bool
-	option      storeSelectorOp
-	leaderIdx   AccessIndex
-	lastIdx     AccessIndex
-	learnerOnly bool
+	tryLeader        bool
+	isStaleRead      bool
+	option           storeSelectorOp
+	leaderIdx        AccessIndex
+	lastIdx          AccessIndex
+	learnerOnly      bool
+	matchReplicasIdx []int
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	replicaSize := len(selector.replicas)
+	matchReplicaSize := len(state.matchReplicasIdx)
 	resetStaleRead := false
 	if state.lastIdx < 0 {
-		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
-		} else {
-			if replicaSize <= 1 {
-				state.lastIdx = state.leaderIdx
-			} else {
-				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(replicaSize - 1))
-				if state.lastIdx >= state.leaderIdx {
-					state.lastIdx++
-				}
-			}
-		}
+		state.lastIdx = AccessIndex(rand.Intn(matchReplicaSize))
 	} else {
 		// Stale Read request will retry the leader only by using the WithLeaderOnly option.
 		if state.isStaleRead {
@@ -569,19 +558,26 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 
 	// If selector is under `ReplicaReadPreferLeader` mode, we should choose leader as high priority.
 	if state.option.preferLeader {
-		state.lastIdx = state.leaderIdx
-	}
-	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % replicaSize)
-		// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
-		// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
-		for cnt := 0; cnt < replicaSize && !state.isCandidate(idx, selector.replicas[idx]); cnt++ {
-			idx = AccessIndex((int(idx) + rand.Intn(replicaSize)) % replicaSize)
+		leader := selector.replicas[state.leaderIdx]
+		if state.isCandidate(state.leaderIdx, leader) {
+			state.lastIdx = state.leaderIdx
+			selector.targetIdx = state.leaderIdx
 		}
-		if state.isCandidate(idx, selector.replicas[idx]) {
-			state.lastIdx = idx
-			selector.targetIdx = idx
-			break
+	}
+	if !state.option.leaderOnly && selector.targetIdx < 0 {
+		for i := 0; i < matchReplicaSize; i++ {
+			i = (int(state.lastIdx) + i) % matchReplicaSize
+			idx := AccessIndex(state.matchReplicasIdx[i])
+			// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
+			// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
+			for cnt := 0; cnt < matchReplicaSize && !state.isCandidate(idx, selector.replicas[idx]); cnt++ {
+				idx = AccessIndex((int(idx) + rand.Intn(matchReplicaSize)) % matchReplicaSize)
+			}
+			if state.isCandidate(idx, selector.replicas[idx]) {
+				state.lastIdx = idx
+				selector.targetIdx = idx
+				break
+			}
 		}
 	}
 	// If there is no candidate, fallback to the leader.
@@ -763,13 +759,31 @@ func newReplicaSelector(
 			WithPerferLeader()(&option)
 		}
 		tryLeader := req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader
+		leaderIdx := regionStore.workTiKVIdx
+		matchReplicasIdx := make([]int, 0, len(replicas))
+		if len(option.labels) == 0 {
+			for i := 0; i < len(replicas); i++ {
+				if !tryLeader && AccessIndex(i) == leaderIdx {
+					continue
+				}
+				matchReplicasIdx = append(matchReplicasIdx, i)
+			}
+		} else {
+			for i, replica := range replicas {
+				if (!tryLeader && AccessIndex(i) == leaderIdx) || !replica.store.IsLabelsMatch(option.labels) {
+					continue
+				}
+				matchReplicasIdx = append(matchReplicasIdx, i)
+			}
+		}
 		state = &accessFollower{
-			tryLeader:   tryLeader,
-			isStaleRead: req.StaleRead,
-			option:      option,
-			leaderIdx:   regionStore.workTiKVIdx,
-			lastIdx:     -1,
-			learnerOnly: req.ReplicaReadType == kv.ReplicaReadLearner,
+			tryLeader:        tryLeader,
+			isStaleRead:      req.StaleRead,
+			option:           option,
+			leaderIdx:        leaderIdx,
+			lastIdx:          -1,
+			learnerOnly:      req.ReplicaReadType == kv.ReplicaReadLearner,
+			matchReplicasIdx: matchReplicasIdx,
 		}
 	}
 
