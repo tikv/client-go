@@ -1472,51 +1472,67 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 
 	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
 	s.NoError(failpoint.Enable("tikvclient/beforeCommitSecondaries", `return("skip")`))
-	s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", `return("skip")`))
+	s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", `return`))
+	s.NoError(failpoint.Enable("tikvclient/onRollback", `return("skipRollbackPessimisticLock")`))
 	defer func() {
 		s.NoError(failpoint.Disable("tikvclient/beforeAsyncPessimisticRollback"))
 		s.NoError(failpoint.Disable("tikvclient/beforeCommitSecondaries"))
 		s.NoError(failpoint.Disable("tikvclient/twoPCRequestBatchSizeLimit"))
+		s.NoError(failpoint.Disable("tikvclient/onRollback"))
 	}()
 
-	k1, k2, k3 := []byte("k1"), []byte("k2"), []byte("k3")
+	k1, k2, k3, k4 := []byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")
 	v2, v3 := []byte("v2"), []byte("v3")
 
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
 
-	txn, err := s.store.Begin()
+	txn1, err := s.store.Begin()
 	s.NoError(err)
-	txn.SetPessimistic(true)
+	txn1.SetPessimistic(true)
 
 	{
 		// Produce write conflict on key k2
-		txn2, err := s.store.Begin()
+		helperTxn, err := s.store.Begin()
 		s.NoError(err)
-		s.NoError(txn2.Set(k2, []byte("v0")))
-		s.NoError(txn2.Commit(ctx))
+		s.NoError(helperTxn.Set(k2, []byte("v0")))
+		s.NoError(helperTxn.Commit(ctx))
 	}
 
-	lockCtx := kv.NewLockCtx(txn.StartTS(), 200, time.Now())
-	err = txn.LockKeys(ctx, lockCtx, k1, k2)
+	lockCtx := kv.NewLockCtx(txn1.StartTS(), 200, time.Now())
+	err = txn1.LockKeys(ctx, lockCtx, k1, k2)
 	s.IsType(&tikverr.ErrWriteConflict{}, errors.Cause(err))
 
-	// k1 has txn's stale pessimistic lock now.
+	// k1 has txn1's stale pessimistic lock now.
 
 	forUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.NoError(err)
 	lockCtx = kv.NewLockCtx(forUpdateTS, 200, time.Now())
-	s.NoError(txn.LockKeys(ctx, lockCtx, k2, k3))
+	s.NoError(txn1.LockKeys(ctx, lockCtx, k2, k3))
 
-	s.NoError(txn.Set(k2, v2))
-	s.NoError(txn.Set(k3, v3))
-	s.NoError(txn.Commit(ctx))
+	s.NoError(txn1.Set(k2, v2))
+	s.NoError(txn1.Set(k3, v3))
+	s.NoError(txn1.Commit(ctx))
 
-	// k3 has txn's stale prewrite lock now.
+	// k3 has txn1's stale prewrite lock now.
+
+	txn2, err := s.store.Begin()
+	s.NoError(err)
+	lockCtx = kv.NewLockCtx(txn1.StartTS(), 200, time.Now())
+	err = txn2.LockKeys(ctx, lockCtx, k4)
+	s.NoError(err)
+	s.NoError(txn2.Rollback())
+
+	// k4 has txn2's stale primary pessimistic lock now.
 
 	// Perform ScanLock - BatchResolveLock.
 	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.NoError(err)
 	s.NoError(s.store.GCResolveLockPhase(ctx, currentTS, 1))
+
+	// Do ScanLock again to make sure no locks are left.
+	remainingLocks, err := s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
+	s.NoError(err)
+	s.Empty(remainingLocks)
 
 	// Check data consistency
 	readTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
