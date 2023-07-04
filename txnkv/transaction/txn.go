@@ -479,6 +479,7 @@ func (txn *KVTxn) Rollback() error {
 		return tikverr.ErrInvalidTxn
 	}
 
+	// `skipPessimisticRollback` may be true only when set by failpoint in tests.
 	skipPessimisticRollback := false
 	if val, err := util.EvalFailpoint("onRollback"); err == nil {
 		if s, ok := val.(string); ok {
