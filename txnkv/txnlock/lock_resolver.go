@@ -242,6 +242,12 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		}
 		metrics.LockResolverCountWithExpired.Inc()
 
+		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
+		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, false, l)
+		if err != nil {
+			return false, err
+		}
+
 		if l.LockType == kvrpcpb.Op_PessimisticLock {
 			// BatchResolveLocks forces resolving the locks ignoring whether whey are expired.
 			// For pessimistic locks, committing them makes no sense, but it won't affect transaction
@@ -254,12 +260,6 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 				return false, err
 			}
 			continue
-		}
-
-		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
-		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, false, l)
-		if err != nil {
-			return false, err
 		}
 
 		// If the transaction uses async commit, CheckTxnStatus will reject rolling back the primary lock.

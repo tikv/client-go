@@ -35,6 +35,7 @@
 package tikv
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -112,6 +113,42 @@ func (s StoreProbe) SetSafeTS(storeID, safeTS uint64) {
 // GCResolveLockPhase performs the resolve-locks phase of GC, which scans all locks and resolves them.
 func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, concurrency int) error {
 	return s.resolveLocks(ctx, safepoint, concurrency)
+}
+
+func (s StoreProbe) ScanLocks(ctx context.Context, startKey, endKey []byte, maxVersion uint64) ([]*txnlock.Lock, error) {
+	bo := NewGcResolveLockMaxBackoffer(ctx)
+	const limit = 1024
+
+	var result []*txnlock.Lock
+
+outerLoop:
+	for {
+		locks, loc, err := s.KVStore.scanLocksInRegionWithStartKey(bo, startKey, maxVersion, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range locks {
+			if bytes.Compare(endKey, l.Key) <= 0 {
+				// Finished scanning the given range.
+				break outerLoop
+			}
+			result = append(result, l)
+		}
+
+		if len(locks) < limit {
+			if len(loc.EndKey) == 0 {
+				// Scanned to the very end.
+				break outerLoop
+			}
+			// The current region is completely scanned.
+			startKey = loc.EndKey
+		} else {
+			// The current region may still have more locks.
+			startKey = append(locks[len(locks)-1].Key, 0)
+		}
+	}
+
+	return result, nil
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
