@@ -1221,7 +1221,6 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		if _, err1 := util.EvalFailpoint("afterSendReqToRegion"); err1 == nil {
-			A
 			if hook := bo.GetCtx().Value("sendReqToRegionFinishHook"); hook != nil {
 				h := hook.(func(*tikvrpc.Request, *tikvrpc.Response, error))
 				h(req, resp, err)
