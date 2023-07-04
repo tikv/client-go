@@ -258,6 +258,9 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			// Pessimistic locks needs special handling logic because their primary may not point
 			// to the real primary of that transaction, and their state cannot be put in `txnInfos`.
 			// (see: https://github.com/pingcap/tidb/issues/42937).
+			//
+			// `resolvePessimisticLock` should be called after calling `getTxnStatus`.
+			// See: https://github.com/pingcap/tidb/issues/45134
 			err := lr.resolvePessimisticLock(bo, l)
 			if err != nil {
 				return false, err
@@ -1173,6 +1176,8 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 	}
 }
 
+// resolvePessimisticLock handles pessimistic locks after checking txn status.
+// Note that this function assumes `CheckTxnStatus` is done (or `getTxnStatusFromLock` has been called) on the lock.
 func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) error {
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	// The lock has been resolved by getTxnStatusFromLock.
