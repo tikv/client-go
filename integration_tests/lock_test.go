@@ -1516,6 +1516,7 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	// k3 has txn1's stale prewrite lock now.
 
 	txn2, err := s.store.Begin()
+	txn2.SetPessimistic(true)
 	s.NoError(err)
 	lockCtx = kv.NewLockCtx(txn1.StartTS(), 200, time.Now())
 	err = txn2.LockKeys(ctx, lockCtx, k4)
@@ -1523,14 +1524,26 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	s.NoError(txn2.Rollback())
 
 	// k4 has txn2's stale primary pessimistic lock now.
+	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+
+	remainingLocks, err := s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
+	s.NoError(err)
+
+	s.Len(remainingLocks, 3)
+	s.Equal(remainingLocks[0].Key, k1)
+	s.Equal(remainingLocks[0].LockType, kvrpcpb.Op_PessimisticLock)
+	s.Equal(remainingLocks[1].Key, k3)
+	s.Equal(remainingLocks[1].LockType, kvrpcpb.Op_Put)
+	s.Equal(remainingLocks[2].Key, k4)
+	s.Equal(remainingLocks[2].LockType, kvrpcpb.Op_PessimisticLock)
+	s.Equal(remainingLocks[2].Primary, k4)
 
 	// Perform ScanLock - BatchResolveLock.
-	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.NoError(err)
 	s.NoError(s.store.GCResolveLockPhase(ctx, currentTS, 1))
 
 	// Do ScanLock again to make sure no locks are left.
-	remainingLocks, err := s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
+	remainingLocks, err = s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
 	s.NoError(err)
 	s.Empty(remainingLocks)
 
