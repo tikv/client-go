@@ -550,10 +550,27 @@ func (txn *KVTxn) Rollback() error {
 		txn.CancelAggressiveLocking(context.Background())
 	}
 
+	// `skipPessimisticRollback` may be true only when set by failpoint in tests.
+	skipPessimisticRollback := false
+	if val, err := util.EvalFailpoint("onRollback"); err == nil {
+		if s, ok := val.(string); ok {
+			if s == "skipRollbackPessimisticLock" {
+				logutil.BgLogger().Info("[failpoint] injected skip pessimistic rollback on explicit rollback",
+					zap.Uint64("txnStartTS", txn.startTS))
+				skipPessimisticRollback = true
+			} else {
+				panic(fmt.Sprintf("unknown instruction %s for failpoint \"onRollback\"", s))
+			}
+		}
+	}
+
 	start := time.Now()
 	// Clean up pessimistic lock.
 	if txn.IsPessimistic() && txn.committer != nil {
-		err := txn.rollbackPessimisticLocks()
+		var err error
+		if !skipPessimisticRollback {
+			err = txn.rollbackPessimisticLocks()
+		}
 		txn.committer.ttlManager.close()
 		if err != nil {
 			logutil.BgLogger().Error(err.Error())
