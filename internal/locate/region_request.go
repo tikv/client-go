@@ -538,7 +538,7 @@ type accessFollower struct {
 	leaderIdx        AccessIndex
 	lastIdx          AccessIndex
 	learnerOnly      bool
-	matchReplicasIdx []int
+	matchReplicasIdx []AccessIndex
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -566,16 +566,16 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	if !state.option.leaderOnly && selector.targetIdx < 0 {
 		for i := 0; i < matchReplicaSize; i++ {
-			i = (int(state.lastIdx) + i) % matchReplicaSize
-			idx := AccessIndex(state.matchReplicasIdx[i])
+			idx := (int(state.lastIdx) + i) % matchReplicaSize
+			accessIdx := state.matchReplicasIdx[idx]
 			// If the given store is abnormal to be accessed under `ReplicaReadMixed` mode, we should choose other followers or leader
 			// as candidates to serve the Read request. Meanwhile, we should make the choice of next() meet Uniform Distribution.
-			for cnt := 0; cnt < matchReplicaSize && !state.isCandidate(idx, selector.replicas[idx]); cnt++ {
-				idx = AccessIndex((int(idx) + rand.Intn(matchReplicaSize)) % matchReplicaSize)
+			for cnt := 0; cnt < matchReplicaSize && !state.isCandidate(accessIdx, selector.replicas[accessIdx]); cnt++ {
+				accessIdx = AccessIndex((int(accessIdx) + rand.Intn(matchReplicaSize)) % matchReplicaSize)
 			}
-			if state.isCandidate(idx, selector.replicas[idx]) {
-				state.lastIdx = idx
-				selector.targetIdx = idx
+			if state.isCandidate(accessIdx, selector.replicas[accessIdx]) {
+				state.lastIdx = accessIdx
+				selector.targetIdx = accessIdx
 				break
 			}
 		}
@@ -760,20 +760,20 @@ func newReplicaSelector(
 		}
 		tryLeader := req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader
 		leaderIdx := regionStore.workTiKVIdx
-		matchReplicasIdx := make([]int, 0, len(replicas))
+		matchReplicasIdx := make([]AccessIndex, 0, len(replicas))
 		if len(option.labels) == 0 {
 			for i := 0; i < len(replicas); i++ {
 				if !tryLeader && AccessIndex(i) == leaderIdx {
 					continue
 				}
-				matchReplicasIdx = append(matchReplicasIdx, i)
+				matchReplicasIdx = append(matchReplicasIdx, AccessIndex(i))
 			}
 		} else {
 			for i, replica := range replicas {
 				if (!tryLeader && AccessIndex(i) == leaderIdx) || !replica.store.IsLabelsMatch(option.labels) {
 					continue
 				}
-				matchReplicasIdx = append(matchReplicasIdx, i)
+				matchReplicasIdx = append(matchReplicasIdx, AccessIndex(i))
 			}
 		}
 		state = &accessFollower{
