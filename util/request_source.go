@@ -29,9 +29,9 @@ const (
 
 const (
 	// InternalRequest is the scope of internal queries
-	InternalRequest = "internal_"
+	InternalRequest = "internal"
 	// ExternalRequest is the scope of external queries
-	ExternalRequest = "external_"
+	ExternalRequest = "external"
 	// SourceUnknown keeps same with the default value(empty string)
 	SourceUnknown = "unknown"
 )
@@ -40,6 +40,9 @@ const (
 type RequestSource struct {
 	RequestSourceInternal bool
 	RequestSourceType     string
+	// ExplicitRequestSoureType is set from the session variable, it may specified by the client or users. `explicit_request_source_type`. it's a complement of RequestSourceType.
+	// The value maybe "lightning", "br", "dumpling" etc.
+	ExplicitRequestSoureType string
 }
 
 // SetRequestSourceInternal sets the scope of the request source.
@@ -50,6 +53,11 @@ func (r *RequestSource) SetRequestSourceInternal(internal bool) {
 // SetRequestSourceType sets the type of the request source.
 func (r *RequestSource) SetRequestSourceType(tp string) {
 	r.RequestSourceType = tp
+}
+
+// SetExplicitRequestSourceType sets the type of the request source.
+func (r *RequestSource) SetExplicitRequestSourceType(tp string) {
+	r.ExplicitRequestSoureType = tp
 }
 
 // WithInternalSourceType create context with internal source.
@@ -76,10 +84,24 @@ func (r *RequestSource) GetRequestSource() string {
 	if r == nil || r.RequestSourceType == "" {
 		return SourceUnknown
 	}
-	if r.RequestSourceInternal {
-		return InternalRequest + r.RequestSourceType
+	appendType := func(list []string) []string {
+		if len(r.ExplicitRequestSoureType) > 0 {
+			list = append(list, r.ExplicitRequestSoureType)
+			return list
+		}
+		return list
 	}
-	return ExternalRequest + r.RequestSourceType
+	if r.RequestSourceInternal {
+		labels := []string{InternalRequest, r.RequestSourceType}
+		labels = appendType(labels)
+		if len(r.ExplicitRequestSoureType) > 0 {
+			labels = append(labels, r.ExplicitRequestSoureType)
+		}
+		return strings.Join(labels, "_")
+	}
+	labels := []string{ExternalRequest, r.RequestSourceType}
+	labels = appendType(labels)
+	return strings.Join(labels, "_")
 }
 
 // RequestSourceFromCtx extract source from passed context.
