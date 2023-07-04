@@ -245,6 +245,12 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 		}
 		metrics.LockResolverCountWithExpired.Inc()
 
+		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
+		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, false, l)
+		if err != nil {
+			return false, err
+		}
+
 		if l.LockType == kvrpcpb.Op_PessimisticLock {
 			// BatchResolveLocks forces resolving the locks ignoring whether whey are expired.
 			// For pessimistic locks, committing them makes no sense, but it won't affect transaction
@@ -252,17 +258,14 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			// Pessimistic locks needs special handling logic because their primary may not point
 			// to the real primary of that transaction, and their state cannot be put in `txnInfos`.
 			// (see: https://github.com/pingcap/tidb/issues/42937).
+			//
+			// `resolvePessimisticLock` should be called after calling `getTxnStatus`.
+			// See: https://github.com/pingcap/tidb/issues/45134
 			err := lr.resolvePessimisticLock(bo, l)
 			if err != nil {
 				return false, err
 			}
 			continue
-		}
-
-		// Use currentTS = math.MaxUint64 means rollback the txn, no matter the lock is expired or not!
-		status, err := lr.getTxnStatus(bo, l.TxnID, l.Primary, 0, math.MaxUint64, true, false, l)
-		if err != nil {
-			return false, err
 		}
 
 		// If the transaction uses async commit, CheckTxnStatus will reject rolling back the primary lock.
@@ -1172,6 +1175,8 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 	}
 }
 
+// resolvePessimisticLock handles pessimistic locks after checking txn status.
+// Note that this function assumes `CheckTxnStatus` is done (or `getTxnStatusFromLock` has been called) on the lock.
 func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) error {
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	// The lock has been resolved by getTxnStatusFromLock.
