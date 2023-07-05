@@ -27,6 +27,18 @@ const (
 	InternalTxnMeta = InternalTxnOthers
 )
 
+// explict source types.
+const (
+	ExplicitTypeDefault    = ""
+	ExplicitTypeLightning  = "lightning"
+	ExplicitTypeBR         = "br"
+	ExplicitTypeDumpling   = "dumpling"
+	ExplicitTypeBackground = "background"
+)
+
+// ExplictTypeList is the list of all explict source types.
+var ExplictTypeList = []string{ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+
 const (
 	// InternalRequest is the scope of internal queries
 	InternalRequest = "internal"
@@ -40,9 +52,9 @@ const (
 type RequestSource struct {
 	RequestSourceInternal bool
 	RequestSourceType     string
-	// ExplicitRequestSoureType is set from the session variable, it may specified by the client or users. `explicit_request_source_type`. it's a complement of RequestSourceType.
+	// ExplicitRequestSourceType is set from the session variable, it may specified by the client or users. `explicit_request_source_type`. it's a complement of RequestSourceType.
 	// The value maybe "lightning", "br", "dumpling" etc.
-	ExplicitRequestSoureType string
+	ExplicitRequestSourceType string
 }
 
 // SetRequestSourceInternal sets the scope of the request source.
@@ -57,7 +69,7 @@ func (r *RequestSource) SetRequestSourceType(tp string) {
 
 // SetExplicitRequestSourceType sets the type of the request source.
 func (r *RequestSource) SetExplicitRequestSourceType(tp string) {
-	r.ExplicitRequestSoureType = tp
+	r.ExplicitRequestSourceType = tp
 }
 
 // WithInternalSourceType create context with internal source.
@@ -81,12 +93,12 @@ func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 func (r *RequestSource) GetRequestSource() string {
 	// if r.RequestSourceType is not set, it's mostly possible that r.RequestSourceInternal is not set
 	// to avoid internal requests be marked as external(default value), return unknown source here.
-	if r == nil || r.RequestSourceType == "" {
+	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
 		return SourceUnknown
 	}
 	appendType := func(list []string) []string {
-		if len(r.ExplicitRequestSoureType) > 0 {
-			list = append(list, r.ExplicitRequestSoureType)
+		if len(r.ExplicitRequestSourceType) > 0 {
+			list = append(list, r.ExplicitRequestSourceType)
 			return list
 		}
 		return list
@@ -94,8 +106,8 @@ func (r *RequestSource) GetRequestSource() string {
 	if r.RequestSourceInternal {
 		labels := []string{InternalRequest, r.RequestSourceType}
 		labels = appendType(labels)
-		if len(r.ExplicitRequestSoureType) > 0 {
-			labels = append(labels, r.ExplicitRequestSoureType)
+		if len(r.ExplicitRequestSourceType) > 0 {
+			labels = append(labels, r.ExplicitRequestSourceType)
 		}
 		return strings.Join(labels, "_")
 	}

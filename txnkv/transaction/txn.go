@@ -1451,7 +1451,7 @@ func (txn *KVTxn) SetRequestSourceType(tp string) {
 	txn.RequestSource.SetRequestSourceType(tp)
 }
 
-// SetExplicitRequestSoureType sets the explicit type of the request source.
-func (txn *KVTxn) SetExplicitRequestSoureType(tp string) {
+// SetExplicitRequestSourceType sets the explicit type of the request source.
+func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 	txn.RequestSource.SetExplicitRequestSourceType(tp)
 }
