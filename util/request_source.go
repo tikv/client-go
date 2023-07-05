@@ -27,7 +27,7 @@ const (
 	InternalTxnMeta = InternalTxnOthers
 )
 
-// explict source types.
+// explicit source types.
 const (
 	ExplicitTypeDefault    = ""
 	ExplicitTypeLightning  = "lightning"
@@ -36,8 +36,8 @@ const (
 	ExplicitTypeBackground = "background"
 )
 
-// ExplictTypeList is the list of all explict source types.
-var ExplictTypeList = []string{ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+// ExplicitTypeList is the list of all explicit source types.
+var ExplicitTypeList = []string{ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
 
 const (
 	// InternalRequest is the scope of internal queries
@@ -96,23 +96,24 @@ func (r *RequestSource) GetRequestSource() string {
 	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
 		return SourceUnknown
 	}
-	appendType := func(list []string) []string {
-		if len(r.ExplicitRequestSourceType) > 0 {
-			list = append(list, r.ExplicitRequestSourceType)
-			return list
+	clearEmpty := func(list []string) []string {
+		i := 0
+		for _, v := range list {
+			if len(v) != 0 {
+				list[i] = v
+				i++
+			}
 		}
-		return list
+		return list[:i]
 	}
 	if r.RequestSourceInternal {
-		labels := []string{InternalRequest, r.RequestSourceType}
-		labels = appendType(labels)
-		if len(r.ExplicitRequestSourceType) > 0 {
-			labels = append(labels, r.ExplicitRequestSourceType)
-		}
+		labels := []string{InternalRequest, r.RequestSourceType, r.ExplicitRequestSourceType}
+		labels = clearEmpty(labels)
+
 		return strings.Join(labels, "_")
 	}
-	labels := []string{ExternalRequest, r.RequestSourceType}
-	labels = appendType(labels)
+	labels := []string{ExternalRequest, r.RequestSourceType, r.ExplicitRequestSourceType}
+	labels = clearEmpty(labels)
 	return strings.Join(labels, "_")
 }
 
