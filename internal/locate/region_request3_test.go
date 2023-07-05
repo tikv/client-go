@@ -340,13 +340,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	s.NotNil(replicaSelector)
 	s.Nil(err)
 
-	accessLearner, _ := replicaSelector.state.(*accessFollower)
 	// Invalidate the region if the leader is not in the region.
 	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	rpcCtx, err := replicaSelector.next(s.bo)
 	s.Nil(err)
-	// Should swith to the next follower.
-	s.Equal(AccessIndex(tikvLearnerAccessIdx), accessLearner.lastIdx)
+	// Should switch to the next follower.
+	s.Equal(AccessIndex(tikvLearnerAccessIdx), replicaSelector.targetIdx)
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[replicaSelector.targetIdx], nil)
 }
 
@@ -581,25 +580,23 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	state3, ok := replicaSelector.state.(*accessFollower)
 	s.True(ok)
 	s.Equal(regionStore.workTiKVIdx, state3.leaderIdx)
-	s.Equal(state3.lastIdx, AccessIndex(-1))
+	s.Equal(replicaSelector.targetIdx, AccessIndex(-1))
 
-	lastIdx := AccessIndex(-1)
+	lastIdx := -1
 	for i := 0; i < regionStore.accessStoreNum(tiKVOnly)-1; i++ {
 		rpcCtx, err := replicaSelector.next(s.bo)
 		s.Nil(err)
-		// Should swith to the next follower.
+		// Should switch to the next follower.
 		s.NotEqual(lastIdx, state3.lastIdx)
 		// Shouldn't access the leader if followers aren't exhausted.
-		s.NotEqual(regionStore.workTiKVIdx, state3.lastIdx)
-		s.Equal(replicaSelector.targetIdx, state3.lastIdx)
+		s.NotEqual(regionStore.workTiKVIdx, replicaSelector.targetIdx)
 		AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[replicaSelector.targetIdx], nil)
 		lastIdx = state3.lastIdx
 	}
 	// Fallback to the leader for 1 time
 	rpcCtx, err = replicaSelector.next(s.bo)
 	s.Nil(err)
-	s.Equal(regionStore.workTiKVIdx, state3.lastIdx)
-	s.Equal(replicaSelector.targetIdx, state3.lastIdx)
+	s.Equal(regionStore.workTiKVIdx, replicaSelector.targetIdx)
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
 	// All replicas are exhausted.
 	rpcCtx, err = replicaSelector.next(s.bo)
@@ -617,12 +614,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
-	state3 = replicaSelector.state.(*accessFollower)
+	_, ok = replicaSelector.state.(*accessFollower)
+	s.True(ok)
 	// Should fallback to the leader immediately.
 	rpcCtx, err = replicaSelector.next(s.bo)
 	s.Nil(err)
-	s.Equal(regionStore.workTiKVIdx, state3.lastIdx)
-	s.Equal(replicaSelector.targetIdx, state3.lastIdx)
+	s.Equal(regionStore.workTiKVIdx, replicaSelector.targetIdx)
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
 
 	// Test accessFollower state filtering label-not-match stores.
