@@ -532,12 +532,12 @@ func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
 type accessFollower struct {
 	stateBase
 	// If tryLeader is true, the request can also be sent to the leader when !leader.isSlow()
-	tryLeader         bool
-	isGlobalStaleRead bool
-	option            storeSelectorOp
-	leaderIdx         AccessIndex
-	lastIdx           AccessIndex
-	learnerOnly       bool
+	tryLeader   bool
+	isStaleRead bool
+	option      storeSelectorOp
+	leaderIdx   AccessIndex
+	lastIdx     AccessIndex
+	learnerOnly bool
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -558,12 +558,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			}
 		}
 	} else {
-		// Stale Read request will retry the leader or next peer on error,
-		// if txnScope is global, we will only retry the leader by using the WithLeaderOnly option,
-		// if txnScope is local, we will retry both other peers and the leader by the strategy of replicaSelector.
-		if state.isGlobalStaleRead {
+		// Stale Read request will retry the leader only by using the WithLeaderOnly option.
+		if state.isStaleRead {
 			WithLeaderOnly()(&state.option)
-			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read
+			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read.
 			resetStaleRead = true
 		}
 		state.lastIdx++
@@ -787,12 +785,12 @@ func newReplicaSelector(
 		}
 		tryLeader := req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader
 		state = &accessFollower{
-			tryLeader:         tryLeader,
-			isGlobalStaleRead: req.IsGlobalStaleRead(),
-			option:            option,
-			leaderIdx:         regionStore.workTiKVIdx,
-			lastIdx:           -1,
-			learnerOnly:       req.ReplicaReadType == kv.ReplicaReadLearner,
+			tryLeader:   tryLeader,
+			isStaleRead: req.StaleRead,
+			option:      option,
+			leaderIdx:   regionStore.workTiKVIdx,
+			lastIdx:     -1,
+			learnerOnly: req.ReplicaReadType == kv.ReplicaReadLearner,
 		}
 	}
 
