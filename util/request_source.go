@@ -38,7 +38,7 @@ const (
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
 
 const (
 	// InternalRequest is the scope of internal queries
@@ -53,8 +53,8 @@ const (
 type RequestSource struct {
 	RequestSourceInternal bool
 	RequestSourceType     string
-	// ExplicitRequestSourceType is set from the session variable, it may specified by the client or users. `explicit_request_source_type`. it's a complement of RequestSourceType.
-	// The value maybe "lightning", "br", "dumpling" etc.
+	// ExplicitRequestSourceType is a type that is set from the session variable and may be specified by the client or users.
+	// It is a complement to the RequestSourceType and provides additional information about how a request was initiated.
 	ExplicitRequestSourceType string
 }
 
@@ -92,34 +92,25 @@ func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
-	// if r.RequestSourceType is not set, it's mostly possible that r.RequestSourceInternal is not set
-	// to avoid internal requests be marked as external(default value), return unknown source here.
+	source := SourceUnknown
+	explicitSourceType := ExplicitTypeDefault
+	origin := ExternalRequest
 	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
-		return SourceUnknown
+		// if r.RequestSourceType and r.ExplicitRequestSourceType are not set, it's mostly possible that r.RequestSourceInternal is not set
+		// to avoid internal requests be marked as external(default value), return unknown source here.
+		return strings.Join([]string{source, explicitSourceType}, "_")
 	}
-	clearEmpty := func(list []string) []string {
-		i := 0
-		for _, v := range list {
-			if len(v) != 0 {
-				list[i] = v
-				i++
-			}
-		}
-		return list[:i]
+
+	if len(r.RequestSourceType) > 0 {
+		source = r.RequestSourceType
 	}
-	explicitSourceType := r.ExplicitRequestSourceType
-	if len(explicitSourceType) == 0 {
-		explicitSourceType = ExplicitTypeDefault
+	if len(r.ExplicitRequestSourceType) > 0 {
+		explicitSourceType = r.ExplicitRequestSourceType
 	}
 	if r.RequestSourceInternal {
-		labels := []string{InternalRequest, r.RequestSourceType, explicitSourceType}
-		labels = clearEmpty(labels)
-
-		return strings.Join(labels, "_")
+		origin = InternalRequest
 	}
-	labels := []string{ExternalRequest, r.RequestSourceType, explicitSourceType}
-	labels = clearEmpty(labels)
-	return strings.Join(labels, "_")
+	return strings.Join([]string{origin, source, explicitSourceType}, "_")
 }
 
 // RequestSourceFromCtx extract source from passed context.
