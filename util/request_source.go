@@ -30,7 +30,7 @@ const (
 // explicit source types.
 const (
 	ExplicitTypeEmpty      = ""
-	ExplicitTypeDB         = "db"
+	ExplicitTypeDefault    = "default"
 	ExplicitTypeLightning  = "lightning"
 	ExplicitTypeBR         = "br"
 	ExplicitTypeDumpling   = "dumpling"
@@ -38,7 +38,7 @@ const (
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeDB, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+var ExplicitTypeList = []string{ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
 
 const (
 	// InternalRequest is the scope of internal queries
@@ -109,7 +109,7 @@ func (r *RequestSource) GetRequestSource() string {
 	}
 	explicitSourceType := r.ExplicitRequestSourceType
 	if len(explicitSourceType) == 0 {
-		explicitSourceType = ExplicitTypeDB
+		explicitSourceType = ExplicitTypeDefault
 	}
 	if r.RequestSourceInternal {
 		labels := []string{InternalRequest, r.RequestSourceType, explicitSourceType}

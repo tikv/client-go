@@ -55,7 +55,7 @@ func TestGetRequestSource(t *testing.T) {
 
 	// Test empty ExplicitRequestSourceType
 	rs.RequestSourceType = "test"
-	expected = "external_test_db"
+	expected = "external_test_default"
 	actual = rs.GetRequestSource()
 	assert.Equal(t, expected, actual)
 
