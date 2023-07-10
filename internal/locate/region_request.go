@@ -1727,7 +1727,7 @@ func (s *staleReadMetricsCollector) collect() {
 		return
 	}
 	in, out := metrics.StaleReadLocalInBytes, metrics.StaleReadLocalOutBytes
-	if !s.local {
+	if !s.local || !s.hit {
 		in, out = metrics.StaleReadRemoteInBytes, metrics.StaleReadRemoteOutBytes
 	}
 	in.Add(float64(s.in))
