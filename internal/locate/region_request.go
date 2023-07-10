@@ -37,6 +37,8 @@ package locate
 import (
 	"context"
 	"fmt"
+	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/tikv"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -999,7 +1001,7 @@ func (s *RegionRequestSender) SendReqCtx(
 
 	var staleReadCollector *staleReadMetricsCollector
 	if req.StaleRead {
-		staleReadCollector = &staleReadMetricsCollector{hit: true}
+		staleReadCollector = &staleReadMetricsCollector{hit: true, local: true}
 		staleReadCollector.onReq(req)
 		defer staleReadCollector.collect()
 	}
@@ -1091,7 +1093,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 		if staleReadCollector != nil {
-			staleReadCollector.onResp(resp)
+			staleReadCollector.onResp(resp, rpcCtx)
 		}
 		return resp, rpcCtx, nil
 	}
@@ -1666,10 +1668,12 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 }
 
 type staleReadMetricsCollector struct {
-	tp  tikvrpc.CmdType
-	hit bool
-	out int
-	in  int
+	tp    tikvrpc.CmdType
+	scope string
+	hit   bool
+	local bool
+	out   int
+	in    int
 }
 
 func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
@@ -1690,9 +1694,10 @@ func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
 	s.tp = req.Type
 	size += req.Context.Size()
 	s.out = size
+	s.scope = req.ReadReplicaScope
 }
 
-func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
+func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response, rpcCtx *RPCContext) {
 	size := 0
 	switch s.tp {
 	case tikvrpc.CmdGet:
@@ -1708,15 +1713,30 @@ func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
 		return
 	}
 	s.in = size
+	if s.scope == "" || s.scope == oracle.GlobalTxnScope {
+		return
+	}
+	for _, label := range rpcCtx.Store.labels {
+		if label.Key == tikv.DCLabelKey && label.Value == s.scope {
+			return
+		}
+	}
+	s.local = false
 }
 
 func (s *staleReadMetricsCollector) collect() {
-	in, out := metrics.StaleReadHitInTraffic, metrics.StaleReadHitOutTraffic
-	if !s.hit {
-		in, out = metrics.StaleReadMissInTraffic, metrics.StaleReadMissOutTraffic
+	if s.in == 0 || s.out == 0 {
+		return
 	}
-	if s.in > 0 && s.out > 0 {
-		in.Observe(float64(s.in))
-		out.Observe(float64(s.out))
+	in, out := metrics.StaleReadLocalInBytes, metrics.StaleReadLocalOutBytes
+	if !s.local {
+		in, out = metrics.StaleReadRemoteInBytes, metrics.StaleReadRemoteOutBytes
+	}
+	in.Add(float64(s.in))
+	out.Add(float64(s.out))
+	if s.hit {
+		metrics.StaleReadHitCounter.Inc()
+	} else {
+		metrics.StaleReadMissCounter.Inc()
 	}
 }
