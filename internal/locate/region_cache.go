@@ -1300,7 +1300,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 		return
 	}
 	if len(regions) == 0 {
-		err = errors.Errorf("PD returned no region, startKey: %q, endKey: %q", startKey, endKey)
+		err = errors.Errorf("PD returned no region, startKey: %q, endKey: %q", util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey))
 		return
 	}
 
@@ -1710,7 +1710,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
 				"scanRegion from PD failed, startKey: %q, limit: %d, err: %v",
-				startKey,
+				util.HexRegionKeyStr(startKey),
 				limit,
 				err)
 			continue
@@ -1721,7 +1721,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		if len(regionsInfo) == 0 {
 			return nil, errors.Errorf(
 				"PD returned no region, startKey: %q, endKey: %q, limit: %d",
-				startKey, endKey, limit,
+				util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey), limit,
 			)
 		}
 		regions := make([]*Region, 0, len(regionsInfo))
