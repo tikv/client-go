@@ -74,7 +74,7 @@ import (
 )
 
 // DCLabelKey indicates the key of label which represents the dc for Store.
-const DCLabelKey = "zone"
+const DCLabelKey = tikvrpc.DCLabelKey
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
 	cfg := config.GetGlobalConfig()

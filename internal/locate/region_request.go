@@ -37,18 +37,12 @@ package locate
 import (
 	"context"
 	"fmt"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikv"
 	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
@@ -62,8 +56,12 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // shuttingDown is a flag to indicate tidb-server is exiting (Ctrl+C signal
@@ -1717,7 +1715,7 @@ func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response, rpcCtx *RPCCo
 		return
 	}
 	for _, label := range rpcCtx.Store.labels {
-		if label.Key == tikv.DCLabelKey && label.Value == s.scope {
+		if label.Key == tikvrpc.DCLabelKey && label.Value == s.scope {
 			return
 		}
 	}

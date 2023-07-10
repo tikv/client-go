@@ -87,3 +87,6 @@ func GetStoreTypeByMeta(store *metapb.Store) EndpointType {
 	}
 	return TiKV
 }
+
+// DCLabelKey indicates the key of label which represents the dc for Store.
+const DCLabelKey = "zone"
