@@ -97,6 +97,7 @@ var (
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
 	TiKVStaleReadSizeSummary                 *prometheus.SummaryVec
+	TiKVStaleReadByteSummary                 *prometheus.SummaryVec
 )
 
 // Label constants.
@@ -118,6 +119,7 @@ const (
 	LblStaleRead       = "stale_read"
 	LblSource          = "source"
 	LblDirection       = "direction"
+	LblCrossAz         = "cross_az"
 )
 
 func initMetrics(namespace, subsystem string) {
@@ -598,6 +600,13 @@ func initMetrics(namespace, subsystem string) {
 			Name:      "stale_read_bytes",
 			Help:      "Size of stale read.",
 		}, []string{LblResult, LblDirection})
+	TiKVStaleReadByteSummary = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "send_req_bytes",
+			Help:      "Size of stale read.",
+		}, []string{LblType, LblCrossAz, LblDirection})
 
 	initShortcuts()
 }
@@ -670,6 +679,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
 	prometheus.MustRegister(TiKVStaleReadSizeSummary)
+	prometheus.MustRegister(TiKVStaleReadByteSummary)
 }
 
 // readCounter reads the value of a prometheus.Counter.

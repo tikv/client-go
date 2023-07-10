@@ -998,9 +998,10 @@ func (s *RegionRequestSender) SendReqCtx(
 	}()
 
 	var staleReadCollector *staleReadMetricsCollector
+	reqSize := 0
 	if req.StaleRead {
 		staleReadCollector = &staleReadMetricsCollector{hit: true}
-		staleReadCollector.onReq(req)
+		reqSize = staleReadCollector.onReq(req)
 		defer staleReadCollector.collect()
 	}
 
@@ -1038,6 +1039,20 @@ func (s *RegionRequestSender) SendReqCtx(
 			logutil.Logger(bo.GetCtx()).Debug("throwing pseudo region error due to region not found in cache", zap.Stringer("region", &regionID))
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, err
+		}
+
+		var crossAz string
+		if s.replicaSelector != nil && reqSize > 0 && s.replicaSelector.targetReplica() != nil {
+			if cf, ok := s.replicaSelector.state.(*accessFollower); ok && len(cf.option.labels) > 0 {
+				if s.replicaSelector.targetReplica().store.IsLabelsMatch(cf.option.labels) {
+					crossAz = "false"
+				} else {
+					crossAz = "true"
+				}
+			}
+		}
+		if crossAz != "" {
+			metrics.TiKVStaleReadByteSummary.WithLabelValues(req.Type.String(), crossAz, "out").Observe(float64(reqSize))
 		}
 
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
@@ -1091,7 +1106,10 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 		if staleReadCollector != nil {
-			staleReadCollector.onResp(resp)
+			size := staleReadCollector.onResp(resp)
+			if crossAz != "" {
+				metrics.TiKVStaleReadByteSummary.WithLabelValues(req.Type.String(), crossAz, "in").Observe(float64(size))
+			}
 		}
 		return resp, rpcCtx, nil
 	}
@@ -1672,7 +1690,7 @@ type staleReadMetricsCollector struct {
 	in  int
 }
 
-func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
+func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) int {
 	size := 0
 	switch req.Type {
 	case tikvrpc.CmdGet:
@@ -1685,14 +1703,15 @@ func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
 		size += req.Cop().Size()
 	default:
 		// ignore non-read requests
-		return
+		return size
 	}
 	s.tp = req.Type
 	size += req.Context.Size()
 	s.out = size
+	return size
 }
 
-func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
+func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) int {
 	size := 0
 	switch s.tp {
 	case tikvrpc.CmdGet:
@@ -1705,9 +1724,10 @@ func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
 		size += resp.Resp.(*coprocessor.Response).Size()
 	default:
 		// unreachable
-		return
+		return 0
 	}
 	s.in = size
+	return size
 }
 
 func (s *staleReadMetricsCollector) collect() {
