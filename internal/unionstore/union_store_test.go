@@ -125,23 +125,27 @@ func TestUnionStoreIterReverse(t *testing.T) {
 	err = store.Set([]byte("3"), []byte("3"))
 	assert.Nil(err)
 
-	iter, err := us.IterReverse(nil)
+	iter, err := us.IterReverse(nil, nil)
 	assert.Nil(err)
 	checkIterator(t, iter, [][]byte{[]byte("3"), []byte("2"), []byte("1")}, [][]byte{[]byte("3"), []byte("2"), []byte("1")})
 
-	iter, err = us.IterReverse([]byte("3"))
+	iter, err = us.IterReverse([]byte("3"), []byte("1"))
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("1")}, [][]byte{[]byte("2"), []byte("1")})
+
+	iter, err = us.IterReverse([]byte("3"), nil)
 	assert.Nil(err)
 	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("1")}, [][]byte{[]byte("2"), []byte("1")})
 
 	err = us.GetMemBuffer().Set([]byte("0"), []byte("0"))
 	assert.Nil(err)
-	iter, err = us.IterReverse([]byte("3"))
+	iter, err = us.IterReverse([]byte("3"), nil)
 	assert.Nil(err)
 	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("1"), []byte("0")}, [][]byte{[]byte("2"), []byte("1"), []byte("0")})
 
 	err = us.GetMemBuffer().Delete([]byte("1"))
 	assert.Nil(err)
-	iter, err = us.IterReverse([]byte("3"))
+	iter, err = us.IterReverse([]byte("3"), nil)
 	assert.Nil(err)
 	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("0")}, [][]byte{[]byte("2"), []byte("0")})
 }

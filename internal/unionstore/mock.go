@@ -71,8 +71,8 @@ func (s *mockSnapshot) Iter(k []byte, upperBound []byte) (Iterator, error) {
 	return s.store.Iter(k, upperBound)
 }
 
-func (s *mockSnapshot) IterReverse(k []byte) (Iterator, error) {
-	return s.store.IterReverse(k)
+func (s *mockSnapshot) IterReverse(k, lowerBound []byte) (Iterator, error) {
+	return s.store.IterReverse(k, lowerBound)
 }
 
 func (s *mockSnapshot) SetOption(opt int, val interface{}) {}
