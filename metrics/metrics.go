@@ -119,7 +119,6 @@ const (
 	LblStaleRead       = "stale_read"
 	LblSource          = "source"
 	LblDirection       = "direction"
-	LblCrossAz         = "cross_az"
 )
 
 func initMetrics(namespace, subsystem string) {
