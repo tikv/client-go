@@ -82,6 +82,7 @@ type TiKVClient struct {
 	StoreLivenessTimeout string           `toml:"store-liveness-timeout" json:"store-liveness-timeout"`
 	CoprCache            CoprocessorCache `toml:"copr-cache" json:"copr-cache"`
 	// CoprReqTimeout is the timeout for a single coprocessor request
+	// Note: this is a transitional modification, and it will be removed if it's dynamic configurable version is ready.
 	CoprReqTimeout time.Duration `toml:"copr-req-timeout" json:"copr-req-timeout"`
 	// TTLRefreshedTxnSize controls whether a transaction should update its TTL or not.
 	TTLRefreshedTxnSize      int64  `toml:"ttl-refreshed-txn-size" json:"ttl-refreshed-txn-size"`
