@@ -34,6 +34,7 @@ type RequestInfo struct {
 	writeBytes    int64
 	storeID       uint64
 	replicaNumber int64
+	requestSource string
 }
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
@@ -77,6 +78,14 @@ func (req *RequestInfo) ReplicaNumber() int64 {
 
 func (req *RequestInfo) StoreID() uint64 {
 	return req.storeID
+}
+
+func (req *RequestInfo) RequestSource() string {
+	return req.requestSource
+}
+
+func (req *RequestInfo) SetRequestSource(requestSource string) {
+	req.requestSource = requestSource
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost
