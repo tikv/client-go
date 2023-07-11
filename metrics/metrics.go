@@ -96,7 +96,8 @@ var (
 	TiKVReadThroughput                       prometheus.Histogram
 	TiKVUnsafeDestroyRangeFailuresCounterVec *prometheus.CounterVec
 	TiKVPrewriteAssertionUsageCounter        *prometheus.CounterVec
-	TiKVStaleReadSizeSummary                 *prometheus.SummaryVec
+	TiKVStaleReadCounter                     *prometheus.CounterVec
+	TiKVStaleReadBytes                       *prometheus.CounterVec
 	TiKVStaleReadByteSummary                 *prometheus.SummaryVec
 )
 
@@ -593,13 +594,21 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of assertions used in prewrite requests",
 		}, []string{LblType})
 
-	TiKVStaleReadSizeSummary = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
+	TiKVStaleReadCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_read_counter",
+			Help:      "Size of stale read.",
+		}, []string{LblResult})
+
+	TiKVStaleReadBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Subsystem: subsystem,
 			Name:      "stale_read_bytes",
 			Help:      "Size of stale read.",
 		}, []string{LblResult, LblDirection})
+
 	TiKVStaleReadByteSummary = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace: namespace,
@@ -678,7 +687,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadThroughput)
 	prometheus.MustRegister(TiKVUnsafeDestroyRangeFailuresCounterVec)
 	prometheus.MustRegister(TiKVPrewriteAssertionUsageCounter)
-	prometheus.MustRegister(TiKVStaleReadSizeSummary)
+	prometheus.MustRegister(TiKVStaleReadCounter)
+	prometheus.MustRegister(TiKVStaleReadBytes)
 	prometheus.MustRegister(TiKVStaleReadByteSummary)
 }
 
