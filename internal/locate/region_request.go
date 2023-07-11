@@ -1002,6 +1002,13 @@ func (s *RegionRequestSender) SendReqCtx(
 	var staleReadCollector *staleReadMetricsCollector
 	if req.StaleRead {
 		staleReadCollector = &staleReadMetricsCollector{}
+		defer func() {
+			if tryTimes == 0 {
+				metrics.StaleReadHitCounter.Add(1)
+			} else {
+				metrics.StaleReadMissCounter.Add(1)
+			}
+		}()
 	}
 
 	for {
@@ -1096,7 +1103,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 		if staleReadCollector != nil {
-			staleReadCollector.onResp(resp, isLocalTraffic)
+			staleReadCollector.onResp(req.Type, resp, isLocalTraffic)
 		}
 		return resp, rpcCtx, nil
 	}
@@ -1671,40 +1678,36 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 }
 
 type staleReadMetricsCollector struct {
-	tp      tikvrpc.CmdType
-	reqSize int
 }
 
 func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request, isLocalTraffic bool) {
-	if s.reqSize == 0 {
-		switch req.Type {
-		case tikvrpc.CmdGet:
-			s.reqSize = req.Get().Size()
-		case tikvrpc.CmdBatchGet:
-			s.reqSize = req.BatchGet().Size()
-		case tikvrpc.CmdScan:
-			s.reqSize = req.Scan().Size()
-		case tikvrpc.CmdCop:
-			s.reqSize = req.Cop().Size()
-		default:
-			// ignore non-read requests
-			return
-		}
+	size := 0
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		size = req.Get().Size()
+	case tikvrpc.CmdBatchGet:
+		size = req.BatchGet().Size()
+	case tikvrpc.CmdScan:
+		size = req.Scan().Size()
+	case tikvrpc.CmdCop:
+		size = req.Cop().Size()
+	default:
+		// ignore non-read requests
+		return
 	}
-	reqSize := s.reqSize + req.Context.Size()
-	s.tp = req.Type
+	size += +req.Context.Size()
 	if isLocalTraffic {
-		metrics.StaleReadLocalOutBytes.Add(float64(reqSize))
-		metrics.StaleReadHitCounter.Add(1)
+		metrics.StaleReadLocalOutBytes.Add(float64(size))
+		metrics.StaleReadReqLocalCounter.Add(1)
 	} else {
-		metrics.StaleReadRemoteOutBytes.Add(float64(reqSize))
-		metrics.StaleReadMissCounter.Add(1)
+		metrics.StaleReadRemoteOutBytes.Add(float64(size))
+		metrics.StaleReadReqCrossZoneCounter.Add(1)
 	}
 }
 
-func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response, isLocalTraffic bool) {
+func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Response, isLocalTraffic bool) {
 	size := 0
-	switch s.tp {
+	switch tp {
 	case tikvrpc.CmdGet:
 		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
 	case tikvrpc.CmdBatchGet:
