@@ -205,6 +205,9 @@ var interceptorCtxKey = interceptorCtxKeyType{}
 
 // WithRPCInterceptor is a helper function used to bind RPCInterceptor with ctx.
 func WithRPCInterceptor(ctx context.Context, interceptor RPCInterceptor) context.Context {
+	if v := ctx.Value(interceptorCtxKey); v != nil {
+		interceptor = ChainRPCInterceptors(v.(RPCInterceptor), interceptor)
+	}
 	return context.WithValue(ctx, interceptorCtxKey, interceptor)
 }
 

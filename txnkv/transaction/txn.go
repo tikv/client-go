@@ -1467,3 +1467,8 @@ func (txn *KVTxn) SetRequestSourceInternal(internal bool) {
 func (txn *KVTxn) SetRequestSourceType(tp string) {
 	txn.RequestSource.SetRequestSourceType(tp)
 }
+
+// SetExplicitRequestSourceType sets the explicit type of the request source.
+func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
+	txn.RequestSource.SetExplicitRequestSourceType(tp)
+}
