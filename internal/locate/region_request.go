@@ -1696,11 +1696,9 @@ func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request, isLocalTraffic b
 	if isLocalTraffic {
 		metrics.StaleReadLocalOutBytes.Add(float64(reqSize))
 		metrics.StaleReadHitCounter.Add(1)
-		metrics.TiKVStaleReadByteSummary.WithLabelValues(req.Type.String(), "local", "out").Observe(float64(reqSize))
 	} else {
 		metrics.StaleReadRemoteOutBytes.Add(float64(reqSize))
 		metrics.StaleReadMissCounter.Add(1)
-		metrics.TiKVStaleReadByteSummary.WithLabelValues(req.Type.String(), "remote", "out").Observe(float64(reqSize))
 	}
 }
 
@@ -1721,9 +1719,7 @@ func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response, isLocalTraffi
 	}
 	if isLocalTraffic {
 		metrics.StaleReadLocalInBytes.Add(float64(size))
-		metrics.TiKVStaleReadByteSummary.WithLabelValues(s.tp.String(), "local", "in").Observe(float64(size))
 	} else {
 		metrics.StaleReadRemoteInBytes.Add(float64(size))
-		metrics.TiKVStaleReadByteSummary.WithLabelValues(s.tp.String(), "remote", "in").Observe(float64(size))
 	}
 }
