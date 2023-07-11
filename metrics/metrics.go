@@ -601,7 +601,7 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of stale read hit/miss",
 		}, []string{LblResult})
 
-	TiKVStaleReadCounter = prometheus.NewCounterVec(
+	TiKVStaleReadReqCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
