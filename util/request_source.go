@@ -95,7 +95,7 @@ func WithInternalSourceType(ctx context.Context, source string) context.Context 
 	})
 }
 
-// BuildRequestSource builds a request source from internal, source and explicitSource.
+// BuildRequestSource builds a request_source from internal, source and explicitSource.
 func BuildRequestSource(internal bool, source, explicitSource string) string {
 	requestSource := RequestSource{
 		RequestSourceInternal:     internal,

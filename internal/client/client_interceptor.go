@@ -107,8 +107,6 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	interceptFn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-			// Background requests don't need to update the runtime stats because it will record in TiKV.
-			reqInfo.SetRequestSource(util.RequestSourceFromCtx(ctx))
 			consumption, penalty, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err

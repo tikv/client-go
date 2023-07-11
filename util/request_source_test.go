@@ -69,13 +69,8 @@ func TestGetRequestSource(t *testing.T) {
 
 func TestBuildRequestSource(t *testing.T) {
 	// Test internal request
-	expected := "unknown_default"
-	actual := BuildRequestSource(true, "", "")
-	assert.Equal(t, expected, actual)
-
-	// Test internal request
-	expected = "internal_test_lightning"
-	actual = BuildRequestSource(true, "test", "lightning")
+	expected := "internal_test_lightning"
+	actual := BuildRequestSource(true, "test", "lightning")
 	assert.Equal(t, expected, actual)
 
 	// Test external request
@@ -91,5 +86,10 @@ func TestBuildRequestSource(t *testing.T) {
 	// Test empty RequestSourceType
 	expected = "external_unknown_lightning"
 	actual = BuildRequestSource(false, "", "lightning")
+	assert.Equal(t, expected, actual)
+
+	// Test RequestSourceType && ExplicitRequestSourceType both empty
+	expected = "unknown_default"
+	actual = BuildRequestSource(true, "", "")
 	assert.Equal(t, expected, actual)
 }
