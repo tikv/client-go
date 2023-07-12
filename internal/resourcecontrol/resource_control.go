@@ -16,12 +16,14 @@ package resourcecontrol
 
 import (
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -34,6 +36,9 @@ type RequestInfo struct {
 	writeBytes    int64
 	storeID       uint64
 	replicaNumber int64
+	// bypass indicates whether the request should be bypassed.
+	// some internal request should be bypassed, such as Privilege request.
+	bypass bool
 }
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
@@ -43,6 +48,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	}
 
 	var writeBytes int64
+	var bypass bool
 	switch r := req.Req.(type) {
 	case *kvrpcpb.PrewriteRequest:
 		for _, m := range r.Mutations {
@@ -57,7 +63,13 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			writeBytes += int64(len(k))
 		}
 	}
-	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId, replicaNumber: req.ReplicaNumber}
+	requestSource := req.Context.GetRequestSource()
+	if len(requestSource) > 0 {
+		if strings.Contains(requestSource, util.InternalRequest+"_"+util.InternalTxnOthers) {
+			bypass = true
+		}
+	}
+	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId, replicaNumber: req.ReplicaNumber, bypass: bypass}
 }
 
 // IsWrite returns whether the request is a write request.
@@ -73,6 +85,11 @@ func (req *RequestInfo) WriteBytes() uint64 {
 
 func (req *RequestInfo) ReplicaNumber() int64 {
 	return req.replicaNumber
+}
+
+// Bypass returns whether the request should be bypassed.
+func (req *RequestInfo) Bypass() bool {
+	return req.bypass
 }
 
 func (req *RequestInfo) StoreID() uint64 {
