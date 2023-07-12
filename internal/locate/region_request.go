@@ -254,7 +254,7 @@ type replicaSelector struct {
 	region      *Region
 	regionStore *regionStore
 	replicas    []*replica
-	option      storeSelectorOp
+	option      *storeSelectorOp
 	state       selectorState
 	// replicas[targetIdx] is the replica handling the request this time
 	targetIdx AccessIndex
@@ -670,7 +670,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		cachedRegion,
 		regionStore,
 		replicas,
-		option,
+		&option,
 		state,
 		-1,
 		-1,
@@ -1045,7 +1045,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		var isLocalTraffic bool
-		if staleReadCollector != nil && s.replicaSelector != nil {
+		if staleReadCollector != nil && s.replicaSelector != nil && s.replicaSelector.option != nil {
 			if target := s.replicaSelector.targetReplica(); target != nil {
 				isLocalTraffic = target.store.IsLabelsMatch(s.replicaSelector.option.labels)
 				staleReadCollector.onReq(req, isLocalTraffic)
@@ -1695,7 +1695,7 @@ func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request, isLocalTraffic b
 		// ignore non-read requests
 		return
 	}
-	size += +req.Context.Size()
+	size += req.Context.Size()
 	if isLocalTraffic {
 		metrics.StaleReadLocalOutBytes.Add(float64(size))
 		metrics.StaleReadReqLocalCounter.Add(1)
