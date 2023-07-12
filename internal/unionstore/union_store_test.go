@@ -148,6 +148,10 @@ func TestUnionStoreIterReverse(t *testing.T) {
 	iter, err = us.IterReverse([]byte("3"), nil)
 	assert.Nil(err)
 	checkIterator(t, iter, [][]byte{[]byte("2"), []byte("0")}, [][]byte{[]byte("2"), []byte("0")})
+
+	iter, err = us.IterReverse([]byte("3"), []byte("1"))
+	assert.Nil(err)
+	checkIterator(t, iter, [][]byte{[]byte("2")}, [][]byte{[]byte("2")})
 }
 
 func checkIterator(t *testing.T, iter Iterator, keys [][]byte, values [][]byte) {

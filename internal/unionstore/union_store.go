@@ -71,6 +71,7 @@ type uSnapshot interface {
 	// IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 	// The returned iterator will iterate from greater key to smaller key.
 	// If k is nil, the returned iterator will be positioned at the last key.
+	// It yields only keys that >= lowerBound. If lowerBound is nil, it means the lowerBound is unbounded.
 	IterReverse(k, lowerBound []byte) (Iterator, error)
 }
 
