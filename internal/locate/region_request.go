@@ -1446,6 +1446,10 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "flashback_in_progress"
 	} else if e.GetFlashbackNotPrepared() != nil {
 		return "flashback_not_prepared"
+	} else if strings.HasPrefix(e.Message, "mismatch peer id") {
+		// the `mismatch peer id` error does not has a specific error type, so we have to match the error message.
+		// TODO: add a specific error type for `mismatch peer id`.
+		return "mismatch_peer_id"
 	}
 	return "unknown"
 }
@@ -1458,7 +1462,8 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 	}
 
 	// NOTE: Please add the region error handler in the same order of errorpb.Error.
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr)).Inc()
+	errLabel := regionErrorToLabel(regionErr)
+	metrics.TiKVRegionErrorCounter.WithLabelValues(errLabel).Inc()
 
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
 		// Retry if error is `NotLeader`.
@@ -1663,6 +1668,10 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		zap.Stringer("ctx", ctx))
 
 	if s.replicaSelector != nil {
+		if errLabel == "mismatch_peer_id" {
+			s.replicaSelector.invalidateRegion()
+			return false, nil
+		}
 		// Try the next replica.
 		return true, nil
 	}
