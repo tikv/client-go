@@ -1064,7 +1064,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 			return nil, errors.New("timeout")
 		default:
 		}
-		// Return serverIsBusy when accesses the leader with busy threshold.
+		// Return `mismatch peer id` when accesses the leader.
 		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
 			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
 				Message: "mismatch peer id 1 != 2",
