@@ -1931,6 +1931,11 @@ func (s *RegionRequestSender) onRegionError(
 	)
 
 	if s.replicaSelector != nil {
+		// the `mismatch peer id` error does not has a specific error type, so we have to match the error message.
+		// TODO: add a specific error type for `mismatch peer id`.
+		if strings.HasPrefix(regionErr.Message, "mismatch peer id") {
+			s.replicaSelector.region.invalidate(NoLeader)
+		}
 		// Try the next replica.
 		return true, nil
 	}

@@ -1052,3 +1052,46 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadWithFlashbackInProg
 		s.Equal(resp.Resp.(*kvrpcpb.GetResponse).Value, []byte("value"))
 	}
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderRegionError() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		// Return serverIsBusy when accesses the leader with busy threshold.
+		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				Message: "mismatch peer id 1 != 2",
+			}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+			DataIsNotReady: &errorpb.DataIsNotReady{},
+		}}}, nil
+	}}
+
+	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	s.True(region.isValid())
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+	req.EnableStaleRead()
+
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	bo := retry.NewBackoffer(ctx, -1)
+	s.Nil(err)
+	resp, retry, err := s.regionRequestSender.SendReq(bo, req, regionLoc.Region, time.Second)
+	s.Nil(err)
+	s.GreaterOrEqual(retry, 1)
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.NotNil(regionErr.GetEpochNotMatch())
+	// after region err returned, the region should be invalidated.
+	s.False(region.isValid())
+}
