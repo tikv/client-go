@@ -1082,6 +1082,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
 	req.EnableStaleRead()
+	req.ReplicaReadType = kv.ReplicaReadFollower
 
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	bo := retry.NewBackoffer(ctx, -1)
@@ -1091,8 +1092,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	s.GreaterOrEqual(retry, 1)
 	regionErr, err := resp.GetRegionError()
 	s.Nil(err)
-	// return epoch-not-match region error and the upper layer can auto retry.
-	s.NotNil(regionErr.GetEpochNotMatch())
+	// return non-epoch-not-match region error and the upper layer can auto retry.
+	s.Nil(regionErr.GetEpochNotMatch())
 	// after region error returned, the region should be invalidated.
 	s.False(region.isValid())
 }

@@ -1938,6 +1938,7 @@ func (s *RegionRequestSender) onRegionError(
 	if s.replicaSelector != nil {
 		if errLabel == "mismatch_peer_id" {
 			s.replicaSelector.invalidateRegion()
+			return false, nil
 		}
 		// Try the next replica.
 		return true, nil
