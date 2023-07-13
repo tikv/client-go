@@ -136,10 +136,16 @@ var (
 	PrewriteAssertionUsageCounterNotExist prometheus.Counter
 	PrewriteAssertionUsageCounterUnknown  prometheus.Counter
 
-	StaleReadHitInTraffic   prometheus.Observer
-	StaleReadHitOutTraffic  prometheus.Observer
-	StaleReadMissInTraffic  prometheus.Observer
-	StaleReadMissOutTraffic prometheus.Observer
+	StaleReadHitCounter  prometheus.Counter
+	StaleReadMissCounter prometheus.Counter
+
+	StaleReadReqLocalCounter     prometheus.Counter
+	StaleReadReqCrossZoneCounter prometheus.Counter
+
+	StaleReadLocalInBytes   prometheus.Counter
+	StaleReadLocalOutBytes  prometheus.Counter
+	StaleReadRemoteInBytes  prometheus.Counter
+	StaleReadRemoteOutBytes prometheus.Counter
 )
 
 func initShortcuts() {
@@ -241,8 +247,14 @@ func initShortcuts() {
 	PrewriteAssertionUsageCounterNotExist = TiKVPrewriteAssertionUsageCounter.WithLabelValues("not-exist")
 	PrewriteAssertionUsageCounterUnknown = TiKVPrewriteAssertionUsageCounter.WithLabelValues("unknown")
 
-	StaleReadHitInTraffic = TiKVStaleReadSizeSummary.WithLabelValues("hit", "in")
-	StaleReadHitOutTraffic = TiKVStaleReadSizeSummary.WithLabelValues("hit", "out")
-	StaleReadMissInTraffic = TiKVStaleReadSizeSummary.WithLabelValues("miss", "in")
-	StaleReadMissOutTraffic = TiKVStaleReadSizeSummary.WithLabelValues("miss", "out")
+	StaleReadHitCounter = TiKVStaleReadCounter.WithLabelValues("hit")
+	StaleReadMissCounter = TiKVStaleReadCounter.WithLabelValues("miss")
+
+	StaleReadReqLocalCounter = TiKVStaleReadReqCounter.WithLabelValues("local")
+	StaleReadReqCrossZoneCounter = TiKVStaleReadReqCounter.WithLabelValues("cross-zone")
+
+	StaleReadLocalInBytes = TiKVStaleReadBytes.WithLabelValues("local", "in")
+	StaleReadLocalOutBytes = TiKVStaleReadBytes.WithLabelValues("local", "out")
+	StaleReadRemoteInBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "in")
+	StaleReadRemoteOutBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "out")
 }
