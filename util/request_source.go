@@ -25,6 +25,8 @@ const (
 	InternalTxnGC = "gc"
 	// InternalTxnMeta is the type of the miscellaneous meta usage.
 	InternalTxnMeta = InternalTxnOthers
+	// InternalTxnDDL is the type of inner DDL sql.
+	InternalTxnDDL = "ddl"
 )
 
 const (

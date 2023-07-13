@@ -43,12 +43,18 @@ type RequestInfo struct {
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
 func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
+	var bypass bool
+	requestSource := req.Context.GetRequestSource()
+	if len(requestSource) > 0 {
+		if strings.Contains(requestSource, util.InternalRequest+util.InternalTxnOthers) {
+			bypass = true
+		}
+	}
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
-		return &RequestInfo{writeBytes: -1}
+		return &RequestInfo{writeBytes: -1, bypass: bypass}
 	}
 
 	var writeBytes int64
-	var bypass bool
 	switch r := req.Req.(type) {
 	case *kvrpcpb.PrewriteRequest:
 		for _, m := range r.Mutations {
@@ -61,12 +67,6 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	case *kvrpcpb.CommitRequest:
 		for _, k := range r.Keys {
 			writeBytes += int64(len(k))
-		}
-	}
-	requestSource := req.Context.GetRequestSource()
-	if len(requestSource) > 0 {
-		if strings.Contains(requestSource, util.InternalRequest+"_"+util.InternalTxnOthers) {
-			bypass = true
 		}
 	}
 	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId, replicaNumber: req.ReplicaNumber, bypass: bypass}
