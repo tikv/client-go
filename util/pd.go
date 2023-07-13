@@ -108,7 +108,7 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 		}
 		if !d.IsRealTime {
 			message := fmt.Errorf("store min resolved ts not enabled, addr: %s", addr)
-			logutil.BgLogger().Error(message.Error())
+			logutil.BgLogger().Debug(message.Error())
 			return 0, errors.Trace(message)
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {

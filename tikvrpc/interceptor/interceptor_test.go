@@ -26,9 +26,8 @@ func TestInterceptor(t *testing.T) {
 	manager := MockInterceptorManager{}
 	it := chain.
 		Link(manager.CreateMockInterceptor("INTERCEPTOR-1")).
-		Link(manager.CreateMockInterceptor("INTERCEPTOR-2")).
-		Build()
-	_, _ = it(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+		Link(manager.CreateMockInterceptor("INTERCEPTOR-2"))
+	_, _ = it.Wrap(func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 		return nil, nil
 	})("", nil)
 	assert.Equal(t, 2, manager.BeginCount())

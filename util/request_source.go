@@ -27,11 +27,24 @@ const (
 	InternalTxnMeta = InternalTxnOthers
 )
 
+// explicit source types.
+const (
+	ExplicitTypeEmpty      = ""
+	ExplicitTypeDefault    = "default"
+	ExplicitTypeLightning  = "lightning"
+	ExplicitTypeBR         = "br"
+	ExplicitTypeDumpling   = "dumpling"
+	ExplicitTypeBackground = "background"
+)
+
+// ExplicitTypeList is the list of all explicit source types.
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+
 const (
 	// InternalRequest is the scope of internal queries
-	InternalRequest = "internal_"
+	InternalRequest = "internal"
 	// ExternalRequest is the scope of external queries
-	ExternalRequest = "external_"
+	ExternalRequest = "external"
 	// SourceUnknown keeps same with the default value(empty string)
 	SourceUnknown = "unknown"
 )
@@ -40,6 +53,9 @@ const (
 type RequestSource struct {
 	RequestSourceInternal bool
 	RequestSourceType     string
+	// ExplicitRequestSourceType is a type that is set from the session variable and may be specified by the client or users.
+	// It is a complement to the RequestSourceType and provides additional information about how a request was initiated.
+	ExplicitRequestSourceType string
 }
 
 // SetRequestSourceInternal sets the scope of the request source.
@@ -50,6 +66,11 @@ func (r *RequestSource) SetRequestSourceInternal(internal bool) {
 // SetRequestSourceType sets the type of the request source.
 func (r *RequestSource) SetRequestSourceType(tp string) {
 	r.RequestSourceType = tp
+}
+
+// SetExplicitRequestSourceType sets the type of the request source.
+func (r *RequestSource) SetExplicitRequestSourceType(tp string) {
+	r.ExplicitRequestSourceType = tp
 }
 
 // WithInternalSourceType create context with internal source.
@@ -71,15 +92,25 @@ func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
-	// if r.RequestSourceType is not set, it's mostly possible that r.RequestSourceInternal is not set
-	// to avoid internal requests be marked as external(default value), return unknown source here.
-	if r == nil || r.RequestSourceType == "" {
-		return SourceUnknown
+	source := SourceUnknown
+	explicitSourceType := ExplicitTypeDefault
+	origin := ExternalRequest
+	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
+		// if r.RequestSourceType and r.ExplicitRequestSourceType are not set, it's mostly possible that r.RequestSourceInternal is not set
+		// to avoid internal requests be marked as external(default value), return unknown source here.
+		return strings.Join([]string{source, explicitSourceType}, "_")
+	}
+
+	if len(r.RequestSourceType) > 0 {
+		source = r.RequestSourceType
+	}
+	if len(r.ExplicitRequestSourceType) > 0 {
+		explicitSourceType = r.ExplicitRequestSourceType
 	}
 	if r.RequestSourceInternal {
-		return InternalRequest + r.RequestSourceType
+		origin = InternalRequest
 	}
-	return ExternalRequest + r.RequestSourceType
+	return strings.Join([]string{origin, source, explicitSourceType}, "_")
 }
 
 // RequestSourceFromCtx extract source from passed context.

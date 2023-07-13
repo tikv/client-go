@@ -1317,7 +1317,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 		return
 	}
 	if len(regions) == 0 {
-		err = errors.New("PD returned no region")
+		err = errors.Errorf("PD returned no region, startKey: %q, endKey: %q", util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey))
 		return
 	}
 
@@ -1722,12 +1722,12 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %q, err: %v", util.HexRegionKeyStr(startKey), limit, err)
+				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %d, err: %v", util.HexRegionKeyStr(startKey), limit, err)
 			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
-				"scanRegion from PD failed, startKey: %q, limit: %q, err: %v",
-				startKey,
+				"scanRegion from PD failed, startKey: %q, limit: %d, err: %v",
+				util.HexRegionKeyStr(startKey),
 				limit,
 				err)
 			continue
@@ -1736,7 +1736,10 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		metrics.RegionCacheCounterWithScanRegionsOK.Inc()
 
 		if len(regionsInfo) == 0 {
-			return nil, errors.New("PD returned no region")
+			return nil, errors.Errorf(
+				"PD returned no region, startKey: %q, endKey: %q, limit: %d",
+				util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey), limit,
+			)
 		}
 		regions := make([]*Region, 0, len(regionsInfo))
 		for _, r := range regionsInfo {

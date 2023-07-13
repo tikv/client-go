@@ -903,11 +903,12 @@ func (s *KVSnapshot) SetRPCInterceptor(it interceptor.RPCInterceptor) {
 }
 
 // AddRPCInterceptor adds an interceptor, the order of addition is the order of execution.
+// the chained interceptors will be dedupcated by its name.
 func (s *KVSnapshot) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.interceptor == nil {
-		s.SetRPCInterceptor(it)
+		s.mu.interceptor = it
 		return
 	}
 	s.mu.interceptor = interceptor.ChainRPCInterceptors(s.mu.interceptor, it)

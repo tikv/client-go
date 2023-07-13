@@ -541,10 +541,13 @@ func (c *batchCommandsClient) failPendingRequests(err error) {
 }
 
 func (c *batchCommandsClient) waitConnReady() (err error) {
-	if c.conn.GetState() == connectivity.Ready {
+	state := c.conn.GetState()
+	if state == connectivity.Ready {
 		return
 	}
-	if c.conn.GetState() == connectivity.Idle {
+	// Trigger idle connection to reconnection
+	// Put it outside loop to avoid unnecessary reconnecting.
+	if state == connectivity.Idle {
 		c.conn.Connect()
 	}
 	start := time.Now()
