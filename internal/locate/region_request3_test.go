@@ -1067,7 +1067,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 		// Return `mismatch peer id` when accesses the leader.
 		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
 			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
-				Message: "mismatch peer id 1 != 2",
+				Message: `"[components/raftstore/src/store/util.rs:428]: mismatch peer id 1 != 2"`,
 			}}}, nil
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
