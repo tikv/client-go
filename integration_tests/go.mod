@@ -6,7 +6,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230705080816-a48f4fe282a2
+	github.com/pingcap/kvproto v0.0.0-20230713060620-89756bd21be1
 	github.com/pingcap/tidb v1.1.0-beta.0.20230619015310-8b1006f1af04
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
@@ -95,7 +95,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
 	golang.org/x/crypto v0.9.0 // indirect
-	golang.org/x/exp v0.0.0-20230519143937-03e91628a987 // indirect
+	golang.org/x/exp v0.0.0-20230711005742-c3f37128e5a4 // indirect
 	golang.org/x/net v0.10.0 // indirect
 	golang.org/x/sync v0.2.0 // indirect
 	golang.org/x/sys v0.8.0 // indirect
@@ -113,5 +113,5 @@ require (
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	github.com/tikv/client-go/v2 => ../
-	github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230707063511-5a34eab12c57
+	github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230713121421-43405155a8b1
 )

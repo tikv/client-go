@@ -34,13 +34,12 @@ type RequestInfo struct {
 	writeBytes    int64
 	storeID       uint64
 	replicaNumber int64
-	requestSource string
 }
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
 func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
-		return &RequestInfo{writeBytes: -1, requestSource: req.RequestSource}
+		return &RequestInfo{writeBytes: -1}
 	}
 
 	var writeBytes int64
@@ -58,8 +57,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			writeBytes += int64(len(k))
 		}
 	}
-	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId,
-		replicaNumber: req.ReplicaNumber, requestSource: req.RequestSource}
+	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId, replicaNumber: req.ReplicaNumber}
 }
 
 // IsWrite returns whether the request is a write request.
@@ -79,10 +77,6 @@ func (req *RequestInfo) ReplicaNumber() int64 {
 
 func (req *RequestInfo) StoreID() uint64 {
 	return req.storeID
-}
-
-func (req *RequestInfo) RequestSource() string {
-	return req.requestSource
 }
 
 // ResponseInfo contains information about a response that is able to calculate the RU cost
