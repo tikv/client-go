@@ -101,7 +101,9 @@ var (
 	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 	TiKVPreferLeaderFlowsGauge               *prometheus.GaugeVec
-	TiKVStaleReadSizeSummary                 *prometheus.SummaryVec
+	TiKVStaleReadCounter                     *prometheus.CounterVec
+	TiKVStaleReadReqCounter                  *prometheus.CounterVec
+	TiKVStaleReadBytes                       *prometheus.CounterVec
 )
 
 // Label constants.
@@ -640,12 +642,28 @@ func initMetrics(namespace, subsystem string) {
 			Help:      "Counter of flows under PreferLeader mode.",
 		}, []string{LblType, LblStore})
 
-	TiKVStaleReadSizeSummary = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
+	TiKVStaleReadCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_read_counter",
+			Help:      "Counter of stale read hit/miss",
+		}, []string{LblResult})
+
+	TiKVStaleReadReqCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_read_req_counter",
+			Help:      "Counter of stale read requests",
+		}, []string{LblType})
+
+	TiKVStaleReadBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "stale_read_bytes",
-			Help:      "Size of stale read.",
+			Help:      "Counter of stale read requests bytes",
 		}, []string{LblResult, LblDirection})
 
 	initShortcuts()
@@ -723,7 +741,9 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVPreferLeaderFlowsGauge)
-	prometheus.MustRegister(TiKVStaleReadSizeSummary)
+	prometheus.MustRegister(TiKVStaleReadCounter)
+	prometheus.MustRegister(TiKVStaleReadReqCounter)
+	prometheus.MustRegister(TiKVStaleReadBytes)
 }
 
 // readCounter reads the value of a prometheus.Counter.
