@@ -51,7 +51,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 		}
 	}
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
-		return &RequestInfo{writeBytes: -1, bypass: bypass}
+		return &RequestInfo{writeBytes: -1, storeID: req.Context.Peer.StoreId, bypass: bypass}
 	}
 
 	var writeBytes int64
@@ -80,7 +80,10 @@ func (req *RequestInfo) IsWrite() bool {
 // WriteBytes returns the actual write size of the request,
 // -1 will be returned if it's not a write request.
 func (req *RequestInfo) WriteBytes() uint64 {
-	return uint64(req.writeBytes)
+	if req.writeBytes > 0 {
+		return uint64(req.writeBytes)
+	}
+	return 0
 }
 
 func (req *RequestInfo) ReplicaNumber() int64 {
