@@ -43,19 +43,19 @@ func TestGetRequestSource(t *testing.T) {
 
 	// Test nil pointer
 	rs = nil
-	expected = "unknown_default"
+	expected = "unknown"
 	actual = rs.GetRequestSource()
 	assert.Equal(t, expected, actual)
 
 	// Test empty RequestSourceType and ExplicitRequestSourceType
 	rs = &RequestSource{}
-	expected = "unknown_default"
+	expected = "unknown"
 	actual = rs.GetRequestSource()
 	assert.Equal(t, expected, actual)
 
 	// Test empty ExplicitRequestSourceType
 	rs.RequestSourceType = "test"
-	expected = "external_test_default"
+	expected = "external_test"
 	actual = rs.GetRequestSource()
 	assert.Equal(t, expected, actual)
 
