@@ -259,6 +259,7 @@ type replicaSelector struct {
 	region      *Region
 	regionStore *regionStore
 	replicas    []*replica
+	labels      []*metapb.StoreLabel
 	state       selectorState
 	// replicas[targetIdx] is the replica handling the request this time
 	targetIdx AccessIndex
@@ -532,12 +533,12 @@ func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
 type accessFollower struct {
 	stateBase
 	// If tryLeader is true, the request can also be sent to the leader when !leader.isSlow()
-	tryLeader         bool
-	isGlobalStaleRead bool
-	option            storeSelectorOp
-	leaderIdx         AccessIndex
-	lastIdx           AccessIndex
-	learnerOnly       bool
+	tryLeader   bool
+	isStaleRead bool
+	option      storeSelectorOp
+	leaderIdx   AccessIndex
+	lastIdx     AccessIndex
+	learnerOnly bool
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -558,12 +559,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			}
 		}
 	} else {
-		// Stale Read request will retry the leader or next peer on error,
-		// if txnScope is global, we will only retry the leader by using the WithLeaderOnly option,
-		// if txnScope is local, we will retry both other peers and the leader by the strategy of replicaSelector.
-		if state.isGlobalStaleRead {
+		// Stale Read request will retry the leader only by using the WithLeaderOnly option.
+		if state.isStaleRead {
 			WithLeaderOnly()(&state.option)
-			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read
+			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read.
 			resetStaleRead = true
 		}
 		state.lastIdx++
@@ -749,6 +748,10 @@ func newReplicaSelector(
 		)
 	}
 
+	option := storeSelectorOp{}
+	for _, op := range opts {
+		op(&option)
+	}
 	var state selectorState
 	if !req.ReplicaReadType.IsFollowerRead() {
 		if regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0 {
@@ -757,21 +760,17 @@ func newReplicaSelector(
 			state = &accessKnownLeader{leaderIdx: regionStore.workTiKVIdx}
 		}
 	} else {
-		option := storeSelectorOp{}
-		for _, op := range opts {
-			op(&option)
-		}
 		if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
 			WithPerferLeader()(&option)
 		}
 		tryLeader := req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader
 		state = &accessFollower{
-			tryLeader:         tryLeader,
-			isGlobalStaleRead: req.IsGlobalStaleRead(),
-			option:            option,
-			leaderIdx:         regionStore.workTiKVIdx,
-			lastIdx:           -1,
-			learnerOnly:       req.ReplicaReadType == kv.ReplicaReadLearner,
+			tryLeader:   tryLeader,
+			isStaleRead: req.StaleRead,
+			option:      option,
+			leaderIdx:   regionStore.workTiKVIdx,
+			lastIdx:     -1,
+			learnerOnly: req.ReplicaReadType == kv.ReplicaReadLearner,
 		}
 	}
 
@@ -780,6 +779,7 @@ func newReplicaSelector(
 		cachedRegion,
 		regionStore,
 		replicas,
+		option.labels,
 		state,
 		-1,
 		-1,
@@ -1158,9 +1158,14 @@ func (s *RegionRequestSender) SendReqCtx(
 
 	var staleReadCollector *staleReadMetricsCollector
 	if req.StaleRead {
-		staleReadCollector = &staleReadMetricsCollector{hit: true}
-		staleReadCollector.onReq(req)
-		defer staleReadCollector.collect()
+		staleReadCollector = &staleReadMetricsCollector{}
+		defer func() {
+			if retryTimes == 0 {
+				metrics.StaleReadHitCounter.Add(1)
+			} else {
+				metrics.StaleReadMissCounter.Add(1)
+			}
+		}()
 	}
 
 	for {
@@ -1172,9 +1177,6 @@ func (s *RegionRequestSender) SendReqCtx(
 					zap.Uint64("region", regionID.GetID()),
 					zap.Int("times", retryTimes),
 				)
-			}
-			if req.StaleRead && staleReadCollector != nil {
-				staleReadCollector.hit = false
 			}
 		}
 
@@ -1204,6 +1206,14 @@ func (s *RegionRequestSender) SendReqCtx(
 			)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
+		}
+
+		var isLocalTraffic bool
+		if staleReadCollector != nil && s.replicaSelector != nil {
+			if target := s.replicaSelector.targetReplica(); target != nil {
+				isLocalTraffic = target.store.IsLabelsMatch(s.replicaSelector.labels)
+				staleReadCollector.onReq(req, isLocalTraffic)
+			}
 		}
 
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
@@ -1264,7 +1274,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 		if staleReadCollector != nil {
-			staleReadCollector.onResp(resp)
+			staleReadCollector.onResp(req.Type, resp, isLocalTraffic)
 		}
 		return resp, rpcCtx, retryTimes, nil
 	}
@@ -1948,35 +1958,36 @@ func (s *RegionRequestSender) onRegionError(
 }
 
 type staleReadMetricsCollector struct {
-	tp  tikvrpc.CmdType
-	hit bool
-	out int
-	in  int
 }
 
-func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
+func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request, isLocalTraffic bool) {
 	size := 0
 	switch req.Type {
 	case tikvrpc.CmdGet:
-		size += req.Get().Size()
+		size = req.Get().Size()
 	case tikvrpc.CmdBatchGet:
-		size += req.BatchGet().Size()
+		size = req.BatchGet().Size()
 	case tikvrpc.CmdScan:
-		size += req.Scan().Size()
+		size = req.Scan().Size()
 	case tikvrpc.CmdCop:
-		size += req.Cop().Size()
+		size = req.Cop().Size()
 	default:
 		// ignore non-read requests
 		return
 	}
-	s.tp = req.Type
 	size += req.Context.Size()
-	s.out = size
+	if isLocalTraffic {
+		metrics.StaleReadLocalOutBytes.Add(float64(size))
+		metrics.StaleReadReqLocalCounter.Add(1)
+	} else {
+		metrics.StaleReadRemoteOutBytes.Add(float64(size))
+		metrics.StaleReadReqCrossZoneCounter.Add(1)
+	}
 }
 
-func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
+func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Response, isLocalTraffic bool) {
 	size := 0
-	switch s.tp {
+	switch tp {
 	case tikvrpc.CmdGet:
 		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
 	case tikvrpc.CmdBatchGet:
@@ -1986,19 +1997,12 @@ func (s *staleReadMetricsCollector) onResp(resp *tikvrpc.Response) {
 	case tikvrpc.CmdCop:
 		size += resp.Resp.(*coprocessor.Response).Size()
 	default:
-		// unreachable
+		// ignore non-read requests
 		return
 	}
-	s.in = size
-}
-
-func (s *staleReadMetricsCollector) collect() {
-	in, out := metrics.StaleReadHitInTraffic, metrics.StaleReadHitOutTraffic
-	if !s.hit {
-		in, out = metrics.StaleReadMissInTraffic, metrics.StaleReadMissOutTraffic
-	}
-	if s.in > 0 && s.out > 0 {
-		in.Observe(float64(s.in))
-		out.Observe(float64(s.out))
+	if isLocalTraffic {
+		metrics.StaleReadLocalInBytes.Add(float64(size))
+	} else {
+		metrics.StaleReadRemoteInBytes.Add(float64(size))
 	}
 }

@@ -71,8 +71,8 @@ type uSnapshot interface {
 	// IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 	// The returned iterator will iterate from greater key to smaller key.
 	// If k is nil, the returned iterator will be positioned at the last key.
-	// TODO: Add lower bound limit
-	IterReverse(k []byte) (Iterator, error)
+	// It yields only keys that >= lowerBound. If lowerBound is nil, it means the lowerBound is unbounded.
+	IterReverse(k, lowerBound []byte) (Iterator, error)
 }
 
 // KVUnionStore is an in-memory Store which contains a buffer for write and a
@@ -124,12 +124,12 @@ func (us *KVUnionStore) Iter(k, upperBound []byte) (Iterator, error) {
 }
 
 // IterReverse implements the Retriever interface.
-func (us *KVUnionStore) IterReverse(k []byte) (Iterator, error) {
-	bufferIt, err := us.memBuffer.IterReverse(k)
+func (us *KVUnionStore) IterReverse(k, lowerBound []byte) (Iterator, error) {
+	bufferIt, err := us.memBuffer.IterReverse(k, lowerBound)
 	if err != nil {
 		return nil, err
 	}
-	retrieverIt, err := us.snapshot.IterReverse(k)
+	retrieverIt, err := us.snapshot.IterReverse(k, lowerBound)
 	if err != nil {
 		return nil, err
 	}
