@@ -550,7 +550,8 @@ func (c *Client) Scan(ctx context.Context, startKey, endKey []byte, limit int, o
 	return
 }
 
-// ReverseScan queries continuous kv pairs in range [endKey, startKey), up to limit pairs.
+// ReverseScan queries continuous kv pairs in range [endKey, startKey),
+// from startKey(upperBound) to endKey(lowerBound), up to limit pairs.
 // The returned keys are in reversed lexicographical order.
 // If endKey is empty, it means unbounded.
 // If you want to include the startKey or exclude the endKey, push a '\0' to the key. For example, to scan

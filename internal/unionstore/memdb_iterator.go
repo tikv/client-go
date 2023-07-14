@@ -67,10 +67,11 @@ func (db *MemDB) Iter(k []byte, upperBound []byte) (Iterator, error) {
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
 // The returned iterator will iterate from greater key to smaller key.
 // If k is nil, the returned iterator will be positioned at the last key.
-// TODO: Add lower bound limit
-func (db *MemDB) IterReverse(k []byte) (Iterator, error) {
+// It yields only keys that >= lowerBound. If lowerBound is nil, it means the lowerBound is unbounded.
+func (db *MemDB) IterReverse(k []byte, lowerBound []byte) (Iterator, error) {
 	i := &MemdbIterator{
 		db:      db,
+		start:   lowerBound,
 		end:     k,
 		reverse: true,
 	}
@@ -128,7 +129,7 @@ func (i *MemdbIterator) Valid() bool {
 	if !i.reverse {
 		return !i.curr.isNull() && (i.end == nil || bytes.Compare(i.Key(), i.end) < 0)
 	}
-	return !i.curr.isNull()
+	return !i.curr.isNull() && (i.start == nil || bytes.Compare(i.Key(), i.start) >= 0)
 }
 
 // Flags returns flags belong to current iterator.

@@ -247,8 +247,8 @@ func (txn *KVTxn) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (txn *KVTxn) IterReverse(k []byte) (unionstore.Iterator, error) {
-	return txn.us.IterReverse(k)
+func (txn *KVTxn) IterReverse(k, lowerBound []byte) (unionstore.Iterator, error) {
+	return txn.us.IterReverse(k, lowerBound)
 }
 
 // Delete removes the entry for key k from kv store.
@@ -1466,4 +1466,9 @@ func (txn *KVTxn) SetRequestSourceInternal(internal bool) {
 // SetRequestSourceType sets the type of the request source.
 func (txn *KVTxn) SetRequestSourceType(tp string) {
 	txn.RequestSource.SetRequestSourceType(tp)
+}
+
+// SetExplicitRequestSourceType sets the explicit type of the request source.
+func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
+	txn.RequestSource.SetExplicitRequestSourceType(tp)
 }
