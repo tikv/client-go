@@ -43,6 +43,8 @@ var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeDefault, Explicit
 const (
 	// InternalRequest is the scope of internal queries
 	InternalRequest = "internal"
+	// InternalRequestPrefix is the prefix of internal queries
+	InternalRequestPrefix = "internal_"
 	// ExternalRequest is the scope of external queries
 	ExternalRequest = "external"
 	// SourceUnknown keeps same with the default value(empty string)
