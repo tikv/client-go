@@ -884,3 +884,48 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		}
 	}
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderRegionError() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		// Return `mismatch peer id` when accesses the leader.
+		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				Message: `"[components/raftstore/src/store/util.rs:428]: mismatch peer id 1 != 2"`,
+			}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+			DataIsNotReady: &errorpb.DataIsNotReady{},
+		}}}, nil
+	}}
+
+	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	s.True(region.isValid())
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+	req.EnableStaleRead()
+	req.ReplicaReadType = kv.ReplicaReadFollower
+
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	bo := retry.NewBackoffer(ctx, -1)
+	s.Nil(err)
+	resp, err := s.regionRequestSender.SendReq(bo, req, regionLoc.Region, time.Second)
+	s.Nil(err)
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Equal(regionErrorToLabel(regionErr), "mismatch_peer_id")
+	// return non-epoch-not-match region error and the upper layer can auto retry.
+	s.Nil(regionErr.GetEpochNotMatch())
+	// after region error returned, the region should be invalidated.
+	s.False(region.isValid())
+}
