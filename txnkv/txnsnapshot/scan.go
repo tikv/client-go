@@ -146,7 +146,7 @@ func (s *Scanner) Next() error {
 		}
 
 		current := s.cache[s.idx]
-		if (!s.reverse && (len(s.endKey) > 0 && kv.CmpKey(current.Key, s.endKey) >= 0)) ||
+		if (!s.reverse && len(s.endKey) > 0 && kv.CmpKey(current.Key, s.endKey) >= 0) ||
 			(s.reverse && len(s.nextStartKey) > 0 && kv.CmpKey(current.Key, s.nextStartKey) < 0) {
 			s.eof = true
 			s.Close()

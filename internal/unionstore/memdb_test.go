@@ -98,14 +98,34 @@ func TestIterator(t *testing.T) {
 	}
 	assert.Equal(i, cnt)
 
-	i--
-	for it, _ := db.IterReverse(nil); it.Valid(); it.Next() {
-		binary.BigEndian.PutUint32(buf[:], uint32(i))
+	for it, _ := db.IterReverse(nil, nil); it.Valid(); it.Next() {
+		binary.BigEndian.PutUint32(buf[:], uint32(i-1))
 		assert.Equal(it.Key(), buf[:])
 		assert.Equal(it.Value(), buf[:])
 		i--
 	}
-	assert.Equal(i, -1)
+	assert.Equal(i, 0)
+
+	var upperBoundBytes, lowerBoundBytes [4]byte
+	bound := 400
+	binary.BigEndian.PutUint32(upperBoundBytes[:], uint32(bound))
+	for it, _ := db.Iter(nil, upperBoundBytes[:]); it.Valid(); it.Next() {
+		binary.BigEndian.PutUint32(buf[:], uint32(i))
+		assert.Equal(it.Key(), buf[:])
+		assert.Equal(it.Value(), buf[:])
+		i++
+	}
+	assert.Equal(i, bound)
+
+	i = cnt
+	binary.BigEndian.PutUint32(lowerBoundBytes[:], uint32(bound))
+	for it, _ := db.IterReverse(nil, lowerBoundBytes[:]); it.Valid(); it.Next() {
+		binary.BigEndian.PutUint32(buf[:], uint32(i-1))
+		assert.Equal(it.Key(), buf[:])
+		assert.Equal(it.Value(), buf[:])
+		i--
+	}
+	assert.Equal(i, bound)
 }
 
 func TestDiscard(t *testing.T) {
@@ -139,7 +159,7 @@ func TestDiscard(t *testing.T) {
 	assert.Equal(i, cnt)
 
 	i--
-	for it, _ := db.IterReverse(nil); it.Valid(); it.Next() {
+	for it, _ := db.IterReverse(nil, nil); it.Valid(); it.Next() {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
 		assert.Equal(it.Key(), buf[:])
 		assert.Equal(it.Value(), buf[:])
@@ -197,7 +217,7 @@ func TestFlushOverwrite(t *testing.T) {
 	assert.Equal(i, cnt)
 
 	i--
-	for it, _ := db.IterReverse(nil); it.Valid(); it.Next() {
+	for it, _ := db.IterReverse(nil, nil); it.Valid(); it.Next() {
 		binary.BigEndian.PutUint32(kbuf[:], uint32(i))
 		binary.BigEndian.PutUint32(vbuf[:], uint32(i+1))
 		assert.Equal(it.Key(), kbuf[:])
@@ -279,7 +299,7 @@ func TestNestedSandbox(t *testing.T) {
 	assert.Equal(i, 200)
 
 	i--
-	for it, _ := db.IterReverse(nil); it.Valid(); it.Next() {
+	for it, _ := db.IterReverse(nil, nil); it.Valid(); it.Next() {
 		binary.BigEndian.PutUint32(kbuf[:], uint32(i))
 		binary.BigEndian.PutUint32(vbuf[:], uint32(i))
 		if i < 100 {
@@ -336,7 +356,7 @@ func TestOverwrite(t *testing.T) {
 	assert.Equal(i, cnt)
 
 	i--
-	for it, _ := db.IterReverse(nil); it.Valid(); it.Next() {
+	for it, _ := db.IterReverse(nil, nil); it.Valid(); it.Next() {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
 		assert.Equal(it.Key(), buf[:])
 		v := binary.BigEndian.Uint32(it.Value())
@@ -569,7 +589,7 @@ func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
 		assert.Equal(it.Value(), it2.Value())
 
 		if prevKey != nil {
-			it, _ = p1.IterReverse(it2.Key())
+			it, _ = p1.IterReverse(it2.Key(), nil)
 			assert.Equal(it.Key(), prevKey)
 			assert.Equal(it.Value(), prevVal)
 		}
@@ -579,7 +599,7 @@ func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
 		prevVal = it2.Value()
 	}
 
-	it1, _ = p1.IterReverse(nil)
+	it1, _ = p1.IterReverse(nil, nil)
 	for it2.Last(); it2.Valid(); it2.Prev() {
 		assert.Equal(it1.Key(), it2.Key())
 		assert.Equal(it1.Value(), it2.Value())
