@@ -335,6 +335,10 @@ func (c *pdClient) UpdateKeyspaceState(ctx context.Context, id uint32, state key
 	return nil, nil
 }
 
+func (c *pdClient) GetAllKeyspaces(ctx context.Context, startID uint32, limit uint32) ([]*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
 func (c *pdClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, error) {
 	return nil, nil
 }
