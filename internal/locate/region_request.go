@@ -566,8 +566,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			if selector.region != nil {
 				regionID = selector.region.GetID()
 			}
-			for _, label := range state.option.labels{
-				labels = append(labels, label.Key + ": " + label.Value)
+			for _, label := range state.option.labels {
+				labels = append(labels, label.Key+": "+label.Value)
 			}
 			for _, replica := range selector.replicas {
 				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, attempts: %v",
@@ -583,6 +583,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Bool("leaderOnly", state.option.leaderOnly),
 				zap.String("req-labels", strings.Join(labels, ",")),
+				zap.String("replica-status", strings.Join(replicaStatus, ";")),
 			)
 		}
 		if leaderInvalid {
@@ -1090,27 +1091,29 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 }
 
-func (s *RegionRequestSender) logReqError(ctx context.Context, msg string,regionID RegionVerID, tryTimes int, req *tikvrpc.Request, lastRegionErr string) {
-	var replicaSelectorState string
-	switch s.replicaSelector.state.(type) {
-	case *accessKnownLeader:
-		replicaSelectorState = "accessKnownLeader"
-	case *accessFollower:
-		replicaSelectorState = "accessFollower"
-	case *accessByKnownProxy:
-		replicaSelectorState = "accessByKnownProxy"
-	case *tryFollower:
-		replicaSelectorState = "tryFollower"
-	case *tryNewProxy:
-		replicaSelectorState = "tryNewProxy"
-	case *invalidLeader:
-		replicaSelectorState = "invalidLeader"
-	case *invalidStore:
-		replicaSelectorState = "invalidStore"
-	case *stateBase:
-		replicaSelectorState = "stateBase"
-	case nil:
-		replicaSelectorState = "nil"
+func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, lastRegionErr string) {
+	replicaSelectorState := "nil"
+	if s.replicaSelector != nil {
+		switch s.replicaSelector.state.(type) {
+		case *accessKnownLeader:
+			replicaSelectorState = "accessKnownLeader"
+		case *accessFollower:
+			replicaSelectorState = "accessFollower"
+		case *accessByKnownProxy:
+			replicaSelectorState = "accessByKnownProxy"
+		case *tryFollower:
+			replicaSelectorState = "tryFollower"
+		case *tryNewProxy:
+			replicaSelectorState = "tryNewProxy"
+		case *invalidLeader:
+			replicaSelectorState = "invalidLeader"
+		case *invalidStore:
+			replicaSelectorState = "invalidStore"
+		case *stateBase:
+			replicaSelectorState = "stateBase"
+		case nil:
+			replicaSelectorState = "nil"
+		}
 	}
 	var replicaStatus []string
 	if s.replicaSelector != nil {
@@ -1125,7 +1128,7 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string,region
 	var cachedRegionInfo string
 	cachedRegion := s.regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion != nil {
-		cachedRegionInfo = fmt.Sprintf("region-id: %v, conf-ver: %v, ver: %v, ,isValid: %v, checkNeedReload: %v",
+		cachedRegionInfo = fmt.Sprintf("region-id: %v, conf-ver: %v, ver: %v, isValid: %v, checkNeedReload: %v",
 			regionID.GetID(),
 			regionID.GetConfVer(),
 			regionID.GetVer(),
