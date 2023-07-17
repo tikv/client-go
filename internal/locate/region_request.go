@@ -1115,6 +1115,28 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 			replicaSelectorState = "nil"
 		}
 	}
+	txnTs := uint64(0)
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		r := req.Get()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdBatchGet:
+		r := req.BatchGet()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdCop:
+		r := req.Cop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdBatchCop:
+		r := req.BatchCop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdPrewrite:
+		r := req.Prewrite()
+		txnTs = r.StartVersion
+	case tikvrpc.CmdScan:
+		r := req.Scan()
+		txnTs = r.GetVersion()
+	}
+
 	var replicaStatus []string
 	if s.replicaSelector != nil {
 		for _, replica := range s.replicaSelector.replicas {
@@ -1137,6 +1159,7 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 		)
 	}
 	logutil.Logger(ctx).Info(msg,
+		zap.Uint64("txn-ts", txnTs),
 		zap.Uint64("region-id", regionID.GetID()),
 		zap.String("region-info", cachedRegionInfo),
 		zap.Int("try-times", tryTimes),
