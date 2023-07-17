@@ -413,6 +413,11 @@ func (s *mockTikvGrpcServer) EstablishMPPConnection(*mpp.EstablishMPPConnectionR
 func (s *mockTikvGrpcServer) CancelMPPTask(context.Context, *mpp.CancelTaskRequest) (*mpp.CancelTaskResponse, error) {
 	return nil, errors.New("unreachable")
 }
+
+func (s *mockTikvGrpcServer) ReportMPPTaskStatus(ctx context.Context, request *mpp.ReportTaskStatusRequest) (*mpp.ReportTaskStatusResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) Raft(tikvpb.Tikv_RaftServer) error {
 	return errors.New("unreachable")
 }
