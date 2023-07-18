@@ -95,3 +95,16 @@ func TestBackoffDeepCopy(t *testing.T) {
 		assert.ErrorIs(t, err, BoMaxDataNotReady.err)
 	}
 }
+
+func TestBackoffErrorLog(t *testing.T) {
+	var err error
+	b := NewBackofferWithVars(context.TODO(), 10000, nil)
+	for i:=0;i<1000;i++{
+		err = b.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
+		err = b.Backoff(BoRegionMiss, errors.New("region miss"))
+		err = b.Backoff(BoRegionScheduling, errors.New("region scheduling"))
+		if err != nil {
+			break
+		}
+	}
+}
