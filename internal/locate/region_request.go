@@ -1202,7 +1202,7 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 	totalBackOff := bo.GetTotalSleep()
 	backoffTimes := bo.GetBackoffTimes()
 	for k,v := range backoffTimes{
-		if len(backoffTimes) > 0{
+		if backoffDetail.Len() > 0{
 			backoffDetail.WriteString(", ")
 		}
 		backoffDetail.WriteString(k)
