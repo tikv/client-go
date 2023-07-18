@@ -35,6 +35,7 @@
 package locate
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand"
@@ -260,6 +261,7 @@ type replicaSelector struct {
 	targetIdx AccessIndex
 	// replicas[proxyIdx] is the store used to redirect requests this time
 	proxyIdx AccessIndex
+	reqTxnTs uint64
 }
 
 // selectorState is the interface of states of the replicaSelector.
@@ -570,11 +572,45 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
-		if len(state.option.labels) > 0 {
-			logutil.BgLogger().Warn("unable to find stores with given labels")
-		}
 		leader := selector.replicas[state.leaderIdx]
-		if leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1)) {
+		leaderInvalid := leader.isEpochStale() || leader.isExhausted(1)
+		if len(state.option.labels) > 0 {
+			var regionID uint64
+			var labels []string
+			var replicaStatus []string
+			if selector.region != nil {
+				regionID = selector.region.GetID()
+			}
+			for _, label := range state.option.labels {
+				labels = append(labels, label.Key+": "+label.Value)
+			}
+			allMismatch := true
+			for _, replica := range selector.replicas {
+				isLabelsMatch := replica.store.IsLabelsMatch(state.option.labels)
+				if isLabelsMatch {
+					allMismatch = false
+				}
+				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v",
+					replica.peer.GetId(),
+					replica.store.storeID,
+					replica.isEpochStale(),
+					isLabelsMatch,
+					replica.isExhausted(1),
+					replica.attempts))
+
+			}
+			logutil.BgLogger().Warn("unable to find stores with given labels",
+				zap.Uint64("txn-ts", selector.reqTxnTs),
+				zap.Uint64("region-id", regionID),
+				zap.Bool("all-replica-labels-mismatch", allMismatch),
+				zap.Uint64("leader-id", leader.peer.GetId()),
+				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Bool("leaderOnly", state.option.leaderOnly),
+				zap.String("req-labels", strings.Join(labels, ",")),
+				zap.String("replica-status", strings.Join(replicaStatus, ";")),
+			)
+		}
+		if leaderInvalid {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 			return nil, nil
@@ -665,6 +701,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		}
 	}
 
+	txnTs := getReqTxnTs(req)
 	return &replicaSelector{
 		regionCache,
 		cachedRegion,
@@ -674,6 +711,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		state,
 		-1,
 		-1,
+		txnTs,
 	}, nil
 }
 
@@ -1011,6 +1049,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
+	totalErrors := make(map[string]int)
 	for {
 		if tryTimes > 0 {
 			req.IsRetryRequest = true
@@ -1039,7 +1078,7 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
-			logutil.Logger(bo.GetCtx()).Debug("throwing pseudo region error due to region not found in cache", zap.Stringer("region", &regionID))
+			s.logReqError(bo, "throwing pseudo region error due to no replica available", regionID, tryTimes, req, totalErrors)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, err
 		}
@@ -1089,6 +1128,8 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, err
 		}
 		if regionErr != nil {
+			errStr := getRegionErrorString(regionErr)
+			totalErrors[errStr]++
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
 				return nil, nil, err
@@ -1097,6 +1138,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				tryTimes++
 				continue
 			}
+			s.logReqError(bo, "send req failed without retry", regionID, tryTimes, req, totalErrors)
 		} else {
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess()
@@ -1107,6 +1149,135 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 		return resp, rpcCtx, nil
 	}
+}
+
+func getRegionErrorString(regionErr *errorpb.Error) string {
+	if regionErr == nil {
+		return ""
+	}
+	errStr := regionErrorToLabel(regionErr)
+	if errStr == "unknown" {
+		if regionErr.Message != "" {
+			errStr = regionErr.Message
+		} else {
+			errStr = regionErr.String()
+		}
+	}
+	return errStr
+}
+
+func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, totalErrors map[string]int) {
+	var replicaStatus []string
+	replicaSelectorState := "nil"
+	cachedRegionInfo := "nil"
+	if s.replicaSelector != nil {
+		switch s.replicaSelector.state.(type) {
+		case *accessKnownLeader:
+			replicaSelectorState = "accessKnownLeader"
+		case *accessFollower:
+			replicaSelectorState = "accessFollower"
+		case *accessByKnownProxy:
+			replicaSelectorState = "accessByKnownProxy"
+		case *tryFollower:
+			replicaSelectorState = "tryFollower"
+		case *tryNewProxy:
+			replicaSelectorState = "tryNewProxy"
+		case *invalidLeader:
+			replicaSelectorState = "invalidLeader"
+		case *invalidStore:
+			replicaSelectorState = "invalidStore"
+		case *stateBase:
+			replicaSelectorState = "stateBase"
+		case nil:
+			replicaSelectorState = "nil"
+		}
+		for _, replica := range s.replicaSelector.replicas {
+			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v",
+				replica.peer.GetId(),
+				replica.store.storeID,
+				replica.isEpochStale(),
+				replica.attempts))
+		}
+		if s.replicaSelector.region != nil {
+			cachedRegionInfo = fmt.Sprintf("region-id: %v, conf-ver: %v, ver: %v, isValid: %v, checkNeedReload: %v",
+				regionID.GetID(),
+				regionID.GetConfVer(),
+				regionID.GetVer(),
+				s.replicaSelector.region.isValid(),
+				s.replicaSelector.region.checkNeedReload(),
+			)
+		}
+	}
+	txnTs := getReqTxnTs(req)
+
+	var totalErrorStr bytes.Buffer
+	for err, cnt := range totalErrors {
+		if totalErrorStr.Len() > 0 {
+			totalErrorStr.WriteString(", ")
+		}
+		totalErrorStr.WriteString(err)
+		totalErrorStr.WriteString(":")
+		totalErrorStr.WriteString(strconv.Itoa(cnt))
+	}
+	var replicaReadType string
+	switch req.ReplicaReadType {
+	case kv.ReplicaReadLeader:
+		replicaReadType = "ReplicaReadLeader"
+	case kv.ReplicaReadFollower:
+		replicaReadType = "ReplicaReadFollower"
+	case kv.ReplicaReadMixed:
+		replicaReadType = "ReplicaReadMixed"
+	default:
+		replicaReadType	= fmt.Sprintf("unknown(%d)", int(req.ReplicaReadType))
+	}
+	var backoffDetail bytes.Buffer
+	totalBackOff := bo.GetTotalSleep()
+	backoffTimes := bo.GetBackoffTimes()
+	for k,v := range backoffTimes{
+		if backoffDetail.Len() > 0{
+			backoffDetail.WriteString(", ")
+		}
+		backoffDetail.WriteString(k)
+		backoffDetail.WriteString(":")
+		backoffDetail.WriteString(strconv.Itoa(v))
+	}
+	logutil.Logger(bo.GetCtx()).Info(msg,
+		zap.Uint64("txn-ts", txnTs),
+		zap.String("region-info", cachedRegionInfo),
+		zap.Int("try-times", tryTimes),
+		zap.String("replica-read-type", replicaReadType),
+		zap.String("replica-selector-state", replicaSelectorState),
+		zap.String("total-region-errors", totalErrorStr.String()),
+		zap.String("replica-status", strings.Join(replicaStatus, ";")),
+		zap.Int("total-backoff-ms", totalBackOff),
+		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+		zap.String("backoff-detail", backoffDetail.String()),
+		)
+}
+
+func getReqTxnTs(req *tikvrpc.Request) uint64{
+	txnTs := uint64(0)
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		r := req.Get()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdBatchGet:
+		r := req.BatchGet()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdCop:
+		r := req.Cop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdBatchCop:
+		r := req.BatchCop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdPrewrite:
+		r := req.Prewrite()
+		txnTs = r.StartVersion
+	case tikvrpc.CmdScan:
+		r := req.Scan()
+		txnTs = r.GetVersion()
+	}
+	return txnTs
 }
 
 // RPCCancellerCtxKey is context key attach rpc send cancelFunc collector to ctx.
