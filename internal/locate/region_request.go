@@ -1184,12 +1184,22 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 		}
 		totalErrorStr += fmt.Sprintf("%s:%d", err.error, err.count)
 	}
+	var replicaReadType string
+	switch req.ReplicaReadType {
+	case kv.ReplicaReadLeader:
+		replicaReadType = "ReplicaReadLeader"
+	case kv.ReplicaReadFollower:
+		replicaReadType = "ReplicaReadFollower"
+	case kv.ReplicaReadMixed:
+		replicaReadType = "ReplicaReadMixed"
+	default:
+		replicaReadType	= fmt.Sprintf("unknown(%d)", int(req.ReplicaReadType))
+	}
 	logutil.Logger(ctx).Info(msg,
 		zap.Uint64("txn-ts", txnTs),
-		zap.Uint64("region-id", regionID.GetID()),
 		zap.String("region-info", cachedRegionInfo),
 		zap.Int("try-times", tryTimes),
-		zap.Int("replica-read-type", int(req.ReplicaReadType)),
+		zap.String("replica-read-type", replicaReadType),
 		zap.String("replica-selector-state", replicaSelectorState),
 		zap.String("total-region-errors", totalErrorStr),
 		zap.String("replica-status", strings.Join(replicaStatus, ";")))
