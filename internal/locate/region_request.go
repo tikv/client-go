@@ -1121,7 +1121,9 @@ func getRegionErrorString(regionErr *errorpb.Error) string {
 }
 
 func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, totalErrors map[string]int) {
+	var replicaStatus []string
 	replicaSelectorState := "nil"
+	cachedRegionInfo := "nil"
 	if s.replicaSelector != nil {
 		switch s.replicaSelector.state.(type) {
 		case *accessKnownLeader:
@@ -1143,11 +1145,6 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 		case nil:
 			replicaSelectorState = "nil"
 		}
-	}
-	txnTs := getReqTxnTs(req)
-
-	var replicaStatus []string
-	if s.replicaSelector != nil {
 		for _, replica := range s.replicaSelector.replicas {
 			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v",
 				replica.peer.GetId(),
@@ -1155,20 +1152,18 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 				replica.isEpochStale(),
 				replica.attempts))
 		}
+		if s.replicaSelector.region != nil {
+			cachedRegionInfo = fmt.Sprintf("region-id: %v, conf-ver: %v, ver: %v, isValid: %v, checkNeedReload: %v",
+				regionID.GetID(),
+				regionID.GetConfVer(),
+				regionID.GetVer(),
+				s.replicaSelector.region.isValid(),
+				s.replicaSelector.region.checkNeedReload(),
+			)
+		}
 	}
-	var cachedRegionInfo string
-	cachedRegion := s.regionCache.GetCachedRegionWithRLock(regionID)
-	if cachedRegion != nil {
-		cachedRegionInfo = fmt.Sprintf("region-id: %v, conf-ver: %v, ver: %v, isValid: %v, checkNeedReload: %v",
-			regionID.GetID(),
-			regionID.GetConfVer(),
-			regionID.GetVer(),
-			cachedRegion.isValid(),
-			cachedRegion.checkNeedReload(),
-		)
-	}else{
-		cachedRegionInfo = "nil"
-	}
+	txnTs := getReqTxnTs(req)
+
 	var totalErrorStr bytes.Buffer
 	for err, cnt := range totalErrors {
 		if totalErrorStr.Len() > 0 {
