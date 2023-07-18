@@ -1014,7 +1014,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(tryTimes))
 		}
 	}()
-	var totalErrors []ErrorCount
+	totalErrors := make(map[string]int)
 	for {
 		if tryTimes > 0 {
 			req.IsRetryRequest = true
@@ -1086,11 +1086,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 		if regionErr != nil {
 			errStr := getRegionErrorString(regionErr)
-			if len(totalErrors) == 0 || totalErrors[len(totalErrors)-1].error != errStr {
-				totalErrors = append(totalErrors, ErrorCount{error: errStr, count: 1})
-			} else {
-				totalErrors[len(totalErrors)-1].count++
-			}
+			totalErrors[errStr]++
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
 				return nil, nil, err
@@ -1109,11 +1105,6 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 }
 
-type ErrorCount struct {
-	error string
-	count int
-}
-
 func getRegionErrorString(regionErr *errorpb.Error) string {
 	if regionErr == nil {
 		return ""
@@ -1129,7 +1120,7 @@ func getRegionErrorString(regionErr *errorpb.Error) string {
 	return errStr
 }
 
-func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, totalErrors []ErrorCount) {
+func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, totalErrors map[string]int) {
 	replicaSelectorState := "nil"
 	if s.replicaSelector != nil {
 		switch s.replicaSelector.state.(type) {
@@ -1179,13 +1170,13 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 		cachedRegionInfo = "nil"
 	}
 	var totalErrorStr bytes.Buffer
-	for i, e := range totalErrors {
-		if i > 0 {
+	for err, cnt := range totalErrors {
+		if totalErrorStr.Len() > 0 {
 			totalErrorStr.WriteString(", ")
 		}
-		totalErrorStr.WriteString(e.error)
+		totalErrorStr.WriteString(err)
 		totalErrorStr.WriteString(":")
-		totalErrorStr.WriteString(strconv.Itoa(e.count))
+		totalErrorStr.WriteString(strconv.Itoa(cnt))
 	}
 	var replicaReadType string
 	switch req.ReplicaReadType {
