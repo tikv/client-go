@@ -259,6 +259,7 @@ type replicaSelector struct {
 	targetIdx AccessIndex
 	// replicas[proxyIdx] is the store used to redirect requests this time
 	proxyIdx AccessIndex
+	reqTxnTs uint64
 }
 
 // selectorState is the interface of states of the replicaSelector.
@@ -585,6 +586,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 
 			}
 			logutil.BgLogger().Warn("unable to find stores with given labels",
+				zap.Uint64("txn-ts", selector.reqTxnTs),
 				zap.Uint64("region-id", regionID),
 				zap.Bool("all-replica-labels-mismatch", allMismatch),
 				zap.Uint64("leader-id", leader.peer.GetId()),
@@ -677,6 +679,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		}
 	}
 
+	txnTs := getReqTxnTs(req)
 	return &replicaSelector{
 		regionCache,
 		cachedRegion,
@@ -685,6 +688,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		state,
 		-1,
 		-1,
+		txnTs,
 	}, nil
 }
 
@@ -1148,27 +1152,7 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 			replicaSelectorState = "nil"
 		}
 	}
-	txnTs := uint64(0)
-	switch req.Type {
-	case tikvrpc.CmdGet:
-		r := req.Get()
-		txnTs = r.GetVersion()
-	case tikvrpc.CmdBatchGet:
-		r := req.BatchGet()
-		txnTs = r.GetVersion()
-	case tikvrpc.CmdCop:
-		r := req.Cop()
-		txnTs = r.StartTs
-	case tikvrpc.CmdBatchCop:
-		r := req.BatchCop()
-		txnTs = r.StartTs
-	case tikvrpc.CmdPrewrite:
-		r := req.Prewrite()
-		txnTs = r.StartVersion
-	case tikvrpc.CmdScan:
-		r := req.Scan()
-		txnTs = r.GetVersion()
-	}
+	txnTs := getReqTxnTs(req)
 
 	var replicaStatus []string
 	if s.replicaSelector != nil {
@@ -1209,6 +1193,31 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 		zap.String("replica-selector-state", replicaSelectorState),
 		zap.String("total-region-errors", totalErrorStr),
 		zap.String("replica-status", strings.Join(replicaStatus, ";")))
+}
+
+func getReqTxnTs(req *tikvrpc.Request) uint64{
+	txnTs := uint64(0)
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		r := req.Get()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdBatchGet:
+		r := req.BatchGet()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdCop:
+		r := req.Cop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdBatchCop:
+		r := req.BatchCop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdPrewrite:
+		r := req.Prewrite()
+		txnTs = r.StartVersion
+	case tikvrpc.CmdScan:
+		r := req.Scan()
+		txnTs = r.GetVersion()
+	}
+	return txnTs
 }
 
 // RPCCancellerCtxKey is context key attach rpc send cancelFunc collector to ctx.
