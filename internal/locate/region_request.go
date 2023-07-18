@@ -569,16 +569,24 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			for _, label := range state.option.labels {
 				labels = append(labels, label.Key+": "+label.Value)
 			}
+			allMismatch := true
 			for _, replica := range selector.replicas {
-				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, attempts: %v",
+				isLabelsMatch := replica.store.IsLabelsMatch(state.option.labels)
+				if isLabelsMatch {
+					allMismatch = false
+				}
+				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v",
 					replica.peer.GetId(),
 					replica.store.storeID,
 					replica.isEpochStale(),
-					replica.store.IsLabelsMatch(state.option.labels),
+					isLabelsMatch,
+					replica.isExhausted(1),
 					replica.attempts))
+
 			}
 			logutil.BgLogger().Warn("unable to find stores with given labels",
 				zap.Uint64("region-id", regionID),
+				zap.Bool("all-replica-labels-mismatch", allMismatch),
 				zap.Uint64("leader-id", leader.peer.GetId()),
 				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Bool("leaderOnly", state.option.leaderOnly),
@@ -1001,7 +1009,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(tryTimes))
 		}
 	}()
-	var lastRegionErr string
+	var totalErrors []ErrorCount
 	for {
 		if tryTimes > 0 {
 			req.IsRetryRequest = true
@@ -1030,7 +1038,7 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
-			s.logReqError(bo.GetCtx(), "throwing pseudo region error due to no replica available", regionID, tryTimes, req, lastRegionErr)
+			s.logReqError(bo.GetCtx(), "throwing pseudo region error due to no replica available", regionID, tryTimes, req, totalErrors)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, err
 		}
@@ -1072,7 +1080,12 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, err
 		}
 		if regionErr != nil {
-			lastRegionErr = regionErrorToLabel(regionErr)
+			errStr := getRegionErrorString(regionErr)
+			if len(totalErrors) == 0 || totalErrors[len(totalErrors)-1].error != errStr {
+				totalErrors = append(totalErrors, ErrorCount{error: errStr, count: 1})
+			} else {
+				totalErrors[len(totalErrors)-1].count++
+			}
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
 				return nil, nil, err
@@ -1081,7 +1094,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				tryTimes++
 				continue
 			}
-			s.logReqError(bo.GetCtx(), "send req failed without retry", regionID, tryTimes, req, lastRegionErr)
+			s.logReqError(bo.GetCtx(), "send req failed without retry", regionID, tryTimes, req, totalErrors)
 		} else {
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess()
@@ -1091,7 +1104,27 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 }
 
-func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, lastRegionErr string) {
+type ErrorCount struct {
+	error string
+	count int
+}
+
+func getRegionErrorString(regionErr *errorpb.Error) string {
+	if regionErr == nil {
+		return ""
+	}
+	errStr := regionErrorToLabel(regionErr)
+	if errStr == "unknown" {
+		if regionErr.Message != "" {
+			errStr = regionErr.Message
+		} else {
+			errStr = regionErr.String()
+		}
+	}
+	return errStr
+}
+
+func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, totalErrors []ErrorCount) {
 	replicaSelectorState := "nil"
 	if s.replicaSelector != nil {
 		switch s.replicaSelector.state.(type) {
@@ -1157,6 +1190,15 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 			cachedRegion.isValid(),
 			cachedRegion.checkNeedReload(),
 		)
+	}else{
+		cachedRegionInfo = "nil"
+	}
+	var totalErrorStr string
+	for i, err := range totalErrors {
+		if i > 0 {
+			totalErrorStr += ", "
+		}
+		totalErrorStr += fmt.Sprintf("%s:%d", err.error, err.count)
 	}
 	logutil.Logger(ctx).Info(msg,
 		zap.Uint64("txn-ts", txnTs),
@@ -1165,7 +1207,7 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 		zap.Int("try-times", tryTimes),
 		zap.Int("replica-read-type", int(req.ReplicaReadType)),
 		zap.String("replica-selector-state", replicaSelectorState),
-		zap.String("last-region-error", lastRegionErr),
+		zap.String("total-region-errors", totalErrorStr),
 		zap.String("replica-status", strings.Join(replicaStatus, ";")))
 }
 
