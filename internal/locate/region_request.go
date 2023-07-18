@@ -35,6 +35,7 @@
 package locate
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand"
@@ -1042,7 +1043,7 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
-			s.logReqError(bo.GetCtx(), "throwing pseudo region error due to no replica available", regionID, tryTimes, req, totalErrors)
+			s.logReqError(bo, "throwing pseudo region error due to no replica available", regionID, tryTimes, req, totalErrors)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, err
 		}
@@ -1098,7 +1099,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				tryTimes++
 				continue
 			}
-			s.logReqError(bo.GetCtx(), "send req failed without retry", regionID, tryTimes, req, totalErrors)
+			s.logReqError(bo, "send req failed without retry", regionID, tryTimes, req, totalErrors)
 		} else {
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess()
@@ -1128,7 +1129,7 @@ func getRegionErrorString(regionErr *errorpb.Error) string {
 	return errStr
 }
 
-func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, totalErrors []ErrorCount) {
+func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, totalErrors []ErrorCount) {
 	replicaSelectorState := "nil"
 	if s.replicaSelector != nil {
 		switch s.replicaSelector.state.(type) {
@@ -1177,12 +1178,14 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 	}else{
 		cachedRegionInfo = "nil"
 	}
-	var totalErrorStr string
-	for i, err := range totalErrors {
+	var totalErrorStr bytes.Buffer
+	for i, e := range totalErrors {
 		if i > 0 {
-			totalErrorStr += ", "
+			totalErrorStr.WriteString(", ")
 		}
-		totalErrorStr += fmt.Sprintf("%s:%d", err.error, err.count)
+		totalErrorStr.WriteString(e.error)
+		totalErrorStr.WriteString(":")
+		totalErrorStr.WriteString(strconv.Itoa(e.count))
 	}
 	var replicaReadType string
 	switch req.ReplicaReadType {
@@ -1195,14 +1198,29 @@ func (s *RegionRequestSender) logReqError(ctx context.Context, msg string, regio
 	default:
 		replicaReadType	= fmt.Sprintf("unknown(%d)", int(req.ReplicaReadType))
 	}
-	logutil.Logger(ctx).Info(msg,
+	var backoffDetail bytes.Buffer
+	totalBackOff := bo.GetTotalSleep()
+	backoffTimes := bo.GetBackoffTimes()
+	for k,v := range backoffTimes{
+		if len(backoffTimes) > 0{
+			backoffDetail.WriteString(", ")
+		}
+		backoffDetail.WriteString(k)
+		backoffDetail.WriteString(":")
+		backoffDetail.WriteString(strconv.Itoa(v))
+	}
+	logutil.Logger(bo.GetCtx()).Info(msg,
 		zap.Uint64("txn-ts", txnTs),
 		zap.String("region-info", cachedRegionInfo),
 		zap.Int("try-times", tryTimes),
 		zap.String("replica-read-type", replicaReadType),
 		zap.String("replica-selector-state", replicaSelectorState),
-		zap.String("total-region-errors", totalErrorStr),
-		zap.String("replica-status", strings.Join(replicaStatus, ";")))
+		zap.String("total-region-errors", totalErrorStr.String()),
+		zap.String("replica-status", strings.Join(replicaStatus, ";")),
+		zap.Int("total-backoff-ms", totalBackOff),
+		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+		zap.String("backoff-detail", backoffDetail.String()),
+		)
 }
 
 func getReqTxnTs(req *tikvrpc.Request) uint64{
