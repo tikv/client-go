@@ -1407,7 +1407,40 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		if s.Stats != nil {
-			RecordRegionRequestRuntimeStats(s.Stats, req.Type, time.Since(start))
+			cost :=  time.Since(start)
+			RecordRegionRequestRuntimeStats(s.Stats, req.Type,cost)
+			if cost > time.Second * 5{
+				txnTs := getReqTxnTs(req)
+				errStr := ""
+				if err != nil {
+					errStr = err.Error()
+				}
+				regionErr := ""
+				regionErrLabel := ""
+				if resp != nil {
+					if re,_ := resp.GetRegionError();re != nil{
+						regionErrLabel = regionErrorToLabel(re)
+						regionErr = re.String()
+						if regionErr == ""{
+							regionErr = re.Message
+						}
+					}
+				}
+				regionID := uint64(0)
+				if rpcCtx != nil {
+					regionID = rpcCtx.Region.id
+				}
+				logutil.Logger(bo.GetCtx()).Info("send kv request too slow",
+					zap.Uint64("txn-ts", txnTs),
+					zap.Uint64("region-id", regionID),
+					zap.String("addr", sendToAddr),
+					zap.String("resp-region-error", regionErr),
+					zap.String("resp-region-error-label", regionErrLabel),
+					zap.String("send-error",errStr),
+					zap.Duration("cost", cost),
+					zap.Duration("timeout", timeout),
+				)
+			}
 			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
 				if val.(bool) {
 					if req.Type == tikvrpc.CmdCop && bo.GetTotalSleep() == 0 {
