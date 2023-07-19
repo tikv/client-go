@@ -590,13 +590,16 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				if isLabelsMatch {
 					allMismatch = false
 				}
-				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v",
+				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v, replica-epoch: %v, store-epoch: %v",
 					replica.peer.GetId(),
 					replica.store.storeID,
 					replica.isEpochStale(),
 					isLabelsMatch,
 					replica.isExhausted(1),
-					replica.attempts))
+					replica.attempts,
+					replica.epoch,
+					atomic.LoadUint32(&replica.store.epoch),
+				))
 
 			}
 			logutil.BgLogger().Warn("unable to find stores with given labels",
@@ -1119,6 +1122,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 		if retry {
 			tryTimes++
+			s.logReqError(bo, "send req failed with retry", regionID, tryTimes, req, totalErrors)
 			continue
 		}
 
@@ -1136,6 +1140,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 			if retry {
 				tryTimes++
+				s.logReqError(bo, "send req region err failed with retry", regionID, tryTimes, req, totalErrors)
 				continue
 			}
 			s.logReqError(bo, "send req failed without retry", regionID, tryTimes, req, totalErrors)
@@ -1192,11 +1197,14 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 			replicaSelectorState = "nil"
 		}
 		for _, replica := range s.replicaSelector.replicas {
-			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v",
+			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v",
 				replica.peer.GetId(),
 				replica.store.storeID,
 				replica.isEpochStale(),
-				replica.attempts))
+				replica.attempts,
+				replica.epoch,
+				atomic.LoadUint32(&replica.store.epoch),
+				))
 		}
 		if s.replicaSelector.region != nil {
 			cachedRegionInfo = fmt.Sprintf("region-id: %v, conf-ver: %v, ver: %v, isValid: %v, checkNeedReload: %v",
