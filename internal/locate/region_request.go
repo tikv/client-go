@@ -1432,6 +1432,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 				}
 				logutil.Logger(bo.GetCtx()).Info("send kv request too slow",
 					zap.Uint64("txn-ts", txnTs),
+					zap.Bool("stale-read", req.StaleRead),
 					zap.Uint64("region-id", regionID),
 					zap.String("addr", sendToAddr),
 					zap.String("resp-region-error", regionErr),
