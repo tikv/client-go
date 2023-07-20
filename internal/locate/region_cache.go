@@ -1298,7 +1298,6 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 					store.getResolveState(),
 					atomic.LoadUint32(&store.epoch),
 			))
-
 		}
 		logutil.BgLogger().Error("batch load region",
 			zap.Uint64("region", region.meta.Id),
@@ -2474,6 +2473,13 @@ func (s *Store) setResolveState(state resolveState) {
 // Returns true if it changes the state successfully, and false if the store's state
 // is changed by another one.
 func (s *Store) changeResolveStateTo(from, to resolveState) bool {
+	logutil.BgLogger().Info("change store resolve state",
+		zap.Uint64("store", s.storeID),
+		zap.String("add", s.addr),
+		zap.Any("current-state", s.getResolveState()),
+		zap.Any("from", from),
+		zap.Any("to", to),
+		zap.Stack("stack"))
 	for {
 		state := s.getResolveState()
 		if state == to {
