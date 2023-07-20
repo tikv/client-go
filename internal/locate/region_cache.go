@@ -285,6 +285,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 				logutil.BgLogger().Error("new region meet store state is not resolve",
 					zap.Uint64("region", r.meta.Id),
 					zap.Any("state", store.getResolveState()),
+					zap.Any("liveness-state", store.getLivenessState()),
 					zap.Uint32("store-epoch", storeEpoch))
 		}else{
 			rs.storeEpochs = append(rs.storeEpochs, storeEpoch)
@@ -2475,6 +2476,7 @@ func (s *Store) setResolveState(state resolveState) {
 func (s *Store) changeResolveStateTo(from, to resolveState) bool {
 	logutil.BgLogger().Info("change store resolve state",
 		zap.Uint64("store", s.storeID),
+		zap.Any("liveness-state", s.getLivenessState()),
 		zap.String("add", s.addr),
 		zap.Any("current-state", s.getResolveState()),
 		zap.Any("from", from),

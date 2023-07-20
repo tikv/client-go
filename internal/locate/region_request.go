@@ -590,7 +590,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				if isLabelsMatch {
 					allMismatch = false
 				}
-				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v",
+				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, liveness-state: %v",
 					replica.peer.GetId(),
 					replica.store.storeID,
 					replica.isEpochStale(),
@@ -600,6 +600,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 					replica.epoch,
 					atomic.LoadUint32(&replica.store.epoch),
 					replica.store.getResolveState(),
+					replica.store.getLivenessState(),
 				))
 
 			}
@@ -852,7 +853,7 @@ func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *repl
 		zap.Uint64("store-id", store.storeID),
 		zap.String("addr", store.addr),
 		zap.Any("old-state", oldState),
-		zap.Any("check-state", liveness))
+		zap.Any("liveness-state", liveness))
 	if liveness != reachable {
 		store.startHealthCheckLoopIfNeeded(s.regionCache, liveness)
 	}
@@ -1205,7 +1206,7 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 			replicaSelectorState = "nil"
 		}
 		for _, replica := range s.replicaSelector.replicas {
-			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v",
+			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, livenessState: %v",
 				replica.peer.GetId(),
 				replica.store.storeID,
 				replica.isEpochStale(),
@@ -1213,6 +1214,7 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 				replica.epoch,
 				atomic.LoadUint32(&replica.store.epoch),
 				replica.store.getResolveState(),
+				replica.store.getLivenessState(),
 			))
 		}
 		if s.replicaSelector.region != nil {

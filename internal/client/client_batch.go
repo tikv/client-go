@@ -500,12 +500,14 @@ func (c *batchCommandsClient) isStopped() bool {
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
+	start := time.Now()
 	err := c.initBatchClient(forwardedHost)
 	if err != nil {
 		logutil.BgLogger().Warn(
 			"init create streaming fail",
 			zap.String("target", c.target),
 			zap.String("forwardedHost", forwardedHost),
+			zap.Duration("cost", time.Since(start)),
 			zap.Error(err),
 		)
 		c.failPendingRequests(err)
@@ -729,7 +731,16 @@ func (c *batchCommandsClient) initBatchClient(forwardedHost string) error {
 		return nil
 	}
 
+	start := time.Now()
 	if err := c.waitConnReady(); err != nil {
+		logutil.BgLogger().Warn(
+			"wait conn ready fail",
+			zap.String("target", c.target),
+			zap.String("forwardedHost", forwardedHost),
+			zap.Duration("cost", time.Since(start)),
+			zap.Duration("dial-timeout", c.dialTimeout),
+			zap.Error(err),
+		)
 		return err
 	}
 
