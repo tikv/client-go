@@ -279,17 +279,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 			rs.accessIndex[tiFlashOnly] = append(rs.accessIndex[tiFlashOnly], len(rs.stores))
 		}
 		rs.stores = append(rs.stores, store)
-		storeEpoch := atomic.LoadUint32(&store.epoch)
-		if store.getResolveState() != resolved && storeEpoch > 0{
-				rs.storeEpochs = append(rs.storeEpochs, storeEpoch - 1)
-				logutil.BgLogger().Error("new region meet store state is not resolve",
-					zap.Uint64("region", r.meta.Id),
-					zap.Any("state", store.getResolveState()),
-					zap.Any("liveness-state", store.getLivenessState()),
-					zap.Uint32("store-epoch", storeEpoch))
-		}else{
-			rs.storeEpochs = append(rs.storeEpochs, storeEpoch)
-		}
+		rs.storeEpochs = append(rs.storeEpochs, atomic.LoadUint32(&store.epoch))
 	}
 	// TODO(youjiali1995): It's possible the region info in PD is stale for now but it can recover.
 	// Maybe we need backoff here.
