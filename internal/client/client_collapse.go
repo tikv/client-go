@@ -37,6 +37,8 @@ package client
 
 import (
 	"context"
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"go.uber.org/zap"
 	"strconv"
 	"time"
 
@@ -108,6 +110,7 @@ func (r reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.
 		err = errors.WithStack(ctx.Err())
 		return
 	case <-timer.C:
+		logutil.Logger(ctx).Info("wait response deadline is exceeded", zap.String("addr", addr))
 		err = errors.WithStack(context.DeadlineExceeded)
 		return
 	case rs := <-rsC:

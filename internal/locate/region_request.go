@@ -590,7 +590,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				if isLabelsMatch {
 					allMismatch = false
 				}
-				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v, replica-epoch: %v, store-epoch: %v",
+				replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, IsLabelsMatch: %v, isExhausted: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v",
 					replica.peer.GetId(),
 					replica.store.storeID,
 					replica.isEpochStale(),
@@ -599,6 +599,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 					replica.attempts,
 					replica.epoch,
 					atomic.LoadUint32(&replica.store.epoch),
+					replica.store.getResolveState(),
 				))
 
 			}
@@ -844,7 +845,14 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
 	store := accessReplica.store
+	oldState := store.getResolveState()
 	liveness := store.requestLiveness(bo, s.regionCache)
+	logutil.BgLogger().Info("check replica store liveness",
+		zap.Uint64("peer-id", accessReplica.peer.Id),
+		zap.Uint64("store-id", store.storeID),
+		zap.String("addr", store.addr),
+		zap.Any("old-state", oldState),
+		zap.Any("check-state", liveness))
 	if liveness != reachable {
 		store.startHealthCheckLoopIfNeeded(s.regionCache, liveness)
 	}
@@ -1197,14 +1205,15 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 			replicaSelectorState = "nil"
 		}
 		for _, replica := range s.replicaSelector.replicas {
-			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v",
+			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v",
 				replica.peer.GetId(),
 				replica.store.storeID,
 				replica.isEpochStale(),
 				replica.attempts,
 				replica.epoch,
 				atomic.LoadUint32(&replica.store.epoch),
-				))
+				replica.store.getResolveState(),
+			))
 		}
 		if s.replicaSelector.region != nil {
 			cachedRegionInfo = fmt.Sprintf("region-id: %v, conf-ver: %v, ver: %v, isValid: %v, checkNeedReload: %v",

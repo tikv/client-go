@@ -452,6 +452,32 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 	}
 }
 
+func getReqTxnTs(req *tikvrpc.Request) uint64{
+	txnTs := uint64(0)
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		r := req.Get()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdBatchGet:
+		r := req.BatchGet()
+		txnTs = r.GetVersion()
+	case tikvrpc.CmdCop:
+		r := req.Cop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdBatchCop:
+		r := req.BatchCop()
+		txnTs = r.StartTs
+	case tikvrpc.CmdPrewrite:
+		r := req.Prewrite()
+		txnTs = r.StartVersion
+	case tikvrpc.CmdScan:
+		r := req.Scan()
+		txnTs = r.GetVersion()
+	}
+	return txnTs
+}
+
+
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	var spanRPC opentracing.Span
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
@@ -469,6 +495,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	enableBatch := req.StoreTp == tikvrpc.TiKV
 	connArray, err := c.getConnArray(addr, enableBatch)
 	if err != nil {
+		logutil.Logger(ctx).Info("get conn array failed",
+			zap.Uint64("txn-ts", getReqTxnTs(req)),
+			zap.String("addr", addr),
+			zap.String("req", req.Type.String()),
+			zap.String("err",err.Error()))
 		return nil, err
 	}
 

@@ -781,10 +781,11 @@ func sendBatchRequest(
 	select {
 	case batchConn.batchCommandsCh <- entry:
 	case <-ctx.Done():
-		logutil.BgLogger().Debug("send request is cancelled",
+		logutil.BgLogger().Info("send request is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
+		logutil.Logger(ctx).Info("send request deadline is exceeded", zap.String("addr", addr))
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
 	metrics.TiKVBatchWaitDuration.Observe(float64(time.Since(start)))
@@ -802,6 +803,7 @@ func sendBatchRequest(
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
+		logutil.Logger(ctx).Info("wait response deadline is exceeded", zap.String("addr", addr))
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait recvLoop")
 	}
 }

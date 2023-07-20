@@ -1288,6 +1288,24 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 		return
 	}
 
+	for _, region := range regions {
+		var storeStatus []string
+		rstore := region.getStore()
+		for _, store := range rstore.stores {
+				storeStatus = append(storeStatus, fmt.Sprintf("storeID: %v, addr: %v, state:%v, epoch:%v",
+					store.storeID,
+					store.addr,
+					store.getResolveState(),
+					atomic.LoadUint32(&store.epoch),
+			))
+
+		}
+		logutil.BgLogger().Error("batch load region",
+			zap.Uint64("region", region.meta.Id),
+			zap.String("stores-status", strings.Join(storeStatus, ",")),
+			zap.Uint32s("store-epochs", rstore.storeEpochs))
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
