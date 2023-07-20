@@ -554,7 +554,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
 		selectReplica := selector.replicas[idx]
-		if state.isCandidate(idx, selectReplica) {
+		if state.isCandidate(idx, selectReplica) && selectReplica.store.getLivenessState() != unreachable {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
