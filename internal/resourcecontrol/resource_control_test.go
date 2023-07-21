@@ -37,4 +37,12 @@ func TestMakeRequestInfo(t *testing.T) {
 	assert.Equal(t, uint64(3), info.WriteBytes())
 	assert.False(t, info.Bypass())
 	assert.Equal(t, uint64(3), info.StoreID())
+
+	// Test Nil Peer in Context
+	req = &tikvrpc.Request{Type: tikvrpc.CmdCommit, Req: commitReq, ReplicaNumber: 2, Context: kvrpcpb.Context{}}
+	info = MakeRequestInfo(req)
+	assert.True(t, info.IsWrite())
+	assert.Equal(t, uint64(3), info.WriteBytes())
+	assert.False(t, info.Bypass())
+	assert.Equal(t, uint64(0), info.StoreID())
 }
