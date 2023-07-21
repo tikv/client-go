@@ -50,8 +50,9 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			bypass = true
 		}
 	}
+	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
-		return &RequestInfo{writeBytes: -1, storeID: req.Context.Peer.StoreId, bypass: bypass}
+		return &RequestInfo{writeBytes: -1, storeID: storeID, bypass: bypass}
 	}
 
 	var writeBytes int64
@@ -69,7 +70,7 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			writeBytes += int64(len(k))
 		}
 	}
-	return &RequestInfo{writeBytes: writeBytes, storeID: req.Context.Peer.StoreId, replicaNumber: req.ReplicaNumber, bypass: bypass}
+	return &RequestInfo{writeBytes: writeBytes, storeID: storeID, replicaNumber: req.ReplicaNumber, bypass: bypass}
 }
 
 // IsWrite returns whether the request is a write request.
