@@ -929,3 +929,80 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	// after region error returned, the region should be invalidated.
 	s.False(region.isValid())
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown() {
+	var leaderAddr string
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		// Returns error when accesses non-leader.
+		if leaderAddr != addr {
+			return nil, context.DeadlineExceeded
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			Value: []byte("value"),
+		}}, nil
+	}}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	req.ReplicaReadType = kv.ReplicaReadMixed
+
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	region := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.NotNil(region)
+	regionStore := region.getStore()
+	leaderAddr = regionStore.stores[regionStore.workTiKVIdx].addr
+	s.NotEqual(leaderAddr, "")
+	for i := 0; i < 10; i++ {
+		bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
+		resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(err)
+		s.NotNil(resp)
+
+		// Since send req to follower will receive error, then all follower will be marked as unreachable and epoch stale.
+		allFollowerStoreEpochStale := true
+		for i, store := range regionStore.stores {
+			if i == int(regionStore.workTiKVIdx) {
+				continue
+			}
+			if store.epoch == regionStore.storeEpochs[i] {
+				allFollowerStoreEpochStale = false
+				break
+			} else {
+				s.Equal(store.getLivenessState(), unreachable)
+			}
+		}
+		if allFollowerStoreEpochStale {
+			break
+		}
+	}
+
+	// mock for GC leader reload all regions.
+	bo := retry.NewBackofferWithVars(context.Background(), 10, nil)
+	_, err = s.cache.BatchLoadRegionsWithKeyRange(bo, []byte(""), nil, 1)
+	s.Nil(err)
+
+	loc, err = s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	region = s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.NotNil(region)
+	regionStore = region.getStore()
+	for i, store := range regionStore.stores {
+		if i == int(regionStore.workTiKVIdx) {
+			continue
+		}
+		// After reload region, the region epoch will be updated, but the store liveness state is still unreachable.
+		s.Equal(store.epoch, regionStore.storeEpochs[i])
+		s.Equal(store.getLivenessState(), unreachable)
+	}
+
+	for i := 0; i < 100; i++ {
+		bo := retry.NewBackofferWithVars(context.Background(), 1, nil)
+		resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+		s.Nil(err)
+		s.NotNil(resp)
+		// since all follower'store is unreachable, the request will be sent to leader, the backoff times should be 0.
+		s.Equal(0, bo.GetTotalBackoffTimes())
+	}
+}

@@ -556,7 +556,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
 		selectReplica := selector.replicas[idx]
-		if state.isCandidate(idx, selectReplica) && selectReplica.store.getLivenessState() != unreachable{
+		if state.isCandidate(idx, selectReplica) && selectReplica.store.getLivenessState() != unreachable {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -1247,13 +1247,13 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 	case kv.ReplicaReadMixed:
 		replicaReadType = "ReplicaReadMixed"
 	default:
-		replicaReadType	= fmt.Sprintf("unknown(%d)", int(req.ReplicaReadType))
+		replicaReadType = fmt.Sprintf("unknown(%d)", int(req.ReplicaReadType))
 	}
 	var backoffDetail bytes.Buffer
 	totalBackOff := bo.GetTotalSleep()
 	backoffTimes := bo.GetBackoffTimes()
-	for k,v := range backoffTimes{
-		if backoffDetail.Len() > 0{
+	for k, v := range backoffTimes {
+		if backoffDetail.Len() > 0 {
 			backoffDetail.WriteString(", ")
 		}
 		backoffDetail.WriteString(k)
@@ -1271,10 +1271,10 @@ func (s *RegionRequestSender) logReqError(bo *retry.Backoffer, msg string, regio
 		zap.Int("total-backoff-ms", totalBackOff),
 		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
 		zap.String("backoff-detail", backoffDetail.String()),
-		)
+	)
 }
 
-func getReqTxnTs(req *tikvrpc.Request) uint64{
+func getReqTxnTs(req *tikvrpc.Request) uint64 {
 	txnTs := uint64(0)
 	switch req.Type {
 	case tikvrpc.CmdGet:
@@ -1426,9 +1426,9 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		if s.Stats != nil {
-			cost :=  time.Since(start)
-			RecordRegionRequestRuntimeStats(s.Stats, req.Type,cost)
-			if cost > time.Second * 5{
+			cost := time.Since(start)
+			RecordRegionRequestRuntimeStats(s.Stats, req.Type, cost)
+			if cost > time.Second*5 {
 				txnTs := getReqTxnTs(req)
 				errStr := ""
 				if err != nil {
@@ -1437,10 +1437,10 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 				regionErr := ""
 				regionErrLabel := ""
 				if resp != nil {
-					if re,_ := resp.GetRegionError();re != nil{
+					if re, _ := resp.GetRegionError(); re != nil {
 						regionErrLabel = regionErrorToLabel(re)
 						regionErr = re.String()
-						if regionErr == ""{
+						if regionErr == "" {
 							regionErr = re.Message
 						}
 					}
@@ -1456,7 +1456,7 @@ func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCCo
 					zap.String("addr", sendToAddr),
 					zap.String("resp-region-error", regionErr),
 					zap.String("resp-region-error-label", regionErrLabel),
-					zap.String("send-error",errStr),
+					zap.String("send-error", errStr),
 					zap.Duration("cost", cost),
 					zap.Duration("timeout", timeout),
 				)
