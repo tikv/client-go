@@ -525,21 +525,25 @@ type accessFollower struct {
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	matchReplicasIdx := make([]int, 0, len(selector.replicas))
+	if len(state.option.labels) == 0 {
+		for i := 0; i < len(selector.replicas); i++ {
+			if !state.tryLeader && AccessIndex(i) == state.leaderIdx {
+				continue
+			}
+			matchReplicasIdx = append(matchReplicasIdx, i)
+		}
+	} else {
+		for i, replica := range selector.replicas {
+			if (!state.tryLeader && AccessIndex(i) == state.leaderIdx) || !replica.store.IsLabelsMatch(state.option.labels) {
+				continue
+			}
+			matchReplicasIdx = append(matchReplicasIdx, i)
+		}
+	}
 	resetStaleRead := false
 	if state.lastIdx < 0 {
-		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas)))
-		} else {
-			if len(selector.replicas) <= 1 {
-				state.lastIdx = state.leaderIdx
-			} else {
-				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(len(selector.replicas) - 1))
-				if state.lastIdx >= state.leaderIdx {
-					state.lastIdx++
-				}
-			}
-		}
+		state.lastIdx = AccessIndex(rand.Intn(len(matchReplicasIdx)))
 	} else {
 		// Stale Read request will retry the leader only by using the WithLeaderOnly option,
 		if state.isStaleRead {
@@ -551,18 +555,21 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 
 	reloadRegion := false
-	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
-		selectReplica := selector.replicas[idx]
-		if state.isCandidate(idx, selectReplica) {
-			state.lastIdx = idx
-			selector.targetIdx = idx
-			break
-		}
-		if selectReplica.isEpochStale() &&
-			selectReplica.store.getResolveState() == resolved &&
-			selectReplica.store.getLivenessState() == reachable {
-			reloadRegion = true
+	if !state.option.leaderOnly {
+		for i := range matchReplicasIdx {
+			i = (int(state.lastIdx) + i) % len(matchReplicasIdx)
+			idx := AccessIndex(matchReplicasIdx[i])
+			selectReplica := selector.replicas[idx]
+			if state.isCandidate(idx, selectReplica) {
+				state.lastIdx = idx
+				selector.targetIdx = idx
+				break
+			}
+			if selectReplica.isEpochStale() &&
+				selectReplica.store.getResolveState() == resolved &&
+				selectReplica.store.getLivenessState() == reachable {
+				reloadRegion = true
+			}
 		}
 	}
 	if reloadRegion {
@@ -604,7 +611,7 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels)))
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx)))
 }
 
 type invalidStore struct {
