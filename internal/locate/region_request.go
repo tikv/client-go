@@ -385,7 +385,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		}
 		targetReplica = selector.replicas[idx]
 		// Each follower is only tried once
-		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable{
+		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -554,7 +554,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
 		selectReplica := selector.replicas[idx]
-		if state.isCandidate(idx, selectReplica) && selectReplica.store.getLivenessState() != unreachable {
+		if state.isCandidate(idx, selectReplica) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -604,7 +604,9 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels)))
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels))) &&
+		// Make sure the replica is not unreachable.
+		replica.store.getLivenessState() != unreachable
 }
 
 type invalidStore struct {
