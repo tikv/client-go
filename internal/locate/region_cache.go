@@ -627,16 +627,17 @@ func (c *RegionCache) SetPDClient(client pd.Client) {
 
 // RPCContext contains data that is needed to send RPC to a region.
 type RPCContext struct {
-	Region     RegionVerID
-	Meta       *metapb.Region
-	Peer       *metapb.Peer
-	AccessIdx  AccessIndex
-	Store      *Store
-	Addr       string
-	AccessMode accessMode
-	ProxyStore *Store // nil means proxy is not used
-	ProxyAddr  string // valid when ProxyStore is not nil
-	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	Region        RegionVerID
+	Meta          *metapb.Region
+	Peer          *metapb.Peer
+	AccessIdx     AccessIndex
+	Store         *Store
+	Addr          string
+	AccessMode    accessMode
+	ProxyStore    *Store // nil means proxy is not used
+	ProxyAddr     string // valid when ProxyStore is not nil
+	TiKVNum       int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	BucketVersion uint64
 
 	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
@@ -1945,6 +1946,12 @@ func (c *RegionCache) getStoresByLabels(labels []*metapb.StoreLabel) []*Store {
 	return s
 }
 
+// OnBucketVersionNotMatch removes the old buckets meta if the version is stale.
+func (c *RegionCache) OnBucketVersionNotMatch(bo *retry.Backoffer, ctx *RPCContext, latestVersion uint64, keys [][]byte) (bool, error) {
+	c.UpdateBucketsIfNeeded(ctx.Region, latestVersion)
+	return false, nil
+}
+
 // OnRegionEpochNotMatch removes the old region and inserts new regions into the cache.
 // It returns whether retries the request because it's possible the region epoch is ahead of TiKV's due to slow appling.
 func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext, currentRegions []*metapb.Region) (bool, error) {
@@ -2091,6 +2098,26 @@ func (c *RegionCache) InvalidateTiFlashComputeStores() {
 	c.tiflashComputeStoreMu.Lock()
 	defer c.tiflashComputeStoreMu.Unlock()
 	c.tiflashComputeStoreMu.needReload = true
+}
+
+// UpdateBucketOnError updates the buckets of the region in the cache if meets the buckets version not match.
+func (c *RegionCache) UpdateBucketOnError(regionID RegionVerID, version uint64, keys [][]byte) {
+	r := c.GetCachedRegionWithRLock(regionID)
+	if r == nil {
+		return
+	}
+
+	buckets := r.getStore().buckets
+	var bucketsVer uint64
+	if buckets != nil {
+		bucketsVer = buckets.GetVersion()
+	}
+	if bucketsVer < version {
+		c.mu.Lock()
+		buckets.Version = version
+		buckets.Keys = keys
+		c.mu.Unlock()
+	}
 }
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
