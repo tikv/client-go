@@ -1178,8 +1178,13 @@ func (c *RegionCache) scheduleReloadRegion(region *Region) {
 	}
 	regionID := region.GetID()
 	if regionID > 0 {
+		const maxPendingReloadRegions = 512
 		c.regionsNeedReload.Lock()
-		c.regionsNeedReload.regions = append(c.regionsNeedReload.regions, regionID)
+		if len(c.regionsNeedReload.regions) < maxPendingReloadRegions {
+			c.regionsNeedReload.regions = append(c.regionsNeedReload.regions, regionID)
+		} else {
+			c.regionsNeedReload.regions[rand.Intn(maxPendingReloadRegions)] = regionID
+		}
 		c.regionsNeedReload.Unlock()
 	}
 }

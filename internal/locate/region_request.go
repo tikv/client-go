@@ -565,7 +565,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			reloadRegion = true
 		}
 	}
-	if reloadRegion {
+	if noCandidate := !state.option.leaderOnly && selector.targetIdx < 0; reloadRegion || noCandidate {
 		selector.regionCache.scheduleReloadRegion(selector.region)
 	}
 	// If there is no candidate, fallback to the leader.
