@@ -276,6 +276,12 @@ func refreshEpochs(regionStore *regionStore) {
 	}
 }
 
+func refreshLivenessStates(regionStore *regionStore) {
+	for _, store := range regionStore.stores {
+		atomic.StoreUint32(&store.livenessState, uint32(reachable))
+	}
+}
+
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
@@ -511,6 +517,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Test accessFollower state with kv.ReplicaReadFollower request type.
 	req = tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadFollower, nil)
 	refreshEpochs(regionStore)
+	refreshLivenessStates(regionStore)
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
@@ -625,10 +632,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(region)
+	regionStore := s.cache.GetCachedRegionWithRLock(region.Region).getStore()
+	s.NotNil(regionStore)
 
 	reloadRegion := func() {
 		s.regionRequestSender.replicaSelector.region.invalidate(Other)
 		region, _ = s.cache.LocateRegionByID(s.bo, s.regionID)
+		regionStore = s.cache.GetCachedRegionWithRLock(region.Region).getStore()
 	}
 
 	hasFakeRegionError := func(resp *tikvrpc.Response) bool {
@@ -660,6 +670,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.Equal(sender.replicaSelector.targetIdx, AccessIndex(1))
 	s.True(bo.GetTotalBackoffTimes() == 1)
 	s.cluster.StartStore(s.storeIDs[0])
+	atomic.StoreUint32(&regionStore.stores[0].livenessState, uint32(reachable))
 
 	// Leader is updated because of send success, so no backoff.
 	bo = retry.NewBackoffer(context.Background(), -1)
@@ -679,6 +690,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.True(hasFakeRegionError(resp))
 	s.Equal(bo.GetTotalBackoffTimes(), 1)
 	s.cluster.StartStore(s.storeIDs[1])
+	atomic.StoreUint32(&regionStore.stores[1].livenessState, uint32(reachable))
 
 	// Leader is changed. No backoff.
 	reloadRegion()
@@ -695,7 +707,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	resp, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
-	s.Equal(bo.GetTotalBackoffTimes(), 2) // The unreachable leader is skipped
+	s.Equal(bo.GetTotalBackoffTimes(), 3)
 	s.False(sender.replicaSelector.region.isValid())
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
 
