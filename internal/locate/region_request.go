@@ -385,7 +385,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		}
 		targetReplica = selector.replicas[idx]
 		// Each follower is only tried once
-		if !targetReplica.isExhausted(1) {
+		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable{
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
