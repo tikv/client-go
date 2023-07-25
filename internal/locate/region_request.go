@@ -517,11 +517,12 @@ func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
 type accessFollower struct {
 	stateBase
 	// If tryLeader is true, the request can also be sent to the leader.
-	tryLeader   bool
-	isStaleRead bool
-	option      storeSelectorOp
-	leaderIdx   AccessIndex
-	lastIdx     AccessIndex
+	tryLeader      bool
+	isStaleRead    bool
+	resetStaleRead bool
+	option         storeSelectorOp
+	leaderIdx      AccessIndex
+	lastIdx        AccessIndex
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -542,7 +543,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		}
 	} else {
 		// Stale Read request will retry the leader only by using the WithLeaderOnly option,
-		if state.isStaleRead {
+		if state.isStaleRead && state.resetStaleRead {
 			WithLeaderOnly()(&state.option)
 			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read.
 			resetStaleRead = true
@@ -617,7 +618,7 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && replica.store.IsLabelsMatch(state.option.labels))) &&
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && (state.lastIdx >= 0 || replica.store.IsLabelsMatch(state.option.labels)))) &&
 		// Make sure the replica is not unreachable.
 		replica.store.getLivenessState() != unreachable
 }
@@ -1669,12 +1670,18 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx),
 		)
-		if !req.IsGlobalStaleRead() {
-			// only backoff local stale reads as global should retry immediately against the leader as a normal read
-			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
-			if err != nil {
-				return false, err
+		// stale reads should retry immediately against the leader as a normal read.
+		if s.replicaSelector != nil && s.replicaSelector.state != nil {
+			if af, ok := s.replicaSelector.state.(*accessFollower); ok && !af.resetStaleRead {
+				af.resetStaleRead = true
+				// always retry data-is-not-ready error.
+				return true, nil
 			}
+		}
+		// backoff other cases to avoid infinite retries.
+		err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
+		if err != nil {
+		    return false, err
 		}
 		return true, nil
 	}

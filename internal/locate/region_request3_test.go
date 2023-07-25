@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -873,12 +874,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		failureOnFollower := 0
 		failureOnLeader := 0
 		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+			dataIsNotReadyErr := &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}}}
 			if addr != s.cluster.GetStore(s.storeIDs[0]).Address {
 				failureOnFollower++
-				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{}}}, nil
+				return dataIsNotReadyErr, nil
 			} else if failureOnLeader == 0 && i%2 == 0 {
 				failureOnLeader++
-				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{}}}, nil
+				return dataIsNotReadyErr, nil
 			} else {
 				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}, nil
 			}
@@ -1099,4 +1101,63 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 	s.NotNil(regionErr)
 	s.NotNil(regionErr.GetEpochNotMatch())
 	s.Nil(regionErr.GetDiskFull())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestResetStaleReadFallbackDataIsNotReadyOnly() {
+	originBoTiKVServerBusy := retry.BoTiKVServerBusy
+	defer func() {
+		retry.BoTiKVServerBusy = originBoTiKVServerBusy
+	}()
+	retry.BoTiKVServerBusy = retry.NewConfig("tikvServerBusy", &metrics.BackoffHistogramServerBusy, retry.NewBackoffFnCfg(2, 10, retry.EqualJitter), tikverr.ErrTiKVServerBusy)
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	tryTime := 0
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		if tryTime == 0 || addr == s.cluster.GetStore(s.storeIDs[0]).Address {
+			tryTime++
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				ServerIsBusy: &errorpb.ServerIsBusy{},
+			}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
+	}}
+
+	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	s.True(region.isValid())
+
+	for _, local := range []bool{false, true} {
+		tryTime = 0
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+		var ops []StoreSelectorOption
+		if !local {
+			req.ReadReplicaScope = oracle.GlobalTxnScope
+			req.TxnScope = oracle.GlobalTxnScope
+		} else {
+			ops = append(ops, WithMatchLabels([]*metapb.StoreLabel{
+				{
+					Key:   "id",
+					Value: "2",
+				},
+			}))
+		}
+		req.EnableStaleRead()
+
+		ctx, _ := context.WithTimeout(context.Background(), 1000*time.Second)
+		bo := retry.NewBackoffer(ctx, -1)
+		s.Nil(err)
+		resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+		s.Nil(err)
+		regionErr, err := resp.GetRegionError()
+		s.Nil(err)
+		s.Nil(regionErr)
+		s.Equal(resp.Resp.(*kvrpcpb.GetResponse).Value, []byte("value"))
+	}
 }
