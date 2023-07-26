@@ -1020,7 +1020,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 	}
 }
 
-func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Leader() {
 	leaderStore, _ := s.loadAndGetLeaderStore()
 	leaderLabel := []*metapb.StoreLabel{
 		{
@@ -1099,4 +1099,70 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 	s.NotNil(regionErr)
 	s.NotNil(regionErr.GetEpochNotMatch())
 	s.Nil(regionErr.GetDiskFull())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
+	leaderStore, _ := s.loadAndGetLeaderStore()
+	leaderLabel := []*metapb.StoreLabel{
+		{
+			Key:   "id",
+			Value: strconv.FormatUint(leaderStore.StoreID(), 10),
+		},
+	}
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	value := []byte("value")
+
+	dataIsNotReady := false
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		if addr == leaderStore.addr {
+			if dataIsNotReady && req.StaleRead {
+				dataIsNotReady = false
+				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+					DataIsNotReady: &errorpb.DataIsNotReady{},
+				}}}, nil
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				ServerIsBusy: &errorpb.ServerIsBusy{},
+			}}}, nil
+		}
+		if !req.ReplicaRead {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				NotLeader: &errorpb.NotLeader{},
+			}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: value}}, nil
+	}}
+
+	dataIsNotReady = true
+	// data is not ready, then server is busy in the first round,
+	// directly server is busy in the second round.
+	for i := 0; i < 2; i++ {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+		req.ReadReplicaScope = oracle.GlobalTxnScope
+		req.TxnScope = oracle.GlobalTxnScope
+		req.EnableStaleRead()
+		req.ReplicaReadType = kv.ReplicaReadMixed
+		var ops []StoreSelectorOption
+		ops = append(ops, WithMatchLabels(leaderLabel))
+
+		ctx, _ := context.WithTimeout(context.Background(), 10000*time.Second)
+		bo := retry.NewBackoffer(ctx, -1)
+		s.Nil(err)
+		resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+		s.Nil(err)
+
+		regionErr, err := resp.GetRegionError()
+		s.Nil(err)
+		s.Nil(regionErr)
+		getResp, ok := resp.Resp.(*kvrpcpb.GetResponse)
+		s.True(ok)
+		s.Equal(getResp.Value, value)
+	}
 }

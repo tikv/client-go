@@ -371,8 +371,9 @@ func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
 // the leader will be updated to replicas[0] and give it another chance.
 type tryFollower struct {
 	stateBase
-	leaderIdx AccessIndex
-	lastIdx   AccessIndex
+	fallbackFromLeader bool
+	leaderIdx          AccessIndex
+	lastIdx            AccessIndex
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -397,12 +398,25 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		selector.invalidateRegion()
 		return nil, nil
 	}
-	return selector.buildRPCContext(bo)
+	rpcCtx, err := selector.buildRPCContext(bo)
+	if err != nil || rpcCtx == nil {
+		return rpcCtx, err
+	}
+	if state.fallbackFromLeader {
+		replicaRead := true
+		rpcCtx.contextPatcher.replicaRead = &replicaRead
+	}
+	return rpcCtx, err
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
-	if !selector.region.switchWorkLeaderToPeer(selector.targetReplica().peer) {
-		panic("the store must exist")
+	if !state.fallbackFromLeader {
+		peer := selector.targetReplica().peer
+		if !selector.region.switchWorkLeaderToPeer(peer) {
+			logutil.BgLogger().Warn("the store must exist",
+				zap.Uint64("store", peer.StoreId),
+				zap.Uint64("peer", peer.Id))
+		}
 	}
 }
 
@@ -886,6 +900,22 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 	}
 	// Invalidate the region since the new leader is not in the cached version.
 	s.region.invalidate(StoreNotFound)
+}
+
+// For some reason, the leader is unreachable by now, try followers instead.
+func (s *replicaSelector) fallback2Follower(ctx *RPCContext) bool {
+	if ctx == nil || s == nil || s.state == nil {
+		return false
+	}
+	state, ok := s.state.(*accessFollower)
+	if !ok {
+		return false
+	}
+	if state.lastIdx != state.leaderIdx {
+		return false
+	}
+	s.state = &tryFollower{fallbackFromLeader: true, leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
+	return true
 }
 
 func (s *replicaSelector) invalidateRegion() {
@@ -1566,6 +1596,10 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx))
+		if s.replicaSelector.fallback2Follower(ctx) {
+			// immediately retry on followers.
+			return true, nil
+		}
 		if ctx != nil && ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
 			err = bo.Backoff(retry.BoTiFlashServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 		} else {
