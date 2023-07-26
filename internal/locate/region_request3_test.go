@@ -36,6 +36,7 @@ package locate
 
 import (
 	"context"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1017,4 +1018,85 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 		// since all follower'store is unreachable, the request will be sent to leader, the backoff times should be 0.
 		s.Equal(0, bo.GetTotalBackoffTimes())
 	}
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
+	leaderStore, _ := s.loadAndGetLeaderStore()
+	leaderLabel := []*metapb.StoreLabel{
+		{
+			Key:   "id",
+			Value: strconv.FormatUint(leaderStore.StoreID(), 10),
+		},
+	}
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	value := []byte("value")
+
+	type testState struct {
+		tryTimes uint8
+		succ     bool
+	}
+
+	state := &testState{}
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		// Return `DataIsNotReady` for the first time on leader.
+		if state.tryTimes == 0 {
+			state.tryTimes++
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				DataIsNotReady: &errorpb.DataIsNotReady{},
+			}}}, nil
+		} else if state.tryTimes == 1 && state.succ {
+			state.tryTimes++
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: value}}, nil
+		}
+		state.tryTimes++
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+			DiskFull: &errorpb.DiskFull{},
+		}}}, nil
+	}}
+
+	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	s.True(region.isValid())
+
+	// Test the successful path.
+	state.succ = true
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+	req.EnableStaleRead()
+	req.ReplicaReadType = kv.ReplicaReadMixed
+	var ops []StoreSelectorOption
+	ops = append(ops, WithMatchLabels(leaderLabel))
+
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	bo := retry.NewBackoffer(ctx, -1)
+	s.Nil(err)
+	resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+	s.Nil(err)
+
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Nil(regionErr)
+	getResp, ok := resp.Resp.(*kvrpcpb.GetResponse)
+	s.True(ok)
+	s.Equal(getResp.Value, value)
+
+	// Test the fail path leader retry limit is reached, epoch not match error would be returned.
+	state.tryTimes = 0
+	state.succ = false
+	req.EnableStaleRead()
+	resp, _, err = s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+	s.Nil(err)
+
+	regionErr, err = resp.GetRegionError()
+	s.Nil(err)
+	s.NotNil(regionErr)
+	s.NotNil(regionErr.GetEpochNotMatch())
+	s.Nil(regionErr.GetDiskFull())
 }
