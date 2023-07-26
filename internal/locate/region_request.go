@@ -1223,7 +1223,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
 			cacheRegionIsValid := "unknown"
-			if s.replicaSelector.region != nil {
+			if s.replicaSelector != nil && s.replicaSelector.region != nil {
 				if s.replicaSelector.region.isValid() {
 					cacheRegionIsValid = "true"
 				} else {
