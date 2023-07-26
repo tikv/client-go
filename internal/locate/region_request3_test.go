@@ -1032,8 +1032,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 	s.Nil(err)
 	s.NotNil(regionLoc)
 	value := []byte("value")
-	isFirstReq := true
 
+	type testState struct {
+		tryTimes uint8
+		succ     bool
+	}
+
+	state := &testState{}
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		select {
 		case <-ctx.Done():
@@ -1041,18 +1046,26 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 		default:
 		}
 		// Return `DataIsNotReady` for the first time on leader.
-		if isFirstReq {
-			isFirstReq = false
+		if state.tryTimes == 0 {
+			state.tryTimes++
 			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
 				DataIsNotReady: &errorpb.DataIsNotReady{},
 			}}}, nil
+		} else if state.tryTimes == 1 && state.succ {
+			state.tryTimes++
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: value}}, nil
 		}
-		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: value}}, nil
+		state.tryTimes++
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+			DiskFull: &errorpb.DiskFull{},
+		}}}, nil
 	}}
 
 	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
 	s.True(region.isValid())
 
+	// Test the successful path.
+	state.succ = true
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
@@ -1073,4 +1086,17 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 	getResp, ok := resp.Resp.(*kvrpcpb.GetResponse)
 	s.True(ok)
 	s.Equal(getResp.Value, value)
+
+	// Test the fail path leader retry limit is reached, epoch not match error would be returned.
+	state.tryTimes = 0
+	state.succ = false
+	req.EnableStaleRead()
+	resp, _, err = s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+	s.Nil(err)
+
+	regionErr, err = resp.GetRegionError()
+	s.Nil(err)
+	s.NotNil(regionErr)
+	s.NotNil(regionErr.GetEpochNotMatch())
+	s.Nil(regionErr.GetDiskFull())
 }
