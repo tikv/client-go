@@ -81,6 +81,6 @@ func (r ReplicaReadType) String() string {
 	case ReplicaReadMixed:
 		return "mixed"
 	default:
-		return fmt.Sprintf("unknown-%v", r)
+		return fmt.Sprintf("unknown-%v", byte(r))
 	}
 }

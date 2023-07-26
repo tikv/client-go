@@ -2336,7 +2336,7 @@ func (s resolveState) String() string {
 	case tombstone:
 		return "tombstone"
 	default:
-		return fmt.Sprintf("unknown-%v", s)
+		return fmt.Sprintf("unknown-%v", uint64(s))
 	}
 }
 
@@ -2577,7 +2577,7 @@ func (s livenessState) String() string {
 	case unknown:
 		return "unknown"
 	default:
-		return fmt.Sprintf("unknown-%v", s)
+		return fmt.Sprintf("unknown-%v", uint32(s))
 	}
 }
 
