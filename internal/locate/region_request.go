@@ -575,8 +575,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		if len(state.option.labels) > 0 {
 			logutil.BgLogger().Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
-				zap.Bool("leader-invalid", leaderInvalid))
-
+				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Any("labels", state.option.labels))
 		}
 		if leaderInvalid {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
