@@ -1048,14 +1048,14 @@ func (s *RegionRequestSender) SendReqCtx(
 			cacheRegionIsValid := "unknown"
 			if s.replicaSelector.region != nil {
 				if s.replicaSelector.region.isValid() {
-					cacheRegionIsValid = "valid"
+					cacheRegionIsValid = "true"
 				} else {
-					cacheRegionIsValid = "invalid"
+					cacheRegionIsValid = "false"
 				}
 			}
 			logutil.Logger(bo.GetCtx()).Info("throwing pseudo region error due to no replica available",
 				zap.String("region", regionID.String()),
-				zap.String("region-valid", cacheRegionIsValid),
+				zap.String("region-is-valid", cacheRegionIsValid),
 				zap.Int("try-times", tryTimes),
 				zap.String("replica-read-type", req.ReplicaReadType.String()),
 				zap.Bool("stale-read", req.StaleRead),
