@@ -2322,6 +2322,7 @@ const (
 	tombstone
 )
 
+// String implements fmt.Stringer interface.
 func (s resolveState) String() string {
 	switch s {
 	case unresolved:
@@ -2566,6 +2567,7 @@ const (
 	unknown
 )
 
+// String implements fmt.Stringer interface.
 func (s livenessState) String() string {
 	switch s {
 	case unreachable:
