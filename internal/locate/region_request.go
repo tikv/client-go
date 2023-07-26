@@ -402,7 +402,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		}
 		targetReplica = selector.replicas[idx]
 		// Each follower is only tried once
-		if !targetReplica.isExhausted(1) {
+		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -649,8 +649,8 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 }
 
 func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool {
-	// the epoch is staled or retry exhausted.
-	if replica.isEpochStale() || replica.isExhausted(1) {
+	// the epoch is staled or retry exhausted, or the store is unreachable.
+	if replica.isEpochStale() || replica.isExhausted(1) || replica.store.getLivenessState() == unreachable {
 		return false
 	}
 	// The request can only be sent to the leader.
