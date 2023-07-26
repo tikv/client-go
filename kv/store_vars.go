@@ -68,3 +68,16 @@ const (
 func (r ReplicaReadType) IsFollowerRead() bool {
 	return r != ReplicaReadLeader
 }
+
+func (r ReplicaReadType) String() string {
+	switch r {
+	case ReplicaReadLeader:
+		return "leader"
+	case ReplicaReadFollower:
+		return "follower"
+	case ReplicaReadMixed:
+		return "mixed"
+	default:
+		return "unknown"
+	}
+}

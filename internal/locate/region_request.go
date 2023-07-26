@@ -570,11 +570,15 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
-		if len(state.option.labels) > 0 {
-			logutil.BgLogger().Warn("unable to find stores with given labels")
-		}
 		leader := selector.replicas[state.leaderIdx]
-		if leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1)) {
+		leaderInvalid := leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1))
+		if len(state.option.labels) > 0 {
+			logutil.BgLogger().Warn("unable to find stores with given labels",
+				zap.Uint64("region", selector.region.GetID()),
+				zap.Bool("leader-invalid", leaderInvalid))
+
+		}
+		if leaderInvalid {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 			return nil, nil
@@ -1041,7 +1045,14 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
-			logutil.Logger(bo.GetCtx()).Debug("throwing pseudo region error due to region not found in cache", zap.Stringer("region", &regionID))
+			logutil.Logger(bo.GetCtx()).Info("throwing pseudo region error due to no replica available",
+				zap.String("region", regionID.String()),
+				zap.Int("try-times", tryTimes),
+				zap.String("replica-read-type", req.ReplicaReadType.String()),
+				zap.Bool("stale-read", req.StaleRead),
+				zap.Int("total-backoff-ms", bo.GetTotalSleep()),
+				zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+			)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, err
 		}
