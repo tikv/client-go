@@ -35,6 +35,8 @@
 package kv
 
 import (
+	"fmt"
+
 	"go.uber.org/atomic"
 )
 
@@ -79,6 +81,6 @@ func (r ReplicaReadType) String() string {
 	case ReplicaReadMixed:
 		return "mixed"
 	default:
-		return "unknown"
+		return fmt.Sprintf("unknown-%v", r)
 	}
 }
