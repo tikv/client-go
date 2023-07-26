@@ -571,7 +571,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
 		leader := selector.replicas[state.leaderIdx]
-		leaderInvalid := leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1))
+		leaderInvalid := leader.isEpochStale() || state.IsLeaderExhausted(leader)
 		if len(state.option.labels) > 0 {
 			logutil.BgLogger().Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
@@ -595,6 +595,19 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		rpcCtx.contextPatcher.staleRead = &staleRead
 	}
 	return rpcCtx, nil
+}
+
+func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
+	// Allow another extra retry for the following case:
+	// 1. The stale read is enabled and leader peer is selected as the target peer at first.
+	// 2. Data is not ready is returned from the leader peer.
+	// 3. Stale read flag is removed and processing falls back to snapshot read on the leader peer.
+	// 4. The leader peer should be retried again using snapshot read.
+	if state.isStaleRead && state.option.leaderOnly {
+		return leader.isExhausted(2)
+	} else {
+		return leader.isExhausted(1)
+	}
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
