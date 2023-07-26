@@ -35,6 +35,8 @@
 package kv
 
 import (
+	"fmt"
+
 	"go.uber.org/atomic"
 )
 
@@ -71,4 +73,18 @@ const (
 // IsFollowerRead checks if follower is going to be used to read data.
 func (r ReplicaReadType) IsFollowerRead() bool {
 	return r != ReplicaReadLeader
+}
+
+// String implements fmt.Stringer interface.
+func (r ReplicaReadType) String() string {
+	switch r {
+	case ReplicaReadLeader:
+		return "leader"
+	case ReplicaReadFollower:
+		return "follower"
+	case ReplicaReadMixed:
+		return "mixed"
+	default:
+		return fmt.Sprintf("unknown-%v", byte(r))
+	}
 }
