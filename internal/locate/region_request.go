@@ -1045,8 +1045,17 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
+			cacheRegionIsValid := "unknown"
+			if s.replicaSelector.region != nil {
+				if s.replicaSelector.region.isValid() {
+					cacheRegionIsValid = "valid"
+				} else {
+					cacheRegionIsValid = "invalid"
+				}
+			}
 			logutil.Logger(bo.GetCtx()).Info("throwing pseudo region error due to no replica available",
 				zap.String("region", regionID.String()),
+				zap.String("region-valid", cacheRegionIsValid),
 				zap.Int("try-times", tryTimes),
 				zap.String("replica-read-type", req.ReplicaReadType.String()),
 				zap.Bool("stale-read", req.StaleRead),
