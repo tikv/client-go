@@ -371,6 +371,7 @@ func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
 // the leader will be updated to replicas[0] and give it another chance.
 type tryFollower struct {
 	stateBase
+	// if the leader is unavailable, but it still holds the leadership, fallbackFromLeader is true and replica read is enabled.
 	fallbackFromLeader bool
 	leaderIdx          AccessIndex
 	lastIdx            AccessIndex
