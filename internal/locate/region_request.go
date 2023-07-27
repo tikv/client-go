@@ -407,7 +407,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		replicaRead := true
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
-	return rpcCtx, err
+	return rpcCtx, nil
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
