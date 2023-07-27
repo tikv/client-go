@@ -1287,6 +1287,8 @@ func (s *RegionRequestSender) SendReqCtx(
 			totalErrors[regionErrLabel]++
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
+				msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
+				s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
 				return nil, nil, retryTimes, err
 			}
 			if retry {
@@ -1361,6 +1363,8 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		totalErrorStr.WriteString(strconv.Itoa(cnt))
 	}
 	logutil.Logger(bo.GetCtx()).Info(msg,
+		zap.Uint64("req-ts", req.GetStartTS()),
+		zap.String("req-type", req.Type.String()),
 		zap.String("region", regionID.String()),
 		zap.String("region-is-valid", cacheRegionIsValid),
 		zap.Int("retry-times", retryTimes),
