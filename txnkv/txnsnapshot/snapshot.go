@@ -118,6 +118,7 @@ type KVSnapshot struct {
 	resolvedLocks   util.TSSet
 	committedLocks  util.TSSet
 	scanBatchSize   int
+	readTimeout     time.Duration
 
 	// Cache the result of BatchGet.
 	// The invariance is that calling BatchGet multiple times using the same start ts,
@@ -982,6 +983,16 @@ func (s *KVSnapshot) mergeRegionRequestStats(stats map[tikvrpc.CmdType]*locate.R
 		stat.Count += v.Count
 		stat.Consume += v.Consume
 	}
+}
+
+// SetKVReadTimeout sets timeout for individual KV read operations under this snapshot
+func (s *KVSnapshot) SetKVReadTimeout(readTimeout time.Duration) {
+	s.readTimeout = readTimeout
+}
+
+// GetKVReadTimeout returns timeout for individual KV read operations under this snapshot or 0 if timeout is not set
+func (s *KVSnapshot) GetKVReadTimeout() time.Duration {
+	return s.readTimeout
 }
 
 func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {
