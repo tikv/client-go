@@ -1831,14 +1831,12 @@ func (s *RegionRequestSender) onRegionError(
 	if bucketVersionNotMatch := regionErr.GetBucketVersionNotMatch(); bucketVersionNotMatch != nil {
 		logutil.BgLogger().Debug(
 			"tikv reports `BucketVersionNotMatch` retry later",
-			zap.Stringer("EpochNotMatch", bucketVersionNotMatch),
+			zap.Stringer("bucketVersionNotMatch", bucketVersionNotMatch),
 			zap.Stringer("ctx", ctx),
 		)
-		retry, err := s.regionCache.OnBucketVersionNotMatch(bo, ctx, bucketVersionNotMatch.Version, bucketVersionNotMatch.Keys)
-		if !retry && s.replicaSelector != nil {
-			s.replicaSelector.invalidateRegion()
-		}
-		return retry, err
+		// bucket version is not match, we should split this cop request again.
+		s.regionCache.OnBucketVersionNotMatch(ctx, bucketVersionNotMatch.Version, bucketVersionNotMatch.Keys)
+		return false, nil
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {

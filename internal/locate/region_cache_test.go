@@ -1646,6 +1646,15 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
 	s.Error(err)
 	s.False(shouldRetry)
+
+	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{BucketVersionNotMatch: &errorpb.BucketVersionNotMatch{Keys: [][]byte{[]byte("a")}, Version: 1}})
+	s.Nil(err)
+	s.False(shouldRetry)
+	ctx.Region.GetID()
+	key, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.Equal(key.Buckets.Keys, [][]byte{[]byte("a")})
+	s.Equal(key.Buckets.Version, uint64(1))
 }
 
 func (s *testRegionCacheSuite) TestBackgroundCacheGC() {

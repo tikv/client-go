@@ -291,6 +291,10 @@ func (c *cancelContextClient) SendRequest(ctx context.Context, addr string, req 
 // mockTikvGrpcServer mock a tikv gprc server for testing.
 type mockTikvGrpcServer struct{}
 
+func (s *mockTikvGrpcServer) ReportMPPTaskStatus(ctx context.Context, request *mpp.ReportTaskStatusRequest) (*mpp.ReportTaskStatusResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 var _ tikvpb.TikvServer = &mockTikvGrpcServer{}
 
 // KvGet commands with mvcc/txn supported.

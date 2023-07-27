@@ -1947,9 +1947,24 @@ func (c *RegionCache) getStoresByLabels(labels []*metapb.StoreLabel) []*Store {
 }
 
 // OnBucketVersionNotMatch removes the old buckets meta if the version is stale.
-func (c *RegionCache) OnBucketVersionNotMatch(bo *retry.Backoffer, ctx *RPCContext, latestVersion uint64, keys [][]byte) (bool, error) {
-	c.UpdateBucketsIfNeeded(ctx.Region, latestVersion)
-	return false, nil
+func (c *RegionCache) OnBucketVersionNotMatch(ctx *RPCContext, version uint64, keys [][]byte) {
+	r := c.GetCachedRegionWithRLock(ctx.Region)
+	if r == nil {
+		println("reigon not found")
+		return
+	}
+
+	buckets := r.getStore().buckets
+	if buckets == nil || buckets.GetVersion() < version {
+		oldStore := r.getStore()
+		store := oldStore.clone()
+		store.buckets = &metapb.Buckets{
+			Version:  version,
+			Keys:     keys,
+			RegionId: r.meta.GetId(),
+		}
+		r.compareAndSwapStore(oldStore, store)
+	}
 }
 
 // OnRegionEpochNotMatch removes the old region and inserts new regions into the cache.
