@@ -379,7 +379,6 @@ type tryFollower struct {
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	var targetReplica *replica
 	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
 		for i := 0; i < len(selector.replicas); i++ {
 			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
@@ -401,12 +400,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
 			selector.targetIdx = idx
-			targetReplica = selectReplica
 		}
 		// labels only take effect for first try.
 		state.labels = nil
 	}
-	if targetReplica == nil {
+	if selector.targetIdx < 0 {
 		// Search replica that is not attempted from the last accessed replica
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
 			return !selectReplica.isExhausted(1)
@@ -414,7 +412,6 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
 			selector.targetIdx = idx
-			targetReplica = selectReplica
 		}
 	}
 
