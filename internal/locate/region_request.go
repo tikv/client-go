@@ -615,13 +615,23 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 }
 
 func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica, leaderExhaust bool) bool {
-	return !replica.isEpochStale() && !replica.isExhausted(1) &&
+	if replica.isEpochStale() || replica.isExhausted(1) || replica.store.getLivenessState() == unreachable {
+		return false
+	}
+	if state.option.leaderOnly {
 		// The request can only be sent to the leader.
-		((state.option.leaderOnly && idx == state.leaderIdx) ||
-			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && (leaderExhaust || replica.store.IsLabelsMatch(state.option.labels)))) &&
-		// Make sure the replica is not unreachable.
-		replica.store.getLivenessState() != unreachable
+		if idx == state.leaderIdx {
+			return true
+		}
+	} else if !state.tryLeader && idx == state.leaderIdx {
+		// The request cannot be sent to leader.
+		return false
+	}
+	// the replica should match labels, but when leader is exhausted, we need to try the rest available replica.
+	if leaderExhaust || replica.store.IsLabelsMatch(state.option.labels) {
+		return true
+	}
+	return false
 }
 
 type invalidStore struct {
