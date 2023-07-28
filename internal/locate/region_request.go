@@ -371,38 +371,75 @@ func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
 // the leader will be updated to replicas[0] and give it another chance.
 type tryFollower struct {
 	stateBase
-	leaderIdx AccessIndex
-	lastIdx   AccessIndex
+	// if the leader is unavailable, but it still holds the leadership, fallbackFromLeader is true and replica read is enabled.
+	fallbackFromLeader bool
+	leaderIdx          AccessIndex
+	lastIdx            AccessIndex
+	labels             []*metapb.StoreLabel
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	var targetReplica *replica
-	// Search replica that is not attempted from the last accessed replica
-	for i := 1; i < len(selector.replicas); i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
-		if idx == state.leaderIdx {
-			continue
+	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
+		for i := 0; i < len(selector.replicas); i++ {
+			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+			if idx == state.leaderIdx {
+				continue
+			}
+			selectReplica := selector.replicas[idx]
+			if fn(selectReplica) && selectReplica.store.getLivenessState() != unreachable {
+				return idx, selectReplica
+			}
 		}
-		targetReplica = selector.replicas[idx]
-		// Each follower is only tried once
-		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable {
+		return -1, nil
+	}
+
+	if len(state.labels) > 0 {
+		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
+			return selectReplica.store.IsLabelsMatch(state.labels)
+		})
+		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
 			selector.targetIdx = idx
-			break
+		}
+		// labels only take effect for first try.
+		state.labels = nil
+	}
+	if selector.targetIdx < 0 {
+		// Search replica that is not attempted from the last accessed replica
+		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
+			return !selectReplica.isExhausted(1)
+		})
+		if selectReplica != nil && idx >= 0 {
+			state.lastIdx = idx
+			selector.targetIdx = idx
 		}
 	}
+
 	// If all followers are tried and fail, backoff and retry.
 	if selector.targetIdx < 0 {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 		selector.invalidateRegion()
 		return nil, nil
 	}
-	return selector.buildRPCContext(bo)
+	rpcCtx, err := selector.buildRPCContext(bo)
+	if err != nil || rpcCtx == nil {
+		return rpcCtx, err
+	}
+	if state.fallbackFromLeader {
+		replicaRead := true
+		rpcCtx.contextPatcher.replicaRead = &replicaRead
+	}
+	return rpcCtx, nil
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
-	if !selector.region.switchWorkLeaderToPeer(selector.targetReplica().peer) {
-		panic("the store must exist")
+	if !state.fallbackFromLeader {
+		peer := selector.targetReplica().peer
+		if !selector.region.switchWorkLeaderToPeer(peer) {
+			logutil.BgLogger().Warn("the store must exist",
+				zap.Uint64("store", peer.StoreId),
+				zap.Uint64("peer", peer.Id))
+		}
 	}
 }
 
@@ -886,6 +923,27 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 	}
 	// Invalidate the region since the new leader is not in the cached version.
 	s.region.invalidate(StoreNotFound)
+}
+
+// For some reason, the leader is unreachable by now, try followers instead.
+func (s *replicaSelector) fallback2Follower(ctx *RPCContext) bool {
+	if ctx == nil || s == nil || s.state == nil {
+		return false
+	}
+	state, ok := s.state.(*accessFollower)
+	if !ok {
+		return false
+	}
+	if state.lastIdx != state.leaderIdx {
+		return false
+	}
+	s.state = &tryFollower{
+		fallbackFromLeader: true,
+		leaderIdx:          state.leaderIdx,
+		lastIdx:            state.leaderIdx,
+		labels:             state.option.labels,
+	}
+	return true
 }
 
 func (s *replicaSelector) invalidateRegion() {
@@ -1566,6 +1624,10 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		logutil.BgLogger().Warn("tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx))
+		if s.replicaSelector.fallback2Follower(ctx) {
+			// immediately retry on followers.
+			return true, nil
+		}
 		if ctx != nil && ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
 			err = bo.Backoff(retry.BoTiFlashServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 		} else {
