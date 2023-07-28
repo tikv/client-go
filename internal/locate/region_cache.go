@@ -2473,6 +2473,24 @@ const (
 	tombstone
 )
 
+// String implements fmt.Stringer interface.
+func (s resolveState) String() string {
+	switch s {
+	case unresolved:
+		return "unresolved"
+	case resolved:
+		return "resolved"
+	case needCheck:
+		return "needCheck"
+	case deleted:
+		return "deleted"
+	case tombstone:
+		return "tombstone"
+	default:
+		return fmt.Sprintf("unknown-%v", uint64(s))
+	}
+}
+
 // IsTiFlash returns true if the storeType is TiFlash
 func (s *Store) IsTiFlash() bool {
 	return s.storeType == tikvrpc.TiFlash
@@ -2612,6 +2630,12 @@ func (s *Store) changeResolveStateTo(from, to resolveState) bool {
 			return false
 		}
 		if atomic.CompareAndSwapUint64(&s.state, uint64(from), uint64(to)) {
+			logutil.BgLogger().Info("change store resolve state",
+				zap.Uint64("store", s.storeID),
+				zap.String("addr", s.addr),
+				zap.String("from", from.String()),
+				zap.String("to", to.String()),
+				zap.String("liveness-state", s.getLivenessState().String()))
 			return true
 		}
 	}
@@ -2711,6 +2735,20 @@ const (
 	unreachable
 	unknown
 )
+
+// String implements fmt.Stringer interface.
+func (s livenessState) String() string {
+	switch s {
+	case unreachable:
+		return "unreachable"
+	case reachable:
+		return "reachable"
+	case unknown:
+		return "unknown"
+	default:
+		return fmt.Sprintf("unknown-%v", uint32(s))
+	}
+}
 
 func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
 	// This mechanism doesn't support non-TiKV stores currently.
