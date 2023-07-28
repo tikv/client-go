@@ -375,24 +375,49 @@ type tryFollower struct {
 	fallbackFromLeader bool
 	leaderIdx          AccessIndex
 	lastIdx            AccessIndex
+	labels             []*metapb.StoreLabel
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	var targetReplica *replica
-	// Search replica that is not attempted from the last accessed replica
-	for i := 1; i < len(selector.replicas); i++ {
-		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
-		if idx == state.leaderIdx {
-			continue
+	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
+		for i := 0; i < len(selector.replicas); i++ {
+			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+			if idx == state.leaderIdx {
+				continue
+			}
+			selectReplica := selector.replicas[idx]
+			if fn(selectReplica) && selectReplica.store.getLivenessState() != unreachable {
+				return idx, selectReplica
+			}
 		}
-		targetReplica = selector.replicas[idx]
-		// Each follower is only tried once
-		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable {
+		return -1, nil
+	}
+
+	if len(state.labels) > 0 {
+		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
+			return selectReplica.store.IsLabelsMatch(state.labels)
+		})
+		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
 			selector.targetIdx = idx
-			break
+			targetReplica = selectReplica
+		}
+		// labels only take effect for first try.
+		state.labels = nil
+	}
+	if targetReplica == nil {
+		// Search replica that is not attempted from the last accessed replica
+		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
+			return !selectReplica.isExhausted(1)
+		})
+		if selectReplica != nil && idx >= 0 {
+			state.lastIdx = idx
+			selector.targetIdx = idx
+			targetReplica = selectReplica
 		}
 	}
+
 	// If all followers are tried and fail, backoff and retry.
 	if selector.targetIdx < 0 {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
@@ -915,7 +940,12 @@ func (s *replicaSelector) fallback2Follower(ctx *RPCContext) bool {
 	if state.lastIdx != state.leaderIdx {
 		return false
 	}
-	s.state = &tryFollower{fallbackFromLeader: true, leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
+	s.state = &tryFollower{
+		fallbackFromLeader: true,
+		leaderIdx:          state.leaderIdx,
+		lastIdx:            state.leaderIdx,
+		labels:             state.option.labels,
+	}
 	return true
 }
 
