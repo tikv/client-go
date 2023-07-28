@@ -533,10 +533,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	for i := 0; i < regionStore.accessStoreNum(tiKVOnly)-1; i++ {
 		rpcCtx, err := replicaSelector.next(s.bo)
 		s.Nil(err)
-		// Should swith to the next follower.
+		// Should switch to the next follower.
 		s.NotEqual(lastIdx, state3.lastIdx)
 		// Shouldn't access the leader if followers aren't exhausted.
-		s.NotEqual(regionStore.workTiKVIdx, state3.lastIdx)
+		if regionStore.workTiKVIdx == state3.lastIdx {
+			s.NotEqual(regionStore.workTiKVIdx, state3.lastIdx)
+		}
 		s.Equal(replicaSelector.targetIdx, state3.lastIdx)
 		assertRPCCtxEqual(rpcCtx, replicaSelector.replicas[replicaSelector.targetIdx], nil)
 		lastIdx = state3.lastIdx

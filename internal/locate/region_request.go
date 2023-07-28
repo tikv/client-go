@@ -552,10 +552,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 
 	reloadRegion := false
+	leaderExhaust := state.IsLeaderExhausted(selector.replicas[state.leaderIdx])
 	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
 		selectReplica := selector.replicas[idx]
-		if state.isCandidate(idx, selectReplica) {
+		if state.isCandidate(idx, selectReplica, leaderExhaust) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -575,7 +576,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			logutil.BgLogger().Warn("unable to find stores with given labels")
 		}
 		leader := selector.replicas[state.leaderIdx]
-		if leader.isEpochStale() || state.IsLeaderExhausted(leader) {
+		if leader.isEpochStale() || leaderExhaust {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 			return nil, nil
@@ -613,12 +614,12 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 	}
 }
 
-func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool {
+func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica, leaderExhaust bool) bool {
 	return !replica.isEpochStale() && !replica.isExhausted(1) &&
 		// The request can only be sent to the leader.
 		((state.option.leaderOnly && idx == state.leaderIdx) ||
 			// Choose a replica with matched labels.
-			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && (state.lastIdx >= 0 || replica.store.IsLabelsMatch(state.option.labels)))) &&
+			(!state.option.leaderOnly && (state.tryLeader || idx != state.leaderIdx) && (leaderExhaust || replica.store.IsLabelsMatch(state.option.labels)))) &&
 		// Make sure the replica is not unreachable.
 		replica.store.getLivenessState() != unreachable
 }
@@ -1681,7 +1682,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		// backoff other cases to avoid infinite retries.
 		err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
 		if err != nil {
-		    return false, err
+			return false, err
 		}
 		return true, nil
 	}
