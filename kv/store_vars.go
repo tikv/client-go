@@ -84,6 +84,10 @@ func (r ReplicaReadType) String() string {
 		return "follower"
 	case ReplicaReadMixed:
 		return "mixed"
+	case ReplicaReadLearner:
+		return "learner"
+	case ReplicaReadPreferLeader:
+		return "prefer-leader"
 	default:
 		return fmt.Sprintf("unknown-%v", byte(r))
 	}
