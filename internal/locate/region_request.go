@@ -1632,12 +1632,12 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 	// If it failed because the context is cancelled by ourself, don't retry.
-	if errors.Cause(err) == context.Canceled {
+	if cause := errors.Cause(err); cause == context.Canceled || cause == context.DeadlineExceeded {
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
 	}
-	if status.Code(errors.Cause(err)) == codes.Canceled {
+	if code := status.Code(errors.Cause(err)); code == codes.Canceled || code == codes.DeadlineExceeded {
 		select {
 		case <-bo.GetCtx().Done():
 			return errors.WithStack(err)
@@ -1645,7 +1645,11 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 			// If we don't cancel, but the error code is Canceled, it must be from grpc remote.
 			// This may happen when tikv is killed and exiting.
 			// Backoff and retry in this case.
-			logutil.BgLogger().Warn("receive a grpc cancel signal from remote", zap.Error(err))
+			sig := "cancel"
+			if code == codes.DeadlineExceeded {
+				sig = "deadline exceeded"
+			}
+			logutil.BgLogger().Warn(fmt.Sprintf("receive a grpc %s signal from remote", sig), zap.Error(err))
 		}
 	}
 
