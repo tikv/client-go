@@ -572,12 +572,16 @@ func (c *RPCContext) String() string {
 }
 
 type contextPatcher struct {
-	staleRead *bool
+	staleRead   *bool
+	replicaRead *bool
 }
 
 func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
 	if patcher.staleRead != nil {
 		pbCtx.StaleRead = *patcher.staleRead
+	}
+	if patcher.replicaRead != nil {
+		pbCtx.ReplicaRead = *patcher.replicaRead
 	}
 }
 
@@ -1191,9 +1195,11 @@ func (c *RegionCache) reloadRegion(regionID uint64) {
 		// ignore error and use old region info.
 		logutil.Logger(bo.GetCtx()).Error("load region failure",
 			zap.Uint64("regionID", regionID), zap.Error(err))
+		c.mu.RLock()
 		if oldRegion := c.getRegionByIDFromCache(regionID); oldRegion != nil {
-			atomic.StoreInt32(&oldRegion.asyncReload, 0)
+			atomic.CompareAndSwapInt32(&oldRegion.asyncReload, 1, 0)
 		}
+		c.mu.RUnlock()
 		return
 	}
 	c.mu.Lock()
