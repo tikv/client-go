@@ -35,9 +35,11 @@
 package retry
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -150,6 +152,18 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 				errMsg += "\n" + err.Error()
 			}
 		}
+		var backoffDetail bytes.Buffer
+		totalTimes := 0
+		for name, times := range b.backoffTimes {
+			totalTimes += times
+			if backoffDetail.Len() > 0 {
+				backoffDetail.WriteString(", ")
+			}
+			backoffDetail.WriteString(name)
+			backoffDetail.WriteString(":")
+			backoffDetail.WriteString(strconv.Itoa(times))
+		}
+		errMsg += fmt.Sprintf("\ntotal-backoff-times: %v, backoff-detail: %v", totalTimes, backoffDetail.String())
 		returnedErr := err
 		if longestSleepCfg != nil {
 			errMsg += fmt.Sprintf("\nlongest sleep type: %s, time: %dms", longestSleepCfg.String(), longestSleepTime)
