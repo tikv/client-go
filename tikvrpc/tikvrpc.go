@@ -1271,3 +1271,51 @@ func (req *Request) IsTxnWriteRequest() bool {
 
 // ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
 type ResourceGroupTagger func(req *Request)
+
+// GetStartTS returns the `start_ts` of the request.
+func (req *Request) GetStartTS() uint64 {
+	switch req.Type {
+	case CmdGet:
+		return req.Get().GetVersion()
+	case CmdScan:
+		return req.Scan().GetVersion()
+	case CmdPrewrite:
+		return req.Prewrite().GetStartVersion()
+	case CmdCommit:
+		return req.Commit().GetStartVersion()
+	case CmdCleanup:
+		return req.Cleanup().GetStartVersion()
+	case CmdBatchGet:
+		return req.BatchGet().GetVersion()
+	case CmdBatchRollback:
+		return req.BatchRollback().GetStartVersion()
+	case CmdScanLock:
+		return req.ScanLock().GetMaxVersion()
+	case CmdResolveLock:
+		return req.ResolveLock().GetStartVersion()
+	case CmdPessimisticLock:
+		return req.PessimisticLock().GetStartVersion()
+	case CmdPessimisticRollback:
+		return req.PessimisticRollback().GetStartVersion()
+	case CmdTxnHeartBeat:
+		return req.TxnHeartBeat().GetStartVersion()
+	case CmdCheckTxnStatus:
+		return req.CheckTxnStatus().GetLockTs()
+	case CmdCheckSecondaryLocks:
+		return req.CheckSecondaryLocks().GetStartVersion()
+	case CmdFlashbackToVersion:
+		return req.FlashbackToVersion().GetStartTs()
+	case CmdPrepareFlashbackToVersion:
+		req.PrepareFlashbackToVersion().GetStartTs()
+	case CmdCop:
+		return req.Cop().GetStartTs()
+	case CmdCopStream:
+		return req.Cop().GetStartTs()
+	case CmdBatchCop:
+		return req.BatchCop().GetStartTs()
+	case CmdMvccGetByStartTs:
+		return req.MvccGetByStartTs().GetStartTs()
+	default:
+	}
+	return 0
+}
