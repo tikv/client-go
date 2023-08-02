@@ -72,8 +72,11 @@ func (s *apiTestSuite) SetupTest() {
 	// Set PD HTTP client.
 	store, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDHTTPClient(nil, addrs))
 	s.store = store
-	storeID := uint64(1)
-	s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, nil)
+	// Need to start cluster at least with 3 stores for test.
+	for i := 1; i <= 3; i++ {
+		storeID := uint64(i)
+		s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, nil)
+	}
 }
 
 func (s *apiTestSuite) storeAddr(id uint64) string {
@@ -120,7 +123,7 @@ func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 		}
 		retryCount++
 	}
-	require.Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
+	require.Equal(int32(0), atomic.LoadInt32(&mockClient.requestCount))
 	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	require.Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 

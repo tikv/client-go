@@ -35,6 +35,7 @@
 package util
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -56,7 +57,7 @@ const (
 	// pd request retry time when connection fail.
 	pdRequestRetryTime = 10
 
-	storeMinResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
+	minResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
 )
 
 // PDHTTPClient is an HTTP client of pd.
@@ -86,45 +87,52 @@ func NewPDHTTPClient(
 	}
 }
 
-// GetStoreMinResolvedTS get store-level min-resolved-ts from pd.
-func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64) (uint64, error) {
+// GetMinResolvedTSByStoresIDs get min-resolved-ts from pd by stores ids.
+func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []string) (map[uint64]uint64, error) {
 	var err error
 	for _, addr := range p.addrs {
-		query := fmt.Sprintf("%s/%d", storeMinResolvedTSPrefix, storeID)
-		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
+		data, err := json.Marshal(storeIDs)
+		if err != nil {
+			logutil.BgLogger().Debug("failed to marshal store ids", zap.String("addr", addr), zap.Error(err))
+			return nil, errors.Trace(err)
+		}
+		v, e := pdRequest(ctx, addr, minResolvedTSPrefix, p.cli, http.MethodGet, bytes.NewBuffer(data))
 		if e != nil {
 			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			err = e
 			continue
 		}
-		logutil.BgLogger().Debug("store min resolved ts", zap.String("resp", string(v)))
+		logutil.BgLogger().Debug("min resolved ts", zap.String("resp", string(v)))
 		d := struct {
-			IsRealTime    bool   `json:"is_real_time,omitempty"`
-			MinResolvedTS uint64 `json:"min_resolved_ts"`
+			IsRealTime         bool              `json:"is_real_time,omitempty"`
+			StoreMinResolvedTS map[uint64]uint64 `json:"store_min_resolved_ts"`
 		}{}
 		err = json.Unmarshal(v, &d)
 		if err != nil {
-			return 0, errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 		if !d.IsRealTime {
-			message := fmt.Errorf("store min resolved ts not enabled, addr: %s", addr)
+			message := fmt.Errorf("min resolved ts not enabled, addr: %s", addr)
 			logutil.BgLogger().Debug(message.Error())
-			return 0, errors.Trace(message)
+			return nil, errors.Trace(message)
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
 			// Need to make sure successfully get from real pd.
-			if d.MinResolvedTS != 0 {
-				// Should be val.(uint64) but failpoint doesn't support that.
-				if tmp, ok := val.(int); ok {
-					d.MinResolvedTS = uint64(tmp)
+			for storeID, v := range d.StoreMinResolvedTS {
+				if v != 0 {
+					// Should be val.(uint64) but failpoint doesn't support that.
+					if tmp, ok := val.(int); ok {
+						d.StoreMinResolvedTS[storeID] = uint64(tmp)
+					}
 				}
 			}
+
 		}
 
-		return d.MinResolvedTS, nil
+		return d.StoreMinResolvedTS, nil
 	}
 
-	return 0, errors.Trace(err)
+	return nil, errors.Trace(err)
 }
 
 // pdRequest is a func to send an HTTP to pd and return the result bytes.
