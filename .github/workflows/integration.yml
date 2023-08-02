@@ -69,7 +69,10 @@ jobs:
           mv ../${{steps.extract-tikv.outputs.destination}}/tikv-server .
           ./pd-server > pd.log 2>&1 &
           sleep 5
-          ./tikv-server -C tikv.toml > tikv.log 2>&1 &
+          TIKV_COUNT=3
+          for i in $(seq $TIKV_COUNT); do
+            ./tikv-server -C tikv.toml > "tikv${i}.log" 2>&1 &
+          done
           sleep 15
         working-directory: integration_tests
 
