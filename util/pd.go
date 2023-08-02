@@ -104,8 +104,8 @@ func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs
 		}
 		logutil.BgLogger().Debug("min resolved ts", zap.String("resp", string(v)))
 		d := struct {
-			IsRealTime         bool              `json:"is_real_time,omitempty"`
-			StoreMinResolvedTS map[uint64]uint64 `json:"store_min_resolved_ts"`
+			IsRealTime          bool              `json:"is_real_time,omitempty"`
+			StoresMinResolvedTS map[uint64]uint64 `json:"stores_min_resolved_ts"`
 		}{}
 		err = json.Unmarshal(v, &d)
 		if err != nil {
@@ -118,18 +118,19 @@ func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
 			// Need to make sure successfully get from real pd.
-			for storeID, v := range d.StoreMinResolvedTS {
+			for storeID, v := range d.StoresMinResolvedTS {
 				if v != 0 {
 					// Should be val.(uint64) but failpoint doesn't support that.
 					if tmp, ok := val.(int); ok {
-						d.StoreMinResolvedTS[storeID] = uint64(tmp)
+						d.StoresMinResolvedTS[storeID] = uint64(tmp)
+						logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("storeID", storeID), zap.Uint64("ts", uint64(tmp)))
 					}
 				}
 			}
 
 		}
 
-		return d.StoreMinResolvedTS, nil
+		return d.StoresMinResolvedTS, nil
 	}
 
 	return nil, errors.Trace(err)

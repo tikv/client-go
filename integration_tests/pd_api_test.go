@@ -72,11 +72,8 @@ func (s *apiTestSuite) SetupTest() {
 	// Set PD HTTP client.
 	store, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDHTTPClient(nil, addrs))
 	s.store = store
-	// Need to start cluster at least with 3 stores for test.
-	for i := 1; i <= 3; i++ {
-		storeID := uint64(i)
-		s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, nil)
-	}
+	storeID := uint64(1)
+	s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, nil)
 }
 
 func (s *apiTestSuite) storeAddr(id uint64) string {
