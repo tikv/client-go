@@ -197,7 +197,14 @@ func WithPool(gp Pool) Option {
 // WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
 func WithPDHTTPClient(tlsConf *tls.Config, pdaddrs []string) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
+		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs, nil)
+	}
+}
+
+// WithPDHTTPClientTimeout set the PD HTTP client with the given address, TLS config and http client config.
+func WithPDHTTPClientTimeout(tlsConf *tls.Config, pdaddrs []string, httpCfg *util.HttpClientConfig) Option {
+	return func(o *KVStore) {
+		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs, httpCfg)
 	}
 }
 

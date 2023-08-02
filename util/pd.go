@@ -68,6 +68,7 @@ type PDHTTPClient struct {
 func NewPDHTTPClient(
 	tlsConf *tls.Config,
 	pdAddrs []string,
+	cfg *HttpClientConfig,
 ) *PDHTTPClient {
 	for i, addr := range pdAddrs {
 		if !strings.HasPrefix(addr, "http") {
@@ -82,7 +83,7 @@ func NewPDHTTPClient(
 
 	return &PDHTTPClient{
 		addrs: pdAddrs,
-		cli:   httpClient(tlsConf),
+		cli:   httpClient(tlsConf, cfg),
 	}
 }
 
@@ -192,10 +193,23 @@ func pdRequestRetryInterval() time.Duration {
 	return time.Second
 }
 
+// HttpClientConfig is the configuration of HttpClient.
+type HttpClientConfig struct {
+	timeout time.Duration
+}
+
+// NewHttpClientConfig returns a new HttpClientConfig.
+func NewHttpClientConfig(timeout time.Duration) *HttpClientConfig {
+	return &HttpClientConfig{timeout: timeout}
+}
+
 // httpClient returns an HTTP(s) client.
-func httpClient(tlsConf *tls.Config) *http.Client {
+func httpClient(tlsConf *tls.Config, cfg *HttpClientConfig) *http.Client {
 	// defaultTimeout for non-context requests.
-	const defaultTimeout = 30 * time.Second
+	var defaultTimeout = 30 * time.Second
+	if cfg != nil {
+		defaultTimeout = cfg.timeout
+	}
 	cli := &http.Client{Timeout: defaultTimeout}
 	if tlsConf != nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
