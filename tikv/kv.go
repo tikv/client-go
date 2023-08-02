@@ -201,8 +201,8 @@ func WithPDHTTPClient(tlsConf *tls.Config, pdaddrs []string) Option {
 	}
 }
 
-// WithPDHTTPClientTimeout set the PD HTTP client with the given address, TLS config and http client config.
-func WithPDHTTPClientTimeout(tlsConf *tls.Config, pdaddrs []string, httpCfg *util.HttpClientConfig) Option {
+// WithPDHTTPClientCfg set the PD HTTP client with the given address, TLS config and http client config.
+func WithPDHTTPClientCfg(tlsConf *tls.Config, pdaddrs []string, httpCfg *util.HttpClientConfig) Option {
 	return func(o *KVStore) {
 		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs, httpCfg)
 	}
