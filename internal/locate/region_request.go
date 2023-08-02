@@ -969,7 +969,8 @@ func (s *replicaSelector) canFallback2Follower() bool {
 	if !state.isStaleRead {
 		return false
 	}
-	return state.lastIdx == state.leaderIdx
+	// can fallback to follower only when the leader is exhausted.
+	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
 }
 
 func (s *replicaSelector) invalidateRegion() {
