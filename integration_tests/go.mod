@@ -113,7 +113,7 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/kvproto v0.0.0-20230703085931-3788ab4ee6b3 => github.com/bufferflies/kvproto v0.0.0-20230721065214-b8832b150494
+	github.com/pingcap/kvproto v0.0.0-20230703085931-3788ab4ee6b3 => github.com/bufferflies/kvproto v0.0.0-20230803075552-24f552d99840
 	github.com/pingcap/tidb => github.com/defined2014/tidb v1.1.0-beta.0.20230712071811-87a5c15e9c7d
 	github.com/pingcap/tidb/parser => github.com/defined2014/tidb/parser v0.0.0-20230712071811-87a5c15e9c7d
 	github.com/tikv/client-go/v2 => ../
