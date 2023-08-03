@@ -592,9 +592,9 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 	for _, store := range stores {
 		storeIDs = append(storeIDs, strconv.FormatUint(store.StoreID(), 10))
 	}
-	StoreMinResolvedTSs := make(map[uint64]uint64)
+	storeMinResolvedTSs := make(map[uint64]uint64)
 	if s.pdHttpClient != nil {
-		StoreMinResolvedTSs, err = s.pdHttpClient.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
+		storeMinResolvedTSs, err = s.pdHttpClient.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
 		if err != nil {
 			// If getting the minimum resolved timestamp from PD failed, log the error and need to get it from TiKV.
 			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err), zap.Any("stores", storeIDs))
@@ -610,7 +610,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
 
-			safeTS := StoreMinResolvedTSs[storeID]
+			safeTS := storeMinResolvedTSs[storeID]
 			storeIDStr := strconv.FormatUint(storeID, 10)
 			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
 			if safeTS == 0 || err != nil {
