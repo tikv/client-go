@@ -107,7 +107,7 @@ func (r *RequestSource) GetRequestSource() string {
 		source = r.RequestSourceType
 	}
 	labelList = append(labelList, source)
-	if len(r.ExplicitRequestSourceType) > 0 {
+	if len(r.ExplicitRequestSourceType) > 0 && r.ExplicitRequestSourceType != r.RequestSourceType {
 		labelList = append(labelList, r.ExplicitRequestSourceType)
 	}
 
