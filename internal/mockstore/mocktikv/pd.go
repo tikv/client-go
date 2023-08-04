@@ -291,6 +291,10 @@ func (c *pdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID strin
 	return minSafePoint, nil
 }
 
+func (c *pdClient) GetAllKeyspaces(ctx context.Context, startID uint32, limit uint32) ([]*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
 func (c *pdClient) Close() {
 }
 

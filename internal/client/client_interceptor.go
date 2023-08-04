@@ -107,6 +107,10 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	interceptFn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			// If the resource group has background jobs, we should not record consumption and wait for it.
+			if resourceControlInterceptor.IsBackgroundRequest(ctx, resourceGroupName, req.RequestSource) {
+				return next(target, req)
+			}
 			consumption, penalty, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err

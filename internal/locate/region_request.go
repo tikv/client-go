@@ -35,6 +35,7 @@
 package locate
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -402,7 +403,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		}
 		targetReplica = selector.replicas[idx]
 		// Each follower is only tried once
-		if !targetReplica.isExhausted(1) {
+		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -608,14 +609,15 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
-		if len(state.option.labels) > 0 {
-			logutil.BgLogger().Warn(
-				"unable to find stores with given labels",
-				zap.Any("labels", state.option.labels),
-			)
-		}
 		leader := selector.replicas[state.leaderIdx]
-		if leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1)) {
+		leaderInvalid := leader.isEpochStale() || (!state.option.leaderOnly && leader.isExhausted(1))
+		if len(state.option.labels) > 0 {
+			logutil.Logger(bo.GetCtx()).Warn("unable to find stores with given labels",
+				zap.Uint64("region", selector.region.GetID()),
+				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Any("labels", state.option.labels))
+		}
+		if leaderInvalid {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 			return nil, nil
@@ -649,8 +651,8 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 }
 
 func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool {
-	// the epoch is staled or retry exhausted.
-	if replica.isEpochStale() || replica.isExhausted(1) {
+	// the epoch is staled or retry exhausted, or the store is unreachable.
+	if replica.isEpochStale() || replica.isExhausted(1) || replica.store.getLivenessState() == unreachable {
 		return false
 	}
 	// The request can only be sent to the leader.
@@ -1189,6 +1191,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
+	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
 			req.IsRetryRequest = true
@@ -1221,10 +1224,7 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
-			logutil.Logger(bo.GetCtx()).Debug(
-				"throwing pseudo region error due to region not found in cache",
-				zap.Stringer("region", &regionID),
-			)
+			s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, totalErrors)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
 		}
@@ -1250,6 +1250,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
+			msg := fmt.Sprintf("send request failed, err: %v", err.Error())
+			s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
 			return nil, nil, retryTimes, err
 		}
 
@@ -1281,14 +1283,19 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 		if regionErr != nil {
+			regionErrLabel := regionErrorToLabel(regionErr)
+			totalErrors[regionErrLabel]++
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
+				msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
+				s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
 				return nil, nil, retryTimes, err
 			}
 			if retry {
 				retryTimes++
 				continue
 			}
+			s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, totalErrors)
 		} else {
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess()
@@ -1299,6 +1306,75 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 		return resp, rpcCtx, retryTimes, nil
 	}
+}
+
+func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, totalErrors map[string]int) {
+	var replicaStatus []string
+	replicaSelectorState := "nil"
+	cacheRegionIsValid := "unknown"
+	if s.replicaSelector != nil {
+		switch s.replicaSelector.state.(type) {
+		case *accessKnownLeader:
+			replicaSelectorState = "accessKnownLeader"
+		case *accessFollower:
+			replicaSelectorState = "accessFollower"
+		case *accessByKnownProxy:
+			replicaSelectorState = "accessByKnownProxy"
+		case *tryFollower:
+			replicaSelectorState = "tryFollower"
+		case *tryNewProxy:
+			replicaSelectorState = "tryNewProxy"
+		case *invalidLeader:
+			replicaSelectorState = "invalidLeader"
+		case *invalidStore:
+			replicaSelectorState = "invalidStore"
+		case *stateBase:
+			replicaSelectorState = "stateBase"
+		case nil:
+			replicaSelectorState = "nil"
+		}
+		if s.replicaSelector.region != nil {
+			if s.replicaSelector.region.isValid() {
+				cacheRegionIsValid = "true"
+			} else {
+				cacheRegionIsValid = "false"
+			}
+		}
+		for _, replica := range s.replicaSelector.replicas {
+			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
+				replica.peer.GetId(),
+				replica.store.storeID,
+				replica.isEpochStale(),
+				replica.attempts,
+				replica.epoch,
+				atomic.LoadUint32(&replica.store.epoch),
+				replica.store.getResolveState(),
+				replica.store.getLivenessState(),
+			))
+		}
+	}
+	var totalErrorStr bytes.Buffer
+	for err, cnt := range totalErrors {
+		if totalErrorStr.Len() > 0 {
+			totalErrorStr.WriteString(", ")
+		}
+		totalErrorStr.WriteString(err)
+		totalErrorStr.WriteString(":")
+		totalErrorStr.WriteString(strconv.Itoa(cnt))
+	}
+	logutil.Logger(bo.GetCtx()).Info(msg,
+		zap.Uint64("req-ts", req.GetStartTS()),
+		zap.String("req-type", req.Type.String()),
+		zap.String("region", regionID.String()),
+		zap.String("region-is-valid", cacheRegionIsValid),
+		zap.Int("retry-times", retryTimes),
+		zap.String("replica-read-type", req.ReplicaReadType.String()),
+		zap.String("replica-selector-state", replicaSelectorState),
+		zap.Bool("stale-read", req.StaleRead),
+		zap.String("replica-status", strings.Join(replicaStatus, "; ")),
+		zap.Int("total-backoff-ms", bo.GetTotalSleep()),
+		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+		zap.String("total-region-errors", totalErrorStr.String()))
 }
 
 // RPCCancellerCtxKey is context key attach rpc send cancelFunc collector to ctx.

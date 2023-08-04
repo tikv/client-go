@@ -1,3 +1,17 @@
+// Copyright 2023 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package util
 
 import (
@@ -80,6 +94,16 @@ func WithInternalSourceType(ctx context.Context, source string) context.Context 
 	})
 }
 
+// BuildRequestSource builds a request_source from internal, source and explicitSource.
+func BuildRequestSource(internal bool, source, explicitSource string) string {
+	requestSource := RequestSource{
+		RequestSourceInternal:     internal,
+		RequestSourceType:         source,
+		ExplicitRequestSourceType: explicitSource,
+	}
+	return requestSource.GetRequestSource()
+}
+
 // IsRequestSourceInternal checks whether the input request source type is internal type.
 func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 	isInternal := false
@@ -134,9 +158,9 @@ type resourceGroupNameKeyType struct{}
 // ResourceGroupNameKey is used as the key of request source type in context.
 var resourceGroupNameKey = resourceGroupNameKeyType{}
 
-// WithResouceGroupName return a copy of the given context with a associated
-// reosurce group name.
-func WithResouceGroupName(ctx context.Context, groupName string) context.Context {
+// WithResourceGroupName return a copy of the given context with a associated
+// resource group name.
+func WithResourceGroupName(ctx context.Context, groupName string) context.Context {
 	return context.WithValue(ctx, resourceGroupNameKey, groupName)
 }
 
