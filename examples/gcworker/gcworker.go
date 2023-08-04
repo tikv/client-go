@@ -36,6 +36,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+
 	sysSafepoint, err := client.GC(context.Background(), *safepoint, tikv.WithConcurrency(10))
 	if err != nil {
 		panic(err)
