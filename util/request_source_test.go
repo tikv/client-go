@@ -79,7 +79,7 @@ func TestBuildRequestSource(t *testing.T) {
 	assert.Equal(t, expected, actual)
 
 	// Test empty ExplicitRequestSourceType
-	expected = "external_test_default"
+	expected = "external_test"
 	actual = BuildRequestSource(false, "test", "")
 	assert.Equal(t, expected, actual)
 
@@ -89,7 +89,7 @@ func TestBuildRequestSource(t *testing.T) {
 	assert.Equal(t, expected, actual)
 
 	// Test RequestSourceType && ExplicitRequestSourceType both empty
-	expected = "unknown_default"
+	expected = "unknown"
 	actual = BuildRequestSource(true, "", "")
 	assert.Equal(t, expected, actual)
 }
