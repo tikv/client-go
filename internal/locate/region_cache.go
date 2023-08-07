@@ -534,10 +534,12 @@ func (c *RegionCache) Close() {
 	c.cancelFunc()
 }
 
+var reloadRegionInterval = int64(10 * time.Second)
+
 // asyncCheckAndResolveLoop with
 func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	reloadRegionTicker := time.NewTicker(10 * time.Second)
+	reloadRegionTicker := time.NewTicker(time.Duration(atomic.LoadInt64(&reloadRegionInterval)))
 	defer func() {
 		ticker.Stop()
 		reloadRegionTicker.Stop()
