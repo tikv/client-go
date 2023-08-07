@@ -112,6 +112,10 @@ type RegionRequestSender struct {
 	RegionRequestRuntimeStats
 }
 
+func (s *RegionRequestSender) String() string {
+	return fmt.Sprintf("{replicaSelector: %v}", s.replicaSelector.String())
+}
+
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
 	Stats map[tikvrpc.CmdType]*RPCRuntimeStats
@@ -271,6 +275,64 @@ type replicaSelector struct {
 	// TiKV can reject the request when its estimated wait duration exceeds busyThreshold.
 	// Then, the client will receive a ServerIsBusy error and choose another replica to retry.
 	busyThreshold time.Duration
+}
+
+func selectorStateToString(state selectorState) string {
+	replicaSelectorState := "nil"
+	if state != nil {
+		switch state.(type) {
+		case *accessKnownLeader:
+			replicaSelectorState = "accessKnownLeader"
+		case *accessFollower:
+			replicaSelectorState = "accessFollower"
+		case *accessByKnownProxy:
+			replicaSelectorState = "accessByKnownProxy"
+		case *tryFollower:
+			replicaSelectorState = "tryFollower"
+		case *tryNewProxy:
+			replicaSelectorState = "tryNewProxy"
+		case *invalidLeader:
+			replicaSelectorState = "invalidLeader"
+		case *invalidStore:
+			replicaSelectorState = "invalidStore"
+		case *stateBase:
+			replicaSelectorState = "stateBase"
+		case nil:
+			replicaSelectorState = "nil"
+		}
+	}
+	return replicaSelectorState
+}
+
+func (s *replicaSelector) String() string {
+	var replicaStatus []string
+	cacheRegionIsValid := "unknown"
+	selectorStateStr := "nil"
+	if s != nil {
+		selectorStateStr = selectorStateToString(s.state)
+		if s.region != nil {
+			if s.region.isValid() {
+				cacheRegionIsValid = "true"
+			} else {
+				cacheRegionIsValid = "false"
+			}
+		}
+		for _, replica := range s.replicas {
+			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, "+
+				"attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
+				replica.peer.GetId(),
+				replica.store.storeID,
+				replica.isEpochStale(),
+				replica.attempts,
+				replica.epoch,
+				atomic.LoadUint32(&replica.store.epoch),
+				replica.store.getResolveState(),
+				replica.store.getLivenessState(),
+			))
+		}
+	}
+
+	return fmt.Sprintf("replicaSelector{selectorStateStr: %v, cacheRegionIsValid: %v, replicaStatus: %v}", selectorStateStr, cacheRegionIsValid, replicaStatus)
 }
 
 // selectorState is the interface of states of the replicaSelector.
@@ -1401,8 +1463,8 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 		if regionErr != nil {
-			regionErrLabel := regionErrorToLabel(regionErr)
-			totalErrors[regionErrLabel]++
+			regionErrLogging := regionErrorToLogging(rpcCtx.Peer.GetId(), regionErr)
+			totalErrors[regionErrLogging]++
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
 				msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
@@ -1427,50 +1489,6 @@ func (s *RegionRequestSender) SendReqCtx(
 }
 
 func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, totalErrors map[string]int) {
-	var replicaStatus []string
-	replicaSelectorState := "nil"
-	cacheRegionIsValid := "unknown"
-	if s.replicaSelector != nil {
-		switch s.replicaSelector.state.(type) {
-		case *accessKnownLeader:
-			replicaSelectorState = "accessKnownLeader"
-		case *accessFollower:
-			replicaSelectorState = "accessFollower"
-		case *accessByKnownProxy:
-			replicaSelectorState = "accessByKnownProxy"
-		case *tryFollower:
-			replicaSelectorState = "tryFollower"
-		case *tryNewProxy:
-			replicaSelectorState = "tryNewProxy"
-		case *invalidLeader:
-			replicaSelectorState = "invalidLeader"
-		case *invalidStore:
-			replicaSelectorState = "invalidStore"
-		case *stateBase:
-			replicaSelectorState = "stateBase"
-		case nil:
-			replicaSelectorState = "nil"
-		}
-		if s.replicaSelector.region != nil {
-			if s.replicaSelector.region.isValid() {
-				cacheRegionIsValid = "true"
-			} else {
-				cacheRegionIsValid = "false"
-			}
-		}
-		for _, replica := range s.replicaSelector.replicas {
-			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
-				replica.peer.GetId(),
-				replica.store.storeID,
-				replica.isEpochStale(),
-				replica.attempts,
-				replica.epoch,
-				atomic.LoadUint32(&replica.store.epoch),
-				replica.store.getResolveState(),
-				replica.store.getLivenessState(),
-			))
-		}
-	}
 	var totalErrorStr bytes.Buffer
 	for err, cnt := range totalErrors {
 		if totalErrorStr.Len() > 0 {
@@ -1484,12 +1502,10 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		zap.Uint64("req-ts", req.GetStartTS()),
 		zap.String("req-type", req.Type.String()),
 		zap.String("region", regionID.String()),
-		zap.String("region-is-valid", cacheRegionIsValid),
-		zap.Int("retry-times", retryTimes),
 		zap.String("replica-read-type", req.ReplicaReadType.String()),
-		zap.String("replica-selector-state", replicaSelectorState),
 		zap.Bool("stale-read", req.StaleRead),
-		zap.String("replica-status", strings.Join(replicaStatus, "; ")),
+		zap.Stringer("request-sender", s),
+		zap.Int("retry-times", retryTimes),
 		zap.Int("total-backoff-ms", bo.GetTotalSleep()),
 		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
 		zap.String("total-region-errors", totalErrorStr.String()))
@@ -1838,6 +1854,20 @@ func (s *RegionRequestSender) NeedReloadRegion(ctx *RPCContext) (need bool) {
 		s.failProxyStoreIDs = nil
 	}
 	return
+}
+
+// regionErrorToLogging constructs the logging content with extra information like returned leader peer id.
+func regionErrorToLogging(peerID uint64, e *errorpb.Error) string {
+	str := regionErrorToLabel(e)
+	if e.GetNotLeader() != nil {
+		notLeader := e.GetNotLeader()
+		if notLeader.GetLeader() != nil {
+			str = fmt.Sprintf("%v-%v", str, notLeader.GetLeader().GetId())
+		} else {
+			str = fmt.Sprintf("%v-nil", str)
+		}
+	}
+	return fmt.Sprintf("%v-%v", peerID, str)
 }
 
 func regionErrorToLabel(e *errorpb.Error) string {
