@@ -705,6 +705,19 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	return rpcCtx, nil
 }
 
+func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
+	// Allow another extra retry for the following case:
+	// 1. The stale read is enabled and leader peer is selected as the target peer at first.
+	// 2. Data is not ready is returned from the leader peer.
+	// 3. Stale read flag is removed and processing falls back to snapshot read on the leader peer.
+	// 4. The leader peer should be retried again using snapshot read.
+	if state.isStaleRead && state.option.leaderOnly {
+		return leader.isExhausted(2)
+	} else {
+		return leader.isExhausted(1)
+	}
+}
+
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
 	if selector.checkLiveness(bo, selector.targetReplica()) != reachable {
 		selector.invalidateReplicaStore(selector.targetReplica(), cause)
