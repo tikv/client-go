@@ -1982,6 +1982,7 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.
+	// if the region error is from follower, can we mark the peer unavailable and reload region asynchronously?
 	if regionErr.GetRegionNotFound() != nil {
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return false, nil
