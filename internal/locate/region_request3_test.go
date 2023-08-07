@@ -1185,7 +1185,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 	var ops []StoreSelectorOption
 	ops = append(ops, WithMatchLabels(leaderLabel))
 
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	bo := retry.NewBackoffer(ctx, -1)
 	s.Nil(err)
 	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
