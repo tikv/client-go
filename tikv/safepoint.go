@@ -46,6 +46,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/namespace"
 	"go.uber.org/zap"
 )
 
@@ -123,10 +124,16 @@ type EtcdSafePointKV struct {
 }
 
 // NewEtcdSafePointKV creates an instance of EtcdSafePointKV
-func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config) (*EtcdSafePointKV, error) {
+func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config, namespacePrefix string) (*EtcdSafePointKV, error) {
 	etcdCli, err := createEtcdKV(addrs, tlsConfig)
 	if err != nil {
 		return nil, err
+	}
+	// If a namespacePrefix is specified, wrap the etcd client with the target namespace.
+	if namespacePrefix != "" {
+		etcdCli.KV = namespace.NewKV(etcdCli.KV, namespacePrefix)
+		etcdCli.Watcher = namespace.NewWatcher(etcdCli.Watcher, namespacePrefix)
+		etcdCli.Lease = namespace.NewLease(etcdCli.Lease, namespacePrefix)
 	}
 	return &EtcdSafePointKV{cli: etcdCli}, nil
 }
