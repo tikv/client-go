@@ -36,6 +36,7 @@ type Client struct {
 type option struct {
 	apiVersion   kvrpcpb.APIVersion
 	keyspaceName string
+	spKVPrefix   string
 }
 
 // ClientOpt is factory to set the client options.
@@ -52,6 +53,13 @@ func WithKeyspace(keyspaceName string) ClientOpt {
 func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 	return func(opt *option) {
 		opt.apiVersion = apiVersion
+	}
+}
+
+// WithSafePointKVPrefix is used to set client's safe point kv prefix.
+func WithSafePointKVPrefix(prefix string) ClientOpt {
+	return func(opt *option) {
+		opt.spKVPrefix = prefix
 	}
 }
 
@@ -94,7 +102,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		return nil, err
 	}
 
-	spkv, err := tikv.NewEtcdSafePointKV(pdAddrs, tlsConfig)
+	spkv, err := tikv.NewEtcdSafePointKV(pdAddrs, tlsConfig, tikv.WithPrefix(opt.spKVPrefix))
 	if err != nil {
 		return nil, err
 	}
