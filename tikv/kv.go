@@ -784,7 +784,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.Cl
 		return nil, err
 	}
 
-	spkv, err := NewEtcdSafePointKV(etcdAddrs, tlsConfig, "")
+	spkv, err := NewEtcdSafePointKV(etcdAddrs, tlsConfig)
 	if err != nil {
 		return nil, err
 	}

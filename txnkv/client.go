@@ -115,7 +115,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		return nil, err
 	}
 
-	spkv, err := tikv.NewEtcdSafePointKV(pdAddrs, tlsConfig, opt.spKVPrefix)
+	spkv, err := tikv.NewEtcdSafePointKV(pdAddrs, tlsConfig, tikv.WithPrefix(opt.spKVPrefix))
 	if err != nil {
 		return nil, err
 	}
