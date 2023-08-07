@@ -29,11 +29,6 @@ import (
 	pd "github.com/tikv/pd/client"
 )
 
-const (
-	// tidbKeyspaceEtcdPathPrefix is the keyspace prefix for etcd namespace
-	tidbKeyspaceEtcdPathPrefix = "/keyspaces/tidb/"
-)
-
 // Client is a txn client.
 type Client struct {
 	*tikv.KVStore
@@ -42,6 +37,7 @@ type Client struct {
 type option struct {
 	apiVersion   kvrpcpb.APIVersion
 	keyspaceName string
+	spKVPrefix   string
 }
 
 // ClientOpt is factory to set the client options.
@@ -58,6 +54,13 @@ func WithKeyspace(keyspaceName string) ClientOpt {
 func WithAPIVersion(apiVersion kvrpcpb.APIVersion) ClientOpt {
 	return func(opt *option) {
 		opt.apiVersion = apiVersion
+	}
+}
+
+// WithSafePointKVPrefix is used to set client's safe point kv prefix.
+func WithSafePointKVPrefix(prefix string) ClientOpt {
+	return func(opt *option) {
+		opt.spKVPrefix = prefix
 	}
 }
 
@@ -90,7 +93,6 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 
 	// Construct codec from options.
 	var codecCli *tikv.CodecPDClient
-	var namespacePrefix string
 	switch opt.apiVersion {
 	case kvrpcpb.APIVersion_V1:
 		codecCli = tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
@@ -99,8 +101,6 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Set etcd namespace prefix if we are using api v2.
-		namespacePrefix = fmt.Sprintf(tidbKeyspaceEtcdPathPrefix+"%d", codecCli.GetCodec().GetKeyspaceID())
 	default:
 		return nil, errors.Errorf("unknown API version: %d", opt.apiVersion)
 	}
@@ -115,7 +115,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 		return nil, err
 	}
 
-	spkv, err := tikv.NewEtcdSafePointKV(pdAddrs, tlsConfig, namespacePrefix)
+	spkv, err := tikv.NewEtcdSafePointKV(pdAddrs, tlsConfig, opt.spKVPrefix)
 	if err != nil {
 		return nil, err
 	}
