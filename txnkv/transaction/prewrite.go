@@ -366,6 +366,13 @@ func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.B
 				} else {
 					c.mu.Lock()
 					if prewriteResp.MinCommitTs > c.minCommitTS {
+						logutil.Logger(bo.GetCtx()).Info(
+							"update min_commit_ts from prewrite response",
+							zap.Uint64("startTS", c.startTS),
+							zap.Uint64("old minCommitTS", c.minCommitTS),
+							zap.Uint64("new minCommitTS", prewriteResp.MinCommitTs),
+							zap.Uint64("session", c.sessionID),
+						)
 						c.minCommitTS = prewriteResp.MinCommitTs
 					}
 					c.mu.Unlock()

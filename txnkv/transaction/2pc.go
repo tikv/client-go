@@ -1457,6 +1457,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		commitDetail.GetLatestTsTime = time.Since(start)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
 		c.minCommitTS = latestTS + 1
+		logutil.Logger(ctx).Info(
+			"2PC get latestTs from PD",
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("new minCommitTS", latestTS+1),
+			zap.Uint64("session", c.sessionID),
+		)
 	}
 	// Calculate maxCommitTS if necessary
 	if commitTSMayBeCalculated {
@@ -1548,7 +1554,8 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 		c.commitTS = c.onePCCommitTS
 		c.txn.commitTS = c.commitTS
-		logutil.Logger(ctx).Debug("1PC protocol is used to commit this txn",
+		logutil.Logger(ctx).Info(
+			"1PC protocol is used to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("session", c.sessionID))
 		return nil
@@ -1564,6 +1571,12 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return errors.Errorf("session %d invalid minCommitTS for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
 		}
 		commitTS = c.minCommitTS
+		logutil.Logger(ctx).Info(
+			"async commit, determine commit-ts using minCommitTS",
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("commit ts", commitTS),
+			zap.Uint64("session", c.sessionID),
+		)
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
@@ -1574,6 +1587,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				zap.Uint64("txnStartTS", c.startTS))
 			return err
 		}
+		logutil.Logger(ctx).Info(
+			"determine commit-ts using oracle",
+			zap.Uint64("commit ts", commitTS),
+			zap.Uint64("session", c.sessionID),
+		)
 		commitDetail.GetCommitTsTime = time.Since(start)
 		logutil.Event(ctx, "finish get commit ts")
 		logutil.SetTag(ctx, "commitTs", commitTS)
@@ -1650,7 +1668,8 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	if c.isAsyncCommit() {
 		// For async commit protocol, the commit is considered success here.
 		c.txn.commitTS = c.commitTS
-		logutil.Logger(ctx).Debug("2PC will use async commit protocol to commit this txn",
+		logutil.Logger(ctx).Info(
+			"2PC will use async commit protocol to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
 		if c.store.IsClose() {
