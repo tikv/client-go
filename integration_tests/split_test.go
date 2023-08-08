@@ -291,6 +291,10 @@ func (c *mockPDClient) UpdateOption(option pd.DynamicOption, value interface{}) 
 	return nil
 }
 
+func (c *mockPDClient) GetAllKeyspaces(ctx context.Context, startID uint32, limit uint32) ([]*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
 func (c *mockPDClient) LoadKeyspace(ctx context.Context, name string) (*keyspacepb.KeyspaceMeta, error) {
 	return nil, nil
 }

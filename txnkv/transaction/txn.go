@@ -247,8 +247,8 @@ func (txn *KVTxn) Iter(k []byte, upperBound []byte) (unionstore.Iterator, error)
 }
 
 // IterReverse creates a reversed Iterator positioned on the first entry which key is less than k.
-func (txn *KVTxn) IterReverse(k []byte) (unionstore.Iterator, error) {
-	return txn.us.IterReverse(k)
+func (txn *KVTxn) IterReverse(k, lowerBound []byte) (unionstore.Iterator, error) {
+	return txn.us.IterReverse(k, lowerBound)
 }
 
 // Delete removes the entry for key k from kv store.
@@ -556,10 +556,27 @@ func (txn *KVTxn) Rollback() error {
 		txn.CancelAggressiveLocking(context.Background())
 	}
 
+	// `skipPessimisticRollback` may be true only when set by failpoint in tests.
+	skipPessimisticRollback := false
+	if val, err := util.EvalFailpoint("onRollback"); err == nil {
+		if s, ok := val.(string); ok {
+			if s == "skipRollbackPessimisticLock" {
+				logutil.BgLogger().Info("[failpoint] injected skip pessimistic rollback on explicit rollback",
+					zap.Uint64("txnStartTS", txn.startTS))
+				skipPessimisticRollback = true
+			} else {
+				panic(fmt.Sprintf("unknown instruction %s for failpoint \"onRollback\"", s))
+			}
+		}
+	}
+
 	start := time.Now()
 	// Clean up pessimistic lock.
 	if txn.IsPessimistic() && txn.committer != nil {
-		err := txn.rollbackPessimisticLocks()
+		var err error
+		if !skipPessimisticRollback {
+			err = txn.rollbackPessimisticLocks()
+		}
 		txn.committer.ttlManager.close()
 		if err != nil {
 			logutil.BgLogger().Error(err.Error())
@@ -1449,4 +1466,9 @@ func (txn *KVTxn) SetRequestSourceInternal(internal bool) {
 // SetRequestSourceType sets the type of the request source.
 func (txn *KVTxn) SetRequestSourceType(tp string) {
 	txn.RequestSource.SetRequestSourceType(tp)
+}
+
+// SetExplicitRequestSourceType sets the explicit type of the request source.
+func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
+	txn.RequestSource.SetExplicitRequestSourceType(tp)
 }

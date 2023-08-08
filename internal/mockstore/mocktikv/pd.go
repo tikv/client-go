@@ -59,6 +59,8 @@ var tsMu = struct {
 	logicalTS  int64
 }{}
 
+const defaultResourceGroupName = "default"
+
 type pdClient struct {
 	cluster *Cluster
 	// SafePoint set by `UpdateGCSafePoint`. Not to be confused with SafePointKV.
@@ -69,15 +71,33 @@ type pdClient struct {
 	gcSafePointMu     sync.Mutex
 
 	externalTimestamp atomic.Uint64
+
+	groups map[string]*rmpb.ResourceGroup
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
 // from a Cluster.
 func NewPDClient(cluster *Cluster) pd.Client {
-	return &pdClient{
+	mockCli := &pdClient{
 		cluster:           cluster,
 		serviceSafePoints: make(map[string]uint64),
+		groups:            make(map[string]*rmpb.ResourceGroup),
 	}
+
+	mockCli.groups[defaultResourceGroupName] = &rmpb.ResourceGroup{
+		Name: defaultResourceGroupName,
+		Mode: rmpb.GroupMode_RUMode,
+		RUSettings: &rmpb.GroupRequestUnitSettings{
+			RU: &rmpb.TokenBucket{
+				Settings: &rmpb.TokenLimitSettings{
+					FillRate:   math.MaxInt32,
+					BurstLimit: -1,
+				},
+			},
+		},
+		Priority: 8,
+	}
+	return mockCli
 }
 
 func (c *pdClient) LoadGlobalConfig(ctx context.Context, names []string, configPath string) ([]pd.GlobalConfigItem, int64, error) {
@@ -271,6 +291,10 @@ func (c *pdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID strin
 	return minSafePoint, nil
 }
 
+func (c *pdClient) GetAllKeyspaces(ctx context.Context, startID uint32, limit uint32) ([]*keyspacepb.KeyspaceMeta, error) {
+	return nil, nil
+}
+
 func (c *pdClient) Close() {
 }
 
@@ -321,7 +345,11 @@ func (c *pdClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 }
 
 func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
-	return nil, nil
+	group, ok := c.groups[resourceGroupName]
+	if !ok {
+		return nil, fmt.Errorf("the group %s does not exist", resourceGroupName)
+	}
+	return group, nil
 }
 
 func (c *pdClient) AddResourceGroup(ctx context.Context, metaGroup *rmpb.ResourceGroup) (string, error) {

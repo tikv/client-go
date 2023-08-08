@@ -60,6 +60,21 @@ func (db *MemDB) SnapshotIter(start, end []byte) Iterator {
 	return it
 }
 
+// SnapshotIterReverse returns a reverse Iterator for a snapshot of MemBuffer.
+func (db *MemDB) SnapshotIterReverse(k, lowerBound []byte) Iterator {
+	it := &memdbSnapIter{
+		MemdbIterator: &MemdbIterator{
+			db:      db,
+			start:   lowerBound,
+			end:     k,
+			reverse: true,
+		},
+		cp: db.getSnapshot(),
+	}
+	it.init()
+	return it
+}
+
 func (db *MemDB) getSnapshot() MemDBCheckpoint {
 	if len(db.stages) > 0 {
 		return db.stages[0]
@@ -123,10 +138,18 @@ func (i *memdbSnapIter) setValue() bool {
 }
 
 func (i *memdbSnapIter) init() {
-	if len(i.start) == 0 {
-		i.seekToFirst()
+	if i.reverse {
+		if len(i.end) == 0 {
+			i.seekToLast()
+		} else {
+			i.seek(i.end)
+		}
 	} else {
-		i.seek(i.start)
+		if len(i.start) == 0 {
+			i.seekToFirst()
+		} else {
+			i.seek(i.start)
+		}
 	}
 
 	if !i.setValue() {

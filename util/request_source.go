@@ -1,3 +1,17 @@
+// Copyright 2023 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package util
 
 import (
@@ -27,11 +41,24 @@ const (
 	InternalTxnMeta = InternalTxnOthers
 )
 
+// explicit source types.
+const (
+	ExplicitTypeEmpty      = ""
+	ExplicitTypeDefault    = "default"
+	ExplicitTypeLightning  = "lightning"
+	ExplicitTypeBR         = "br"
+	ExplicitTypeDumpling   = "dumpling"
+	ExplicitTypeBackground = "background"
+)
+
+// ExplicitTypeList is the list of all explicit source types.
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+
 const (
 	// InternalRequest is the scope of internal queries
-	InternalRequest = "internal_"
+	InternalRequest = "internal"
 	// ExternalRequest is the scope of external queries
-	ExternalRequest = "external_"
+	ExternalRequest = "external"
 	// SourceUnknown keeps same with the default value(empty string)
 	SourceUnknown = "unknown"
 )
@@ -40,6 +67,9 @@ const (
 type RequestSource struct {
 	RequestSourceInternal bool
 	RequestSourceType     string
+	// ExplicitRequestSourceType is a type that is set from the session variable and may be specified by the client or users.
+	// It is a complement to the RequestSourceType and provides additional information about how a request was initiated.
+	ExplicitRequestSourceType string
 }
 
 // SetRequestSourceInternal sets the scope of the request source.
@@ -52,12 +82,27 @@ func (r *RequestSource) SetRequestSourceType(tp string) {
 	r.RequestSourceType = tp
 }
 
+// SetExplicitRequestSourceType sets the type of the request source.
+func (r *RequestSource) SetExplicitRequestSourceType(tp string) {
+	r.ExplicitRequestSourceType = tp
+}
+
 // WithInternalSourceType create context with internal source.
 func WithInternalSourceType(ctx context.Context, source string) context.Context {
 	return context.WithValue(ctx, RequestSourceKey, RequestSource{
 		RequestSourceInternal: true,
 		RequestSourceType:     source,
 	})
+}
+
+// BuildRequestSource builds a request_source from internal, source and explicitSource.
+func BuildRequestSource(internal bool, source, explicitSource string) string {
+	requestSource := RequestSource{
+		RequestSourceInternal:     internal,
+		RequestSourceType:         source,
+		ExplicitRequestSourceType: explicitSource,
+	}
+	return requestSource.GetRequestSource()
 }
 
 // IsRequestSourceInternal checks whether the input request source type is internal type.
@@ -71,15 +116,25 @@ func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
-	// if r.RequestSourceType is not set, it's mostly possible that r.RequestSourceInternal is not set
-	// to avoid internal requests be marked as external(default value), return unknown source here.
-	if r == nil || r.RequestSourceType == "" {
-		return SourceUnknown
+	source := SourceUnknown
+	explicitSourceType := ExplicitTypeDefault
+	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
+		// if r.RequestSourceType and r.ExplicitRequestSourceType are not set, it's mostly possible that r.RequestSourceInternal is not set
+		// to avoid internal requests be marked as external(default value), return unknown source here.
+		return strings.Join([]string{source, explicitSourceType}, "_")
 	}
+
+	if len(r.RequestSourceType) > 0 {
+		source = r.RequestSourceType
+	}
+	if len(r.ExplicitRequestSourceType) > 0 {
+		explicitSourceType = r.ExplicitRequestSourceType
+	}
+	origin := ExternalRequest
 	if r.RequestSourceInternal {
-		return InternalRequest + r.RequestSourceType
+		origin = InternalRequest
 	}
-	return ExternalRequest + r.RequestSourceType
+	return strings.Join([]string{origin, source, explicitSourceType}, "_")
 }
 
 // RequestSourceFromCtx extract source from passed context.
@@ -102,9 +157,9 @@ type resourceGroupNameKeyType struct{}
 // ResourceGroupNameKey is used as the key of request source type in context.
 var resourceGroupNameKey = resourceGroupNameKeyType{}
 
-// WithResouceGroupName return a copy of the given context with a associated
-// reosurce group name.
-func WithResouceGroupName(ctx context.Context, groupName string) context.Context {
+// WithResourceGroupName return a copy of the given context with a associated
+// resource group name.
+func WithResourceGroupName(ctx context.Context, groupName string) context.Context {
 	return context.WithValue(ctx, resourceGroupNameKey, groupName)
 }
 
