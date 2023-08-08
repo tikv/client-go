@@ -1590,6 +1590,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Info(
 			"determine commit-ts using oracle",
 			zap.Uint64("commit ts", commitTS),
+			zap.Uint64("startTS", c.startTS),
 			zap.Uint64("session", c.sessionID),
 		)
 		commitDetail.GetCommitTsTime = time.Since(start)
