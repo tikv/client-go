@@ -403,3 +403,7 @@ func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd
 func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
 	return nil, 0, nil
 }
+
+func (c *pdClient) GetMinResolvedTS(ctx context.Context, storesID []uint64) (uint64, []*pdpb.StoreMinResolvedTS, error) {
+	return 0, nil, nil
+}

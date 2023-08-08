@@ -14,7 +14,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20230720094213-a3b4a77b4333
+	github.com/pingcap/kvproto v0.0.0-20230727073445-53e1f8730c30
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.15.1
@@ -60,4 +60,9 @@ require (
 	google.golang.org/protobuf v1.30.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+replace (
+	github.com/pingcap/kvproto => github.com/HuSharp/kvproto v0.0.0-20230807004737-dc9501789825
+	github.com/tikv/pd/client => github.com/HuSharp/pd/client v0.0.0-20230808030446-787bf8a2d091
 )
