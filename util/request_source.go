@@ -48,10 +48,11 @@ const (
 	ExplicitTypeBR         = "br"
 	ExplicitTypeDumpling   = "dumpling"
 	ExplicitTypeBackground = "background"
+	ExplicitTypeDDL        = "ddl"
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL}
 
 const (
 	// InternalRequest is the scope of internal queries
@@ -91,6 +92,15 @@ func WithInternalSourceType(ctx context.Context, source string) context.Context 
 	return context.WithValue(ctx, RequestSourceKey, RequestSource{
 		RequestSourceInternal: true,
 		RequestSourceType:     source,
+	})
+}
+
+// WithInternalSourceAndTaskType create context with internal source and task name.
+func WithInternalSourceAndTaskType(ctx context.Context, source, taskName string) context.Context {
+	return context.WithValue(ctx, RequestSourceKey, RequestSource{
+		RequestSourceInternal:     true,
+		RequestSourceType:         source,
+		ExplicitRequestSourceType: taskName,
 	})
 }
 
