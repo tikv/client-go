@@ -96,13 +96,16 @@ func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs
 			logutil.BgLogger().Debug("failed to marshal store ids", zap.String("addr", addr), zap.Error(err))
 			return nil, errors.Trace(err)
 		}
-		v, e := pdRequest(ctx, addr, minResolvedTSPrefix, p.cli, http.MethodGet, bytes.NewBuffer(data))
-		if e != nil {
-			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
-			err = e
+		v, err := pdRequest(ctx, addr, minResolvedTSPrefix, p.cli, http.MethodGet, bytes.NewBuffer(data))
+		if err != nil {
+			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(err))
 			continue
 		}
 		logutil.BgLogger().Debug("min resolved ts", zap.String("resp", string(v)))
+		// - When no store is given, cluster-level's min_resolved_ts will be returned,
+		//		and min_resolved_ts for each store will be empty.
+		// - When given a list of stores, min_resolved_ts will be provided for each store
+		//      and the scope-specific min_resolved_ts will be returned.
 		d := struct {
 			IsRealTime          bool              `json:"is_real_time,omitempty"`
 			StoresMinResolvedTS map[uint64]uint64 `json:"stores_min_resolved_ts"`
