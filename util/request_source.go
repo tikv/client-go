@@ -44,7 +44,6 @@ const (
 // explicit source types.
 const (
 	ExplicitTypeEmpty      = ""
-	ExplicitTypeDefault    = "default"
 	ExplicitTypeLightning  = "lightning"
 	ExplicitTypeBR         = "br"
 	ExplicitTypeDumpling   = "dumpling"
@@ -53,7 +52,7 @@ const (
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL}
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL}
 
 const (
 	// InternalRequest is the scope of internal queries
@@ -127,24 +126,26 @@ func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
 	source := SourceUnknown
-	explicitSourceType := ExplicitTypeDefault
+	origin := ExternalRequest
 	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
 		// if r.RequestSourceType and r.ExplicitRequestSourceType are not set, it's mostly possible that r.RequestSourceInternal is not set
 		// to avoid internal requests be marked as external(default value), return unknown source here.
-		return strings.Join([]string{source, explicitSourceType}, "_")
+		return source
 	}
-
-	if len(r.RequestSourceType) > 0 {
-		source = r.RequestSourceType
-	}
-	if len(r.ExplicitRequestSourceType) > 0 {
-		explicitSourceType = r.ExplicitRequestSourceType
-	}
-	origin := ExternalRequest
 	if r.RequestSourceInternal {
 		origin = InternalRequest
 	}
-	return strings.Join([]string{origin, source, explicitSourceType}, "_")
+	labelList := make([]string, 0, 3)
+	labelList = append(labelList, origin)
+	if len(r.RequestSourceType) > 0 {
+		source = r.RequestSourceType
+	}
+	labelList = append(labelList, source)
+	if len(r.ExplicitRequestSourceType) > 0 && r.ExplicitRequestSourceType != r.RequestSourceType {
+		labelList = append(labelList, r.ExplicitRequestSourceType)
+	}
+
+	return strings.Join(labelList, "_")
 }
 
 // RequestSourceFromCtx extract source from passed context.
