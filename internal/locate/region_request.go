@@ -245,6 +245,8 @@ type replica struct {
 	peer     *metapb.Peer
 	epoch    uint32
 	attempts int
+	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
+	deadlineErrUsingConfTimeout bool
 }
 
 func (r *replica) isEpochStale() bool {
@@ -377,7 +379,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 }
 
 func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
-	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
+	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromOnNotLeader: true}
 }
 
 // tryFollower is the state where we cannot access the known leader
@@ -391,19 +393,23 @@ type tryFollower struct {
 	stateBase
 	leaderIdx AccessIndex
 	lastIdx   AccessIndex
+	// fromOnNotLeader indicates whether the state is changed from onNotLeader.
+	fromOnNotLeader bool
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	var targetReplica *replica
+	hasDeadlineExceededErr := false
 	// Search replica that is not attempted from the last accessed replica
 	for i := 1; i < len(selector.replicas); i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+		targetReplica = selector.replicas[idx]
+		hasDeadlineExceededErr = hasDeadlineExceededErr || targetReplica.deadlineErrUsingConfTimeout
 		if idx == state.leaderIdx {
 			continue
 		}
-		targetReplica = selector.replicas[idx]
 		// Each follower is only tried once
-		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable {
+		if !targetReplica.isExhausted(1) && targetReplica.store.getLivenessState() != unreachable && !targetReplica.deadlineErrUsingConfTimeout {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -411,16 +417,33 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	}
 	// If all followers are tried and fail, backoff and retry.
 	if selector.targetIdx < 0 {
+		if hasDeadlineExceededErr {
+			// when meet deadline exceeded error, do fast retry without invalidate region cache.
+			return nil, nil
+		}
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 		selector.invalidateRegion()
 		return nil, nil
 	}
-	return selector.buildRPCContext(bo)
+	rpcCtx, err := selector.buildRPCContext(bo)
+	if err != nil || rpcCtx == nil {
+		return nil, err
+	}
+	// If the state is changed from onNotLeader, the `replicaRead` flag should not be set as leader read would still be used.
+	if !state.fromOnNotLeader {
+		replicaRead := selector.targetIdx != state.leaderIdx
+		rpcCtx.contextPatcher.replicaRead = &replicaRead
+	}
+	disableStaleRead := false
+	rpcCtx.contextPatcher.staleRead = &disableStaleRead
+	return rpcCtx, nil
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
-	if !selector.region.switchWorkLeaderToPeer(selector.targetReplica().peer) {
-		panic("the store must exist")
+	if state.fromOnNotLeader {
+		if !selector.region.switchWorkLeaderToPeer(selector.targetReplica().peer) {
+			panic("the store must exist")
+		}
 	}
 }
 
@@ -617,6 +640,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Any("labels", state.option.labels))
 		}
+		// If leader tried and received deadline exceeded error, return nil to upper layer to retry with default timeout.
+		if leader.deadlineErrUsingConfTimeout {
+			return nil, nil
+		}
 		if leaderInvalid {
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
@@ -665,7 +692,7 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 
 func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool {
 	// the epoch is staled or retry exhausted, or the store is unreachable.
-	if replica.isEpochStale() || replica.isExhausted(1) || replica.store.getLivenessState() == unreachable {
+	if replica.isEpochStale() || replica.isExhausted(1) || replica.store.getLivenessState() == unreachable || replica.deadlineErrUsingConfTimeout {
 		return false
 	}
 	// The request can only be sent to the leader.
@@ -945,6 +972,16 @@ func (s *replicaSelector) buildRPCContext(bo *retry.Backoffer) (*RPCContext, err
 func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	metrics.RegionCacheCounterWithSendFail.Inc()
 	s.state.onSendFailure(bo, s, err)
+}
+
+func (s *replicaSelector) onDeadlineExceeded() {
+	if target := s.targetReplica(); target != nil {
+		target.deadlineErrUsingConfTimeout = true
+	}
+	if accessLeader, ok := s.state.(*accessKnownLeader); ok {
+		// If leader return deadline exceeded error, we should try to access follower next time.
+		s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+	}
 }
 
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
@@ -1608,7 +1645,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 				return nil, false, err
 			}
 		}
-		if e := s.onSendFail(bo, rpcCtx, err); e != nil {
+		if e := s.onSendFail(bo, rpcCtx, req, err); e != nil {
 			return nil, false, err
 		}
 		return nil, true, nil
@@ -1638,7 +1675,7 @@ func (s *RegionRequestSender) releaseStoreToken(st *Store) {
 	logutil.BgLogger().Warn("release store token failed, count equals to 0")
 }
 
-func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, err error) error {
+func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, err error) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("regionRequest.onSendFail", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -1649,6 +1686,11 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
+	} else if errors.Cause(err) == context.DeadlineExceeded && req.MaxExecutionDurationMs < uint64(client.ReadTimeoutShort.Milliseconds()) {
+		if s.replicaSelector != nil {
+			s.replicaSelector.onDeadlineExceeded()
+			return nil
+		}
 	}
 	if status.Code(errors.Cause(err)) == codes.Canceled {
 		select {
@@ -1740,6 +1782,9 @@ func regionErrorToLabel(e *errorpb.Error) string {
 	} else if e.GetEpochNotMatch() != nil {
 		return "epoch_not_match"
 	} else if e.GetServerIsBusy() != nil {
+		if strings.Contains(e.GetServerIsBusy().GetReason(), "deadline is exceeded") {
+			return "deadline_exceeded"
+		}
 		return "server_is_busy"
 	} else if e.GetStaleCommand() != nil {
 		return "stale_command"
@@ -1767,8 +1812,14 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "flashback_not_prepared"
 	} else if e.GetIsWitness() != nil {
 		return "peer_is_witness"
+	} else if isDeadlineExceeded(e) {
+		return "deadline_exceeded"
 	}
 	return "unknown"
+}
+
+func isDeadlineExceeded(e *errorpb.Error) bool {
+	return strings.Contains(e.GetMessage(), "Deadline is exceeded")
 }
 
 func (s *RegionRequestSender) onRegionError(
@@ -1918,6 +1969,10 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
+		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
+			s.replicaSelector.onDeadlineExceeded()
+			return true, nil
+		}
 		if s.replicaSelector != nil {
 			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
 		}
@@ -2044,6 +2099,10 @@ func (s *RegionRequestSender) onRegionError(
 			}
 		}
 		return true, nil
+	}
+
+	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil {
+		s.replicaSelector.onDeadlineExceeded()
 	}
 
 	logutil.Logger(bo.GetCtx()).Debug(

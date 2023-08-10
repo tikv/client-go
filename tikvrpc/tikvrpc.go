@@ -233,7 +233,7 @@ type Request struct {
 	// the forwarded host. It's useful when network partition occurs.
 	ForwardedHost string
 	// ReplicaNumber is the number of current replicas, which is used to calculate the RU cost.
-	ReplicaNumber int64
+	ReplicaNumber   int64
 }
 
 // NewRequest returns new kv rpc request.
