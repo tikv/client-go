@@ -1005,7 +1005,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	r := ctxTiFlash.Meta
 	reqSend := NewRegionRequestSender(s.cache, nil)
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{CurrentRegions: []*metapb.Region{r}}}
-	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr)
+	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr, nil)
 
 	// check leader read should not go to tiflash
 	lctx, err = s.cache.GetTiKVRPCContext(s.bo, loc1.Region, kv.ReplicaReadLeader, 0)
@@ -1640,10 +1640,10 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	s.NotNil(ctx)
 	s.NoError(err)
 	reqSend := NewRegionRequestSender(s.cache, nil)
-	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
+	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}}, nil)
 	s.Error(err)
 	s.False(shouldRetry)
-	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}})
+	shouldRetry, err = reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackNotPrepared: &errorpb.FlashbackNotPrepared{}}, nil)
 	s.Error(err)
 	s.False(shouldRetry)
 }
