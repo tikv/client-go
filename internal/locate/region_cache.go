@@ -1272,9 +1272,11 @@ func (c *RegionCache) reloadRegion(regionID uint64) {
 		// ignore error and use old region info.
 		logutil.Logger(bo.GetCtx()).Error("load region failure",
 			zap.Uint64("regionID", regionID), zap.Error(err))
+		c.mu.RLock()
 		if oldRegion := c.getRegionByIDFromCache(regionID); oldRegion != nil {
 			oldRegion.asyncReload.Store(false)
 		}
+		c.mu.RUnlock()
 		return
 	}
 	c.mu.Lock()
