@@ -407,14 +407,14 @@ func (s *mockTikvGrpcServer) IsAlive(context.Context, *mpp.IsAliveRequest) (*mpp
 	return nil, errors.New("unreachable")
 }
 
+func (s *mockTikvGrpcServer) ReportMPPTaskStatus(context.Context, *mpp.ReportTaskStatusRequest) (*mpp.ReportTaskStatusResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) EstablishMPPConnection(*mpp.EstablishMPPConnectionRequest, tikvpb.Tikv_EstablishMPPConnectionServer) error {
 	return errors.New("unreachable")
 }
 func (s *mockTikvGrpcServer) CancelMPPTask(context.Context, *mpp.CancelTaskRequest) (*mpp.CancelTaskResponse, error) {
-	return nil, errors.New("unreachable")
-}
-
-func (s *mockTikvGrpcServer) ReportMPPTaskStatus(ctx context.Context, request *mpp.ReportTaskStatusRequest) (*mpp.ReportTaskStatusResponse, error) {
 	return nil, errors.New("unreachable")
 }
 
@@ -613,7 +613,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	v2 := region.Region.confVer + 1
 	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
 	st := &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()})
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
@@ -623,7 +623,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	v3 := region.Region.confVer + 1
 	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: v3, ConfVer: region.Region.confVer}, StartKey: []byte{2}}
 	st = &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()})
+	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
@@ -663,42 +663,38 @@ func (s *testRegionRequestToSingleStoreSuite) TestCloseConnectionOnStoreNotMatch
 	s.Equal(target, client.closedAddr)
 }
 
-func (s *testRegionRequestToSingleStoreSuite) TestCountReplicaNumber() {
-	fmt.Println("TestCountReplicaNumber")
-	fmt.Println(s.cache.storeMu.stores)
-	tikvLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tikv"}}
-	tiflashLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tiflash"}}
-	tiflashWNLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tiflash"}, {Key: "engine_role", Value: "write"}}
+func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	req.EnableStaleRead()
+	req.ReadReplicaScope = "z1" // not global stale read.
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
 
-	s.cache.SetRegionCacheStore(1, "", "", tikvrpc.TiKV, 0, tikvLabels)
-	s.cache.SetRegionCacheStore(2, "", "", tikvrpc.TiKV, 0, tikvLabels)
-	s.cache.SetRegionCacheStore(3, "", "", tikvrpc.TiKV, 0, tikvLabels)
-	s.cache.SetRegionCacheStore(4, "", "", tikvrpc.TiFlash, 0, tiflashLabels)
-	s.cache.SetRegionCacheStore(5, "", "", tikvrpc.TiFlash, 0, tiflashLabels)
-	{
-		peers := []*metapb.Peer{{StoreId: 1, Role: metapb.PeerRole_Voter}}
-		s.Equal(1, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 2, Role: metapb.PeerRole_Voter})
-		s.Equal(2, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 3, Role: metapb.PeerRole_Voter})
-		s.Equal(3, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 4, Role: metapb.PeerRole_Learner})
-		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
-		s.Equal(5, s.regionRequestSender.countReplicaNumber(peers))
-	}
-	s.cache.SetRegionCacheStore(4, "", "", tikvrpc.TiFlash, 0, tiflashWNLabels)
-	s.cache.SetRegionCacheStore(5, "", "", tikvrpc.TiFlash, 0, tiflashWNLabels)
-	{
-		peers := []*metapb.Peer{{StoreId: 1, Role: metapb.PeerRole_Voter}}
-		s.Equal(1, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 2, Role: metapb.PeerRole_Voter})
-		s.Equal(2, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 3, Role: metapb.PeerRole_Voter})
-		s.Equal(3, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 4, Role: metapb.PeerRole_Learner})
-		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers))
-		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
-		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers)) // Only count 1 tiflash replica for tiflash write-nodes.
-	}
+	oc := s.regionRequestSender.client
+	defer func() {
+		s.regionRequestSender.client = oc
+	}()
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if req.StaleRead {
+			// Mock for stale-read request always return DataIsNotReady error when tikv `ResolvedTS` is blocked.
+			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}},
+			}}
+		} else {
+			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}
+		}
+		return response, nil
+	}}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.Nil(regionErr)
+	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
 }

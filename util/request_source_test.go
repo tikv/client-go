@@ -43,19 +43,19 @@ func TestGetRequestSource(t *testing.T) {
 
 	// Test nil pointer
 	rs = nil
-	expected = "unknown_default"
+	expected = "unknown"
 	actual = rs.GetRequestSource()
 	assert.Equal(t, expected, actual)
 
 	// Test empty RequestSourceType and ExplicitRequestSourceType
 	rs = &RequestSource{}
-	expected = "unknown_default"
+	expected = "unknown"
 	actual = rs.GetRequestSource()
 	assert.Equal(t, expected, actual)
 
 	// Test empty ExplicitRequestSourceType
 	rs.RequestSourceType = "test"
-	expected = "external_test_default"
+	expected = "external_test"
 	actual = rs.GetRequestSource()
 	assert.Equal(t, expected, actual)
 
@@ -64,5 +64,32 @@ func TestGetRequestSource(t *testing.T) {
 	rs.ExplicitRequestSourceType = "lightning"
 	expected = "external_unknown_lightning"
 	actual = rs.GetRequestSource()
+	assert.Equal(t, expected, actual)
+}
+
+func TestBuildRequestSource(t *testing.T) {
+	// Test internal request
+	expected := "internal_test_lightning"
+	actual := BuildRequestSource(true, "test", "lightning")
+	assert.Equal(t, expected, actual)
+
+	// Test external request
+	expected = "external_test_lightning"
+	actual = BuildRequestSource(false, "test", "lightning")
+	assert.Equal(t, expected, actual)
+
+	// Test empty ExplicitRequestSourceType
+	expected = "external_test"
+	actual = BuildRequestSource(false, "test", "")
+	assert.Equal(t, expected, actual)
+
+	// Test empty RequestSourceType
+	expected = "external_unknown_lightning"
+	actual = BuildRequestSource(false, "", "lightning")
+	assert.Equal(t, expected, actual)
+
+	// Test RequestSourceType && ExplicitRequestSourceType both empty
+	expected = "unknown"
+	actual = BuildRequestSource(true, "", "")
 	assert.Equal(t, expected, actual)
 }
