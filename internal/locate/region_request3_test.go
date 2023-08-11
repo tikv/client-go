@@ -46,6 +46,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -56,6 +57,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"go.uber.org/zap"
 )
 
 func TestRegionRequestToThreeStores(t *testing.T) {
@@ -1232,88 +1234,53 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 		s.regionRequestSender.RegionRequestRuntimeStats = NewRegionRequestRuntimeStats()
 	}
 
-	resetStats()
-	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
-	loc := getLocFn()
-	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
-	s.Nil(err)
-	regionErr, err := resp.GetRegionError()
-	s.Nil(err)
-	s.True(IsFakeRegionError(regionErr))
-	s.Equal(1, len(s.regionRequestSender.Stats))
-	s.Equal(int64(3), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 3 rpc
-	s.Equal(3, len(reqTargetAddrs))                                      // each rpc to a different store.
-	s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
-	// warn: must rest MaxExecutionDurationMs before retry.
-	resetStats()
-	req.Context.MaxExecutionDurationMs = 0
-	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
-	s.Nil(err)
-	regionErr, err = resp.GetRegionError()
-	s.Nil(err)
-	s.Nil(regionErr)
-	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
-	s.Equal(1, len(s.regionRequestSender.Stats))
-	s.Equal(int64(1), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 1 rpc
-	s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
-
-	// Test stale read.
-	resetStats()
-	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
-	req.EnableStaleRead()
-	loc = getLocFn()
-	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
-	s.Nil(err)
-	regionErr, err = resp.GetRegionError()
-	s.Nil(err)
-	s.True(IsFakeRegionError(regionErr))
-	s.Equal(1, len(s.regionRequestSender.Stats))
-	s.True(s.regionRequestSender.Stats[tikvrpc.CmdGet].Count >= 1)
-	s.Equal(0, bo.GetTotalBackoffTimes()) // no backoff since fast retry.
-	// warn: must rest MaxExecutionDurationMs before retry.
-	resetStats()
-	req.EnableStaleRead()
-	req.Context.MaxExecutionDurationMs = 0
-	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
-	s.Nil(err)
-	regionErr, err = resp.GetRegionError()
-	s.Nil(err)
-	s.Nil(regionErr)
-	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
-	s.Equal(1, len(s.regionRequestSender.Stats))
-	s.Equal(int64(1), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 1 rpc
-	s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
-
 	//Test different read type.
+	staleReadTypes := []bool{false, true}
 	replicaReadTypes := []kv.ReplicaReadType{kv.ReplicaReadLeader, kv.ReplicaReadFollower, kv.ReplicaReadMixed}
-	for _, tp := range replicaReadTypes {
-		resetStats()
-		req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
-		req.ReplicaRead = tp.IsFollowerRead()
-		req.ReplicaReadType = tp
-		loc = getLocFn()
-		resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
-		s.Nil(err)
-		regionErr, err = resp.GetRegionError()
-		s.Nil(err)
-		s.True(IsFakeRegionError(regionErr))
-		s.Equal(1, len(s.regionRequestSender.Stats))
-		s.Equal(int64(3), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 3 rpc
-		s.Equal(3, len(reqTargetAddrs))
-		s.Equal(0, bo.GetTotalBackoffTimes()) // no backoff since fast retry.
-		// warn: must rest MaxExecutionDurationMs before retry.
-		resetStats()
-		req.ReplicaRead = tp.IsFollowerRead()
-		req.ReplicaReadType = tp
-		req.Context.MaxExecutionDurationMs = 0
-		resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
-		s.Nil(err)
-		regionErr, err = resp.GetRegionError()
-		s.Nil(err)
-		s.Nil(regionErr)
-		s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
-		s.Equal(1, len(s.regionRequestSender.Stats))
-		s.Equal(int64(1), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 1 rpc
-		s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
+	for _, staleRead := range staleReadTypes {
+		for _, tp := range replicaReadTypes {
+			log.Info("TestSendReqFirstTimeout", zap.Bool("stale-read", staleRead), zap.String("replica-read-type", tp.String()))
+			resetStats()
+			req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+			if staleRead {
+				req.EnableStaleRead()
+			} else {
+				req.ReplicaRead = tp.IsFollowerRead()
+				req.ReplicaReadType = tp
+			}
+			loc := getLocFn()
+			resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
+			s.Nil(err)
+			regionErr, err := resp.GetRegionError()
+			s.Nil(err)
+			s.True(IsFakeRegionError(regionErr))
+			s.Equal(1, len(s.regionRequestSender.Stats))
+			if staleRead {
+				rpcNum := s.regionRequestSender.Stats[tikvrpc.CmdGet].Count
+				s.True(rpcNum == 1 || rpcNum == 2) // 1 rpc or 2 rpc
+			} else {
+				s.Equal(int64(3), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 3 rpc
+				s.Equal(3, len(reqTargetAddrs))                                      // each rpc to a different store.
+			}
+			s.Equal(0, bo.GetTotalBackoffTimes()) // no backoff since fast retry.
+			// warn: must rest MaxExecutionDurationMs before retry.
+			resetStats()
+			if staleRead {
+				req.EnableStaleRead()
+			} else {
+				req.ReplicaRead = tp.IsFollowerRead()
+				req.ReplicaReadType = tp
+			}
+			req.Context.MaxExecutionDurationMs = 0
+			resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+			s.Nil(err)
+			regionErr, err = resp.GetRegionError()
+			s.Nil(err)
+			s.Nil(regionErr)
+			s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
+			s.Equal(1, len(s.regionRequestSender.Stats))
+			s.Equal(int64(1), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 1 rpc
+			s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
+		}
 	}
 }
