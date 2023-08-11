@@ -253,6 +253,10 @@ type replica struct {
 	deadlineErrUsingConfTimeout bool
 }
 
+func (r *replica) getEpoch() uint32 {
+	return atomic.LoadUint32(&r.epoch)
+}
+
 func (r *replica) isEpochStale() bool {
 	return r.epoch != atomic.LoadUint32(&r.store.epoch)
 }
@@ -324,7 +328,7 @@ func (s *replicaSelector) String() string {
 				replica.store.storeID,
 				replica.isEpochStale(),
 				replica.attempts,
-				replica.epoch,
+				replica.getEpoch(),
 				atomic.LoadUint32(&replica.store.epoch),
 				replica.store.getResolveState(),
 				replica.store.getLivenessState(),
