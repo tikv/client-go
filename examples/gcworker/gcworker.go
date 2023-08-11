@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
 )
 
@@ -36,10 +37,14 @@ func main() {
 		panic(err)
 	}
 
-	sysSafepoint, err := client.GC(context.Background(), *safepoint)
+	sysSafepoint, err := client.GC(context.Background(), *safepoint, tikv.WithConcurrency(10))
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("Finished GC, expect safepoint:%d(%+v),real safepoint:%d(+%v)\n", *safepoint, oracle.GetTimeFromTS(*safepoint), sysSafepoint, oracle.GetTimeFromTS(sysSafepoint))
 
+	err = client.Close()
+	if err != nil {
+		panic(err)
+	}
 }
