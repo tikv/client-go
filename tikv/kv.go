@@ -586,12 +586,12 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 	wg.Add(len(stores))
 	// Try to get the minimum resolved timestamp of the store from PD.
 	var err error
-	storeIDs := make([]string, len(stores))
-	for i, store := range stores {
-		storeIDs[i] = strconv.FormatUint(store.StoreID(), 10)
-	}
 	storeMinResolvedTSs := make(map[uint64]uint64)
 	if s.pdHttpClient != nil {
+		storeIDs := make([]string, len(stores))
+		for i, store := range stores {
+			storeIDs[i] = strconv.FormatUint(store.StoreID(), 10)
+		}
 		storeMinResolvedTSs, err = s.pdHttpClient.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
 		if err != nil {
 			// If getting the minimum resolved timestamp from PD failed, log the error and need to get it from TiKV.

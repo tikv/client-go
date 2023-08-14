@@ -35,7 +35,6 @@
 package util
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -91,21 +90,18 @@ func NewPDHTTPClient(
 func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []string) (map[uint64]uint64, error) {
 	var err error
 	for _, addr := range p.addrs {
-		data, err := json.Marshal(storeIDs)
-		if err != nil {
-			logutil.BgLogger().Debug("failed to marshal store ids", zap.String("addr", addr), zap.Error(err))
-			return nil, errors.Trace(err)
-		}
-		v, err := pdRequest(ctx, addr, minResolvedTSPrefix, p.cli, http.MethodGet, bytes.NewBuffer(data))
-		if err != nil {
-			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(err))
+		// scope is an optional parameter, it can be `cluster` or specified store IDs.
+		// - When no scope is given, cluster-level's min_resolved_ts will be returned and storesMinResolvedTS will be nil.
+		// - When scope is `cluster`, cluster-level's min_resolved_ts will be returned and storesMinResolvedTS will be filled.
+		// - When scope given a list of stores, min_resolved_ts will be provided for each store
+		//      and the scope-specific min_resolved_ts will be returned.
+		query := fmt.Sprintf("%s?scope=%s", minResolvedTSPrefix, strings.Join(storeIDs, ","))
+		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
+		if e != nil {
+			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			continue
 		}
 		logutil.BgLogger().Debug("min resolved ts", zap.String("resp", string(v)))
-		// - When no store is given, cluster-level's min_resolved_ts will be returned,
-		//		and min_resolved_ts for each store will be empty.
-		// - When given a list of stores, min_resolved_ts will be provided for each store
-		//      and the scope-specific min_resolved_ts will be returned.
 		d := struct {
 			IsRealTime          bool              `json:"is_real_time,omitempty"`
 			StoresMinResolvedTS map[uint64]uint64 `json:"stores_min_resolved_ts"`
