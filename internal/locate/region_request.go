@@ -1882,6 +1882,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "peer_is_witness"
 	} else if isDeadlineExceeded(e) {
 		return "deadline_exceeded"
+	} else if e.GetMismatchPeerId() != nil {
+		return "mismatch_peer_id"
 	}
 	return "unknown"
 }
@@ -2171,6 +2173,18 @@ func (s *RegionRequestSender) onRegionError(
 
 	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil {
 		s.replicaSelector.onDeadlineExceeded()
+	}
+
+	if mismatch := regionErr.GetMismatchPeerId(); mismatch != nil {
+		logutil.Logger(bo.GetCtx()).Warn(
+			"tikv reports `MismatchPeerId`, invalidate region cache",
+			zap.Uint64("req peer id", mismatch.GetRequestPeerId()),
+			zap.Uint64("store peer id", mismatch.GetStorePeerId()),
+		)
+		if s.replicaSelector != nil {
+			s.replicaSelector.invalidateRegion()
+		}
+		return false, nil
 	}
 
 	logutil.Logger(bo.GetCtx()).Debug(
