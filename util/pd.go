@@ -99,6 +99,7 @@ func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs
 		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
 		if e != nil {
 			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
+			err = e
 			continue
 		}
 		logutil.BgLogger().Debug("min resolved ts", zap.String("resp", string(v)))
@@ -117,13 +118,24 @@ func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
 			// Need to make sure successfully get from real pd.
-			for storeID, v := range d.StoresMinResolvedTS {
-				if v != 0 {
-					// Should be val.(uint64) but failpoint doesn't support that.
-					if tmp, ok := val.(int); ok {
-						d.StoresMinResolvedTS[storeID] = uint64(tmp)
-						logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("storeID", storeID), zap.Uint64("ts", uint64(tmp)))
+			if d.StoresMinResolvedTS != nil {
+				for storeID, v := range d.StoresMinResolvedTS {
+					if v != 0 {
+						// Should be val.(uint64) but failpoint doesn't support that.
+						if tmp, ok := val.(int); ok {
+							d.StoresMinResolvedTS[storeID] = uint64(tmp)
+							logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("storeID", storeID), zap.Uint64("ts", uint64(tmp)))
+						}
 					}
+				}
+			} else {
+				// Should be val.(uint64) but failpoint doesn't support that.
+				if tmp, ok := val.(int); ok {
+					// ci's store id is 1, we can change it if we have more stores.
+					// but for pool ci it's no need to do that :(
+					d.StoresMinResolvedTS = make(map[uint64]uint64)
+					d.StoresMinResolvedTS[1] = uint64(tmp)
+					logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("ts", uint64(tmp)))
 				}
 			}
 

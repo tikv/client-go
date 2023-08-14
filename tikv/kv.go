@@ -586,7 +586,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 	wg.Add(len(stores))
 	// Try to get the minimum resolved timestamp of the store from PD.
 	var err error
-	storeMinResolvedTSs := make(map[uint64]uint64)
+	var storeMinResolvedTSs map[uint64]uint64
 	if s.pdHttpClient != nil {
 		storeIDs := make([]string, len(stores))
 		for i, store := range stores {
@@ -608,10 +608,10 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
 
-			safeTS := storeMinResolvedTSs[storeID]
+			var safeTS uint64
 			storeIDStr := strconv.FormatUint(storeID, 10)
 			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
-			if safeTS == 0 || err != nil {
+			if storeMinResolvedTSs == nil || storeMinResolvedTSs[storeID] == 0 || err != nil {
 				resp, err := tikvClient.SendRequest(
 					ctx, storeAddr, tikvrpc.NewRequest(
 						tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
@@ -630,6 +630,8 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 					return
 				}
 				safeTS = resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
+			} else {
+				safeTS = storeMinResolvedTSs[storeID]
 			}
 
 			_, preSafeTS := s.getSafeTS(storeID)
