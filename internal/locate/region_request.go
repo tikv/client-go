@@ -345,7 +345,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	// a request. So, before the new leader is elected, we should not send requests
 	// to the unreachable old leader to avoid unnecessary timeout.
 	if liveness != reachable || leader.isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
+		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromOnNotLeader: true}
 		return nil, stateChanged{}
 	}
 	if selector.busyThreshold > 0 {
@@ -369,7 +369,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 		return
 	}
 	if liveness != reachable || selector.targetReplica().isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
+		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromOnNotLeader: true}
 	}
 	if liveness != reachable {
 		selector.invalidateReplicaStore(selector.targetReplica(), cause)
@@ -377,7 +377,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 }
 
 func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
-	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx}
+	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromOnNotLeader: true}
 }
 
 // tryFollower is the state where we cannot access the known leader
@@ -656,14 +656,13 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	if selector.targetIdx < 0 {
 		leader := selector.replicas[state.leaderIdx]
 		leaderEpochStale := leader.isEpochStale()
-		leaderInvalid := leaderEpochStale || leader.isExhausted(1)
+		leaderInvalid := leaderEpochStale || state.IsLeaderExhausted(leader)
 		if len(state.option.labels) > 0 {
 			logutil.Logger(bo.GetCtx()).Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
 				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Any("labels", state.option.labels))
 		}
-		if leaderInvalid {
 		if leaderInvalid {
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
