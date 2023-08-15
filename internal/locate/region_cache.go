@@ -741,7 +741,7 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	storeFailEpoch := atomic.LoadUint32(&store.epoch)
 	if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 		cachedRegion.invalidate(Other)
-		logutil.BgLogger().Info("invalidate current region, because others failed on same store",
+		logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 			zap.Uint64("region", id.GetID()),
 			zap.String("store", store.addr))
 		return nil, nil
@@ -862,7 +862,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		storeFailEpoch := atomic.LoadUint32(&store.epoch)
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 			cachedRegion.invalidate(Other)
-			logutil.BgLogger().Info("invalidate current region, because others failed on same store",
+			logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 				zap.Uint64("region", id.GetID()),
 				zap.String("store", store.addr))
 			// TiFlash will always try to find out a valid peer, avoiding to retry too many times.
@@ -1878,7 +1878,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 			(meta.GetRegionEpoch().GetConfVer() < ctx.Region.confVer ||
 				meta.GetRegionEpoch().GetVersion() < ctx.Region.ver) {
 			err := errors.Errorf("region epoch is ahead of tikv. rpc ctx: %+v, currentRegions: %+v", ctx, currentRegions)
-			logutil.BgLogger().Info("region epoch is ahead of tikv", zap.Error(err))
+			logutil.Logger(bo.GetCtx()).Info("region epoch is ahead of tikv", zap.Error(err))
 			return true, bo.Backoff(retry.BoRegionMiss, err)
 		}
 	}

@@ -778,7 +778,7 @@ func sendBatchRequest(
 	select {
 	case batchConn.batchCommandsCh <- entry:
 	case <-ctx.Done():
-		logutil.BgLogger().Debug("send request is cancelled",
+		logutil.Logger(ctx).Debug("send request is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
@@ -794,7 +794,7 @@ func sendBatchRequest(
 		return tikvrpc.FromBatchCommandsResponse(res)
 	case <-ctx.Done():
 		atomic.StoreInt32(&entry.canceled, 1)
-		logutil.BgLogger().Debug("wait response is cancelled",
+		logutil.Logger(ctx).Debug("wait response is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
