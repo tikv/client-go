@@ -547,7 +547,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 	tikvClient := s.GetTiKVClient()
 	wg := &sync.WaitGroup{}
 	wg.Add(len(stores))
-	safeTS, txnScopeMap, err := s.buildTxnScopeMap(ctx)
+	clusterTS, txnScopeMap, err := s.buildTxnScopeMap(ctx, stores)
 	for _, store := range stores {
 		storeID := store.StoreID()
 		storeAddr := store.GetAddr()
@@ -555,9 +555,10 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 			defer wg.Done()
 
 			storeIDStr := strconv.Itoa(int(storeID))
+			safeTS := clusterTS
 			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
 			if safeTS == 0 || err != nil {
-				resp, err := tikvClient.SendRequest(
+				resp, e := tikvClient.SendRequest(
 					ctx, storeAddr, tikvrpc.NewRequest(
 						tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
 							KeyRange: &kvrpcpb.KeyRange{
@@ -569,7 +570,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 						},
 					), client.ReadTimeoutShort,
 				)
-				if err != nil {
+				if e != nil {
 					metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
 					logutil.BgLogger().Debug("update safeTS failed", zap.Error(err), zap.Uint64("store-id", storeID))
 					return
@@ -591,8 +592,12 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		}(ctx, wg, storeID, storeAddr)
 	}
 
-	for txnScope, storeIDs := range txnScopeMap {
-		s.updateMinSafeTS(txnScope, storeIDs)
+	if clusterTS != 0 && err == nil {
+		s.minSafeTS.Store(oracle.GlobalTxnScope, clusterTS)
+	} else {
+		for txnScope, storeIDs := range txnScopeMap {
+			s.updateMinSafeTS(txnScope, storeIDs)
+		}
 	}
 	wg.Wait()
 }
@@ -600,10 +605,9 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 // build txnScopeMap and judge whether it is needed to get safeTS from PD.
 // - if stores label are global, return get cluster min resolved ts from pd.
 // - if contains dc label store, return try to get it from TiKV.
-func (s *KVStore) buildTxnScopeMap(ctx context.Context) (safeTS uint64, txnScopeMap map[string][]uint64, err error) {
+func (s *KVStore) buildTxnScopeMap(ctx context.Context, stores []*Store) (safeTS uint64, txnScopeMap map[string][]uint64, err error) {
 	isGlobal := true
 	txnScopeMap = make(map[string][]uint64)
-	stores := s.regionCache.GetStoresByType(tikvrpc.TiKV)
 	for _, store := range stores {
 		txnScopeMap[oracle.GlobalTxnScope] = append(txnScopeMap[oracle.GlobalTxnScope], store.StoreID())
 
