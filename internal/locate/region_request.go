@@ -400,7 +400,6 @@ type tryFollower struct {
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	hasDeadlineExceededErr := false
-	//hasDeadlineExceededErr || targetReplica.deadlineErrUsingConfTimeout
 	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
 		for i := 0; i < len(selector.replicas); i++ {
 			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
