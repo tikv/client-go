@@ -627,16 +627,17 @@ func (c *RegionCache) SetPDClient(client pd.Client) {
 
 // RPCContext contains data that is needed to send RPC to a region.
 type RPCContext struct {
-	Region     RegionVerID
-	Meta       *metapb.Region
-	Peer       *metapb.Peer
-	AccessIdx  AccessIndex
-	Store      *Store
-	Addr       string
-	AccessMode accessMode
-	ProxyStore *Store // nil means proxy is not used
-	ProxyAddr  string // valid when ProxyStore is not nil
-	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	Region        RegionVerID
+	Meta          *metapb.Region
+	Peer          *metapb.Peer
+	AccessIdx     AccessIndex
+	Store         *Store
+	Addr          string
+	AccessMode    accessMode
+	ProxyStore    *Store // nil means proxy is not used
+	ProxyAddr     string // valid when ProxyStore is not nil
+	TiKVNum       int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	BucketVersion uint64
 
 	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
@@ -1289,9 +1290,11 @@ func (c *RegionCache) reloadRegion(regionID uint64) {
 		// ignore error and use old region info.
 		logutil.Logger(bo.GetCtx()).Error("load region failure",
 			zap.Uint64("regionID", regionID), zap.Error(err))
+		c.mu.RLock()
 		if oldRegion := c.getRegionByIDFromCache(regionID); oldRegion != nil {
 			oldRegion.asyncReload.Store(false)
 		}
+		c.mu.RUnlock()
 		return
 	}
 	c.mu.Lock()
@@ -1943,6 +1946,26 @@ func (c *RegionCache) getStoresByLabels(labels []*metapb.StoreLabel) []*Store {
 		}
 	}
 	return s
+}
+
+// OnBucketVersionNotMatch removes the old buckets meta if the version is stale.
+func (c *RegionCache) OnBucketVersionNotMatch(ctx *RPCContext, version uint64, keys [][]byte) {
+	r := c.GetCachedRegionWithRLock(ctx.Region)
+	if r == nil {
+		return
+	}
+
+	buckets := r.getStore().buckets
+	if buckets == nil || buckets.GetVersion() < version {
+		oldStore := r.getStore()
+		store := oldStore.clone()
+		store.buckets = &metapb.Buckets{
+			Version:  version,
+			Keys:     keys,
+			RegionId: r.meta.GetId(),
+		}
+		r.compareAndSwapStore(oldStore, store)
+	}
 }
 
 // OnRegionEpochNotMatch removes the old region and inserts new regions into the cache.
