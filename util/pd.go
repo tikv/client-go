@@ -86,12 +86,11 @@ func NewPDHTTPClient(
 	}
 }
 
-// GetStoreMinResolvedTS get store-level min-resolved-ts from pd.
-func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64) (uint64, error) {
+// GetClusterMinResolvedTS get cluster-level min-resolved-ts from pd.
+func (p *PDHTTPClient) GetClusterMinResolvedTS(ctx context.Context) (uint64, error) {
 	var err error
 	for _, addr := range p.addrs {
-		query := fmt.Sprintf("%s/%d", storeMinResolvedTSPrefix, storeID)
-		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
+		v, e := pdRequest(ctx, addr, storeMinResolvedTSPrefix, p.cli, http.MethodGet, nil)
 		if e != nil {
 			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			err = e

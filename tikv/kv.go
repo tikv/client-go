@@ -547,24 +547,14 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 	tikvClient := s.GetTiKVClient()
 	wg := &sync.WaitGroup{}
 	wg.Add(len(stores))
+	safeTS, txnScopeMap, err := s.buildTxnScopeMap(ctx)
 	for _, store := range stores {
 		storeID := store.StoreID()
 		storeAddr := store.GetAddr()
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
 
-			var (
-				safeTS uint64
-				err    error
-			)
 			storeIDStr := strconv.Itoa(int(storeID))
-			// Try to get the minimum resolved timestamp of the store from PD.
-			if s.pdHttpClient != nil {
-				safeTS, err = s.pdHttpClient.GetStoreMinResolvedTS(ctx, storeID)
-				if err != nil {
-					logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err), zap.Uint64("store-id", storeID))
-				}
-			}
 			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
 			if safeTS == 0 || err != nil {
 				resp, err := tikvClient.SendRequest(
@@ -601,18 +591,37 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		}(ctx, wg, storeID, storeAddr)
 	}
 
-	txnScopeMap := make(map[string][]uint64)
+	for txnScope, storeIDs := range txnScopeMap {
+		s.updateMinSafeTS(txnScope, storeIDs)
+	}
+	wg.Wait()
+}
+
+// build txnScopeMap and judge whether it is needed to get safeTS from PD.
+// - if stores label are global, return get cluster min resolved ts from pd.
+// - if contains dc label store, return try to get it from TiKV.
+func (s *KVStore) buildTxnScopeMap(ctx context.Context) (safeTS uint64, txnScopeMap map[string][]uint64, err error) {
+	isGlobal := true
+	txnScopeMap = make(map[string][]uint64)
+	stores := s.regionCache.GetStoresByType(tikvrpc.TiKV)
 	for _, store := range stores {
 		txnScopeMap[oracle.GlobalTxnScope] = append(txnScopeMap[oracle.GlobalTxnScope], store.StoreID())
 
 		if label, ok := store.GetLabelValue(DCLabelKey); ok {
 			txnScopeMap[label] = append(txnScopeMap[label], store.StoreID())
+			isGlobal = false
 		}
 	}
-	for txnScope, storeIDs := range txnScopeMap {
-		s.updateMinSafeTS(txnScope, storeIDs)
+
+	// Try to get the minimum resolved timestamp of the cluster from PD.
+	if s.pdHttpClient != nil && isGlobal {
+		safeTS, err = s.pdHttpClient.GetClusterMinResolvedTS(ctx)
+		if err != nil {
+			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err))
+		}
 	}
-	wg.Wait()
+
+	return safeTS, txnScopeMap, err
 }
 
 // Variables defines the variables used by TiKV storage.
