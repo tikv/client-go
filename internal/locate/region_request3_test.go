@@ -1097,7 +1097,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	req.EnableStaleRead()
 	req.ReplicaReadType = kv.ReplicaReadFollower
 
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	bo := retry.NewBackoffer(ctx, -1)
 	s.Nil(err)
 	resp, retry, err := s.regionRequestSender.SendReq(bo, req, regionLoc.Region, time.Second)
