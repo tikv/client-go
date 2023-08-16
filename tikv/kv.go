@@ -585,10 +585,12 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 	wg := &sync.WaitGroup{}
 	wg.Add(len(stores))
 	// Try to get the minimum resolved timestamp of the store from PD.
-	var err error
-	var storeMinResolvedTSs map[uint64]uint64
+	var (
+		err                 error
+		storeMinResolvedTSs map[uint64]uint64
+	)
+	storeIDs := make([]string, len(stores))
 	if s.pdHttpClient != nil {
-		storeIDs := make([]string, len(stores))
 		for i, store := range stores {
 			storeIDs[i] = strconv.FormatUint(store.StoreID(), 10)
 		}
@@ -599,17 +601,16 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		}
 	}
 
-	for _, store := range stores {
+	for i, store := range stores {
 		storeID := store.StoreID()
 		storeAddr := store.GetAddr()
 		if store.IsTiFlash() {
 			storeAddr = store.GetPeerAddr()
 		}
-		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
+		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string, storeIDStr string) {
 			defer wg.Done()
 
 			var safeTS uint64
-			storeIDStr := strconv.FormatUint(storeID, 10)
 			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
 			if storeMinResolvedTSs == nil || storeMinResolvedTSs[storeID] == 0 || err != nil {
 				resp, err := tikvClient.SendRequest(
@@ -645,7 +646,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 			metrics.TiKVSafeTSUpdateCounter.WithLabelValues("success", storeIDStr).Inc()
 			safeTSTime := oracle.GetTimeFromTS(safeTS)
 			metrics.TiKVMinSafeTSGapSeconds.WithLabelValues(storeIDStr).Set(time.Since(safeTSTime).Seconds())
-		}(ctx, wg, storeID, storeAddr)
+		}(ctx, wg, storeID, storeAddr, storeIDs[i])
 	}
 
 	txnScopeMap := make(map[string][]uint64)

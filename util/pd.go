@@ -128,15 +128,13 @@ func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs
 						}
 					}
 				}
-			} else {
+			} else if tmp, ok := val.(int); ok {
 				// Should be val.(uint64) but failpoint doesn't support that.
-				if tmp, ok := val.(int); ok {
-					// ci's store id is 1, we can change it if we have more stores.
-					// but for pool ci it's no need to do that :(
-					d.StoresMinResolvedTS = make(map[uint64]uint64)
-					d.StoresMinResolvedTS[1] = uint64(tmp)
-					logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("ts", uint64(tmp)))
-				}
+				// ci's store id is 1, we can change it if we have more stores.
+				// but for pool ci it's no need to do that :(
+				d.StoresMinResolvedTS = make(map[uint64]uint64)
+				d.StoresMinResolvedTS[1] = uint64(tmp)
+				logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("ts", uint64(tmp)))
 			}
 
 		}
