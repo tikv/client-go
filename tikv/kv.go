@@ -542,12 +542,30 @@ func (s *KVStore) safeTSUpdater() {
 	}
 }
 
+var (
+	skipSafeTSUpdateCounter    = metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", "cluster")
+	successSafeTSUpdateCounter = metrics.TiKVSafeTSUpdateCounter.WithLabelValues("success", "cluster")
+	clusterMinSafeTSGap        = metrics.TiKVMinSafeTSGapSeconds.WithLabelValues("cluster")
+)
+
 func (s *KVStore) updateSafeTS(ctx context.Context) {
 	stores := s.regionCache.GetStoresByType(tikvrpc.TiKV)
 	// Try getting the cluster-level minimum resolved timestamp from PD first.
 	clusterMinSafeTS, txnScopeMap, err := s.buildTxnScopeMap(ctx, stores)
 	if clusterMinSafeTS != 0 && err == nil {
-		s.minSafeTS.Store(oracle.GlobalTxnScope, clusterMinSafeTS)
+		preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
+		if preClusterMinSafeTS > clusterMinSafeTS {
+			skipSafeTSUpdateCounter.Inc()
+			preSafeTSTime := oracle.GetTimeFromTS(preClusterMinSafeTS)
+			clusterMinSafeTSGap.Set(time.Since(preSafeTSTime).Seconds())
+			return
+		} else {
+			s.minSafeTS.Store(oracle.GlobalTxnScope, clusterMinSafeTS)
+			successSafeTSUpdateCounter.Inc()
+			safeTSTime := oracle.GetTimeFromTS(clusterMinSafeTS)
+			clusterMinSafeTSGap.Set(time.Since(safeTSTime).Seconds())
+		}
+
 		return
 	}
 
