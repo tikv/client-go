@@ -544,39 +544,43 @@ func (s *KVStore) safeTSUpdater() {
 
 func (s *KVStore) updateSafeTS(ctx context.Context) {
 	stores := s.regionCache.GetStoresByType(tikvrpc.TiKV)
+	// Try getting the cluster-level minimum resolved timestamp from PD first.
+	clusterMinSafeTS, txnScopeMap, err := s.buildTxnScopeMap(ctx, stores)
+	if clusterMinSafeTS != 0 && err == nil {
+		s.minSafeTS.Store(oracle.GlobalTxnScope, clusterMinSafeTS)
+		return
+	}
+
 	tikvClient := s.GetTiKVClient()
 	wg := &sync.WaitGroup{}
 	wg.Add(len(stores))
-	clusterTS, txnScopeMap, err := s.buildTxnScopeMap(ctx, stores)
+	// If getting the cluster-level minimum resolved timestamp from PD failed or returned 0,
+	// try to get it from TiKV.
 	for _, store := range stores {
 		storeID := store.StoreID()
 		storeAddr := store.GetAddr()
 		go func(ctx context.Context, wg *sync.WaitGroup, storeID uint64, storeAddr string) {
 			defer wg.Done()
 
-			storeIDStr := strconv.Itoa(int(storeID))
-			safeTS := clusterTS
-			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
-			if safeTS == 0 || err != nil {
-				resp, e := tikvClient.SendRequest(
-					ctx, storeAddr, tikvrpc.NewRequest(
-						tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
-							KeyRange: &kvrpcpb.KeyRange{
-								StartKey: []byte(""),
-								EndKey:   []byte(""),
-							},
-						}, kvrpcpb.Context{
-							RequestSource: util.RequestSourceFromCtx(ctx),
+			resp, e := tikvClient.SendRequest(
+				ctx, storeAddr, tikvrpc.NewRequest(
+					tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
+						KeyRange: &kvrpcpb.KeyRange{
+							StartKey: []byte(""),
+							EndKey:   []byte(""),
 						},
-					), client.ReadTimeoutShort,
-				)
-				if e != nil {
-					metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
-					logutil.BgLogger().Debug("update safeTS failed", zap.Error(err), zap.Uint64("store-id", storeID))
-					return
-				}
-				safeTS = resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
+					}, kvrpcpb.Context{
+						RequestSource: util.RequestSourceFromCtx(ctx),
+					},
+				), client.ReadTimeoutShort,
+			)
+			storeIDStr := strconv.Itoa(int(storeID))
+			if e != nil {
+				metrics.TiKVSafeTSUpdateCounter.WithLabelValues("fail", storeIDStr).Inc()
+				logutil.BgLogger().Debug("update safeTS failed", zap.Error(err), zap.Uint64("store-id", storeID))
+				return
 			}
+			safeTS := resp.Resp.(*kvrpcpb.StoreSafeTSResponse).GetSafeTs()
 
 			_, preSafeTS := s.getSafeTS(storeID)
 			if preSafeTS > safeTS {
@@ -592,12 +596,8 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		}(ctx, wg, storeID, storeAddr)
 	}
 
-	if clusterTS != 0 && err == nil {
-		s.minSafeTS.Store(oracle.GlobalTxnScope, clusterTS)
-	} else {
-		for txnScope, storeIDs := range txnScopeMap {
-			s.updateMinSafeTS(txnScope, storeIDs)
-		}
+	for txnScope, storeIDs := range txnScopeMap {
+		s.updateMinSafeTS(txnScope, storeIDs)
 	}
 	wg.Wait()
 }
