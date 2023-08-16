@@ -252,7 +252,7 @@ func TestRegionCacheStaleRead(t *testing.T) {
 	originReloadRegionInterval := atomic.LoadInt64(&reloadRegionInterval)
 	originBoTiKVServerBusy := retry.BoTiKVServerBusy
 	defer func() {
-		reloadRegionInterval = originReloadRegionInterval
+		atomic.StoreInt64(&reloadRegionInterval, originReloadRegionInterval)
 		retry.BoTiKVServerBusy = originBoTiKVServerBusy
 	}()
 	atomic.StoreInt64(&reloadRegionInterval, int64(24*time.Hour)) // disable reload region
