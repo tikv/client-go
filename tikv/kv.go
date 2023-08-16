@@ -580,6 +580,12 @@ func (s *KVStore) safeTSUpdater() {
 }
 
 func (s *KVStore) updateSafeTS(ctx context.Context) {
+	// Try getting the cluster-level minimum resolved timestamp from PD first.
+	if s.setGlobalMinSafeTSByPD(ctx) {
+		return
+	}
+
+	// When txn scope is not global, we need to get the minimum resolved timestamp of each store.
 	stores := s.regionCache.GetAllStores()
 	tikvClient := s.GetTiKVClient()
 	wg := &sync.WaitGroup{}
@@ -594,7 +600,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		for i, store := range stores {
 			storeIDs[i] = strconv.FormatUint(store.StoreID(), 10)
 		}
-		storeMinResolvedTSs, err = s.pdHttpClient.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
+		_, storeMinResolvedTSs, err = s.pdHttpClient.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
 		if err != nil {
 			// If getting the minimum resolved timestamp from PD failed, log the error and need to get it from TiKV.
 			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err), zap.Any("stores", storeIDs))
@@ -661,6 +667,40 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		s.updateMinSafeTS(txnScope, storeIDs)
 	}
 	wg.Wait()
+}
+
+var (
+	skipSafeTSUpdateCounter    = metrics.TiKVSafeTSUpdateCounter.WithLabelValues("skip", "cluster")
+	successSafeTSUpdateCounter = metrics.TiKVSafeTSUpdateCounter.WithLabelValues("success", "cluster")
+	clusterMinSafeTSGap        = metrics.TiKVMinSafeTSGapSeconds.WithLabelValues("cluster")
+)
+
+// setGlobalMinSafeTSByPD check whether it is needed to get cluster-level's min resolved ts from PD.
+func (s *KVStore) setGlobalMinSafeTSByPD(ctx context.Context) bool {
+	isGlobal := config.GetTxnScopeFromConfig() == oracle.GlobalTxnScope
+	// Try to get the minimum resolved timestamp of the cluster from PD.
+	if s.pdHttpClient != nil && isGlobal {
+		clusterMinSafeTS, _, err := s.pdHttpClient.GetMinResolvedTSByStoresIDs(ctx, nil)
+		if err != nil {
+			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err))
+		} else if clusterMinSafeTS != 0 {
+			// update metrics.
+			preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
+			if preClusterMinSafeTS > clusterMinSafeTS {
+				skipSafeTSUpdateCounter.Inc()
+				preSafeTSTime := oracle.GetTimeFromTS(preClusterMinSafeTS)
+				clusterMinSafeTSGap.Set(time.Since(preSafeTSTime).Seconds())
+			} else {
+				s.minSafeTS.Store(oracle.GlobalTxnScope, clusterMinSafeTS)
+				successSafeTSUpdateCounter.Inc()
+				safeTSTime := oracle.GetTimeFromTS(clusterMinSafeTS)
+				clusterMinSafeTSGap.Set(time.Since(safeTSTime).Seconds())
+			}
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *KVStore) ruRuntimeStatsMapCleaner() {
