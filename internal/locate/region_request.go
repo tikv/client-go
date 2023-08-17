@@ -616,7 +616,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	if selector.targetIdx < 0 {
 		leader := selector.replicas[state.leaderIdx]
 		leaderEpochStale := leader.isEpochStale()
-		leaderInvalid := leaderEpochStale || state.IsLeaderExhausted(leader)
+		leaderUnreachable := leader.store.getLivenessState() != reachable
+		leaderInvalid := leaderEpochStale || leaderUnreachable || state.IsLeaderExhausted(leader)
 		if len(state.option.labels) > 0 {
 			logutil.BgLogger().Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
