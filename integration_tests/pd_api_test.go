@@ -46,6 +46,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -167,6 +168,11 @@ func (s *apiTestSuite) TestDCLabelClusterMinResolvedTS() {
 
 	// Set DC label for store 1.
 	dcLabel := "testDC"
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TxnScope = dcLabel
+	})
+	defer restore()
+
 	labels := []*metapb.StoreLabel{
 		{
 			Key:   tikv.DCLabelKey,
