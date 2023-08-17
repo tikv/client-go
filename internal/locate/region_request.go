@@ -621,6 +621,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		if len(state.option.labels) > 0 {
 			logutil.BgLogger().Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
+				zap.Bool("leader-epoch-stale", leaderEpochStale),
+				zap.Bool("leader-unreachable", leaderUnreachable),
 				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Any("labels", state.option.labels))
 		}

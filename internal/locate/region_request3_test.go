@@ -863,6 +863,16 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 
 	// Verify switch to the leader immediately when stale read requests with global txn scope meet region errors.
 	s.cluster.ChangeLeader(region.Region.id, s.peerIDs[0])
+	tf = func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	s.Eventually(func() bool {
+		stores := s.regionRequestSender.replicaSelector.regionStore.stores
+		return stores[0].getLivenessState() == reachable &&
+			stores[1].getLivenessState() == reachable &&
+			stores[2].getLivenessState() == reachable
+	}, 3*time.Second, 200*time.Millisecond)
 	reloadRegion()
 	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
 	req.ReadReplicaScope = oracle.GlobalTxnScope
