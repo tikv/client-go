@@ -595,10 +595,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 
 	reloadRegion := false
+	rejectReasons := make([]string, len(selector.replicas))
 	for i := 0; i < len(selector.replicas) && !state.option.leaderOnly; i++ {
 		idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
 		selectReplica := selector.replicas[idx]
-		if state.isCandidate(idx, selectReplica) {
+		if state.isCandidate(idx, selectReplica, rejectReasons) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
 			break
@@ -617,16 +618,21 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		leader := selector.replicas[state.leaderIdx]
 		leaderEpochStale := leader.isEpochStale()
 		leaderUnreachable := leader.store.getLivenessState() != reachable
-		leaderInvalid := leaderEpochStale || leaderUnreachable || state.IsLeaderExhausted(leader)
-		if len(state.option.labels) > 0 {
+		leaderExhausted := state.IsLeaderExhausted(leader)
+		leaderInvalid := leaderEpochStale || leaderUnreachable || leaderExhausted
+		if !state.option.leaderOnly && len(state.option.labels) > 0 {
 			logutil.BgLogger().Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
-				zap.Bool("leader-epoch-stale", leaderEpochStale),
-				zap.Bool("leader-unreachable", leaderUnreachable),
-				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Strings("reasons", rejectReasons),
 				zap.Any("labels", state.option.labels))
 		}
 		if leaderInvalid {
+			logutil.BgLogger().Warn("unable to find valid leader peer",
+				zap.Uint64("region", selector.region.GetID()),
+				zap.Bool("stale-read", state.isStaleRead),
+				zap.Bool("leader-epoch-stale", leaderEpochStale),
+				zap.Bool("leader-unreachable", leaderUnreachable),
+				zap.Bool("leader-exhausted", leaderExhausted))
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
@@ -679,8 +685,15 @@ func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replic
 	}
 }
 
-func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool {
-	if replica.isEpochStale() || replica.isExhausted(1) || replica.store.getLivenessState() == unreachable {
+func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica, reasons []string) bool {
+	if isStale, isExhausted, isUnreachable := replica.isEpochStale(), replica.isExhausted(1), replica.store.getLivenessState() == unreachable; isStale || isExhausted || isUnreachable {
+		if isStale {
+			reasons[idx] = "stale"
+		} else if isExhausted {
+			reasons[idx] = "exhausted"
+		} else if isUnreachable {
+			reasons[idx] = "unreachable"
+		}
 		return false
 	}
 	if state.option.leaderOnly && idx == state.leaderIdx {
@@ -688,9 +701,14 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 		return true
 	} else if !state.tryLeader && idx == state.leaderIdx {
 		// The request cannot be sent to leader.
+		reasons[idx] = "not-try-leader"
 		return false
 	}
-	return replica.store.IsLabelsMatch(state.option.labels)
+	ok := replica.store.IsLabelsMatch(state.option.labels)
+	if !ok {
+		reasons[idx] = "label-not-match"
+	}
+	return ok
 }
 
 type invalidStore struct {
@@ -1644,7 +1662,11 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 
 	// NOTE: Please add the region error handler in the same order of errorpb.Error.
 	errLabel := regionErrorToLabel(regionErr)
-	metrics.TiKVRegionErrorCounter.WithLabelValues(errLabel).Inc()
+	storeLabel := ""
+	if ctx.Store != nil {
+		storeLabel = strconv.FormatUint(ctx.Store.StoreID(), 10)
+	}
+	metrics.TiKVRegionErrorCounter.WithLabelValues(errLabel, storeLabel).Inc()
 
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
 		// Retry if error is `NotLeader`.

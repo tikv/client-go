@@ -118,6 +118,7 @@ const (
 	LblFromStore       = "from_store"
 	LblToStore         = "to_store"
 	LblStaleRead       = "stale_read"
+	LblReplicaRead     = "replica_read"
 	LblSource          = "source"
 	LblDirection       = "direction"
 )
@@ -148,7 +149,7 @@ func initMetrics(namespace, subsystem string) {
 			Name:      "request_seconds",
 			Help:      "Bucketed histogram of sending request duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
-		}, []string{LblType, LblStore, LblStaleRead})
+		}, []string{LblType, LblStore, LblStaleRead, LblReplicaRead})
 
 	TiKVSendReqCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -198,7 +199,7 @@ func initMetrics(namespace, subsystem string) {
 			Subsystem: subsystem,
 			Name:      "region_err_total",
 			Help:      "Counter of region errors.",
-		}, []string{LblType})
+		}, []string{LblType, LblStore})
 
 	TiKVTxnWriteKVCountHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

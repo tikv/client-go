@@ -380,9 +380,10 @@ var (
 )
 
 type sendReqHistCacheKey struct {
-	tp       tikvrpc.CmdType
-	id       uint64
-	staleRad bool
+	tp          tikvrpc.CmdType
+	id          uint64
+	staleRead   bool
+	replicaRead bool
 }
 
 type sendReqCounterCacheKey struct {
@@ -395,15 +396,18 @@ type sendReqCounterCacheValue struct {
 	timeCounter prometheus.Counter
 }
 
-func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time, staleRead bool) {
+func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time) {
 	elapsed := time.Since(start)
 	secs := elapsed.Seconds()
 	storeID := req.Context.GetPeer().GetStoreId()
 
+	staleRead := req.GetStaleRead()
+	replicaRead := req.GetReplicaRead()
 	histKey := sendReqHistCacheKey{
 		req.Type,
 		storeID,
 		staleRead,
+		replicaRead,
 	}
 	counterKey := sendReqCounterCacheKey{
 		histKey,
@@ -418,7 +422,7 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 		if len(storeIDStr) == 0 {
 			storeIDStr = strconv.FormatUint(storeID, 10)
 		}
-		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead))
+		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead), strconv.FormatBool(replicaRead))
 		sendReqHistCache.Store(histKey, hist)
 	}
 	counter, ok := sendReqCounterCache.Load(counterKey)
@@ -473,14 +477,13 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	start := time.Now()
-	staleRead := req.GetStaleRead()
 	defer func() {
 		stmtExec := ctx.Value(util.ExecDetailsKey)
 		if stmtExec != nil {
 			detail := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
-		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
+		c.updateTiKVSendReqHistogram(req, resp, start)
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {
