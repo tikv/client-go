@@ -777,7 +777,7 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	storeFailEpoch := atomic.LoadUint32(&store.epoch)
 	if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 		cachedRegion.invalidate(Other)
-		logutil.BgLogger().Info("invalidate current region, because others failed on same store",
+		logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 			zap.Uint64("region", id.GetID()),
 			zap.String("store", store.addr))
 		return nil, nil
@@ -906,7 +906,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		storeFailEpoch := atomic.LoadUint32(&store.epoch)
 		if storeFailEpoch != regionStore.storeEpochs[storeIdx] {
 			cachedRegion.invalidate(Other)
-			logutil.BgLogger().Info("invalidate current region, because others failed on same store",
+			logutil.Logger(bo.GetCtx()).Info("invalidate current region, because others failed on same store",
 				zap.Uint64("region", id.GetID()),
 				zap.String("store", store.addr))
 			// TiFlash will always try to find out a valid peer, avoiding to retry too many times.
@@ -1290,9 +1290,11 @@ func (c *RegionCache) reloadRegion(regionID uint64) {
 		// ignore error and use old region info.
 		logutil.Logger(bo.GetCtx()).Error("load region failure",
 			zap.Uint64("regionID", regionID), zap.Error(err))
+		c.mu.RLock()
 		if oldRegion := c.getRegionByIDFromCache(regionID); oldRegion != nil {
 			oldRegion.asyncReload.Store(false)
 		}
+		c.mu.RUnlock()
 		return
 	}
 	c.mu.Lock()
@@ -1981,7 +1983,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 			(meta.GetRegionEpoch().GetConfVer() < ctx.Region.confVer ||
 				meta.GetRegionEpoch().GetVersion() < ctx.Region.ver) {
 			err := errors.Errorf("region epoch is ahead of tikv. rpc ctx: %+v, currentRegions: %+v", ctx, currentRegions)
-			logutil.BgLogger().Info("region epoch is ahead of tikv", zap.Error(err))
+			logutil.Logger(bo.GetCtx()).Info("region epoch is ahead of tikv", zap.Error(err))
 			return true, bo.Backoff(retry.BoRegionMiss, err)
 		}
 	}
@@ -2515,6 +2517,24 @@ const (
 	tombstone
 )
 
+// String implements fmt.Stringer interface.
+func (s resolveState) String() string {
+	switch s {
+	case unresolved:
+		return "unresolved"
+	case resolved:
+		return "resolved"
+	case needCheck:
+		return "needCheck"
+	case deleted:
+		return "deleted"
+	case tombstone:
+		return "tombstone"
+	default:
+		return fmt.Sprintf("unknown-%v", uint64(s))
+	}
+}
+
 // IsTiFlash returns true if the storeType is TiFlash
 func (s *Store) IsTiFlash() bool {
 	return s.storeType == tikvrpc.TiFlash
@@ -2654,6 +2674,12 @@ func (s *Store) changeResolveStateTo(from, to resolveState) bool {
 			return false
 		}
 		if atomic.CompareAndSwapUint64(&s.state, uint64(from), uint64(to)) {
+			logutil.BgLogger().Info("change store resolve state",
+				zap.Uint64("store", s.storeID),
+				zap.String("addr", s.addr),
+				zap.String("from", from.String()),
+				zap.String("to", to.String()),
+				zap.String("liveness-state", s.getLivenessState().String()))
 			return true
 		}
 	}
@@ -2753,6 +2779,20 @@ const (
 	unreachable
 	unknown
 )
+
+// String implements fmt.Stringer interface.
+func (s livenessState) String() string {
+	switch s {
+	case unreachable:
+		return "unreachable"
+	case reachable:
+		return "reachable"
+	case unknown:
+		return "unknown"
+	default:
+		return fmt.Sprintf("unknown-%v", uint32(s))
+	}
+}
 
 func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
 	// This mechanism doesn't support non-TiKV stores currently.

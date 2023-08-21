@@ -1,3 +1,17 @@
+// Copyright 2023 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package util
 
 import (
@@ -30,19 +44,21 @@ const (
 // explicit source types.
 const (
 	ExplicitTypeEmpty      = ""
-	ExplicitTypeDefault    = "default"
 	ExplicitTypeLightning  = "lightning"
 	ExplicitTypeBR         = "br"
 	ExplicitTypeDumpling   = "dumpling"
 	ExplicitTypeBackground = "background"
+	ExplicitTypeDDL        = "ddl"
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL}
 
 const (
 	// InternalRequest is the scope of internal queries
 	InternalRequest = "internal"
+	// InternalRequestPrefix is the prefix of internal queries
+	InternalRequestPrefix = "internal_"
 	// ExternalRequest is the scope of external queries
 	ExternalRequest = "external"
 	// SourceUnknown keeps same with the default value(empty string)
@@ -81,6 +97,25 @@ func WithInternalSourceType(ctx context.Context, source string) context.Context 
 	})
 }
 
+// WithInternalSourceAndTaskType create context with internal source and task name.
+func WithInternalSourceAndTaskType(ctx context.Context, source, taskName string) context.Context {
+	return context.WithValue(ctx, RequestSourceKey, RequestSource{
+		RequestSourceInternal:     true,
+		RequestSourceType:         source,
+		ExplicitRequestSourceType: taskName,
+	})
+}
+
+// BuildRequestSource builds a request_source from internal, source and explicitSource.
+func BuildRequestSource(internal bool, source, explicitSource string) string {
+	requestSource := RequestSource{
+		RequestSourceInternal:     internal,
+		RequestSourceType:         source,
+		ExplicitRequestSourceType: explicitSource,
+	}
+	return requestSource.GetRequestSource()
+}
+
 // IsRequestSourceInternal checks whether the input request source type is internal type.
 func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 	isInternal := false
@@ -93,24 +128,26 @@ func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
 	source := SourceUnknown
-	explicitSourceType := ExplicitTypeDefault
 	origin := ExternalRequest
 	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
 		// if r.RequestSourceType and r.ExplicitRequestSourceType are not set, it's mostly possible that r.RequestSourceInternal is not set
 		// to avoid internal requests be marked as external(default value), return unknown source here.
-		return strings.Join([]string{source, explicitSourceType}, "_")
-	}
-
-	if len(r.RequestSourceType) > 0 {
-		source = r.RequestSourceType
-	}
-	if len(r.ExplicitRequestSourceType) > 0 {
-		explicitSourceType = r.ExplicitRequestSourceType
+		return source
 	}
 	if r.RequestSourceInternal {
 		origin = InternalRequest
 	}
-	return strings.Join([]string{origin, source, explicitSourceType}, "_")
+	labelList := make([]string, 0, 3)
+	labelList = append(labelList, origin)
+	if len(r.RequestSourceType) > 0 {
+		source = r.RequestSourceType
+	}
+	labelList = append(labelList, source)
+	if len(r.ExplicitRequestSourceType) > 0 && r.ExplicitRequestSourceType != r.RequestSourceType {
+		labelList = append(labelList, r.ExplicitRequestSourceType)
+	}
+
+	return strings.Join(labelList, "_")
 }
 
 // RequestSourceFromCtx extract source from passed context.
@@ -133,9 +170,9 @@ type resourceGroupNameKeyType struct{}
 // ResourceGroupNameKey is used as the key of request source type in context.
 var resourceGroupNameKey = resourceGroupNameKeyType{}
 
-// WithResouceGroupName return a copy of the given context with a associated
-// reosurce group name.
-func WithResouceGroupName(ctx context.Context, groupName string) context.Context {
+// WithResourceGroupName return a copy of the given context with a associated
+// resource group name.
+func WithResourceGroupName(ctx context.Context, groupName string) context.Context {
 	return context.WithValue(ctx, resourceGroupNameKey, groupName)
 }
 

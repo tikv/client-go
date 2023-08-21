@@ -107,6 +107,15 @@ func buildResourceControlInterceptor(
 	// Build the interceptor.
 	interceptFn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+			// bypass some internal requests and it's may influence user experience. For example, the
+			// request of `alter user password`, totally bypasses the resource control. it's not cost
+			// many resources, but it's may influence the user experience.
+			// If the resource group has background jobs, we should not record consumption and wait for it.
+			// Background jobs will record and report in tikv side.
+			if reqInfo.Bypass() || resourceControlInterceptor.IsBackgroundRequest(ctx, resourceGroupName, req.RequestSource) {
+				return next(target, req)
+			}
+
 			consumption, penalty, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
