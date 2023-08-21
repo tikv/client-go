@@ -6,7 +6,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20230703085931-3788ab4ee6b3
+	github.com/pingcap/kvproto v0.0.0-20230818065851-7b612d935bf9
 	github.com/pingcap/tidb v1.1.0-beta.0.20230619015310-8b1006f1af04
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
@@ -113,7 +113,6 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/kvproto v0.0.0-20230703085931-3788ab4ee6b3 => github.com/bufferflies/kvproto v0.0.0-20230803075552-24f552d99840
 	github.com/pingcap/tidb => github.com/defined2014/tidb v1.1.0-beta.0.20230712071811-87a5c15e9c7d
 	github.com/pingcap/tidb/parser => github.com/defined2014/tidb/parser v0.0.0-20230712071811-87a5c15e9c7d
 	github.com/tikv/client-go/v2 => ../
