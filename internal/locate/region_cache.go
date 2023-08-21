@@ -1952,7 +1952,6 @@ func (c *RegionCache) getStoresByLabels(labels []*metapb.StoreLabel) []*Store {
 func (c *RegionCache) OnBucketVersionNotMatch(ctx *RPCContext, version uint64, keys [][]byte) {
 	r := c.GetCachedRegionWithRLock(ctx.Region)
 	if r == nil {
-		println("reigon not found")
 		return
 	}
 
@@ -2115,26 +2114,6 @@ func (c *RegionCache) InvalidateTiFlashComputeStores() {
 	c.tiflashComputeStoreMu.Lock()
 	defer c.tiflashComputeStoreMu.Unlock()
 	c.tiflashComputeStoreMu.needReload = true
-}
-
-// UpdateBucketOnError updates the buckets of the region in the cache if meets the buckets version not match.
-func (c *RegionCache) UpdateBucketOnError(regionID RegionVerID, version uint64, keys [][]byte) {
-	r := c.GetCachedRegionWithRLock(regionID)
-	if r == nil {
-		return
-	}
-
-	buckets := r.getStore().buckets
-	var bucketsVer uint64
-	if buckets != nil {
-		bucketsVer = buckets.GetVersion()
-	}
-	if bucketsVer < version {
-		c.mu.Lock()
-		buckets.Version = version
-		buckets.Keys = keys
-		c.mu.Unlock()
-	}
 }
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if

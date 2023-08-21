@@ -2039,7 +2039,7 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if bucketVersionNotMatch := regionErr.GetBucketVersionNotMatch(); bucketVersionNotMatch != nil {
-		logutil.BgLogger().Debug(
+		logutil.Logger(bo.GetCtx()).Debug(
 			"tikv reports `BucketVersionNotMatch` retry later",
 			zap.Stringer("bucketVersionNotMatch", bucketVersionNotMatch),
 			zap.Stringer("ctx", ctx),
