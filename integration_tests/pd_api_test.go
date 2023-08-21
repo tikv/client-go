@@ -37,8 +37,6 @@ package tikv_test
 import (
 	"context"
 	"fmt"
-	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/tikv/client-go/v2/config"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -46,7 +44,9 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -105,9 +105,9 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 	return c.Client.CloseAddr(addr)
 }
 
-func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
+func (s *apiTestSuite) TestGetClusterMinResolvedTS() {
 	util.EnableFailpoints()
-	// Try to get the minimum resolved timestamp of the store from PD.
+	// Try to get the minimum resolved timestamp of the cluster from PD.
 	require := s.Require()
 	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
 	mockClient := storeSafeTsMockClient{
@@ -126,7 +126,7 @@ func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	require.Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 
-	// Try to get the minimum resolved timestamp of the store from TiKV.
+	// Try to get the minimum resolved timestamp of the cluster from TiKV.
 	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(0)`))
 	defer func() {
 		s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
