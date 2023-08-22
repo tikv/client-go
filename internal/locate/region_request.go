@@ -2038,6 +2038,17 @@ func (s *RegionRequestSender) onRegionError(
 		return retry, err
 	}
 
+	if bucketVersionNotMatch := regionErr.GetBucketVersionNotMatch(); bucketVersionNotMatch != nil {
+		logutil.Logger(bo.GetCtx()).Debug(
+			"tikv reports `BucketVersionNotMatch` retry later",
+			zap.Stringer("bucketVersionNotMatch", bucketVersionNotMatch),
+			zap.Stringer("ctx", ctx),
+		)
+		// bucket version is not match, we should split this cop request again.
+		s.regionCache.OnBucketVersionNotMatch(ctx, bucketVersionNotMatch.Version, bucketVersionNotMatch.Keys)
+		return false, nil
+	}
+
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
 		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
 			s.replicaSelector.onDeadlineExceeded()
