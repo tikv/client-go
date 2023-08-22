@@ -347,7 +347,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	// a request. So, before the new leader is elected, we should not send requests
 	// to the unreachable old leader to avoid unnecessary timeout.
 	if liveness != reachable || leader.isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromKnownLeader: true}
+		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 		return nil, stateChanged{}
 	}
 	if selector.busyThreshold > 0 {
@@ -371,7 +371,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 		return
 	}
 	if liveness != reachable || selector.targetReplica().isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromKnownLeader: true}
+		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 	}
 	if liveness != reachable {
 		selector.invalidateReplicaStore(selector.targetReplica(), cause)
@@ -379,7 +379,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 }
 
 func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
-	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromKnownLeader: true}
+	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 }
 
 // tryFollower is the state where we cannot access the known leader
@@ -393,9 +393,9 @@ type tryFollower struct {
 	stateBase
 	leaderIdx AccessIndex
 	lastIdx   AccessIndex
-	// fromKnownLeader indicates whether the state is changed from onNotLeader.
-	fromKnownLeader bool
-	labels          []*metapb.StoreLabel
+	// fromAccessKnownLeader indicates whether the state is changed from `accessKnownLeader`.
+	fromAccessKnownLeader bool
+	labels                []*metapb.StoreLabel
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -454,7 +454,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if err != nil || rpcCtx == nil {
 		return rpcCtx, err
 	}
-	if !state.fromKnownLeader {
+	if !state.fromAccessKnownLeader {
 		replicaRead := true
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
@@ -464,7 +464,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
-	if state.fromKnownLeader {
+	if state.fromAccessKnownLeader {
 		peer := selector.targetReplica().peer
 		if !selector.region.switchWorkLeaderToPeer(peer) {
 			logutil.BgLogger().Warn("the store must exist",
