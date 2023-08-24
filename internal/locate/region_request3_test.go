@@ -43,6 +43,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -57,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -1452,4 +1454,86 @@ func (s *testRegionRequestToThreeStoresSuite) TestLogging() {
 	s.NotNil(resp)
 	regionErr, _ := resp.GetRegionError()
 	s.NotNil(regionErr)
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	}, kvrpcpb.Context{RequestSource: "test"})
+	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(region)
+
+	setReadType := func(req *tikvrpc.Request, readType string) {
+		req.StaleRead = false
+		req.ReplicaRead = false
+		switch readType {
+		case "leader":
+			return
+		case "replica":
+			req.ReplicaRead = true
+		case "stale":
+			req.EnableStaleRead()
+		default:
+			panic("unreachable")
+		}
+	}
+
+	var (
+		firstType string
+		retryType string
+		busy      = true
+	)
+
+	oc := s.regionRequestSender.client
+	defer func() {
+		s.regionRequestSender.client = oc
+	}()
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if busy {
+			busy = false
+			// first read check.
+			s.Equal("test-"+firstType+"_read", req.RequestSource)
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}},
+			}}, nil
+		}
+		response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			Value: []byte(req.RequestSource),
+		}}
+		return response, nil
+	}}
+
+	hook := func(req *tikvrpc.Request) {
+		if busy {
+			// only change request type in the second retry.
+			return
+		}
+		setReadType(req, retryType)
+	}
+	util.EnableFailpoints()
+	failpoint.Enable("tikvclient/beforeSendReqToRegion", "return")
+	defer failpoint.Disable("tikvclient/beforeSendReqToRegion")
+	ctx := context.WithValue(context.TODO(), "sendReqToRegionHook", hook)
+
+	firstReadTypes := []string{"leader", "replica", "stale"}
+	retryReadTypes := []string{"leader", "replica"}
+	for _, firstType = range firstReadTypes {
+		for _, retryType = range retryReadTypes {
+			busy = true
+			setReadType(req, firstType)
+			bo := retry.NewBackoffer(ctx, -1)
+			resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+			s.Nil(err)
+			s.NotNil(resp)
+			var retryRequestSource string
+			if firstType == retryType {
+				retryRequestSource = "test-" + firstType + "_retry_read"
+			} else {
+				retryRequestSource = "test-" + firstType + "_to_" + retryType + "_read"
+			}
+			// retry read check.
+			s.Equal(retryRequestSource, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+		}
+	}
 }

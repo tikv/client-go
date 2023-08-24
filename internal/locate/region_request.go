@@ -1375,6 +1375,12 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
+	requestSource := req.Context.RequestSource
+	defer func() {
+		// reset the request source because it may be retried from upper layer.
+		req.Context.RequestSource = requestSource
+	}()
+	readType := getReadType(req)
 	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
@@ -1430,6 +1436,12 @@ func (s *RegionRequestSender) SendReqCtx(
 				h(req)
 			}
 		}
+
+		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+			return nil, nil, retryTimes, err
+		}
+		rpcCtx.contextPatcher.applyTo(&req.Context)
+		patchRequestSource(req, requestSource, readType, retryTimes)
 
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
@@ -1582,10 +1594,6 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 func (s *RegionRequestSender) sendReqToRegion(
 	bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration,
 ) (resp *tikvrpc.Response, retry bool, err error) {
-	if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
-		return nil, false, err
-	}
-	rpcCtx.contextPatcher.applyTo(&req.Context)
 	// judge the store limit switch.
 	if limit := kv.StoreLimit.Load(); limit > 0 {
 		if err := s.getStoreToken(rpcCtx.Store, limit); err != nil {
@@ -2301,4 +2309,35 @@ func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Res
 	} else {
 		metrics.StaleReadRemoteInBytes.Add(float64(size))
 	}
+}
+
+func getReadType(req *tikvrpc.Request) string {
+	if req.StaleRead {
+		return "stale"
+	}
+	if req.ReplicaRead {
+		return "replica"
+	}
+	return "leader"
+}
+
+func patchRequestSource(req *tikvrpc.Request, source, readType string, retryTimes int) {
+	var sb strings.Builder
+	sb.WriteString(source)
+	sb.WriteByte('-')
+	sb.WriteString(readType)
+	defer func() {
+		sb.WriteString("_read")
+		req.RequestSource = sb.String()
+	}()
+	if retryTimes == 0 {
+		return
+	}
+	thisReadType := getReadType(req)
+	if thisReadType == readType {
+		sb.WriteString("_retry")
+		return
+	}
+	sb.WriteString("_to_")
+	sb.WriteString(thisReadType)
 }
