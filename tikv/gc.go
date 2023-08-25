@@ -178,7 +178,7 @@ func ResolveLocksForRange(
 		if resolvedLocation == nil {
 			continue
 		}
-		if len(locks) < GCScanLockLimit {
+		if len(locks) < int(scanLimit) {
 			stat.CompletedRegions++
 			key = loc.EndKey
 			logutil.Logger(ctx).Debug("[gc worker] one region finshed ",
@@ -189,7 +189,7 @@ func ResolveLocksForRange(
 				zap.String("identifier", resolver.Identifier()),
 				zap.Int("regionID", int(resolvedLocation.Region.GetID())),
 				zap.Int("resolvedLocksNum", len(locks)),
-				zap.Int("scan lock limit", GCScanLockLimit))
+				zap.Uint32("scan lock limit", scanLimit))
 			key = locks[len(locks)-1].Key
 		}
 
@@ -208,7 +208,7 @@ func scanLocksInRegionWithStartKey(bo *retry.Backoffer, store Storage, startKey 
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
 			MaxVersion: maxVersion,
-			Limit:      GCScanLockLimit,
+			Limit:      limit,
 			StartKey:   startKey,
 			EndKey:     loc.EndKey,
 		})
