@@ -441,9 +441,10 @@ type livenessFunc func(s *Store, bo *retry.Backoffer) livenessState
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
 type RegionCache struct {
-	pdClient         pd.Client
-	codec            apicodec.Codec
-	enableForwarding bool
+	pdClient               pd.Client
+	codec                  apicodec.Codec
+	enableForwarding       bool
+	preferSecureConnection bool
 
 	mu regionIndexMu
 
@@ -504,6 +505,8 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
+	logutil.BgLogger().Warn("tls context", zap.Bool("tls", config.GetGlobalConfig().PreferSecureConnection))
+	c.preferSecureConnection = config.GetGlobalConfig().PreferSecureConnection
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
 	if config.GetGlobalConfig().RegionsRefreshInterval > 0 {
@@ -2543,6 +2546,9 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 		if addr == "" {
 			return "", errors.Errorf("empty store(%d) address", s.storeID)
 		}
+		if c.preferSecureConnection && store.GetSecureAddress() != "" {
+			addr = store.GetSecureAddress()
+		}
 		s.addr = addr
 		s.peerAddr = store.GetPeerAddress()
 		s.saddr = store.GetStatusAddress()
@@ -2590,6 +2596,9 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
+	if c.preferSecureConnection && store.GetSecureAddress() != "" {
+		addr = store.GetSecureAddress()
+	}
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		c.storeMu.Lock()

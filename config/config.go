@@ -71,13 +71,14 @@ type Config struct {
 	PessimisticTxn       PessimisticTxn
 	TxnLocalLatches      TxnLocalLatches
 	// StoresRefreshInterval indicates the interval of refreshing stores info, the unit is second.
-	StoresRefreshInterval uint64
-	OpenTracingEnable     bool
-	Path                  string
-	EnableForwarding      bool
-	TxnScope              string
-	EnableAsyncCommit     bool
-	Enable1PC             bool
+	StoresRefreshInterval  uint64
+	OpenTracingEnable      bool
+	Path                   string
+	EnableForwarding       bool
+	PreferSecureConnection bool
+	TxnScope               string
+	EnableAsyncCommit      bool
+	Enable1PC              bool
 	// RegionsRefreshInterval indicates the interval of loading regions info, the unit is second, if RegionsRefreshInterval == 0, it will be disabled.
 	RegionsRefreshInterval uint64
 	// EnablePreload indicates whether to preload region info when initializing the client.
@@ -87,18 +88,19 @@ type Config struct {
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		CommitterConcurrency:  128,
-		MaxTxnTTL:             60 * 60 * 1000, // 1hour
-		TiKVClient:            DefaultTiKVClient(),
-		PDClient:              DefaultPDClient(),
-		TxnLocalLatches:       DefaultTxnLocalLatches(),
-		StoresRefreshInterval: DefStoresRefreshInterval,
-		OpenTracingEnable:     false,
-		Path:                  "",
-		EnableForwarding:      false,
-		TxnScope:              "",
-		EnableAsyncCommit:     false,
-		Enable1PC:             false,
+		CommitterConcurrency:   128,
+		MaxTxnTTL:              60 * 60 * 1000, // 1hour
+		TiKVClient:             DefaultTiKVClient(),
+		PDClient:               DefaultPDClient(),
+		TxnLocalLatches:        DefaultTxnLocalLatches(),
+		StoresRefreshInterval:  DefStoresRefreshInterval,
+		OpenTracingEnable:      false,
+		Path:                   "",
+		EnableForwarding:       false,
+		PreferSecureConnection: false,
+		TxnScope:               "",
+		EnableAsyncCommit:      false,
+		Enable1PC:              false,
 	}
 }
 
