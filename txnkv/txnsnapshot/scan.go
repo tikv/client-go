@@ -245,12 +245,13 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
-			RequestSource:    s.snapshot.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.snapshot.mu.resourceGroupName,
 			},
 			BusyThresholdMs: uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 		})
+		req.ReadType = locate.GetReadType(req)
+		req.InputRequestSource = s.snapshot.GetRequestSource()
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)
 		}

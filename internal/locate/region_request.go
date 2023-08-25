@@ -1375,16 +1375,9 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
-	requestSource := req.Context.RequestSource
-	defer func() {
-		// reset the request source because it may be retried from upper layer.
-		req.Context.RequestSource = requestSource
-	}()
-	readType := getReadType(req)
 	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
-			req.IsRetryRequest = true
 			if retryTimes%100 == 0 {
 				logutil.Logger(bo.GetCtx()).Warn(
 					"retry",
@@ -1441,10 +1434,13 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 		rpcCtx.contextPatcher.applyTo(&req.Context)
-		patchRequestSource(req, requestSource, readType, retryTimes)
+		if req.InputRequestSource != "" {
+			patchRequestSource(req, req.InputRequestSource, req.ReadType, req.IsRetryRequest)
+		}
 
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
+		req.IsRetryRequest = true
 		if err != nil {
 			msg := fmt.Sprintf("send request failed, err: %v", err.Error())
 			s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
@@ -2311,7 +2307,7 @@ func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Res
 	}
 }
 
-func getReadType(req *tikvrpc.Request) string {
+func GetReadType(req *tikvrpc.Request) string {
 	if req.StaleRead {
 		return "stale"
 	}
@@ -2321,7 +2317,7 @@ func getReadType(req *tikvrpc.Request) string {
 	return "leader"
 }
 
-func patchRequestSource(req *tikvrpc.Request, source, readType string, retryTimes int) {
+func patchRequestSource(req *tikvrpc.Request, source, readType string, isRetry bool) {
 	var sb strings.Builder
 	sb.WriteString(source)
 	sb.WriteByte('-')
@@ -2330,10 +2326,10 @@ func patchRequestSource(req *tikvrpc.Request, source, readType string, retryTime
 		sb.WriteString("_read")
 		req.RequestSource = sb.String()
 	}()
-	if retryTimes == 0 {
+	if !isRetry {
 		return
 	}
-	thisReadType := getReadType(req)
+	thisReadType := GetReadType(req)
 	if thisReadType == readType {
 		sb.WriteString("_retry")
 		return

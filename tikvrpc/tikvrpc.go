@@ -234,6 +234,10 @@ type Request struct {
 	ForwardedHost string
 	// ReplicaNumber is the number of current replicas, which is used to calculate the RU cost.
 	ReplicaNumber int64
+	// The initial read type.
+	ReadType string
+	// InputRequestSource is the input source of the request, if it's not empty, the final RequestSource sent to store will be attached with the retry info.
+	InputRequestSource string
 }
 
 // NewRequest returns new kv rpc request.

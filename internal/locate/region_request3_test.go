@@ -1459,7 +1459,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestLogging() {
 func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
 		Key: []byte("key"),
-	}, kvrpcpb.Context{RequestSource: "test"})
+	})
+	req.InputRequestSource = "test"
 	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(region)
@@ -1522,6 +1523,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 		for _, retryType = range retryReadTypes {
 			busy = true
 			setReadType(req, firstType)
+			req.IsRetryRequest = false
+			req.ReadType = GetReadType(req)
 			bo := retry.NewBackoffer(ctx, -1)
 			resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
 			s.Nil(err)
