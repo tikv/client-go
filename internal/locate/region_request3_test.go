@@ -1425,3 +1425,31 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	// after region error returned, the region should be invalidated.
 	s.False(region.isValid())
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestLogging() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(region)
+
+	oc := s.regionRequestSender.client
+	defer func() {
+		s.regionRequestSender.client = oc
+	}()
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}},
+		}}
+		return response, nil
+	}}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.NotNil(regionErr)
+}
