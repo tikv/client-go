@@ -35,6 +35,9 @@ import (
 	zap "go.uber.org/zap"
 )
 
+// We don't want gc to sweep out the cached info belong to other processes, like coprocessor.
+const GCScanLockLimit = txnlock.ResolvedCacheSize / 2
+
 // GC does garbage collection (GC) of the TiKV cluster.
 // GC deletes MVCC records whose timestamp is lower than the given `safepoint`. We must guarantee
 //
@@ -146,9 +149,6 @@ type RegionLockResolver interface {
 	// GetStore is used to get store to GetRegionCache and SendReq for this lock resolver.
 	GetStore() Storage
 }
-
-// We don't want gc to sweep out the cached info belong to other processes, like coprocessor.
-const GCScanLockLimit = txnlock.ResolvedCacheSize / 2
 
 func ResolveLocksForRange(
 	ctx context.Context,
