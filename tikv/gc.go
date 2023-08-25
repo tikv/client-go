@@ -81,7 +81,7 @@ func WithConcurrency(concurrency int) GCOpt {
 }
 
 func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrency int) error {
-	lockResolver := NewBaseLockResolver("gc-client-go-api", s)
+	lockResolver := NewRegionLockResolver("gc-client-go-api", s)
 	handler := func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		return ResolveLocksForRange(ctx, lockResolver, safePoint, r.StartKey, r.EndKey, NewGcResolveLockMaxBackoffer, GCScanLockLimit)
 	}
@@ -95,46 +95,53 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 	return nil
 }
 
-type BaseLockResolver struct {
+type BaseRegionLockResolver struct {
 	identifier string
 	store      Storage
 }
 
-func NewBaseLockResolver(identifier string, store Storage) *BaseLockResolver {
-	return &BaseLockResolver{
+func NewRegionLockResolver(identifier string, store Storage) *BaseRegionLockResolver {
+	return &BaseRegionLockResolver{
 		identifier: identifier,
 		store:      store,
 	}
 }
 
-func (l *BaseLockResolver) Identifier() string {
+func (l *BaseRegionLockResolver) Identifier() string {
 	return l.identifier
 }
 
-func (l *BaseLockResolver) ResolveLocks(bo *Backoffer, locks []*txnlock.Lock, loc *locate.KeyLocation) (*locate.KeyLocation, error) {
-	return batchResolveLocksInARegion(bo, l.GetStore(), locks, loc)
+func (l *BaseRegionLockResolver) ResolveLocksInOneRegion(bo *Backoffer, locks []*txnlock.Lock, loc *locate.KeyLocation) (*locate.KeyLocation, error) {
+	return batchResolveLocksInOneRegion(bo, l.GetStore(), locks, loc)
 }
 
-func (l *BaseLockResolver) ScanLocks(bo *Backoffer, key []byte, maxVersion uint64, scanLimit uint32) ([]*txnlock.Lock, *locate.KeyLocation, error) {
-	return scanLocksInRegionWithStartKey(bo, l.GetStore(), key, maxVersion, scanLimit)
+func (l *BaseRegionLockResolver) ScanLocksInOneRegion(bo *Backoffer, key []byte, maxVersion uint64, scanLimit uint32) ([]*txnlock.Lock, *locate.KeyLocation, error) {
+	return scanLocksInOneRegionWithStartKey(bo, l.GetStore(), key, maxVersion, scanLimit)
 }
 
-func (l *BaseLockResolver) GetStore() Storage {
+func (l *BaseRegionLockResolver) GetStore() Storage {
 	return l.store
 }
 
-// GCLockResolver is used for GCWorker and log backup advancer to resolve locks.
-type GCLockResolver interface {
+// RegionLockResolver is used for GCWorker and log backup advancer to resolve locks in a region.
+type RegionLockResolver interface {
+	// Identifier represents the name of this resolver.
 	Identifier() string
-	// ResolveLocks tries to resolve expired locks.
-	// 1. For GCWorker it will scan locks for all regions before *safepoint*,
-	// and force remove locks. rollback the txn, no matter the lock is expired of not.
+
+	// ResolveLocksInOneRegion tries to resolve expired locks for one region.
+	// 1. For GCWorker it will scan locks before *safepoint*,
+	// and force remove these locks. rollback the txn, no matter the lock is expired of not.
 	// 2. For log backup advancer, it will scan all locks for a small range.
 	// and it will check status of the txn. resolve the locks if txn is expired, Or do nothing.
-	ResolveLocks(*Backoffer, []*txnlock.Lock, *locate.KeyLocation) (*locate.KeyLocation, error)
+	//
+	// regionLocation should return if resolve locks succeed. if regionLocation return nil,
+	// which means not all locks are resolved in someway. the caller should retry scan locks.
+	ResolveLocksInOneRegion(bo *Backoffer, locks []*txnlock.Lock, regionLocation *locate.KeyLocation) (*locate.KeyLocation, error)
 
-	// ScanLocks return locks and location with given start key
-	ScanLocks(*Backoffer, []byte, uint64, uint32) ([]*txnlock.Lock, *locate.KeyLocation, error)
+	// ScanLocksInOneRegion return locks and location with given start key in a region.
+	// The return result ([]*Lock, *KeyLocation, error) represents the all locks in a regionLocation.
+	// which will used by ResolveLocksInOneRegion later.
+	ScanLocksInOneRegion(bo *Backoffer, key []byte, maxVersion uint64, scanLimit uint32) ([]*txnlock.Lock, *locate.KeyLocation, error)
 
 	// GetStore is used to get store to GetRegionCache and SendReq for this lock resolver.
 	GetStore() Storage
@@ -145,7 +152,7 @@ const GCScanLockLimit = txnlock.ResolvedCacheSize / 2
 
 func ResolveLocksForRange(
 	ctx context.Context,
-	resolver GCLockResolver,
+	resolver RegionLockResolver,
 	maxVersion uint64,
 	startKey []byte,
 	endKey []byte,
@@ -165,12 +172,12 @@ func ResolveLocksForRange(
 		}
 		// create new backoffer for every scan and resolve locks
 		bo := createBackoffFn(ctx)
-		locks, loc, err := resolver.ScanLocks(bo, key, maxVersion, scanLimit)
+		locks, loc, err := resolver.ScanLocksInOneRegion(bo, key, maxVersion, scanLimit)
 		if err != nil {
 			return stat, err
 		}
 
-		resolvedLocation, err := resolver.ResolveLocks(bo, locks, loc)
+		resolvedLocation, err := resolver.ResolveLocksInOneRegion(bo, locks, loc)
 		if err != nil {
 			return stat, err
 		}
@@ -181,7 +188,8 @@ func ResolveLocksForRange(
 		if len(locks) < int(scanLimit) {
 			stat.CompletedRegions++
 			key = loc.EndKey
-			logutil.Logger(ctx).Debug("[gc worker] one region finshed ",
+			logutil.Logger(ctx).Debug("resolve one region finshed ",
+				zap.String("identifier", resolver.Identifier()),
 				zap.Int("regionID", int(resolvedLocation.Region.GetID())),
 				zap.Int("resolvedLocksNum", len(locks)))
 		} else {
@@ -200,7 +208,7 @@ func ResolveLocksForRange(
 	return stat, nil
 }
 
-func scanLocksInRegionWithStartKey(bo *retry.Backoffer, store Storage, startKey []byte, maxVersion uint64, limit uint32) (locks []*txnlock.Lock, loc *locate.KeyLocation, err error) {
+func scanLocksInOneRegionWithStartKey(bo *retry.Backoffer, store Storage, startKey []byte, maxVersion uint64, limit uint32) (locks []*txnlock.Lock, loc *locate.KeyLocation, err error) {
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, startKey)
 		if err != nil {
@@ -243,12 +251,12 @@ func scanLocksInRegionWithStartKey(bo *retry.Backoffer, store Storage, startKey 
 	}
 }
 
-// batchResolveLocksInARegion resolves locks in a region.
+// batchResolveLocksInOneRegion resolves locks in a region.
 // It returns the real location of the resolved locks if resolve locks success.
 // It returns error when meet an unretryable error.
 // When the locks are not in one region, resolve locks should be failed, it returns with nil resolveLocation and nil err.
 // Used it in gcworker only!
-func batchResolveLocksInARegion(bo *Backoffer, store Storage, locks []*txnlock.Lock, expectedLoc *locate.KeyLocation) (resolvedLocation *locate.KeyLocation, err error) {
+func batchResolveLocksInOneRegion(bo *Backoffer, store Storage, locks []*txnlock.Lock, expectedLoc *locate.KeyLocation) (resolvedLocation *locate.KeyLocation, err error) {
 	if expectedLoc == nil {
 		return nil, nil
 	}
