@@ -139,6 +139,7 @@ type RegionLockResolver interface {
 	//
 	// regionLocation should return if resolve locks succeed. if regionLocation return nil,
 	// which means not all locks are resolved in someway. the caller should retry scan locks.
+	// ** the locks are assumed sorted by key in ascending order **
 	ResolveLocksInOneRegion(bo *Backoffer, locks []*txnlock.Lock, regionLocation *locate.KeyLocation) (*locate.KeyLocation, error)
 
 	// ScanLocksInOneRegion return locks and location with given start key in a region.
@@ -164,14 +165,14 @@ func ResolveLocksForRange(
 	// cleaned.
 	var stat rangetask.TaskStat
 	key := startKey
+	// create new backoffer for every scan and resolve locks
+	bo := createBackoffFn(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return stat, errors.New("[gc worker] gc job canceled")
 		default:
 		}
-		// create new backoffer for every scan and resolve locks
-		bo := createBackoffFn(ctx)
 		locks, loc, err := resolver.ScanLocksInOneRegion(bo, key, maxVersion, scanLimit)
 		if err != nil {
 			return stat, err
@@ -204,6 +205,7 @@ func ResolveLocksForRange(
 		if len(key) == 0 || (len(endKey) != 0 && bytes.Compare(key, endKey) >= 0) {
 			break
 		}
+		bo = createBackoffFn(ctx)
 	}
 	return stat, nil
 }
