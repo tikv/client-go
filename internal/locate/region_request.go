@@ -1434,8 +1434,8 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 		rpcCtx.contextPatcher.applyTo(&req.Context)
-		if req.InputRequestSource != "" {
-			patchRequestSource(req, req.InputRequestSource, req.ReadType, req.IsRetryRequest)
+		if req.InputRequestSource != "" && s.replicaSelector != nil {
+			s.replicaSelector.patchRequestSource(req, rpcCtx)
 		}
 
 		var retry bool
@@ -2307,33 +2307,52 @@ func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Res
 	}
 }
 
-func GetReadType(req *tikvrpc.Request) string {
-	if req.StaleRead {
-		return "stale"
+func (s *replicaSelector) replicaType(rpcCtx *RPCContext) string {
+	leaderIdx := -1
+	switch v := s.state.(type) {
+	case *accessKnownLeader:
+		return "leader"
+	case *tryFollower:
+		return "follower"
+	case *accessFollower:
+		leaderIdx = int(v.leaderIdx)
+	case *tryIdleReplica:
+		leaderIdx = int(v.leaderIdx)
 	}
-	if req.ReplicaRead {
-		return "replica"
+	if leaderIdx > -1 && rpcCtx != nil && rpcCtx.Peer != nil {
+		for idx, replica := range s.replicas {
+			if replica.peer.Id == rpcCtx.Peer.Id {
+				if idx == leaderIdx {
+					return "leader"
+				}
+				return "follower"
+			}
+		}
 	}
-	return "leader"
+	return "unknown"
 }
 
-func patchRequestSource(req *tikvrpc.Request, source, readType string, isRetry bool) {
+func (s *replicaSelector) patchRequestSource(req *tikvrpc.Request, rpcCtx *RPCContext) {
 	var sb strings.Builder
-	sb.WriteString(source)
+	sb.WriteString(req.InputRequestSource)
 	sb.WriteByte('-')
-	sb.WriteString(readType)
 	defer func() {
-		sb.WriteString("_read")
 		req.RequestSource = sb.String()
 	}()
-	if !isRetry {
+
+	replicaType := s.replicaType(rpcCtx)
+
+	if req.IsRetryRequest {
+		sb.WriteString("retry_")
+		sb.WriteString(req.ReadType)
+		sb.WriteByte('_')
+		sb.WriteString(replicaType)
 		return
 	}
-	thisReadType := GetReadType(req)
-	if thisReadType == readType {
-		sb.WriteString("_retry")
-		return
+	if req.StaleRead {
+		req.ReadType = "stale_" + replicaType
+	} else {
+		req.ReadType = replicaType
 	}
-	sb.WriteString("_to_")
-	sb.WriteString(thisReadType)
+	sb.WriteString(req.ReadType)
 }

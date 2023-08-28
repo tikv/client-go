@@ -250,7 +250,6 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			},
 			BusyThresholdMs: uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 		})
-		req.ReadType = locate.GetReadType(req)
 		req.InputRequestSource = s.snapshot.GetRequestSource()
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)
