@@ -347,6 +347,12 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 }
 
 func (a *batchConn) getClientAndSend() {
+	if val, err := util.EvalFailpoint("mockBatchClientSendDelay"); err == nil {
+		if timeout, ok := val.(int); ok && timeout > 0 {
+			time.Sleep(time.Duration(timeout * int(time.Millisecond)))
+		}
+	}
+
 	// Choose a connection by round-robbin.
 	var (
 		cli    *batchCommandsClient
