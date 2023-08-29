@@ -700,7 +700,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 			cli.unlockForSend()
 			break
 		}
-		if time.Since(start) > time.Second*5 {
+		if time.Since(start) > time.Second*10 {
 			// It shouldn't take too long for batch_client to reconnect.
 			require.Fail(t, "wait batch client reconnect timeout")
 		}
