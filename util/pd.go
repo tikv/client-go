@@ -56,7 +56,7 @@ const (
 	// pd request retry time when connection fail.
 	pdRequestRetryTime = 10
 
-	storeMinResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
+	minResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
 )
 
 // PDHTTPClient is an HTTP client of pd.
@@ -86,18 +86,17 @@ func NewPDHTTPClient(
 	}
 }
 
-// GetStoreMinResolvedTS get store-level min-resolved-ts from pd.
-func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64) (uint64, error) {
+// GetClusterMinResolvedTS get cluster-level min-resolved-ts from pd.
+func (p *PDHTTPClient) GetClusterMinResolvedTS(ctx context.Context) (uint64, error) {
 	var err error
 	for _, addr := range p.addrs {
-		query := fmt.Sprintf("%s/%d", storeMinResolvedTSPrefix, storeID)
-		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
+		v, e := pdRequest(ctx, addr, minResolvedTSPrefix, p.cli, http.MethodGet, nil)
 		if e != nil {
 			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			err = e
 			continue
 		}
-		logutil.BgLogger().Debug("store min resolved ts", zap.String("resp", string(v)))
+		logutil.BgLogger().Debug("get cluster min resolved ts", zap.String("resp", string(v)))
 		d := struct {
 			IsRealTime    bool   `json:"is_real_time,omitempty"`
 			MinResolvedTS uint64 `json:"min_resolved_ts"`
@@ -107,7 +106,7 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 			return 0, errors.Trace(err)
 		}
 		if !d.IsRealTime {
-			message := fmt.Errorf("store min resolved ts not enabled, addr: %s", addr)
+			message := fmt.Errorf("cluster min resolved ts not enabled, addr: %s", addr)
 			logutil.BgLogger().Debug(message.Error())
 			return 0, errors.Trace(message)
 		}
@@ -117,6 +116,7 @@ func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64
 				// Should be val.(uint64) but failpoint doesn't support that.
 				if tmp, ok := val.(int); ok {
 					d.MinResolvedTS = uint64(tmp)
+					logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("ts", uint64(tmp)))
 				}
 			}
 		}

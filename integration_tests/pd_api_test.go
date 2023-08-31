@@ -44,7 +44,9 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -103,9 +105,9 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 	return c.Client.CloseAddr(addr)
 }
 
-func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
+func (s *apiTestSuite) TestGetClusterMinResolvedTS() {
 	util.EnableFailpoints()
-	// Try to get the minimum resolved timestamp of the store from PD.
+	// Try to get the minimum resolved timestamp of the cluster from PD.
 	require := s.Require()
 	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
 	mockClient := storeSafeTsMockClient{
@@ -139,6 +141,59 @@ func (s *apiTestSuite) TestGetStoreMinResolvedTS() {
 	}
 	require.GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	require.Equal(uint64(150), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+}
+
+func (s *apiTestSuite) TestDCLabelClusterMinResolvedTS() {
+	util.EnableFailpoints()
+	// Try to get the minimum resolved timestamp of the cluster from PD.
+	require := s.Require()
+	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
+	mockClient := storeSafeTsMockClient{
+		Client: s.store.GetTiKVClient(),
+	}
+	s.store.SetTiKVClient(&mockClient)
+	var retryCount int
+	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) != 100 {
+		time.Sleep(2 * time.Second)
+		if retryCount > 5 {
+			break
+		}
+		retryCount++
+	}
+	require.Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
+	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	defer func() {
+		s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
+	}()
+
+	// Set DC label for store 1.
+	dcLabel := "testDC"
+	restore := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TxnScope = dcLabel
+	})
+	defer restore()
+
+	labels := []*metapb.StoreLabel{
+		{
+			Key:   tikv.DCLabelKey,
+			Value: dcLabel,
+		},
+	}
+	storeID := uint64(1)
+	s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, labels)
+
+	// Try to get the minimum resolved timestamp of the store from TiKV.
+	retryCount = 0
+	for s.store.GetMinSafeTS(dcLabel) != 150 {
+		time.Sleep(2 * time.Second)
+		if retryCount > 5 {
+			break
+		}
+		retryCount++
+	}
+
+	require.GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
+	require.Equal(uint64(150), s.store.GetMinSafeTS(dcLabel))
 }
 
 func (s *apiTestSuite) TearDownTest() {
