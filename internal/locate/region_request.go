@@ -1922,6 +1922,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "deadline_exceeded"
 	} else if e.GetMismatchPeerId() != nil {
 		return "mismatch_peer_id"
+	} else if e.GetBucketVersionNotMatch() != nil {
+		return "bucket_version_not_match"
 	}
 	return "unknown"
 }
@@ -2079,7 +2081,8 @@ func (s *RegionRequestSender) onRegionError(
 	if bucketVersionNotMatch := regionErr.GetBucketVersionNotMatch(); bucketVersionNotMatch != nil {
 		logutil.Logger(bo.GetCtx()).Debug(
 			"tikv reports `BucketVersionNotMatch` retry later",
-			zap.Stringer("bucketVersionNotMatch", bucketVersionNotMatch),
+			zap.Uint64("latest bucket version", bucketVersionNotMatch.GetVersion()),
+			zap.Uint64("request bucket version", ctx.BucketVersion),
 			zap.Stringer("ctx", ctx),
 		)
 		// bucket version is not match, we should split this cop request again.
