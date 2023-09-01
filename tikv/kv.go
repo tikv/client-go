@@ -584,7 +584,7 @@ func (s *KVStore) safeTSUpdater() {
 
 func (s *KVStore) updateSafeTS(ctx context.Context) {
 	// Try to get the cluster-level minimum resolved timestamp from PD first.
-	if s.setClusterMinSafeTSByPD(ctx) {
+	if s.updateGlobalTxnScopeTSFromPD(ctx) {
 		return
 	}
 
@@ -678,8 +678,9 @@ var (
 	clusterMinSafeTSGap        = metrics.TiKVMinSafeTSGapSeconds.WithLabelValues("cluster")
 )
 
-// setClusterMinSafeTSByPD check whether it is needed to get cluster-level's min resolved ts from PD.
-func (s *KVStore) setClusterMinSafeTSByPD(ctx context.Context) bool {
+// updateGlobalTxnScopeTSFromPD check whether it is needed to get cluster-level's min resolved ts from PD
+// to update min safe ts for global txn scope.
+func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 	isGlobal := config.GetTxnScopeFromConfig() == oracle.GlobalTxnScope
 	// Try to get the minimum resolved timestamp of the cluster from PD.
 	if s.pdHttpClient != nil && isGlobal {
@@ -687,7 +688,7 @@ func (s *KVStore) setClusterMinSafeTSByPD(ctx context.Context) bool {
 		if err != nil {
 			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err))
 		} else if clusterMinSafeTS != 0 {
-			// Update metrics.
+			// Update ts and metrics.
 			preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
 			if preClusterMinSafeTS > clusterMinSafeTS {
 				skipSafeTSUpdateCounter.Inc()

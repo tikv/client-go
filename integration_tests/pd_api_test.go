@@ -69,7 +69,7 @@ type apiTestSuite struct {
 func (s *apiTestSuite) SetupTest() {
 	addrs := strings.Split(*pdAddrs, ",")
 	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
-	s.Require().Nil(err)
+	s.Require().NoError(err)
 	rpcClient := tikv.NewRPCClient()
 	// Set PD HTTP client.
 	store, err := tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDHTTPClient(nil, addrs))
@@ -108,9 +108,9 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 func (s *apiTestSuite) TestGetStoresMinResolvedTS() {
 	util.EnableFailpoints()
 	require := s.Require()
-	require.Nil(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
+	require.NoError(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
 	defer func() {
-		require.Nil(failpoint.Disable("tikvclient/mockFastSafeTSUpdater"))
+		require.NoError(failpoint.Disable("tikvclient/mockFastSafeTSUpdater"))
 	}()
 
 	// Set DC label for store 1.
@@ -130,7 +130,7 @@ func (s *apiTestSuite) TestGetStoresMinResolvedTS() {
 	storeID := uint64(1)
 	s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, labels)
 	// Try to get the minimum resolved timestamp of the stores from PD.
-	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
+	require.NoError(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
 	mockClient := storeSafeTsMockClient{
 		Client: s.store.GetTiKVClient(),
 	}
@@ -152,11 +152,11 @@ func (s *apiTestSuite) TestDCLabelClusterMinResolvedTS() {
 	util.EnableFailpoints()
 	// Try to get the minimum resolved timestamp of the cluster from PD.
 	require := s.Require()
-	require.Nil(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
+	require.NoError(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
 	defer func() {
-		require.Nil(failpoint.Disable("tikvclient/mockFastSafeTSUpdater"))
+		require.NoError(failpoint.Disable("tikvclient/mockFastSafeTSUpdater"))
 	}()
-	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
+	require.NoError(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
 	mockClient := storeSafeTsMockClient{
 		Client: s.store.GetTiKVClient(),
 	}
@@ -171,13 +171,13 @@ func (s *apiTestSuite) TestDCLabelClusterMinResolvedTS() {
 	}
 	require.Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
 	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
-	s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
+	require.NoError(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 
 	// Set DC label for store 1.
 	// Mock PD server not support get min resolved ts by stores.
-	require.Nil(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(0)`))
+	require.NoError(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(0)`))
 	defer func() {
-		s.Require().Nil(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
+		require.NoError(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 	}()
 	dcLabel := "testDC"
 	restore := config.UpdateGlobal(func(conf *config.Config) {
