@@ -565,6 +565,9 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 func (s *KVStore) safeTSUpdater() {
 	defer s.wg.Done()
 	t := time.NewTicker(safeTSUpdateInterval)
+	if _, e := util.EvalFailpoint("mockFastSafeTSUpdater"); e == nil {
+		t.Reset(time.Millisecond * 100)
+	}
 	defer t.Stop()
 	ctx, cancel := context.WithCancel(s.ctx)
 	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
