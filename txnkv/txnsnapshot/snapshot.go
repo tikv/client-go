@@ -372,6 +372,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	pending := batch.keys
 	var resolvingRecordToken *int
 	useConfigurableKVTimeout := true
+	// the states in request need to keep when retry request.
+	var readType string
 	for {
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
@@ -383,8 +385,12 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
-			RequestSource:    s.GetRequestSource(),
 		})
+		req.InputRequestSource = s.GetRequestSource()
+		if readType != "" {
+			req.ReadType = readType
+			req.IsRetryRequest = true
+		}
 		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 			s.mu.resourceGroupTagger(req)
 		}
@@ -422,6 +428,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		if err != nil {
 			return err
 		}
+		readType = req.ReadType
 		if regionErr != nil {
 			// For other region error and the fake region error, backoff because
 			// there's something wrong.
@@ -595,8 +602,8 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
-			RequestSource:    s.GetRequestSource(),
 		})
+	req.InputRequestSource = s.GetRequestSource()
 	if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 		s.mu.resourceGroupTagger(req)
 	}

@@ -229,6 +229,10 @@ type Request struct {
 	// If it's not empty, the store which receive the request will forward it to
 	// the forwarded host. It's useful when network partition occurs.
 	ForwardedHost string
+	// The initial read type, note this will be assigned in the first try, no need to set it outside the client.
+	ReadType string
+	// InputRequestSource is the input source of the request, if it's not empty, the final RequestSource sent to store will be attached with the retry info.
+	InputRequestSource string
 }
 
 // NewRequest returns new kv rpc request.
