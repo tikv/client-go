@@ -1515,7 +1515,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			rpcCtx, err := replicaSelector.buildRPCContext(bo)
 			s.Nil(err)
 			replicaSelector.patchRequestSource(req, rpcCtx)
-			s.Equal("test-"+firstReplica, req.RequestSource)
+			s.Equal(firstReplica+"_test", req.RequestSource)
 
 			// retry
 			setReadType(req, retryReplica)
@@ -1526,7 +1526,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			s.Nil(err)
 			req.IsRetryRequest = true
 			replicaSelector.patchRequestSource(req, rpcCtx)
-			s.Equal("test-retry_"+firstReplica+"_"+retryReplica, req.RequestSource)
+			s.Equal("retry_"+firstReplica+"_"+retryReplica+"_test", req.RequestSource)
 		}
 	}
 }
