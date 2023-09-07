@@ -2241,9 +2241,10 @@ func (s *replicaSelector) replicaType(rpcCtx *RPCContext) string {
 
 func (s *replicaSelector) patchRequestSource(req *tikvrpc.Request, rpcCtx *RPCContext) {
 	var sb strings.Builder
-	sb.WriteString(req.InputRequestSource)
-	sb.WriteByte('-')
 	defer func() {
+		// TiKV does the limit control by the last part of the request source.
+		sb.WriteByte('_')
+		sb.WriteString(req.InputRequestSource)
 		req.RequestSource = sb.String()
 	}()
 
