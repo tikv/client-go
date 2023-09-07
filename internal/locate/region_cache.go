@@ -2840,7 +2840,7 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 	}
 	addr := s.addr
 	rsCh := livenessSf.DoChan(addr, func() (interface{}, error) {
-		return invokeKVStatusAPI(addr, storeLivenessTimeout), nil
+		return invokeKVStatusAPI(addr, s.storeType, storeLivenessTimeout), nil
 	})
 	var ctx context.Context
 	if bo != nil {
@@ -2882,7 +2882,7 @@ func (s *Store) EstimatedWaitTime() time.Duration {
 	return loadStats.estimatedWait - timeSinceUpdated
 }
 
-func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
+func invokeKVStatusAPI(addr string, storeTp tikvrpc.EndpointType, timeout time.Duration) (l livenessState) {
 	start := time.Now()
 	defer func() {
 		if l == reachable {
@@ -2895,7 +2895,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, cli, err := createKVHealthClient(ctx, addr)
+	conn, cli, err := createKVHealthClient(ctx, addr, storeTp)
 	if err != nil {
 		logutil.BgLogger().Info("[health check] create grpc connection failed", zap.String("store", addr), zap.Error(err))
 		l = unreachable
@@ -3031,7 +3031,7 @@ func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
 	}
 }
 
-func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
+func createKVHealthClient(ctx context.Context, addr string, storeTp tikvrpc.EndpointType) (*grpc.ClientConn, healthpb.HealthClient, error) {
 	// Temporarily directly load the config from the global config, however it's not a good idea to let RegionCache to
 	// access it.
 	// TODO: Pass the config in a better way, or use the connArray inner the client directly rather than creating new
@@ -3040,8 +3040,13 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 	cfg := config.GetGlobalConfig()
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
-	if len(cfg.Security.ClusterSSLCA) != 0 {
-		tlsConfig, err := cfg.Security.ToTLSConfig()
+	if storeTp == tikvrpc.TiKV {
+		security := config.Security{
+			ClusterSSLCA:   "/workspaces/cse-local-testbed/cert/root.crt",
+			ClusterSSLCert: "/workspaces/cse-local-testbed/cert/tikv.crt",
+			ClusterSSLKey:  "/workspaces/cse-local-testbed/cert/tikv.key",
+		}
+		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}
