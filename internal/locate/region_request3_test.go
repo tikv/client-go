@@ -1530,3 +1530,43 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 		}
 	}
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeout() {
+	var (
+		leaderAddr  string
+		leaderLabel []*metapb.StoreLabel
+	)
+	bo := retry.NewBackoffer(context.Background(), 10000)
+	mockRPCClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		if addr == leaderAddr {
+			return nil, context.DeadlineExceeded
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
+	}}
+	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+	s.regionRequestSender.RegionRequestRuntimeStats = NewRegionRequestRuntimeStats()
+	getLocFn := func() *KeyLocation {
+		loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("a"))
+		s.Nil(err)
+		region := s.regionRequestSender.regionCache.GetCachedRegionWithRLock(loc.Region)
+		leaderStore, _, _, _ := region.WorkStorePeer(region.getStore())
+		leaderAddr, err = s.regionRequestSender.regionCache.getStoreAddr(s.bo, region, leaderStore)
+		s.Nil(err)
+		leaderLabel = []*metapb.StoreLabel{{Key: "id", Value: strconv.FormatUint(leaderStore.StoreID(), 10)}}
+		return loc
+	}
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+	req.EnableStaleRead()
+	loc := getLocFn()
+	var ops []StoreSelectorOption
+	ops = append(ops, WithMatchLabels(leaderLabel))
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV, ops...)
+	s.Nil(err)
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Nil(regionErr)
+	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
+	s.Equal(1, len(s.regionRequestSender.Stats))
+	s.Equal(int64(2), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 2 rpc
+	s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
+}
