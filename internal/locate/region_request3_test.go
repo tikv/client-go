@@ -1255,14 +1255,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			s.Nil(err)
 			s.True(IsFakeRegionError(regionErr))
 			s.Equal(1, len(s.regionRequestSender.Stats))
-			if staleRead {
-				rpcNum := s.regionRequestSender.Stats[tikvrpc.CmdGet].Count
-				s.True(rpcNum == 1 || rpcNum == 2) // 1 rpc or 2 rpc
-			} else {
-				s.Equal(int64(3), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 3 rpc
-				s.Equal(3, len(reqTargetAddrs))                                      // each rpc to a different store.
-			}
-			s.Equal(0, bo.GetTotalBackoffTimes()) // no backoff since fast retry.
+			s.Equal(int64(3), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 3 rpc
+			s.Equal(3, len(reqTargetAddrs))                                      // each rpc to a different store.
+			s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
 			// warn: must rest MaxExecutionDurationMs before retry.
 			resetStats()
 			if staleRead {
