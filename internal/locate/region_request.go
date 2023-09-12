@@ -2094,14 +2094,14 @@ func (s *RegionRequestSender) onRegionError(
 			s.replicaSelector.onDeadlineExceeded()
 			return true, nil
 		}
+		if s.replicaSelector != nil {
+			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
+		}
 		logutil.Logger(bo.GetCtx()).Warn(
 			"tikv reports `ServerIsBusy` retry later",
 			zap.String("reason", regionErr.GetServerIsBusy().GetReason()),
 			zap.Stringer("ctx", ctx),
 		)
-		if s.replicaSelector != nil {
-			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
-		}
 		if ctx != nil && ctx.Store != nil && ctx.Store.storeType.IsTiFlashRelatedType() {
 			err = bo.Backoff(retry.BoTiFlashServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 		} else {
