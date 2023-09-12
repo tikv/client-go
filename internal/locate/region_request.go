@@ -1517,6 +1517,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		zap.Int("retry-times", retryTimes),
 		zap.Int("total-backoff-ms", bo.GetTotalSleep()),
 		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+		zap.Uint64("max-exec-timeout-ms", req.Context.MaxExecutionDurationMs),
 		zap.String("total-region-errors", totalErrorStr.String()))
 }
 
