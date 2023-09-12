@@ -735,6 +735,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			logutil.Logger(bo.GetCtx()).Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
 				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
 		}
 		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
@@ -742,7 +743,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
 			// If leader tried and received deadline exceeded error, try follower.
-			if state.isStaleRead {
+			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
