@@ -738,11 +738,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Any("labels", state.option.labels))
 		}
-		// If leader tried and received deadline exceeded error, return nil to upper layer to retry with default timeout.
-		if leader.deadlineErrUsingConfTimeout {
-			return nil, nil
-		}
-		if leaderInvalid {
+		// If leader tried and received deadline exceeded error, try follower.
+		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
