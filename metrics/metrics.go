@@ -338,7 +338,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Namespace:   namespace,
 			Subsystem:   subsystem,
 			Name:        "batch_wait_duration",
-			Buckets:     prometheus.ExponentialBuckets(1, 2, 34), // 1ns ~ 8s
+			Buckets:     prometheus.ExponentialBuckets(16, 2, 36), // 16ns ~ 549s
 			Help:        "batch wait duration",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
