@@ -70,6 +70,8 @@ type batchCommandsEntry struct {
 	// canceled indicated the request is canceled or not.
 	canceled int32
 	err      error
+	start    time.Time
+	target   string
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
@@ -100,6 +102,7 @@ func (b *batchCommandsBuilder) len() int {
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries = append(b.entries, entry)
+	metrics.TiKVBatchWaitDuration.WithLabelValues("wait-fetch", entry.target).Observe(float64(time.Since(entry.start)))
 }
 
 // build builds BatchCommandsRequests and calls collect() for each valid entry.
@@ -109,6 +112,7 @@ func (b *batchCommandsBuilder) build(
 	collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
 	for _, e := range b.entries {
+		metrics.TiKVBatchWaitDuration.WithLabelValues("wait-build-req", e.target).Observe(float64(time.Since(e.start)))
 		if e.isCanceled() {
 			continue
 		}
@@ -649,6 +653,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				trace.Log(entry.ctx, "rpc", "received")
 			}
 			logutil.Eventf(entry.ctx, "receive %T response with other %d batched requests from %s", responses[i].GetCmd(), len(responses), c.target)
+			metrics.TiKVBatchWaitDuration.WithLabelValues("wait-resp", entry.target).Observe(float64(time.Since(entry.start)))
 			if atomic.LoadInt32(&entry.canceled) == 0 {
 				// Put the response only if the request is not canceled.
 				entry.res <- responses[i]
@@ -773,6 +778,7 @@ func sendBatchRequest(
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
 ) (*tikvrpc.Response, error) {
+	start := time.Now()
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
 		req:           req,
@@ -780,11 +786,12 @@ func sendBatchRequest(
 		forwardedHost: forwardedHost,
 		canceled:      0,
 		err:           nil,
+		start:         start,
+		target:        addr,
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	start := time.Now()
 	select {
 	case batchConn.batchCommandsCh <- entry:
 	case <-ctx.Done():
@@ -795,7 +802,7 @@ func sendBatchRequest(
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
 	waitDuration := time.Since(start)
-	metrics.TiKVBatchWaitDuration.Observe(float64(waitDuration))
+	metrics.TiKVBatchWaitDuration.WithLabelValues("wait-send", entry.target).Observe(float64(waitDuration))
 
 	select {
 	case res, ok := <-entry.res:
