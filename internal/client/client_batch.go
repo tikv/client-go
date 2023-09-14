@@ -198,8 +198,15 @@ type batchConn struct {
 	pendingRequests prometheus.Observer
 	batchSize       prometheus.Observer
 
-	index uint32
+	index            uint32
+	state            atomic.Int32
+	startHandingTime atomic.Int64
 }
+
+var (
+	batchConnIdle    = int32(0)
+	batchConnHanding = int32(1)
+)
 
 func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 	return &batchConn{
@@ -215,6 +222,16 @@ func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 
 func (a *batchConn) isIdle() bool {
 	return atomic.LoadUint32(&a.idle) != 0
+}
+
+func (a *batchConn) isBusy(now int64) bool {
+	if len(a.batchCommandsCh) == cap(a.batchCommandsCh) {
+		return true
+	}
+	if a.state.Load() == batchConnHanding && (now-a.startHandingTime.Load()) > int64(time.Second) {
+		return true
+	}
+	return false
 }
 
 // fetchAllPendingRequests fetches all pending requests from the channel.
@@ -312,6 +329,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 
 	bestBatchWaitSize := cfg.BatchWaitSize
 	for {
+		a.state.Store(batchConnIdle)
 		a.reqBuilder.reset()
 
 		start := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
@@ -323,6 +341,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			}
 		}
 
+		a.state.Store(batchConnHanding)
+		a.startHandingTime.Store(start.UnixNano())
 		if a.reqBuilder.len() < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
 			// If the target TiKV is overload, wait a while to collect more requests.
 			if atomic.LoadUint64(&a.tikvTransportLayerLoad) >= uint64(cfg.OverloadThreshold) {
