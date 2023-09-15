@@ -2,9 +2,9 @@ name: Unit Test
 
 on:
   push:
-    branches: [ master, tidb-6.5 ]
+    branches: [ master, tidb-6.5, tidb-6.5-with-kv-timeout-feature ]
   pull_request:
-    branches: [ master, tidb-6.5 ]
+    branches: [ master, tidb-6.5, tidb-6.5-with-kv-timeout-feature ]
 
 jobs:
   test:
