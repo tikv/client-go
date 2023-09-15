@@ -1778,7 +1778,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 	} else if LoadShuttingDown() > 0 {
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
 	} else if errors.Cause(err) == context.DeadlineExceeded && req.MaxExecutionDurationMs < uint64(client.ReadTimeoutShort.Milliseconds()) {
-		if s.replicaSelector != nil {
+		if s.replicaSelector != nil && isReadReq(req.Type) {
 			s.replicaSelector.onDeadlineExceeded()
 			return nil
 		}
@@ -2091,7 +2091,7 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
-		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
+		if s.replicaSelector != nil && isReadReq(req.Type) && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
 			s.replicaSelector.onDeadlineExceeded()
 			return true, nil
 		}
@@ -2223,7 +2223,7 @@ func (s *RegionRequestSender) onRegionError(
 		return true, nil
 	}
 
-	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil {
+	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil && isReadReq(req.Type) {
 		s.replicaSelector.onDeadlineExceeded()
 	}
 
@@ -2359,4 +2359,14 @@ func (s *replicaSelector) patchRequestSource(req *tikvrpc.Request, rpcCtx *RPCCo
 		req.ReadType = replicaType
 	}
 	sb.WriteString(req.ReadType)
+}
+
+func isReadReq(tp tikvrpc.CmdType) bool {
+	switch tp {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
+	default:
+		return false
+	}
 }
