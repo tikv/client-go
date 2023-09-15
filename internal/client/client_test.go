@@ -55,6 +55,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/client/mock_server"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"go.uber.org/zap"
@@ -118,12 +119,12 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 }
 
 func TestSendWhenReconnect(t *testing.T) {
-	server, port := startMockTikvService()
+	server, port := mock_server.StartMockTikvService()
 	require.True(t, port > 0)
 
 	rpcClient := NewRPCClient()
 	defer rpcClient.Close()
-	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
+	addr := server.Addr()
 	conn, err := rpcClient.getConnArray(addr, true)
 	assert.Nil(t, err)
 
@@ -242,7 +243,7 @@ func TestCollapseResolveLock(t *testing.T) {
 }
 
 func TestForwardMetadataByUnaryCall(t *testing.T) {
-	server, port := startMockTikvService()
+	server, port := mock_server.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
@@ -257,7 +258,7 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 
 	var checkCnt uint64
 	// Check no corresponding metadata if ForwardedHost is empty.
-	server.setMetaChecker(func(ctx context.Context) error {
+	server.SetMetaChecker(func(ctx context.Context) error {
 		atomic.AddUint64(&checkCnt, 1)
 		// gRPC may set some metadata by default, e.g. "context-type".
 		md, ok := metadata.FromIncomingContext(ctx)
@@ -285,7 +286,7 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 	checkCnt = 0
 	forwardedHost := "127.0.0.1:6666"
 	// Check the metadata exists.
-	server.setMetaChecker(func(ctx context.Context) error {
+	server.SetMetaChecker(func(ctx context.Context) error {
 		atomic.AddUint64(&checkCnt, 1)
 		// gRPC may set some metadata by default, e.g. "context-type".
 		md, ok := metadata.FromIncomingContext(ctx)
@@ -310,10 +311,10 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 }
 
 func TestForwardMetadataByBatchCommands(t *testing.T) {
-	server, port := startMockTikvService()
+	server, port := mock_server.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
-	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
+	addr := server.Addr()
 
 	// Enable batch and limit the connection count to 1 so that
 	// there is only one BatchCommands stream for each host or forwarded host.
@@ -326,7 +327,7 @@ func TestForwardMetadataByBatchCommands(t *testing.T) {
 
 	var checkCnt uint64
 	setCheckHandler := func(forwardedHost string) {
-		server.setMetaChecker(func(ctx context.Context) error {
+		server.SetMetaChecker(func(ctx context.Context) error {
 			atomic.AddUint64(&checkCnt, 1)
 			md, ok := metadata.FromIncomingContext(ctx)
 			if forwardedHost == "" {
@@ -649,10 +650,10 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		conf.TiKVClient.MaxBatchSize = 128
 	})()
 
-	server, port := startMockTikvService()
+	server, port := mock_server.StartMockTikvService()
 	require.True(t, port > 0)
 	require.True(t, server.IsRunning())
-	addr := server.addr
+	addr := server.Addr()
 	client := NewRPCClient()
 	defer func() {
 		err := client.Close()
@@ -689,7 +690,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	logutil.BgLogger().Info("restart mock tikv server")
 	server.Start(addr)
 	require.True(t, server.IsRunning())
-	require.Equal(t, addr, server.addr)
+	require.Equal(t, addr, server.Addr())
 
 	// Wait batch client to auto reconnect.
 	start := time.Now()
