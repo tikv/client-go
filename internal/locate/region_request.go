@@ -632,17 +632,15 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				zap.Bool("leader-epoch-stale", leaderEpochStale),
 				zap.Bool("leader-unreachable", leaderUnreachable),
 				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
 		}
-		// If leader tried and received deadline exceeded error, return nil to upper layer to retry with default timeout.
-		if leader.deadlineErrUsingConfTimeout {
-			return nil, nil
-		}
-		if leaderInvalid {
+		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
-			if state.isStaleRead {
+			// If leader tried and received deadline exceeded error, try follower.
+			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -1308,6 +1306,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		zap.String("replica-status", strings.Join(replicaStatus, "; ")),
 		zap.Int("total-backoff-ms", bo.GetTotalSleep()),
 		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+		zap.Uint64("max-exec-timeout-ms", req.Context.MaxExecutionDurationMs),
 		zap.String("total-region-errors", totalErrorStr.String()))
 }
 
