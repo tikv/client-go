@@ -711,21 +711,19 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 		return context.DeadlineExceeded
 	})
 	rpcClient := client.NewRPCClient()
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
+	}}
 	defer func() {
 		rpcClient.Close()
 		server.Stop()
 	}()
 
-	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	bo := retry.NewBackofferWithVars(context.Background(), 2000, nil)
+	region, err := s.cache.LocateRegionByID(bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
-
-	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
-	}}
-
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
-	bo := retry.NewBackofferWithVars(context.Background(), 2000, nil)
 	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Millisecond*10)
 	s.Nil(err)
 	s.NotNil(resp)
