@@ -18,13 +18,14 @@
 // https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/client/mock_tikv_service_test.go
 //
 
-package client
+package mock_server
 
 import (
 	"context"
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
@@ -35,9 +36,11 @@ import (
 	"google.golang.org/grpc"
 )
 
-type server struct {
+type MockServer struct {
 	tikvpb.TikvServer
 	grpcServer *grpc.Server
+	addr       string
+	running    int64 // 0: not running, 1: running
 	// metaChecker check the metadata of each request. Now only requests
 	// which need redirection set it.
 	metaChecker struct {
@@ -46,21 +49,28 @@ type server struct {
 	}
 }
 
-func (s *server) KvPrewrite(ctx context.Context, req *kvrpcpb.PrewriteRequest) (*kvrpcpb.PrewriteResponse, error) {
+func (s *MockServer) KvGet(ctx context.Context, req *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, error) {
+	if err := s.checkMetadata(ctx); err != nil {
+		return nil, err
+	}
+	return &kvrpcpb.GetResponse{}, nil
+}
+
+func (s *MockServer) KvPrewrite(ctx context.Context, req *kvrpcpb.PrewriteRequest) (*kvrpcpb.PrewriteResponse, error) {
 	if err := s.checkMetadata(ctx); err != nil {
 		return nil, err
 	}
 	return &kvrpcpb.PrewriteResponse{}, nil
 }
 
-func (s *server) CoprocessorStream(req *coprocessor.Request, ss tikvpb.Tikv_CoprocessorStreamServer) error {
+func (s *MockServer) CoprocessorStream(req *coprocessor.Request, ss tikvpb.Tikv_CoprocessorStreamServer) error {
 	if err := s.checkMetadata(ss.Context()); err != nil {
 		return err
 	}
 	return ss.Send(&coprocessor.Response{})
 }
 
-func (s *server) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
+func (s *MockServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 	if err := s.checkMetadata(ss.Context()); err != nil {
 		return err
 	}
@@ -91,13 +101,13 @@ func (s *server) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 	}
 }
 
-func (s *server) setMetaChecker(check func(context.Context) error) {
+func (s *MockServer) SetMetaChecker(check func(context.Context) error) {
 	s.metaChecker.Lock()
 	s.metaChecker.check = check
 	s.metaChecker.Unlock()
 }
 
-func (s *server) checkMetadata(ctx context.Context) error {
+func (s *MockServer) checkMetadata(ctx context.Context) error {
 	s.metaChecker.Lock()
 	defer s.metaChecker.Unlock()
 	if s.metaChecker.check != nil {
@@ -106,32 +116,52 @@ func (s *server) checkMetadata(ctx context.Context) error {
 	return nil
 }
 
-func (s *server) Stop() {
-	s.grpcServer.Stop()
+func (s *MockServer) IsRunning() bool {
+	return atomic.LoadInt64(&s.running) == 1
 }
 
-// Try to start a gRPC server and retrun the server instance and binded port.
-func startMockTikvService() (*server, int) {
+func (s *MockServer) Addr() string {
+	return s.addr
+}
+
+func (s *MockServer) Stop() {
+	s.grpcServer.Stop()
+	atomic.StoreInt64(&s.running, 0)
+}
+
+func (s *MockServer) Start(addr string) int {
+	if addr == "" {
+		addr = fmt.Sprintf("%s:%d", "127.0.0.1", 0)
+	}
 	port := -1
-	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", "127.0.0.1", 0))
+	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		logutil.BgLogger().Error("can't listen", zap.Error(err))
 		logutil.BgLogger().Error("can't start mock tikv service because no available ports")
-		return nil, port
+		return port
 	}
 	port = lis.Addr().(*net.TCPAddr).Port
 
-	server := &server{}
-	s := grpc.NewServer(grpc.ConnectionTimeout(time.Minute))
-	tikvpb.RegisterTikvServer(s, server)
-	server.grpcServer = s
+	grpcServer := grpc.NewServer(grpc.ConnectionTimeout(time.Minute))
+	tikvpb.RegisterTikvServer(grpcServer, s)
+	s.grpcServer = grpcServer
 	go func() {
-		if err = s.Serve(lis); err != nil {
+		if err = grpcServer.Serve(lis); err != nil {
 			logutil.BgLogger().Error(
 				"can't serve gRPC requests",
 				zap.Error(err),
 			)
 		}
 	}()
+	atomic.StoreInt64(&s.running, 1)
+	s.addr = fmt.Sprintf("%s:%d", "127.0.0.1", port)
+	logutil.BgLogger().Info("mock server started", zap.String("addr", s.addr))
+	return port
+}
+
+// StartMockTikvService try to start a gRPC server and retrun the server instance and binded port.
+func StartMockTikvService() (*MockServer, int) {
+	server := &MockServer{}
+	port := server.Start("")
 	return server, port
 }
