@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -72,6 +73,44 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 		codec:  codec,
 	}
 	pdCli := pd.Client(locate.NewCodecPDClient(ModeTxn, pdClient))
+
+	if clientHijack != nil {
+		client = clientHijack(client)
+	}
+
+	if pdClientHijack != nil {
+		pdCli = pdClientHijack(pdCli)
+	}
+
+	// Make sure the uuid is unique.
+	uid := uuid.New().String()
+	spkv := NewMockSafePointKV()
+	tikvStore, err := NewKVStore(uid, pdCli, spkv, client, opt...)
+
+	if txnLocalLatches > 0 {
+		tikvStore.EnableTxnLocalLatches(txnLocalLatches)
+	}
+
+	tikvStore.mock = true
+	return tikvStore, err
+}
+
+// NewTestTiKVStore creates a test store with Option
+func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack func(Client) Client, pdClientHijack func(pd.Client) pd.Client, txnLocalLatches uint, keyspaceMeta keyspacepb.KeyspaceMeta, opt ...Option) (*KVStore, error) {
+	codec, err := apicodec.NewCodecV2(apicodec.ModeTxn, keyspaceMeta.Id)
+	if err != nil {
+		return nil, err
+	}
+	client = &CodecClient{
+		Client: client,
+		codec:  codec,
+	}
+
+	codecPDCli, err := locate.NewCodecPDClientWithKeyspace(apicodec.ModeTxn, pdClient, keyspaceMeta.Name)
+	if err != nil {
+		return nil, err
+	}
+	pdCli := pd.Client(codecPDCli)
 
 	if clientHijack != nil {
 		client = clientHijack(client)
