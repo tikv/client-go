@@ -1295,7 +1295,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 	loc := getLocFn()
 	bo = retry.NewBackoffer(context.Background(), 1000)
 	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
-	s.NotNil(err)
 	s.Nil(resp)
 	s.Equal(context.DeadlineExceeded, err)
 	backoffTimes := bo.GetBackoffTimes()
