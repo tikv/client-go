@@ -1308,6 +1308,22 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
 		}
 	}
+
+	// Test for write request.
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	resetStats()
+	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	loc := getLocFn()
+	bo = retry.NewBackoffer(context.Background(), 1000)
+	resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
+	s.Nil(resp)
+	s.Equal(context.DeadlineExceeded, err)
+	backoffTimes := bo.GetBackoffTimes()
+	s.True(backoffTimes["tikvRPC"] > 0) // write request timeout won't do fast retry, so backoff times should be more than 0.
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeout() {
