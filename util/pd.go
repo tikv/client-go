@@ -56,7 +56,7 @@ const (
 	// pd request retry time when connection fail.
 	pdRequestRetryTime = 10
 
-	storeMinResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
+	minResolvedTSPrefix = "pd/api/v1/min-resolved-ts"
 )
 
 // PDHTTPClient is an HTTP client of pd.
@@ -86,45 +86,66 @@ func NewPDHTTPClient(
 	}
 }
 
-// GetStoreMinResolvedTS get store-level min-resolved-ts from pd.
-func (p *PDHTTPClient) GetStoreMinResolvedTS(ctx context.Context, storeID uint64) (uint64, error) {
+// GetMinResolvedTSByStoresIDs get min-resolved-ts from pd by stores ids.
+func (p *PDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []string) (uint64, map[uint64]uint64, error) {
 	var err error
 	for _, addr := range p.addrs {
-		query := fmt.Sprintf("%s/%d", storeMinResolvedTSPrefix, storeID)
+		// scope is an optional parameter, it can be `cluster` or specified store IDs.
+		// - When no scope is given, cluster-level's min_resolved_ts will be returned and storesMinResolvedTS will be nil.
+		// - When scope is `cluster`, cluster-level's min_resolved_ts will be returned and storesMinResolvedTS will be filled.
+		// - When scope given a list of stores, min_resolved_ts will be provided for each store
+		//      and the scope-specific min_resolved_ts will be returned.
+		query := minResolvedTSPrefix
+		if len(storeIDs) != 0 {
+			query = fmt.Sprintf("%s?scope=%s", query, strings.Join(storeIDs, ","))
+		}
 		v, e := pdRequest(ctx, addr, query, p.cli, http.MethodGet, nil)
 		if e != nil {
 			logutil.BgLogger().Debug("failed to get min resolved ts", zap.String("addr", addr), zap.Error(e))
 			err = e
 			continue
 		}
-		logutil.BgLogger().Debug("store min resolved ts", zap.String("resp", string(v)))
+		logutil.BgLogger().Debug("min resolved ts", zap.String("resp", string(v)))
 		d := struct {
-			IsRealTime    bool   `json:"is_real_time,omitempty"`
-			MinResolvedTS uint64 `json:"min_resolved_ts"`
+			MinResolvedTS       uint64            `json:"min_resolved_ts"`
+			IsRealTime          bool              `json:"is_real_time,omitempty"`
+			StoresMinResolvedTS map[uint64]uint64 `json:"stores_min_resolved_ts"`
 		}{}
 		err = json.Unmarshal(v, &d)
 		if err != nil {
-			return 0, errors.Trace(err)
+			return 0, nil, errors.Trace(err)
 		}
 		if !d.IsRealTime {
-			message := fmt.Errorf("store min resolved ts not enabled, addr: %s", addr)
+			message := fmt.Errorf("min resolved ts not enabled, addr: %s", addr)
 			logutil.BgLogger().Debug(message.Error())
-			return 0, errors.Trace(message)
+			return 0, nil, errors.Trace(message)
 		}
 		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
 			// Need to make sure successfully get from real pd.
-			if d.MinResolvedTS != 0 {
-				// Should be val.(uint64) but failpoint doesn't support that.
-				if tmp, ok := val.(int); ok {
-					d.MinResolvedTS = uint64(tmp)
+			if d.StoresMinResolvedTS != nil {
+				for storeID, v := range d.StoresMinResolvedTS {
+					if v != 0 {
+						// Should be val.(uint64) but failpoint doesn't support that.
+						if tmp, ok := val.(int); ok {
+							d.StoresMinResolvedTS[storeID] = uint64(tmp)
+							logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("storeID", storeID), zap.Uint64("ts", uint64(tmp)))
+						}
+					}
 				}
+			} else if tmp, ok := val.(int); ok {
+				// Should be val.(uint64) but failpoint doesn't support that.
+				// ci's store id is 1, we can change it if we have more stores.
+				// but for pool ci it's no need to do that :(
+				d.MinResolvedTS = uint64(tmp)
+				logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("ts", uint64(tmp)))
 			}
+
 		}
 
-		return d.MinResolvedTS, nil
+		return d.MinResolvedTS, d.StoresMinResolvedTS, nil
 	}
 
-	return 0, errors.Trace(err)
+	return 0, nil, errors.Trace(err)
 }
 
 // pdRequest is a func to send an HTTP to pd and return the result bytes.

@@ -534,10 +534,12 @@ func (c *RegionCache) Close() {
 	c.cancelFunc()
 }
 
+var reloadRegionInterval = int64(10 * time.Second)
+
 // asyncCheckAndResolveLoop with
 func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	reloadRegionTicker := time.NewTicker(10 * time.Second)
+	reloadRegionTicker := time.NewTicker(time.Duration(atomic.LoadInt64(&reloadRegionInterval)))
 	defer func() {
 		ticker.Stop()
 		reloadRegionTicker.Stop()
@@ -587,7 +589,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 		r := recover()
 		if r != nil {
 			logutil.BgLogger().Error("panic in the checkAndResolve goroutine",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack trace"))
 		}
 	}()
@@ -627,16 +629,17 @@ func (c *RegionCache) SetPDClient(client pd.Client) {
 
 // RPCContext contains data that is needed to send RPC to a region.
 type RPCContext struct {
-	Region     RegionVerID
-	Meta       *metapb.Region
-	Peer       *metapb.Peer
-	AccessIdx  AccessIndex
-	Store      *Store
-	Addr       string
-	AccessMode accessMode
-	ProxyStore *Store // nil means proxy is not used
-	ProxyAddr  string // valid when ProxyStore is not nil
-	TiKVNum    int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	Region        RegionVerID
+	Meta          *metapb.Region
+	Peer          *metapb.Peer
+	AccessIdx     AccessIndex
+	Store         *Store
+	Addr          string
+	AccessMode    accessMode
+	ProxyStore    *Store // nil means proxy is not used
+	ProxyAddr     string // valid when ProxyStore is not nil
+	TiKVNum       int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
+	BucketVersion uint64
 
 	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
@@ -1947,6 +1950,26 @@ func (c *RegionCache) getStoresByLabels(labels []*metapb.StoreLabel) []*Store {
 	return s
 }
 
+// OnBucketVersionNotMatch removes the old buckets meta if the version is stale.
+func (c *RegionCache) OnBucketVersionNotMatch(ctx *RPCContext, version uint64, keys [][]byte) {
+	r := c.GetCachedRegionWithRLock(ctx.Region)
+	if r == nil {
+		return
+	}
+
+	buckets := r.getStore().buckets
+	if buckets == nil || buckets.GetVersion() < version {
+		oldStore := r.getStore()
+		store := oldStore.clone()
+		store.buckets = &metapb.Buckets{
+			Version:  version,
+			Keys:     keys,
+			RegionId: r.meta.GetId(),
+		}
+		r.compareAndSwapStore(oldStore, store)
+	}
+}
+
 // OnRegionEpochNotMatch removes the old region and inserts new regions into the cache.
 // It returns whether retries the request because it's possible the region epoch is ahead of TiKV's due to slow appling.
 func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext, currentRegions []*metapb.Region) (bool, error) {
@@ -2972,7 +2995,7 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 		r := recover()
 		if r != nil {
 			logutil.BgLogger().Error("panic in the checkAndUpdateStoreSlowScores goroutine",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack trace"))
 		}
 	}()
