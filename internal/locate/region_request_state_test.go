@@ -237,15 +237,12 @@ func (s *testRegionCacheStaleReadSuite) extractResp(resp *tikvrpc.Response) (uin
 	storeID, err := strconv.Atoi(resps[0])
 	s.Nil(err)
 	successReadType, err := strconv.Atoi(resps[2])
+	s.Nil(err)
 	return uint64(storeID), resps[1], SuccessReadType(successReadType)
 }
 
 func (s *testRegionCacheStaleReadSuite) setUnavailableStore(id uint64) {
 	s.injection.unavailableStoreIDs[id] = struct{}{}
-}
-
-func (s *testRegionCacheStaleReadSuite) setTimeout(id uint64) {
-	s.injection.timeoutStoreIDs[id] = struct{}{}
 }
 
 func TestRegionCacheStaleRead(t *testing.T) {
@@ -545,7 +542,8 @@ func testStaleReadLeader(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCas
 }
 
 func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zone string) {
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	leaderZone := zone == "z1"
 	var available bool
 	if leaderZone {

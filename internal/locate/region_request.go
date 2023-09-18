@@ -490,6 +490,7 @@ func (state *accessByKnownProxy) onNoLeader(selector *replicaSelector) {
 
 // tryNewProxy is the state where we try to find a node from followers as proxy.
 type tryNewProxy struct {
+	//nolint:unused
 	stateBase
 	leaderIdx AccessIndex
 }
@@ -668,9 +669,8 @@ func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
 	// 4. The leader peer should be retried again using snapshot read.
 	if state.isStaleRead && state.option.leaderOnly {
 		return leader.isExhausted(2)
-	} else {
-		return leader.isExhausted(1)
 	}
+	return leader.isExhausted(1)
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {

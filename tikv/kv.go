@@ -105,7 +105,7 @@ type KVStore struct {
 		client Client
 	}
 	pdClient     pd.Client
-	pdHttpClient *util.PDHTTPClient
+	pdHTTPClient *util.PDHTTPClient
 	regionCache  *locate.RegionCache
 	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
@@ -171,7 +171,7 @@ type Option func(*KVStore)
 // WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
 func WithPDHTTPClient(tlsConf *tls.Config, pdaddrs []string) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
+		o.pdHTTPClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
 	}
 }
 
@@ -327,8 +327,8 @@ func (s *KVStore) Close() error {
 
 	s.oracle.Close()
 	s.pdClient.Close()
-	if s.pdHttpClient != nil {
-		s.pdHttpClient.Close()
+	if s.pdHTTPClient != nil {
+		s.pdHTTPClient.Close()
 	}
 	s.lockResolver.Close()
 
@@ -618,8 +618,8 @@ var (
 func (s *KVStore) setClusterMinSafeTSByPD(ctx context.Context) bool {
 	isGlobal := config.GetTxnScopeFromConfig() == oracle.GlobalTxnScope
 	// Try to get the minimum resolved timestamp of the cluster from PD.
-	if s.pdHttpClient != nil && isGlobal {
-		clusterMinSafeTS, err := s.pdHttpClient.GetClusterMinResolvedTS(ctx)
+	if s.pdHTTPClient != nil && isGlobal {
+		clusterMinSafeTS, err := s.pdHTTPClient.GetClusterMinResolvedTS(ctx)
 		if err != nil {
 			logutil.BgLogger().Debug("get cluster-level min resolved timestamp from PD failed", zap.Error(err))
 		} else if clusterMinSafeTS != 0 {

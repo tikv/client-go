@@ -65,6 +65,7 @@ type PDHTTPClient struct {
 	cli   *http.Client
 }
 
+// NewPDHTTPClient create a HTTP client of pd.
 func NewPDHTTPClient(
 	tlsConf *tls.Config,
 	pdAddrs []string,
@@ -204,6 +205,7 @@ func httpClient(tlsConf *tls.Config) *http.Client {
 	return cli
 }
 
+// Close pd connections before exit.
 func (p *PDHTTPClient) Close() {
 	p.cli.CloseIdleConnections()
 	logutil.BgLogger().Info("closed pd http client")

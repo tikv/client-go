@@ -115,6 +115,7 @@ func (s StoreProbe) GCResolveLockPhase(ctx context.Context, safepoint uint64, co
 	return s.resolveLocks(ctx, safepoint, concurrency)
 }
 
+// ScanLocks scan locks in a range with given start key/end key.
 func (s StoreProbe) ScanLocks(ctx context.Context, startKey, endKey []byte, maxVersion uint64) ([]*txnlock.Lock, error) {
 	bo := NewGcResolveLockMaxBackoffer(ctx)
 	const limit = 1024
