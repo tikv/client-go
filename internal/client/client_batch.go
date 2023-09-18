@@ -70,6 +70,7 @@ type batchCommandsEntry struct {
 	// canceled indicated the request is canceled or not.
 	canceled int32
 	err      error
+	start    time.Time
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
@@ -197,8 +198,15 @@ type batchConn struct {
 	pendingRequests prometheus.Observer
 	batchSize       prometheus.Observer
 
-	index uint32
+	index            uint32
+	state            atomic.Int32
+	startHandingTime atomic.Int64
 }
+
+var (
+	batchConnIdle    = int32(0)
+	batchConnHanding = int32(1)
+)
 
 func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 	return &batchConn{
@@ -214,6 +222,16 @@ func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 
 func (a *batchConn) isIdle() bool {
 	return atomic.LoadUint32(&a.idle) != 0
+}
+
+func (a *batchConn) isBusy(now int64) bool {
+	if len(a.batchCommandsCh) == cap(a.batchCommandsCh) {
+		return true
+	}
+	if a.state.Load() == batchConnHanding && (now-a.startHandingTime.Load()) > int64(time.Second) {
+		return true
+	}
+	return false
 }
 
 // fetchAllPendingRequests fetches all pending requests from the channel.
@@ -311,6 +329,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 
 	bestBatchWaitSize := cfg.BatchWaitSize
 	for {
+		a.state.Store(batchConnIdle)
 		a.reqBuilder.reset()
 
 		start := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
@@ -322,6 +341,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			}
 		}
 
+		a.state.Store(batchConnHanding)
+		a.startHandingTime.Store(start.UnixNano())
 		if a.reqBuilder.len() < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
 			// If the target TiKV is overload, wait a while to collect more requests.
 			if atomic.LoadUint64(&a.tikvTransportLayerLoad) >= uint64(cfg.OverloadThreshold) {
@@ -378,11 +399,14 @@ func (a *batchConn) getClientAndSend() {
 	}
 	defer cli.unlockForSend()
 
+	now := time.Now()
+	batchCmdWaitToSendDuration := metrics.TiKVBatchCmdDuration.WithLabelValues("wait-to-send", target)
 	req, forwardingReqs := a.reqBuilder.build(func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
+		batchCmdWaitToSendDuration.Observe(float64(now.Sub(e.start)))
 	})
 	if req != nil {
 		cli.send("", req)
@@ -507,6 +531,14 @@ func (c *batchCommandsClient) isStopped() bool {
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
+	start := time.Now()
+	defer func() {
+		if forwardedHost == "" {
+			metrics.TiKVBatchConnSendDuration.WithLabelValues(c.target).Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TiKVBatchConnSendDuration.WithLabelValues(forwardedHost).Observe(time.Since(start).Seconds())
+		}
+	}()
 	err := c.initBatchClient(forwardedHost)
 	if err != nil {
 		logutil.BgLogger().Warn(
@@ -612,6 +644,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 	}()
 
+	batchCmdGotRespDuration := metrics.TiKVBatchCmdDuration.WithLabelValues("got-resp", c.target)
 	epoch := atomic.LoadUint64(&c.epoch)
 	for {
 		resp, err := streamClient.recv()
@@ -635,6 +668,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 
 		responses := resp.GetResponses()
+		now := time.Now()
 		for i, requestID := range resp.GetRequestIds() {
 			value, ok := c.batched.Load(requestID)
 			if !ok {
@@ -649,6 +683,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				trace.Log(entry.ctx, "rpc", "received")
 			}
 			logutil.Eventf(entry.ctx, "receive %T response with other %d batched requests from %s", responses[i].GetCmd(), len(responses), c.target)
+			batchCmdGotRespDuration.Observe(float64(now.Sub(entry.start)))
 			if atomic.LoadInt32(&entry.canceled) == 0 {
 				// Put the response only if the request is not canceled.
 				entry.res <- responses[i]
@@ -773,6 +808,7 @@ func sendBatchRequest(
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
 ) (*tikvrpc.Response, error) {
+	start := time.Now()
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
 		req:           req,
@@ -780,11 +816,11 @@ func sendBatchRequest(
 		forwardedHost: forwardedHost,
 		canceled:      0,
 		err:           nil,
+		start:         start,
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	start := time.Now()
 	select {
 	case batchConn.batchCommandsCh <- entry:
 	case <-ctx.Done():
@@ -795,7 +831,7 @@ func sendBatchRequest(
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
 	waitDuration := time.Since(start)
-	metrics.TiKVBatchWaitDuration.Observe(float64(waitDuration))
+	metrics.TiKVBatchCmdDuration.WithLabelValues("send-to-chan", addr).Observe(float64(waitDuration))
 
 	select {
 	case res, ok := <-entry.res:
