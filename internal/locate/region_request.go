@@ -897,13 +897,25 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	s.state.onSendFailure(bo, s, err)
 }
 
-func (s *replicaSelector) onDeadlineExceeded() {
-	if target := s.targetReplica(); target != nil {
-		target.deadlineErrUsingConfTimeout = true
+func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+	if req.MaxExecutionDurationMs >= uint64(client.ReadTimeoutShort.Milliseconds()) {
+		// Configurable timeout should less than `ReadTimeoutShort`.
+		return false
 	}
-	if accessLeader, ok := s.state.(*accessKnownLeader); ok {
-		// If leader return deadline exceeded error, we should try to access follower next time.
-		s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+	switch req.Type {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		if target := s.targetReplica(); target != nil {
+			target.deadlineErrUsingConfTimeout = true
+		}
+		if accessLeader, ok := s.state.(*accessKnownLeader); ok {
+			// If leader return deadline exceeded error, we should try to access follower next time.
+			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+		}
+		return true
+	default:
+		// Only work for read requests, return false for non-read requests.
+		return false
 	}
 }
 
@@ -1553,9 +1565,8 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
-	} else if isCauseByDeadlineExceeded(err) && req.MaxExecutionDurationMs < uint64(client.ReadTimeoutShort.Milliseconds()) {
-		if s.replicaSelector != nil {
-			s.replicaSelector.onDeadlineExceeded()
+	} else if isCauseByDeadlineExceeded(err) {
+		if s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
 			return nil
 		}
 	}
@@ -1776,8 +1787,9 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
 		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
-			s.replicaSelector.onDeadlineExceeded()
-			return true, nil
+			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
+				return true, nil
+			}
 		}
 		logutil.Logger(bo.GetCtx()).Warn(
 			"tikv reports `ServerIsBusy` retry later",
@@ -1900,8 +1912,8 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 		return true, nil
 	}
 
-	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil {
-		s.replicaSelector.onDeadlineExceeded()
+	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
+		return true, nil
 	}
 
 	logutil.Logger(bo.GetCtx()).Debug(
