@@ -990,7 +990,7 @@ func (c *RegionCache) ListRegionIDsInKeyRange(bo *retry.Backoffer, startKey, end
 	return regionIDs, nil
 }
 
-// LoadRegionsInKeyRange lists regions in [start_key,end_key].
+// LoadRegionsInKeyRange lists regions in [start_key,end_key).
 func (c *RegionCache) LoadRegionsInKeyRange(bo *retry.Backoffer, startKey, endKey []byte) (regions []*Region, err error) {
 	var batchRegions []*Region
 	for {
