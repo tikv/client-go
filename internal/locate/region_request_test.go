@@ -52,8 +52,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/client/mock_server"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -696,4 +698,36 @@ func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
 	regionErr, _ := resp.GetRegionError()
 	s.Nil(regionErr)
 	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchClient() {
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 0
+	})()
+
+	server, port := mock_server.StartMockTikvService()
+	s.True(port > 0)
+	server.SetMetaChecker(func(ctx context.Context) error {
+		return context.DeadlineExceeded
+	})
+	rpcClient := client.NewRPCClient()
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
+	}}
+	defer func() {
+		rpcClient.Close()
+		server.Stop()
+	}()
+
+	bo := retry.NewBackofferWithVars(context.Background(), 2000, nil)
+	region, err := s.cache.LocateRegionByID(bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Millisecond*10)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.True(IsFakeRegionError(regionErr))
+	s.Equal(0, bo.GetTotalBackoffTimes()) // use kv read timeout will do fast retry, so backoff times should be 0.
 }

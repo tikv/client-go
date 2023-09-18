@@ -735,17 +735,15 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			logutil.Logger(bo.GetCtx()).Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
 				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
 		}
-		// If leader tried and received deadline exceeded error, return nil to upper layer to retry with default timeout.
-		if leader.deadlineErrUsingConfTimeout {
-			return nil, nil
-		}
-		if leaderInvalid {
+		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
-			if state.isStaleRead {
+			// If leader tried and received deadline exceeded error, try follower.
+			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -1531,6 +1529,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		zap.Int("retry-times", retryTimes),
 		zap.Int("total-backoff-ms", bo.GetTotalSleep()),
 		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+		zap.Uint64("max-exec-timeout-ms", req.Context.MaxExecutionDurationMs),
 		zap.String("total-region-errors", totalErrorStr.String()))
 }
 
@@ -1789,7 +1788,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
-	} else if errors.Cause(err) == context.DeadlineExceeded {
+	} else if isCauseByDeadlineExceeded(err) {
 		if s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
 			return nil
 		}
@@ -1844,6 +1843,12 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		)
 	}
 	return err
+}
+
+func isCauseByDeadlineExceeded(err error) bool {
+	causeErr := errors.Cause(err)
+	return causeErr == context.DeadlineExceeded || // batch-client will return this error.
+		status.Code(causeErr) == codes.DeadlineExceeded // when batch-client is disabled, grpc will return this error.
 }
 
 // NeedReloadRegion checks is all peers has sent failed, if so need reload.
