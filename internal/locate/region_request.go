@@ -1553,7 +1553,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
-	} else if errors.Cause(err) == context.DeadlineExceeded && req.MaxExecutionDurationMs < uint64(client.ReadTimeoutShort.Milliseconds()) {
+	} else if isCauseByDeadlineExceeded(err) && req.MaxExecutionDurationMs < uint64(client.ReadTimeoutShort.Milliseconds()) {
 		if s.replicaSelector != nil {
 			s.replicaSelector.onDeadlineExceeded()
 			return nil
@@ -1591,6 +1591,13 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		err = bo.Backoff(retry.BoTiKVRPC, errors.Errorf("send tikv request error: %v, ctx: %v, try next peer later", err, ctx))
 	}
 	return err
+}
+
+func isCauseByDeadlineExceeded(err error) bool {
+	causeErr := errors.Cause(err)
+	return causeErr == context.DeadlineExceeded || // batch-client will return this error.
+		status.Code(causeErr) == codes.DeadlineExceeded || // when batch-client is disabled, grpc will return this error.
+		strings.Contains(err.Error(), "context deadline exceeded") // when batch-client is disabled, grpc may return this error with unknown code.
 }
 
 // NeedReloadRegion checks is all peers has sent failed, if so need reload.
