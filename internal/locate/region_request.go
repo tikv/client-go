@@ -113,7 +113,7 @@ type RegionRequestSender struct {
 }
 
 func (s *RegionRequestSender) String() string {
-	return fmt.Sprintf("{replicaSelector: %v}", s.replicaSelector.String())
+	return fmt.Sprintf("{rpcError:%v,replicaSelector: %v}", s.rpcError, s.replicaSelector.String())
 }
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
@@ -466,7 +466,6 @@ type tryFollower struct {
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	hasDeadlineExceededErr := false
-	//hasDeadlineExceededErr || targetReplica.deadlineErrUsingConfTimeout
 	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
 		for i := 0; i < len(selector.replicas); i++ {
 			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
@@ -736,17 +735,15 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			logutil.Logger(bo.GetCtx()).Warn("unable to find stores with given labels",
 				zap.Uint64("region", selector.region.GetID()),
 				zap.Bool("leader-invalid", leaderInvalid),
+				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
 		}
-		// If leader tried and received deadline exceeded error, return nil to upper layer to retry with default timeout.
-		if leader.deadlineErrUsingConfTimeout {
-			return nil, nil
-		}
-		if leaderInvalid {
+		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
-			if state.isStaleRead {
+			// If leader tried and received deadline exceeded error, try follower.
+			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -1088,13 +1085,25 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	s.state.onSendFailure(bo, s, err)
 }
 
-func (s *replicaSelector) onDeadlineExceeded() {
-	if target := s.targetReplica(); target != nil {
-		target.deadlineErrUsingConfTimeout = true
+func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+	if req.MaxExecutionDurationMs >= uint64(client.ReadTimeoutShort.Milliseconds()) {
+		// Configurable timeout should less than `ReadTimeoutShort`.
+		return false
 	}
-	if accessLeader, ok := s.state.(*accessKnownLeader); ok {
-		// If leader return deadline exceeded error, we should try to access follower next time.
-		s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+	switch req.Type {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		if target := s.targetReplica(); target != nil {
+			target.deadlineErrUsingConfTimeout = true
+		}
+		if accessLeader, ok := s.state.(*accessKnownLeader); ok {
+			// If leader return deadline exceeded error, we should try to access follower next time.
+			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+		}
+		return true
+	default:
+		// Only work for read requests, return false for non-read requests.
+		return false
 	}
 }
 
@@ -1520,6 +1529,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		zap.Int("retry-times", retryTimes),
 		zap.Int("total-backoff-ms", bo.GetTotalSleep()),
 		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
+		zap.Uint64("max-exec-timeout-ms", req.Context.MaxExecutionDurationMs),
 		zap.String("total-region-errors", totalErrorStr.String()))
 }
 
@@ -1778,9 +1788,8 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
-	} else if errors.Cause(err) == context.DeadlineExceeded && req.MaxExecutionDurationMs < uint64(client.ReadTimeoutShort.Milliseconds()) {
-		if s.replicaSelector != nil {
-			s.replicaSelector.onDeadlineExceeded()
+	} else if isCauseByDeadlineExceeded(err) {
+		if s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
 			return nil
 		}
 	}
@@ -1834,6 +1843,12 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		)
 	}
 	return err
+}
+
+func isCauseByDeadlineExceeded(err error) bool {
+	causeErr := errors.Cause(err)
+	return causeErr == context.DeadlineExceeded || // batch-client will return this error.
+		status.Code(causeErr) == codes.DeadlineExceeded // when batch-client is disabled, grpc will return this error.
 }
 
 // NeedReloadRegion checks is all peers has sent failed, if so need reload.
@@ -2054,6 +2069,7 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	// This peer is removed from the region. Invalidate the region since it's too stale.
+	// if the region error is from follower, can we mark the peer unavailable and reload region asynchronously?
 	if regionErr.GetRegionNotFound() != nil {
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return false, nil
@@ -2092,8 +2108,9 @@ func (s *RegionRequestSender) onRegionError(
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
 		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
-			s.replicaSelector.onDeadlineExceeded()
-			return true, nil
+			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
+				return true, nil
+			}
 		}
 		if s.replicaSelector != nil {
 			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
@@ -2223,8 +2240,8 @@ func (s *RegionRequestSender) onRegionError(
 		return true, nil
 	}
 
-	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil {
-		s.replicaSelector.onDeadlineExceeded()
+	if isDeadlineExceeded(regionErr) && s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
+		return true, nil
 	}
 
 	if mismatch := regionErr.GetMismatchPeerId(); mismatch != nil {

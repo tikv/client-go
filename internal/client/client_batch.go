@@ -37,6 +37,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"runtime/trace"
 	"sync"
@@ -793,7 +794,8 @@ func sendBatchRequest(
 	case <-timer.C:
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
-	metrics.TiKVBatchWaitDuration.Observe(float64(time.Since(start)))
+	waitDuration := time.Since(start)
+	metrics.TiKVBatchWaitDuration.Observe(float64(waitDuration))
 
 	select {
 	case res, ok := <-entry.res:
@@ -808,7 +810,8 @@ func sendBatchRequest(
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
-		return nil, errors.WithMessage(context.DeadlineExceeded, "wait recvLoop")
+		reason := fmt.Sprintf("wait recvLoop timeout,timeout:%s, wait_duration:%s:", timeout, waitDuration)
+		return nil, errors.WithMessage(context.DeadlineExceeded, reason)
 	}
 }
 

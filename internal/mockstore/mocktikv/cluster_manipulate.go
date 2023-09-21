@@ -80,3 +80,29 @@ func BootstrapWithMultiRegions(cluster *Cluster, splitKeys ...[]byte) (storeID u
 	}
 	return
 }
+
+// BootstrapWithMultiZones initializes a Cluster with 1 Region and n Zones and m Stores in each Zone.
+func BootstrapWithMultiZones(cluster *Cluster, n, m int) (storeIDs, peerIDs []uint64, regionID uint64, leaderPeer uint64, store2zone map[uint64]string) {
+	storeIDs = cluster.AllocIDs(n * m)
+	peerIDs = cluster.AllocIDs(n)
+	leaderPeer = peerIDs[0]
+	regionID = cluster.AllocID()
+	store2zone = make(map[uint64]string, n*m)
+	for id, storeID := range storeIDs {
+		zone := fmt.Sprintf("z%d", (id%n)+1)
+		store2zone[storeID] = zone
+		labels := []*metapb.StoreLabel{
+			{
+				Key:   "id",
+				Value: fmt.Sprintf("%v", storeID),
+			},
+			{
+				Key:   "zone",
+				Value: zone,
+			},
+		}
+		cluster.AddStore(storeID, fmt.Sprintf("store%d", storeID), labels...)
+	}
+	cluster.Bootstrap(regionID, storeIDs[:n], peerIDs, leaderPeer)
+	return
+}
