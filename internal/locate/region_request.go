@@ -1318,13 +1318,13 @@ func (s *RegionRequestSender) SendReqCtx(
 		if err != nil {
 			metrics.TiKVRegionRequestHistogram.WithLabelValues(
 				req.Type.String(),
-				"fail",
+				metrics.LblErr,
 				req.InputRequestSource,
 			).Observe(time.Since(startTime).Seconds())
 		} else {
 			metrics.TiKVRegionRequestHistogram.WithLabelValues(
 				req.Type.String(),
-				"ok",
+				metrics.LblOK,
 				req.InputRequestSource,
 			).Observe(time.Since(startTime).Seconds())
 		}
