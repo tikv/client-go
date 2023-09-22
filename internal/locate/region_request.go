@@ -1384,6 +1384,48 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
+	type backoffArgs struct {
+		cfg *retry.Config
+		err error
+	}
+	pendingBackoffs := make(map[string]*backoffArgs)
+	delayBoTiKVServerBusy := func(addr string, reason string) {
+		if _, ok := pendingBackoffs[addr]; !ok {
+			pendingBackoffs[addr] = &backoffArgs{
+				cfg: retry.BoTiKVServerBusy,
+				err: errors.Errorf("server is busy, reason: %s", reason),
+			}
+		}
+	}
+	backoffOnRetry := func(addr string) error {
+		if args, ok := pendingBackoffs[addr]; ok {
+			delete(pendingBackoffs, addr)
+			logutil.Logger(bo.GetCtx()).Warn(
+				"apply pending backoff on retry",
+				zap.String("target", addr),
+				zap.String("bo", args.cfg.String()),
+				zap.String("err", args.err.Error()))
+			return bo.Backoff(args.cfg, args.err)
+		}
+		return nil
+	}
+	backoffOnFakeErr := func() error {
+		var args *backoffArgs
+		// if there are multiple pending backoffs, choose the one with the largest base duration.
+		for _, it := range pendingBackoffs {
+			if args == nil || args.cfg.Base() < it.cfg.Base() {
+				args = it
+			}
+		}
+		if args != nil {
+			logutil.Logger(bo.GetCtx()).Warn(
+				"apply pending backoff on pseudo region error",
+				zap.String("bo", args.cfg.String()),
+				zap.String("err", args.err.Error()))
+			return bo.Backoff(args.cfg, args.err)
+		}
+		return nil
+	}
 	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
@@ -1416,6 +1458,9 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
+			if err = backoffOnFakeErr(); err != nil {
+				return nil, nil, retryTimes, err
+			}
 			s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, totalErrors)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
@@ -1447,6 +1492,9 @@ func (s *RegionRequestSender) SendReqCtx(
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
 		}
 
+		if err = backoffOnRetry(rpcCtx.Addr); err != nil {
+			return nil, nil, retryTimes, err
+		}
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		req.IsRetryRequest = true
@@ -1486,7 +1534,9 @@ func (s *RegionRequestSender) SendReqCtx(
 		if regionErr != nil {
 			regionErrLogging := regionErrorToLogging(rpcCtx.Peer.GetId(), regionErr)
 			totalErrors[regionErrLogging]++
-			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
+			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr, func(reason string) {
+				delayBoTiKVServerBusy(rpcCtx.Addr, reason)
+			})
 			if err != nil {
 				msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
 				s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
@@ -1949,6 +1999,7 @@ func isDeadlineExceeded(e *errorpb.Error) bool {
 
 func (s *RegionRequestSender) onRegionError(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, regionErr *errorpb.Error,
+	onServerBusyFastRetry func(string),
 ) (shouldRetry bool, err error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("tikv.onRegionError", opentracing.ChildOf(span.Context()))
@@ -2107,12 +2158,18 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
-		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
+		if s.replicaSelector != nil {
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
+				// now `req` must be a read request with configured read-timeout (max-exec-dur < ReadTimeoutShort).
+				// when the `ServerBusy` is not caused by timeout, we still retry other peer immediately, and also
+				// delay backoff to avoid accessing busy peers too frequently.
+				if reason := serverIsBusy.GetReason(); !strings.Contains(reason, "deadline is exceeded") {
+					if onServerBusyFastRetry != nil {
+						onServerBusyFastRetry(reason)
+					}
+				}
 				return true, nil
 			}
-		}
-		if s.replicaSelector != nil {
 			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
 		}
 		logutil.Logger(bo.GetCtx()).Warn(
