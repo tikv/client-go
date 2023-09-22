@@ -1085,14 +1085,21 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	s.state.onSendFailure(bo, s, err)
 }
 
-func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+func isReadWithTinyTimeout(req *tikvrpc.Request) bool {
 	if req.MaxExecutionDurationMs >= uint64(client.ReadTimeoutShort.Milliseconds()) {
-		// Configurable timeout should less than `ReadTimeoutShort`.
 		return false
 	}
 	switch req.Type {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
 		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+	if isReadWithTinyTimeout(req) {
 		if target := s.targetReplica(); target != nil {
 			target.deadlineErrUsingConfTimeout = true
 		}
@@ -1101,10 +1108,8 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
 		}
 		return true
-	default:
-		// Only work for read requests, return false for non-read requests.
-		return false
 	}
+	return false
 }
 
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
@@ -1191,6 +1196,7 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
+	onServerBusyFastRetry func(string),
 ) (shouldRetry bool, err error) {
 	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
 		estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
@@ -1227,6 +1233,10 @@ func (s *replicaSelector) onServerIsBusy(
 		if s.canFallback2Follower() {
 			return true, nil
 		}
+	}
+	if onServerBusyFastRetry != nil && isReadWithTinyTimeout(req) {
+		onServerBusyFastRetry(serverIsBusy.GetReason())
+		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 	if err != nil {
@@ -2158,19 +2168,13 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
-		if s.replicaSelector != nil {
+		if s.replicaSelector != nil && strings.Contains(serverIsBusy.GetReason(), "deadline is exceeded") {
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
-				// now `req` must be a read request with configured read-timeout (max-exec-dur < ReadTimeoutShort).
-				// when the `ServerBusy` is not caused by timeout, we still retry other peer immediately, and also
-				// delay backoff to avoid accessing busy peers too frequently.
-				if reason := serverIsBusy.GetReason(); !strings.Contains(reason, "deadline is exceeded") {
-					if onServerBusyFastRetry != nil {
-						onServerBusyFastRetry(reason)
-					}
-				}
 				return true, nil
 			}
-			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
+		}
+		if s.replicaSelector != nil {
+			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy, onServerBusyFastRetry)
 		}
 		logutil.Logger(bo.GetCtx()).Warn(
 			"tikv reports `ServerIsBusy` retry later",

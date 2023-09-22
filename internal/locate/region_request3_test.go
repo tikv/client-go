@@ -982,7 +982,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	// Receive a ServerIsBusy error
 	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 500,
-	})
+	}, nil)
 
 	rpcCtx, err = replicaSelector.next(bo)
 	s.Nil(err)
@@ -993,7 +993,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 
 	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 800,
-	})
+	}, nil)
 
 	rpcCtx, err = replicaSelector.next(bo)
 	s.Nil(err)
@@ -1006,7 +1006,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	// All peers are too busy
 	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 150,
-	})
+	}, nil)
 	lessBusyPeer := rpcCtx.Peer.Id
 
 	// Then, send to the leader again with no threshold.
