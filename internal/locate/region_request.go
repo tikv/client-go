@@ -1235,6 +1235,10 @@ func (s *replicaSelector) onServerIsBusy(
 		}
 	}
 	if onServerBusyFastRetry != nil && isReadWithTinyTimeout(req) {
+		if target := s.targetReplica(); target != nil {
+			// avoid retrying on this replica again
+			target.deadlineErrUsingConfTimeout = true
+		}
 		onServerBusyFastRetry(serverIsBusy.GetReason())
 		return true, nil
 	}
