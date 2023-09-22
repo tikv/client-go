@@ -104,6 +104,7 @@ var (
 	TiKVStaleReadCounter                     *prometheus.CounterVec
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
 	TiKVStaleReadBytes                       *prometheus.CounterVec
+	TiKVOriginalRequestHistogram             *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -726,6 +727,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Counter of stale read requests bytes",
 		}, []string{LblResult, LblDirection})
 
+	TiKVOriginalRequestHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "original_request_duration_seconds",
+			Help:        "Bucketed histogram of the duration of original request.",
+			ConstLabels: constLabels,
+		}, []string{LblType, LblResult},
+	)
+
 	initShortcuts()
 }
 
@@ -809,6 +820,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadCounter)
 	prometheus.MustRegister(TiKVStaleReadReqCounter)
 	prometheus.MustRegister(TiKVStaleReadBytes)
+	prometheus.MustRegister(TiKVOriginalRequestHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.

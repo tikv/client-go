@@ -37,6 +37,7 @@ package txnsnapshot
 import (
 	"bytes"
 	"context"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
@@ -46,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -191,12 +193,23 @@ func (s *Scanner) resolveCurrentLock(bo *retry.Backoffer, current *kvrpcpb.KvPai
 	return nil
 }
 
-func (s *Scanner) getData(bo *retry.Backoffer) error {
+func (s *Scanner) getData(bo *retry.Backoffer) (_err error) {
 	logutil.BgLogger().Debug("txn getData",
 		zap.String("nextStartKey", kv.StrKey(s.nextStartKey)),
 		zap.String("nextEndKey", kv.StrKey(s.nextEndKey)),
 		zap.Bool("reverse", s.reverse),
 		zap.Uint64("txnStartTS", s.startTS()))
+	startTime := time.Now()
+	defer func() {
+		if _err != nil {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				"scan",
+				"fail",
+			).Observe(time.Since(startTime).Seconds())
+		} else {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues("scan", "ok").Observe(time.Since(startTime).Seconds())
+		}
+	}()
 	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient())
 	var reqEndKey, reqStartKey []byte
 	var loc *locate.KeyLocation

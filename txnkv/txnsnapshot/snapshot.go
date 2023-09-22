@@ -373,7 +373,27 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 	return err
 }
 
-func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, collectF func(k, v []byte)) error {
+func (s *KVSnapshot) batchGetSingleRegion(
+	bo *retry.Backoffer, batch batchKeys, collectF func(
+	k,
+	v []byte,
+),
+) (_err error) {
+	startTime := time.Now()
+	defer func() {
+		if _err == nil {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				"batch_get",
+				"ok",
+			).Observe(time.Since(startTime).Seconds())
+		} else {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				"batch_get",
+				"fail",
+			).Observe(time.Since(startTime).Seconds())
+		}
+	}()
+
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
@@ -593,7 +613,7 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	return val, nil
 }
 
-func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]byte, error) {
+func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ []byte, _err error) {
 	// Check the cached values first.
 	s.mu.RLock()
 	if s.mu.cached != nil {
@@ -614,6 +634,15 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			panic("cache miss")
 		}
 	}
+
+	startTime := time.Now()
+	defer func() {
+		if _err == nil {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues("get", "ok").Observe(time.Since(startTime).Seconds())
+		} else {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues("get", "fail").Observe(time.Since(startTime).Seconds())
+		}
+	}()
 
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, true)
 
