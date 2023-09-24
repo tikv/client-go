@@ -105,6 +105,7 @@ var (
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
 	TiKVStaleReadBytes                       *prometheus.CounterVec
 	TiKVOriginalRequestHistogram             *prometheus.HistogramVec
+	TiKVOriginalRequestRetryCounter          *prometheus.CounterVec
 )
 
 // Label constants.
@@ -129,6 +130,11 @@ const (
 	LblInternal        = "internal"
 	LblGeneral         = "general"
 	LblDirection       = "direction"
+	LblReason          = "reason"
+	LblOK              = "ok"
+	LblErr             = "err"
+	LblScan            = "scan"
+	LblResolveLock     = "resolve_lock"
 )
 
 func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
@@ -737,6 +743,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 		}, []string{LblType, LblResult},
 	)
 
+	TiKVOriginalRequestRetryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "original_request_retry_total",
+			Help:        "Counter of the retry count of original request.",
+			ConstLabels: constLabels,
+		}, []string{LblType, LblReason},
+	)
+
 	initShortcuts()
 }
 
@@ -821,6 +837,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadReqCounter)
 	prometheus.MustRegister(TiKVStaleReadBytes)
 	prometheus.MustRegister(TiKVOriginalRequestHistogram)
+	prometheus.MustRegister(TiKVOriginalRequestRetryCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.

@@ -1430,7 +1430,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	s.Nil(err)
 	regionErr, err := resp.GetRegionError()
 	s.Nil(err)
-	s.Equal(regionErrorToLabel(regionErr), "mismatch_peer_id")
+	s.Equal(RegionErrorToLabel(regionErr), "mismatch_peer_id")
 	// return non-epoch-not-match region error and the upper layer can auto retry.
 	s.Nil(regionErr.GetEpochNotMatch())
 	// after region error returned, the region should be invalidated.

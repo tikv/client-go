@@ -383,13 +383,13 @@ func (s *KVSnapshot) batchGetSingleRegion(
 	defer func() {
 		if _err == nil {
 			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
-				"batch_get",
-				"ok",
+				metrics.LblBatchGet,
+				metrics.LblOK,
 			).Observe(time.Since(startTime).Seconds())
 		} else {
 			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
-				"batch_get",
-				"fail",
+				metrics.LblBatchGet,
+				metrics.LblErr,
 			).Observe(time.Since(startTime).Seconds())
 		}
 	}()
@@ -485,6 +485,10 @@ func (s *KVSnapshot) batchGetSingleRegion(
 				return err
 			}
 			if same {
+				metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+					metrics.LblBatchGet,
+					locate.RegionErrorToLabel(regionErr),
+				).Inc()
 				continue
 			}
 			return s.batchGetKeysByRegions(bo, pending, collectF)
@@ -566,6 +570,10 @@ func (s *KVSnapshot) batchGetSingleRegion(
 			if batchGetResp.GetError() == nil {
 				pending = lockedKeys
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+				metrics.LblBatchGet,
+				metrics.LblResolveLock,
+			).Inc()
 			continue
 		}
 		return nil
@@ -638,9 +646,15 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ 
 	startTime := time.Now()
 	defer func() {
 		if _err == nil {
-			metrics.TiKVOriginalRequestHistogram.WithLabelValues("get", "ok").Observe(time.Since(startTime).Seconds())
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				metrics.LblGet,
+				metrics.LblOK,
+			).Observe(time.Since(startTime).Seconds())
 		} else {
-			metrics.TiKVOriginalRequestHistogram.WithLabelValues("get", "fail").Observe(time.Since(startTime).Seconds())
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				metrics.LblGet,
+				metrics.LblErr,
+			).Observe(time.Since(startTime).Seconds())
 		}
 	}()
 
@@ -726,6 +740,10 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ 
 					return nil, err
 				}
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+				metrics.LblGet,
+				locate.RegionErrorToLabel(regionErr),
+			).Inc()
 			continue
 		}
 		if resp.Resp == nil {
@@ -762,6 +780,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ 
 				// by the first lock it meets. During retries, if the encountered
 				// lock is different from the first one, we can omit it.
 				cli.resolvedLocks.Put(lock.TxnID)
+				metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(metrics.LblGet, "omit-lock").Inc()
 				continue
 			}
 			locks := []*txnlock.Lock{lock}
@@ -788,6 +807,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ 
 					return nil, err
 				}
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(metrics.LblGet, metrics.LblResolveLock).Inc()
 			continue
 		}
 		return val, nil

@@ -203,11 +203,14 @@ func (s *Scanner) getData(bo *retry.Backoffer) (_err error) {
 	defer func() {
 		if _err != nil {
 			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
-				"scan",
-				"fail",
+				metrics.LblScan,
+				metrics.LblErr,
 			).Observe(time.Since(startTime).Seconds())
 		} else {
-			metrics.TiKVOriginalRequestHistogram.WithLabelValues("scan", "ok").Observe(time.Since(startTime).Seconds())
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				metrics.LblScan,
+				metrics.LblOK,
+			).Observe(time.Since(startTime).Seconds())
 		}
 	}()
 	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient())
