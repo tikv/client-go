@@ -664,19 +664,34 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// In unit test, the option or codec may be nil. Here should skip the encode/decode process.
 	if c.option == nil || c.option.codec == nil {
-		return c.sendRequest(ctx, addr, req, timeout)
+		startTime := time.Now()
+		resp, err := c.sendRequest(ctx, addr, req, timeout)
+		metrics.TiKVLowerRequestDurationHistogram.WithLabelValues("req").Observe(time.Since(startTime).Seconds())
+		return resp, err
 	}
 
 	codec := c.option.codec
+	beforeEncode := time.Now()
 	req, err := codec.EncodeRequest(req)
+	afterEncode := time.Now()
 	if err != nil {
 		return nil, err
 	}
 	resp, err := c.sendRequest(ctx, addr, req, timeout)
+	beforeDecode := time.Now()
 	if err != nil {
 		return nil, err
 	}
-	return codec.DecodeResponse(req, resp)
+	_resp, err := codec.DecodeResponse(req, resp)
+	afterDecode := time.Now()
+	metrics.TiKVLowerRequestDurationHistogram.WithLabelValues(metrics.LblEncode).Observe(afterEncode.Sub(beforeEncode).Seconds())
+	metrics.TiKVLowerRequestDurationHistogram.WithLabelValues(metrics.LblRequest).Observe(
+		beforeDecode.Sub(
+			afterEncode,
+		).Seconds(),
+	)
+	metrics.TiKVLowerRequestDurationHistogram.WithLabelValues(metrics.LblDecode).Observe(afterDecode.Sub(beforeDecode).Seconds())
+	return _resp, err
 }
 
 func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {

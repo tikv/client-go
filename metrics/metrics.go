@@ -104,6 +104,7 @@ var (
 	TiKVStaleReadCounter                     *prometheus.CounterVec
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
 	TiKVStaleReadBytes                       *prometheus.CounterVec
+	TiKVLowerRequestDurationHistogram        *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -128,6 +129,10 @@ const (
 	LblInternal        = "internal"
 	LblGeneral         = "general"
 	LblDirection       = "direction"
+	LblPart            = "part"
+	LblRequest         = "request"
+	LblEncode          = "encode"
+	LblDecode          = "decode"
 )
 
 func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
@@ -726,6 +731,17 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Counter of stale read requests bytes",
 		}, []string{LblResult, LblDirection})
 
+	TiKVLowerRequestDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "lower_request_duration_seconds",
+			Help:        "Bucketed histogram of the duration of lower-level requests.",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(0.000001, 2, 29), // 1us ~ 1s
+		}, []string{LblPart},
+	)
+
 	initShortcuts()
 }
 
@@ -809,6 +825,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadCounter)
 	prometheus.MustRegister(TiKVStaleReadReqCounter)
 	prometheus.MustRegister(TiKVStaleReadBytes)
+	prometheus.MustRegister(TiKVLowerRequestDurationHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.
