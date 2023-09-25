@@ -375,9 +375,9 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 
 func (s *KVSnapshot) batchGetSingleRegion(
 	bo *retry.Backoffer, batch batchKeys, collectF func(
-	k,
-	v []byte,
-),
+		k,
+		v []byte,
+	),
 ) (_err error) {
 	startTime := time.Now()
 	defer func() {
