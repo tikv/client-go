@@ -411,7 +411,14 @@ func (s *KVSnapshot) batchGetSingleRegion(
 	useConfigurableKVTimeout := true
 	// the states in request need to keep when retry request.
 	var readType string
+	retryTimes := -1
+	defer func() {
+		if retryTimes > 0 {
+			metrics.TiKVOriginalRequestRetryTimesHistogram.WithLabelValues(metrics.LblBatchGet).Observe(float64(retryTimes))
+		}
+	}()
 	for {
+		retryTimes++
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
 			Keys:    pending,
@@ -710,7 +717,14 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ 
 	var firstLock *txnlock.Lock
 	var resolvingRecordToken *int
 	useConfigurableKVTimeout := true
+	retryTimes := -1
+	defer func() {
+		if retryTimes > 0 {
+			metrics.TiKVOriginalRequestRetryTimesHistogram.WithLabelValues(metrics.LblScan).Observe(float64(retryTimes))
+		}
+	}()
 	for {
+		retryTimes++
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.GetRegionCache().LocateKey(bo, k)
 		if err != nil {

@@ -220,7 +220,14 @@ func (s *Scanner) getData(bo *retry.Backoffer) (_err error) {
 	var err error
 	// the states in request need to keep when retry request.
 	var readType string
+	retryTimes := -1
+	defer func() {
+		if retryTimes > 0 {
+			metrics.TiKVOriginalRequestRetryTimesHistogram.WithLabelValues(metrics.LblScan).Observe(float64(retryTimes))
+		}
+	}()
 	for {
+		retryTimes++
 		if !s.reverse {
 			loc, err = s.snapshot.store.GetRegionCache().LocateKey(bo, s.nextStartKey)
 		} else {
@@ -298,6 +305,10 @@ func (s *Scanner) getData(bo *retry.Backoffer) (_err error) {
 					return err
 				}
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+				metrics.LblScan,
+				locate.RegionErrorToLabel(regionErr),
+			).Inc()
 			continue
 		}
 		if resp.Resp == nil {
@@ -335,6 +346,10 @@ func (s *Scanner) getData(bo *retry.Backoffer) (_err error) {
 					return err
 				}
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+				metrics.LblScan,
+				metrics.LblResolveLock,
+			).Inc()
 			continue
 		}
 
