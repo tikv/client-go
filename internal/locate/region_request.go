@@ -1646,6 +1646,8 @@ func (s *RegionRequestSender) sendReqToRegion(
 		sessionID = v.(uint64)
 	}
 
+	req.Context.SendTimestamp = uint64(time.Now().UnixMilli())
+
 	injectFailOnSend := false
 	if val, e := util.EvalFailpoint("rpcFailOnSend"); e == nil {
 		inject := true
