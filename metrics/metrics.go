@@ -738,7 +738,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "region_request_duration_seconds",
 			Help:        "Bucketed histogram of region request duration",
 			ConstLabels: constLabels,
-			Buckets: prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 104s
+			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 104s
 		}, []string{LblType, LblResult, LblSource},
 	)
 	TiKVRegionRequestRetryCounter = prometheus.NewCounterVec(
