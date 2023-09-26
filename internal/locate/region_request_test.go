@@ -724,6 +724,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 	s.Nil(err)
 	s.NotNil(region)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
+	// send a probe request to make sure the mock server is ready.
+	s.regionRequestSender.SendReq(retry.NewNoopBackoff(context.Background()), req, region.Region, time.Second)
 	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Millisecond*10)
 	s.Nil(err)
 	s.NotNil(resp)
