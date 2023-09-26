@@ -358,6 +358,7 @@ func (r *Region) isCacheTTLExpired(ts int64) bool {
 	return ts-lastAccess > regionCacheTTLSec
 }
 
+// checkRegionCacheTTL returns false means the region cache is expired.
 func (r *Region) checkRegionCacheTTL(ts int64) bool {
 	// Only consider use percentage on this failpoint, for example, "2%return"
 	if _, err := util.EvalFailpoint("invalidateRegionCache"); err == nil {
