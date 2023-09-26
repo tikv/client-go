@@ -720,7 +720,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ 
 	retryTimes := -1
 	defer func() {
 		if retryTimes > 0 {
-			metrics.TiKVOriginalRequestRetryTimesHistogram.WithLabelValues(metrics.LblScan).Observe(float64(retryTimes))
+			metrics.TiKVOriginalRequestRetryTimesHistogram.WithLabelValues(metrics.LblGet).Observe(float64(retryTimes))
 		}
 	}()
 	for {

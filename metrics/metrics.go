@@ -741,6 +741,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "original_request_duration_seconds",
 			Help:        "Bucketed histogram of the duration of original request.",
 			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 23), // 0.1ms ~ 419s
 		}, []string{LblType, LblResult},
 	)
 
