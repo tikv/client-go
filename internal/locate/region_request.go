@@ -906,9 +906,14 @@ func newReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
-	if cachedRegion == nil || !cachedRegion.isValid() {
-		return nil, nil
+	if cachedRegion == nil {
+		return nil, errors.New("cached region not found")
+	} else if cachedRegion.checkNeedReload() {
+		return nil, errors.New("cached region need reload")
+	} else if !cachedRegion.checkRegionCacheTTL(time.Now().Unix()) {
+		return nil, errors.New("cached region ttl expired")
 	}
+
 	regionStore := cachedRegion.getStore()
 	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
 	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
@@ -1270,7 +1275,8 @@ func (s *RegionRequestSender) getRPCContext(
 		if s.replicaSelector == nil {
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if selector == nil || err != nil {
-				return nil, err
+				s.rpcError = err
+				return nil, nil
 			}
 			s.replicaSelector = selector
 		}
