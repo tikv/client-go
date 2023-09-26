@@ -49,10 +49,11 @@ const (
 	ExplicitTypeDumpling   = "dumpling"
 	ExplicitTypeBackground = "background"
 	ExplicitTypeDDL        = "ddl"
+	ExplicitTypeStats      = "stats"
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL}
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL, ExplicitTypeStats}
 
 const (
 	// InternalRequest is the scope of internal queries
