@@ -500,6 +500,9 @@ func (s *KVStore) GetTiKVClient() (client Client) {
 // GetMinSafeTS return the minimal safeTS of the storage with given txnScope.
 func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
 	if val, ok := s.minSafeTS.Load(txnScope); ok {
+		if val.(uint64) == uint64(math.MaxUint64) {
+			return 0
+		}
 		return val.(uint64)
 	}
 	return 0
@@ -850,3 +853,15 @@ type SchemaVer = transaction.SchemaVer
 // MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = transaction.MaxTxnTimeUse
+
+// SetMinSafeTS set the minimal safeTS of the storage with given txnScope.
+// Note: it is only used for test.
+func (s *KVStore) SetMinSafeTS(txnScope string, safeTS uint64) {
+	s.minSafeTS.Store(txnScope, safeTS)
+}
+
+// SetStoreSafeTS set the safeTS of the store with given storeID.
+// Note: it is only used for test.
+func (s *KVStore) SetStoreSafeTS(storeID, safeTS uint64) {
+	s.safeTSMap.Store(storeID, safeTS)
+}

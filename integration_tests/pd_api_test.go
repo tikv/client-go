@@ -37,6 +37,7 @@ package tikv_test
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -206,6 +207,55 @@ func (s *apiTestSuite) TestDCLabelClusterMinResolvedTS() {
 
 	require.GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	require.Equal(uint64(150), s.store.GetMinSafeTS(dcLabel))
+}
+
+func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
+	util.EnableFailpoints()
+	require := s.Require()
+	require.NoError(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
+	defer func() {
+		require.NoError(failpoint.Disable("tikvclient/mockFastSafeTSUpdater"))
+	}()
+	// Try to get the minimum resolved timestamp of the cluster from PD.
+	require.NoError(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
+	mockClient := storeSafeTsMockClient{
+		Client: s.store.GetTiKVClient(),
+	}
+	s.store.SetTiKVClient(&mockClient)
+	// Mock safeTS is not initialized.
+	s.store.SetStoreSafeTS(uint64(1), 0)
+	s.store.SetMinSafeTS(oracle.GlobalTxnScope, 0)
+	require.Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+
+	var retryCount int
+	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) != 100 {
+		require.NotEqual(uint64(math.MaxUint64), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+		time.Sleep(100 * time.Millisecond)
+		if retryCount > 5 {
+			break
+		}
+		retryCount++
+	}
+	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.NoError(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
+
+	// Try to get the minimum resolved timestamp of the cluster from TiKV.
+	require.NoError(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(0)`))
+	// Mock safeTS is not initialized.
+	s.store.SetStoreSafeTS(uint64(1), 0)
+	s.store.SetMinSafeTS(oracle.GlobalTxnScope, 0)
+	require.Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+
+	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) != 150 {
+		require.NotEqual(uint64(math.MaxUint64), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+		time.Sleep(100 * time.Millisecond)
+		if retryCount > 5 {
+			break
+		}
+		retryCount++
+	}
+	require.Equal(uint64(150), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.NoError(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 }
 
 func (s *apiTestSuite) TearDownTest() {
