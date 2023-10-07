@@ -70,6 +70,7 @@ type batchCommandsEntry struct {
 	// canceled indicated the request is canceled or not.
 	canceled int32
 	err      error
+	start    time.Time
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
@@ -378,11 +379,14 @@ func (a *batchConn) getClientAndSend() {
 	}
 	defer cli.unlockForSend()
 
+	now := time.Now()
+	tiKVBatchWaitToSendDuration := metrics.TiKVBatchWaitDuration.WithLabelValues("wait-to-send", target)
 	req, forwardingReqs := a.reqBuilder.build(func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
+		tiKVBatchWaitToSendDuration.Observe(float64(now.Sub(e.start)))
 	})
 	if req != nil {
 		cli.send("", req)
@@ -507,6 +511,14 @@ func (c *batchCommandsClient) isStopped() bool {
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
+	start := time.Now()
+	defer func() {
+		if forwardedHost == "" {
+			metrics.TiKVBatchConnSendDuration.WithLabelValues(c.target).Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TiKVBatchConnSendDuration.WithLabelValues(forwardedHost).Observe(time.Since(start).Seconds())
+		}
+	}()
 	err := c.initBatchClient(forwardedHost)
 	if err != nil {
 		logutil.BgLogger().Warn(
@@ -773,6 +785,7 @@ func sendBatchRequest(
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
 ) (*tikvrpc.Response, error) {
+	start := time.Now()
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
 		req:           req,
@@ -780,11 +793,11 @@ func sendBatchRequest(
 		forwardedHost: forwardedHost,
 		canceled:      0,
 		err:           nil,
+		start:         start,
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	start := time.Now()
 	select {
 	case batchConn.batchCommandsCh <- entry:
 	case <-ctx.Done():
@@ -795,7 +808,7 @@ func sendBatchRequest(
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
 	waitDuration := time.Since(start)
-	metrics.TiKVBatchWaitDuration.Observe(float64(waitDuration))
+	metrics.TiKVBatchWaitDuration.WithLabelValues("wait-to-chan", addr).Observe(float64(waitDuration))
 
 	select {
 	case res, ok := <-entry.res:
