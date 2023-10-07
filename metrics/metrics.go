@@ -185,7 +185,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "rpc_net_latency_seconds",
 			Help:        "Bucketed histogram of time difference between TiDB and TiKV.",
-			Buckets:     prometheus.ExponentialBuckets(5e-5, 2, 18), // 50us ~ 6.5s
+			Buckets:     prometheus.ExponentialBuckets(5e-5, 2, 22), // 50us ~ 105s
 			ConstLabels: constLabels,
 		}, []string{LblStore, LblScope})
 

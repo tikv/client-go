@@ -358,6 +358,7 @@ func (r *Region) isCacheTTLExpired(ts int64) bool {
 	return ts-lastAccess > regionCacheTTLSec
 }
 
+// checkRegionCacheTTL returns false means the region cache is expired.
 func (r *Region) checkRegionCacheTTL(ts int64) bool {
 	// Only consider use percentage on this failpoint, for example, "2%return"
 	if _, err := util.EvalFailpoint("invalidateRegionCache"); err == nil {
@@ -534,10 +535,12 @@ func (c *RegionCache) Close() {
 	c.cancelFunc()
 }
 
+var reloadRegionInterval = int64(10 * time.Second)
+
 // asyncCheckAndResolveLoop with
 func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	reloadRegionTicker := time.NewTicker(10 * time.Second)
+	reloadRegionTicker := time.NewTicker(time.Duration(atomic.LoadInt64(&reloadRegionInterval)))
 	defer func() {
 		ticker.Stop()
 		reloadRegionTicker.Stop()
@@ -587,7 +590,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 		r := recover()
 		if r != nil {
 			logutil.BgLogger().Error("panic in the checkAndResolve goroutine",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack trace"))
 		}
 	}()
@@ -2999,7 +3002,7 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 		r := recover()
 		if r != nil {
 			logutil.BgLogger().Error("panic in the checkAndUpdateStoreSlowScores goroutine",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack trace"))
 		}
 	}()
