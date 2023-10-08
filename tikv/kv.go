@@ -692,10 +692,7 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 			preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
 			// If preClusterMinSafeTS is maxUint64, it means that the min safe ts has not been initialized.
 			// related to https://github.com/tikv/client-go/issues/991
-			if preClusterMinSafeTS == math.MaxUint64 {
-				preClusterMinSafeTS = 0
-			}
-			if preClusterMinSafeTS > clusterMinSafeTS {
+			if preClusterMinSafeTS != math.MaxUint64 && preClusterMinSafeTS > clusterMinSafeTS {
 				skipSafeTSUpdateCounter.Inc()
 				preSafeTSTime := oracle.GetTimeFromTS(preClusterMinSafeTS)
 				clusterMinSafeTSGap.Set(time.Since(preSafeTSTime).Seconds())
