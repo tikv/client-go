@@ -158,7 +158,7 @@ type KVTxn struct {
 	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
-	aggressiveLockingDirty   bool
+	aggressiveLockingDirty   atomic.Bool
 
 	forUpdateTSChecks map[string]uint64
 }
@@ -1233,7 +1233,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				Value:                 val,
 				ActualLockForUpdateTS: actualForUpdateTS,
 			}
-			txn.aggressiveLockingDirty = true
+			txn.aggressiveLockingDirty.Store(true)
 		} else {
 			setValExists := tikv.SetKeyLockedValueExists
 			if !valExists {
@@ -1391,7 +1391,7 @@ func hashInKeys(deadlockKeyHash uint64, keys [][]byte) bool {
 
 // IsReadOnly checks if the transaction has only performed read operations.
 func (txn *KVTxn) IsReadOnly() bool {
-	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty)
+	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty.Load())
 }
 
 // StartTS returns the transaction start timestamp.
