@@ -118,6 +118,7 @@ type KVSnapshot struct {
 	resolvedLocks   util.TSSet
 	committedLocks  util.TSSet
 	scanBatchSize   int
+	readTimeout     time.Duration
 
 	// Cache the result of BatchGet.
 	// The invariance is that calling BatchGet multiple times using the same start ts,
@@ -387,6 +388,9 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 
 	pending := batch.keys
 	var resolvingRecordToken *int
+	useConfigurableKVTimeout := true
+	// the states in request need to keep when retry request.
+	var readType string
 	for {
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
@@ -398,12 +402,16 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
-			RequestSource:    s.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.mu.resourceGroupName,
 			},
 			BusyThresholdMs: uint32(busyThresholdMs),
 		})
+		req.InputRequestSource = s.GetRequestSource()
+		if readType != "" {
+			req.ReadType = readType
+			req.IsRetryRequest = true
+		}
 		if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 			s.mu.resourceGroupTagger(req)
 		}
@@ -416,6 +424,12 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		if isStaleness {
 			req.EnableStaleRead()
 		}
+		timeout := client.ReadTimeoutMedium
+		if useConfigurableKVTimeout && s.readTimeout > 0 {
+			useConfigurableKVTimeout = false
+			timeout = s.readTimeout
+		}
+		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
 		ops := make([]locate.StoreSelectorOption, 0, 2)
 		if len(matchStoreLabels) > 0 {
 			ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
@@ -427,7 +441,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			}
 			req.ReplicaReadType = readType
 		}
-		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, client.ReadTimeoutMedium, tikvrpc.TiKV, "", ops...)
+		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, timeout, tikvrpc.TiKV, "", ops...)
 		if err != nil {
 			return err
 		}
@@ -435,6 +449,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		if err != nil {
 			return err
 		}
+		readType = req.ReadType
 		if regionErr != nil {
 			// For other region error and the fake region error, backoff because
 			// there's something wrong.
@@ -618,12 +633,12 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			TaskId:           s.mu.taskID,
 			ResourceGroupTag: s.mu.resourceGroupTag,
 			IsolationLevel:   s.isolationLevel.ToPB(),
-			RequestSource:    s.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.mu.resourceGroupName,
 			},
 			BusyThresholdMs: uint32(s.mu.busyThreshold.Milliseconds()),
 		})
+	req.InputRequestSource = s.GetRequestSource()
 	if s.mu.resourceGroupTag == nil && s.mu.resourceGroupTagger != nil {
 		s.mu.resourceGroupTagger(req)
 	}
@@ -651,13 +666,20 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 
 	var firstLock *txnlock.Lock
 	var resolvingRecordToken *int
+	useConfigurableKVTimeout := true
 	for {
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.GetRegionCache().LocateKey(bo, k)
 		if err != nil {
 			return nil, err
 		}
-		resp, _, _, err := cli.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV, "", ops...)
+		timeout := client.ReadTimeoutShort
+		if useConfigurableKVTimeout && s.readTimeout > 0 {
+			useConfigurableKVTimeout = false
+			timeout = s.readTimeout
+		}
+		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
+		resp, _, _, err := cli.SendReqCtx(bo, req, loc.Region, timeout, tikvrpc.TiKV, "", ops...)
 		if err != nil {
 			return nil, err
 		}
@@ -982,6 +1004,16 @@ func (s *KVSnapshot) mergeRegionRequestStats(stats map[tikvrpc.CmdType]*locate.R
 		stat.Count += v.Count
 		stat.Consume += v.Consume
 	}
+}
+
+// SetKVReadTimeout sets timeout for individual KV read operations under this snapshot
+func (s *KVSnapshot) SetKVReadTimeout(readTimeout time.Duration) {
+	s.readTimeout = readTimeout
+}
+
+// GetKVReadTimeout returns timeout for individual KV read operations under this snapshot or 0 if timeout is not set
+func (s *KVSnapshot) GetKVReadTimeout() time.Duration {
+	return s.readTimeout
 }
 
 func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {

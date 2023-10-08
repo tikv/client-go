@@ -37,6 +37,7 @@ package locate
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,15 +46,18 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
+	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"go.uber.org/zap"
 )
 
 func TestRegionRequestToThreeStores(t *testing.T) {
@@ -344,7 +348,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
 	rpcCtx, err := replicaSelector.next(s.bo)
 	s.Nil(err)
-	// Should swith to the next follower.
+	// Should switch to the next follower.
 	s.Equal(AccessIndex(tikvLearnerAccessIdx), accessLearner.lastIdx)
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[replicaSelector.targetIdx], nil)
 }
@@ -586,7 +590,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	for i := 0; i < regionStore.accessStoreNum(tiKVOnly)-1; i++ {
 		rpcCtx, err := replicaSelector.next(s.bo)
 		s.Nil(err)
-		// Should swith to the next follower.
+		// Should switch to the next follower.
 		s.NotEqual(lastIdx, state3.lastIdx)
 		// Shouldn't access the leader if followers aren't exhausted.
 		s.NotEqual(regionStore.workTiKVIdx, state3.lastIdx)
@@ -710,7 +714,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	// Normal
 	bo := retry.NewBackoffer(context.Background(), -1)
 	sender := s.regionRequestSender
-	resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err := sender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 	s.Nil(err)
 	s.NotNil(resp)
 	s.True(bo.GetTotalBackoffTimes() == 0)
@@ -719,7 +723,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	bo = retry.NewBackoffer(context.Background(), -1)
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[1])
 	s.cluster.StopStore(s.storeIDs[0])
-	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 	s.Nil(err)
 	s.NotNil(resp)
 	s.Equal(sender.replicaSelector.targetIdx, AccessIndex(1))
@@ -728,8 +732,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	atomic.StoreUint32(&regionStore.stores[0].livenessState, uint32(reachable))
 
 	// Leader is updated because of send success, so no backoff.
+	reloadRegion()
 	bo = retry.NewBackoffer(context.Background(), -1)
-	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
+	resp, _, err = sender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 	s.Nil(err)
 	s.NotNil(resp)
 	s.Equal(sender.replicaSelector.targetIdx, AccessIndex(1))
@@ -917,6 +922,16 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 
 	// Verify switch to the leader immediately when stale read requests with global txn scope meet region errors.
 	s.cluster.ChangeLeader(region.Region.id, s.peerIDs[0])
+	tf = func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	s.Eventually(func() bool {
+		stores := s.regionRequestSender.replicaSelector.regionStore.stores
+		return stores[0].getLivenessState() == reachable &&
+			stores[1].getLivenessState() == reachable &&
+			stores[2].getLivenessState() == reachable
+	}, 3*time.Second, 200*time.Millisecond)
 	reloadRegion()
 	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
 	req.ReadReplicaScope = oracle.GlobalTxnScope
@@ -1091,7 +1106,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 	s.NotEqual(leaderAddr, "")
 	for i := 0; i < 10; i++ {
 		bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
-		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 		s.Nil(err)
 		s.NotNil(resp)
 
@@ -1134,11 +1149,474 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 
 	for i := 0; i < 100; i++ {
 		bo := retry.NewBackofferWithVars(context.Background(), 1, nil)
-		resp, _, retryTimes, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+		resp, _, retryTimes, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 		s.Nil(err)
 		s.NotNil(resp)
 		// since all follower'store is unreachable, the request will be sent to leader, the backoff times should be 0.
 		s.Equal(0, bo.GetTotalBackoffTimes())
 		s.Equal(0, retryTimes)
 	}
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
+	leaderStore, _ := s.loadAndGetLeaderStore()
+	leaderLabel := []*metapb.StoreLabel{
+		{
+			Key:   "id",
+			Value: strconv.FormatUint(leaderStore.StoreID(), 10),
+		},
+	}
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+	value := []byte("value")
+	isFirstReq := true
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		// Return `DataIsNotReady` for the first time on leader.
+		if isFirstReq {
+			isFirstReq = false
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				DataIsNotReady: &errorpb.DataIsNotReady{},
+			}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: value}}, nil
+	}}
+
+	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	s.True(region.isValid())
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+	req.EnableStaleRead()
+	req.ReplicaReadType = kv.ReplicaReadMixed
+	var ops []StoreSelectorOption
+	ops = append(ops, WithMatchLabels(leaderLabel))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bo := retry.NewBackoffer(ctx, -1)
+	s.Nil(err)
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+	s.Nil(err)
+
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Nil(regionErr)
+	getResp, ok := resp.Resp.(*kvrpcpb.GetResponse)
+	s.True(ok)
+	s.Equal(getResp.Value, value)
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
+	leaderAddr := ""
+	reqTargetAddrs := make(map[string]struct{})
+	s.regionRequestSender.RegionRequestRuntimeStats = NewRegionRequestRuntimeStats()
+	bo := retry.NewBackoffer(context.Background(), 10000)
+	mockRPCClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		reqTargetAddrs[addr] = struct{}{}
+		if req.Context.MaxExecutionDurationMs < 10 {
+			return nil, context.DeadlineExceeded
+		}
+		if addr != leaderAddr && !req.Context.ReplicaRead && !req.Context.StaleRead {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
+	}}
+	getLocFn := func() *KeyLocation {
+		loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("a"))
+		s.Nil(err)
+		region := s.regionRequestSender.regionCache.GetCachedRegionWithRLock(loc.Region)
+		leaderStore, _, _, _ := region.WorkStorePeer(region.getStore())
+		leaderAddr, err = s.regionRequestSender.regionCache.getStoreAddr(s.bo, region, leaderStore)
+		s.Nil(err)
+		return loc
+	}
+	resetStats := func() {
+		reqTargetAddrs = make(map[string]struct{})
+		s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+		s.regionRequestSender.RegionRequestRuntimeStats = NewRegionRequestRuntimeStats()
+	}
+
+	//Test different read type.
+	staleReadTypes := []bool{false, true}
+	replicaReadTypes := []kv.ReplicaReadType{kv.ReplicaReadLeader, kv.ReplicaReadFollower, kv.ReplicaReadMixed}
+	for _, staleRead := range staleReadTypes {
+		for _, tp := range replicaReadTypes {
+			log.Info("TestSendReqFirstTimeout", zap.Bool("stale-read", staleRead), zap.String("replica-read-type", tp.String()))
+			resetStats()
+			req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+			if staleRead {
+				req.EnableStaleRead()
+			} else {
+				req.ReplicaRead = tp.IsFollowerRead()
+				req.ReplicaReadType = tp
+			}
+			loc := getLocFn()
+			resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
+			s.Nil(err)
+			regionErr, err := resp.GetRegionError()
+			s.Nil(err)
+			s.True(IsFakeRegionError(regionErr))
+			s.Equal(1, len(s.regionRequestSender.Stats))
+			s.Equal(int64(3), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 3 rpc
+			s.Equal(3, len(reqTargetAddrs))                                      // each rpc to a different store.
+			s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
+			// warn: must rest MaxExecutionDurationMs before retry.
+			resetStats()
+			if staleRead {
+				req.EnableStaleRead()
+			} else {
+				req.ReplicaRead = tp.IsFollowerRead()
+				req.ReplicaReadType = tp
+			}
+			req.Context.MaxExecutionDurationMs = 0
+			resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+			s.Nil(err)
+			regionErr, err = resp.GetRegionError()
+			s.Nil(err)
+			s.Nil(regionErr)
+			s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
+			s.Equal(1, len(s.regionRequestSender.Stats))
+			s.Equal(int64(1), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 1 rpc
+			s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
+		}
+	}
+
+	// Test for write request.
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	resetStats()
+	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	loc := getLocFn()
+	bo = retry.NewBackoffer(context.Background(), 1000)
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Millisecond, tikvrpc.TiKV)
+	s.Nil(resp)
+	s.Equal(context.DeadlineExceeded, err)
+	backoffTimes := bo.GetBackoffTimes()
+	s.True(backoffTimes["tikvRPC"] > 0) // write request timeout won't do fast retry, so backoff times should be more than 0.
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
+	leaderStore, _ := s.loadAndGetLeaderStore()
+	leaderLabel := []*metapb.StoreLabel{
+		{
+			Key:   "id",
+			Value: strconv.FormatUint(leaderStore.StoreID(), 10),
+		},
+	}
+	var followerID *uint64
+	for _, storeID := range s.storeIDs {
+		if storeID != leaderStore.storeID {
+			id := storeID
+			followerID = &id
+			break
+		}
+	}
+	s.NotNil(followerID)
+	followerLabel := []*metapb.StoreLabel{
+		{
+			Key:   "id",
+			Value: strconv.FormatUint(*followerID, 10),
+		},
+	}
+
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	dataIsNotReady := false
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		if dataIsNotReady && req.StaleRead {
+			dataIsNotReady = false
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				DataIsNotReady: &errorpb.DataIsNotReady{},
+			}}}, nil
+		}
+		if addr == leaderStore.addr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				ServerIsBusy: &errorpb.ServerIsBusy{},
+			}}}, nil
+		}
+		if !req.ReplicaRead {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				NotLeader: &errorpb.NotLeader{},
+			}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
+	}}
+
+	for _, localLeader := range []bool{true, false} {
+		dataIsNotReady = true
+		// data is not ready, then server is busy in the first round,
+		// directly server is busy in the second round.
+		for i := 0; i < 2; i++ {
+			req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+			req.ReadReplicaScope = oracle.GlobalTxnScope
+			req.TxnScope = oracle.GlobalTxnScope
+			req.EnableStaleRead()
+			req.ReplicaReadType = kv.ReplicaReadMixed
+			var ops []StoreSelectorOption
+			if localLeader {
+				ops = append(ops, WithMatchLabels(leaderLabel))
+			} else {
+				ops = append(ops, WithMatchLabels(followerLabel))
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Second)
+			bo := retry.NewBackoffer(ctx, -1)
+			s.Nil(err)
+			resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+			s.Nil(err)
+
+			regionErr, err := resp.GetRegionError()
+			s.Nil(err)
+			s.Nil(regionErr)
+			getResp, ok := resp.Resp.(*kvrpcpb.GetResponse)
+			s.True(ok)
+			if localLeader {
+				s.NotEqual(getResp.Value, []byte("store"+leaderLabel[0].Value))
+			} else {
+				s.Equal(getResp.Value, []byte("store"+followerLabel[0].Value))
+			}
+			cancel()
+		}
+	}
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderRegionError() {
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(regionLoc)
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		// Return `mismatch peer id` when accesses the leader.
+		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				MismatchPeerId: &errorpb.MismatchPeerId{
+					RequestPeerId: 1,
+					StorePeerId:   2,
+				},
+			}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+			DataIsNotReady: &errorpb.DataIsNotReady{},
+		}}}, nil
+	}}
+
+	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	s.True(region.isValid())
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+	req.EnableStaleRead()
+	req.ReplicaReadType = kv.ReplicaReadFollower
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bo := retry.NewBackoffer(ctx, -1)
+	s.Nil(err)
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV)
+	s.Nil(err)
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Equal(regionErrorToLabel(regionErr), "mismatch_peer_id")
+	// return non-epoch-not-match region error and the upper layer can auto retry.
+	s.Nil(regionErr.GetEpochNotMatch())
+	// after region error returned, the region should be invalidated.
+	s.False(region.isValid())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestLogging() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	s.NotNil(region)
+
+	oc := s.regionRequestSender.client
+	defer func() {
+		s.regionRequestSender.client = oc
+	}()
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}},
+		}}
+		return response, nil
+	}}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.NotNil(regionErr)
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
+	leaderStore, _ := s.loadAndGetLeaderStore()
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	req.InputRequestSource = "test"
+
+	setReadType := func(req *tikvrpc.Request, readType string) {
+		req.StaleRead = false
+		req.ReplicaRead = false
+		switch readType {
+		case "leader":
+			return
+		case "follower":
+			req.ReplicaRead = true
+			req.ReplicaReadType = kv.ReplicaReadFollower
+		case "stale_follower", "stale_leader":
+			req.EnableStaleRead()
+		default:
+			panic("unreachable")
+		}
+	}
+
+	setTargetReplica := func(selector *replicaSelector, readType string) {
+		var leader bool
+		switch readType {
+		case "leader", "stale_leader":
+			leader = true
+		case "follower", "stale_follower":
+			leader = false
+		default:
+			panic("unreachable")
+		}
+		for idx, replica := range selector.replicas {
+			if replica.store.storeID == leaderStore.storeID && leader {
+				selector.targetIdx = AccessIndex(idx)
+				return
+			}
+			if replica.store.storeID != leaderStore.storeID && !leader {
+				selector.targetIdx = AccessIndex(idx)
+				return
+			}
+		}
+		panic("unreachable")
+	}
+
+	firstReadReplicas := []string{"leader", "follower", "stale_follower", "stale_leader"}
+	retryReadReplicas := []string{"leader", "follower"}
+	for _, firstReplica := range firstReadReplicas {
+		for _, retryReplica := range retryReadReplicas {
+			bo := retry.NewBackoffer(context.Background(), -1)
+			req.IsRetryRequest = false
+			setReadType(req, firstReplica)
+			replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+			s.Nil(err)
+			setTargetReplica(replicaSelector, firstReplica)
+			rpcCtx, err := replicaSelector.buildRPCContext(bo)
+			s.Nil(err)
+			replicaSelector.patchRequestSource(req, rpcCtx)
+			s.Equal(firstReplica+"_test", req.RequestSource)
+
+			// retry
+			setReadType(req, retryReplica)
+			replicaSelector, err = newReplicaSelector(s.cache, regionLoc.Region, req)
+			s.Nil(err)
+			setTargetReplica(replicaSelector, retryReplica)
+			rpcCtx, err = replicaSelector.buildRPCContext(bo)
+			s.Nil(err)
+			req.IsRetryRequest = true
+			replicaSelector.patchRequestSource(req, rpcCtx)
+			s.Equal("retry_"+firstReplica+"_"+retryReplica+"_test", req.RequestSource)
+		}
+	}
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeout() {
+	var (
+		leaderAddr  string
+		leaderLabel []*metapb.StoreLabel
+	)
+	bo := retry.NewBackoffer(context.Background(), 10000)
+	mockRPCClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		if addr == leaderAddr {
+			return nil, context.DeadlineExceeded
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
+	}}
+	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+	s.regionRequestSender.RegionRequestRuntimeStats = NewRegionRequestRuntimeStats()
+	getLocFn := func() *KeyLocation {
+		loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("a"))
+		s.Nil(err)
+		region := s.regionRequestSender.regionCache.GetCachedRegionWithRLock(loc.Region)
+		leaderStore, _, _, _ := region.WorkStorePeer(region.getStore())
+		leaderAddr, err = s.regionRequestSender.regionCache.getStoreAddr(s.bo, region, leaderStore)
+		s.Nil(err)
+		leaderLabel = []*metapb.StoreLabel{{Key: "id", Value: strconv.FormatUint(leaderStore.StoreID(), 10)}}
+		return loc
+	}
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+	req.EnableStaleRead()
+	loc := getLocFn()
+	var ops []StoreSelectorOption
+	ops = append(ops, WithMatchLabels(leaderLabel))
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV, ops...)
+	s.Nil(err)
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Nil(regionErr)
+	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
+	s.Equal(1, len(s.regionRequestSender.Stats))
+	s.Equal(int64(2), s.regionRequestSender.Stats[tikvrpc.CmdGet].Count) // 2 rpc
+	s.Equal(0, bo.GetTotalBackoffTimes())                                // no backoff since fast retry.
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
+	key := []byte("key")
+	region, err := s.regionRequestSender.regionCache.findRegionByKey(s.bo, key, false)
+	s.Nil(err)
+	regionStore := region.getStore()
+	leader, _, _, _ := region.WorkStorePeer(regionStore)
+	follower, _, _, _ := region.FollowerStorePeer(regionStore, 0, &storeSelectorOp{})
+
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if req.StaleRead && addr == follower.addr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			Value: []byte(addr),
+		}}, nil
+	}}
+	atomic.StoreUint32(&leader.livenessState, uint32(unreachable))
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+	req.EnableStaleRead()
+	bo := retry.NewBackoffer(context.Background(), -1)
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
+	s.Nil(err)
+	// `tryFollower` always try the local peer firstly
+	s.Equal(follower.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
 }

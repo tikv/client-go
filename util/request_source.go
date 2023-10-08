@@ -44,19 +44,22 @@ const (
 // explicit source types.
 const (
 	ExplicitTypeEmpty      = ""
-	ExplicitTypeDefault    = "default"
 	ExplicitTypeLightning  = "lightning"
 	ExplicitTypeBR         = "br"
 	ExplicitTypeDumpling   = "dumpling"
 	ExplicitTypeBackground = "background"
+	ExplicitTypeDDL        = "ddl"
+	ExplicitTypeStats      = "stats"
 )
 
 // ExplicitTypeList is the list of all explicit source types.
-var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeDefault, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground}
+var ExplicitTypeList = []string{ExplicitTypeEmpty, ExplicitTypeLightning, ExplicitTypeBR, ExplicitTypeDumpling, ExplicitTypeBackground, ExplicitTypeDDL, ExplicitTypeStats}
 
 const (
 	// InternalRequest is the scope of internal queries
 	InternalRequest = "internal"
+	// InternalRequestPrefix is the prefix of internal queries
+	InternalRequestPrefix = "internal_"
 	// ExternalRequest is the scope of external queries
 	ExternalRequest = "external"
 	// SourceUnknown keeps same with the default value(empty string)
@@ -95,6 +98,15 @@ func WithInternalSourceType(ctx context.Context, source string) context.Context 
 	})
 }
 
+// WithInternalSourceAndTaskType create context with internal source and task name.
+func WithInternalSourceAndTaskType(ctx context.Context, source, taskName string) context.Context {
+	return context.WithValue(ctx, RequestSourceKey, RequestSource{
+		RequestSourceInternal:     true,
+		RequestSourceType:         source,
+		ExplicitRequestSourceType: taskName,
+	})
+}
+
 // BuildRequestSource builds a request_source from internal, source and explicitSource.
 func BuildRequestSource(internal bool, source, explicitSource string) string {
 	requestSource := RequestSource{
@@ -117,24 +129,26 @@ func IsRequestSourceInternal(reqSrc *RequestSource) bool {
 // GetRequestSource gets the request_source field of the request.
 func (r *RequestSource) GetRequestSource() string {
 	source := SourceUnknown
-	explicitSourceType := ExplicitTypeDefault
+	origin := ExternalRequest
 	if r == nil || (len(r.RequestSourceType) == 0 && len(r.ExplicitRequestSourceType) == 0) {
 		// if r.RequestSourceType and r.ExplicitRequestSourceType are not set, it's mostly possible that r.RequestSourceInternal is not set
 		// to avoid internal requests be marked as external(default value), return unknown source here.
-		return strings.Join([]string{source, explicitSourceType}, "_")
+		return source
 	}
-
-	if len(r.RequestSourceType) > 0 {
-		source = r.RequestSourceType
-	}
-	if len(r.ExplicitRequestSourceType) > 0 {
-		explicitSourceType = r.ExplicitRequestSourceType
-	}
-	origin := ExternalRequest
 	if r.RequestSourceInternal {
 		origin = InternalRequest
 	}
-	return strings.Join([]string{origin, source, explicitSourceType}, "_")
+	labelList := make([]string, 0, 3)
+	labelList = append(labelList, origin)
+	if len(r.RequestSourceType) > 0 {
+		source = r.RequestSourceType
+	}
+	labelList = append(labelList, source)
+	if len(r.ExplicitRequestSourceType) > 0 && r.ExplicitRequestSourceType != r.RequestSourceType {
+		labelList = append(labelList, r.ExplicitRequestSourceType)
+	}
+
+	return strings.Join(labelList, "_")
 }
 
 // RequestSourceFromCtx extract source from passed context.

@@ -37,6 +37,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"runtime/trace"
 	"sync"
@@ -69,6 +70,7 @@ type batchCommandsEntry struct {
 	// canceled indicated the request is canceled or not.
 	canceled int32
 	err      error
+	start    time.Time
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
@@ -301,7 +303,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchSendLoop).Inc()
 			logutil.BgLogger().Error("batchSendLoop",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
 			logutil.BgLogger().Info("restart batchSendLoop")
 			go a.batchSendLoop(cfg)
@@ -347,6 +349,12 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 }
 
 func (a *batchConn) getClientAndSend() {
+	if val, err := util.EvalFailpoint("mockBatchClientSendDelay"); err == nil {
+		if timeout, ok := val.(int); ok && timeout > 0 {
+			time.Sleep(time.Duration(timeout * int(time.Millisecond)))
+		}
+	}
+
 	// Choose a connection by round-robbin.
 	var (
 		cli    *batchCommandsClient
@@ -371,11 +379,14 @@ func (a *batchConn) getClientAndSend() {
 	}
 	defer cli.unlockForSend()
 
+	now := time.Now()
+	tiKVBatchWaitToSendDuration := metrics.TiKVBatchWaitDuration.WithLabelValues("wait-to-send", target)
 	req, forwardingReqs := a.reqBuilder.build(func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
+		tiKVBatchWaitToSendDuration.Observe(float64(now.Sub(e.start)))
 	})
 	if req != nil {
 		cli.send("", req)
@@ -430,7 +441,7 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
 			logutil.BgLogger().Error("batchCommandsClient.recv panic",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
 			err = errors.New("batch conn recv paniced")
 		}
@@ -500,6 +511,14 @@ func (c *batchCommandsClient) isStopped() bool {
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
+	start := time.Now()
+	defer func() {
+		if forwardedHost == "" {
+			metrics.TiKVBatchConnSendDuration.WithLabelValues(c.target).Observe(time.Since(start).Seconds())
+		} else {
+			metrics.TiKVBatchConnSendDuration.WithLabelValues(forwardedHost).Observe(time.Since(start).Seconds())
+		}
+	}()
 	err := c.initBatchClient(forwardedHost)
 	if err != nil {
 		logutil.BgLogger().Warn(
@@ -598,7 +617,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
 			logutil.BgLogger().Error("batchRecvLoop",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
 			logutil.BgLogger().Info("restart batchRecvLoop")
 			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, streamClient)
@@ -766,6 +785,7 @@ func sendBatchRequest(
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
 ) (*tikvrpc.Response, error) {
+	start := time.Now()
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
 		req:           req,
@@ -773,21 +793,22 @@ func sendBatchRequest(
 		forwardedHost: forwardedHost,
 		canceled:      0,
 		err:           nil,
+		start:         start,
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	start := time.Now()
 	select {
 	case batchConn.batchCommandsCh <- entry:
 	case <-ctx.Done():
-		logutil.BgLogger().Debug("send request is cancelled",
+		logutil.Logger(ctx).Debug("send request is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
-	metrics.TiKVBatchWaitDuration.Observe(float64(time.Since(start)))
+	waitDuration := time.Since(start)
+	metrics.TiKVBatchWaitDuration.WithLabelValues("wait-to-chan", addr).Observe(float64(waitDuration))
 
 	select {
 	case res, ok := <-entry.res:
@@ -797,12 +818,13 @@ func sendBatchRequest(
 		return tikvrpc.FromBatchCommandsResponse(res)
 	case <-ctx.Done():
 		atomic.StoreInt32(&entry.canceled, 1)
-		logutil.BgLogger().Debug("wait response is cancelled",
+		logutil.Logger(ctx).Debug("wait response is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
-		return nil, errors.WithMessage(context.DeadlineExceeded, "wait recvLoop")
+		reason := fmt.Sprintf("wait recvLoop timeout,timeout:%s, wait_duration:%s:", timeout, waitDuration)
+		return nil, errors.WithMessage(context.DeadlineExceeded, reason)
 	}
 }
 
