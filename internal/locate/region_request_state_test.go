@@ -594,7 +594,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 
 	bo := retry.NewBackoffer(ctx, -1)
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadMixed, nil)
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	ops := []StoreSelectorOption{WithMatchLabels([]*metapb.StoreLabel{{
 		Key:   "zone",
 		Value: zone,

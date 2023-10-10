@@ -272,8 +272,8 @@ func (req *Request) GetReplicaReadSeed() *uint32 {
 	return nil
 }
 
-// EnableStaleRead enables stale read
-func (req *Request) EnableStaleRead() {
+// EnableStaleWithMixedReplicaRead enables stale read and set replica read type to mixed.
+func (req *Request) EnableStaleWithMixedReplicaRead() {
 	req.StaleRead = true
 	req.ReplicaReadType = kv.ReplicaReadMixed
 	req.ReplicaRead = false

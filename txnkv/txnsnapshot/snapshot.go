@@ -422,7 +422,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		req.TxnScope = scope
 		req.ReadReplicaScope = scope
 		if isStaleness {
-			req.EnableStaleRead()
+			req.EnableStaleWithMixedReplicaRead()
 		}
 		timeout := client.ReadTimeoutMedium
 		if useConfigurableKVTimeout && s.readTimeout > 0 {
@@ -651,7 +651,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	req.ReadReplicaScope = scope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
-		req.EnableStaleRead()
+		req.EnableStaleWithMixedReplicaRead()
 	}
 	if len(matchStoreLabels) > 0 {
 		ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
