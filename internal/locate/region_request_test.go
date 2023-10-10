@@ -668,7 +668,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
 		Key: []byte("key"),
 	})
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	req.ReadReplicaScope = "z1" // not global stale read.
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
