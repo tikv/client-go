@@ -202,6 +202,8 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 	var loc *locate.KeyLocation
 	var resolvingRecordToken *int
 	var err error
+	// the states in request need to keep when retry request.
+	var readType string
 	for {
 		if !s.reverse {
 			loc, err = s.snapshot.store.GetRegionCache().LocateKey(bo, s.nextStartKey)
@@ -245,12 +247,16 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 			TaskId:           s.snapshot.mu.taskID,
 			ResourceGroupTag: s.snapshot.mu.resourceGroupTag,
 			IsolationLevel:   s.snapshot.isolationLevel.ToPB(),
-			RequestSource:    s.snapshot.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: s.snapshot.mu.resourceGroupName,
 			},
 			BusyThresholdMs: uint32(s.snapshot.mu.busyThreshold.Milliseconds()),
 		})
+		if readType != "" {
+			req.ReadType = readType
+			req.IsRetryRequest = true
+		}
+		req.InputRequestSource = s.snapshot.GetRequestSource()
 		if s.snapshot.mu.resourceGroupTag == nil && s.snapshot.mu.resourceGroupTagger != nil {
 			s.snapshot.mu.resourceGroupTagger(req)
 		}
@@ -263,6 +269,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		if err != nil {
 			return err
 		}
+		readType = req.ReadType
 		if regionErr != nil {
 			logutil.BgLogger().Debug("scanner getData failed",
 				zap.Stringer("regionErr", regionErr))

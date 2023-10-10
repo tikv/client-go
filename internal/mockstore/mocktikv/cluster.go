@@ -393,11 +393,11 @@ func (c *Cluster) AddPeer(regionID, storeID, peerID uint64) {
 
 // RemovePeer removes the Peer from the Region. Note that if the Peer is leader,
 // the Region will have no leader before calling ChangeLeader().
-func (c *Cluster) RemovePeer(regionID, storeID uint64) {
+func (c *Cluster) RemovePeer(regionID, peerID uint64) {
 	c.Lock()
 	defer c.Unlock()
 
-	c.regions[regionID].removePeer(storeID)
+	c.regions[regionID].removePeer(peerID)
 }
 
 // ChangeLeader sets the Region's leader Peer. Caller should guarantee the Peer
