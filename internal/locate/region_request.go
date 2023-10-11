@@ -1849,6 +1849,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "flashback_not_prepared"
 	} else if e.GetIsWitness() != nil {
 		return "peer_is_witness"
+	} else if e.GetBucketVersionNotMatch() != nil {
+		return "bucket_version_not_match"
 	} else if strings.Contains(e.Message, "mismatch peer id") {
 		// the error message is like "[components/raftstore/src/store/util.rs:428]: mismatch peer id ? != ?"
 		// the `mismatch peer id` error does not has a specific error type, so we have to match the error message.
