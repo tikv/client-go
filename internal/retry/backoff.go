@@ -143,7 +143,13 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	if b.noop {
 		return err
 	}
-	if b.maxSleep > 0 && (b.totalSleep-b.excludedSleep) >= b.maxSleep {
+	maxBackoffTimeExceeded := (b.totalSleep - b.excludedSleep) >= b.maxSleep
+	maxExcludedTimeExceeded := false
+	if maxLimit, ok := isSleepExcluded[cfg.name]; ok {
+		maxExcludedTimeExceeded = b.excludedSleep >= maxLimit && b.excludedSleep >= b.maxSleep
+	}
+	maxTimeExceeded := maxBackoffTimeExceeded || maxExcludedTimeExceeded
+	if b.maxSleep > 0 && maxTimeExceeded {
 		longestSleepCfg, longestSleepTime := b.longestSleepCfg()
 		errMsg := fmt.Sprintf("%s backoffer.maxSleep %dms is exceeded, errors:", cfg.String(), b.maxSleep)
 		for i, err := range b.errors {
@@ -163,7 +169,8 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 			backoffDetail.WriteString(":")
 			backoffDetail.WriteString(strconv.Itoa(times))
 		}
-		errMsg += fmt.Sprintf("\ntotal-backoff-times: %v, backoff-detail: %v", totalTimes, backoffDetail.String())
+		errMsg += fmt.Sprintf("\ntotal-backoff-times: %v, backoff-detail: %v, maxBackoffTimeExceeded: %v, maxBackoffTimeExceeded: %v",
+			totalTimes, backoffDetail.String(), maxBackoffTimeExceeded, maxExcludedTimeExceeded)
 		returnedErr := err
 		if longestSleepCfg != nil {
 			errMsg += fmt.Sprintf("\nlongest sleep type: %s, time: %dms", longestSleepCfg.String(), longestSleepTime)
