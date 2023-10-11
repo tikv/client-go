@@ -169,7 +169,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 			backoffDetail.WriteString(":")
 			backoffDetail.WriteString(strconv.Itoa(times))
 		}
-		errMsg += fmt.Sprintf("\ntotal-backoff-times: %v, backoff-detail: %v, maxBackoffTimeExceeded: %v, maxBackoffTimeExceeded: %v",
+		errMsg += fmt.Sprintf("\ntotal-backoff-times: %v, backoff-detail: %v, maxBackoffTimeExceeded: %v, maxExcludedTimeExceeded: %v",
 			totalTimes, backoffDetail.String(), maxBackoffTimeExceeded, maxExcludedTimeExceeded)
 		returnedErr := err
 		if longestSleepCfg != nil {
