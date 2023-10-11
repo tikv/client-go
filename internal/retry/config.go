@@ -129,9 +129,16 @@ var (
 	BoTxnLockFast = NewConfig(txnLockFastName, &metrics.BackoffHistogramLockFast, NewBackoffFnCfg(2, 3000, EqualJitter), tikverr.ErrResolveLockTimeout)
 )
 
-var isSleepExcluded = map[string]struct{}{
-	BoTiKVServerBusy.name: {},
+var isSleepExcluded = map[string]int{
+	BoTiKVServerBusy.name: 600000, // The max excluded limit is 10min.
 	// add BoTiFlashServerBusy if appropriate
+}
+
+// setBackoffExcluded is used for test only.
+func setBackoffExcluded(name string, maxVal int) {
+	if _, ok := isSleepExcluded[name]; ok {
+		isSleepExcluded[name] = maxVal
+	}
 }
 
 const (
