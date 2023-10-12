@@ -95,3 +95,15 @@ func TestBackoffDeepCopy(t *testing.T) {
 		assert.ErrorIs(t, err, BoMaxDataNotReady.err)
 	}
 }
+
+func TestBackoffWithMaxExcludedExceed(t *testing.T) {
+	setBackoffExcluded(BoTiKVServerBusy.name, 1)
+	b := NewBackofferWithVars(context.TODO(), 1, nil)
+	err := b.Backoff(BoTiKVServerBusy, errors.New("server is busy"))
+	assert.Nil(t, err)
+
+	// As the total excluded sleep is greater than the max limited value, error should be returned.
+	err = b.Backoff(BoTiKVServerBusy, errors.New("server is busy"))
+	assert.NotNil(t, err)
+	assert.Greater(t, b.excludedSleep, b.maxSleep)
+}
