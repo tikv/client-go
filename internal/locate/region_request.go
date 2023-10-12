@@ -1849,6 +1849,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "flashback_not_prepared"
 	} else if e.GetIsWitness() != nil {
 		return "peer_is_witness"
+	} else if e.GetBucketVersionNotMatch() != nil {
+		return "bucket_version_not_match"
 	} else if strings.Contains(e.Message, "mismatch peer id") {
 		// the error message is like "[components/raftstore/src/store/util.rs:428]: mismatch peer id ? != ?"
 		// the `mismatch peer id` error does not has a specific error type, so we have to match the error message.
@@ -2004,6 +2006,18 @@ func (s *RegionRequestSender) onRegionError(
 			s.replicaSelector.invalidateRegion()
 		}
 		return retry, err
+	}
+
+	if bucketVersionNotMatch := regionErr.GetBucketVersionNotMatch(); bucketVersionNotMatch != nil {
+		logutil.Logger(bo.GetCtx()).Debug(
+			"tikv reports `BucketVersionNotMatch` retry later",
+			zap.Uint64("latest-bucket-version", bucketVersionNotMatch.Version),
+			zap.Uint64("request-bucket-version", ctx.BucketVersion),
+			zap.Stringer("ctx", ctx),
+		)
+		// bucket version is not match, we should split this cop request again.
+		s.regionCache.OnBucketVersionNotMatch(ctx, bucketVersionNotMatch.Version, bucketVersionNotMatch.Keys)
+		return false, nil
 	}
 
 	if serverIsBusy := regionErr.GetServerIsBusy(); serverIsBusy != nil {
