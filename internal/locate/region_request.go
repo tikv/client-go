@@ -1680,7 +1680,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		// Record timecost of external requests on related Store when ReplicaReadMode == PreferLeader.
-		if req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) && rpcCtx.Store != nil {
+		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.recordSlowScoreStat(time.Since(start))
 		}
 		if s.Stats != nil {
