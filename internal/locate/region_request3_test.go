@@ -1338,3 +1338,80 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 	s.True(ok)
 	s.Equal(getResp.Value, value)
 }
+
+func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
+	leaderStore, _ := s.loadAndGetLeaderStore()
+	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
+	s.Nil(err)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key: []byte("key"),
+	})
+	req.InputRequestSource = "test"
+
+	setReadType := func(req *tikvrpc.Request, readType string) {
+		req.StaleRead = false
+		req.ReplicaRead = false
+		switch readType {
+		case "leader":
+			return
+		case "follower":
+			req.ReplicaRead = true
+			req.ReplicaReadType = kv.ReplicaReadFollower
+		case "stale_follower", "stale_leader":
+			req.EnableStaleRead()
+		default:
+			panic("unreachable")
+		}
+	}
+
+	setTargetReplica := func(selector *replicaSelector, readType string) {
+		var leader bool
+		switch readType {
+		case "leader", "stale_leader":
+			leader = true
+		case "follower", "stale_follower":
+			leader = false
+		default:
+			panic("unreachable")
+		}
+		for idx, replica := range selector.replicas {
+			if replica.store.storeID == leaderStore.storeID && leader {
+				selector.targetIdx = AccessIndex(idx)
+				return
+			}
+			if replica.store.storeID != leaderStore.storeID && !leader {
+				selector.targetIdx = AccessIndex(idx)
+				return
+			}
+		}
+		panic("unreachable")
+	}
+
+	firstReadReplicas := []string{"leader", "follower", "stale_follower", "stale_leader"}
+	retryReadReplicas := []string{"leader", "follower"}
+	for _, firstReplica := range firstReadReplicas {
+		for _, retryReplica := range retryReadReplicas {
+			bo := retry.NewBackoffer(context.Background(), -1)
+			req.IsRetryRequest = false
+			setReadType(req, firstReplica)
+			replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
+			s.Nil(err)
+			setTargetReplica(replicaSelector, firstReplica)
+			rpcCtx, err := replicaSelector.buildRPCContext(bo)
+			s.Nil(err)
+			replicaSelector.patchRequestSource(req, rpcCtx)
+			s.Equal(firstReplica+"_test", req.RequestSource)
+
+			// retry
+			setReadType(req, retryReplica)
+			replicaSelector, err = newReplicaSelector(s.cache, regionLoc.Region, req)
+			s.Nil(err)
+			setTargetReplica(replicaSelector, retryReplica)
+			rpcCtx, err = replicaSelector.buildRPCContext(bo)
+			s.Nil(err)
+			req.IsRetryRequest = true
+			replicaSelector.patchRequestSource(req, rpcCtx)
+			s.Equal("retry_"+firstReplica+"_"+retryReplica+"_test", req.RequestSource)
+		}
+	}
+}
