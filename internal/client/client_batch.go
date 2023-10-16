@@ -298,6 +298,9 @@ func (a *batchConn) fetchMorePendingRequests(
 
 const idleTimeout = 3 * time.Minute
 
+// BatchSendLoopPanicFlag only used for testing.
+var BatchSendLoopPanicFlag = int64(0)
+
 func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -305,7 +308,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			logutil.BgLogger().Error("batchSendLoop",
 				zap.Any("r", r),
 				zap.Stack("stack"))
-			logutil.BgLogger().Info("restart batchSendLoop")
+			logutil.BgLogger().Info("restart batchSendLoop", zap.Int64("cound", BatchSendLoopPanicFlag))
+			atomic.AddInt64(&BatchSendLoopPanicFlag, 1)
 			go a.batchSendLoop(cfg)
 		}
 	}()

@@ -723,3 +723,49 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestDebugBatchClient(t *testing.T) {
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 128
+	})()
+
+	server, port := startMockTikvService()
+	require.True(t, port > 0)
+	require.True(t, server.IsRunning())
+	addr := server.addr
+	client := NewRPCClient()
+	defer func() {
+		err := client.Close()
+		require.NoError(t, err)
+		server.Stop()
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := client.getConnArray(addr, true)
+			assert.Nil(t, err)
+			for j := 0; j < 100; j++ {
+				req := &tikvrpc.Request{
+					Type: tikvrpc.CmdCop,
+					Req:  &coprocessor.Request{},
+				}
+				err = tikvrpc.SetContext(req, nil, nil)
+				assert.Nil(t, err)
+				batchReq := req.ToBatchCommandsRequest()
+				ctx, cancel := context.WithCancel(context.Background())
+				go func() {
+					time.Sleep(time.Millisecond * time.Duration(rand.Intn(5)+1))
+					cancel()
+				}()
+				_, err = sendBatchRequest(ctx, addr, "", conn.batchConn, batchReq, time.Second*30)
+				req.IsRetryRequest = true
+			}
+		}()
+	}
+	wg.Wait()
+	// batchSendLoop should not panic.
+	assert.Equal(t, atomic.LoadInt64(&BatchSendLoopPanicFlag), int64(0))
+}
