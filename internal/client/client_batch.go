@@ -308,8 +308,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			logutil.BgLogger().Error("batchSendLoop",
 				zap.Any("r", r),
 				zap.Stack("stack"))
-			logutil.BgLogger().Info("restart batchSendLoop", zap.Int64("cound", BatchSendLoopPanicFlag))
 			atomic.AddInt64(&BatchSendLoopPanicFlag, 1)
+			logutil.BgLogger().Info("restart batchSendLoop", zap.Int64("count", atomic.LoadInt64(&BatchSendLoopPanicFlag)))
 			go a.batchSendLoop(cfg)
 		}
 	}()
