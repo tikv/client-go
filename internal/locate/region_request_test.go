@@ -737,9 +737,11 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
+	// This test should use `go test -race` to run.
 	config.UpdateGlobal(func(conf *config.Config) {
 		conf.TiKVClient.MaxBatchSize = 128
 	})()
+	atomic.StoreInt64(&client.BatchSendLoopPanicFlag, 0)
 
 	server, port := mock_server.StartMockTikvService()
 	s.True(port > 0)
