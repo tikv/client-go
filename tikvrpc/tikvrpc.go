@@ -699,7 +699,9 @@ type MPPStreamResponse struct {
 
 // SetContext set the Context field for the given req to the specified ctx.
 func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
-	ctx := &req.Context
+	// Shallow copy the context to avoid concurrent modification.
+	copyCtx := req.Context
+	ctx := &copyCtx
 	if region != nil {
 		ctx.RegionId = region.Id
 		ctx.RegionEpoch = region.RegionEpoch
