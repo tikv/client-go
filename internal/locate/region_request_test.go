@@ -774,7 +774,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 					time.Sleep(time.Millisecond * time.Duration(rand.Intn(5)+1))
 					cancel()
 				}()
-				req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
+				req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{Data: []byte("a"), StartTs: 1})
 				regionRequestSender := NewRegionRequestSender(s.cache, s.regionRequestSender.client)
 				regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 				regionRequestSender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)

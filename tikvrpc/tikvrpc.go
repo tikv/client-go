@@ -807,13 +807,14 @@ func AttachContext(req *Request, ctx *kvrpcpb.Context) bool {
 
 // SetContext set the Context field for the given req to the specified ctx.
 func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
-	ctx := &req.Context
+	// Shallow copy the context to avoid concurrent modification.
+	ctx := *(&req.Context)
 	if region != nil {
 		ctx.RegionId = region.Id
 		ctx.RegionEpoch = region.RegionEpoch
 	}
 	ctx.Peer = peer
-	if !AttachContext(req, ctx) {
+	if !AttachContext(req, &ctx) {
 		return errors.Errorf("invalid request type %v", req.Type)
 	}
 	return nil

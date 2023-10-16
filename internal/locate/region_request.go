@@ -1459,11 +1459,6 @@ func (s *RegionRequestSender) SendReqCtx(
 
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
-		if err != nil {
-			oldCtx := req.Context
-			req.Context = kvrpcpb.Context{}
-			req.Context = oldCtx
-		}
 		req.IsRetryRequest = true
 		if err != nil {
 			msg := fmt.Sprintf("send request failed, err: %v", err.Error())
