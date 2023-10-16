@@ -201,7 +201,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	}
 
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
+	pdCli, err := pd.NewClientWithContext(ctx, pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
 		KeyPath:  opt.security.ClusterSSLKey,
