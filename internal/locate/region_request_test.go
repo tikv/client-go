@@ -710,5 +710,5 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 	}
 	wg.Wait()
 	// batchSendLoop should not panic.
-	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicFlag), int64(0))
+	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicCounter), int64(0))
 }

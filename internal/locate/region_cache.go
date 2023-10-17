@@ -508,7 +508,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 		r := recover()
 		if r != nil {
 			logutil.BgLogger().Error("panic in the checkAndResolve goroutine",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack trace"))
 		}
 	}()
