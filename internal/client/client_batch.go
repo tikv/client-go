@@ -298,7 +298,7 @@ func (a *batchConn) fetchMorePendingRequests(
 
 const idleTimeout = 3 * time.Minute
 
-// BatchSendLoopPanicCounter only used for testing.
+// BatchSendLoopPanicCounter is only used for testing.
 var BatchSendLoopPanicCounter int64 = 0
 
 func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
