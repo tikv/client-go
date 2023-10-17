@@ -673,7 +673,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 	server, port := mock_server.StartMockTikvService()
 	s.True(port > 0)
 	rpcClient := client.NewRPCClient()
-	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
 	}}
 	tf := func(s *Store, bo *retry.Backoffer) livenessState {
@@ -702,7 +702,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 					cancel()
 				}()
 				req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{Data: []byte("a"), StartTs: 1})
-				regionRequestSender := NewRegionRequestSender(s.cache, s.regionRequestSender.client)
+				regionRequestSender := NewRegionRequestSender(s.cache, fnClient)
 				regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 				regionRequestSender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 			}
