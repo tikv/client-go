@@ -709,7 +709,9 @@ type MPPStreamResponse struct {
 
 // AttachContext sets the request context to the request,
 // return false if encounter unknown request type.
-func AttachContext(req *Request, ctx *kvrpcpb.Context) bool {
+// Parameter `rpcCtx` use `kvrpcpb.Context` instead of `*kvrpcpb.Context` to avoid concurrent modification by shallow copy.
+func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
+	ctx := &rpcCtx
 	switch req.Type {
 	case CmdGet:
 		req.Get().Context = ctx
@@ -807,13 +809,14 @@ func AttachContext(req *Request, ctx *kvrpcpb.Context) bool {
 
 // SetContext set the Context field for the given req to the specified ctx.
 func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
-	ctx := &req.Context
 	if region != nil {
-		ctx.RegionId = region.Id
-		ctx.RegionEpoch = region.RegionEpoch
+		req.Context.RegionId = region.Id
+		req.Context.RegionEpoch = region.RegionEpoch
 	}
-	ctx.Peer = peer
-	if !AttachContext(req, ctx) {
+	req.Context.Peer = peer
+
+	// Shallow copy the context to avoid concurrent modification.
+	if !AttachContext(req, req.Context) {
 		return errors.Errorf("invalid request type %v", req.Type)
 	}
 	return nil
