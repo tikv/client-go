@@ -92,28 +92,27 @@ func attachAPICtx(c Codec, req *tikvrpc.Request) *tikvrpc.Request {
 	// Shallow copy the request to avoid concurrent modification.
 	r := *req
 
-	ctx := &r.Context
-	ctx.ApiVersion = c.GetAPIVersion()
-	ctx.KeyspaceId = uint32(c.GetKeyspaceID())
+	r.Context.ApiVersion = c.GetAPIVersion()
+	r.Context.KeyspaceId = uint32(c.GetKeyspaceID())
 
 	switch r.Type {
 	case tikvrpc.CmdMPPTask:
 		mpp := *r.DispatchMPPTask()
 		// Shallow copy the meta to avoid concurrent modification.
 		meta := *mpp.Meta
-		meta.KeyspaceId = ctx.KeyspaceId
-		meta.ApiVersion = ctx.ApiVersion
+		meta.KeyspaceId = r.Context.KeyspaceId
+		meta.ApiVersion = r.Context.ApiVersion
 		mpp.Meta = &meta
 		r.Req = &mpp
 
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
-		compact.KeyspaceId = ctx.KeyspaceId
-		compact.ApiVersion = ctx.ApiVersion
+		compact.KeyspaceId = r.Context.KeyspaceId
+		compact.ApiVersion = r.Context.ApiVersion
 		r.Req = &compact
 	}
 
-	tikvrpc.AttachContext(&r, ctx)
+	tikvrpc.AttachContext(&r, r.Context)
 
 	return &r
 }
