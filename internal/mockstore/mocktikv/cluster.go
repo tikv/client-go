@@ -63,9 +63,10 @@ var _ cluster.Cluster = &Cluster{}
 //     to client's request.
 type Cluster struct {
 	sync.RWMutex
-	id      uint64
-	stores  map[uint64]*Store
-	regions map[uint64]*Region
+	id        uint64
+	stores    map[uint64]*Store
+	regions   map[uint64]*Region
+	downPeers map[uint64]struct{}
 
 	mvccStore MVCCStore
 
@@ -85,6 +86,7 @@ func NewCluster(mvccStore MVCCStore) *Cluster {
 	return &Cluster{
 		stores:      make(map[uint64]*Store),
 		regions:     make(map[uint64]*Region),
+		downPeers:   make(map[uint64]struct{}),
 		delayEvents: make(map[delayKey]time.Duration),
 		mvccStore:   mvccStore,
 	}
@@ -244,6 +246,18 @@ func (c *Cluster) MarkTombstone(storeID uint64) {
 	c.stores[storeID].meta = &nm
 }
 
+func (c *Cluster) MarkPeerDown(peerID uint64) {
+	c.Lock()
+	defer c.Unlock()
+	c.downPeers[peerID] = struct{}{}
+}
+
+func (c *Cluster) RemoveDownPeer(peerID uint64) {
+	c.Lock()
+	defer c.Unlock()
+	delete(c.downPeers, peerID)
+}
+
 // UpdateStoreAddr updates store address for cluster.
 func (c *Cluster) UpdateStoreAddr(storeID uint64, addr string, labels ...*metapb.StoreLabel) {
 	c.Lock()
@@ -272,7 +286,7 @@ func (c *Cluster) GetRegion(regionID uint64) (*metapb.Region, uint64) {
 }
 
 // GetRegionByKey returns the Region and its leader whose range contains the key.
-func (c *Cluster) GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
+func (c *Cluster) GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets, []*metapb.Peer) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -280,43 +294,58 @@ func (c *Cluster) GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *met
 }
 
 // getRegionByKeyNoLock returns the Region and its leader whose range contains the key without Lock.
-func (c *Cluster) getRegionByKeyNoLock(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
+func (c *Cluster) getRegionByKeyNoLock(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets, []*metapb.Peer) {
 	for _, r := range c.regions {
 		if regionContains(r.Meta.StartKey, r.Meta.EndKey, key) {
-			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer), proto.Clone(r.Buckets).(*metapb.Buckets)
+			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer),
+				proto.Clone(r.Buckets).(*metapb.Buckets), c.getDownPeers(r)
 		}
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
 // GetPrevRegionByKey returns the previous Region and its leader whose range contains the key.
-func (c *Cluster) GetPrevRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
+func (c *Cluster) GetPrevRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets, []*metapb.Peer) {
 	c.RLock()
 	defer c.RUnlock()
 
-	currentRegion, _, _ := c.getRegionByKeyNoLock(key)
+	currentRegion, _, _, _ := c.getRegionByKeyNoLock(key)
 	if len(currentRegion.StartKey) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	for _, r := range c.regions {
 		if bytes.Equal(r.Meta.EndKey, currentRegion.StartKey) {
-			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer), proto.Clone(r.Buckets).(*metapb.Buckets)
+			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer),
+				proto.Clone(r.Buckets).(*metapb.Buckets), c.getDownPeers(r)
 		}
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
+}
+
+func (c *Cluster) getDownPeers(region *Region) []*metapb.Peer {
+	var downPeers []*metapb.Peer
+	for peerID, _ := range c.downPeers {
+		for _, peer := range region.Meta.Peers {
+			if peer.GetId() == peerID {
+				downPeers = append(downPeers, proto.Clone(peer).(*metapb.Peer))
+			}
+		}
+	}
+	return downPeers
 }
 
 // GetRegionByID returns the Region and its leader whose ID is regionID.
-func (c *Cluster) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer, *metapb.Buckets) {
+func (c *Cluster) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer, *metapb.Buckets, []*metapb.Peer) {
 	c.RLock()
 	defer c.RUnlock()
 
 	for _, r := range c.regions {
 		if r.Meta.GetId() == regionID {
-			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer), proto.Clone(r.Buckets).(*metapb.Buckets)
+			return proto.Clone(r.Meta).(*metapb.Region), proto.Clone(r.leaderPeer()).(*metapb.Peer),
+				proto.Clone(r.Buckets).(*metapb.Buckets), c.getDownPeers(r)
 		}
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
 // ScanRegions returns at most `limit` regions from given `key` and their leaders.
@@ -362,8 +391,9 @@ func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int) []*pd.Region {
 		}
 
 		r := &pd.Region{
-			Meta:   proto.Clone(region.Meta).(*metapb.Region),
-			Leader: leader,
+			Meta:      proto.Clone(region.Meta).(*metapb.Region),
+			Leader:    leader,
+			DownPeers: c.getDownPeers(region),
 		}
 		result = append(result, r)
 	}
