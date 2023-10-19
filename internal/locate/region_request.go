@@ -773,7 +773,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 	}, nil
 }
 
-const maxReplicaAttempt = 10
+const maxReplicaAttempt = 2
 
 // next creates the RPCContext of the current candidate replica.
 // It returns a SendError if runs out of all replicas or the cached region is invalidated.
