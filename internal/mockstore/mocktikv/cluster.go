@@ -324,7 +324,7 @@ func (c *Cluster) GetPrevRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, 
 
 func (c *Cluster) getDownPeers(region *Region) []*metapb.Peer {
 	var downPeers []*metapb.Peer
-	for peerID, _ := range c.downPeers {
+	for peerID := range c.downPeers {
 		for _, peer := range region.Meta.Peers {
 			if peer.GetId() == peerID {
 				downPeers = append(downPeers, proto.Clone(peer).(*metapb.Peer))

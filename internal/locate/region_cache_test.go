@@ -336,7 +336,7 @@ func (s *testRegionCacheSuite) TestTiFlashDownPeersAndAsyncReload() {
 		}
 	}()
 	wg.Wait()
-	ctx, err = s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+	s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
 	s.Equal(region.hasUnavailableTiFlashStore, true)
 	s.Equal(region.asyncReload.Load(), true)
 
