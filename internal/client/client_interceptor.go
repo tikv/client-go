@@ -16,7 +16,6 @@ package client
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,17 +34,16 @@ var _ Client = interceptedClient{}
 
 type interceptedClient struct {
 	Client
-	ruRuntimeStatsMap *sync.Map
 }
 
 // NewInterceptedClient creates a Client which can execute interceptor.
-func NewInterceptedClient(client Client, ruRuntimeStatsMap *sync.Map) Client {
-	return interceptedClient{client, ruRuntimeStatsMap}
+func NewInterceptedClient(client Client) Client {
+	return interceptedClient{client}
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// Build the resource control interceptor.
-	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, r.getRURuntimeStats(req.GetStartTS()))
+	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req)
 	// Chain the interceptors if there are multiple interceptors.
 	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
 		if finalInterceptor != nil {
@@ -62,6 +60,7 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 	return r.Client.SendRequest(ctx, addr, req, timeout)
 }
 
+/*
 func (r interceptedClient) getRURuntimeStats(startTS uint64) *util.RURuntimeStats {
 	if r.ruRuntimeStatsMap == nil || startTS == 0 {
 		return nil
@@ -71,6 +70,7 @@ func (r interceptedClient) getRURuntimeStats(startTS uint64) *util.RURuntimeStat
 	}
 	return nil
 }
+*/
 
 var (
 	// ResourceControlSwitch is used to control whether to enable the resource control.
@@ -84,7 +84,7 @@ var (
 func buildResourceControlInterceptor(
 	ctx context.Context,
 	req *tikvrpc.Request,
-	ruRuntimeStats *util.RURuntimeStats,
+	// ruRuntimeStats *util.RURuntimeStats,
 ) interceptor.RPCInterceptor {
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
@@ -101,6 +101,8 @@ func buildResourceControlInterceptor(
 		return nil
 	}
 	resourceControlInterceptor := *rcInterceptor
+
+	ruDetails := ctx.Value(util.RUDetailsCtxKey)
 
 	// Make the request info.
 	reqInfo := resourcecontrol.MakeRequestInfo(req)
@@ -121,7 +123,11 @@ func buildResourceControlInterceptor(
 				return nil, err
 			}
 			req.GetResourceControlContext().Penalty = penalty
-			ruRuntimeStats.Update(consumption)
+			if ruDetails != nil {
+				detail := ruDetails.(*util.RUDetails)
+				detail.Update(consumption)
+			}
+
 			resp, err := next(target, req)
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
@@ -129,7 +135,10 @@ func buildResourceControlInterceptor(
 				if err != nil {
 					return nil, err
 				}
-				ruRuntimeStats.Update(consumption)
+				if ruDetails != nil {
+					detail := ruDetails.(*util.RUDetails)
+					detail.Update(consumption)
+				}
 			}
 			return resp, err
 		}

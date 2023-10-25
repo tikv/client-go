@@ -138,9 +138,6 @@ type KVStore struct {
 
 	replicaReadSeed uint32 // this is used to load balance followers / learners when replica read is enabled
 
-	// StartTS -> RURuntimeStats, stores the RU runtime stats for certain transaction.
-	ruRuntimeStatsMap sync.Map
-
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -230,14 +227,13 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		cancel:          cancel,
 		gP:              util.NewSpool(128, 10*time.Second),
 	}
-	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient, &store.ruRuntimeStatsMap))
+	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
 
 	store.wg.Add(3)
 	go store.runSafePointChecker()
 	go store.safeTSUpdater()
-	go store.ruRuntimeStatsMapCleaner()
 
 	return store, nil
 }
@@ -693,44 +689,6 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		s.updateMinSafeTS(txnScope, storeIDs)
 	}
 	wg.Wait()
-}
-
-func (s *KVStore) ruRuntimeStatsMapCleaner() {
-	defer s.wg.Done()
-	t := time.NewTicker(ruRuntimeStatsCleanInterval)
-	defer t.Stop()
-	ctx, cancel := context.WithCancel(s.ctx)
-	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
-	defer cancel()
-
-	cleanThreshold := ruRuntimeStatsCleanThreshold
-	if _, e := util.EvalFailpoint("mockFastRURuntimeStatsMapClean"); e == nil {
-		t.Reset(time.Millisecond * 100)
-		cleanThreshold = time.Millisecond
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-t.C:
-			s.ruRuntimeStatsMap.Range(
-				func(key, _ interface{}) bool {
-					startTSTime := oracle.GetTimeFromTS(key.(uint64))
-					if now.Sub(startTSTime) >= cleanThreshold {
-						s.ruRuntimeStatsMap.Delete(key)
-					}
-					return true
-				},
-			)
-		}
-	}
-}
-
-// CreateRURuntimeStats creates a RURuntimeStats for the startTS and returns it.
-func (s *KVStore) CreateRURuntimeStats(startTS uint64) *util.RURuntimeStats {
-	rrs, _ := s.ruRuntimeStatsMap.LoadOrStore(startTS, util.NewRURuntimeStats())
-	return rrs.(*util.RURuntimeStats)
 }
 
 // EnableResourceControl enables the resource control.

@@ -52,6 +52,7 @@ import (
 type commitDetailCtxKeyType struct{}
 type lockKeysDetailCtxKeyType struct{}
 type execDetailsCtxKeyType struct{}
+type ruDetailsCtxKeyType struct{}
 type traceExecDetailsCtxKeyType struct{}
 
 var (
@@ -63,6 +64,9 @@ var (
 
 	// ExecDetailsKey presents ExecDetail info key in context.
 	ExecDetailsKey = execDetailsCtxKeyType{}
+
+	// ruDetailsCtxKey presents RUDetals info key in context.
+	RUDetailsCtxKey = ruDetailsCtxKeyType{}
 
 	// traceExecDetailsKey is a context key whose value indicates whether to add ExecDetails to trace.
 	traceExecDetailsKey = traceExecDetailsCtxKeyType{}
@@ -682,54 +686,54 @@ func (rd *ResolveLockDetail) Merge(resolveLock *ResolveLockDetail) {
 	rd.ResolveLockTime += resolveLock.ResolveLockTime
 }
 
-// RURuntimeStats is the runtime stats collector for RU.
-type RURuntimeStats struct {
+// RUDetails contains RU detail info.
+type RUDetails struct {
 	readRU  *uatomic.Float64
 	writeRU *uatomic.Float64
 }
 
-// NewRURuntimeStats creates a new RURuntimeStats.
-func NewRURuntimeStats() *RURuntimeStats {
-	return &RURuntimeStats{
+// NewRUDetails creates a new RUDetails.
+func NewRUDetails() *RUDetails {
+	return &RUDetails{
 		readRU:  uatomic.NewFloat64(0),
 		writeRU: uatomic.NewFloat64(0),
 	}
 }
 
 // Clone implements the RuntimeStats interface.
-func (rs *RURuntimeStats) Clone() *RURuntimeStats {
-	return &RURuntimeStats{
-		readRU:  uatomic.NewFloat64(rs.readRU.Load()),
-		writeRU: uatomic.NewFloat64(rs.writeRU.Load()),
+func (rd *RUDetails) Clone() *RUDetails {
+	return &RUDetails{
+		readRU:  uatomic.NewFloat64(rd.readRU.Load()),
+		writeRU: uatomic.NewFloat64(rd.writeRU.Load()),
 	}
 }
 
 // Merge implements the RuntimeStats interface.
-func (rs *RURuntimeStats) Merge(other *RURuntimeStats) {
-	rs.readRU.Add(other.readRU.Load())
-	rs.writeRU.Add(other.writeRU.Load())
+func (rd *RUDetails) Merge(other *RUDetails) {
+	rd.readRU.Add(other.readRU.Load())
+	rd.writeRU.Add(other.writeRU.Load())
 }
 
 // String implements fmt.Stringer interface.
-func (rs *RURuntimeStats) String() string {
-	return fmt.Sprintf("RRU:%f, WRU:%f", rs.readRU.Load(), rs.writeRU.Load())
+func (rd *RUDetails) String() string {
+	return fmt.Sprintf("RRU:%f, WRU:%f", rd.readRU.Load(), rd.writeRU.Load())
 }
 
 // RRU returns the read RU.
-func (rs RURuntimeStats) RRU() float64 {
-	return rs.readRU.Load()
+func (rd *RUDetails) RRU() float64 {
+	return rd.readRU.Load()
 }
 
 // WRU returns the write RU.
-func (rs RURuntimeStats) WRU() float64 {
-	return rs.writeRU.Load()
+func (rd *RUDetails) WRU() float64 {
+	return rd.writeRU.Load()
 }
 
 // Update updates the RU runtime stats with the given consumption info.
-func (rs *RURuntimeStats) Update(consumption *rmpb.Consumption) {
-	if rs == nil || consumption == nil {
+func (rd *RUDetails) Update(consumption *rmpb.Consumption) {
+	if rd == nil || consumption == nil {
 		return
 	}
-	rs.readRU.Add(consumption.RRU)
-	rs.writeRU.Add(consumption.WRU)
+	rd.readRU.Add(consumption.RRU)
+	rd.writeRU.Add(consumption.WRU)
 }
