@@ -190,7 +190,7 @@ func (s *testRegionCacheStaleReadSuite) setClient() {
 		} else {
 			// follower read leader
 			if !req.ReplicaRead && !req.StaleRead {
-				_, leaderPeer, _ := s.cluster.GetRegionByID(s.regionID)
+				_, leaderPeer, _, _ := s.cluster.GetRegionByID(s.regionID)
 				response.Resp = &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
 					NotLeader: &errorpb.NotLeader{
 						RegionId: req.RegionId,

@@ -47,7 +47,7 @@ type Cluster interface {
 	// StoreID, RegionID, or PeerID.
 	AllocID() uint64
 	// GetRegionByKey returns the Region, Buckets and its leader whose range contains the key.
-	GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets)
+	GetRegionByKey(key []byte) (*metapb.Region, *metapb.Peer, *metapb.Buckets, []*metapb.Peer)
 	// GetAllStores returns all Stores' meta.
 	GetAllStores() []*metapb.Store
 	// ScheduleDelay schedules a delay event for a transaction on a region.

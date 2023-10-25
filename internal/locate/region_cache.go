@@ -148,12 +148,14 @@ const (
 
 // Region presents kv region
 type Region struct {
-	meta          *metapb.Region // raw region meta from PD, immutable after init
-	store         unsafe.Pointer // point to region store info, see RegionStore
-	syncFlag      int32          // region need be sync in next turn
-	lastAccess    int64          // last region access time, see checkRegionCacheTTL
-	invalidReason InvalidReason  // the reason why the region is invalidated
-	asyncReload   atomic.Bool    // the region need to be reloaded in async mode
+	meta                       *metapb.Region // raw region meta from PD, immutable after init
+	store                      unsafe.Pointer // point to region store info, see RegionStore
+	syncFlag                   int32          // region need be sync in next turn
+	lastAccess                 int64          // last region access time, see checkRegionCacheTTL
+	invalidReason              InvalidReason  // the reason why the region is invalidated
+	asyncReload                atomic.Bool    // the region need to be reloaded in async mode
+	lastLoad                   int64          // last region load time
+	hasUnavailableTiFlashStore bool           // has unavailable TiFlash store, if yes, need to trigger async reload periodically
 }
 
 // AccessIndex represent the index for accessIndex array
@@ -330,6 +332,29 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	if len(availablePeers) == 0 {
 		return nil, errors.Errorf("no available peers, region: {%v}", r.meta)
 	}
+
+	for _, p := range pdRegion.DownPeers {
+		c.storeMu.RLock()
+		store, exists := c.storeMu.stores[p.StoreId]
+		c.storeMu.RUnlock()
+		if !exists {
+			store = c.getStoreByStoreID(p.StoreId)
+		}
+		addr, err := store.initResolve(bo, c)
+		if err != nil {
+			continue
+		}
+		// Filter the peer on a tombstone store.
+		if addr == "" {
+			continue
+		}
+
+		if store.storeType == tikvrpc.TiFlash {
+			r.hasUnavailableTiFlashStore = true
+			break
+		}
+	}
+
 	rs.workTiKVIdx = leaderAccessIdx
 	r.meta.Peers = availablePeers
 
@@ -337,6 +362,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 
 	// mark region has been init accessed.
 	r.lastAccess = time.Now().Unix()
+	r.lastLoad = r.lastAccess
 	return r, nil
 }
 
@@ -722,18 +748,8 @@ func WithMatchStores(stores []uint64) StoreSelectorOption {
 // GetTiKVRPCContext returns RPCContext for a region. If it returns nil, the region
 // must be out of date and already dropped from cache.
 func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, replicaRead kv.ReplicaReadType, followerStoreSeed uint32, opts ...StoreSelectorOption) (*RPCContext, error) {
-	ts := time.Now().Unix()
-
 	cachedRegion := c.GetCachedRegionWithRLock(id)
-	if cachedRegion == nil {
-		return nil, nil
-	}
-
-	if cachedRegion.checkNeedReload() {
-		return nil, nil
-	}
-
-	if !cachedRegion.checkRegionCacheTTL(ts) {
+	if !cachedRegion.isValid() {
 		return nil, nil
 	}
 
@@ -867,14 +883,15 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 // must be out of date and already dropped from cache or not flash store found.
 // `loadBalance` is an option. For batch cop, it is pointless and might cause try the failed store repeatly.
 func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool, labelFilter LabelFilter) (*RPCContext, error) {
-	ts := time.Now().Unix()
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
-	if cachedRegion == nil {
+	if !cachedRegion.isValid() {
 		return nil, nil
 	}
-	if !cachedRegion.checkRegionCacheTTL(ts) {
-		return nil, nil
+
+	if cachedRegion.hasUnavailableTiFlashStore && time.Now().Unix()-cachedRegion.lastLoad > regionCacheTTLSec {
+		/// schedule an async reload to avoid load balance issue, refer https://github.com/pingcap/tidb/issues/35418 for details
+		c.scheduleReloadRegion(cachedRegion)
 	}
 
 	regionStore := cachedRegion.getStore()

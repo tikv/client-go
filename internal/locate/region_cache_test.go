@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -289,6 +290,56 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 		s.Equal(store.getResolveState(), tombstone)
 	}
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
+}
+
+func (s *testRegionCacheSuite) TestTiFlashDownPeersAndAsyncReload() {
+	store3 := s.cluster.AllocID()
+	peer3 := s.cluster.AllocID()
+	s.cluster.AddStore(store3, s.storeAddr(store3))
+	s.cluster.AddPeer(s.region1, store3, peer3)
+	s.cluster.UpdateStoreAddr(store3, s.storeAddr(store3), &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
+	store4 := s.cluster.AllocID()
+	peer4 := s.cluster.AllocID()
+	s.cluster.AddStore(store4, s.storeAddr(store4))
+	s.cluster.AddPeer(s.region1, store4, peer4)
+	s.cluster.UpdateStoreAddr(store4, s.storeAddr(store4), &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
+
+	// load region to region cache with no down tiflash peer
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.Equal(loc.Region.id, s.region1)
+	ctx, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+	s.Nil(err)
+	s.NotNil(ctx)
+	region := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.Equal(region.hasUnavailableTiFlashStore, false)
+	s.Equal(region.asyncReload.Load(), false)
+	s.cache.clear()
+
+	s.cluster.MarkPeerDown(peer3)
+	s.cache.reloadRegion(loc.Region.id)
+	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.Equal(loc.Region.id, s.region1)
+	region = s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.Equal(region.hasUnavailableTiFlashStore, true)
+	s.Equal(region.asyncReload.Load(), false)
+
+	SetRegionCacheTTLSec(3)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i <= 3; i++ {
+			s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+			time.Sleep(1 * time.Second)
+		}
+	}()
+	wg.Wait()
+	s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+	s.Equal(region.hasUnavailableTiFlashStore, true)
+	s.Equal(region.asyncReload.Load(), true)
+
 }
 
 // TestFilterDownPeersOrPeersOnTombstoneOrDroppedStore verifies the RegionCache filter
