@@ -7,11 +7,11 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
 	github.com/pingcap/kvproto v0.0.0-20230925123611-87bebcc0d071
-	github.com/pingcap/tidb v1.1.0-beta.0.20231020070330-48d69d39c3d0
+	github.com/pingcap/tidb v1.1.0-beta.0.20231025055903-f3dfd896b5e6
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20231010061802-07432ef6c031
+	github.com/tikv/client-go/v2 v2.0.8-0.20231025022411-cad314220659
 	github.com/tikv/pd/client v0.0.0-20230912103610-2f57a9f050eb
 	go.uber.org/goleak v1.2.1
 )
@@ -118,5 +118,3 @@ replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	github.com/tikv/client-go/v2 => ../
 )
-
-replace github.com/pingcap/tidb => github.com/windtalker/tidb v1.1.0-beta.0.20231020063218-4d1c15539f3f
