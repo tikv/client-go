@@ -60,18 +60,6 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 	return r.Client.SendRequest(ctx, addr, req, timeout)
 }
 
-/*
-func (r interceptedClient) getRURuntimeStats(startTS uint64) *util.RURuntimeStats {
-	if r.ruRuntimeStatsMap == nil || startTS == 0 {
-		return nil
-	}
-	if v, ok := r.ruRuntimeStatsMap.Load(startTS); ok {
-		return v.(*util.RURuntimeStats)
-	}
-	return nil
-}
-*/
-
 var (
 	// ResourceControlSwitch is used to control whether to enable the resource control.
 	ResourceControlSwitch atomic.Value
@@ -84,7 +72,6 @@ var (
 func buildResourceControlInterceptor(
 	ctx context.Context,
 	req *tikvrpc.Request,
-	// ruRuntimeStats *util.RURuntimeStats,
 ) interceptor.RPCInterceptor {
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
