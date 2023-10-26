@@ -231,7 +231,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
 
-	store.wg.Add(3)
+	store.wg.Add(2)
 	go store.runSafePointChecker()
 	go store.safeTSUpdater()
 
