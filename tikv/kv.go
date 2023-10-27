@@ -79,10 +79,6 @@ const (
 	// DCLabelKey indicates the key of label which represents the dc for Store.
 	DCLabelKey           = "zone"
 	safeTSUpdateInterval = time.Second * 2
-	// Since the default max transaction TTL is 1 hour, we can use this to
-	// clean up the RU runtime stats as well.
-	ruRuntimeStatsCleanThreshold = time.Hour
-	ruRuntimeStatsCleanInterval  = ruRuntimeStatsCleanThreshold / 2
 )
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
