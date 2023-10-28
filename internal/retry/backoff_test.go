@@ -71,7 +71,7 @@ func TestBackoffErrorType(t *testing.T) {
 	err = b.Backoff(BoIsWitness, errors.New("peer is witness"))
 	assert.Nil(t, err)
 	// wait it exceed max sleep
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		err = b.Backoff(BoTxnNotFound, errors.New("txn not found"))
 		if err != nil {
 			// Next backoff should return error of backoff that sleeps for longest time.
