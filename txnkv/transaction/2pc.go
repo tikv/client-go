@@ -474,6 +474,28 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 	}, nil
 }
 
+func NewTwoPhaseCommitterWithPK(txn *KVTxn, sessionID uint64, primary []byte, mutations CommitterMutations) (*twoPhaseCommitter, error) {
+	committer, err := newTwoPhaseCommitter(txn, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	committer.setAsyncCommit(false)
+	committer.setOnePC(false)
+	committer.primaryKey = primary
+	size := 2 * len(mutations.GetKey(0)) * mutations.Len()
+	commitDetail := &util.CommitDetails{
+		WriteSize:   size,
+		WriteKeys:   mutations.Len(),
+		ResolveLock: util.ResolveLockDetail{},
+	}
+	committer.setDetail(commitDetail)
+	return committer, nil
+}
+
+func (c *twoPhaseCommitter) SetCommitTs(commitTs uint64) {
+	c.commitTS = commitTs
+}
+
 func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error {
 	c.txn.GetMemBuffer().RLock()
 	defer c.txn.GetMemBuffer().RUnlock()
@@ -788,6 +810,25 @@ func txnLockTTL(startTime time.Time, txnSize int) uint64 {
 
 var preSplitDetectThreshold uint32 = 100000
 var preSplitSizeThreshold uint32 = 32 << 20
+
+func (c *twoPhaseCommitter) DoActionOnMutations(ctx context.Context, act int, mutations CommitterMutations, region interface{}) error {
+	if act == 0 {
+		bo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
+		action := actionPrewrite{isInternal: false}
+		return c.doActionOnMutations(bo, action, mutations)
+	}
+	if act == 1 {
+		bo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
+		action := actionCommit{isInternal: false}
+		if region != nil {
+			action.regionHint = region.(*locate.KeyLocation)
+			action.handleSingleBatch(c, bo, batchMutations{})
+		}
+		return c.doActionOnMutations(bo, action, mutations)
+	}
+
+	return errors.Errorf("unexpected action: %d", act)
+}
 
 // doActionOnMutations groups keys into primary batch and secondary batches, if primary batch exists in the key,
 // it does action on primary batch first, then on secondary batches. If action is commit, secondary batches

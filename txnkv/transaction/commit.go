@@ -35,6 +35,7 @@
 package transaction
 
 import (
+	"bytes"
 	"encoding/hex"
 	"time"
 
@@ -55,6 +56,7 @@ import (
 type actionCommit struct {
 	retry      bool
 	isInternal bool
+	regionHint *locate.KeyLocation
 }
 
 var _ twoPhaseCommitAction = actionCommit{}
@@ -71,12 +73,28 @@ func (action actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 }
 
 func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
-	keys := batch.mutations.GetKeys()
-	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-		StartVersion:  c.startTS,
-		Keys:          keys,
-		CommitVersion: c.commitTS,
-	}, kvrpcpb.Context{
+	var commit *kvrpcpb.CommitRequest
+	var keys [][]byte
+	if batch.mutations != nil {
+		keys = batch.mutations.GetKeys()
+	}
+
+	if action.regionHint != nil {
+		commit = &kvrpcpb.CommitRequest{
+			StartVersion:  c.startTS,
+			CommitVersion: c.commitTS,
+			Bounds:        [][]byte{action.regionHint.StartKey, action.regionHint.EndKey},
+		}
+	} else if len(keys) > 0 {
+		commit = &kvrpcpb.CommitRequest{
+			StartVersion:  c.startTS,
+			Keys:          keys,
+			CommitVersion: c.commitTS,
+		}
+	} else {
+		return errors.New("unreachable")
+	}
+	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, commit, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
 		ResourceGroupTag:       c.resourceGroupTag,
@@ -133,6 +151,34 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 					return err
 				}
 			}
+
+			if action.regionHint != nil {
+				var locs []*locate.KeyLocation
+				regionCache := c.store.GetRegionCache()
+				min, max := action.regionHint.StartKey, action.regionHint.EndKey
+				for {
+					region, err := regionCache.LocateKey(bo, min)
+					if err != nil {
+						return err
+					}
+					locs = append(locs)
+					if bytes.Compare(region.EndKey, max) >= 0 {
+						break
+					}
+				}
+				for _, loc := range locs {
+					subAction := actionCommit{
+						retry:      true,
+						isInternal: false,
+						regionHint: loc,
+					}
+					if err := subAction.handleSingleBatch(c, bo, batch); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+
 			same, err := batch.relocate(bo, c.store.GetRegionCache())
 			if err != nil {
 				return err
@@ -140,7 +186,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			if same {
 				continue
 			}
-			return c.doActionOnMutations(bo, actionCommit{true, action.isInternal}, batch.mutations)
+			return c.doActionOnMutations(bo, actionCommit{true, action.isInternal, nil}, batch.mutations)
 		}
 
 		if resp.Resp == nil {
