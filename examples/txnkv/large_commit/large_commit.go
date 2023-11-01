@@ -319,6 +319,11 @@ func main() {
 		}
 	}
 	close(commitTaskCh)
+	if *oneTokenPerStore {
+		for _, ch := range commitTaskChByStore {
+			close(ch)
+		}
+	}
 	wg.Wait()
 	fmt.Println("task count", taskCount)
 	fmt.Println("============ COMMIT DONE ============", time.Since(commitStart))
