@@ -223,6 +223,9 @@ func main() {
 	for i := int64(0); i < COMMIT_CONC; i++ {
 		wg.Add(1)
 		taskCh := commitTaskCh
+		if *oneTokenPerStore {
+			taskCh = commitTaskChByStore[i]
+		}
 		go func(taskCh chan interface{}) {
 			defer wg.Done()
 			for region := range taskCh {
