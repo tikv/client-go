@@ -40,14 +40,16 @@ func (kv KV) String() string {
 }
 
 var (
-	client  *txnkv.Client
-	pdAddr  = flag.String("pd", "127.0.0.1:2379", "pd address")
-	txnSize = flag.Int64("txn-size", 1024, "txn size")
-	mode    = flag.String("mode", "common-commit", "common-commit|scan-commit")
-	bits    int
+	client              *txnkv.Client
+	pdAddr              = flag.String("pd", "127.0.0.1:2379", "pd address")
+	txnSize             = flag.Int64("txn-size", 1024, "txn size")
+	mode                = flag.String("mode", "common-commit", "common-commit|scan-commit")
+	commitConcurrency   = flag.Int64("commit-concurrency", 100, "concurrency of commit")
+	prewriteConcurrency = flag.Int64("prewrite-concurrency", 100, "concurrency of prewrite")
+	bits                int
 )
 
-const (
+var (
 	PREWRITE_CONC = int64(100)
 	COMMIT_CONC   = int64(100)
 )
@@ -114,6 +116,9 @@ func main() {
 	}
 	flag.Parse()
 	bits = len(fmt.Sprintf("%d", *txnSize))
+	PREWRITE_CONC = *prewriteConcurrency
+	COMMIT_CONC = *commitConcurrency
+
 	initStore()
 	initContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
 
@@ -218,7 +223,11 @@ func main() {
 				committer, err := transaction.NewTwoPhaseCommitterWithPK(txn, 1, primary, &mutations)
 				MustNil(err)
 				committer.SetCommitTs(commitTs)
-				commitCtx, _ := context.WithTimeout(context.Background(), 30*time.Second)
+				commitTimeout := 30 * time.Second
+				if commitByScan {
+					commitTimeout = 300 * time.Second
+				}
+				commitCtx, _ := context.WithTimeout(context.Background(), commitTimeout)
 				if commitByScan {
 					err = committer.DoActionOnMutations(commitCtx, 1, &mutations, region)
 					MustNil(err)

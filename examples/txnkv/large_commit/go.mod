@@ -1,4 +1,4 @@
-module 1pc_txn
+module large_commit
 
 go 1.21
 
