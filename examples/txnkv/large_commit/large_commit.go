@@ -19,6 +19,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 	"sync"
@@ -118,6 +120,10 @@ func main() {
 	bits = len(fmt.Sprintf("%d", *txnSize))
 	PREWRITE_CONC = *prewriteConcurrency
 	COMMIT_CONC = *commitConcurrency
+
+	go func() {
+		fmt.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
 
 	initStore()
 	initContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
