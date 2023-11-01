@@ -175,6 +175,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 					if bytes.Compare(region.EndKey, max) >= 0 {
 						break
 					}
+					min = region.EndKey
 				}
 				for _, loc := range locs {
 					subAction := actionCommit{
