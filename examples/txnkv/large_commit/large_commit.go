@@ -46,6 +46,7 @@ var (
 	pdAddr              = flag.String("pd", "127.0.0.1:2379", "pd address")
 	txnSize             = flag.Int64("txn-size", 1024, "txn size")
 	mode                = flag.String("mode", "common-commit", "common-commit|scan-commit")
+	oneTokenPerStore    = flag.Bool("one-token-per-store", false, "one token per store")
 	commitConcurrency   = flag.Int64("commit-concurrency", 100, "concurrency of commit")
 	prewriteConcurrency = flag.Int64("prewrite-concurrency", 100, "concurrency of prewrite")
 	bits                int
@@ -126,6 +127,7 @@ func main() {
 	}()
 
 	initStore()
+
 	initContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
 
 	MustNil(client.UnsafeDestroyRange(initContext, []byte{0}, []byte{255}))
@@ -200,11 +202,30 @@ func main() {
 	commitTs, err := client.GetTimestamp(context.Background())
 	MustNil(err)
 	commitTaskCh := make(chan interface{}, COMMIT_CONC)
+	var (
+		commitTaskChByStore []chan interface{}
+		storeID2Idx         map[uint64]int
+	)
+	if *oneTokenPerStore {
+		stores := client.GetRegionCache().GetAllStores()
+		storeCount := len(stores)
+		fmt.Println("set concurrency to store count", storeCount)
+		COMMIT_CONC = int64(storeCount)
+		commitTaskChByStore = make([]chan interface{}, 0, storeCount)
+		for i := 0; i < storeCount; i++ {
+			commitTaskChByStore = append(commitTaskChByStore, make(chan interface{}, 10))
+		}
+		storeID2Idx = make(map[uint64]int, storeCount)
+		for i, store := range stores {
+			storeID2Idx[store.StoreID()] = i
+		}
+	}
 	for i := int64(0); i < COMMIT_CONC; i++ {
 		wg.Add(1)
-		go func() {
+		taskCh := commitTaskCh
+		go func(taskCh chan interface{}) {
 			defer wg.Done()
-			for region := range commitTaskCh {
+			for region := range taskCh {
 				var mutations transaction.PlainMutations
 				commitByScan := false
 				if hint, ok := region.(commitHint); ok {
@@ -242,7 +263,7 @@ func main() {
 					MustNil(err)
 				}
 			}
-		}()
+		}(taskCh)
 	}
 
 	commitStart := time.Now()
@@ -275,7 +296,18 @@ func main() {
 			bo := tikv.NewBackoffer(context.Background(), 1000)
 			region, err := regionCache.LocateKey(bo, min)
 			MustNil(err)
-			commitTaskCh <- region
+			if *oneTokenPerStore {
+				cachedRegion := regionCache.GetCachedRegionWithRLock(region.Region)
+				leaderStoreID := cachedRegion.GetLeaderStoreID()
+				if idx, ok := storeID2Idx[leaderStoreID]; ok {
+					commitTaskChByStore[idx] <- region
+				} else {
+					fmt.Println("region leader store not found, region id ", region.Region.GetID(), ", leader store id ", leaderStoreID)
+					commitTaskChByStore[0] <- region
+				}
+			} else {
+				commitTaskCh <- region
+			}
 			taskCount++
 			if bytes.Compare(region.EndKey, max) >= 0 {
 				break
