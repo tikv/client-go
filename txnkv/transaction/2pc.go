@@ -195,6 +195,8 @@ type twoPhaseCommitter struct {
 	isInternal bool
 
 	forUpdateTSConstraints map[string]uint64
+
+	DisableBackgroundCommitSecondaries bool
 }
 
 type memBufferMutations struct {
@@ -489,6 +491,7 @@ func NewTwoPhaseCommitterWithPK(txn *KVTxn, sessionID uint64, primary []byte, mu
 		ResolveLock: util.ResolveLockDetail{},
 	}
 	committer.setDetail(commitDetail)
+	committer.DisableBackgroundCommitSecondaries = true
 	return committer, nil
 }
 
@@ -1040,7 +1043,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 	util.EvalFailpoint("afterPrimaryBatch")
 
 	// Already spawned a goroutine for async commit transaction.
-	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
+	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() && !c.DisableBackgroundCommitSecondaries {
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
 		if c.store.IsClose() {
 			logutil.Logger(bo.GetCtx()).Warn("the store is closed",
