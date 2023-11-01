@@ -243,6 +243,7 @@ func main() {
 	fmt.Println("============ COMMIT START ============")
 	fmt.Printf("commit with commit_ts: %d\n", commitTs)
 	regionCache := client.GetRegionCache()
+	taskCount := 0
 	switch *mode {
 	case "common-commit":
 		start := int64(0)
@@ -256,6 +257,7 @@ func main() {
 			if end > start {
 				hint := commitHint{start, end}
 				commitTaskCh <- hint
+				taskCount++
 			}
 			if stop {
 				break
@@ -268,6 +270,7 @@ func main() {
 			region, err := regionCache.LocateKey(bo, min)
 			MustNil(err)
 			commitTaskCh <- region
+			taskCount++
 			if bytes.Compare(region.EndKey, max) >= 0 {
 				break
 			}
@@ -276,6 +279,7 @@ func main() {
 	}
 	close(commitTaskCh)
 	wg.Wait()
+	fmt.Println("task count", taskCount)
 	fmt.Println("============ COMMIT DONE ============", time.Since(commitStart))
 
 	{
