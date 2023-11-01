@@ -196,7 +196,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 
 	for i, r := range spResp.Regions {
 		if err = s.scatterRegion(bo, r.Id, tableID); err == nil {
-			logutil.BgLogger().Info("batch split regions, scatter region complete",
+			logutil.BgLogger().Debug("batch split regions, scatter region complete",
 				zap.Uint64("batch region ID", batch.RegionID.GetID()),
 				zap.String("at", kv.StrKey(batch.Keys[i])),
 				zap.Stringer("new region left", logutil.Hex(r)))
@@ -239,7 +239,7 @@ func (s *KVStore) SplitRegions(ctx context.Context, splitKeys [][]byte, scatter 
 }
 
 func (s *KVStore) scatterRegion(bo *Backoffer, regionID uint64, tableID *int64) error {
-	logutil.BgLogger().Info("start scatter region",
+	logutil.BgLogger().Debug("start scatter region",
 		zap.Uint64("regionID", regionID))
 	for {
 		opts := make([]pd.RegionsOption, 0, 1)

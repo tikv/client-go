@@ -268,6 +268,10 @@ func (action actionPrewrite) handleSingleBatch(
 	attempts := 0
 
 	req := c.buildPrewriteRequest(batch, txnSize)
+	//logutil.Logger(bo.GetCtx()).Info("prewrite with keys",
+	//	zap.Int("keys", len(req.Req.(*kvrpcpb.PrewriteRequest).Mutations)),
+	//	zap.ByteString("pk", req.Req.(*kvrpcpb.PrewriteRequest).PrimaryLock))
+
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 	var resolvingRecordToken *int
 	defer func() {

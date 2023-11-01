@@ -78,22 +78,32 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 	if batch.mutations != nil {
 		keys = batch.mutations.GetKeys()
 	}
-
+	var region locate.RegionVerID
 	if action.regionHint != nil {
 		commit = &kvrpcpb.CommitRequest{
 			StartVersion:  c.startTS,
 			CommitVersion: c.commitTS,
 			Bounds:        [][]byte{action.regionHint.StartKey, action.regionHint.EndKey},
 		}
+		region = action.regionHint.Region
+		//logutil.Logger(bo.GetCtx()).Info("use region hint for commit",
+		//	zap.Uint64("region id", action.regionHint.Region.GetID()),
+		//	zap.ByteString("start", action.regionHint.StartKey),
+		//	zap.ByteString("end", action.regionHint.EndKey))
 	} else if len(keys) > 0 {
+		//logutil.Logger(bo.GetCtx()).Info("commit keys",
+		//	zap.Int("keys", len(keys)),
+		//	zap.ByteString("pk", c.primaryKey))
 		commit = &kvrpcpb.CommitRequest{
 			StartVersion:  c.startTS,
 			Keys:          keys,
 			CommitVersion: c.commitTS,
 		}
+		region = batch.region
 	} else {
 		return errors.New("unreachable")
 	}
+
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, commit, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
@@ -122,7 +132,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			tBegin = time.Now()
 		}
 
-		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
+		resp, _, err := sender.SendReq(bo, req, region, client.ReadTimeoutShort)
 		// If we fail to receive response for the request that commits primary key, it will be undetermined whether this
 		// transaction has been successfully committed.
 		// Under this circumstance, we can not declare the commit is complete (may lead to data lost), nor can we throw

@@ -822,7 +822,7 @@ func (c *twoPhaseCommitter) DoActionOnMutations(ctx context.Context, act int, mu
 		action := actionCommit{isInternal: false}
 		if region != nil {
 			action.regionHint = region.(*locate.KeyLocation)
-			action.handleSingleBatch(c, bo, batchMutations{})
+			return action.handleSingleBatch(c, bo, batchMutations{})
 		}
 		return c.doActionOnMutations(bo, action, mutations)
 	}

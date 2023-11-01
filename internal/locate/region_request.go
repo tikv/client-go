@@ -1529,7 +1529,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		totalErrorStr.WriteString(":")
 		totalErrorStr.WriteString(strconv.Itoa(cnt))
 	}
-	logutil.Logger(bo.GetCtx()).Info(msg,
+	logutil.Logger(bo.GetCtx()).Debug(msg,
 		zap.Uint64("req-ts", req.GetStartTS()),
 		zap.String("req-type", req.Type.String()),
 		zap.String("region", regionID.String()),

@@ -43,6 +43,7 @@ var (
 	client  *txnkv.Client
 	pdAddr  = flag.String("pd", "127.0.0.1:2379", "pd address")
 	txnSize = flag.Int64("txn-size", 1024, "txn size")
+	mode    = flag.String("mode", "common-commit", "common-commit|scan-commit")
 	bits    int
 )
 
@@ -58,49 +59,6 @@ func initStore() {
 	if err != nil {
 		panic(err)
 	}
-}
-
-// key1 val1 key2 val2 ...
-func puts(args ...[]byte) error {
-	tx, err := client.Begin()
-	if err != nil {
-		return err
-	}
-
-	for i := 0; i < len(args); i += 2 {
-		key, val := args[i], args[i+1]
-		err := tx.Set(key, val)
-		if err != nil {
-			return err
-		}
-	}
-	return tx.Commit(context.Background())
-}
-
-func get(k []byte) (KV, error) {
-	tx, err := client.Begin()
-	if err != nil {
-		return KV{}, err
-	}
-	v, err := tx.Get(context.TODO(), k)
-	if err != nil {
-		return KV{}, err
-	}
-	return KV{K: k, V: v}, nil
-}
-
-func dels(keys ...[]byte) error {
-	tx, err := client.Begin()
-	if err != nil {
-		return err
-	}
-	for _, key := range keys {
-		err := tx.Delete(key)
-		if err != nil {
-			return err
-		}
-	}
-	return tx.Commit(context.Background())
 }
 
 func scan(keyPrefix []byte, limit int) ([]KV, error) {
@@ -144,6 +102,11 @@ func generateKV(i int64) ([]byte, []byte) {
 	return []byte(fmt.Sprintf("key%s%v", padding, i)), []byte(fmt.Sprintf("val%s%v", padding, i))
 }
 
+type commitHint struct {
+	start int64
+	end   int64
+}
+
 func main() {
 	pdAddr := os.Getenv("PD_ADDR")
 	if pdAddr != "" {
@@ -185,8 +148,8 @@ func main() {
 			defer wg.Done()
 			<-splitReady
 			var mutations transaction.PlainMutations
+			mutations = transaction.NewPlainMutations(1000)
 			for j := start; j < end; j++ {
-				mutations = transaction.NewPlainMutations(1000)
 				key, val := generateKV(j)
 				mutations.AppendMutation(transaction.PlainMutation{
 					KeyOp: kvrpcpb.Op_Put,
@@ -217,52 +180,94 @@ func main() {
 		MustNil(err)
 	}
 	close(splitReady)
+	prewriteStart := time.Now()
 	fmt.Println("============ PREWRITE START ============")
 	fmt.Printf("prewrite with start_ts: %d, primary: %s\n", txn.StartTS(), string(primary))
 	wg.Wait()
-	fmt.Println("============ PREWRITE DONE ============")
+	fmt.Println("============ PREWRITE DONE ============", time.Since(prewriteStart))
 
 	commitTs, err := client.GetTimestamp(context.Background())
 	MustNil(err)
-	regionCh := make(chan interface{}, COMMIT_CONC)
+	commitTaskCh := make(chan interface{}, COMMIT_CONC)
 	for i := int64(0); i < COMMIT_CONC; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for region := range regionCh {
-				mutations := transaction.NewPlainMutations(0)
-				mutations.AppendMutation(transaction.PlainMutation{
-					KeyOp: kvrpcpb.Op_Put,
-					Key:   []byte("key"),
-					Value: []byte("val"),
-					Flags: transaction.MutationFlagIsAssertNotExists,
-				})
+			for region := range commitTaskCh {
+				var mutations transaction.PlainMutations
+				commitByScan := false
+				if hint, ok := region.(commitHint); ok {
+					mutations = transaction.NewPlainMutations(int(hint.end - hint.start))
+					for j := hint.start; j < hint.end; j++ {
+						key, val := generateKV(j)
+						mutations.AppendMutation(transaction.PlainMutation{
+							KeyOp: kvrpcpb.Op_Put,
+							Key:   key,
+							Value: val,
+						})
+					}
+				} else {
+					commitByScan = true
+					mutations = transaction.NewPlainMutations(0)
+					mutations.AppendMutation(transaction.PlainMutation{
+						KeyOp: kvrpcpb.Op_Put,
+						Key:   []byte("key"),
+						Value: []byte("val"),
+					})
+				}
 				committer, err := transaction.NewTwoPhaseCommitterWithPK(txn, 1, primary, &mutations)
 				MustNil(err)
 				committer.SetCommitTs(commitTs)
 				commitCtx, _ := context.WithTimeout(context.Background(), 30*time.Second)
-				err = committer.DoActionOnMutations(commitCtx, 1, &mutations, region)
-				MustNil(err)
-				mutations = transaction.NewPlainMutations(1000)
+				if commitByScan {
+					err = committer.DoActionOnMutations(commitCtx, 1, &mutations, region)
+					MustNil(err)
+				} else {
+					err = committer.DoActionOnMutations(commitCtx, 1, &mutations, nil)
+					MustNil(err)
+				}
 			}
 		}()
 	}
 
+	commitStart := time.Now()
 	fmt.Println("============ COMMIT START ============")
 	fmt.Printf("commit with commit_ts: %d\n", commitTs)
 	regionCache := client.GetRegionCache()
-	for {
-		bo := tikv.NewBackoffer(context.Background(), 1000)
-		region, err := regionCache.LocateKey(bo, min)
-		MustNil(err)
-		regionCh <- region
-		if bytes.Compare(region.EndKey, max) >= 0 {
-			break
+	switch *mode {
+	case "common-commit":
+		start := int64(0)
+		for {
+			stop := false
+			end := start + 1000
+			if end >= size {
+				end = size
+				stop = true
+			}
+			if end > start {
+				hint := commitHint{start, end}
+				commitTaskCh <- hint
+			}
+			if stop {
+				break
+			}
+			start = end
+		}
+	case "scan-commit":
+		for {
+			bo := tikv.NewBackoffer(context.Background(), 1000)
+			region, err := regionCache.LocateKey(bo, min)
+			MustNil(err)
+			commitTaskCh <- region
+			if bytes.Compare(region.EndKey, max) >= 0 {
+				break
+			}
+			min = region.EndKey
 		}
 	}
-	close(regionCh)
+	close(commitTaskCh)
 	wg.Wait()
-	fmt.Println("============ COMMIT DONE ============")
+	fmt.Println("============ COMMIT DONE ============", time.Since(commitStart))
 
 	{
 		times := 0
