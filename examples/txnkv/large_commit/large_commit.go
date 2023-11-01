@@ -173,7 +173,7 @@ func main() {
 				if mutations.Len() >= 1000 {
 					committer, err := transaction.NewTwoPhaseCommitterWithPK(txn, 1, primary, &mutations)
 					MustNil(err)
-					prewriteCtx, _ := context.WithTimeout(context.Background(), 30*time.Second)
+					prewriteCtx, _ := context.WithTimeout(context.Background(), 100*time.Second)
 					err = committer.DoActionOnMutations(prewriteCtx, 0, &mutations, nil)
 					MustNil(err)
 					mutations = transaction.NewPlainMutations(1000)
@@ -182,7 +182,7 @@ func main() {
 			if mutations.Len() > 0 {
 				committer, err := transaction.NewTwoPhaseCommitterWithPK(txn, 1, primary, &mutations)
 				MustNil(err)
-				prewriteCtx, _ := context.WithTimeout(context.Background(), 30*time.Second)
+				prewriteCtx, _ := context.WithTimeout(context.Background(), 100*time.Second)
 				err = committer.DoActionOnMutations(prewriteCtx, 0, &mutations, nil)
 				MustNil(err)
 			}
@@ -253,7 +253,7 @@ func main() {
 				committer, err := transaction.NewTwoPhaseCommitterWithPK(txn, 1, primary, &mutations)
 				MustNil(err)
 				committer.SetCommitTs(commitTs)
-				commitTimeout := 30 * time.Second
+				commitTimeout := 100 * time.Second
 				if commitByScan {
 					commitTimeout = 300 * time.Second
 				}
