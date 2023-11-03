@@ -66,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	pdhttp "github.com/tikv/pd/client/http"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	atomicutil "go.uber.org/atomic"
@@ -115,7 +116,7 @@ type KVStore struct {
 		client Client
 	}
 	pdClient     pd.Client
-	pdHttpClient *util.PDHTTPClient
+	pdHttpClient pdhttp.HTTPClient
 	regionCache  *locate.RegionCache
 	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
@@ -197,7 +198,7 @@ func WithPool(gp Pool) Option {
 // WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
 func WithPDHTTPClient(tlsConf *tls.Config, pdaddrs []string) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = util.NewPDHTTPClient(tlsConf, pdaddrs)
+		o.pdHttpClient = pdhttp.NewHTTPClient(pdaddrs, pdhttp.WithTLSConfig(tlsConf))
 	}
 }
 
@@ -442,6 +443,11 @@ func (s *KVStore) GetOracle() oracle.Oracle {
 // GetPDClient returns the PD client.
 func (s *KVStore) GetPDClient() pd.Client {
 	return s.pdClient
+}
+
+// GetPDHTTPClient returns the PD HTTP client.
+func (s *KVStore) GetPDHTTPClient() pdhttp.HTTPClient {
+	return s.pdHttpClient
 }
 
 // SupportDeleteRange gets the storage support delete range or not.
