@@ -26,6 +26,7 @@ jobs:
       with:
         repository: pingcap/tidb
         path: tidb
+        ref: release-7.1
 
     - name: Check build
       run: |
