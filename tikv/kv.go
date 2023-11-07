@@ -198,9 +198,9 @@ func WithPool(gp Pool) Option {
 }
 
 // WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
-func WithPDHTTPClient(tlsConf *tls.Config, pdaddrs []string) Option {
+func WithPDHTTPClient(pdAddrs []string, tlsConf *tls.Config) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = pdhttp.NewClient(pdaddrs, pdhttp.WithTLSConfig(tlsConf))
+		o.pdHttpClient = pdhttp.NewClient(pdAddrs, pdhttp.WithTLSConfig(tlsConf))
 	}
 }
 
@@ -611,7 +611,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 		for i, store := range stores {
 			storeIDs[i] = store.StoreID()
 		}
-		_, storeMinResolvedTSs, err = s.getGetMinResolvedTSByStoresIDs(ctx, storeIDs)
+		_, storeMinResolvedTSs, err = s.getMinResolvedTSByStoresIDs(ctx, storeIDs)
 		if err != nil {
 			// If getting the minimum resolved timestamp from PD failed, log the error and need to get it from TiKV.
 			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err), zap.Any("stores", storeIDs))
@@ -683,7 +683,7 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 	wg.Wait()
 }
 
-func (s *KVStore) getGetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []uint64) (uint64, map[uint64]uint64, error) {
+func (s *KVStore) getMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []uint64) (uint64, map[uint64]uint64, error) {
 	var (
 		minResolvedTS       uint64
 		storeMinResolvedTSs map[uint64]uint64
@@ -694,25 +694,19 @@ func (s *KVStore) getGetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs [
 		return 0, nil, err
 	}
 	if val, e := util.EvalFailpoint("InjectPDMinResolvedTS"); e == nil {
-		// Need to make sure successfully get from real pd.
-		if storeMinResolvedTSs != nil {
-			for storeID, v := range storeMinResolvedTSs {
-				if v != 0 {
-					// Should be val.(uint64) but failpoint doesn't support that.
-					if tmp, ok := val.(int); ok {
-						storeMinResolvedTSs[storeID] = uint64(tmp)
-						logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("storeID", storeID), zap.Uint64("ts", uint64(tmp)))
-					}
-				}
-			}
-		} else if tmp, ok := val.(int); ok {
-			// Should be val.(uint64) but failpoint doesn't support that.
-			// ci's store id is 1, we can change it if we have more stores.
-			// but for pool ci it's no need to do that :(
-			minResolvedTS = uint64(tmp)
-			logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("ts", uint64(tmp)))
+		injectedTS, ok := val.(int)
+		if !ok {
+			return minResolvedTS, storeMinResolvedTSs, err
 		}
-
+		minResolvedTS = uint64(injectedTS)
+		logutil.BgLogger().Info("inject min resolved ts", zap.Uint64("ts", uint64(injectedTS)))
+		// Currently we only have a store 1 in the test, so it's OK to inject the same min resolved TS for all stores here.
+		for storeID, v := range storeMinResolvedTSs {
+			if v != 0 && v != math.MaxUint64 {
+				storeMinResolvedTSs[storeID] = uint64(injectedTS)
+				logutil.BgLogger().Info("inject store min resolved ts", zap.Uint64("storeID", storeID), zap.Uint64("ts", uint64(injectedTS)))
+			}
+		}
 	}
 	return minResolvedTS, storeMinResolvedTSs, err
 }
@@ -729,7 +723,7 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 	isGlobal := config.GetTxnScopeFromConfig() == oracle.GlobalTxnScope
 	// Try to get the minimum resolved timestamp of the cluster from PD.
 	if s.pdHttpClient != nil && isGlobal {
-		clusterMinSafeTS, _, err := s.pdHttpClient.GetMinResolvedTSByStoresIDs(ctx, nil)
+		clusterMinSafeTS, _, err := s.getMinResolvedTSByStoresIDs(ctx, nil)
 		if err != nil {
 			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err))
 		} else if clusterMinSafeTS != 0 {
