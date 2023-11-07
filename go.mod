@@ -2,7 +2,7 @@ module github.com/tikv/client-go/v2
 
 go 1.21
 
-replace github.com/tikv/pd/client v0.0.0-20230724080549-de985b8e0afc => github.com/JmPotato/pd/client v0.0.0-20231103055242-5d2c4974156f
+replace github.com/tikv/pd/client v0.0.0-20230724080549-de985b8e0afc => github.com/JmPotato/pd/client v0.0.0-20231107024609-216b5b763864
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548

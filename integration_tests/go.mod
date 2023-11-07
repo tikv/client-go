@@ -2,7 +2,7 @@ module integration_tests
 
 go 1.21
 
-replace github.com/tikv/pd/client v0.0.0-20230912103610-2f57a9f050eb => github.com/JmPotato/pd/client v0.0.0-20231103055242-5d2c4974156f
+replace github.com/tikv/pd/client v0.0.0-20230912103610-2f57a9f050eb => github.com/JmPotato/pd/client v0.0.0-20231107024609-216b5b763864
 
 require (
 	github.com/ninedraft/israce v0.0.3
