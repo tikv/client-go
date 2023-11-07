@@ -148,6 +148,8 @@ type KVStore struct {
 	gP     Pool
 }
 
+var _ Storage = (*KVStore)(nil)
+
 // Go run the function in a separate goroutine.
 func (s *KVStore) Go(f func()) error {
 	return s.gP.Run(f)
