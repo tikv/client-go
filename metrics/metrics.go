@@ -62,8 +62,7 @@ var (
 	TiKVLocalLatchWaitTimeHistogram          prometheus.Histogram
 	TiKVStatusDuration                       *prometheus.HistogramVec
 	TiKVStatusCounter                        *prometheus.CounterVec
-	TiKVBatchWaitDuration                    *prometheus.HistogramVec
-	TiKVBatchConnSendDuration                *prometheus.HistogramVec
+	TiKVBatchWaitDuration                    prometheus.Histogram
 	TiKVBatchSendLatency                     prometheus.Histogram
 	TiKVBatchWaitOverLoad                    prometheus.Counter
 	TiKVBatchPendingRequests                 *prometheus.HistogramVec
@@ -334,25 +333,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
-	TiKVBatchWaitDuration = prometheus.NewHistogramVec(
+	TiKVBatchWaitDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
 			Name:        "batch_wait_duration",
-			Buckets:     prometheus.ExponentialBuckets(64, 2, 34), // 64ns ~ 549s
-			Help:        "batch-cmd wait duration, unit is nanosecond",
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 34), // 1ns ~ 8s
+			Help:        "batch wait duration",
 			ConstLabels: constLabels,
-		}, []string{LblType, LblStore})
-
-	TiKVBatchConnSendDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "batch_conn_send_seconds",
-			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 22), // 0.5ms ~ 1048s
-			Help:        "batch conn send duration",
-			ConstLabels: constLabels,
-		}, []string{LblStore})
+		})
 
 	TiKVBatchSendLatency = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -779,7 +768,6 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStatusDuration)
 	prometheus.MustRegister(TiKVStatusCounter)
 	prometheus.MustRegister(TiKVBatchWaitDuration)
-	prometheus.MustRegister(TiKVBatchConnSendDuration)
 	prometheus.MustRegister(TiKVBatchSendLatency)
 	prometheus.MustRegister(TiKVBatchRecvLatency)
 	prometheus.MustRegister(TiKVBatchWaitOverLoad)
