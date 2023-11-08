@@ -2469,8 +2469,8 @@ func (r *Region) Contains(key []byte) bool {
 // startKey < key <= endKey.
 func (r *Region) ContainsByEnd(key []byte) bool {
 	return len(key) == 0 && len(r.EndKey()) == 0 ||
-		(bytes.Compare(r.meta.GetStartKey(), key) < 0 &&
-			(bytes.Compare(key, r.meta.GetEndKey()) <= 0 || len(r.meta.GetEndKey()) == 0))
+		bytes.Compare(r.meta.GetStartKey(), key) < 0 &&
+			(bytes.Compare(key, r.meta.GetEndKey()) <= 0 || len(r.meta.GetEndKey()) == 0)
 }
 
 // Store contains a kv process's address.
