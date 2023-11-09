@@ -172,14 +172,17 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 		lastTSInterface, _ = o.lastTSMap.LoadOrStore(txnScope, &atomic.Pointer[lastTSO]{})
 	}
 	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
+	var current *lastTSO
 	for {
 		last := lastTSPointer.Load()
 		if ts <= last.tso {
 			return
 		}
-		current := &lastTSO{
-			tso:     ts,
-			arrival: o.getArrivalTimestamp(),
+		if current == nil {
+			current = &lastTSO{
+				tso:     ts,
+				arrival: o.getArrivalTimestamp(),
+			}
 		}
 		if lastTSPointer.CompareAndSwap(last, current) {
 			return
