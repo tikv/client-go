@@ -175,7 +175,7 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	var current *lastTSO
 	for {
 		last := lastTSPointer.Load()
-		if ts <= last.tso {
+		if last != nil && ts <= last.tso {
 			return
 		}
 		if current == nil {
