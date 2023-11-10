@@ -59,7 +59,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/client/mock_server"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"google.golang.org/grpc"
 )
