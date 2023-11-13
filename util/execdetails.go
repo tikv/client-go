@@ -615,7 +615,7 @@ type TimeDetail struct {
 	// other kind of waits in series.
 	WaitTime time.Duration
 	// KvReadWallTime is the time used in KV Scan/Get. For get/batch_get,
-	// it also includes the time of spawning and queueing.
+	// this is total duration, which is almost the same with grpc duration.
 	KvReadWallTime time.Duration
 	// TotalRPCWallTime is Total wall clock time spent on this RPC in TiKV.
 	TotalRPCWallTime time.Duration
