@@ -48,6 +48,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -198,9 +199,18 @@ func WithPool(gp Pool) Option {
 }
 
 // WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
-func WithPDHTTPClient(pdAddrs []string, tlsConf *tls.Config) Option {
+func WithPDHTTPClient(
+	pdAddrs []string,
+	tlsConf *tls.Config,
+	requestCounter *prometheus.CounterVec,
+	executionDuration *prometheus.HistogramVec,
+) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = pdhttp.NewClient(pdAddrs, pdhttp.WithTLSConfig(tlsConf))
+		o.pdHttpClient = pdhttp.NewClient(
+			pdAddrs,
+			pdhttp.WithTLSConfig(tlsConf),
+			pdhttp.WithMetrics(requestCounter, executionDuration),
+		)
 	}
 }
 
