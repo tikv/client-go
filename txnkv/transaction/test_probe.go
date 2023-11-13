@@ -20,8 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/config/retry"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"

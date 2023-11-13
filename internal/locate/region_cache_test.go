@@ -50,9 +50,9 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/kv"
 	pd "github.com/tikv/pd/client"
 )

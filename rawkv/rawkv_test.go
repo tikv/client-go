@@ -42,9 +42,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/kv"
 )
 
