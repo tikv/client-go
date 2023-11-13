@@ -55,7 +55,8 @@ func (s *apiTestSuite) SetupTest() {
 	rpcClient := tikv.NewRPCClient()
 	require.NoError(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
 	// Set PD HTTP client.
-	s.store, err = tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0, tikv.WithPDHTTPClient(addrs, nil))
+	s.store, err = tikv.NewTestTiKVStore(rpcClient, pdClient, nil, nil, 0,
+		tikv.WithPDHTTPClient(addrs, nil, nil, nil))
 	require.NoError(err)
 	storeID := uint64(1)
 	s.store.GetRegionCache().SetRegionCacheStore(storeID, s.storeAddr(storeID), s.storeAddr(storeID), tikvrpc.TiKV, 1, nil)
