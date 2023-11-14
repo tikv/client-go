@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
