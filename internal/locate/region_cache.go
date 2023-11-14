@@ -2468,6 +2468,10 @@ func (r *Region) Contains(key []byte) bool {
 // for the maximum region endKey is empty.
 // startKey < key <= endKey.
 func (r *Region) ContainsByEnd(key []byte) bool {
+	// Only a region's right bound expands to inf contains the point at inf.
+	if len(key) == 0 {
+		return len(r.EndKey()) == 0
+	}
 	return bytes.Compare(r.meta.GetStartKey(), key) < 0 &&
 		(bytes.Compare(key, r.meta.GetEndKey()) <= 0 || len(r.meta.GetEndKey()) == 0)
 }
