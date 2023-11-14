@@ -197,10 +197,16 @@ func WithPool(gp Pool) Option {
 	}
 }
 
-// WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
-func WithPDHTTPClient(pdAddrs []string, tlsConf *tls.Config) Option {
+// WithPDHTTPClient sets the PD HTTP client with the given PD addresses and options.
+func WithPDHTTPClient(
+	pdAddrs []string,
+	opts ...pdhttp.ClientOption,
+) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = pdhttp.NewClient(pdAddrs, pdhttp.WithTLSConfig(tlsConf))
+		o.pdHttpClient = pdhttp.NewClient(
+			pdAddrs,
+			opts...,
+		)
 	}
 }
 
