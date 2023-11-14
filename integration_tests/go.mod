@@ -2,8 +2,6 @@ module integration_tests
 
 go 1.21
 
-replace github.com/tikv/pd/client v0.0.0-20230912103610-2f57a9f050eb => github.com/JmPotato/pd/client v0.0.0-20231107024609-216b5b763864
-
 require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
@@ -14,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.8-0.20231025022411-cad314220659
-	github.com/tikv/pd/client v0.0.0-20230912103610-2f57a9f050eb
+	github.com/tikv/pd/client v0.0.0-20231114041114-86831ce71865
 	go.uber.org/goleak v1.2.1
 )
 
