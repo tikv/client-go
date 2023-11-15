@@ -49,12 +49,12 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/latch"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -197,10 +197,16 @@ func WithPool(gp Pool) Option {
 	}
 }
 
-// WithPDHTTPClient set the PD HTTP client with the given address and TLS config.
-func WithPDHTTPClient(pdAddrs []string, tlsConf *tls.Config) Option {
+// WithPDHTTPClient sets the PD HTTP client with the given PD addresses and options.
+func WithPDHTTPClient(
+	pdAddrs []string,
+	opts ...pdhttp.ClientOption,
+) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = pdhttp.NewClient(pdAddrs, pdhttp.WithTLSConfig(tlsConf))
+		o.pdHttpClient = pdhttp.NewClient(
+			pdAddrs,
+			opts...,
+		)
 	}
 }
 

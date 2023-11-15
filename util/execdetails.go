@@ -609,12 +609,13 @@ type TimeDetail struct {
 	// cannot be excluded for now, like Mutex wait time, which is included in this field, so that
 	// this field is called wall time instead of CPU time.
 	ProcessTime time.Duration
-	// Cpu wall time elapsed that task is waiting in queue.
+	// Time elapsed when a coprocessor task yields itself.
 	SuspendTime time.Duration
 	// Off-cpu wall time elapsed in TiKV side. Usually this includes queue waiting time and
 	// other kind of waits in series.
 	WaitTime time.Duration
-	// KvReadWallTime is the time used in KV Scan/Get.
+	// KvReadWallTime is the time used in KV Scan/Get. For get/batch_get,
+	// this is total duration, which is almost the same with grpc duration.
 	KvReadWallTime time.Duration
 	// TotalRPCWallTime is Total wall clock time spent on this RPC in TiKV.
 	TotalRPCWallTime time.Duration
