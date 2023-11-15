@@ -167,22 +167,22 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	if txnScope == "" {
 		txnScope = oracle.GlobalTxnScope
 	}
+	current := &lastTSO{
+		tso:     ts,
+		arrival: o.getArrivalTimestamp(),
+	}
 	lastTSInterface, ok := o.lastTSMap.Load(txnScope)
 	if !ok {
-		lastTSInterface, _ = o.lastTSMap.LoadOrStore(txnScope, &atomic.Pointer[lastTSO]{})
+		pointer := &atomic.Pointer[lastTSO]{}
+		pointer.Store(current)
+		// do not handle the stored case, because it only runs once.
+		lastTSInterface, _ = o.lastTSMap.LoadOrStore(txnScope, pointer)
 	}
 	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
-	var current *lastTSO
 	for {
 		last := lastTSPointer.Load()
-		if last != nil && ts <= last.tso {
+		if current.tso <= last.tso || current.arrival <= last.arrival {
 			return
-		}
-		if current == nil {
-			current = &lastTSO{
-				tso:     ts,
-				arrival: o.getArrivalTimestamp(),
-			}
 		}
 		if lastTSPointer.CompareAndSwap(last, current) {
 			return
