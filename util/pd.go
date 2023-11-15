@@ -111,7 +111,7 @@ func (p *PDHTTPClient) GetClusterMinResolvedTS(ctx context.Context) (uint64, err
 			logutil.BgLogger().Debug(message.Error())
 			return 0, errors.Trace(message)
 		}
-		if val, e := EvalFailpoint("InjectMinResolvedTS"); e == nil {
+		if val, e := EvalFailpoint("InjectPDMinResolvedTS"); e == nil {
 			// Need to make sure successfully get from real pd.
 			if d.MinResolvedTS != 0 {
 				// Should be val.(uint64) but failpoint doesn't support that.
