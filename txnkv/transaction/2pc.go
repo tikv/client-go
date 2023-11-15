@@ -786,8 +786,8 @@ func txnLockTTL(startTime time.Time, txnSize int) uint64 {
 	return lockTTL + uint64(elapsed)
 }
 
-var preSplitDetectThreshold uint32 = 100000
-var preSplitSizeThreshold uint32 = 32 << 20
+var preSplitDetectThreshold uint32 = 1000000
+var preSplitSizeThreshold uint32 = 512 << 20
 
 // doActionOnMutations groups keys into primary batch and secondary batches, if primary batch exists in the key,
 // it does action on primary batch first, then on secondary batches. If action is commit, secondary batches
