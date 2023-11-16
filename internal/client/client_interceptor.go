@@ -123,7 +123,7 @@ func buildResourceControlInterceptor(
 			req.GetResourceControlContext().Penalty = penalty
 			// override request priority with resource group priority if it's not set.
 			// Get the priority at tikv side has some performance issue, so we pass it
-			// at client side. See: https://github.com/tikv/tikv/issues/15994 for more detials.
+			// at client side. See: https://github.com/tikv/tikv/issues/15994 for more details.
 			if req.GetResourceControlContext().OverridePriority == 0 {
 				req.GetResourceControlContext().OverridePriority = uint64(priority)
 			}
