@@ -121,6 +121,7 @@ func buildResourceControlInterceptor(
 				return nil, err
 			}
 			req.GetResourceControlContext().Penalty = penalty
+			ruRuntimeStats.Update(consumption)
 			// override request priority with resource group priority if it's not set.
 			// Get the priority at tikv side has some performance issue, so we pass it
 			// at client side. See: https://github.com/tikv/tikv/issues/15994 for more details.
