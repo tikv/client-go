@@ -296,14 +296,18 @@ func (a *batchConn) fetchMorePendingRequests(
 
 const idleTimeout = 3 * time.Minute
 
+// BatchSendLoopPanicCounter is only used for testing.
+var BatchSendLoopPanicCounter int64 = 0
+
 func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchSendLoop).Inc()
 			logutil.BgLogger().Error("batchSendLoop",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
-			logutil.BgLogger().Info("restart batchSendLoop")
+			atomic.AddInt64(&BatchSendLoopPanicCounter, 1)
+			logutil.BgLogger().Info("restart batchSendLoop", zap.Int64("count", atomic.LoadInt64(&BatchSendLoopPanicCounter)))
 			go a.batchSendLoop(cfg)
 		}
 	}()
@@ -430,7 +434,7 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
 			logutil.BgLogger().Error("batchCommandsClient.recv panic",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
 			err = errors.New("batch conn recv paniced")
 		}
@@ -598,7 +602,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
 			logutil.BgLogger().Error("batchRecvLoop",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
 			logutil.BgLogger().Info("restart batchRecvLoop")
 			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, streamClient)

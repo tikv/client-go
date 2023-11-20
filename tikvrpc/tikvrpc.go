@@ -699,13 +699,20 @@ type MPPStreamResponse struct {
 
 // SetContext set the Context field for the given req to the specified ctx.
 func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
-	ctx := &req.Context
 	if region != nil {
-		ctx.RegionId = region.Id
-		ctx.RegionEpoch = region.RegionEpoch
+		req.Context.RegionId = region.Id
+		req.Context.RegionEpoch = region.RegionEpoch
 	}
-	ctx.Peer = peer
+	req.Context.Peer = peer
 
+	// Shallow copy the context to avoid concurrent modification.
+	return AttachContext(req, req.Context)
+}
+
+// AttachContext sets the request context to the request,
+// Parameter `rpcCtx` use `kvrpcpb.Context` instead of `*kvrpcpb.Context` to avoid concurrent modification by shallow copy.
+func AttachContext(req *Request, rpcCtx kvrpcpb.Context) error {
+	ctx := &rpcCtx
 	switch req.Type {
 	case CmdGet:
 		req.Get().Context = ctx
