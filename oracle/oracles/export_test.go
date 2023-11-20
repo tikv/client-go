@@ -35,7 +35,6 @@
 package oracles
 
 import (
-	"sync/atomic"
 	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
@@ -63,8 +62,9 @@ func NewEmptyPDOracle() oracle.Oracle {
 func SetEmptyPDOracleLastTs(oc oracle.Oracle, ts uint64) {
 	switch o := oc.(type) {
 	case *pdOracle:
-		lastTSInterface, _ := o.lastTSMap.LoadOrStore(oracle.GlobalTxnScope, &atomic.Pointer[lastTSO]{})
-		lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
-		lastTSPointer.Store(&lastTSO{tso: ts, arrival: ts})
+		now := &lastTSO{ts, ts}
+		lastTSInterface, _ := o.lastTSMap.LoadOrStore(oracle.GlobalTxnScope, NewLastTSOPointer(now))
+		lastTSPointer := lastTSInterface.(*lastTSOPointer)
+		lastTSPointer.store(&lastTSO{tso: ts, arrival: ts})
 	}
 }

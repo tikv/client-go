@@ -40,6 +40,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -56,7 +57,7 @@ const slowDist = 30 * time.Millisecond
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
 	c pd.Client
-	// txn_scope (string) -> lastTSPointer (*atomic.Pointer[lastTSO])
+	// txn_scope (string) -> lastTSPointer (*lastTSOPointer)
 	lastTSMap sync.Map
 	quit      chan struct{}
 }
@@ -65,6 +66,27 @@ type pdOracle struct {
 type lastTSO struct {
 	tso     uint64
 	arrival uint64
+}
+
+// lastTSOPointer wrap the lastTSO struct into a pointer.
+type lastTSOPointer struct {
+	p unsafe.Pointer
+}
+
+func NewLastTSOPointer(last *lastTSO) *lastTSOPointer {
+	return &lastTSOPointer{p: unsafe.Pointer(last)}
+}
+
+func (p *lastTSOPointer) load() *lastTSO {
+	return (*lastTSO)(atomic.LoadPointer(&p.p))
+}
+
+func (p *lastTSOPointer) store(last *lastTSO) {
+	atomic.StorePointer(&p.p, unsafe.Pointer(last))
+}
+
+func (p *lastTSOPointer) compareAndSwap(old, new *lastTSO) bool {
+	return atomic.CompareAndSwapPointer(&p.p, unsafe.Pointer(old), unsafe.Pointer(new))
 }
 
 // NewPdOracle create an Oracle that uses a pd client source.
@@ -173,18 +195,17 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	}
 	lastTSInterface, ok := o.lastTSMap.Load(txnScope)
 	if !ok {
-		pointer := &atomic.Pointer[lastTSO]{}
-		pointer.Store(current)
+		pointer := NewLastTSOPointer(current)
 		// do not handle the stored case, because it only runs once.
 		lastTSInterface, _ = o.lastTSMap.LoadOrStore(txnScope, pointer)
 	}
-	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
+	lastTSPointer := lastTSInterface.(*lastTSOPointer)
 	for {
-		last := lastTSPointer.Load()
+		last := lastTSPointer.load()
 		if current.tso <= last.tso || current.arrival <= last.arrival {
 			return
 		}
-		if lastTSPointer.CompareAndSwap(last, current) {
+		if lastTSPointer.compareAndSwap(last, current) {
 			return
 		}
 	}
@@ -206,8 +227,8 @@ func (o *pdOracle) getLastTSWithArrivalTS(txnScope string) (*lastTSO, bool) {
 	if !ok {
 		return nil, false
 	}
-	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
-	last := lastTSPointer.Load()
+	lastTSPointer := lastTSInterface.(*lastTSOPointer)
+	last := lastTSPointer.load()
 	if last == nil {
 		return nil, false
 	}
