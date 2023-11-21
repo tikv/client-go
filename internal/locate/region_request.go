@@ -56,10 +56,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -1449,12 +1449,12 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
-		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
-			return nil, nil, retryTimes, err
-		}
 		rpcCtx.contextPatcher.applyTo(&req.Context)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
+		}
+		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+			return nil, nil, retryTimes, err
 		}
 
 		var retry bool
@@ -1679,8 +1679,8 @@ func (s *RegionRequestSender) sendReqToRegion(
 	if !injectFailOnSend {
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
-		// Record timecost of external requests on related Store when ReplicaReadMode == PreferLeader.
-		if req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
+		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
+		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.recordSlowScoreStat(time.Since(start))
 		}
 		if s.Stats != nil {

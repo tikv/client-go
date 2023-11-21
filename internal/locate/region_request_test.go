@@ -37,8 +37,10 @@ package locate
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -53,11 +55,11 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/client/mock_server"
+	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"google.golang.org/grpc"
 )
@@ -705,7 +707,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 		conf.TiKVClient.MaxBatchSize = 0
 	})()
 
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	s.True(port > 0)
 	server.SetMetaChecker(func(ctx context.Context) error {
 		return context.DeadlineExceeded
@@ -732,4 +734,53 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 	regionErr, _ := resp.GetRegionError()
 	s.True(IsFakeRegionError(regionErr))
 	s.Equal(0, bo.GetTotalBackoffTimes()) // use kv read timeout will do fast retry, so backoff times should be 0.
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
+	// This test should use `go test -race` to run.
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 128
+	})()
+
+	server, port := mockserver.StartMockTikvService()
+	s.True(port > 0)
+	rpcClient := client.NewRPCClient()
+	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
+	}}
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+
+	defer func() {
+		rpcClient.Close()
+		server.Stop()
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				ctx, cancel := context.WithCancel(context.Background())
+				bo := retry.NewBackofferWithVars(ctx, int(client.ReadTimeoutShort.Milliseconds()), nil)
+				region, err := s.cache.LocateRegionByID(bo, s.region)
+				s.Nil(err)
+				s.NotNil(region)
+				go func() {
+					// mock for kill query execution or timeout.
+					time.Sleep(time.Millisecond * time.Duration(rand.Intn(5)+1))
+					cancel()
+				}()
+				req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{Data: []byte("a"), StartTs: 1})
+				regionRequestSender := NewRegionRequestSender(s.cache, fnClient)
+				regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+				regionRequestSender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
+			}
+		}()
+	}
+	wg.Wait()
+	// batchSendLoop should not panic.
+	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicCounter), int64(0))
 }
