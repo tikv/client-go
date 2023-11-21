@@ -528,6 +528,9 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 func (s *KVStore) safeTSUpdater() {
 	defer s.wg.Done()
 	t := time.NewTicker(time.Second * 2)
+	if _, e := util.EvalFailpoint("mockFastSafeTSUpdater"); e == nil {
+		t.Reset(time.Millisecond * 100)
+	}
 	defer t.Stop()
 	ctx, cancel := context.WithCancel(s.ctx)
 	ctx = util.WithInternalSourceType(ctx, util.InternalTxnGC)
@@ -625,7 +628,9 @@ func (s *KVStore) setClusterMinSafeTSByPD(ctx context.Context) bool {
 		} else if clusterMinSafeTS != 0 {
 			// Update metrics.
 			preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
-			if preClusterMinSafeTS > clusterMinSafeTS {
+			// If preClusterMinSafeTS is maxUint64, it means that the min safe ts has not been initialized.
+			// related to https://github.com/tikv/client-go/issues/991
+			if preClusterMinSafeTS != math.MaxUint64 && preClusterMinSafeTS > clusterMinSafeTS {
 				skipClusterSafeTSUpdateCounter.Inc()
 				preSafeTSTime := oracle.GetTimeFromTS(preClusterMinSafeTS)
 				clusterMinSafeTSGap.Set(time.Since(preSafeTSTime).Seconds())
