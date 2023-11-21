@@ -35,7 +35,6 @@
 package oracles
 
 import (
-	"sync/atomic"
 	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
@@ -63,20 +62,9 @@ func NewEmptyPDOracle() oracle.Oracle {
 func SetEmptyPDOracleLastTs(oc oracle.Oracle, ts uint64) {
 	switch o := oc.(type) {
 	case *pdOracle:
-		lastTSInterface, _ := o.lastTSMap.LoadOrStore(oracle.GlobalTxnScope, new(uint64))
-		lastTSPointer := lastTSInterface.(*uint64)
-		atomic.StoreUint64(lastTSPointer, ts)
-		lasTSArrivalInterface, _ := o.lastArrivalTSMap.LoadOrStore(oracle.GlobalTxnScope, new(uint64))
-		lasTSArrivalPointer := lasTSArrivalInterface.(*uint64)
-		atomic.StoreUint64(lasTSArrivalPointer, uint64(time.Now().Unix()*1000))
-	}
-	setEmptyPDOracleLastArrivalTs(oc, ts)
-}
-
-// setEmptyPDOracleLastArrivalTs exports PD oracle's global last ts to test.
-func setEmptyPDOracleLastArrivalTs(oc oracle.Oracle, ts uint64) {
-	switch o := oc.(type) {
-	case *pdOracle:
-		o.setLastArrivalTS(ts, oracle.GlobalTxnScope)
+		now := &lastTSO{ts, ts}
+		lastTSInterface, _ := o.lastTSMap.LoadOrStore(oracle.GlobalTxnScope, NewLastTSOPointer(now))
+		lastTSPointer := lastTSInterface.(*lastTSOPointer)
+		lastTSPointer.store(&lastTSO{tso: ts, arrival: ts})
 	}
 }
