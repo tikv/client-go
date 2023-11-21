@@ -46,7 +46,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/internal/client/mock_server"
+	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
@@ -54,7 +54,7 @@ func TestPanicInRecvLoop(t *testing.T) {
 	require.Nil(t, failpoint.Enable("tikvclient/panicInFailPendingRequests", `panic`))
 	require.Nil(t, failpoint.Enable("tikvclient/gotErrorInRecvLoop", `return("0")`))
 
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
 
@@ -82,7 +82,7 @@ func TestPanicInRecvLoop(t *testing.T) {
 }
 
 func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
 	addr := server.Addr()
