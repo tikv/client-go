@@ -55,11 +55,11 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
-	"github.com/tikv/client-go/v2/internal/client/mock_server"
+	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"google.golang.org/grpc"
 )
@@ -707,7 +707,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 		conf.TiKVClient.MaxBatchSize = 0
 	})()
 
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	s.True(port > 0)
 	server.SetMetaChecker(func(ctx context.Context) error {
 		return context.DeadlineExceeded
@@ -742,7 +742,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 		conf.TiKVClient.MaxBatchSize = 128
 	})()
 
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	s.True(port > 0)
 	rpcClient := client.NewRPCClient()
 	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {

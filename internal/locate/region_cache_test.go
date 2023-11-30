@@ -50,9 +50,9 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	pd "github.com/tikv/pd/client"
 )
@@ -1374,9 +1374,9 @@ func (s *testRegionCacheSuite) TestContains() {
 }
 
 func (s *testRegionCacheSuite) TestContainsByEnd() {
-	s.False(createSampleRegion(nil, nil).ContainsByEnd([]byte{}))
+	s.True(createSampleRegion(nil, nil).ContainsByEnd([]byte{}))
 	s.True(createSampleRegion(nil, nil).ContainsByEnd([]byte{10}))
-	s.False(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{}))
+	s.True(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{}))
 	s.False(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{10}))
 	s.True(createSampleRegion([]byte{10}, nil).ContainsByEnd([]byte{11}))
 	s.False(createSampleRegion(nil, []byte{10}).ContainsByEnd([]byte{}))
