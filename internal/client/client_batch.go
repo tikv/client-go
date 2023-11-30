@@ -184,6 +184,10 @@ func (b *batchCommandsBuilder) cancel(e error) {
 	for _, entry := range b.entries {
 		entry.error(e)
 	}
+
+	for _, entry := range b.waitEntries {
+		entry.error(e)
+	}
 }
 
 func (b *batchCommandsBuilder) pushWaitEntry() {
@@ -422,8 +426,8 @@ func (a *batchConn) getClientAndSend() {
 		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
 		target = a.batchCommandsClients[a.index].target
 		// The lock protects the batchCommandsClient from been closed while it's in use.
-		if a.batchCommandsClients[a.index].tryLockForSend() && a.batchCommandsClients[a.index].Available() > 0 {
-			if a.batchCommandsClients[a.index].Available() > 0 {
+		if a.batchCommandsClients[a.index].tryLockForSend() {
+			if a.batchCommandsClients[a.index].limit.Available() > 0 {
 				cli = a.batchCommandsClients[a.index]
 				break
 			} else {
@@ -444,14 +448,13 @@ func (a *batchConn) getClientAndSend() {
 		} else {
 			logutil.BgLogger().Warn("no available connections due to limit", zap.String("target", target))
 			metrics.TiKVNoLimitConnectionCounter.Inc()
-			a.reqBuilder.pushWaitEntry()
 			return
 		}
 
 	}
 	defer cli.unlockForSend()
 
-	req, forwardingReqs := a.reqBuilder.buildWithLimit(cli.Available(), func(id uint64, e *batchCommandsEntry) {
+	req, forwardingReqs := a.reqBuilder.buildWithLimit(cli.limit.Available(), func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
@@ -574,7 +577,7 @@ type batchCommandsClient struct {
 	// tryLock protects client when re-create the streaming.
 	tryLock
 
-	WindowsLimit
+	limit *WindowsLimit
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -598,7 +601,7 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 	if forwardedHost != "" {
 		client = c.forwardedClients[forwardedHost]
 	}
-	c.Take(len(req.GetRequestIds()))
+	c.limit.Take(len(req.GetRequestIds()))
 	if err := client.Send(req); err != nil {
 		logutil.BgLogger().Info(
 			"sending batch commands meets error",
@@ -619,7 +622,7 @@ func (c *batchCommandsClient) failPendingRequests(err error) {
 		entry, _ := value.(*batchCommandsEntry)
 		c.batched.Delete(id)
 		entry.error(err)
-		c.Ack(1)
+		c.limit.Ack(1)
 		return true
 	})
 }
@@ -725,12 +728,13 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				detail := cop.GetExecDetailsV2().GetTimeDetailV2()
 				if detail != nil {
 					e := detail.GetGrpcExecuteTimeNs() - detail.GetGrpcWaitTimeNs()
+					c.limit.Feedback(e)
 					logutil.BgLogger().Info("batchRecvLoop receives response",
 						zap.Uint64("err", e),
 						zap.Uint64("execute", detail.GetGrpcExecuteTimeNs()),
 						zap.Uint64("wait", detail.GetGrpcWaitTimeNs()),
+						zap.Int("new_cap", c.limit.Capacity()),
 					)
-					c.Feedback(e)
 				}
 			}
 
@@ -744,7 +748,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			}
 			c.batched.Delete(requestID)
 		}
-		c.Ack(len(resp.GetRequestIds()))
+		c.limit.Ack(len(resp.GetRequestIds()))
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
 		if transportLayerLoad > 0 && cfg.MaxBatchWaitTime > 0 {

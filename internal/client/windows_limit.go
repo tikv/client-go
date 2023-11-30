@@ -39,3 +39,7 @@ func (w *WindowsLimit) Feedback(err uint64) {
 		w.cap = 100
 	}
 }
+
+func (w *WindowsLimit) Capacity() int {
+	return w.cap
+}
