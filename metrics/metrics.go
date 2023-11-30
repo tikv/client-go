@@ -79,6 +79,7 @@ var (
 	TiKVPessimisticLockKeysDuration          prometheus.Histogram
 	TiKVTTLLifeTimeReachCounter              prometheus.Counter
 	TiKVNoAvailableConnectionCounter         prometheus.Counter
+	TiKVNoLimitConnectionCounter             prometheus.Counter
 	TiKVTwoPCTxnCounter                      *prometheus.CounterVec
 	TiKVAsyncCommitTxnCounter                *prometheus.CounterVec
 	TiKVOnePCTxnCounter                      *prometheus.CounterVec
@@ -496,6 +497,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "batch_client_no_available_connection_total",
 			Help:        "Counter of no available batch client.",
+			ConstLabels: constLabels,
+		})
+
+	TiKVNoLimitConnectionCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_client_no_limit_connection_total",
+			Help:        "Counter of no limit batch client.",
 			ConstLabels: constLabels,
 		})
 

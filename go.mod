@@ -60,4 +60,7 @@ require (
 	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+
 )
+
+replace github.com/pingcap/kvproto => github.com/bufferflies/kvproto v0.0.0-20231130084419-083bb59b419d
