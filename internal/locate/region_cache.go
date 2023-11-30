@@ -441,9 +441,10 @@ type livenessFunc func(s *Store, bo *retry.Backoffer) livenessState
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
 type RegionCache struct {
-	pdClient         pd.Client
-	codec            apicodec.Codec
-	enableForwarding bool
+	pdClient               pd.Client
+	codec                  apicodec.Codec
+	enableForwarding       bool
+	preferSecureConnection bool
 
 	mu regionIndexMu
 
@@ -504,6 +505,8 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
+	logutil.BgLogger().Warn("tls context", zap.Bool("tls", config.GetGlobalConfig().PreferSecureConnection))
+	c.preferSecureConnection = config.GetGlobalConfig().PreferSecureConnection
 	// Default use 15s as the update inerval.
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
 	if config.GetGlobalConfig().RegionsRefreshInterval > 0 {
@@ -2543,6 +2546,9 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 		if addr == "" {
 			return "", errors.Errorf("empty store(%d) address", s.storeID)
 		}
+		if c.preferSecureConnection && store.GetSecureAddress() != "" {
+			addr = store.GetSecureAddress()
+		}
 		s.addr = addr
 		s.peerAddr = store.GetPeerAddress()
 		s.saddr = store.GetStatusAddress()
@@ -2590,6 +2596,9 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
+	if c.preferSecureConnection && store.GetSecureAddress() != "" {
+		addr = store.GetSecureAddress()
+	}
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		c.storeMu.Lock()
@@ -2831,7 +2840,7 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 	}
 	addr := s.addr
 	rsCh := livenessSf.DoChan(addr, func() (interface{}, error) {
-		return invokeKVStatusAPI(addr, storeLivenessTimeout), nil
+		return invokeKVStatusAPI(addr, s.storeType, storeLivenessTimeout), nil
 	})
 	var ctx context.Context
 	if bo != nil {
@@ -2873,7 +2882,7 @@ func (s *Store) EstimatedWaitTime() time.Duration {
 	return loadStats.estimatedWait - timeSinceUpdated
 }
 
-func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
+func invokeKVStatusAPI(addr string, storeTp tikvrpc.EndpointType, timeout time.Duration) (l livenessState) {
 	start := time.Now()
 	defer func() {
 		if l == reachable {
@@ -2886,7 +2895,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, cli, err := createKVHealthClient(ctx, addr)
+	conn, cli, err := createKVHealthClient(ctx, addr, storeTp)
 	if err != nil {
 		logutil.BgLogger().Info("[health check] create grpc connection failed", zap.String("store", addr), zap.Error(err))
 		l = unreachable
@@ -3022,7 +3031,7 @@ func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
 	}
 }
 
-func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
+func createKVHealthClient(ctx context.Context, addr string, storeTp tikvrpc.EndpointType) (*grpc.ClientConn, healthpb.HealthClient, error) {
 	// Temporarily directly load the config from the global config, however it's not a good idea to let RegionCache to
 	// access it.
 	// TODO: Pass the config in a better way, or use the connArray inner the client directly rather than creating new
@@ -3031,8 +3040,13 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 	cfg := config.GetGlobalConfig()
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
-	if len(cfg.Security.ClusterSSLCA) != 0 {
-		tlsConfig, err := cfg.Security.ToTLSConfig()
+	if storeTp == tikvrpc.TiKV {
+		security := config.Security{
+			ClusterSSLCA:   "/workspaces/cse-local-testbed/cert/root.crt",
+			ClusterSSLCert: "/workspaces/cse-local-testbed/cert/tikv.crt",
+			ClusterSSLKey:  "/workspaces/cse-local-testbed/cert/tikv.key",
+		}
+		tlsConfig, err := security.ToTLSConfig()
 		if err != nil {
 			return nil, nil, errors.WithStack(err)
 		}

@@ -415,7 +415,7 @@ func NewRPCClient(opts ...Opt) *RPCClient {
 	return cli
 }
 
-func (c *RPCClient) getConnArray(addr string, enableBatch bool, opt ...func(cfg *config.TiKVClient)) (*connArray, error) {
+func (c *RPCClient) getConnArray(addr string, storeTp tikvrpc.EndpointType, enableBatch bool, opt ...func(cfg *config.TiKVClient)) (*connArray, error) {
 	c.RLock()
 	if c.isClosed {
 		c.RUnlock()
@@ -425,7 +425,7 @@ func (c *RPCClient) getConnArray(addr string, enableBatch bool, opt ...func(cfg 
 	c.RUnlock()
 	if !ok {
 		var err error
-		array, err = c.createConnArray(addr, enableBatch, opt...)
+		array, err = c.createConnArray(addr, storeTp, enableBatch, opt...)
 		if err != nil {
 			return nil, err
 		}
@@ -440,7 +440,7 @@ func (c *RPCClient) getConnArray(addr string, enableBatch bool, opt ...func(cfg 
 	return array, nil
 }
 
-func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(cfg *config.TiKVClient)) (*connArray, error) {
+func (c *RPCClient) createConnArray(addr string, storeTp tikvrpc.EndpointType, enableBatch bool, opts ...func(cfg *config.TiKVClient)) (*connArray, error) {
 	c.Lock()
 	defer c.Unlock()
 	array, ok := c.conns[addr]
@@ -450,10 +450,17 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 		for _, opt := range opts {
 			opt(&client)
 		}
+		security := config.Security{}
+		whitelists := []tikvrpc.EndpointType{tikvrpc.TiKV}
+		for _, tp := range whitelists {
+			if tp == storeTp {
+				security = c.option.security
+			}
+		}
 		array, err = newConnArray(
 			client.GrpcConnectionCount,
 			addr,
-			c.option.security,
+			security,
 			&c.idleNotify,
 			enableBatch,
 			c.option.dialTimeout,
@@ -596,7 +603,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
 	// tiflash/tiflash_mpp/tidb don't use BatchCommand.
 	enableBatch := req.StoreTp == tikvrpc.TiKV
-	connArray, err := c.getConnArray(addr, enableBatch)
+	connArray, err := c.getConnArray(addr, req.StoreTp, enableBatch)
 	if err != nil {
 		return nil, err
 	}
