@@ -87,8 +87,8 @@ func (b *batchCommandsEntry) error(err error) {
 type batchCommandsBuilder struct {
 	// Each BatchCommandsRequest_Request sent to a store has a unique identity to
 	// distinguish its response.
-	idAlloc     uint64
-	entries     []*batchCommandsEntry
+	idAlloc uint64
+	//entries     []*batchCommandsEntry
 	waitEntries []*batchCommandsEntry
 	requests    []*tikvpb.BatchCommandsRequest_Request
 	requestIDs  []uint64
@@ -98,7 +98,7 @@ type batchCommandsBuilder struct {
 }
 
 func (b *batchCommandsBuilder) len() int {
-	return len(b.entries)
+	return 0
 }
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
@@ -139,7 +139,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int,
 			RequestIds: b.requestIDs,
 		}
 	}
-	b.send += len(b.waitEntries)
+	b.send += len(b.requests)
 	return req, b.forwardingReqs
 }
 
@@ -149,49 +149,45 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int,
 func (b *batchCommandsBuilder) build(
 	collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	for _, e := range b.entries {
-		if e.isCanceled() {
-			continue
-		}
-		if collect != nil {
-			collect(b.idAlloc, e)
-		}
-		if e.forwardedHost == "" {
-			b.requestIDs = append(b.requestIDs, b.idAlloc)
-			b.requests = append(b.requests, e.req)
-		} else {
-			batchReq, ok := b.forwardingReqs[e.forwardedHost]
-			if !ok {
-				batchReq = &tikvpb.BatchCommandsRequest{}
-				b.forwardingReqs[e.forwardedHost] = batchReq
-			}
-			batchReq.RequestIds = append(batchReq.RequestIds, b.idAlloc)
-			batchReq.Requests = append(batchReq.Requests, e.req)
-		}
-		b.idAlloc++
-	}
-	var req *tikvpb.BatchCommandsRequest
-	if len(b.requests) > 0 {
-		req = &tikvpb.BatchCommandsRequest{
-			Requests:   b.requests,
-			RequestIds: b.requestIDs,
-		}
-	}
-	return req, b.forwardingReqs
+	//for _, e := range b.entries {
+	//	if e.isCanceled() {
+	//		continue
+	//	}
+	//	if collect != nil {
+	//		collect(b.idAlloc, e)
+	//	}
+	//	if e.forwardedHost == "" {
+	//		b.requestIDs = append(b.requestIDs, b.idAlloc)
+	//		b.requests = append(b.requests, e.req)
+	//	} else {
+	//		batchReq, ok := b.forwardingReqs[e.forwardedHost]
+	//		if !ok {
+	//			batchReq = &tikvpb.BatchCommandsRequest{}
+	//			b.forwardingReqs[e.forwardedHost] = batchReq
+	//		}
+	//		batchReq.RequestIds = append(batchReq.RequestIds, b.idAlloc)
+	//		batchReq.Requests = append(batchReq.Requests, e.req)
+	//	}
+	//	b.idAlloc++
+	//}
+	//var req *tikvpb.BatchCommandsRequest
+	//if len(b.requests) > 0 {
+	//	req = &tikvpb.BatchCommandsRequest{
+	//		Requests:   b.requests,
+	//		RequestIds: b.requestIDs,
+	//	}
+	//}
+	return b.buildWithLimit(1000, collect)
 }
 
 func (b *batchCommandsBuilder) cancel(e error) {
-	for _, entry := range b.entries {
-		entry.error(e)
-	}
+	//for _, entry := range b.entries {
+	//	entry.error(e)
+	//}
 
 	for _, entry := range b.waitEntries {
 		entry.error(e)
 	}
-}
-
-func (b *batchCommandsBuilder) pushWaitEntry() {
-	b.waitEntries = append(b.waitEntries, b.entries...)
 }
 
 // reset resets the builder to the initial state.
@@ -207,11 +203,11 @@ func (b *batchCommandsBuilder) reset() {
 	// The data in the cap part of the slice would reference the prewrite keys whose
 	// underlying memory is borrowed from memdb. The reference cause GC can't release
 	// the memdb, leading to serious memory leak problems in the large transaction case.
-	for i := 0; i < len(b.entries); i++ {
-		b.entries[i] = nil
-	}
-
-	b.entries = b.entries[:0]
+	//for i := 0; i < len(b.entries); i++ {
+	//	b.entries[i] = nil
+	//}
+	//
+	//b.entries = b.entries[:0]
 	for i := 0; i < len(b.requests); i++ {
 		b.requests[i] = nil
 	}
@@ -225,8 +221,8 @@ func (b *batchCommandsBuilder) reset() {
 
 func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
 	return &batchCommandsBuilder{
-		idAlloc:        0,
-		entries:        make([]*batchCommandsEntry, 0, maxBatchSize),
+		idAlloc: 0,
+		//entries:        make([]*batchCommandsEntry, 0, maxBatchSize),
 		waitEntries:    make([]*batchCommandsEntry, 0, maxBatchSize),
 		requests:       make([]*tikvpb.BatchCommandsRequest_Request, 0, maxBatchSize),
 		requestIDs:     make([]uint64, 0, maxBatchSize),

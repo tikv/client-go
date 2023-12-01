@@ -35,8 +35,8 @@ func (w *WindowsLimit) Feedback(err uint64) {
 	}
 	w.sum += err
 	w.cap = int(Kp*w.sum + Ki*err)
-	if w.cap < 100 {
-		w.cap = 100
+	if w.cap < 10000 {
+		w.cap = 10000
 	}
 }
 
