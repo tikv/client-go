@@ -43,3 +43,7 @@ func (w *WindowsLimit) Feedback(err uint64) {
 func (w *WindowsLimit) Capacity() int {
 	return w.cap
 }
+
+func (w *WindowsLimit) Used() int {
+	return w.used
+}

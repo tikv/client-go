@@ -315,6 +315,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
 				limit:            NewWindowsLimit(10000),
+				index:            i,
 			}
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
 		}

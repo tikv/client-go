@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"math"
 	"runtime/trace"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -101,7 +102,6 @@ func (b *batchCommandsBuilder) len() int {
 }
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
-	//priority := entry.req.GetCoprocessor().GetContext().GetResourceControlContext().GetOverridePriority()
 	b.waitEntries = append(b.waitEntries, entry)
 }
 
@@ -578,6 +578,7 @@ type batchCommandsClient struct {
 	tryLock
 
 	limit *WindowsLimit
+	index int
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -601,6 +602,8 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 	if forwardedHost != "" {
 		client = c.forwardedClients[forwardedHost]
 	}
+	metrics.TiKVWindowsLimitGauge.WithLabelValues("cap", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Capacity()))
+	metrics.TiKVWindowsLimitGauge.WithLabelValues("used", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Used()))
 	c.limit.Take(len(req.GetRequestIds()))
 	if err := client.Send(req); err != nil {
 		logutil.BgLogger().Info(
