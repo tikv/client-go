@@ -600,6 +600,11 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 	}
 	metrics.TiKVWindowsLimitGauge.WithLabelValues("cap", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Capacity()))
 	metrics.TiKVWindowsLimitGauge.WithLabelValues("used", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Used()))
+	logutil.BgLogger().Info(
+		"send request to tikv server",
+		zap.String("target", c.target),
+		zap.Int("request_len", len(req.GetRequestIds())),
+	)
 	c.limit.Take(len(req.GetRequestIds()))
 	if err := client.Send(req); err != nil {
 		logutil.BgLogger().Info(
@@ -714,6 +719,11 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 
 		responses := resp.GetResponses()
+		logutil.BgLogger().Info(
+			"recv request to tikv server",
+			zap.String("target", c.target),
+			zap.Int("request_len", len(resp.GetRequestIds())),
+		)
 		for i, requestID := range resp.GetRequestIds() {
 			value, ok := c.batched.Load(requestID)
 			if !ok {
