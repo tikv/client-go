@@ -209,7 +209,7 @@ func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegi
 	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string) (*pd.Region, error) {
+func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...pd.GetRegionOption) (*pd.Region, error) {
 	return &pd.Region{}, nil
 }
 
@@ -226,8 +226,8 @@ func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...p
 	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int) ([]*pd.Region, error) {
-	regions := c.cluster.ScanRegions(startKey, endKey, limit)
+func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+	regions := c.cluster.ScanRegions(startKey, endKey, limit, opts...)
 	return regions, nil
 }
 
