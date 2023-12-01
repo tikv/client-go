@@ -349,7 +349,7 @@ func (c *Cluster) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer, 
 }
 
 // ScanRegions returns at most `limit` regions from given `key` and their leaders.
-func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int) []*pd.Region {
+func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...pd.GetRegionOption) []*pd.Region {
 	c.RLock()
 	defer c.RUnlock()
 
