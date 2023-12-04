@@ -16,7 +16,6 @@ package client
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,17 +34,16 @@ var _ Client = interceptedClient{}
 
 type interceptedClient struct {
 	Client
-	ruRuntimeStatsMap *sync.Map
 }
 
 // NewInterceptedClient creates a Client which can execute interceptor.
-func NewInterceptedClient(client Client, ruRuntimeStatsMap *sync.Map) Client {
-	return interceptedClient{client, ruRuntimeStatsMap}
+func NewInterceptedClient(client Client) Client {
+	return interceptedClient{client}
 }
 
 func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	// Build the resource control interceptor.
-	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req, r.getRURuntimeStats(req.GetStartTS()))
+	var finalInterceptor interceptor.RPCInterceptor = buildResourceControlInterceptor(ctx, req)
 	// Chain the interceptors if there are multiple interceptors.
 	if it := interceptor.GetRPCInterceptorFromCtx(ctx); it != nil {
 		if finalInterceptor != nil {
@@ -62,16 +60,6 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 	return r.Client.SendRequest(ctx, addr, req, timeout)
 }
 
-func (r interceptedClient) getRURuntimeStats(startTS uint64) *util.RURuntimeStats {
-	if r.ruRuntimeStatsMap == nil || startTS == 0 {
-		return nil
-	}
-	if v, ok := r.ruRuntimeStatsMap.Load(startTS); ok {
-		return v.(*util.RURuntimeStats)
-	}
-	return nil
-}
-
 var (
 	// ResourceControlSwitch is used to control whether to enable the resource control.
 	ResourceControlSwitch atomic.Value
@@ -84,7 +72,6 @@ var (
 func buildResourceControlInterceptor(
 	ctx context.Context,
 	req *tikvrpc.Request,
-	ruRuntimeStats *util.RURuntimeStats,
 ) interceptor.RPCInterceptor {
 	if !ResourceControlSwitch.Load().(bool) {
 		return nil
@@ -102,6 +89,8 @@ func buildResourceControlInterceptor(
 	}
 	resourceControlInterceptor := *rcInterceptor
 
+	ruDetails := ctx.Value(util.RUDetailsCtxKey)
+
 	// Make the request info.
 	reqInfo := resourcecontrol.MakeRequestInfo(req)
 	// Build the interceptor.
@@ -116,18 +105,22 @@ func buildResourceControlInterceptor(
 				return next(target, req)
 			}
 
-			consumption, penalty, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
 			req.GetResourceControlContext().Penalty = penalty
-			ruRuntimeStats.Update(consumption)
 			// override request priority with resource group priority if it's not set.
 			// Get the priority at tikv side has some performance issue, so we pass it
 			// at client side. See: https://github.com/tikv/tikv/issues/15994 for more details.
 			if req.GetResourceControlContext().OverridePriority == 0 {
 				req.GetResourceControlContext().OverridePriority = uint64(priority)
 			}
+			if ruDetails != nil {
+				detail := ruDetails.(*util.RUDetails)
+				detail.Update(consumption, waitDuration)
+			}
+
 			resp, err := next(target, req)
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
@@ -135,7 +128,10 @@ func buildResourceControlInterceptor(
 				if err != nil {
 					return nil, err
 				}
-				ruRuntimeStats.Update(consumption)
+				if ruDetails != nil {
+					detail := ruDetails.(*util.RUDetails)
+					detail.Update(consumption, time.Duration(0))
+				}
 			}
 			return resp, err
 		}
