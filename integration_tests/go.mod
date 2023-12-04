@@ -11,8 +11,8 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20231116051730-1c2351c28173
-	github.com/tikv/pd/client v0.0.0-20231130081618-862eee18738e
+	github.com/tikv/client-go/v2 v2.0.8-0.20231201024404-0ff16620f6c0
+	github.com/tikv/pd/client v0.0.0-20231204034622-259435d93ae2
 	go.uber.org/goleak v1.3.0
 )
 
