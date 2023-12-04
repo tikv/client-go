@@ -105,7 +105,7 @@ func buildResourceControlInterceptor(
 				return next(target, req)
 			}
 
-			consumption, penalty, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+			consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -118,7 +118,7 @@ func buildResourceControlInterceptor(
 			}
 			if ruDetails != nil {
 				detail := ruDetails.(*util.RUDetails)
-				detail.Update(consumption)
+				detail.Update(consumption, waitDuration)
 			}
 
 			resp, err := next(target, req)
@@ -130,7 +130,7 @@ func buildResourceControlInterceptor(
 				}
 				if ruDetails != nil {
 					detail := ruDetails.(*util.RUDetails)
-					detail.Update(consumption)
+					detail.Update(consumption, time.Duration(0))
 				}
 			}
 			return resp, err

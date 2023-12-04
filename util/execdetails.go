@@ -689,23 +689,26 @@ func (rd *ResolveLockDetail) Merge(resolveLock *ResolveLockDetail) {
 
 // RUDetails contains RU detail info.
 type RUDetails struct {
-	readRU  *uatomic.Float64
-	writeRU *uatomic.Float64
+	readRU         *uatomic.Float64
+	writeRU        *uatomic.Float64
+	ruWaitDuration *uatomic.Duration
 }
 
 // NewRUDetails creates a new RUDetails.
 func NewRUDetails() *RUDetails {
 	return &RUDetails{
-		readRU:  uatomic.NewFloat64(0),
-		writeRU: uatomic.NewFloat64(0),
+		readRU:         uatomic.NewFloat64(0),
+		writeRU:        uatomic.NewFloat64(0),
+		ruWaitDuration: uatomic.NewDuration(0),
 	}
 }
 
 // Clone implements the RuntimeStats interface.
 func (rd *RUDetails) Clone() *RUDetails {
 	return &RUDetails{
-		readRU:  uatomic.NewFloat64(rd.readRU.Load()),
-		writeRU: uatomic.NewFloat64(rd.writeRU.Load()),
+		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
+		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
+		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
 	}
 }
 
@@ -713,11 +716,12 @@ func (rd *RUDetails) Clone() *RUDetails {
 func (rd *RUDetails) Merge(other *RUDetails) {
 	rd.readRU.Add(other.readRU.Load())
 	rd.writeRU.Add(other.writeRU.Load())
+	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
 }
 
 // String implements fmt.Stringer interface.
 func (rd *RUDetails) String() string {
-	return fmt.Sprintf("RRU:%f, WRU:%f", rd.readRU.Load(), rd.writeRU.Load())
+	return fmt.Sprintf("RRU:%f, WRU:%f, WaitDuration:%v", rd.readRU.Load(), rd.writeRU.Load(), rd.ruWaitDuration.Load())
 }
 
 // RRU returns the read RU.
@@ -730,11 +734,17 @@ func (rd *RUDetails) WRU() float64 {
 	return rd.writeRU.Load()
 }
 
+// RUWaitDuration returns the time duration waiting for available RU.
+func (rd *RUDetails) RUWaitDuration() time.Duration {
+	return rd.ruWaitDuration.Load()
+}
+
 // Update updates the RU runtime stats with the given consumption info.
-func (rd *RUDetails) Update(consumption *rmpb.Consumption) {
+func (rd *RUDetails) Update(consumption *rmpb.Consumption, waitDuration time.Duration) {
 	if rd == nil || consumption == nil {
 		return
 	}
 	rd.readRU.Add(consumption.RRU)
 	rd.writeRU.Add(consumption.WRU)
+	rd.ruWaitDuration.Add(waitDuration)
 }
