@@ -1099,7 +1099,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 	r = c.searchCachedRegion(key, isEndKey)
 	if r == nil {
 		// load region when it is not exists or expired.
-		lr, err := c.loadRegion(bo, key, isEndKey)
+		lr, err := c.loadRegion(bo, key, isEndKey, pd.WithAllowFollowerHandle())
 		if err != nil {
 			// no region data, return error if failure.
 			return nil, err
@@ -1631,7 +1631,7 @@ func filterUnavailablePeers(region *pd.Region) {
 // loadRegion loads region from pd client, and picks the first peer as leader.
 // If the given key is the end key of the region that you want, you may set the second argument to true. This is useful
 // when processing in reverse order.
-func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool) (*Region, error) {
+func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool, opts ...pd.GetRegionOption) (*Region, error) {
 	ctx := bo.GetCtx()
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("loadRegion", opentracing.ChildOf(span.Context()))
@@ -1641,6 +1641,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 
 	var backoffErr error
 	searchPrev := false
+	opts = append(opts, pd.WithBuckets())
 	for {
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
@@ -1652,9 +1653,9 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 		var reg *pd.Region
 		var err error
 		if searchPrev {
-			reg, err = c.pdClient.GetPrevRegion(ctx, key, pd.WithBuckets())
+			reg, err = c.pdClient.GetPrevRegion(ctx, key, opts...)
 		} else {
-			reg, err = c.pdClient.GetRegion(ctx, key, pd.WithBuckets())
+			reg, err = c.pdClient.GetRegion(ctx, key, opts...)
 		}
 		metrics.LoadRegionCacheHistogramWhenCacheMiss.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -1806,7 +1807,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 		}
 		start := time.Now()
-		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
+		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pd.WithAllowFollowerHandle())
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
