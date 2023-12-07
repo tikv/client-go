@@ -806,11 +806,6 @@ type invalidStore struct {
 }
 
 func (state *invalidStore) next(bo *retry.Backoffer, _ *replicaSelector) (*RPCContext, error) {
-	if span := opentracing.SpanFromContext(context.Background()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("invalidStore.next", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
-	}
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalidStore").Inc()
 	return nil, nil
 }
@@ -822,11 +817,6 @@ type invalidLeader struct {
 }
 
 func (state *invalidLeader) next(bo *retry.Backoffer, _ *replicaSelector) (*RPCContext, error) {
-	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("invalidLeader.next", opentracing.ChildOf(span.Context()))
-		defer span1.Finish()
-		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
-	}
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalidLeader").Inc()
 	return nil, nil
 }
