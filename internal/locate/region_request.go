@@ -805,7 +805,7 @@ type invalidStore struct {
 	stateBase
 }
 
-func (state *invalidStore) next(bo *retry.Backoffer, _ *replicaSelector) (*RPCContext, error) {
+func (state *invalidStore) next(_ *retry.Backoffer, _ *replicaSelector) (*RPCContext, error) {
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalidStore").Inc()
 	return nil, nil
 }
@@ -816,7 +816,7 @@ type invalidLeader struct {
 	stateBase
 }
 
-func (state *invalidLeader) next(bo *retry.Backoffer, _ *replicaSelector) (*RPCContext, error) {
+func (state *invalidLeader) next(_ *retry.Backoffer, _ *replicaSelector) (*RPCContext, error) {
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalidLeader").Inc()
 	return nil, nil
 }
@@ -1167,8 +1167,9 @@ func (s *RegionRequestSender) getRPCContext(
 	et tikvrpc.EndpointType,
 	opts ...StoreSelectorOption,
 ) (*RPCContext, error) {
+	var span1 opentracing.Span
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("regionRequest.getRPCContext", opentracing.ChildOf(span.Context()))
+		span1 = span.Tracer().StartSpan("regionRequest.getRPCContext", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
@@ -1176,7 +1177,14 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV, tikvrpc.TiKVRemoteCoprocessor:
 		if s.replicaSelector == nil {
+			var span2 opentracing.Span
+			if span1 != nil && span1.Tracer() != nil {
+				span2 = span1.Tracer().StartSpan("newReplicaSelector", opentracing.ChildOf(span1.Context()))
+			}
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
+			if span2 != nil {
+				span2.Finish()
+			}
 			if selector == nil || err != nil {
 				return nil, err
 			}
