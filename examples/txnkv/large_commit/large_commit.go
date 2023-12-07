@@ -50,6 +50,7 @@ var (
 	commitConcurrency   = flag.Int64("commit-concurrency", 100, "concurrency of commit")
 	prewriteConcurrency = flag.Int64("prewrite-concurrency", 100, "concurrency of prewrite")
 	bits                int
+	schema              = flag.String("schema", "./tests/sysbench.sql", "schema of the table")
 )
 
 var (
@@ -131,39 +132,61 @@ func main() {
 	initContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
 
 	MustNil(client.UnsafeDestroyRange(initContext, []byte{0}, []byte{255}))
+	core, err := NewCore(*schema, false, false)
+	MustNil(err)
+	start := time.Now()
+	memBuffer, err := core.InsertRows(int(*txnSize), 1)
+	MustNil(err)
+	fmt.Printf("prepare membuffer takes %s", time.Since(start))
+
+	KVChan := make(chan struct {
+		k []byte
+		v []byte
+	}, PREWRITE_CONC*2)
+
+	it, err := memBuffer.Iter(nil, nil)
+	MustNil(err)
+	primary := []byte(it.Key())
+	min, max := primary, primary
+	it.Close()
+	go func() {
+		it, err := memBuffer.Iter(nil, nil)
+		MustNil(err)
+		for ; it.Valid(); err = it.Next() {
+			k := []byte(it.Key())
+			if bytes.Compare(k, min) < 0 {
+				min = k
+			}
+			if bytes.Compare(k, max) > 0 {
+				max = k
+			}
+			MustNil(err)
+			KVChan <- struct {
+				k []byte
+				v []byte
+			}{it.Key(), it.Value()}
+		}
+		close(KVChan)
+		it.Close()
+	}()
 
 	txn, err := client.Begin()
 	MustNil(err)
-	primary, _ := generateKV(0)
-	min, max := primary, primary
 	size := *txnSize
 	// prewrite
 	var wg sync.WaitGroup
-	splitKeys := make([][]byte, 0, PREWRITE_CONC)
-	splitReady := make(chan struct{})
 	for i := int64(0); i < PREWRITE_CONC; i++ {
 		wg.Add(1)
-		start := (size / PREWRITE_CONC) * i
-		end := (size / PREWRITE_CONC) * (i + 1)
-		if i == PREWRITE_CONC-1 {
-			end = size
-		}
-		startKey, _ := generateKV(start)
-		endKey, _ := generateKV(end)
-		if bytes.Compare(startKey, min) < 0 {
-			min = startKey
-		}
-		if bytes.Compare(endKey, max) > 0 {
-			max = endKey
-		}
-		splitKeys = append(splitKeys, startKey)
-		go func(start, end int64) {
+		go func() {
 			defer wg.Done()
-			<-splitReady
 			var mutations transaction.PlainMutations
 			mutations = transaction.NewPlainMutations(1000)
-			for j := start; j < end; j++ {
-				key, val := generateKV(j)
+			for {
+				kv, ok := <-KVChan
+				if !ok {
+					break
+				}
+				key, val := kv.k, kv.v
 				mutations.AppendMutation(transaction.PlainMutation{
 					KeyOp: kvrpcpb.Op_Put,
 					Key:   key,
@@ -186,13 +209,9 @@ func main() {
 				err = committer.DoActionOnMutations(prewriteCtx, 0, &mutations, nil)
 				MustNil(err)
 			}
-		}(start, end)
+		}()
 	}
-	if size/PREWRITE_CONC > 1000 {
-		_, err = client.SplitRegions(initContext, splitKeys, true, nil)
-		MustNil(err)
-	}
-	close(splitReady)
+
 	prewriteStart := time.Now()
 	fmt.Println("============ PREWRITE START ============")
 	fmt.Printf("prewrite with start_ts: %d, primary: %s\n", txn.StartTS(), string(primary))
@@ -333,9 +352,8 @@ func main() {
 	SCAN:
 		times++
 		// scan
-		scanStart, _ := generateKV(0)
-		fmt.Println("scan start", string(scanStart))
-		ret, err := scan(scanStart, 10)
+		fmt.Println("scan start", string(primary))
+		ret, err := scan(primary, 10)
 		MustNil(err)
 		for _, kv := range ret {
 			fmt.Println(kv)
