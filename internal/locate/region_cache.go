@@ -863,6 +863,11 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 // must be out of date and already dropped from cache or not flash store found.
 // `loadBalance` is an option. For batch cop, it is pointless and might cause try the failed store repeatly.
 func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, loadBalance bool, labelFilter LabelFilter) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("regionCache.GetTiFlashRPCContext", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	ts := time.Now().Unix()
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
@@ -1834,6 +1839,11 @@ func (c *RegionCache) GetCachedRegionWithRLock(regionID RegionVerID) (r *Region)
 }
 
 func (c *RegionCache) getStoreAddr(bo *retry.Backoffer, region *Region, store *Store) (addr string, err error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("regionCache.getStoreAddr", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	state := store.getResolveState()
 	switch state {
 	case resolved, needCheck:
@@ -2504,6 +2514,11 @@ func (s *Store) StoreID() uint64 {
 // initResolve resolves the address of the store that never resolved and returns an
 // empty string if it's a tombstone.
 func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, err error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("store.initResolve", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	s.resolveMutex.Lock()
 	state := s.getResolveState()
 	defer s.resolveMutex.Unlock()
