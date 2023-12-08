@@ -596,7 +596,17 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
 	// tiflash/tiflash_mpp/tidb don't use BatchCommand.
 	enableBatch := req.StoreTp == tikvrpc.TiKV
+	var spanConn opentracing.Span
+	if spanRPC != nil {
+		spanConn = spanRPC.Tracer().StartSpan(
+			"RPCClient.getConnArray", opentracing.ChildOf(spanRPC.Context()),
+		)
+		ctx = opentracing.ContextWithSpan(ctx, spanConn)
+	}
 	connArray, err := c.getConnArray(addr, enableBatch)
+	if spanConn != nil {
+		spanConn.Finish()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -657,6 +667,12 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	// Or else it's a unary call.
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	var spanCall opentracing.Span
+	if spanRPC != nil {
+		spanCall = spanRPC.Tracer().StartSpan("tikvrpc.CallRPC", opentracing.ChildOf(spanRPC.Context()))
+		defer spanCall.Finish()
+		ctx1 = opentracing.ContextWithSpan(ctx1, spanCall)
+	}
 	return tikvrpc.CallRPC(ctx1, client, req)
 }
 
