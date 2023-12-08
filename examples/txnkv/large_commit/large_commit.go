@@ -44,15 +44,14 @@ func (kv KV) String() string {
 }
 
 var (
-	client              *txnkv.Client
-	pdAddr              = flag.String("pd", "127.0.0.1:2379", "pd address")
-	txnSize             = flag.Int64("txn-size", 1024, "txn size")
-	mode                = flag.String("mode", "common-commit", "common-commit|scan-commit")
-	oneTokenPerStore    = flag.Bool("one-token-per-store", false, "one token per store")
-	commitConcurrency   = flag.Int64("commit-concurrency", 100, "concurrency of commit")
-	prewriteConcurrency = flag.Int64("prewrite-concurrency", 100, "concurrency of prewrite")
-	bits                int
-	schema              = flag.String("schema", "./cases/sysbench.sql", "schema of the table")
+	client            *txnkv.Client
+	pdAddr            = flag.String("pd", "127.0.0.1:2379", "pd address")
+	txnSize           = flag.Int64("txn-size", 1024, "txn size")
+	mode              = flag.String("mode", "common-commit", "common-commit|scan-commit")
+	oneTokenPerStore  = flag.Bool("one-token-per-store", false, "one token per store")
+	commitConcurrency = flag.Int64("commit-concurrency", 100, "concurrency of commit")
+	bits              int
+	schema            = flag.String("schema", "./cases/sysbench.sql", "schema of the table")
 )
 
 var (
@@ -122,7 +121,6 @@ func main() {
 	}
 	flag.Parse()
 	bits = len(fmt.Sprintf("%d", *txnSize))
-	PREWRITE_CONC = *prewriteConcurrency
 	COMMIT_CONC = *commitConcurrency
 
 	cfg := config.GetGlobalConfig()
