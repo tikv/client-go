@@ -43,6 +43,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -772,6 +773,12 @@ func sendBatchRequest(
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
 ) (*tikvrpc.Response, error) {
+	var span0 opentracing.Span
+	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
+		span0 = span.Tracer().StartSpan("sendBatchRequest", opentracing.ChildOf(span.Context()))
+		defer span0.Finish()
+		ctx = opentracing.ContextWithSpan(ctx, span0)
+	}
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
 		req:           req,
@@ -783,6 +790,10 @@ func sendBatchRequest(
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
+	var spanWaitBatch opentracing.Span
+	if span0 != nil {
+		spanWaitBatch = span0.Tracer().StartSpan("waitBatch", opentracing.ChildOf(span0.Context()))
+	}
 	start := time.Now()
 	select {
 	case batchConn.batchCommandsCh <- entry:
@@ -794,7 +805,15 @@ func sendBatchRequest(
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
 	metrics.TiKVBatchWaitDuration.Observe(float64(time.Since(start)))
+	if spanWaitBatch != nil {
+		spanWaitBatch.Finish()
+	}
 
+	var spanWaitRes opentracing.Span
+	if span0 != nil {
+		spanWaitRes = span0.Tracer().StartSpan("waitRes", opentracing.ChildOf(span0.Context()))
+		defer spanWaitRes.Finish()
+	}
 	select {
 	case res, ok := <-entry.res:
 		if !ok {

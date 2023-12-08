@@ -337,6 +337,11 @@ type accessKnownLeader struct {
 }
 
 func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("accessKnownLeader.next", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	leader := selector.replicas[state.leaderIdx]
 	liveness := leader.store.getLivenessState()
 	if liveness == unreachable && selector.regionCache.enableForwarding {
@@ -399,6 +404,11 @@ type tryFollower struct {
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("tryFollower.next", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	var targetReplica *replica
 	hasDeadlineExceededErr := false
 	// Search replica that is not attempted from the last accessed replica
@@ -462,6 +472,12 @@ type accessByKnownProxy struct {
 }
 
 func (state *accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("accessByKnownProxy.next", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
+
 	leader := selector.replicas[state.leaderIdx]
 	if leader.store.getLivenessState() == reachable {
 		selector.regionStore.unsetProxyStoreIfNeeded(selector.region)
@@ -496,6 +512,11 @@ type tryNewProxy struct {
 }
 
 func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("tryNewProxy.next", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	leader := selector.replicas[state.leaderIdx]
 	if leader.store.getLivenessState() == reachable {
 		selector.regionStore.unsetProxyStoreIfNeeded(selector.region)
@@ -567,6 +588,11 @@ type accessFollower struct {
 }
 
 func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("accessFollower.next", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	replicaSize := len(selector.replicas)
 	resetStaleRead := false
 	if state.lastIdx < 0 {
@@ -722,6 +748,11 @@ type tryIdleReplica struct {
 }
 
 func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("tryIdleReplica.next", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	// Select a follower replica that has the lowest estimated wait duration
 	minWait := time.Duration(math.MaxInt64)
 	targetIdx := state.leaderIdx
@@ -856,6 +887,11 @@ const maxReplicaAttempt = 10
 // next creates the RPCContext of the current candidate replica.
 // It returns a SendError if runs out of all replicas or the cached region is invalidated.
 func (s *replicaSelector) next(bo *retry.Backoffer) (rpcCtx *RPCContext, err error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("replicaSelector.next", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	if !s.region.isValid() {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
 		return nil, nil
@@ -922,6 +958,14 @@ func (s *replicaSelector) refreshRegionStore() {
 }
 
 func (s *replicaSelector) buildRPCContext(bo *retry.Backoffer) (*RPCContext, error) {
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan(
+			"replicaSelector.BuildRPCContext",
+			opentracing.ChildOf(span.Context()),
+		)
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
 	targetReplica, proxyReplica := s.targetReplica(), s.proxyReplica()
 
 	// Backoff and retry if no replica is selected or the selected replica is stale
@@ -1123,10 +1167,24 @@ func (s *RegionRequestSender) getRPCContext(
 	et tikvrpc.EndpointType,
 	opts ...StoreSelectorOption,
 ) (*RPCContext, error) {
+	var span1 opentracing.Span
+	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
+		span1 = span.Tracer().StartSpan("regionRequest.getRPCContext", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+	}
+
 	switch et {
 	case tikvrpc.TiKV, tikvrpc.TiKVRemoteCoprocessor:
 		if s.replicaSelector == nil {
+			var span2 opentracing.Span
+			if span1 != nil && span1.Tracer() != nil {
+				span2 = span1.Tracer().StartSpan("newReplicaSelector", opentracing.ChildOf(span1.Context()))
+			}
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
+			if span2 != nil {
+				span2.Finish()
+			}
 			if selector == nil || err != nil {
 				return nil, err
 			}
@@ -1171,8 +1229,9 @@ func (s *RegionRequestSender) SendReqCtx(
 	retryTimes int,
 	err error,
 ) {
+	var span1 opentracing.Span
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("regionRequest.SendReqCtx", opentracing.ChildOf(span.Context()))
+		span1 = span.Tracer().StartSpan("regionRequest.SendReqCtx", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
@@ -1298,6 +1357,9 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
+		if span1 != nil {
+			bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+		}
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
