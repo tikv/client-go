@@ -2517,7 +2517,6 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("store.initResolve", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
-		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 	s.resolveMutex.Lock()
 	state := s.getResolveState()

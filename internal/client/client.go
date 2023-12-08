@@ -601,7 +601,6 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		spanConn = spanRPC.Tracer().StartSpan(
 			"RPCClient.getConnArray", opentracing.ChildOf(spanRPC.Context()),
 		)
-		ctx = opentracing.ContextWithSpan(ctx, spanConn)
 	}
 	connArray, err := c.getConnArray(addr, enableBatch)
 	if spanConn != nil {

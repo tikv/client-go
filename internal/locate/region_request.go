@@ -1229,8 +1229,9 @@ func (s *RegionRequestSender) SendReqCtx(
 	retryTimes int,
 	err error,
 ) {
+	var span1 opentracing.Span
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("regionRequest.SendReqCtx", opentracing.ChildOf(span.Context()))
+		span1 = span.Tracer().StartSpan("regionRequest.SendReqCtx", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
@@ -1356,6 +1357,9 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
+		if span1 != nil {
+			bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
+		}
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		if err != nil {
