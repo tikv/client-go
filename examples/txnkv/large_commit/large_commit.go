@@ -19,6 +19,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -52,6 +53,7 @@ var (
 	commitConcurrency = flag.Int64("commit-concurrency", 100, "concurrency of commit")
 	bits              int
 	schema            = flag.String("schema", "./cases/sysbench.sql", "schema of the table")
+	shuffle           = flag.Bool("shuffle", false, "shuffle the keys")
 )
 
 var (
@@ -143,12 +145,16 @@ func main() {
 	start := time.Now()
 	memBuffer, err := core.InsertRows(int(*txnSize), 1)
 	MustNil(err)
-	fmt.Printf("prepare membuffer takes %s", time.Since(start))
+	fmt.Printf("prepare membuffer takes %s\n", time.Since(start))
 
-	KVChan := make(chan struct {
-		k, v []byte
-	}, PREWRITE_CONC*2)
+	KVChan := make(chan KV, PREWRITE_CONC*2)
 
+	var shuffledMap map[int64]KV
+	shuffleStart := time.Now()
+	if *shuffle {
+		fmt.Println("shuffling")
+		shuffledMap = make(map[int64]KV, memBuffer.Len())
+	}
 	it, err := memBuffer.Iter(nil, nil)
 	MustNil(err)
 	primary := []byte(it.Key())
@@ -161,26 +167,45 @@ func main() {
 			k := []byte(it.Key())
 			splitKeys = append(splitKeys, k)
 		}
+		if *shuffle {
+			k := []byte(it.Key())
+			v := it.Value()
+			for {
+				shuffleKey := rand.Int63()
+				if _, ok := shuffledMap[shuffleKey]; ok {
+					continue
+				}
+				shuffledMap[shuffleKey] = KV{k, v}
+				break
+			}
+		}
+	}
+	if *shuffle {
+		fmt.Println("shuffling done", time.Since(shuffleStart))
 	}
 	it.Close()
 	go func() {
-		it, err := memBuffer.Iter(nil, nil)
-		MustNil(err)
-		for ; it.Valid(); err = it.Next() {
-			k := []byte(it.Key())
-			if bytes.Compare(k, min) < 0 {
-				min = k
+		if *shuffle {
+			for _, kv := range shuffledMap {
+				KVChan <- kv
 			}
-			if bytes.Compare(k, max) > 0 {
-				max = k
-			}
+		} else {
+			it, err := memBuffer.Iter(nil, nil)
 			MustNil(err)
-			KVChan <- struct {
-				k, v []byte
-			}{it.Key(), it.Value()}
+			for ; it.Valid(); err = it.Next() {
+				k := []byte(it.Key())
+				if bytes.Compare(k, min) < 0 {
+					min = k
+				}
+				if bytes.Compare(k, max) > 0 {
+					max = k
+				}
+				MustNil(err)
+				KVChan <- KV{it.Key(), it.Value()}
+			}
+			it.Close()
 		}
 		close(KVChan)
-		it.Close()
 	}()
 
 	txn, err := client.Begin()
@@ -201,7 +226,7 @@ func main() {
 				if !ok {
 					break
 				}
-				key, val := kv.k, kv.v
+				key, val := kv.K, kv.V
 				mutations.AppendMutation(transaction.PlainMutation{
 					KeyOp: kvrpcpb.Op_Put,
 					Key:   key,
@@ -227,7 +252,8 @@ func main() {
 		}()
 	}
 
-	_, err = client.SplitRegions(initContext, splitKeys, true, nil)
+	splitContext, _ := context.WithTimeout(context.Background(), 5*time.Minute)
+	_, err = client.SplitRegions(splitContext, splitKeys, true, nil)
 	MustNil(err)
 
 	prewriteStart := time.Now()
