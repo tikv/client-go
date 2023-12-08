@@ -221,6 +221,10 @@ func main() {
 	wg.Wait()
 	fmt.Println("============ PREWRITE DONE ============", time.Since(prewriteStart))
 
+	if *schema != "" {
+		return
+	}
+
 	commitTs, err := client.GetTimestamp(context.Background())
 	MustNil(err)
 	commitTaskCh := make(chan interface{}, COMMIT_CONC)
