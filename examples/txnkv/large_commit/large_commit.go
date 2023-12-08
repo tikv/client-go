@@ -146,14 +146,22 @@ func main() {
 	fmt.Printf("prepare membuffer takes %s", time.Since(start))
 
 	KVChan := make(chan struct {
-		k []byte
-		v []byte
+		k, v []byte
 	}, PREWRITE_CONC*2)
 
 	it, err := memBuffer.Iter(nil, nil)
 	MustNil(err)
 	primary := []byte(it.Key())
 	min, max := primary, primary
+	splitKeys := [][]byte{}
+	index := 0
+	for ; it.Valid(); err = it.Next() {
+		index++
+		if index%100000 == 0 {
+			k := []byte(it.Key())
+			splitKeys = append(splitKeys, k)
+		}
+	}
 	it.Close()
 	go func() {
 		it, err := memBuffer.Iter(nil, nil)
@@ -168,8 +176,7 @@ func main() {
 			}
 			MustNil(err)
 			KVChan <- struct {
-				k []byte
-				v []byte
+				k, v []byte
 			}{it.Key(), it.Value()}
 		}
 		close(KVChan)
@@ -179,12 +186,14 @@ func main() {
 	txn, err := client.Begin()
 	MustNil(err)
 	size := *txnSize
+	splitDone := make(chan struct{})
 	// prewrite
 	var wg sync.WaitGroup
 	for i := int64(0); i < PREWRITE_CONC; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-splitDone
 			var mutations transaction.PlainMutations
 			mutations = transaction.NewPlainMutations(1000)
 			for {
@@ -218,7 +227,11 @@ func main() {
 		}()
 	}
 
+	_, err = client.SplitRegions(initContext, splitKeys, true, nil)
+	MustNil(err)
+
 	prewriteStart := time.Now()
+	close(splitDone)
 	fmt.Println("============ PREWRITE START ============")
 	fmt.Printf("prewrite with start_ts: %d, primary: %s\n", txn.StartTS(), string(primary))
 	wg.Wait()
