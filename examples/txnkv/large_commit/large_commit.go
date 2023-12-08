@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	_ "github.com/pingcap/tidb/pkg/planner/core"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
@@ -50,7 +51,7 @@ var (
 	commitConcurrency   = flag.Int64("commit-concurrency", 100, "concurrency of commit")
 	prewriteConcurrency = flag.Int64("prewrite-concurrency", 100, "concurrency of prewrite")
 	bits                int
-	schema              = flag.String("schema", "./tests/sysbench.sql", "schema of the table")
+	schema              = flag.String("schema", "./cases/sysbench.sql", "schema of the table")
 )
 
 var (
@@ -132,7 +133,9 @@ func main() {
 	initContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
 
 	MustNil(client.UnsafeDestroyRange(initContext, []byte{0}, []byte{255}))
-	core, err := NewCore(*schema, false, false)
+	schemaContent, err := os.ReadFile(*schema)
+	MustNil(err)
+	core, err := NewCore(string(schemaContent), false, false)
 	MustNil(err)
 	start := time.Now()
 	memBuffer, err := core.InsertRows(int(*txnSize), 1)
