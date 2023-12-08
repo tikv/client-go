@@ -28,6 +28,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	_ "github.com/pingcap/tidb/pkg/planner/core"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
@@ -55,7 +56,7 @@ var (
 )
 
 var (
-	PREWRITE_CONC = int64(100)
+	PREWRITE_CONC = int64(1)
 	COMMIT_CONC   = int64(100)
 )
 
@@ -123,6 +124,10 @@ func main() {
 	bits = len(fmt.Sprintf("%d", *txnSize))
 	PREWRITE_CONC = *prewriteConcurrency
 	COMMIT_CONC = *commitConcurrency
+
+	cfg := config.GetGlobalConfig()
+	cfg.CommitterConcurrency = int(*commitConcurrency)
+	config.StoreGlobalConfig(cfg)
 
 	go func() {
 		fmt.Println(http.ListenAndServe("0.0.0.0:6060", nil))
