@@ -11,8 +11,8 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.2
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20230427065546-c619a504747d
-	github.com/tikv/pd/client v0.0.0-20230419153320-f1d1a80feb95
+	github.com/tikv/client-go/v2 v2.0.8-0.20231208132725-106bf1992ddf
+	github.com/tikv/pd/client v0.0.0-20231211083919-fe6fd1721aa6
 	go.uber.org/goleak v1.2.1
 )
 
@@ -68,7 +68,7 @@ require (
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20220927061507-ef77025ab5aa // indirect
-	github.com/rogpeppe/go-internal v1.9.0 // indirect
+	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.23.3 // indirect
 	github.com/shoenig/go-m1cpu v0.1.5 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
@@ -88,10 +88,10 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
 	golang.org/x/exp v0.0.0-20221023144134-a1e5550cf13e // indirect
-	golang.org/x/net v0.10.0 // indirect
+	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sync v0.2.0 // indirect
-	golang.org/x/sys v0.8.0 // indirect
-	golang.org/x/text v0.9.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
+	golang.org/x/text v0.13.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	golang.org/x/tools v0.9.1 // indirect
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
@@ -102,3 +102,5 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/pingcap/tidb => github.com/nolouch/tidb v0.0.0-20231211094313-187c59b557fa
