@@ -2043,6 +2043,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("req", req),
 			zap.Stringer("ctx", ctx),
 		)
+		var reqExtraInfo, ctxExtraInfo string
 		if req != nil {
 			// if the failure is caused by replica read, we can retry it with leader safely.
 			if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
@@ -2057,10 +2058,14 @@ func (s *RegionRequestSender) onRegionError(
 				req.ReplicaReadType = kv.ReplicaReadLeader
 				return true, nil
 			}
+			reqExtraInfo = fmt.Sprintf("req type: %s, read type %d, busy threshold %d", req.Type, req.ReplicaReadType, req.BusyThresholdMs)
+		}
+		if ctx != nil {
+			ctxExtraInfo = ctx.String()
 		}
 		return false, errors.Errorf(
-			"region %d is in flashback progress, FlashbackStartTS is %d",
-			flashbackInProgress.GetRegionId(), flashbackInProgress.GetFlashbackStartTs(),
+			"region %d is in flashback progress, FlashbackStartTS is %d, req extra is %s, ctx extra is %s",
+			flashbackInProgress.GetRegionId(), flashbackInProgress.GetFlashbackStartTs(), reqExtraInfo, ctxExtraInfo,
 		)
 	}
 	// This error means a second-phase flashback request is sent to a region that is not
