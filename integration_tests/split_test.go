@@ -366,3 +366,7 @@ func (c *mockPDClient) Get(ctx context.Context, key []byte, opts ...pd.OpOption)
 func (c *mockPDClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd.OpOption) (*meta_storagepb.PutResponse, error) {
 	return nil, nil
 }
+
+func (m *mockPDClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
+	return nil, 0, nil
+}
