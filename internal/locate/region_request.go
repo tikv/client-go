@@ -2086,7 +2086,7 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if regionErr.GetKeyNotInRegion() != nil {
-		logutil.Logger(bo.GetCtx()).Error("tikv reports `KeyNotInRegion`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
+		logutil.Logger(bo.GetCtx()).Debug("tikv reports `KeyNotInRegion`", zap.Stringer("req", req), zap.Stringer("ctx", ctx))
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return false, nil
 	}
