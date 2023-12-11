@@ -7,7 +7,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
 	github.com/pingcap/kvproto v0.0.0-20231011074246-fa00d2b03372
-	github.com/pingcap/tidb v1.1.0-beta.0.20231124053542-069631e2ecfe
+	github.com/pingcap/tidb v1.1.0-beta.0.20230428082552-991d99c1e0b9
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.2
 	github.com/tidwall/gjson v1.14.1
@@ -17,7 +17,6 @@ require (
 )
 
 require (
-	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
 	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -36,8 +35,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-farm v0.0.0-20200201041132-a6ae2369ad13 // indirect
 	github.com/elastic/gosigar v0.14.2 // indirect
-	github.com/go-asn1-ber/asn1-ber v1.5.4 // indirect
-	github.com/go-ldap/ldap/v3 v3.4.4 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/glog v1.1.1 // indirect
@@ -46,7 +43,6 @@ require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
-	github.com/influxdata/tdigest v0.0.1 // indirect
 	github.com/klauspost/compress v1.15.13 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
@@ -91,7 +87,6 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
-	golang.org/x/crypto v0.14.0 // indirect
 	golang.org/x/exp v0.0.0-20221023144134-a1e5550cf13e // indirect
 	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sync v0.2.0 // indirect
@@ -107,3 +102,5 @@ require (
 )
 
 replace github.com/tikv/client-go/v2 => ../
+
+replace github.com/pingcap/tidb => github.com/nolouch/tidb v0.0.0-20231211094313-187c59b557fa
