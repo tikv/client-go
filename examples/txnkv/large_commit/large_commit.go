@@ -23,6 +23,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +55,7 @@ var (
 	bits              int
 	schema            = flag.String("schema", "./cases/sysbench.sql", "schema of the table")
 	shuffle           = flag.Bool("shuffle", false, "shuffle the keys")
+	batchSize         = flag.Int("batch-size", 1000, "batch size")
 )
 
 var (
@@ -213,6 +215,7 @@ func main() {
 	size := *txnSize
 	splitDone := make(chan struct{})
 	// prewrite
+	sortTime := time.Duration(0)
 	var wg sync.WaitGroup
 	for i := int64(0); i < PREWRITE_CONC; i++ {
 		wg.Add(1)
@@ -233,7 +236,12 @@ func main() {
 					Value: val,
 					Flags: transaction.MutationFlagIsAssertNotExists,
 				})
-				if mutations.Len() >= 1000 {
+				if mutations.Len() >= *batchSize {
+					if *shuffle {
+						sortStart := time.Now()
+						sort.Sort(&mutations)
+						sortTime += time.Since(sortStart)
+					}
 					committer, err := transaction.NewTwoPhaseCommitterWithPK(txn, 1, primary, &mutations)
 					MustNil(err)
 					prewriteCtx, _ := context.WithTimeout(context.Background(), 300*time.Second)
@@ -243,6 +251,11 @@ func main() {
 				}
 			}
 			if mutations.Len() > 0 {
+				if *shuffle {
+					sortStart := time.Now()
+					sort.Sort(&mutations)
+					sortTime += time.Since(sortStart)
+				}
 				committer, err := transaction.NewTwoPhaseCommitterWithPK(txn, 1, primary, &mutations)
 				MustNil(err)
 				prewriteCtx, _ := context.WithTimeout(context.Background(), 300*time.Second)
@@ -261,7 +274,11 @@ func main() {
 	fmt.Println("============ PREWRITE START ============")
 	fmt.Printf("prewrite with start_ts: %d, primary: %s\n", txn.StartTS(), string(primary))
 	wg.Wait()
-	fmt.Println("============ PREWRITE DONE ============", time.Since(prewriteStart))
+	prewriteDur := time.Since(prewriteStart)
+	fmt.Println("============ PREWRITE DONE ============", prewriteDur)
+	if *shuffle {
+		fmt.Println("============ no sort prewrite ============", prewriteDur-sortTime)
+	}
 
 	if *schema != "" {
 		return

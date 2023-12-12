@@ -461,6 +461,17 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 	c.flags = append(c.flags, mutation.Flags)
 }
 
+func (c *PlainMutations) Less(i, j int) bool {
+	return bytes.Compare(c.keys[i], c.keys[j]) < 0
+}
+
+func (c *PlainMutations) Swap(i, j int) {
+	c.ops[i], c.ops[j] = c.ops[j], c.ops[i]
+	c.keys[i], c.keys[j] = c.keys[j], c.keys[i]
+	c.values[i], c.values[j] = c.values[j], c.values[i]
+	c.flags[i], c.flags[j] = c.flags[j], c.flags[i]
+}
+
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
 func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	return &twoPhaseCommitter{
