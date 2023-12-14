@@ -1497,7 +1497,7 @@ func (mu *regionIndexMu) removeVersionFromCache(oldVer RegionVerID, regionID uin
 // It should be protected by c.mu.l.Lock().
 // if `invalidateOldRegion` is false, the old region cache should be still valid,
 // and it may still be used by some kv requests.
-// Moreover, it will return whether the region is fresh.
+// Moreover, it will return whether the region is stale.
 func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool) bool {
 	newVer := cachedRegion.VerID()
 	latest, ok := mu.latestVersions[cachedRegion.VerID().id]
@@ -1511,7 +1511,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		logutil.BgLogger().Debug("get stale region",
 			zap.Uint64("region", newVer.GetID()), zap.Uint64("ver", newVer.GetVer()), zap.Uint64("conf", newVer.GetConfVer()),
 			zap.Uint64("lastest-ver", latest.GetVer()), zap.Uint64("lastest-conf", latest.GetConfVer()))
-		return false
+		return true
 	}
 	// Also check the intersecting regions.
 	intersectedRegions := mu.sorted.removeIntersecting(cachedRegion)
@@ -1520,7 +1520,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 			logutil.BgLogger().Debug("get stale region",
 				zap.Uint64("region", newVer.GetID()), zap.Uint64("ver", newVer.GetVer()), zap.Uint64("conf", newVer.GetConfVer()),
 				zap.Uint64("intersecting-ver", region.cachedRegion.meta.GetRegionEpoch().GetVersion()))
-			return false
+			return true
 		}
 	}
 	oldRegion := mu.sorted.ReplaceOrInsert(cachedRegion)
@@ -1567,7 +1567,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	for _, region := range intersectedRegions {
 		mu.removeVersionFromCache(region.cachedRegion.VerID(), region.cachedRegion.GetID())
 	}
-	return true
+	return false
 }
 
 // searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
