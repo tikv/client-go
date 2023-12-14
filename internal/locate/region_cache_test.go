@@ -1567,6 +1567,8 @@ func (s *testRegionCacheSuite) TestBuckets() {
 
 	// update buckets if it's nil.
 	cachedRegion.getStore().buckets = nil
+	// we should replace the version of `cacheRegion` because of stale.
+	s.cluster.PutRegion(r.GetId(), newMeta.RegionEpoch.ConfVer, newMeta.RegionEpoch.Version, []uint64{s.store1, s.store2}, []uint64{s.peer1, s.peer2}, s.peer1)
 	s.cluster.SplitRegionBuckets(cachedRegion.GetID(), defaultBuckets.Keys, defaultBuckets.Version)
 	s.cache.UpdateBucketsIfNeeded(cachedRegion.VerID(), defaultBuckets.GetVersion())
 	waitUpdateBuckets(defaultBuckets, []byte("a"))
