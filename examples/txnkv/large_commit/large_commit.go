@@ -56,6 +56,7 @@ var (
 	schema            = flag.String("schema", "./cases/sysbench.sql", "schema of the table")
 	shuffle           = flag.Bool("shuffle", false, "shuffle the keys")
 	batchSize         = flag.Int("batch-size", 1000, "batch size")
+	keysPerRegion     = flag.Int("keys-per-region", 100000, "keys per region")
 )
 
 var (
@@ -165,7 +166,7 @@ func main() {
 	index := 0
 	for ; it.Valid(); err = it.Next() {
 		index++
-		if index%100000 == 0 {
+		if index%(*keysPerRegion) == 0 {
 			k := []byte(it.Key())
 			splitKeys = append(splitKeys, k)
 		}
