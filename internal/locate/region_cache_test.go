@@ -55,6 +55,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
 	pd "github.com/tikv/pd/client"
+	uatomic "go.uber.org/atomic"
 )
 
 func TestRegionCache(t *testing.T) {
@@ -88,7 +89,7 @@ func (s *testRegionCacheSuite) SetupTest() {
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
-func (s *testRegionCacheSuite) TearDownTest() {
+func (s *testRegionCacheSuite) TearDownSuite() {
 	s.cache.Close()
 	s.mvccStore.Close()
 }
@@ -1834,4 +1835,79 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
 	time.Sleep(5 * time.Second)
 
 	cancel()
+}
+
+func TestRegionCacheWithDelay(t *testing.T) {
+	suite.Run(t, new(testRegionCacheWithDelaySuite))
+}
+
+type testRegionCacheWithDelaySuite struct {
+	suite.Suite
+	mvccStore mocktikv.MVCCStore
+	cluster   *mocktikv.Cluster
+	store     uint64 // store1 is leader
+	region1   uint64
+	bo        *retry.Backoffer
+
+	delay      uatomic.Bool
+	delayCache *RegionCache
+	cache      *RegionCache
+}
+
+func (s *testRegionCacheWithDelaySuite) SetupTest() {
+	s.mvccStore = mocktikv.MustNewMVCCStore()
+	s.cluster = mocktikv.NewCluster(s.mvccStore)
+	storeIDs, _, regionID, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 1)
+	s.region1 = regionID
+	s.store = storeIDs[0]
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	s.cache = NewRegionCache(pdCli)
+	pdCli2 := &CodecPDClient{mocktikv.NewPDClient(s.cluster, mocktikv.WithDelay(&s.delay)), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	s.delayCache = NewRegionCache(pdCli2)
+	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
+}
+
+func (s *testRegionCacheWithDelaySuite) TearDownSuite() {
+	s.cache.Close()
+	s.delayCache.Close()
+	s.mvccStore.Close()
+}
+
+func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
+	r1, err := s.cache.findRegionByKey(s.bo, []byte("a"), false)
+	s.NoError(err)
+	r2, err := s.delayCache.findRegionByKey(s.bo, []byte("a"), false)
+	s.NoError(err)
+	s.Equal(r1.meta, r2.meta)
+
+	s.delay.Store(true)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		r2.invalidate(Other)
+		_, err = s.delayCache.findRegionByKey(s.bo, []byte("b"), false)
+		s.NoError(err)
+		wg.Done()
+	}()
+	newPeersIDs := s.cluster.AllocIDs(1)
+	s.cluster.Split(r1.GetID(), s.cluster.AllocID(), []byte("b"), newPeersIDs, newPeersIDs[0])
+	r1.invalidate(Other)
+	r, err := s.cache.findRegionByKey(s.bo, []byte("b"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r.meta.StartKey)
+	r, err = s.cache.findRegionByKey(s.bo, []byte("c"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r.meta.StartKey)
+
+	s.delay.Store(false)
+	r, err = s.delayCache.findRegionByKey(s.bo, []byte("b"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r.meta.StartKey)
+	wg.Wait()
+	r, err = s.delayCache.findRegionByKey(s.bo, []byte("b"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r.meta.StartKey)
+	r, err = s.delayCache.findRegionByKey(s.bo, []byte("a"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r.meta.EndKey)
 }
