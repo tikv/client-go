@@ -552,8 +552,8 @@ func (c *RegionCache) clear() {
 }
 
 // thread unsafe, should use with lock
-func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool) {
-	c.mu.insertRegionToCache(cachedRegion, invalidateOldRegion)
+func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool) bool {
+	return c.mu.insertRegionToCache(cachedRegion, invalidateOldRegion)
 }
 
 // Close releases region cache's resource.
@@ -1485,7 +1485,32 @@ func (mu *regionIndexMu) removeVersionFromCache(oldVer RegionVerID, regionID uin
 // It should be protected by c.mu.l.Lock().
 // if `invalidateOldRegion` is false, the old region cache should be still valid,
 // and it may still be used by some kv requests.
-func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool) {
+// Moreover, it will return whether the region is stale.
+func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool) bool {
+	newVer := cachedRegion.VerID()
+	latest, ok := mu.latestVersions[cachedRegion.VerID().id]
+	// There are two or more situations in which the region we got is stale.
+	// The first case is that the process of getting a region is concurrent.
+	// The stale region may be returned later due to network reasons.
+	// The second case is that the region may be obtained from the PD follower,
+	// and there is the synchronization time between the pd follower and the leader.
+	// So we should check the epoch.
+	if ok && (latest.GetVer() > newVer.GetVer() || latest.GetConfVer() > newVer.GetConfVer()) {
+		logutil.BgLogger().Debug("get stale region",
+			zap.Uint64("region", newVer.GetID()), zap.Uint64("ver", newVer.GetVer()), zap.Uint64("conf", newVer.GetConfVer()),
+			zap.Uint64("lastest-ver", latest.GetVer()), zap.Uint64("lastest-conf", latest.GetConfVer()))
+		return true
+	}
+	// Also check the intersecting regions.
+	intersectedRegions := mu.sorted.removeIntersecting(cachedRegion)
+	for _, region := range intersectedRegions {
+		if region.cachedRegion.meta.GetRegionEpoch().GetVersion() > newVer.GetVer() {
+			logutil.BgLogger().Debug("get stale region",
+				zap.Uint64("region", newVer.GetID()), zap.Uint64("ver", newVer.GetVer()), zap.Uint64("conf", newVer.GetConfVer()),
+				zap.Uint64("intersecting-ver", region.cachedRegion.meta.GetRegionEpoch().GetVersion()))
+			return true
+		}
+	}
 	oldRegion := mu.sorted.ReplaceOrInsert(cachedRegion)
 	if oldRegion != nil {
 		store := cachedRegion.getStore()
@@ -1513,21 +1538,24 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
 			store.buckets = oldRegionStore.buckets
 		}
-		mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
+		// Only delete when IDs are different, because we will update right away.
+		if cachedRegion.VerID().id != oldRegion.VerID().id {
+			mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
+		}
 	}
+	// update related vars.
 	mu.regions[cachedRegion.VerID()] = cachedRegion
-	newVer := cachedRegion.VerID()
-	latest, ok := mu.latestVersions[cachedRegion.VerID().id]
 	if !ok || latest.GetVer() < newVer.GetVer() || latest.GetConfVer() < newVer.GetConfVer() {
 		mu.latestVersions[cachedRegion.VerID().id] = newVer
 	}
 	// The intersecting regions in the cache are probably stale, clear them.
-	deleted := mu.sorted.removeIntersecting(cachedRegion)
-	for _, region := range deleted {
+	for _, region := range intersectedRegions {
 		mu.removeVersionFromCache(region.cachedRegion.VerID(), region.cachedRegion.GetID())
 	}
+	return false
+}
 
-} // searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
+// searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
 // it should be called with c.mu.RLock(), and the returned Region should not be
 // used after c.mu is RUnlock().
 // If the given key is the end key of the region that you want, you may set the second argument to true. This is useful

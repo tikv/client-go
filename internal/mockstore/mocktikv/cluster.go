@@ -413,6 +413,14 @@ func (c *Cluster) Bootstrap(regionID uint64, storeIDs, peerIDs []uint64, leaderP
 	c.regions[regionID] = newRegion(regionID, storeIDs, peerIDs, leaderPeerID)
 }
 
+// PutRegion adds or replaces a region.
+func (c *Cluster) PutRegion(regionID, confVer, ver uint64, storeIDs, peerIDs []uint64, leaderPeerID uint64) {
+	c.Lock()
+	defer c.Unlock()
+
+	c.regions[regionID] = newRegion(regionID, storeIDs, peerIDs, leaderPeerID, confVer, ver)
+}
+
 // AddPeer adds a new Peer for the Region on the Store.
 func (c *Cluster) AddPeer(regionID, storeID, peerID uint64) {
 	c.Lock()
@@ -634,7 +642,7 @@ func newPeerMeta(peerID, storeID uint64) *metapb.Peer {
 	}
 }
 
-func newRegion(regionID uint64, storeIDs, peerIDs []uint64, leaderPeerID uint64) *Region {
+func newRegion(regionID uint64, storeIDs, peerIDs []uint64, leaderPeerID uint64, epoch ...uint64) *Region {
 	if len(storeIDs) != len(peerIDs) {
 		panic("len(storeIDs) != len(peerIds)")
 	}
@@ -646,6 +654,10 @@ func newRegion(regionID uint64, storeIDs, peerIDs []uint64, leaderPeerID uint64)
 		Id:          regionID,
 		Peers:       peers,
 		RegionEpoch: &metapb.RegionEpoch{},
+	}
+	if len(epoch) == 2 {
+		meta.RegionEpoch.ConfVer = epoch[0]
+		meta.RegionEpoch.Version = epoch[1]
 	}
 	return &Region{
 		Meta:   meta,
