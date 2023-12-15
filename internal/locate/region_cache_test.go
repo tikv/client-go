@@ -1982,3 +1982,33 @@ func BenchmarkInsertRegionToCache(b *testing.B) {
 		cache.insertRegionToCache(region, true)
 	}
 }
+
+func BenchmarkInsertRegionToCache2(b *testing.B) {
+	b.StopTimer()
+	cache := newTestRegionCache()
+	r := &Region{
+		meta: &metapb.Region{
+			Id:          1,
+			RegionEpoch: &metapb.RegionEpoch{},
+		},
+	}
+	rs := &regionStore{
+		workTiKVIdx:              0,
+		proxyTiKVIdx:             -1,
+		stores:                   make([]*Store, 0, len(r.meta.Peers)),
+		pendingTiFlashPeerStores: map[uint64]uint64{},
+		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
+	}
+	r.setStore(rs)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		newMeta := proto.Clone(r.meta).(*metapb.Region)
+		newMeta.RegionEpoch.ConfVer = uint64(i + 1)
+		newMeta.RegionEpoch.Version = uint64(i + 1)
+		region := &Region{
+			meta: newMeta,
+		}
+		region.setStore(r.getStore())
+		cache.insertRegionToCache(region, true)
+	}
+}
