@@ -1885,7 +1885,7 @@ func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
 	wg.Add(1)
 	go func() {
 		r2.invalidate(Other)
-		_, err = s.delayCache.findRegionByKey(s.bo, []byte("b"), false)
+		_, err := s.delayCache.findRegionByKey(s.bo, []byte("b"), false)
 		s.NoError(err)
 		wg.Done()
 	}()
