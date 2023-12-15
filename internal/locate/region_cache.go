@@ -1598,7 +1598,7 @@ func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
 	}
 	latestRegion, ok := c.mu.regions[ver]
 	if !ok {
-		// Should not happen. If happned, maybe
+		// should not happen
 		logutil.BgLogger().Warn("region version not found",
 			zap.Uint64("regionID", regionID), zap.Stringer("version", &ver))
 		return nil

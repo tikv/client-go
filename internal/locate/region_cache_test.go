@@ -1867,7 +1867,7 @@ func (s *testRegionCacheWithDelaySuite) SetupTest() {
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
-func (s *testRegionCacheWithDelaySuite) TearDownSuite() {
+func (s *testRegionCacheWithDelaySuite) TearDownTest() {
 	s.cache.Close()
 	s.delayCache.Close()
 	s.mvccStore.Close()
