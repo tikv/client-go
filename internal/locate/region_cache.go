@@ -543,6 +543,18 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	return c
 }
 
+// only used fot test.
+func newTestRegionCache() *RegionCache {
+	c := &RegionCache{}
+	c.storeMu.stores = make(map[uint64]*Store)
+	c.tiflashComputeStoreMu.needReload = true
+	c.tiflashComputeStoreMu.stores = make([]*Store, 0)
+	c.notifyCheckCh = make(chan struct{}, 1)
+	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
+	c.mu = *newRegionIndexMu(nil)
+	return c
+}
+
 // clear clears all cached data in the RegionCache. It's only used in tests.
 func (c *RegionCache) clear() {
 	c.mu = *newRegionIndexMu(nil)

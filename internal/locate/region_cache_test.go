@@ -1930,11 +1930,55 @@ func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
 	s.NoError(err)
 	s.Equal([]byte("b"), r.meta.StartKey)
 	wg.Wait()
-	// the delay response is recived, but insert failed.
+	// the delay response is received, but insert failed.
 	r, err = s.delayCache.findRegionByKey(s.bo, []byte("b"), false)
 	s.NoError(err)
 	s.Equal([]byte("b"), r.meta.StartKey)
 	r, err = s.delayCache.findRegionByKey(s.bo, []byte("a"), false)
 	s.NoError(err)
 	s.Equal([]byte("b"), r.meta.EndKey)
+}
+
+func generateKeyForSimulator(id int, keyLen int) []byte {
+	k := make([]byte, keyLen)
+	copy(k, fmt.Sprintf("%010d", id))
+	return k
+}
+
+func BenchmarkInsertRegionToCache(b *testing.B) {
+	b.StopTimer()
+	cache := newTestRegionCache()
+	r := &Region{
+		meta: &metapb.Region{
+			Id:          1,
+			RegionEpoch: &metapb.RegionEpoch{},
+		},
+	}
+	rs := &regionStore{
+		workTiKVIdx:              0,
+		proxyTiKVIdx:             -1,
+		stores:                   make([]*Store, 0, len(r.meta.Peers)),
+		pendingTiFlashPeerStores: map[uint64]uint64{},
+		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
+	}
+	r.setStore(rs)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		newMeta := proto.Clone(r.meta).(*metapb.Region)
+		newMeta.Id = uint64(i + 1)
+		newMeta.RegionEpoch.ConfVer = uint64(i+1) - uint64(rand.Intn(i+1))
+		newMeta.RegionEpoch.Version = uint64(i+1) - uint64(rand.Intn(i+1))
+		if i%2 == 0 {
+			newMeta.StartKey = generateKeyForSimulator(rand.Intn(i+1), 56)
+			newMeta.EndKey = []byte("")
+		} else {
+			newMeta.EndKey = generateKeyForSimulator(rand.Intn(i+1), 56)
+			newMeta.StartKey = []byte("")
+		}
+		region := &Region{
+			meta: newMeta,
+		}
+		region.setStore(r.getStore())
+		cache.insertRegionToCache(region, true)
+	}
 }
