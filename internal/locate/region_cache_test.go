@@ -89,7 +89,7 @@ func (s *testRegionCacheSuite) SetupTest() {
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
 }
 
-func (s *testRegionCacheSuite) TearDownSuite() {
+func (s *testRegionCacheSuite) TearDownTest() {
 	s.cache.Close()
 	s.mvccStore.Close()
 }
