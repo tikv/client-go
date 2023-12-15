@@ -1889,6 +1889,7 @@ func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
 		s.NoError(err)
 		wg.Done()
 	}()
+	time.Sleep(30 * time.Millisecond)
 	newPeersIDs := s.cluster.AllocIDs(1)
 	s.cluster.Split(r1.GetID(), s.cluster.AllocID(), []byte("b"), newPeersIDs, newPeersIDs[0])
 	r1.invalidate(Other)
