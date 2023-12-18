@@ -91,17 +91,10 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 		return nil, err
 	}
 	sampleRows := n / sample
-	rowCh := make(chan []types.Datum, 100)
-	go func() {
-		for i := 0; i < sampleRows; i++ {
-			rowCh <- c.GetRow()
-		}
-		close(rowCh)
-	}()
 	start := time.Now()
 	subStart := start
 	for i := 0; i < sampleRows; i++ {
-		row := <-rowCh
+		row := c.GetRow()
 		opts := []table.AddRecordOption{}
 		if _, err := c.tbl.AddRecord(c.ctx, row, opts...); err != nil {
 			return nil, err
