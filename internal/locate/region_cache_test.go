@@ -1885,13 +1885,26 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 	fakeRegion.setStore(r.getStore().clone())
 
 	newPeersIDs := s.cluster.AllocIDs(1)
+	s.cluster.Split(r.GetID(), s.cluster.AllocID(), []byte("c"), newPeersIDs, newPeersIDs[0])
+	newPeersIDs = s.cluster.AllocIDs(1)
 	s.cluster.Split(r.GetID(), s.cluster.AllocID(), []byte("b"), newPeersIDs, newPeersIDs[0])
+
 	r.invalidate(Other)
-	r2, err := s.cache.findRegionByKey(s.bo, []byte("a"), false)
+	r2, err := s.cache.findRegionByKey(s.bo, []byte("c"), false)
 	s.NoError(err)
-	s.Equal([]byte("b"), r2.EndKey())
+	s.Equal([]byte("c"), r2.StartKey())
+	r2, err = s.cache.findRegionByKey(s.bo, []byte("b"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r2.StartKey())
+
 	stale := s.cache.insertRegionToCache(fakeRegion, true)
 	s.True(stale)
+
+	rs, err := s.cache.scanRegionsFromCache(s.bo, []byte(""), []byte(""), 100)
+	s.NoError(err)
+	s.Greater(len(rs), 1)
+	s.NotEqual(rs[0].EndKey(), "")
+
 	r3, err := s.cache.findRegionByKey(s.bo, []byte("a"), false)
 	s.NoError(err)
 	s.Equal([]byte("b"), r3.EndKey())
