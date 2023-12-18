@@ -1873,6 +1873,30 @@ func (s *testRegionCacheWithDelaySuite) TearDownTest() {
 	s.mvccStore.Close()
 }
 
+func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
+	r, err := s.cache.findRegionByKey(s.bo, []byte("a"), false)
+	s.NoError(err)
+	fakeRegion := &Region{
+		meta:          r.meta,
+		syncFlag:      r.syncFlag,
+		lastAccess:    r.lastAccess,
+		invalidReason: r.invalidReason,
+	}
+	fakeRegion.setStore(r.getStore().clone())
+
+	newPeersIDs := s.cluster.AllocIDs(1)
+	s.cluster.Split(r.GetID(), s.cluster.AllocID(), []byte("b"), newPeersIDs, newPeersIDs[0])
+	r.invalidate(Other)
+	r2, err := s.cache.findRegionByKey(s.bo, []byte("a"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r2.EndKey())
+	stale := s.cache.insertRegionToCache(fakeRegion, true)
+	s.True(stale)
+	r3, err := s.cache.findRegionByKey(s.bo, []byte("a"), false)
+	s.NoError(err)
+	s.Equal([]byte("b"), r3.EndKey())
+}
+
 func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
 	r1, err := s.cache.findRegionByKey(s.bo, []byte("a"), false)
 	s.NoError(err)
@@ -1880,6 +1904,7 @@ func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
 	s.NoError(err)
 	s.Equal(r1.meta, r2.meta)
 
+	// simulates network delay
 	s.delay.Store(true)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -1905,10 +1930,85 @@ func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
 	s.NoError(err)
 	s.Equal([]byte("b"), r.meta.StartKey)
 	wg.Wait()
+	// the delay response is received, but insert failed.
 	r, err = s.delayCache.findRegionByKey(s.bo, []byte("b"), false)
 	s.NoError(err)
 	s.Equal([]byte("b"), r.meta.StartKey)
 	r, err = s.delayCache.findRegionByKey(s.bo, []byte("a"), false)
 	s.NoError(err)
 	s.Equal([]byte("b"), r.meta.EndKey)
+}
+
+func generateKeyForSimulator(id int, keyLen int) []byte {
+	k := make([]byte, keyLen)
+	copy(k, fmt.Sprintf("%010d", id))
+	return k
+}
+
+func BenchmarkInsertRegionToCache(b *testing.B) {
+	b.StopTimer()
+	cache := newTestRegionCache()
+	r := &Region{
+		meta: &metapb.Region{
+			Id:          1,
+			RegionEpoch: &metapb.RegionEpoch{},
+		},
+	}
+	rs := &regionStore{
+		workTiKVIdx:              0,
+		proxyTiKVIdx:             -1,
+		stores:                   make([]*Store, 0, len(r.meta.Peers)),
+		pendingTiFlashPeerStores: map[uint64]uint64{},
+		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
+	}
+	r.setStore(rs)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		newMeta := proto.Clone(r.meta).(*metapb.Region)
+		newMeta.Id = uint64(i + 1)
+		newMeta.RegionEpoch.ConfVer = uint64(i+1) - uint64(rand.Intn(i+1))
+		newMeta.RegionEpoch.Version = uint64(i+1) - uint64(rand.Intn(i+1))
+		if i%2 == 0 {
+			newMeta.StartKey = generateKeyForSimulator(rand.Intn(i+1), 56)
+			newMeta.EndKey = []byte("")
+		} else {
+			newMeta.EndKey = generateKeyForSimulator(rand.Intn(i+1), 56)
+			newMeta.StartKey = []byte("")
+		}
+		region := &Region{
+			meta: newMeta,
+		}
+		region.setStore(r.getStore())
+		cache.insertRegionToCache(region, true)
+	}
+}
+
+func BenchmarkInsertRegionToCache2(b *testing.B) {
+	b.StopTimer()
+	cache := newTestRegionCache()
+	r := &Region{
+		meta: &metapb.Region{
+			Id:          1,
+			RegionEpoch: &metapb.RegionEpoch{},
+		},
+	}
+	rs := &regionStore{
+		workTiKVIdx:              0,
+		proxyTiKVIdx:             -1,
+		stores:                   make([]*Store, 0, len(r.meta.Peers)),
+		pendingTiFlashPeerStores: map[uint64]uint64{},
+		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
+	}
+	r.setStore(rs)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		newMeta := proto.Clone(r.meta).(*metapb.Region)
+		newMeta.RegionEpoch.ConfVer = uint64(i + 1)
+		newMeta.RegionEpoch.Version = uint64(i + 1)
+		region := &Region{
+			meta: newMeta,
+		}
+		region.setStore(r.getStore())
+		cache.insertRegionToCache(region, true)
+	}
 }
