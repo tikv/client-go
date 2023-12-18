@@ -38,6 +38,8 @@ import (
 	"bytes"
 
 	"github.com/google/btree"
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"go.uber.org/zap"
 )
 
 // SortedRegions is a sorted btree.
@@ -97,13 +99,13 @@ func (s *SortedRegions) removeIntersecting(r *Region, verID *RegionVerID) ([]*bt
 	var deleted []*btreeItem
 	var stale bool
 	s.b.AscendGreaterOrEqual(newBtreeSearchItem(r.StartKey()), func(item *btreeItem) bool {
-		// if item.cachedRegion.meta.GetRegionEpoch().GetVersion() > verID.ver {
-		// 	logutil.BgLogger().Debug("get stale region",
-		// 		zap.Uint64("region", verID.GetID()), zap.Uint64("ver", verID.GetVer()), zap.Uint64("conf", verID.GetConfVer()),
-		// 		zap.Uint64("intersecting-ver", item.cachedRegion.meta.GetRegionEpoch().GetVersion()))
-		// 	stale = true
-		// 	return false
-		// }
+		if item.cachedRegion.meta.GetRegionEpoch().GetVersion() > verID.ver {
+			logutil.BgLogger().Debug("get stale region",
+				zap.Uint64("region", verID.GetID()), zap.Uint64("ver", verID.GetVer()), zap.Uint64("conf", verID.GetConfVer()),
+				zap.Uint64("intersecting-ver", item.cachedRegion.meta.GetRegionEpoch().GetVersion()))
+			stale = true
+			return false
+		}
 		if len(r.EndKey()) > 0 && bytes.Compare(item.cachedRegion.StartKey(), r.EndKey()) >= 0 {
 			return false
 		}
