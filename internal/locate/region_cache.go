@@ -1553,13 +1553,10 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		// Only delete when IDs are different, because we will update right away.
 		if cachedRegion.VerID().id != oldRegion.VerID().id {
 			mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
-			mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
-			mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
 		}
 	}
 	// update related vars.
 	mu.regions[cachedRegion.VerID()] = cachedRegion
-	latest, ok = mu.latestVersions[cachedRegion.VerID().id]
 	if !ok || latest.GetVer() < newVer.GetVer() || latest.GetConfVer() < newVer.GetConfVer() {
 		mu.latestVersions[cachedRegion.VerID().id] = newVer
 	}
