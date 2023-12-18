@@ -1018,7 +1018,7 @@ func (s *testRegionCacheSuite) TestRegionEpochAheadOfTiKV() {
 	region := createSampleRegion([]byte("k1"), []byte("k2"))
 	region.meta.Id = 1
 	region.meta.RegionEpoch = &metapb.RegionEpoch{Version: 10, ConfVer: 10}
-	cache.insertRegionToCache(region, true)
+	cache.insertRegionToCache(region, true, true)
 
 	r1 := metapb.Region{Id: 1, RegionEpoch: &metapb.RegionEpoch{Version: 9, ConfVer: 10}}
 	r2 := metapb.Region{Id: 1, RegionEpoch: &metapb.RegionEpoch{Version: 10, ConfVer: 9}}
@@ -1309,7 +1309,7 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 	filterUnavailablePeers(cpRegion)
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
-	s.cache.insertRegionToCache(region, true)
+	s.cache.insertRegionToCache(region, true, true)
 
 	// OnSendFail should not panic
 	s.cache.OnSendFail(retry.NewNoopBackoff(context.Background()), ctx, false, errors.New("send fail"))
@@ -1345,7 +1345,7 @@ func (s *testRegionCacheSuite) TestPeersLenChangedByWitness() {
 	cpRegion := &pd.Region{Meta: cpMeta}
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
-	s.cache.insertRegionToCache(region, true)
+	s.cache.insertRegionToCache(region, true, true)
 
 	// OnSendFail should not panic
 	s.cache.OnSendFail(retry.NewNoopBackoff(context.Background()), ctx, false, errors.New("send fail"))
@@ -1518,12 +1518,12 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	fakeRegion.setStore(cachedRegion.getStore().clone())
 	// no buckets
 	fakeRegion.getStore().buckets = nil
-	s.cache.insertRegionToCache(fakeRegion, true)
+	s.cache.insertRegionToCache(fakeRegion, true, true)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
 	// stale buckets
 	fakeRegion.getStore().buckets = &metapb.Buckets{Version: defaultBuckets.Version - 1}
-	s.cache.insertRegionToCache(fakeRegion, true)
+	s.cache.insertRegionToCache(fakeRegion, true, true)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(defaultBuckets, cachedRegion.getStore().buckets)
 	// new buckets
@@ -1533,7 +1533,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 		Keys:     buckets.Keys,
 	}
 	fakeRegion.getStore().buckets = newBuckets
-	s.cache.insertRegionToCache(fakeRegion, true)
+	s.cache.insertRegionToCache(fakeRegion, true, true)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(newBuckets, cachedRegion.getStore().buckets)
 
@@ -1668,7 +1668,7 @@ func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	region, err := s.cache.loadRegion(s.bo, []byte("c"), false)
 	s.Nil(err)
 	s.Equal(region.GetID(), regions[0])
-	s.cache.insertRegionToCache(region, true)
+	s.cache.insertRegionToCache(region, true, true)
 	loc, err = s.cache.LocateKey(s.bo, []byte{'c'})
 	s.Nil(err)
 	s.Equal(loc.Region.GetID(), regions[0])
@@ -1679,7 +1679,7 @@ func (s *testRegionCacheSuite) TestRemoveIntersectingRegions() {
 	region, err = s.cache.loadRegion(s.bo, []byte("e"), false)
 	s.Nil(err)
 	s.Equal(region.GetID(), regions[0])
-	s.cache.insertRegionToCache(region, true)
+	s.cache.insertRegionToCache(region, true, true)
 	loc, err = s.cache.LocateKey(s.bo, []byte{'e'})
 	s.Nil(err)
 	s.Equal(loc.Region.GetID(), regions[0])
@@ -1802,7 +1802,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	v2 := region.Region.confVer + 1
 	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
 	st := &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true)
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true, true)
 
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 2)
@@ -1897,7 +1897,7 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 	s.NoError(err)
 	s.Equal([]byte("b"), r2.StartKey())
 
-	stale := s.cache.insertRegionToCache(fakeRegion, true)
+	stale := s.cache.insertRegionToCache(fakeRegion, true, true)
 	s.True(stale)
 
 	rs, err := s.cache.scanRegionsFromCache(s.bo, []byte(""), []byte(""), 100)
@@ -2026,7 +2026,7 @@ func BenchmarkInsertRegionToCache(b *testing.B) {
 			meta: newMeta,
 		}
 		region.setStore(r.getStore())
-		cache.insertRegionToCache(region, true)
+		cache.insertRegionToCache(region, true, true)
 	}
 }
 
@@ -2056,6 +2056,6 @@ func BenchmarkInsertRegionToCache2(b *testing.B) {
 			meta: newMeta,
 		}
 		region.setStore(r.getStore())
-		cache.insertRegionToCache(region, true)
+		cache.insertRegionToCache(region, true, true)
 	}
 }
