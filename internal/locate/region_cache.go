@@ -1514,14 +1514,9 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		return true
 	}
 	// Also check the intersecting regions.
-	intersectedRegions := mu.sorted.removeIntersecting(cachedRegion)
-	for _, region := range intersectedRegions {
-		if region.cachedRegion.meta.GetRegionEpoch().GetVersion() > newVer.GetVer() {
-			logutil.BgLogger().Debug("get stale region",
-				zap.Uint64("region", newVer.GetID()), zap.Uint64("ver", newVer.GetVer()), zap.Uint64("conf", newVer.GetConfVer()),
-				zap.Uint64("intersecting-ver", region.cachedRegion.meta.GetRegionEpoch().GetVersion()))
-			return true
-		}
+	intersectedRegions, stale := mu.sorted.removeIntersecting(cachedRegion, &newVer)
+	if stale {
+		return true
 	}
 	oldRegion := mu.sorted.ReplaceOrInsert(cachedRegion)
 	if oldRegion != nil {
