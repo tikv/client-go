@@ -92,11 +92,18 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 	}
 	sampleRows := n / sample
 	start := time.Now()
+	subStart := start
 	for i := 0; i < sampleRows; i++ {
 		row := c.GetRow()
 		opts := []table.AddRecordOption{}
 		if _, err := c.tbl.AddRecord(c.ctx, row, opts...); err != nil {
 			return nil, err
+		}
+		if *logPerRow > 0 && (i+1)%*logPerRow == 0 {
+			nextStart := time.Now()
+			fmt.Printf("insert %d rows (%d, %d) cost %s, %s per row\n", *logPerRow, i+1-*logPerRow, i+1,
+				nextStart.Sub(subStart), nextStart.Sub(subStart)/time.Duration(*logPerRow))
+			subStart = nextStart
 		}
 	}
 	fmt.Printf("sample %d lines cost %s, %s per row\n", sampleRows, time.Since(start), time.Since(start)/time.Duration(sampleRows))

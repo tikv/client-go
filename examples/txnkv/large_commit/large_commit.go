@@ -57,6 +57,7 @@ var (
 	shuffle           = flag.Bool("shuffle", false, "shuffle the keys")
 	batchSize         = flag.Int("batch-size", 1000, "batch size")
 	keysPerRegion     = flag.Int("keys-per-region", 100000, "keys per region")
+	logPerRow         = flag.Int("log-per-row", 0, "log per memdb row if > 0")
 )
 
 var (
@@ -136,11 +137,6 @@ func main() {
 		fmt.Println(http.ListenAndServe("0.0.0.0:6060", nil))
 	}()
 
-	initStore()
-
-	initContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
-
-	MustNil(client.UnsafeDestroyRange(initContext, []byte{0}, []byte{255}))
 	schemaContent, err := os.ReadFile(*schema)
 	MustNil(err)
 	core, err := NewCore(string(schemaContent), false, false)
@@ -149,6 +145,14 @@ func main() {
 	memBuffer, err := core.InsertRows(int(*txnSize), 1)
 	MustNil(err)
 	fmt.Printf("prepare membuffer takes %s\n", time.Since(start))
+	if pdAddr == "" {
+		fmt.Println("stop before prewrite because no pd addr is provided")
+		return
+	}
+
+	initStore()
+	initContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
+	MustNil(client.UnsafeDestroyRange(initContext, []byte{0}, []byte{255}))
 
 	KVChan := make(chan KV, PREWRITE_CONC*2)
 
