@@ -1500,17 +1500,17 @@ func (mu *regionIndexMu) removeVersionFromCache(oldVer RegionVerID, regionID uin
 // Moreover, it will return whether the region is stale.
 func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool) bool {
 	newVer := cachedRegion.VerID()
-	latest, ok := mu.latestVersions[cachedRegion.VerID().id]
+	oldVer, ok := mu.latestVersions[cachedRegion.VerID().id]
 	// There are two or more situations in which the region we got is stale.
 	// The first case is that the process of getting a region is concurrent.
 	// The stale region may be returned later due to network reasons.
 	// The second case is that the region may be obtained from the PD follower,
 	// and there is the synchronization time between the pd follower and the leader.
 	// So we should check the epoch.
-	if ok && (latest.GetVer() > newVer.GetVer() || latest.GetConfVer() > newVer.GetConfVer()) {
+	if ok && (oldVer.GetVer() > newVer.GetVer() || oldVer.GetConfVer() > newVer.GetConfVer()) {
 		logutil.BgLogger().Debug("get stale region",
-			zap.Uint64("region", newVer.GetID()), zap.Uint64("ver", newVer.GetVer()), zap.Uint64("conf", newVer.GetConfVer()),
-			zap.Uint64("lastest-ver", latest.GetVer()), zap.Uint64("lastest-conf", latest.GetConfVer()))
+			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
+			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
 		return true
 	}
 	// Also check the intersecting regions.
@@ -1552,7 +1552,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	}
 	// update related vars.
 	mu.regions[cachedRegion.VerID()] = cachedRegion
-	if !ok || latest.GetVer() < newVer.GetVer() || latest.GetConfVer() < newVer.GetConfVer() {
+	if !ok || oldVer.GetVer() < newVer.GetVer() || oldVer.GetConfVer() < newVer.GetConfVer() {
 		mu.latestVersions[cachedRegion.VerID().id] = newVer
 	}
 	// The intersecting regions in the cache are probably stale, clear them.
