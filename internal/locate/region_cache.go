@@ -1519,13 +1519,16 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
 		return true
 	}
-	// Also check the intersecting regions.
+	// Also check and remove the intersecting regions including the old region.
 	intersectedRegions, stale := mu.sorted.removeIntersecting(cachedRegion, &newVer)
 	if stale {
 		return true
 	}
-	oldRegion := mu.sorted.ReplaceOrInsert(cachedRegion)
-	if oldRegion != nil {
+	// Insert the region (won't replace because of above deletion).
+	mu.sorted.ReplaceOrInsert(cachedRegion)
+	// Inherit the workTiKVIdx, workTiFlashIdx and buckets from the first intersected region.
+	if len(intersectedRegions) > 0 {
+		oldRegion := intersectedRegions[0].cachedRegion
 		store := cachedRegion.getStore()
 		oldRegionStore := oldRegion.getStore()
 		// TODO(youjiali1995): remove this because the new retry logic can handle this issue.
@@ -1538,15 +1541,6 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		if InvalidReason(atomic.LoadInt32((*int32)(&oldRegion.invalidReason))) == NoLeader {
 			store.workTiKVIdx = (oldRegionStore.workTiKVIdx + 1) % AccessIndex(store.accessStoreNum(tiKVOnly))
 		}
-		// If the old region is still valid, do not invalidate it to avoid unnecessary backoff.
-		if invalidateOldRegion {
-			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
-			if shouldCount {
-				oldRegion.invalidate(Other)
-			} else {
-				oldRegion.invalidateWithoutMetrics(Other)
-			}
-		}
 		// Don't refresh TiFlash work idx for region. Otherwise, it will always goto a invalid store which
 		// is under transferring regions.
 		store.workTiFlashIdx.Store(oldRegionStore.workTiFlashIdx.Load())
@@ -1555,20 +1549,23 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
 			store.buckets = oldRegionStore.buckets
 		}
-		// Only delete when IDs are different, because we will update right away.
-		if cachedRegion.VerID().id != oldRegion.VerID().id {
-			mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
-		}
-	}
-	// update related vars.
-	mu.regions[cachedRegion.VerID()] = cachedRegion
-	if !ok || oldVer.GetVer() < newVer.GetVer() || oldVer.GetConfVer() < newVer.GetConfVer() {
-		mu.latestVersions[cachedRegion.VerID().id] = newVer
 	}
 	// The intersecting regions in the cache are probably stale, clear them.
 	for _, region := range intersectedRegions {
 		mu.removeVersionFromCache(region.cachedRegion.VerID(), region.cachedRegion.GetID())
+		// If the old region is still valid, do not invalidate it to avoid unnecessary backoff.
+		if invalidateOldRegion {
+			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
+			if shouldCount {
+				region.cachedRegion.invalidate(Other)
+			} else {
+				region.cachedRegion.invalidateWithoutMetrics(Other)
+			}
+		}
 	}
+	// update related vars.
+	mu.regions[cachedRegion.VerID()] = cachedRegion
+	mu.latestVersions[cachedRegion.VerID().id] = newVer
 	return false
 }
 
