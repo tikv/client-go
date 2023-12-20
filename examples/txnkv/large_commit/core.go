@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -105,57 +106,70 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 	sampleRows := n / sample
 	start := time.Now()
 	subStart := start
+	var wg sync.WaitGroup
+	tokens := make(chan struct{}, 256)
+	for i := 0; i < 256; i++ {
+		tokens <- struct{}{}
+	}
 	for i := 0; i < sampleRows; i++ {
 		row := c.GetRow()
 		if db != nil {
-			var stmt strings.Builder
-			stmt.WriteString("insert into ")
-			stmt.WriteString(c.model.Table.Name.String())
-			stmt.WriteString(" values (")
-			for j, col := range row {
-				if j > 0 {
-					stmt.WriteString(", ")
+			wg.Add(1)
+			go func() {
+				token := <-tokens
+				defer func() {
+					tokens <- token
+					wg.Done()
+				}()
+				var stmt strings.Builder
+				stmt.WriteString("insert into ")
+				stmt.WriteString(c.model.Table.Name.String())
+				stmt.WriteString(" values (")
+				for j, col := range row {
+					if j > 0 {
+						stmt.WriteString(", ")
+					}
+					val := col.GetValue()
+					switch v := val.(type) {
+					case string:
+						stmt.WriteByte('"')
+						s := strings.ReplaceAll(v, `\`, `\\"`)
+						s = strings.ReplaceAll(s, `"`, `\"`)
+						stmt.WriteString(s)
+						stmt.WriteByte('"')
+					case int64:
+						stmt.WriteString(strconv.Itoa(int(v)))
+					case uint64:
+						stmt.WriteString(strconv.Itoa(int(v)))
+					case int32:
+						stmt.WriteString(strconv.Itoa(int(v)))
+					case uint32:
+						stmt.WriteString(strconv.Itoa(int(v)))
+					case float64:
+						stmt.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+					case float32:
+						stmt.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
+					case []byte:
+						stmt.WriteByte('"')
+						s := strings.ReplaceAll(string(v), `\`, `\\`)
+						s = strings.ReplaceAll(s, `"`, `\"`)
+						stmt.WriteString(s)
+						stmt.WriteByte('"')
+					case *types.MyDecimal:
+						stmt.WriteString(v.String())
+					case time.Duration:
+						stmt.WriteByte('"')
+						stmt.WriteString(fmtDuration(v))
+						stmt.WriteByte('"')
+					case time.Time:
+						stmt.WriteByte('"')
+						stmt.WriteString(v.Format("2006-01-02 15:04:05.9999"))
+						stmt.WriteByte('"')
+					}
 				}
-				val := col.GetValue()
-				switch v := val.(type) {
-				case string:
-					stmt.WriteByte('"')
-					s := strings.ReplaceAll(v, `\`, `\\"`)
-					s = strings.ReplaceAll(s, `"`, `\"`)
-					stmt.WriteString(s)
-					stmt.WriteByte('"')
-				case int64:
-					stmt.WriteString(strconv.Itoa(int(v)))
-				case uint64:
-					stmt.WriteString(strconv.Itoa(int(v)))
-				case int32:
-					stmt.WriteString(strconv.Itoa(int(v)))
-				case uint32:
-					stmt.WriteString(strconv.Itoa(int(v)))
-				case float64:
-					stmt.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
-				case float32:
-					stmt.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
-				case []byte:
-					stmt.WriteByte('"')
-					s := strings.ReplaceAll(string(v), `\`, `\\`)
-					s = strings.ReplaceAll(s, `"`, `\"`)
-					stmt.WriteString(s)
-					stmt.WriteByte('"')
-				case *types.MyDecimal:
-					stmt.WriteString(v.String())
-				case time.Duration:
-					stmt.WriteByte('"')
-					stmt.WriteString(fmtDuration(v))
-					stmt.WriteByte('"')
-				case time.Time:
-					stmt.WriteByte('"')
-					stmt.WriteString(v.Format("2006-01-02 15:04:05.9999"))
-					stmt.WriteByte('"')
-				}
-			}
-			stmt.WriteString(")")
-			MustExec(stmt.String())
+				stmt.WriteString(")")
+				MustExec(stmt.String())
+			}()
 			continue
 		}
 		opts := []table.AddRecordOption{}
@@ -169,6 +183,7 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 			subStart = nextStart
 		}
 	}
+	wg.Wait()
 	fmt.Printf("sample %d lines cost %s, %s per row\n", sampleRows, time.Since(start), time.Since(start)/time.Duration(sampleRows))
 	membuf := txn.GetMemBuffer()
 	return membuf, nil
