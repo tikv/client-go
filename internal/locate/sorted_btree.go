@@ -95,13 +95,16 @@ func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int)
 
 // removeIntersecting removes all items that have intersection with the key range of given region.
 // If the region itself is in the cache, it's not removed.
-func (s *SortedRegions) removeIntersecting(r *Region, verID *RegionVerID) ([]*btreeItem, bool) {
+func (s *SortedRegions) removeIntersecting(r *Region, verID RegionVerID) ([]*btreeItem, bool) {
 	var deleted []*btreeItem
 	var stale bool
 	s.b.AscendGreaterOrEqual(newBtreeSearchItem(r.StartKey()), func(item *btreeItem) bool {
-		// Skip the item that is equal to the given region.
-		if item.cachedRegion.VerID() == r.VerID() {
-			return true
+		if item.cachedRegion.meta.GetRegionEpoch().GetVersion() > verID.ver {
+			logutil.BgLogger().Debug("get stale region",
+				zap.Uint64("region", verID.GetID()), zap.Uint64("ver", verID.GetVer()), zap.Uint64("conf", verID.GetConfVer()),
+				zap.Uint64("intersecting-ver", item.cachedRegion.meta.GetRegionEpoch().GetVersion()))
+			stale = true
+			return false
 		}
 		if item.cachedRegion.meta.GetRegionEpoch().GetVersion() > verID.ver {
 			logutil.BgLogger().Debug("get stale region",

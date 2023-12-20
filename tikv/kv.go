@@ -191,12 +191,15 @@ func WithPool(gp Pool) Option {
 }
 
 // WithPDHTTPClient sets the PD HTTP client with the given PD addresses and options.
+// Source is to mark where the HTTP client is created, which is used for metrics and logs.
 func WithPDHTTPClient(
+	source string,
 	pdAddrs []string,
 	opts ...pdhttp.ClientOption,
 ) Option {
 	return func(o *KVStore) {
 		o.pdHttpClient = pdhttp.NewClient(
+			source,
 			pdAddrs,
 			opts...,
 		)

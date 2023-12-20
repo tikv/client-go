@@ -1897,7 +1897,7 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 	s.NoError(err)
 	s.Equal([]byte("b"), r2.StartKey())
 
-	stale := s.cache.insertRegionToCache(fakeRegion, true, true)
+	stale := !s.cache.insertRegionToCache(fakeRegion, true, true)
 	s.True(stale)
 
 	rs, err := s.cache.scanRegionsFromCache(s.bo, []byte(""), []byte(""), 100)
