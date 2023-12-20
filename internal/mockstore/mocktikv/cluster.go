@@ -37,7 +37,6 @@ package mocktikv
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -541,9 +540,6 @@ func (c *Cluster) getEntriesGroupByRegions(mvccStore MVCCStore, start, end MvccK
 	regionEntriesSlice := make([][]Pair, 0, count)
 	quotient := len(pairs) / count
 	remainder := len(pairs) % count
-	for i := range pairs {
-		fmt.Println(pairs[i])
-	}
 	i := 0
 	for i < len(pairs) {
 		regionEntryCount := quotient
