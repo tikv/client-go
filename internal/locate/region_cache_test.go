@@ -1952,6 +1952,40 @@ func (s *testRegionCacheWithDelaySuite) TestStaleGetRegion() {
 	s.Equal([]byte("b"), r.meta.EndKey)
 }
 
+func (s *testRegionCacheWithDelaySuite) TestFollowerGetStaleRegion() {
+	var delay uatomic.Bool
+	pdCli3 := &CodecPDClient{mocktikv.NewPDClient(s.cluster, mocktikv.WithDelay(&delay)), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	followerDelayCache := NewRegionCache(pdCli3)
+
+	delay.Store(true)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var final *Region
+	go func() {
+		var err error
+		// followerDelayCache is empty now, so it will go follower.
+		final, err = followerDelayCache.findRegionByKey(s.bo, []byte("z"), false)
+		s.NoError(err)
+		wg.Done()
+	}()
+	time.Sleep(30 * time.Millisecond)
+	delay.Store(false)
+	r, err := followerDelayCache.findRegionByKey(s.bo, []byte("y"), false)
+	s.NoError(err)
+	newPeersIDs := s.cluster.AllocIDs(1)
+	s.cluster.Split(r.GetID(), s.cluster.AllocID(), []byte("z"), newPeersIDs, newPeersIDs[0])
+	r.invalidate(Other)
+	r, err = followerDelayCache.findRegionByKey(s.bo, []byte("y"), false)
+	s.NoError(err)
+	s.Equal([]byte("z"), r.meta.EndKey)
+
+	// no need to retry because
+	wg.Wait()
+	s.Equal([]byte("z"), final.meta.StartKey)
+
+	followerDelayCache.Close()
+}
+
 func generateKeyForSimulator(id int, keyLen int) []byte {
 	k := make([]byte, keyLen)
 	copy(k, fmt.Sprintf("%010d", id))
