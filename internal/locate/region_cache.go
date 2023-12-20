@@ -549,6 +549,18 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	return c
 }
 
+// only used fot test.
+func newTestRegionCache() *RegionCache {
+	c := &RegionCache{}
+	c.storeMu.stores = make(map[uint64]*Store)
+	c.tiflashComputeStoreMu.needReload = true
+	c.tiflashComputeStoreMu.stores = make([]*Store, 0)
+	c.notifyCheckCh = make(chan struct{}, 1)
+	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
+	c.mu = *newRegionIndexMu(nil)
+	return c
+}
+
 // clear clears all cached data in the RegionCache. It's only used in tests.
 func (c *RegionCache) clear() {
 	c.mu = *newRegionIndexMu(nil)
@@ -558,8 +570,8 @@ func (c *RegionCache) clear() {
 }
 
 // thread unsafe, should use with lock
-func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool, shouldCount bool) {
-	c.mu.insertRegionToCache(cachedRegion, invalidateOldRegion, shouldCount)
+func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool, shouldCount bool) bool {
+	return c.mu.insertRegionToCache(cachedRegion, invalidateOldRegion, shouldCount)
 }
 
 // Close releases region cache's resource.
@@ -1491,9 +1503,32 @@ func (mu *regionIndexMu) removeVersionFromCache(oldVer RegionVerID, regionID uin
 // It should be protected by c.mu.l.Lock().
 // if `invalidateOldRegion` is false, the old region cache should be still valid,
 // and it may still be used by some kv requests.
-func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool, shouldCount bool) {
-	oldRegion := mu.sorted.ReplaceOrInsert(cachedRegion)
-	if oldRegion != nil {
+// Moreover, it will return false if the region is stale.
+func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool, shouldCount bool) bool {
+	newVer := cachedRegion.VerID()
+	oldVer, ok := mu.latestVersions[newVer.id]
+	// There are two or more situations in which the region we got is stale.
+	// The first case is that the process of getting a region is concurrent.
+	// The stale region may be returned later due to network reasons.
+	// The second case is that the region may be obtained from the PD follower,
+	// and there is the synchronization time between the pd follower and the leader.
+	// So we should check the epoch.
+	if ok && (oldVer.GetVer() > newVer.GetVer() || oldVer.GetConfVer() > newVer.GetConfVer()) {
+		logutil.BgLogger().Debug("get stale region",
+			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
+			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
+		return false
+	}
+	// Also check and remove the intersecting regions including the old region.
+	intersectedRegions, stale := mu.sorted.removeIntersecting(cachedRegion, newVer)
+	if stale {
+		return false
+	}
+	// Insert the region (won't replace because of above deletion).
+	mu.sorted.ReplaceOrInsert(cachedRegion)
+	// Inherit the workTiKVIdx, workTiFlashIdx and buckets from the first intersected region.
+	if len(intersectedRegions) > 0 {
+		oldRegion := intersectedRegions[0].cachedRegion
 		store := cachedRegion.getStore()
 		oldRegionStore := oldRegion.getStore()
 		// TODO(youjiali1995): remove this because the new retry logic can handle this issue.
@@ -1506,15 +1541,6 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		if InvalidReason(atomic.LoadInt32((*int32)(&oldRegion.invalidReason))) == NoLeader {
 			store.workTiKVIdx = (oldRegionStore.workTiKVIdx + 1) % AccessIndex(store.accessStoreNum(tiKVOnly))
 		}
-		// If the old region is still valid, do not invalidate it to avoid unnecessary backoff.
-		if invalidateOldRegion {
-			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
-			if shouldCount {
-				oldRegion.invalidate(Other)
-			} else {
-				oldRegion.invalidateWithoutMetrics(Other)
-			}
-		}
 		// Don't refresh TiFlash work idx for region. Otherwise, it will always goto a invalid store which
 		// is under transferring regions.
 		store.workTiFlashIdx.Store(oldRegionStore.workTiFlashIdx.Load())
@@ -1523,21 +1549,27 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		if store.buckets == nil || (oldRegionStore.buckets != nil && store.buckets.GetVersion() < oldRegionStore.buckets.GetVersion()) {
 			store.buckets = oldRegionStore.buckets
 		}
-		mu.removeVersionFromCache(oldRegion.VerID(), cachedRegion.VerID().id)
-	}
-	mu.regions[cachedRegion.VerID()] = cachedRegion
-	newVer := cachedRegion.VerID()
-	latest, ok := mu.latestVersions[cachedRegion.VerID().id]
-	if !ok || latest.GetVer() < newVer.GetVer() || latest.GetConfVer() < newVer.GetConfVer() {
-		mu.latestVersions[cachedRegion.VerID().id] = newVer
 	}
 	// The intersecting regions in the cache are probably stale, clear them.
-	deleted := mu.sorted.removeIntersecting(cachedRegion)
-	for _, region := range deleted {
+	for _, region := range intersectedRegions {
 		mu.removeVersionFromCache(region.cachedRegion.VerID(), region.cachedRegion.GetID())
+		// If the old region is still valid, do not invalidate it to avoid unnecessary backoff.
+		if invalidateOldRegion {
+			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
+			if shouldCount {
+				region.cachedRegion.invalidate(Other)
+			} else {
+				region.cachedRegion.invalidateWithoutMetrics(Other)
+			}
+		}
 	}
+	// update related vars.
+	mu.regions[newVer] = cachedRegion
+	mu.latestVersions[newVer.id] = newVer
+	return true
+}
 
-} // searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
+// searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
 // it should be called with c.mu.RLock(), and the returned Region should not be
 // used after c.mu is RUnlock().
 // If the given key is the end key of the region that you want, you may set the second argument to true. This is useful
