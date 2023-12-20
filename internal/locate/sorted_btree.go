@@ -95,7 +95,7 @@ func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int)
 
 // removeIntersecting removes all items that have intersection with the key range of given region.
 // If the region itself is in the cache, it's not removed.
-func (s *SortedRegions) removeIntersecting(r *Region, verID *RegionVerID) ([]*btreeItem, bool) {
+func (s *SortedRegions) removeIntersecting(r *Region, verID RegionVerID) ([]*btreeItem, bool) {
 	var deleted []*btreeItem
 	var stale bool
 	s.b.AscendGreaterOrEqual(newBtreeSearchItem(r.StartKey()), func(item *btreeItem) bool {

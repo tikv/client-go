@@ -1503,10 +1503,10 @@ func (mu *regionIndexMu) removeVersionFromCache(oldVer RegionVerID, regionID uin
 // It should be protected by c.mu.l.Lock().
 // if `invalidateOldRegion` is false, the old region cache should be still valid,
 // and it may still be used by some kv requests.
-// Moreover, it will return whether the region is stale.
+// Moreover, it will return false if the region is stale.
 func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool, shouldCount bool) bool {
 	newVer := cachedRegion.VerID()
-	oldVer, ok := mu.latestVersions[cachedRegion.VerID().id]
+	oldVer, ok := mu.latestVersions[newVer.id]
 	// There are two or more situations in which the region we got is stale.
 	// The first case is that the process of getting a region is concurrent.
 	// The stale region may be returned later due to network reasons.
@@ -1517,12 +1517,12 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		logutil.BgLogger().Debug("get stale region",
 			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
 			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
-		return true
+		return false
 	}
 	// Also check and remove the intersecting regions including the old region.
-	intersectedRegions, stale := mu.sorted.removeIntersecting(cachedRegion, &newVer)
+	intersectedRegions, stale := mu.sorted.removeIntersecting(cachedRegion, newVer)
 	if stale {
-		return true
+		return false
 	}
 	// Insert the region (won't replace because of above deletion).
 	mu.sorted.ReplaceOrInsert(cachedRegion)
@@ -1564,9 +1564,9 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		}
 	}
 	// update related vars.
-	mu.regions[cachedRegion.VerID()] = cachedRegion
-	mu.latestVersions[cachedRegion.VerID().id] = newVer
-	return false
+	mu.regions[newVer] = cachedRegion
+	mu.latestVersions[newVer.id] = newVer
+	return true
 }
 
 // searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
