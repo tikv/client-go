@@ -37,6 +37,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"runtime/trace"
 	"sync"
@@ -47,9 +48,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -296,14 +297,18 @@ func (a *batchConn) fetchMorePendingRequests(
 
 const idleTimeout = 3 * time.Minute
 
+// BatchSendLoopPanicCounter is only used for testing.
+var BatchSendLoopPanicCounter int64 = 0
+
 func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchSendLoop).Inc()
 			logutil.BgLogger().Error("batchSendLoop",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
-			logutil.BgLogger().Info("restart batchSendLoop")
+			atomic.AddInt64(&BatchSendLoopPanicCounter, 1)
+			logutil.BgLogger().Info("restart batchSendLoop", zap.Int64("count", atomic.LoadInt64(&BatchSendLoopPanicCounter)))
 			go a.batchSendLoop(cfg)
 		}
 	}()
@@ -436,7 +441,7 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
 			logutil.BgLogger().Error("batchCommandsClient.recv panic",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
 			err = errors.New("batch conn recv paniced")
 		}
@@ -604,7 +609,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
 			logutil.BgLogger().Error("batchRecvLoop",
-				zap.Reflect("r", r),
+				zap.Any("r", r),
 				zap.Stack("stack"))
 			logutil.BgLogger().Info("restart batchRecvLoop")
 			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, streamClient)
@@ -793,7 +798,8 @@ func sendBatchRequest(
 	case <-timer.C:
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
-	metrics.TiKVBatchWaitDuration.Observe(float64(time.Since(start)))
+	waitDuration := time.Since(start)
+	metrics.TiKVBatchWaitDuration.Observe(float64(waitDuration))
 
 	select {
 	case res, ok := <-entry.res:
@@ -808,7 +814,8 @@ func sendBatchRequest(
 		return nil, errors.WithStack(ctx.Err())
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
-		return nil, errors.WithMessage(context.DeadlineExceeded, "wait recvLoop")
+		reason := fmt.Sprintf("wait recvLoop timeout,timeout:%s, wait_duration:%s:", timeout, waitDuration)
+		return nil, errors.WithMessage(context.DeadlineExceeded, reason)
 	}
 }
 

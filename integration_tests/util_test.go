@@ -45,9 +45,9 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/tidb/kv"
-	txndriver "github.com/pingcap/tidb/store/driver/txn"
-	"github.com/pingcap/tidb/store/mockstore/unistore"
+	"github.com/pingcap/tidb/pkg/kv"
+	txndriver "github.com/pingcap/tidb/pkg/store/driver/txn"
+	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"github.com/tikv/client-go/v2/config"

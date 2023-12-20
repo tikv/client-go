@@ -71,7 +71,7 @@ func TestBackoffErrorType(t *testing.T) {
 	err = b.Backoff(BoIsWitness, errors.New("peer is witness"))
 	assert.Nil(t, err)
 	// wait it exceed max sleep
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 15; i++ {
 		err = b.Backoff(BoTxnNotFound, errors.New("txn not found"))
 		if err != nil {
 			// Next backoff should return error of backoff that sleeps for longest time.
@@ -97,4 +97,16 @@ func TestBackoffDeepCopy(t *testing.T) {
 		err = b.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
 		assert.ErrorIs(t, err, BoMaxDataNotReady.err)
 	}
+}
+
+func TestBackoffWithMaxExcludedExceed(t *testing.T) {
+	setBackoffExcluded(BoTiKVServerBusy.name, 1)
+	b := NewBackofferWithVars(context.TODO(), 1, nil)
+	err := b.Backoff(BoTiKVServerBusy, errors.New("server is busy"))
+	assert.Nil(t, err)
+
+	// As the total excluded sleep is greater than the max limited value, error should be returned.
+	err = b.Backoff(BoTiKVServerBusy, errors.New("server is busy"))
+	assert.NotNil(t, err)
+	assert.Greater(t, b.excludedSleep, b.maxSleep)
 }
