@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -28,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	_ "github.com/pingcap/tidb/pkg/planner/core"
 	"github.com/tikv/client-go/v2/config"
@@ -47,6 +49,7 @@ func (kv KV) String() string {
 
 var (
 	client            *txnkv.Client
+	dsn               = flag.String("dsn", "", "dsn")
 	pdAddr            = flag.String("pd", "127.0.0.1:2379", "pd address")
 	txnSize           = flag.Int64("txn-size", 1024, "txn size")
 	mode              = flag.String("mode", "common-commit", "common-commit|scan-commit")
@@ -72,6 +75,22 @@ func initStore() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+var db *sql.DB
+
+func initConn() {
+	var err error
+	db, err = sql.Open("mysql", *dsn)
+	MustNil(err)
+}
+
+func MustExec(sql string) {
+	_, err := db.Exec(sql)
+	if err != nil {
+		fmt.Println(sql)
+	}
+	MustNil(err)
 }
 
 func scan(keyPrefix []byte, limit int) ([]KV, error) {
@@ -126,6 +145,10 @@ func main() {
 		os.Args = append(os.Args, "-pd", pdAddr)
 	}
 	flag.Parse()
+	if *dsn != "" {
+		initConn()
+		fmt.Println("will insert into a real database")
+	}
 	bits = len(fmt.Sprintf("%d", *txnSize))
 	COMMIT_CONC = *commitConcurrency
 
@@ -139,6 +162,9 @@ func main() {
 
 	schemaContent, err := os.ReadFile(*schema)
 	MustNil(err)
+	if db != nil {
+		MustExec(string(schemaContent))
+	}
 	core, err := NewCore(string(schemaContent), false, false)
 	MustNil(err)
 	start := time.Now()

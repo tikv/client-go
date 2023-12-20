@@ -6,6 +6,8 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -82,6 +84,16 @@ func (c *Core) Context() context.Context {
 	return ctx
 }
 
+func fmtDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+}
+
 func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 	if err := c.ctx.NewTxn(c.Context()); err != nil {
 		return nil, err
@@ -95,6 +107,57 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 	subStart := start
 	for i := 0; i < sampleRows; i++ {
 		row := c.GetRow()
+		if db != nil {
+			var stmt strings.Builder
+			stmt.WriteString("insert into ")
+			stmt.WriteString(c.model.Table.Name.String())
+			stmt.WriteString(" values (")
+			for j, col := range row {
+				if j > 0 {
+					stmt.WriteString(", ")
+				}
+				val := col.GetValue()
+				switch v := val.(type) {
+				case string:
+					stmt.WriteByte('"')
+					s := strings.ReplaceAll(v, `\`, `\\"`)
+					s = strings.ReplaceAll(s, `"`, `\"`)
+					stmt.WriteString(s)
+					stmt.WriteByte('"')
+				case int64:
+					stmt.WriteString(strconv.Itoa(int(v)))
+				case uint64:
+					stmt.WriteString(strconv.Itoa(int(v)))
+				case int32:
+					stmt.WriteString(strconv.Itoa(int(v)))
+				case uint32:
+					stmt.WriteString(strconv.Itoa(int(v)))
+				case float64:
+					stmt.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+				case float32:
+					stmt.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
+				case []byte:
+					stmt.WriteByte('"')
+					s := strings.ReplaceAll(string(v), `\`, `\\`)
+					s = strings.ReplaceAll(s, `"`, `\"`)
+					stmt.WriteString(s)
+					stmt.WriteByte('"')
+				case *types.MyDecimal:
+					stmt.WriteString(v.String())
+				case time.Duration:
+					stmt.WriteByte('"')
+					stmt.WriteString(fmtDuration(v))
+					stmt.WriteByte('"')
+				case time.Time:
+					stmt.WriteByte('"')
+					stmt.WriteString(v.Format("2006-01-02 15:04:05.9999"))
+					stmt.WriteByte('"')
+				}
+			}
+			stmt.WriteString(")")
+			MustExec(stmt.String())
+			continue
+		}
 		opts := []table.AddRecordOption{}
 		if _, err := c.tbl.AddRecord(c.ctx, row, opts...); err != nil {
 			return nil, err
@@ -290,7 +353,7 @@ func (a *Allocator) NewDatum() types.Datum {
 
 func growBytes(bytes []byte) {
 	for i := len(bytes) - 1; i >= 0; i-- {
-		if bytes[i] < 255 {
+		if bytes[i] < 127 {
 			bytes[i]++
 			return
 		}
