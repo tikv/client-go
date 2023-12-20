@@ -37,8 +37,10 @@ package locate
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -52,10 +54,12 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"google.golang.org/grpc"
 )
@@ -613,7 +617,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	v2 := region.Region.confVer + 1
 	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
 	st := &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true)
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
@@ -623,7 +627,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	v3 := region.Region.confVer + 1
 	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: v3, ConfVer: region.Region.confVer}, StartKey: []byte{2}}
 	st = &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true)
+	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
@@ -667,7 +671,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
 		Key: []byte("key"),
 	})
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	req.ReadReplicaScope = "z1" // not global stale read.
 	region, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
@@ -697,4 +701,87 @@ func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
 	regionErr, _ := resp.GetRegionError()
 	s.Nil(regionErr)
 	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchClient() {
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 0
+	})()
+
+	server, port := mockserver.StartMockTikvService()
+	s.True(port > 0)
+	server.SetMetaChecker(func(ctx context.Context) error {
+		return context.DeadlineExceeded
+	})
+	rpcClient := client.NewRPCClient()
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
+	}}
+	defer func() {
+		rpcClient.Close()
+		server.Stop()
+	}()
+
+	bo := retry.NewBackofferWithVars(context.Background(), 2000, nil)
+	region, err := s.cache.LocateRegionByID(bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
+	// send a probe request to make sure the mock server is ready.
+	s.regionRequestSender.SendReq(retry.NewNoopBackoff(context.Background()), req, region.Region, time.Second)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Millisecond*10)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.True(IsFakeRegionError(regionErr))
+	s.Equal(0, bo.GetTotalBackoffTimes()) // use kv read timeout will do fast retry, so backoff times should be 0.
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
+	// This test should use `go test -race` to run.
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxBatchSize = 128
+	})()
+
+	server, port := mockserver.StartMockTikvService()
+	s.True(port > 0)
+	rpcClient := client.NewRPCClient()
+	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
+	}}
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+
+	defer func() {
+		rpcClient.Close()
+		server.Stop()
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				ctx, cancel := context.WithCancel(context.Background())
+				bo := retry.NewBackofferWithVars(ctx, int(client.ReadTimeoutShort.Milliseconds()), nil)
+				region, err := s.cache.LocateRegionByID(bo, s.region)
+				s.Nil(err)
+				s.NotNil(region)
+				go func() {
+					// mock for kill query execution or timeout.
+					time.Sleep(time.Millisecond * time.Duration(rand.Intn(5)+1))
+					cancel()
+				}()
+				req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{Data: []byte("a"), StartTs: 1})
+				regionRequestSender := NewRegionRequestSender(s.cache, fnClient)
+				regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+				regionRequestSender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
+			}
+		}()
+	}
+	wg.Wait()
+	// batchSendLoop should not panic.
+	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicCounter), int64(0))
 }

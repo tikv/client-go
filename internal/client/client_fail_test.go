@@ -36,7 +36,6 @@ package client
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,6 +46,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
@@ -54,11 +54,11 @@ func TestPanicInRecvLoop(t *testing.T) {
 	require.Nil(t, failpoint.Enable("tikvclient/panicInFailPendingRequests", `panic`))
 	require.Nil(t, failpoint.Enable("tikvclient/gotErrorInRecvLoop", `return("0")`))
 
-	server, port := startMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
 
-	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
+	addr := server.Addr()
 	rpcClient := NewRPCClient()
 	defer rpcClient.Close()
 	rpcClient.option.dialTimeout = time.Second / 3
@@ -81,10 +81,10 @@ func TestPanicInRecvLoop(t *testing.T) {
 }
 
 func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
-	server, port := startMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
-	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
+	addr := server.Addr()
 
 	// Enable batch and limit the connection count to 1 so that
 	// there is only one BatchCommands stream for each host or forwarded host.

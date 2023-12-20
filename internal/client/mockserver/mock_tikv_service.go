@@ -18,7 +18,7 @@
 // https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/client/mock_tikv_service_test.go
 //
 
-package client
+package mockserver
 
 import (
 	"context"
@@ -36,7 +36,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-type server struct {
+// MockServer is a mock tikv server for testing purpose.
+type MockServer struct {
 	tikvpb.TikvServer
 	grpcServer *grpc.Server
 	addr       string
@@ -49,21 +50,32 @@ type server struct {
 	}
 }
 
-func (s *server) KvPrewrite(ctx context.Context, req *kvrpcpb.PrewriteRequest) (*kvrpcpb.PrewriteResponse, error) {
+// KvGet implements the TikvServer interface.
+func (s *MockServer) KvGet(ctx context.Context, req *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, error) {
+	if err := s.checkMetadata(ctx); err != nil {
+		return nil, err
+	}
+	return &kvrpcpb.GetResponse{}, nil
+}
+
+// KvScan implements the TikvServer interface.
+func (s *MockServer) KvPrewrite(ctx context.Context, req *kvrpcpb.PrewriteRequest) (*kvrpcpb.PrewriteResponse, error) {
 	if err := s.checkMetadata(ctx); err != nil {
 		return nil, err
 	}
 	return &kvrpcpb.PrewriteResponse{}, nil
 }
 
-func (s *server) CoprocessorStream(req *coprocessor.Request, ss tikvpb.Tikv_CoprocessorStreamServer) error {
+// KvCommit implements the TikvServer interface.
+func (s *MockServer) CoprocessorStream(req *coprocessor.Request, ss tikvpb.Tikv_CoprocessorStreamServer) error {
 	if err := s.checkMetadata(ss.Context()); err != nil {
 		return err
 	}
 	return ss.Send(&coprocessor.Response{})
 }
 
-func (s *server) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
+// KvBatchGet implements the TikvServer interface.
+func (s *MockServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 	if err := s.checkMetadata(ss.Context()); err != nil {
 		return err
 	}
@@ -94,13 +106,14 @@ func (s *server) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 	}
 }
 
-func (s *server) setMetaChecker(check func(context.Context) error) {
+// SetMetaChecker set the meta checker for mock server.
+func (s *MockServer) SetMetaChecker(check func(context.Context) error) {
 	s.metaChecker.Lock()
 	s.metaChecker.check = check
 	s.metaChecker.Unlock()
 }
 
-func (s *server) checkMetadata(ctx context.Context) error {
+func (s *MockServer) checkMetadata(ctx context.Context) error {
 	s.metaChecker.Lock()
 	defer s.metaChecker.Unlock()
 	if s.metaChecker.check != nil {
@@ -109,16 +122,24 @@ func (s *server) checkMetadata(ctx context.Context) error {
 	return nil
 }
 
-func (s *server) IsRunning() bool {
+// IsRunning returns true is the mock server is running.
+func (s *MockServer) IsRunning() bool {
 	return atomic.LoadInt64(&s.running) == 1
 }
 
-func (s *server) Stop() {
+// Addr returns the address of the mock server.
+func (s *MockServer) Addr() string {
+	return s.addr
+}
+
+// Stop stops the mock server.
+func (s *MockServer) Stop() {
 	s.grpcServer.Stop()
 	atomic.StoreInt64(&s.running, 0)
 }
 
-func (s *server) Start(addr string) int {
+// Start starts the mock server.
+func (s *MockServer) Start(addr string) int {
 	if addr == "" {
 		addr = fmt.Sprintf("%s:%d", "127.0.0.1", 0)
 	}
@@ -148,9 +169,9 @@ func (s *server) Start(addr string) int {
 	return port
 }
 
-// Try to start a gRPC server and retrun the server instance and binded port.
-func startMockTikvService() (*server, int) {
-	server := &server{}
+// StartMockTikvService try to start a gRPC server and return the server instance and binded port.
+func StartMockTikvService() (*MockServer, int) {
+	server := &MockServer{}
 	port := server.Start("")
 	return server, port
 }
