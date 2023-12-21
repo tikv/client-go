@@ -460,7 +460,10 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 }
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
-func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
+func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (
+	*twoPhaseCommitter,
+	error,
+) {
 	return &twoPhaseCommitter{
 		store:             txn.store,
 		txn:               txn,
@@ -919,7 +922,10 @@ const CommitSecondaryMaxBackoff = 41000
 
 // doActionOnGroupedMutations splits groups into batches (there is one group per region, and potentially many batches per group, but all mutations
 // in a batch will belong to the same region).
-func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action twoPhaseCommitAction, groups []groupedMutations) error {
+func (c *twoPhaseCommitter) doActionOnGroupMutations(
+	bo *retry.Backoffer,
+	action twoPhaseCommitAction, groups []groupedMutations,
+) error {
 	action.tiKVTxnRegionsNumHistogram().Observe(float64(len(groups)))
 
 	var sizeFunc = c.keySize
@@ -1048,7 +1054,27 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 }
 
 // doActionOnBatches does action to batches in parallel.
-func (c *twoPhaseCommitter) doActionOnBatches(bo *retry.Backoffer, action twoPhaseCommitAction, batches []batchMutations) error {
+func (c *twoPhaseCommitter) doActionOnBatches(
+	bo *retry.Backoffer, action twoPhaseCommitAction,
+	batches []batchMutations,
+) error {
+	// killSignal should never be nil for TiDB
+	if c.txn != nil && c.txn.vars != nil && c.txn.vars.Killed != nil {
+		// Do not reset the killed flag here. Let the upper layer reset the flag.
+		// Before it resets, any request is considered valid to be killed.
+		status := atomic.LoadUint32(c.txn.vars.Killed)
+		if status != 0 {
+			logutil.BgLogger().Info(
+				"query is killed", zap.Uint32(
+					"signal",
+					status,
+				),
+			)
+			// TODO: There might be various signals besides a query interruption,
+			// but we are unable to differentiate them, because the definition is in TiDB.
+			return errors.WithStack(tikverr.ErrQueryInterrupted)
+		}
+	}
 	if len(batches) == 0 {
 		return nil
 	}
