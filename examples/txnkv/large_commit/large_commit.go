@@ -83,12 +83,14 @@ func initConn() {
 	var err error
 	db, err = sql.Open("mysql", *dsn)
 	MustNil(err)
+	db.SetMaxOpenConns(256)
 }
 
-func MustExec(sql string) {
+func MustExec(sql string, msg ...interface{}) {
 	_, err := db.Exec(sql)
 	if err != nil {
 		fmt.Println(sql)
+		fmt.Println(msg)
 	}
 	MustNil(err)
 }
@@ -114,7 +116,7 @@ func scan(keyPrefix []byte, limit int) ([]KV, error) {
 
 func MustNil(err error) {
 	if err != nil {
-		fmt.Println("Must nil assertion failed")
+		fmt.Println("Must nil assertion failed", err)
 		panic(err)
 	}
 }

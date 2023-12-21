@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -95,6 +94,63 @@ func fmtDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
+func (c *Core) insertValues(data [][]types.Datum) {
+	var stmt strings.Builder
+	stmt.WriteString("insert into ")
+	stmt.WriteString(c.model.Table.Name.String())
+	stmt.WriteString(" values ")
+	for i, row := range data {
+		if i > 0 {
+			stmt.WriteString(",")
+		}
+		stmt.WriteString("(")
+		for j, col := range row {
+			if j > 0 {
+				stmt.WriteString(", ")
+			}
+			val := col.GetValue()
+			switch v := val.(type) {
+			case string:
+				stmt.WriteByte('"')
+				stmt.WriteString(v)
+				stmt.WriteByte('"')
+			case int64:
+				stmt.WriteString(strconv.Itoa(int(v)))
+			case uint64:
+				stmt.WriteString(strconv.Itoa(int(v)))
+			case int32:
+				stmt.WriteString(strconv.Itoa(int(v)))
+			case uint32:
+				stmt.WriteString(strconv.Itoa(int(v)))
+			case float64:
+				stmt.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+			case float32:
+				stmt.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
+			case []byte:
+				stmt.WriteByte('"')
+				stmt.WriteString(string(v))
+				stmt.WriteByte('"')
+			case *types.MyDecimal:
+				stmt.WriteString(v.String())
+			case time.Duration:
+				stmt.WriteByte('"')
+				stmt.WriteString(fmtDuration(v))
+				stmt.WriteByte('"')
+			case types.Time:
+				t, err := v.CoreTime().GoTime(time.Local)
+				MustNil(err)
+				stmt.WriteByte('"')
+				stmt.WriteString(t.Format("2006-01-02 15:04:05.9999"))
+				stmt.WriteByte('"')
+			default:
+				panic(fmt.Sprintf("unknown type %T", v))
+			}
+		}
+		stmt.WriteString(")")
+	}
+	MustExec(stmt.String())
+}
+
 func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 	if err := c.ctx.NewTxn(c.Context()); err != nil {
 		return nil, err
@@ -106,70 +162,15 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 	sampleRows := n / sample
 	start := time.Now()
 	subStart := start
-	var wg sync.WaitGroup
-	tokens := make(chan struct{}, 256)
-	for i := 0; i < 256; i++ {
-		tokens <- struct{}{}
-	}
+	rows := make([][]types.Datum, 0, 256)
 	for i := 0; i < sampleRows; i++ {
 		row := c.GetRow()
 		if db != nil {
-			wg.Add(1)
-			go func() {
-				token := <-tokens
-				defer func() {
-					tokens <- token
-					wg.Done()
-				}()
-				var stmt strings.Builder
-				stmt.WriteString("insert into ")
-				stmt.WriteString(c.model.Table.Name.String())
-				stmt.WriteString(" values (")
-				for j, col := range row {
-					if j > 0 {
-						stmt.WriteString(", ")
-					}
-					val := col.GetValue()
-					switch v := val.(type) {
-					case string:
-						stmt.WriteByte('"')
-						s := strings.ReplaceAll(v, `\`, `\\"`)
-						s = strings.ReplaceAll(s, `"`, `\"`)
-						stmt.WriteString(s)
-						stmt.WriteByte('"')
-					case int64:
-						stmt.WriteString(strconv.Itoa(int(v)))
-					case uint64:
-						stmt.WriteString(strconv.Itoa(int(v)))
-					case int32:
-						stmt.WriteString(strconv.Itoa(int(v)))
-					case uint32:
-						stmt.WriteString(strconv.Itoa(int(v)))
-					case float64:
-						stmt.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
-					case float32:
-						stmt.WriteString(strconv.FormatFloat(float64(v), 'f', -1, 32))
-					case []byte:
-						stmt.WriteByte('"')
-						s := strings.ReplaceAll(string(v), `\`, `\\`)
-						s = strings.ReplaceAll(s, `"`, `\"`)
-						stmt.WriteString(s)
-						stmt.WriteByte('"')
-					case *types.MyDecimal:
-						stmt.WriteString(v.String())
-					case time.Duration:
-						stmt.WriteByte('"')
-						stmt.WriteString(fmtDuration(v))
-						stmt.WriteByte('"')
-					case time.Time:
-						stmt.WriteByte('"')
-						stmt.WriteString(v.Format("2006-01-02 15:04:05.9999"))
-						stmt.WriteByte('"')
-					}
-				}
-				stmt.WriteString(")")
-				MustExec(stmt.String())
-			}()
+			rows = append(rows, row)
+			if len(rows) > 255 {
+				c.insertValues(rows)
+				rows = rows[:0]
+			}
 			continue
 		}
 		opts := []table.AddRecordOption{}
@@ -183,7 +184,9 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 			subStart = nextStart
 		}
 	}
-	wg.Wait()
+	if len(rows) > 0 {
+		c.insertValues(rows)
+	}
 	fmt.Printf("sample %d lines cost %s, %s per row\n", sampleRows, time.Since(start), time.Since(start)/time.Duration(sampleRows))
 	membuf := txn.GetMemBuffer()
 	return membuf, nil
@@ -347,7 +350,7 @@ func (a *Allocator) NewDatum() types.Datum {
 		growBytes(a.bytesAlloc)
 		bytes := make([]byte, len(a.bytesAlloc))
 		copy(bytes, a.bytesAlloc)
-		return types.NewBytesDatum(a.bytesAlloc)
+		return types.NewStringDatum(string(a.bytesAlloc))
 	case mysql.TypeNewDecimal:
 		a.floatAlloc += rand.Float64()
 		var decimal types.MyDecimal
@@ -367,9 +370,12 @@ func (a *Allocator) NewDatum() types.Datum {
 }
 
 func growBytes(bytes []byte) {
-	for i := len(bytes) - 1; i >= 0; i-- {
+	for i := 0; i < len(bytes); i++ {
 		if bytes[i] < 127 {
 			bytes[i]++
+			for bytes[i] == '"' || bytes[i] == '\\' {
+				bytes[i]++
+			}
 			return
 		}
 		bytes[i] = 0
