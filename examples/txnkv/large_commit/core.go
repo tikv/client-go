@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -163,13 +164,26 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 	start := time.Now()
 	subStart := start
 	rows := make([][]types.Datum, 0, 256)
+	var wg sync.WaitGroup
+	tokens := make(chan struct{}, 128)
+	for i := 0; i < 128; i++ {
+		tokens <- struct{}{}
+	}
 	for i := 0; i < sampleRows; i++ {
 		row := c.GetRow()
 		if db != nil {
 			rows = append(rows, row)
-			if len(rows) > 255 {
-				c.insertValues(rows)
-				rows = rows[:0]
+			if len(rows) > 256 {
+				wg.Add(1)
+				go func(rows [][]types.Datum) {
+					token := <-tokens
+					defer func() {
+						tokens <- token
+						wg.Done()
+					}()
+					c.insertValues(rows)
+				}(rows)
+				rows = make([][]types.Datum, 0, 256)
 			}
 			continue
 		}
@@ -184,6 +198,7 @@ func (c *Core) InsertRows(n, sample int) (kv.MemBuffer, error) {
 			subStart = nextStart
 		}
 	}
+	wg.Wait()
 	if len(rows) > 0 {
 		c.insertValues(rows)
 	}
