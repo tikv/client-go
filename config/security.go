@@ -103,7 +103,5 @@ func (s *Security) ToTLSConfig() (tlsConfig *tls.Config, err error) {
 			}
 		}
 	}
-	return &tls.Config{
-		MinVersion: tls.VersionTLS10,
-	}, nil
+	return
 }
