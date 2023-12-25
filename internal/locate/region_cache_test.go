@@ -1883,21 +1883,30 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 		invalidReason: r.invalidReason,
 	}
 	fakeRegion.setStore(r.getStore().clone())
-
+	keya := mocktikv.NewMvccKey([]byte("a"))
+	keyb := mocktikv.NewMvccKey([]byte("b"))
+	keyc := mocktikv.NewMvccKey([]byte("c"))
+	newRegionID := s.cluster.AllocID()
 	newPeersIDs := s.cluster.AllocIDs(1)
-	s.cluster.Split(r.GetID(), s.cluster.AllocID(), []byte("c"), newPeersIDs, newPeersIDs[0])
+	s.cluster.Split(r.GetID(), newRegionID, []byte("b"), newPeersIDs, newPeersIDs[0])
 	newPeersIDs = s.cluster.AllocIDs(1)
-	s.cluster.Split(r.GetID(), s.cluster.AllocID(), []byte("b"), newPeersIDs, newPeersIDs[0])
+	s.cluster.Split(newRegionID, s.cluster.AllocID(), []byte("c"), newPeersIDs, newPeersIDs[0])
 
 	r.invalidate(Other)
-	r2, err := s.cache.findRegionByKey(s.bo, []byte("c"), false)
+	r2, err := s.cache.findRegionByKey(s.bo, keyc, false)
 	s.NoError(err)
 	s.Equal([]byte("c"), r2.StartKey())
-	r2, err = s.cache.findRegionByKey(s.bo, []byte("b"), false)
+	r2, err = s.cache.findRegionByKey(s.bo, keyb, false)
 	s.NoError(err)
 	s.Equal([]byte("b"), r2.StartKey())
+	ra, err := s.cache.loadRegion(s.bo, keya, false)
+	s.NoError(err)
+	s.cache.mu.Lock()
+	stale := s.cache.insertRegionToCache(ra, true, true)
+	s.cache.mu.Unlock()
+	s.True(stale)
 
-	stale := !s.cache.insertRegionToCache(fakeRegion, true, true)
+	stale = !s.cache.insertRegionToCache(fakeRegion, true, true)
 	s.True(stale)
 
 	rs, err := s.cache.scanRegionsFromCache(s.bo, []byte(""), []byte(""), 100)
