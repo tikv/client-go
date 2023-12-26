@@ -314,7 +314,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				tikvLoad:         &a.tikvTransportLayerLoad,
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
-				limit:            NewWindowsLimit(10000),
+				limit:            NewWindowsLimit(float64(cfg.TiKVClient.SendLimit), float64(cfg.TiKVClient.Kp)),
 				index:            i,
 			}
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)

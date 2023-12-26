@@ -36,6 +36,7 @@
 package client
 
 import (
+	"container/heap"
 	"context"
 	"fmt"
 	"math"
@@ -89,29 +90,43 @@ type batchCommandsBuilder struct {
 	// distinguish its response.
 	idAlloc uint64
 	//entries     []*batchCommandsEntry
-	waitEntries []*batchCommandsEntry
+	waitEntries *PriorityQueue
 	requests    []*tikvpb.BatchCommandsRequest_Request
 	requestIDs  []uint64
 	// In most cases, there isn't any forwardingReq.
 	forwardingReqs map[string]*tikvpb.BatchCommandsRequest
-	send           int
+}
+
+func (b *batchCommandsBuilder) PendingCount() int {
+	return b.waitEntries.Len()
 }
 
 func (b *batchCommandsBuilder) len() int {
-	return 0
+	return 1
 }
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
-	b.waitEntries = append(b.waitEntries, entry)
+	priority := 0
+	if cop := entry.req.GetCoprocessor(); cop != nil {
+		priority = int(cop.GetContext().GetResourceControlContext().GetOverridePriority())
+	}
+
+	item := &Item{
+		value:    entry,
+		priority: priority,
+	}
+	heap.Push(b.waitEntries, item)
 }
 
-func (b *batchCommandsBuilder) buildWithLimit(limit int,
+func (b *batchCommandsBuilder) buildWithLimit(limit uint,
 	collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	for i, e := range b.waitEntries {
-		if i > limit {
-			break
-		}
+	pending := b.PendingCount()
+	firstPri := 0
+	for count, i := uint(0), 0; i < pending; i++ {
+		item := heap.Pop(b.waitEntries).(*Item)
+		pri := item.priority
+		e := item.value
 		if e.isCanceled() {
 			continue
 		}
@@ -131,6 +146,13 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int,
 			batchReq.Requests = append(batchReq.Requests, e.req)
 		}
 		b.idAlloc++
+		if count == 0 {
+			firstPri = pri
+		}
+		count++
+		if count >= limit || pri != firstPri {
+			break
+		}
 	}
 	var req *tikvpb.BatchCommandsRequest
 	if len(b.requests) > 0 {
@@ -139,53 +161,22 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int,
 			RequestIds: b.requestIDs,
 		}
 	}
-	b.send += len(b.requests)
 	return req, b.forwardingReqs
 }
 
 // build builds BatchCommandsRequests and calls collect() for each valid entry.
 // The first return value is the request that doesn't need forwarding.
 // The second is a map that maps forwarded hosts to requests.
-func (b *batchCommandsBuilder) build(
-	collect func(id uint64, e *batchCommandsEntry),
-) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	//for _, e := range b.entries {
-	//	if e.isCanceled() {
-	//		continue
-	//	}
-	//	if collect != nil {
-	//		collect(b.idAlloc, e)
-	//	}
-	//	if e.forwardedHost == "" {
-	//		b.requestIDs = append(b.requestIDs, b.idAlloc)
-	//		b.requests = append(b.requests, e.req)
-	//	} else {
-	//		batchReq, ok := b.forwardingReqs[e.forwardedHost]
-	//		if !ok {
-	//			batchReq = &tikvpb.BatchCommandsRequest{}
-	//			b.forwardingReqs[e.forwardedHost] = batchReq
-	//		}
-	//		batchReq.RequestIds = append(batchReq.RequestIds, b.idAlloc)
-	//		batchReq.Requests = append(batchReq.Requests, e.req)
-	//	}
-	//	b.idAlloc++
-	//}
-	//var req *tikvpb.BatchCommandsRequest
-	//if len(b.requests) > 0 {
-	//	req = &tikvpb.BatchCommandsRequest{
-	//		Requests:   b.requests,
-	//		RequestIds: b.requestIDs,
-	//	}
-	//}
-	return b.buildWithLimit(1000, collect)
-}
+// func (b *batchCommandsBuilder) build(
+// 	collect func(id uint64, e *batchCommandsEntry),
+// ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
+// 	return b.buildWithLimit(1000, collect)
+// }
 
 func (b *batchCommandsBuilder) cancel(e error) {
-	//for _, entry := range b.entries {
-	//	entry.error(e)
-	//}
-
-	for _, entry := range b.waitEntries {
+	len := b.waitEntries.Len()
+	for i := 0; i < len; i++ {
+		entry := heap.Pop(b.waitEntries).(*Item).value
 		entry.error(e)
 	}
 }
@@ -193,12 +184,6 @@ func (b *batchCommandsBuilder) cancel(e error) {
 // reset resets the builder to the initial state.
 // Should call it before collecting a new batch.
 func (b *batchCommandsBuilder) reset() {
-	for i := 0; i < b.send; i++ {
-		b.waitEntries[i] = nil
-	}
-	b.waitEntries = b.waitEntries[b.send:]
-	b.send = 0
-
 	// NOTE: We can't simply set entries = entries[:0] here.
 	// The data in the cap part of the slice would reference the prewrite keys whose
 	// underlying memory is borrowed from memdb. The reference cause GC can't release
@@ -220,10 +205,11 @@ func (b *batchCommandsBuilder) reset() {
 }
 
 func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
+	pq := make(PriorityQueue, 0)
 	return &batchCommandsBuilder{
 		idAlloc: 0,
 		//entries:        make([]*batchCommandsEntry, 0, maxBatchSize),
-		waitEntries:    make([]*batchCommandsEntry, 0, maxBatchSize),
+		waitEntries:    &pq,
 		requests:       make([]*tikvpb.BatchCommandsRequest_Request, 0, maxBatchSize),
 		requestIDs:     make([]uint64, 0, maxBatchSize),
 		forwardingReqs: make(map[string]*tikvpb.BatchCommandsRequest),
@@ -391,6 +377,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		length := a.reqBuilder.len()
 		if uint(length) == 0 {
 			// The batch command channel is closed.
+			logutil.BgLogger().Warn("batchSendLoop exit because batchCommandsCh is closed")
 			return
 		} else if uint(length) < bestBatchWaitSize && bestBatchWaitSize > 1 {
 			// Waits too long to collect requests, reduce the target batch size.
@@ -399,12 +386,12 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			bestBatchWaitSize++
 		}
 
-		a.getClientAndSend()
+		a.getClientAndSend(cfg.MaxBatchSize)
 		metrics.TiKVBatchSendLatency.Observe(float64(time.Since(start)))
 	}
 }
 
-func (a *batchConn) getClientAndSend() {
+func (a *batchConn) getClientAndSend(maxBatchSize uint) {
 	if val, err := util.EvalFailpoint("mockBatchClientSendDelay"); err == nil {
 		if timeout, ok := val.(int); ok && timeout > 0 {
 			time.Sleep(time.Duration(timeout * int(time.Millisecond)))
@@ -421,18 +408,29 @@ func (a *batchConn) getClientAndSend() {
 	for i := 0; i < len(a.batchCommandsClients); i++ {
 		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
 		target = a.batchCommandsClients[a.index].target
+		c := a.batchCommandsClients[a.index]
+		metrics.TiKVWindowsLimitGauge.WithLabelValues("pending", strconv.Itoa(c.index), c.target).Set(float64(a.reqBuilder.PendingCount()))
+		metrics.TiKVWindowsLimitGauge.WithLabelValues("cap", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Capacity()))
+		metrics.TiKVWindowsLimitGauge.WithLabelValues("used", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Used()))
+		// c.limit.SetUsed(int(c.count.Load()))
 		// The lock protects the batchCommandsClient from been closed while it's in use.
 		if a.batchCommandsClients[a.index].tryLockForSend() {
 			if a.batchCommandsClients[a.index].limit.Available() > 0 {
 				cli = a.batchCommandsClients[a.index]
 				break
 			} else {
+				a.batchCommandsClients[a.index].unlockForSend()
+				logutil.BgLogger().Info("getClientAndSend send request to tikv fail due to limit",
+					zap.Int("limit used", a.batchCommandsClients[a.index].limit.Used()),
+					zap.Int("limit cap", int(a.batchCommandsClients[a.index].limit.Capacity())),
+				)
 				reason = "limit"
 			}
 		} else {
 			reason = "lock"
 		}
 	}
+
 	if cli == nil {
 		if reason == "lock" {
 			logutil.BgLogger().Warn("no available connections", zap.String("target", target))
@@ -449,13 +447,24 @@ func (a *batchConn) getClientAndSend() {
 
 	}
 	defer cli.unlockForSend()
-
-	req, forwardingReqs := a.reqBuilder.buildWithLimit(cli.limit.Available(), func(id uint64, e *batchCommandsEntry) {
+	if limit := cli.limit.Available(); limit < maxBatchSize {
+		maxBatchSize = limit
+	}
+	req, forwardingReqs := a.reqBuilder.buildWithLimit(maxBatchSize, func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
+		cli.count.Add(1)
+		cli.limit.used.Add(1)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
 	})
+	logutil.BgLogger().Info("getClientAndSend send request to tikv",
+		zap.Int("request count", len(req.GetRequestIds())),
+		zap.Int("limit used", cli.limit.Used()),
+		zap.Float64("limit cap", cli.limit.Capacity()),
+		zap.Uint("max batch size", maxBatchSize),
+	)
+
 	if req != nil {
 		cli.send("", req)
 	}
@@ -559,6 +568,7 @@ type batchCommandsClient struct {
 	// forwardedClients are clients that need forwarding. It's a map that maps forwarded hosts to streams
 	forwardedClients map[string]*batchCommandsStream
 	batched          sync.Map
+	// count            atomic.Int32
 
 	tikvClientCfg config.TiKVClient
 	tikvLoad      *uint64
@@ -600,12 +610,6 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 	}
 	metrics.TiKVWindowsLimitGauge.WithLabelValues("cap", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Capacity()))
 	metrics.TiKVWindowsLimitGauge.WithLabelValues("used", strconv.Itoa(c.index), c.target).Set(float64(c.limit.Used()))
-	logutil.BgLogger().Info(
-		"send request to tikv server",
-		zap.String("target", c.target),
-		zap.Int("request_len", len(req.GetRequestIds())),
-	)
-	c.limit.Take(len(req.GetRequestIds()))
 	if err := client.Send(req); err != nil {
 		logutil.BgLogger().Info(
 			"sending batch commands meets error",
@@ -625,8 +629,9 @@ func (c *batchCommandsClient) failPendingRequests(err error) {
 		id, _ := key.(uint64)
 		entry, _ := value.(*batchCommandsEntry)
 		c.batched.Delete(id)
+		// c.count.Add(-1)
+		c.limit.used.Add(-1)
 		entry.error(err)
-		c.limit.Ack(1)
 		return true
 	})
 }
@@ -695,8 +700,9 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, streamClient)
 		}
 	}()
-
+	c.limit.Reset()
 	epoch := atomic.LoadUint64(&c.epoch)
+	expect := c.tikvClientCfg.Expect
 	for {
 		resp, err := streamClient.recv()
 		if err != nil {
@@ -719,11 +725,6 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 
 		responses := resp.GetResponses()
-		logutil.BgLogger().Info(
-			"recv request to tikv server",
-			zap.String("target", c.target),
-			zap.Int("request_len", len(resp.GetRequestIds())),
-		)
 		for i, requestID := range resp.GetRequestIds() {
 			value, ok := c.batched.Load(requestID)
 			if !ok {
@@ -736,13 +737,28 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			if cop := responses[i].GetCoprocessor(); cop != nil {
 				detail := cop.GetExecDetailsV2().GetTimeDetailV2()
 				if detail != nil {
-					e := detail.GetGrpcExecuteTimeNs() - detail.GetGrpcWaitTimeNs()
+					exec_us := detail.GetGrpcExecuteTimeNs() / 1_000
+					wait_us := detail.GetGrpcWaitTimeNs() / 1_000
+					e := (float64(exec_us*expect) - float64(wait_us))
+					if e > float64(exec_us*expect) {
+						e = float64(exec_us * expect)
+					}
+
+					if e < -float64(exec_us*expect) {
+						e = -float64(exec_us * expect)
+					}
+					//LblType, LblScope, LblStore
+					metrics.TIKVGrpcDetailHistogram.WithLabelValues("exec", strconv.Itoa(c.index), c.target).Observe(float64(exec_us))
+					metrics.TIKVGrpcDetailHistogram.WithLabelValues("wait", strconv.Itoa(c.index), c.target).Observe(float64(wait_us))
+					metrics.TIKVGrpcDetailHistogram.WithLabelValues("err", strconv.Itoa(c.index), c.target).Observe(e)
 					c.limit.Feedback(e)
-					logutil.BgLogger().Info("batchRecvLoop receives response",
-						zap.Uint64("err", e),
-						zap.Uint64("execute", detail.GetGrpcExecuteTimeNs()),
-						zap.Uint64("wait", detail.GetGrpcWaitTimeNs()),
-						zap.Int("new_cap", c.limit.Capacity()),
+					logutil.BgLogger().Info("batchRecvLoop adjust windows limit",
+						zap.Float64("err", e),
+						zap.Uint64("execute-us", exec_us),
+						zap.Uint64("wait-us", wait_us),
+						zap.Float64("cap", c.limit.Capacity()),
+						zap.Int("used", c.limit.Used()),
+						zap.Int("client-index", c.index),
 					)
 				}
 			}
@@ -756,8 +772,8 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				entry.res <- responses[i]
 			}
 			c.batched.Delete(requestID)
+			c.limit.used.Add(-1)
 		}
-		c.limit.Ack(len(resp.GetRequestIds()))
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
 		if transportLayerLoad > 0 && cfg.MaxBatchWaitTime > 0 {

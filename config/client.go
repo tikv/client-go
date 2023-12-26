@@ -63,7 +63,10 @@ type TiKVClient struct {
 	CommitTimeout string      `toml:"commit-timeout" json:"commit-timeout"`
 	AsyncCommit   AsyncCommit `toml:"async-commit" json:"async-commit"`
 	// MaxBatchSize is the max batch size when calling batch commands API.
-	MaxBatchSize uint `toml:"max-batch-size" json:"max-batch-size"`
+	MaxBatchSize uint    `toml:"max-batch-size" json:"max-batch-size"`
+	SendLimit    uint    `toml:"send-limit" json:"send-limit"`
+	Kp           float64 `toml:"kp" json:"kp"`
+	Expect       uint64  `toml:"expect" json:"expect"`
 	// If TiKV load is greater than this, TiDB will wait for a while to avoid little batch.
 	OverloadThreshold uint `toml:"overload-threshold" json:"overload-threshold"`
 	// MaxBatchWaitTime in nanosecond is the max wait time for batch.
@@ -135,6 +138,9 @@ func DefaultTiKVClient() TiKVClient {
 		},
 
 		MaxBatchSize:      128,
+		SendLimit:         5,
+		Kp:                0.01,
+		Expect:            5,
 		OverloadThreshold: 200,
 		MaxBatchWaitTime:  0,
 		BatchWaitSize:     8,

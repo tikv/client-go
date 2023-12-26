@@ -108,6 +108,7 @@ var (
 
 	TiKVWindowsLimitGauge        *prometheus.GaugeVec
 	TiKVNoLimitConnectionCounter prometheus.Counter
+	TIKVGrpcDetailHistogram      *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -512,6 +513,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		})
 
+	TIKVGrpcDetailHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "grpc_detail_latency",
+			Help:        "Bucketed histogram of the grpc detail duration.",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(1, 2, 20),
+		}, []string{LblType, LblScope, LblStore})
+
 	TiKVTwoPCTxnCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
@@ -834,6 +845,7 @@ func RegisterMetrics() {
 
 	prometheus.MustRegister(TiKVNoLimitConnectionCounter)
 	prometheus.MustRegister(TiKVWindowsLimitGauge)
+	prometheus.MustRegister(TIKVGrpcDetailHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.
