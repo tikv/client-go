@@ -460,10 +460,7 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 }
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
-func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (
-	*twoPhaseCommitter,
-	error,
-) {
+func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	return &twoPhaseCommitter{
 		store:             txn.store,
 		txn:               txn,
@@ -922,10 +919,7 @@ const CommitSecondaryMaxBackoff = 41000
 
 // doActionOnGroupedMutations splits groups into batches (there is one group per region, and potentially many batches per group, but all mutations
 // in a batch will belong to the same region).
-func (c *twoPhaseCommitter) doActionOnGroupMutations(
-	bo *retry.Backoffer,
-	action twoPhaseCommitAction, groups []groupedMutations,
-) error {
+func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action twoPhaseCommitAction, groups []groupedMutations) error {
 	action.tiKVTxnRegionsNumHistogram().Observe(float64(len(groups)))
 
 	var sizeFunc = c.keySize
