@@ -56,6 +56,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -1275,7 +1276,7 @@ func (s *RegionRequestSender) getRPCContext(
 	opts ...StoreSelectorOption,
 ) (*RPCContext, error) {
 	switch et {
-	case tikvrpc.TiKV:
+	case tikvrpc.TiKV, tikvrpc.TiKVRemoteCoprocessor:
 		if s.replicaSelector == nil {
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if selector == nil || err != nil {
@@ -1607,6 +1608,32 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 	return extraInfo
 }
 
+func (s *RegionRequestSender) countReplicaNumber(peers []*metapb.Peer) int {
+	isTiFlashWriteNode := func(storeId uint64) bool {
+		store := s.regionCache.getStoreByStoreID(storeId)
+		engine, _ := store.GetLabelValue("engine")
+		engineRole, _ := store.GetLabelValue("engine_role")
+		return engine == "tiflash" && engineRole == "write"
+	}
+	// In disaggregated-mode(tiflash write-node), only count 1 replica for tiflash, no matter how many tiflash write-nodes there are.
+	replicaNumber := 0
+	hasTiFlashWriteNode := false
+	for _, peer := range peers {
+		role := peer.GetRole()
+		if role == metapb.PeerRole_Voter {
+			replicaNumber++
+		} else if role == metapb.PeerRole_Learner {
+			if !isTiFlashWriteNode(peer.StoreId) {
+				replicaNumber++
+			} else if !hasTiFlashWriteNode {
+				hasTiFlashWriteNode = true
+				replicaNumber++
+			}
+		}
+	}
+	return replicaNumber
+}
+
 func (s *RegionRequestSender) sendReqToRegion(
 	bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration,
 ) (resp *tikvrpc.Response, retry bool, err error) {
@@ -1634,17 +1661,14 @@ func (s *RegionRequestSender) sendReqToRegion(
 		req.ForwardedHost = rpcCtx.Addr
 		sendToAddr = rpcCtx.ProxyAddr
 	}
+	if req.StoreTp == tikvrpc.TiKVRemoteCoprocessor {
+		sendToAddr = config.GetGlobalConfig().TiKVClient.RemoteCoprocessorAddr
+	}
 
 	// Count the replica number as the RU cost factor.
 	req.ReplicaNumber = 1
 	if rpcCtx.Meta != nil && len(rpcCtx.Meta.GetPeers()) > 0 {
-		req.ReplicaNumber = 0
-		for _, peer := range rpcCtx.Meta.GetPeers() {
-			role := peer.GetRole()
-			if role == metapb.PeerRole_Voter || role == metapb.PeerRole_Learner {
-				req.ReplicaNumber++
-			}
-		}
+		req.ReplicaNumber = int64(s.countReplicaNumber(rpcCtx.Meta.GetPeers()))
 	}
 
 	var sessionID uint64
