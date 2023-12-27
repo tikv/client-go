@@ -1891,7 +1891,7 @@ func (s *RegionRequestSender) NeedReloadRegion(ctx *RPCContext) (need bool) {
 
 // regionErrorToLogging constructs the logging content with extra information like returned leader peer id.
 func regionErrorToLogging(peerID uint64, e *errorpb.Error) string {
-	str := regionErrorToLabel(e)
+	str := RegionErrorToLabel(e)
 	if e.GetNotLeader() != nil {
 		notLeader := e.GetNotLeader()
 		if notLeader.GetLeader() != nil {
@@ -1903,7 +1903,7 @@ func regionErrorToLogging(peerID uint64, e *errorpb.Error) string {
 	return fmt.Sprintf("%v-%v", peerID, str)
 }
 
-func regionErrorToLabel(e *errorpb.Error) string {
+func RegionErrorToLabel(e *errorpb.Error) string {
 	if e.GetNotLeader() != nil {
 		return "not_leader"
 	} else if e.GetRegionNotFound() != nil {
@@ -1971,7 +1971,7 @@ func (s *RegionRequestSender) onRegionError(
 	if req != nil {
 		isInternal = util.IsInternalRequest(req.GetRequestSource())
 	}
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr), strconv.FormatBool(isInternal)).Inc()
+	metrics.TiKVRegionErrorCounter.WithLabelValues(RegionErrorToLabel(regionErr), strconv.FormatBool(isInternal)).Inc()
 
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
 		// Retry if error is `NotLeader`.

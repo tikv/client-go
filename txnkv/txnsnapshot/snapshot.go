@@ -373,7 +373,27 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 	return err
 }
 
-func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, collectF func(k, v []byte)) error {
+func (s *KVSnapshot) batchGetSingleRegion(
+	bo *retry.Backoffer, batch batchKeys, collectF func(
+		k,
+		v []byte,
+	),
+) (_err error) {
+	startTime := time.Now()
+	defer func() {
+		if _err == nil {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				metrics.LblBatchGet,
+				metrics.LblOK,
+			).Observe(time.Since(startTime).Seconds())
+		} else {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				metrics.LblBatchGet,
+				metrics.LblErr,
+			).Observe(time.Since(startTime).Seconds())
+		}
+	}()
+
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
@@ -391,7 +411,14 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	useConfigurableKVTimeout := true
 	// the states in request need to keep when retry request.
 	var readType string
+	retryTimes := -1
+	defer func() {
+		if retryTimes > 0 {
+			metrics.TiKVOriginalRequestRetryTimesHistogram.WithLabelValues(metrics.LblBatchGet).Observe(float64(retryTimes))
+		}
+	}()
 	for {
+		retryTimes++
 		s.mu.RLock()
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
 			Keys:    pending,
@@ -465,6 +492,10 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				return err
 			}
 			if same {
+				metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+					metrics.LblBatchGet,
+					locate.RegionErrorToLabel(regionErr),
+				).Inc()
 				continue
 			}
 			return s.batchGetKeysByRegions(bo, pending, collectF)
@@ -546,6 +577,10 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			if batchGetResp.GetError() == nil {
 				pending = lockedKeys
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+				metrics.LblBatchGet,
+				metrics.LblResolveLock,
+			).Inc()
 			continue
 		}
 		return nil
@@ -593,7 +628,7 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	return val, nil
 }
 
-func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]byte, error) {
+func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) (_ []byte, _err error) {
 	// Check the cached values first.
 	s.mu.RLock()
 	if s.mu.cached != nil {
@@ -614,6 +649,21 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			panic("cache miss")
 		}
 	}
+
+	startTime := time.Now()
+	defer func() {
+		if _err == nil {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				metrics.LblGet,
+				metrics.LblOK,
+			).Observe(time.Since(startTime).Seconds())
+		} else {
+			metrics.TiKVOriginalRequestHistogram.WithLabelValues(
+				metrics.LblGet,
+				metrics.LblErr,
+			).Observe(time.Since(startTime).Seconds())
+		}
+	}()
 
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, true)
 
@@ -667,7 +717,14 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	var firstLock *txnlock.Lock
 	var resolvingRecordToken *int
 	useConfigurableKVTimeout := true
+	retryTimes := -1
+	defer func() {
+		if retryTimes > 0 {
+			metrics.TiKVOriginalRequestRetryTimesHistogram.WithLabelValues(metrics.LblGet).Observe(float64(retryTimes))
+		}
+	}()
 	for {
+		retryTimes++
 		util.EvalFailpoint("beforeSendPointGet")
 		loc, err := s.store.GetRegionCache().LocateKey(bo, k)
 		if err != nil {
@@ -697,6 +754,10 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 					return nil, err
 				}
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(
+				metrics.LblGet,
+				locate.RegionErrorToLabel(regionErr),
+			).Inc()
 			continue
 		}
 		if resp.Resp == nil {
@@ -733,6 +794,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 				// by the first lock it meets. During retries, if the encountered
 				// lock is different from the first one, we can omit it.
 				cli.resolvedLocks.Put(lock.TxnID)
+				metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(metrics.LblGet, "omit-lock").Inc()
 				continue
 			}
 			locks := []*txnlock.Lock{lock}
@@ -759,6 +821,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 					return nil, err
 				}
 			}
+			metrics.TiKVOriginalRequestRetryCounter.WithLabelValues(metrics.LblGet, metrics.LblResolveLock).Inc()
 			continue
 		}
 		return val, nil

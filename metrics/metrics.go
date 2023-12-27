@@ -104,6 +104,9 @@ var (
 	TiKVStaleReadCounter                     *prometheus.CounterVec
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
 	TiKVStaleReadBytes                       *prometheus.CounterVec
+	TiKVOriginalRequestHistogram             *prometheus.HistogramVec
+	TiKVOriginalRequestRetryCounter          *prometheus.CounterVec
+	TiKVOriginalRequestRetryTimesHistogram   *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -128,6 +131,11 @@ const (
 	LblInternal        = "internal"
 	LblGeneral         = "general"
 	LblDirection       = "direction"
+	LblReason          = "reason"
+	LblOK              = "ok"
+	LblErr             = "err"
+	LblScan            = "scan"
+	LblResolveLock     = "resolve_lock"
 )
 
 func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
@@ -726,6 +734,38 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Counter of stale read requests bytes",
 		}, []string{LblResult, LblDirection})
 
+	TiKVOriginalRequestHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "original_request_duration_seconds",
+			Help:        "Bucketed histogram of the duration of original request.",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 23), // 0.1ms ~ 419s
+		}, []string{LblType, LblResult},
+	)
+
+	TiKVOriginalRequestRetryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "original_request_retry_total",
+			Help:        "Counter of the retry count of original request.",
+			ConstLabels: constLabels,
+		}, []string{LblType, LblReason},
+	)
+
+	TiKVOriginalRequestRetryTimesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "original_request_retry_times",
+			Help:        "Bucketed histogram of how many times a original request retries.",
+			ConstLabels: constLabels,
+			Buckets:     []float64{1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64, 128, 256},
+		}, []string{LblType},
+	)
+
 	initShortcuts()
 }
 
@@ -809,6 +849,9 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadCounter)
 	prometheus.MustRegister(TiKVStaleReadReqCounter)
 	prometheus.MustRegister(TiKVStaleReadBytes)
+	prometheus.MustRegister(TiKVOriginalRequestHistogram)
+	prometheus.MustRegister(TiKVOriginalRequestRetryCounter)
+	prometheus.MustRegister(TiKVOriginalRequestRetryTimesHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.
