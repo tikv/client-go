@@ -1323,6 +1323,23 @@ func (s *RegionRequestSender) SendReqCtx(
 	retryTimes int,
 	err error,
 ) {
+	startTime := time.Now()
+	defer func() {
+		if err != nil {
+			metrics.TiKVRegionRequestHistogram.WithLabelValues(
+				req.Type.String(),
+				metrics.LblErr,
+				req.InputRequestSource,
+			).Observe(time.Since(startTime).Seconds())
+		} else {
+			metrics.TiKVRegionRequestHistogram.WithLabelValues(
+				req.Type.String(),
+				metrics.LblOK,
+				req.InputRequestSource,
+			).Observe(time.Since(startTime).Seconds())
+		}
+	}()
+
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("regionRequest.SendReqCtx", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -1485,6 +1502,10 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 		if retry {
 			retryTimes++
+			metrics.TiKVRegionRequestRetryCounter.WithLabelValues(
+				req.Type.String(), req.InputRequestSource,
+				"rpc",
+			).Inc()
 			continue
 		}
 
@@ -1504,6 +1525,10 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 			if retry {
 				retryTimes++
+				metrics.TiKVRegionRequestRetryCounter.WithLabelValues(
+					req.Type.String(), req.InputRequestSource,
+					regionErrorToLabel(regionErr),
+				).Inc()
 				continue
 			}
 			s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, totalErrors)

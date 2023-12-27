@@ -291,11 +291,11 @@ func (s *KVStore) runSafePointChecker() {
 		case spCachedTime := <-time.After(d):
 			cachedSafePoint, err := loadSafePoint(s.GetSafePointKV())
 			if err == nil {
-				metrics.TiKVLoadSafepointCounter.WithLabelValues("ok").Inc()
+				metrics.TiKVLoadSafepointCounter.WithLabelValues(metrics.LblOK).Inc()
 				s.UpdateSPCache(cachedSafePoint, spCachedTime)
 				d = gcSafePointUpdateInterval
 			} else {
-				metrics.TiKVLoadSafepointCounter.WithLabelValues("fail").Inc()
+				metrics.TiKVLoadSafepointCounter.WithLabelValues(metrics.LblErr).Inc()
 				logutil.BgLogger().Error("fail to load safepoint from pd", zap.Error(err))
 				d = gcSafePointQuickRepeatInterval
 			}

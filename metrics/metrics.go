@@ -104,6 +104,8 @@ var (
 	TiKVStaleReadCounter                     *prometheus.CounterVec
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
 	TiKVStaleReadBytes                       *prometheus.CounterVec
+	TiKVRegionRequestHistogram               *prometheus.HistogramVec
+	TiKVRegionRequestRetryCounter            *prometheus.CounterVec
 )
 
 // Label constants.
@@ -128,6 +130,9 @@ const (
 	LblInternal        = "internal"
 	LblGeneral         = "general"
 	LblDirection       = "direction"
+	LblReason          = "reason"
+	LblOK              = "ok"
+	LblErr             = "err"
 )
 
 func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
@@ -726,6 +731,26 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Counter of stale read requests bytes",
 		}, []string{LblResult, LblDirection})
 
+	TiKVRegionRequestHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "region_request_duration_seconds",
+			Help:        "Bucketed histogram of region request duration",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 104s
+		}, []string{LblType, LblResult, LblSource},
+	)
+	TiKVRegionRequestRetryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "region_request_retry_total",
+			Help:        "Counter of region request retry",
+			ConstLabels: constLabels,
+		}, []string{LblType, LblSource, LblReason},
+	)
+
 	initShortcuts()
 }
 
@@ -809,6 +834,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadCounter)
 	prometheus.MustRegister(TiKVStaleReadReqCounter)
 	prometheus.MustRegister(TiKVStaleReadBytes)
+	prometheus.MustRegister(TiKVRegionRequestHistogram)
+	prometheus.MustRegister(TiKVRegionRequestRetryCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.
