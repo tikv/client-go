@@ -4,15 +4,15 @@ go 1.21
 
 require (
 	github.com/ninedraft/israce v0.0.3
-	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32
+	github.com/pingcap/errors v0.11.5-0.20231212100244-799fae176cfb
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20231122054644-fb0f5c2a0a10
+	github.com/pingcap/kvproto v0.0.0-20231222062942-c0c73f41d0b2
 	github.com/pingcap/tidb v1.1.0-beta.0.20231201112349-7353fbeea8c0
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20231201024404-0ff16620f6c0
-	github.com/tikv/pd/client v0.0.0-20231219031951-25f48f0bdd27
+	github.com/tikv/client-go/v2 v2.0.8-0.20231225015355-db2e85c4631a
+	github.com/tikv/pd/client v0.0.0-20231227041826-d3551ea0bdbe
 	go.uber.org/goleak v1.3.0
 )
 
@@ -104,12 +104,12 @@ require (
 	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	golang.org/x/tools v0.15.0 // indirect
+	golang.org/x/tools v0.16.1 // indirect
 	google.golang.org/genproto v0.0.0-20231211222908-989df2bf70f3 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20231120223509-83a465c0220f // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231212172506-995d672761c0 // indirect
 	google.golang.org/grpc v1.60.1 // indirect
-	google.golang.org/protobuf v1.31.0 // indirect
+	google.golang.org/protobuf v1.32.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
@@ -117,5 +117,8 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+	// remove this after tidb https://github.com/pingcap/tidb/pull/49833 is merged.
+	github.com/pingcap/tidb => github.com/glorv/tidb v1.1.0-beta.0.20231227062622-cf95945480de
+	github.com/pingcap/tidb/pkg/parser => github.com/glorv/tidb/pkg/parser v0.0.0-20231227062622-cf95945480de
 	github.com/tikv/client-go/v2 => ../
 )
