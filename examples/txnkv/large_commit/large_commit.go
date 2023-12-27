@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"github.com/tikv/client-go/v2/kv"
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
@@ -61,6 +62,7 @@ var (
 	batchSize         = flag.Int("batch-size", 1000, "batch size")
 	keysPerRegion     = flag.Int("keys-per-region", 100000, "keys per region")
 	logPerRow         = flag.Int("log-per-row", 0, "log per memdb row if > 0")
+	stagingSupport    = flag.Bool("staging-support", true, "whether support staging in membuffer")
 )
 
 var (
@@ -151,6 +153,7 @@ func main() {
 		initConn()
 		fmt.Println("will insert into a real database")
 	}
+	kv.StagingMemdb = *stagingSupport
 	bits = len(fmt.Sprintf("%d", *txnSize))
 	COMMIT_CONC = *commitConcurrency
 

@@ -87,10 +87,16 @@ type MemDB struct {
 	vlogInvalid bool
 	dirty       bool
 	stages      []MemDBCheckpoint
+	// hack: no staging impl
+	noStagingImpl map[string][]byte
 }
 
 func newMemDB() *MemDB {
 	db := new(MemDB)
+	if !kv.StagingMemdb {
+		db.noStagingImpl = make(map[string][]byte, 1024)
+		return db
+	}
 	db.allocator.init()
 	db.root = nullAddr
 	db.stages = make([]MemDBCheckpoint, 0, 2)
@@ -104,6 +110,9 @@ func newMemDB() *MemDB {
 // Subsequent writes will be temporarily stored in this new staging buffer.
 // When you think all modifications looks good, you can call `Release` to public all of them to the upper level buffer.
 func (db *MemDB) Staging() int {
+	if db.noStagingImpl != nil {
+		return 0
+	}
 	db.Lock()
 	defer db.Unlock()
 
@@ -113,6 +122,9 @@ func (db *MemDB) Staging() int {
 
 // Release publish all modifications in the latest staging buffer to upper level.
 func (db *MemDB) Release(h int) {
+	if db.noStagingImpl != nil {
+		return
+	}
 	db.Lock()
 	defer db.Unlock()
 
@@ -134,6 +146,9 @@ func (db *MemDB) Release(h int) {
 // Cleanup cleanup the resources referenced by the StagingHandle.
 // If the changes are not published by `Release`, they will be discarded.
 func (db *MemDB) Cleanup(h int) {
+	if db.noStagingImpl != nil {
+		return
+	}
 	db.Lock()
 	defer db.Unlock()
 
@@ -160,12 +175,18 @@ func (db *MemDB) Cleanup(h int) {
 
 // Checkpoint returns a checkpoint of MemDB.
 func (db *MemDB) Checkpoint() *MemDBCheckpoint {
+	if db.noStagingImpl != nil {
+		return &MemDBCheckpoint{}
+	}
 	cp := db.vlog.checkpoint()
 	return &cp
 }
 
 // RevertToCheckpoint reverts the MemDB to the checkpoint.
 func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
+	if db.noStagingImpl != nil {
+		return
+	}
 	db.vlog.revertToCheckpoint(db, cp)
 	db.vlog.truncate(cp)
 	db.vlog.onMemChange()
@@ -173,6 +194,10 @@ func (db *MemDB) RevertToCheckpoint(cp *MemDBCheckpoint) {
 
 // Reset resets the MemBuffer to initial states.
 func (db *MemDB) Reset() {
+	if db.noStagingImpl != nil {
+		db.noStagingImpl = make(map[string][]byte, 1024)
+		return
+	}
 	db.root = nullAddr
 	db.stages = db.stages[:0]
 	db.dirty = false
@@ -186,12 +211,18 @@ func (db *MemDB) Reset() {
 // DiscardValues releases the memory used by all values.
 // NOTE: any operation need value will panic after this function.
 func (db *MemDB) DiscardValues() {
+	if db.noStagingImpl != nil {
+		return
+	}
 	db.vlogInvalid = true
 	db.vlog.reset()
 }
 
 // InspectStage used to inspect the value updates in the given stage.
 func (db *MemDB) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte)) {
+	if db.noStagingImpl != nil {
+		return
+	}
 	idx := handle - 1
 	tail := db.vlog.checkpoint()
 	head := db.stages[idx]
@@ -201,6 +232,13 @@ func (db *MemDB) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte)) {
 // Get gets the value for key k from kv store.
 // If corresponding kv pair does not exist, it returns nil and ErrNotExist.
 func (db *MemDB) Get(key []byte) ([]byte, error) {
+	if db.noStagingImpl != nil {
+		v, ok := db.noStagingImpl[string(key)]
+		if ok {
+			return v, nil
+		}
+		return nil, tikverr.ErrNotExist
+	}
 	if db.vlogInvalid {
 		// panic for easier debugging.
 		panic("vlog is resetted")
@@ -219,6 +257,15 @@ func (db *MemDB) Get(key []byte) ([]byte, error) {
 
 // SelectValueHistory select the latest value which makes `predicate` returns true from the modification history.
 func (db *MemDB) SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error) {
+	if db.noStagingImpl != nil {
+		v, ok := db.noStagingImpl[string(key)]
+		if ok {
+			if predicate(v) {
+				return v, nil
+			}
+		}
+		return nil, tikverr.ErrNotExist
+	}
 	x := db.traverse(key, false)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
@@ -238,6 +285,9 @@ func (db *MemDB) SelectValueHistory(key []byte, predicate func(value []byte) boo
 
 // GetFlags returns the latest flags associated with key.
 func (db *MemDB) GetFlags(key []byte) (kv.KeyFlags, error) {
+	if db.noStagingImpl != nil {
+		return 0, nil
+	}
 	x := db.traverse(key, false)
 	if x.isNull() {
 		return 0, tikverr.ErrNotExist
@@ -312,6 +362,10 @@ func (db *MemDB) Dirty() bool {
 }
 
 func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
+	if db.noStagingImpl != nil {
+		db.noStagingImpl[string(key)] = value
+		return nil
+	}
 	db.Lock()
 	defer db.Unlock()
 

@@ -66,3 +66,5 @@ const (
 	DefBackoffLockFast = 10
 	DefBackOffWeight   = 2
 )
+
+var StagingMemdb = true
