@@ -112,10 +112,10 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	cancel()
-	_, err := sendBatchRequest(ctx, "", "", a, req, 2*time.Second)
+	_, err := sendBatchRequest(ctx, "", "", a, req, 2*time.Second, 0)
 	assert.Equal(t, errors.Cause(err), context.Canceled)
 
-	_, err = sendBatchRequest(context.Background(), "", "", a, req, 0)
+	_, err = sendBatchRequest(context.Background(), "", "", a, req, 0, 0)
 	assert.Equal(t, errors.Cause(err), context.DeadlineExceeded)
 }
 
@@ -666,7 +666,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
 
@@ -676,7 +676,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be failed since server is down.
 	for i := 0; i < 200; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.Error(t, err)
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
 		grpcConn := conn.Get()
@@ -719,7 +719,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be success again.
 	for i := 0; i < 100; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
 }

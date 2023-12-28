@@ -18,7 +18,7 @@ import "container/heap"
 
 // Item is the interface that all entries in a priority queue must implement.
 type Item interface {
-	priority() int
+	priority() uint64
 }
 
 // entry is an entry in a priority queue.

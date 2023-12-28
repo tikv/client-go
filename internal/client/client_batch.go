@@ -70,15 +70,15 @@ type batchCommandsEntry struct {
 	// canceled indicated the request is canceled or not.
 	canceled int32
 	err      error
+	pri      uint64
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
 	return atomic.LoadInt32(&b.canceled) == 1
 }
 
-// TODO: implement by the request priority.
-func (b *batchCommandsEntry) priority() int {
-	return 0
+func (b *batchCommandsEntry) priority() uint64 {
+	return b.pri
 }
 
 func (b *batchCommandsEntry) error(err error) {
@@ -112,7 +112,7 @@ func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 // The second is a map that maps forwarded hosts to requests.
 func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	pri, pending := 0, b.entries.Len()
+	pri, pending := uint64(0), b.entries.Len()
 	for count, i := int64(0), 0; i < pending; i++ {
 		e := b.entries.Pop().(*batchCommandsEntry)
 		if e.isCanceled() {
@@ -801,6 +801,7 @@ func sendBatchRequest(
 	batchConn *batchConn,
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
+	priority uint64,
 ) (*tikvrpc.Response, error) {
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
@@ -809,6 +810,7 @@ func sendBatchRequest(
 		forwardedHost: forwardedHost,
 		canceled:      0,
 		err:           nil,
+		pri:           priority,
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
