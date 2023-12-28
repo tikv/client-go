@@ -94,7 +94,7 @@ func (pq *PriorityQueue) Pop() Item {
 func (pq *PriorityQueue) All() []Item {
 	items := make([]Item, 0, pq.Len())
 	for i := 0; i < pq.Len(); i++ {
-		items = append(items, pq.ps[i].entry.(Item))
+		items = append(items, pq.ps[i].entry)
 	}
 	return items
 }
