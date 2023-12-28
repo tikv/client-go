@@ -90,12 +90,19 @@ func (pq *PriorityQueue) Pop() Item {
 	return heap.Pop(&pq.ps).(entry).entry
 }
 
-// Clear removes all entries from the priority queue.
-func (pq *PriorityQueue) Clear() []Item {
+// All returns all entries in the priority queue not ensure the priority.
+func (pq *PriorityQueue) All() []Item {
 	items := make([]Item, 0, pq.Len())
 	for i := 0; i < pq.Len(); i++ {
 		items = append(items, pq.ps[i].entry.(Item))
 	}
-	pq.ps = prioritySlice{}
 	return items
+}
+
+// Reset resets the priority queue.
+func (pq *PriorityQueue) Reset() {
+	for i := 0; i < pq.Len(); i++ {
+		pq.ps[i].entry = nil
+	}
+	pq.ps = pq.ps[:0]
 }
