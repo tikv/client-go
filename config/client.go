@@ -36,6 +36,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"google.golang.org/grpc/encoding/gzip"
@@ -87,6 +88,9 @@ type TiKVClient struct {
 	// TTLRefreshedTxnSize controls whether a transaction should update its TTL or not.
 	TTLRefreshedTxnSize      int64  `toml:"ttl-refreshed-txn-size" json:"ttl-refreshed-txn-size"`
 	ResolveLockLiteThreshold uint64 `toml:"resolve-lock-lite-threshold" json:"resolve-lock-lite-threshold"`
+	// MaxBatchGetRequestCount is the max concurrency number of request to be sent the tikv
+	// 0 means auto adjust by feedback .
+	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -155,7 +159,8 @@ func DefaultTiKVClient() TiKVClient {
 		},
 		CoprReqTimeout: 60 * time.Second,
 
-		ResolveLockLiteThreshold: 16,
+		ResolveLockLiteThreshold:   16,
+		MaxConcurrencyRequestLimit: math.MaxInt64,
 	}
 }
 

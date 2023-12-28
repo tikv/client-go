@@ -107,14 +107,14 @@ func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries.Push(entry)
 }
 
-// build builds BatchCommandsRequests and calls collect() for each valid entry.
+// buildWithLimit builds BatchCommandsRequests and calls collect() for each valid entry.
 // The first return value is the request that doesn't need forwarding.
 // The second is a map that maps forwarded hosts to requests.
-func (b *batchCommandsBuilder) build(
-	collect func(id uint64, e *batchCommandsEntry),
+func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	for _, entry := range b.entries.All() {
-		e := entry.(*batchCommandsEntry)
+	pri, pending := 0, b.entries.Len()
+	for count, i := int64(0), 0; i < pending; i++ {
+		e := b.entries.Pop().(*batchCommandsEntry)
 		if e.isCanceled() {
 			continue
 		}
@@ -133,7 +133,15 @@ func (b *batchCommandsBuilder) build(
 			batchReq.RequestIds = append(batchReq.RequestIds, b.idAlloc)
 			batchReq.Requests = append(batchReq.Requests, e.req)
 		}
+		if count == 0 {
+			pri = e.priority()
+		}
+		count++
 		b.idAlloc++
+		// keep one batch for each priority, don't max different priority request into one batch requests.
+		if count >= limit || e.priority() != pri {
+			break
+		}
 	}
 	var req *tikvpb.BatchCommandsRequest
 	if len(b.requests) > 0 {
@@ -158,7 +166,6 @@ func (b *batchCommandsBuilder) reset() {
 	// The data in the cap part of the slice would reference the prewrite keys whose
 	// underlying memory is borrowed from memdb. The reference cause GC can't release
 	// the memdb, leading to serious memory leak problems in the large transaction case.
-	b.entries.Reset()
 	for i := 0; i < len(b.requests); i++ {
 		b.requests[i] = nil
 	}
@@ -366,17 +373,25 @@ func (a *batchConn) getClientAndSend() {
 		cli    *batchCommandsClient
 		target string
 	)
+	reason := ""
 	for i := 0; i < len(a.batchCommandsClients); i++ {
 		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
 		target = a.batchCommandsClients[a.index].target
 		// The lock protects the batchCommandsClient from been closed while it's in use.
-		if a.batchCommandsClients[a.index].tryLockForSend() {
-			cli = a.batchCommandsClients[a.index]
-			break
+		if c := a.batchCommandsClients[a.index]; c.tryLockForSend() {
+			if c.sent.Load() <= c.maxConcurrencyRequestLimit.Load() {
+				cli = c
+				break
+			} else {
+				reason = "no available limit"
+				c.unlockForSend()
+			}
+		} else {
+			reason = "tryLockForSend fail"
 		}
 	}
 	if cli == nil {
-		logutil.BgLogger().Warn("no available connections", zap.String("target", target))
+		logutil.BgLogger().Warn("no available connections", zap.String("target", target), zap.String("reason", reason))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
 
 		// Please ensure the error is handled in region cache correctly.
@@ -384,9 +399,10 @@ func (a *batchConn) getClientAndSend() {
 		return
 	}
 	defer cli.unlockForSend()
-
-	req, forwardingReqs := a.reqBuilder.build(func(id uint64, e *batchCommandsEntry) {
+	available := cli.maxConcurrencyRequestLimit.Load() - cli.sent.Load()
+	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
+		cli.sent.Add(1)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
@@ -507,6 +523,10 @@ type batchCommandsClient struct {
 	closed int32
 	// tryLock protects client when re-create the streaming.
 	tryLock
+	// sent is the counter of sent requests to tikv but not accept response.
+	sent atomic.Int64
+	// limit is the max number of requests can be sent to tikv but not accept response.
+	maxConcurrencyRequestLimit atomic.Int64
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -549,6 +569,7 @@ func (c *batchCommandsClient) failPendingRequests(err error) {
 		id, _ := key.(uint64)
 		entry, _ := value.(*batchCommandsEntry)
 		c.batched.Delete(id)
+		c.sent.Add(-1)
 		entry.error(err)
 		return true
 	})
@@ -661,6 +682,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				entry.res <- responses[i]
 			}
 			c.batched.Delete(requestID)
+			c.sent.Add(-1)
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()

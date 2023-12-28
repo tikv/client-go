@@ -38,11 +38,6 @@ func TestPriority(t *testing.T) {
 	re.Equal(5, pq.Len())
 	arr := pq.All()
 	re.Len(arr, 5)
-	pq.Reset()
-	re.Equal(0, pq.Len())
-	for i := 1; i <= 5; i++ {
-		pq.Push(&FakeItem{value: i, pri: i})
-	}
 	for i := pq.Len(); i > 0; i-- {
 		re.Equal(i, pq.Pop().(*FakeItem).value)
 	}

@@ -37,6 +37,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"runtime"
 	"strconv"
@@ -386,7 +387,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		assert.Equal(t, builder.len(), i+1)
 	}
 	entryMap := make(map[uint64]*batchCommandsEntry)
-	batchedReq, forwardingReqs := builder.build(func(id uint64, e *batchCommandsEntry) {
+	batchedReq, forwardingReqs := builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
 	assert.Equal(t, len(batchedReq.GetRequests()), 10)
@@ -412,7 +413,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		}
 	}
 	entryMap = make(map[uint64]*batchCommandsEntry)
-	batchedReq, forwardingReqs = builder.build(func(id uint64, e *batchCommandsEntry) {
+	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
 	assert.Equal(t, len(batchedReq.GetRequests()), 1)
@@ -444,7 +445,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		builder.push(entry)
 	}
 	entryMap = make(map[uint64]*batchCommandsEntry)
-	batchedReq, forwardingReqs = builder.build(func(id uint64, e *batchCommandsEntry) {
+	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
 	assert.Equal(t, len(batchedReq.GetRequests()), 2)
@@ -721,4 +722,16 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
 		require.NoError(t, err)
 	}
+}
+
+func TestLimitConcurrency(t *testing.T) {
+	re := require.New(t)
+	batch := newBatchConn(1, 128, nil)
+	for i := 0; i < 100; i++ {
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+	}
+	re.Equal(100, batch.reqBuilder.len())
+	req, _ := batch.reqBuilder.buildWithLimit(1, func(_ uint64, _ *batchCommandsEntry) {})
+	re.Len(req.RequestIds, 1)
+	re.Equal(99, batch.reqBuilder.len())
 }

@@ -98,11 +98,3 @@ func (pq *PriorityQueue) All() []Item {
 	}
 	return items
 }
-
-// Reset resets the priority queue.
-func (pq *PriorityQueue) Reset() {
-	for i := 0; i < pq.Len(); i++ {
-		pq.ps[i].entry = nil
-	}
-	pq.ps = pq.ps[:0]
-}
