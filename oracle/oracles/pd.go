@@ -56,11 +56,15 @@ const slowDist = 30 * time.Millisecond
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
 	c pd.Client
-	// txn_scope (string) -> lastTSPointer (*uint64)
+	// txn_scope (string) -> lastTSPointer (*atomic.Pointer[lastTSO])
 	lastTSMap sync.Map
-	// txn_scope (string) -> lastArrivalTSPointer (*uint64)
-	lastArrivalTSMap sync.Map
-	quit             chan struct{}
+	quit      chan struct{}
+}
+
+// lastTSO stores the last timestamp oracle gets from PD server and the local time when the TSO is fetched.
+type lastTSO struct {
+	tso     uint64
+	arrival uint64
 }
 
 // NewPdOracle create an Oracle that uses a pd client source.
@@ -163,63 +167,51 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	if txnScope == "" {
 		txnScope = oracle.GlobalTxnScope
 	}
+	current := &lastTSO{
+		tso:     ts,
+		arrival: o.getArrivalTimestamp(),
+	}
 	lastTSInterface, ok := o.lastTSMap.Load(txnScope)
 	if !ok {
-		lastTSInterface, _ = o.lastTSMap.LoadOrStore(txnScope, new(uint64))
+		pointer := &atomic.Pointer[lastTSO]{}
+		pointer.Store(current)
+		// do not handle the stored case, because it only runs once.
+		lastTSInterface, _ = o.lastTSMap.LoadOrStore(txnScope, pointer)
 	}
-	lastTSPointer := lastTSInterface.(*uint64)
+	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
 	for {
-		lastTS := atomic.LoadUint64(lastTSPointer)
-		if ts <= lastTS {
+		last := lastTSPointer.Load()
+		if current.tso <= last.tso || current.arrival <= last.arrival {
 			return
 		}
-		if atomic.CompareAndSwapUint64(lastTSPointer, lastTS, ts) {
-			break
-		}
-	}
-	o.setLastArrivalTS(o.getArrivalTimestamp(), txnScope)
-}
-
-func (o *pdOracle) setLastArrivalTS(ts uint64, txnScope string) {
-	if txnScope == "" {
-		txnScope = oracle.GlobalTxnScope
-	}
-	lastTSInterface, ok := o.lastArrivalTSMap.Load(txnScope)
-	if !ok {
-		lastTSInterface, _ = o.lastArrivalTSMap.LoadOrStore(txnScope, new(uint64))
-	}
-	lastTSPointer := lastTSInterface.(*uint64)
-	for {
-		lastTS := atomic.LoadUint64(lastTSPointer)
-		if ts <= lastTS {
-			return
-		}
-		if atomic.CompareAndSwapUint64(lastTSPointer, lastTS, ts) {
+		if lastTSPointer.CompareAndSwap(last, current) {
 			return
 		}
 	}
 }
 
 func (o *pdOracle) getLastTS(txnScope string) (uint64, bool) {
+	last, exist := o.getLastTSWithArrivalTS(txnScope)
+	if !exist {
+		return 0, false
+	}
+	return last.tso, true
+}
+
+func (o *pdOracle) getLastTSWithArrivalTS(txnScope string) (*lastTSO, bool) {
 	if txnScope == "" {
 		txnScope = oracle.GlobalTxnScope
 	}
 	lastTSInterface, ok := o.lastTSMap.Load(txnScope)
 	if !ok {
-		return 0, false
+		return nil, false
 	}
-	return atomic.LoadUint64(lastTSInterface.(*uint64)), true
-}
-
-func (o *pdOracle) getLastArrivalTS(txnScope string) (uint64, bool) {
-	if txnScope == "" {
-		txnScope = oracle.GlobalTxnScope
+	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
+	last := lastTSPointer.Load()
+	if last == nil {
+		return nil, false
 	}
-	lastArrivalTSInterface, ok := o.lastArrivalTSMap.Load(txnScope)
-	if !ok {
-		return 0, false
-	}
-	return atomic.LoadUint64(lastArrivalTSInterface.(*uint64)), true
+	return last, true
 }
 
 func (o *pdOracle) updateTS(ctx context.Context, interval time.Duration) {
@@ -293,22 +285,18 @@ func (o *pdOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *orac
 }
 
 func (o *pdOracle) getStaleTimestamp(txnScope string, prevSecond uint64) (uint64, error) {
-	ts, ok := o.getLastTS(txnScope)
+	last, ok := o.getLastTSWithArrivalTS(txnScope)
 	if !ok {
 		return 0, errors.Errorf("get stale timestamp fail, txnScope: %s", txnScope)
 	}
-	arrivalTS, ok := o.getLastArrivalTS(txnScope)
-	if !ok {
-		return 0, errors.Errorf("get stale arrival timestamp fail, txnScope: %s", txnScope)
-	}
+	ts, arrivalTS := last.tso, last.arrival
 	arrivalTime := oracle.GetTimeFromTS(arrivalTS)
 	physicalTime := oracle.GetTimeFromTS(ts)
 	if uint64(physicalTime.Unix()) <= prevSecond {
 		return 0, errors.Errorf("invalid prevSecond %v", prevSecond)
 	}
 
-	staleTime := physicalTime.Add(-arrivalTime.Sub(time.Now().Add(-time.Duration(prevSecond) * time.Second)))
-
+	staleTime := physicalTime.Add(time.Now().Add(-time.Duration(prevSecond) * time.Second).Sub(arrivalTime))
 	return oracle.GoTimeToTS(staleTime), nil
 }
 

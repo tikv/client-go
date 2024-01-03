@@ -41,7 +41,7 @@ func (c emptyClient) CloseAddr(addr string) error {
 
 func TestInterceptedClient(t *testing.T) {
 	executed := false
-	client := NewInterceptedClient(emptyClient{}, nil)
+	client := NewInterceptedClient(emptyClient{})
 	ctx := interceptor.WithRPCInterceptor(context.Background(), interceptor.NewRPCInterceptor("test", func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 		return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 			executed = true
@@ -54,7 +54,7 @@ func TestInterceptedClient(t *testing.T) {
 
 func TestAppendChainedInterceptor(t *testing.T) {
 	executed := make([]int, 0, 10)
-	client := NewInterceptedClient(emptyClient{}, nil)
+	client := NewInterceptedClient(emptyClient{})
 
 	mkInterceptorFn := func(i int) interceptor.RPCInterceptor {
 		return interceptor.NewRPCInterceptor(fmt.Sprintf("%d", i), func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {

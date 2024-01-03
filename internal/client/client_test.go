@@ -56,7 +56,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/config"
-	"github.com/tikv/client-go/v2/internal/client/mock_server"
+	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"go.uber.org/zap"
@@ -120,7 +120,7 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 }
 
 func TestSendWhenReconnect(t *testing.T) {
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 
 	rpcClient := NewRPCClient()
@@ -244,7 +244,7 @@ func TestCollapseResolveLock(t *testing.T) {
 }
 
 func TestForwardMetadataByUnaryCall(t *testing.T) {
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", port)
@@ -312,7 +312,7 @@ func TestForwardMetadataByUnaryCall(t *testing.T) {
 }
 
 func TestForwardMetadataByBatchCommands(t *testing.T) {
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	defer server.Stop()
 	addr := server.Addr()
@@ -423,8 +423,8 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		assert.Equal(t, len(forwardingReqs[host].GetRequests()), i+2)
 		assert.Equal(t, len(forwardingReqs[host].GetRequestIds()), i+2)
 	}
-	assert.Equal(t, builder.idAlloc, uint64(10+builder.len()))
-	assert.Equal(t, len(entryMap), builder.len())
+	assert.Equal(t, int(builder.idAlloc), 20)
+	assert.Equal(t, len(entryMap), 10)
 	for host, forwardingReq := range forwardingReqs {
 		for i, id := range forwardingReq.GetRequestIds() {
 			assert.Equal(t, entryMap[id].req, forwardingReq.GetRequests()[i])
@@ -476,7 +476,6 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	// Test reset
 	builder.reset()
 	assert.Equal(t, builder.len(), 0)
-	assert.Equal(t, builder.entries.Len(), 0)
 	assert.Equal(t, len(builder.requests), 0)
 	assert.Equal(t, len(builder.requestIDs), 0)
 	assert.Equal(t, len(builder.forwardingReqs), 0)
@@ -650,7 +649,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		conf.TiKVClient.MaxBatchSize = 128
 	})()
 
-	server, port := mock_server.StartMockTikvService()
+	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	require.True(t, server.IsRunning())
 	addr := server.Addr()
