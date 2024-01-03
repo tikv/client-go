@@ -60,7 +60,7 @@ func (ps *prioritySlice) Pop() interface{} {
 	old := *ps
 	n := len(old)
 	item := old[n-1]
-	item.index = -1 // 为了安全起见，将索引设置为-1
+	item.index = -1
 	*ps = old[0 : n-1]
 	return item
 }
