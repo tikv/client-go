@@ -98,3 +98,10 @@ func (pq *PriorityQueue) All() []Item {
 	}
 	return items
 }
+
+func (pq *PriorityQueue) Reset() {
+	for i := 0; i < pq.Len(); i++ {
+		pq.ps[i].entry = nil
+	}
+	pq.ps = pq.ps[:0]
+}

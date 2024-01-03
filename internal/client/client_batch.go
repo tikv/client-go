@@ -157,6 +157,7 @@ func (b *batchCommandsBuilder) cancel(e error) {
 	for _, entry := range b.entries.All() {
 		entry.(*batchCommandsEntry).error(e)
 	}
+	b.entries.Reset()
 }
 
 // reset resets the builder to the initial state.
@@ -361,6 +362,11 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	}
 }
 
+const (
+	SendFailedReasonNoAvailableLimit   = "no available limit"
+	SendFailedReasonTryLockForSendFail = "tryLockForSend fail"
+)
+
 func (a *batchConn) getClientAndSend() {
 	if val, err := util.EvalFailpoint("mockBatchClientSendDelay"); err == nil {
 		if timeout, ok := val.(int); ok && timeout > 0 {
@@ -383,19 +389,20 @@ func (a *batchConn) getClientAndSend() {
 				cli = c
 				break
 			} else {
-				reason = "no available limit"
+				reason = SendFailedReasonNoAvailableLimit
 				c.unlockForSend()
 			}
 		} else {
-			reason = "tryLockForSend fail"
+			reason = SendFailedReasonTryLockForSendFail
 		}
 	}
 	if cli == nil {
 		logutil.BgLogger().Warn("no available connections", zap.String("target", target), zap.String("reason", reason))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
-
-		// Please ensure the error is handled in region cache correctly.
-		a.reqBuilder.cancel(errors.New("no available connections"))
+		if reason == SendFailedReasonTryLockForSendFail {
+			// Please ensure the error is handled in region cache correctly.
+			a.reqBuilder.cancel(errors.New("no available connections"))
+		}
 		return
 	}
 	defer cli.unlockForSend()
