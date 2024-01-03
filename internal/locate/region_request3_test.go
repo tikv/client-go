@@ -1632,7 +1632,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryOnServerBusy() {
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 
 	var (
 		bo        *retry.Backoffer
