@@ -28,10 +28,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -190,7 +190,7 @@ func (s *testRegionCacheStaleReadSuite) setClient() {
 		} else {
 			// follower read leader
 			if !req.ReplicaRead && !req.StaleRead {
-				_, leaderPeer, _ := s.cluster.GetRegionByID(s.regionID)
+				_, leaderPeer, _, _ := s.cluster.GetRegionByID(s.regionID)
 				response.Resp = &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
 					NotLeader: &errorpb.NotLeader{
 						RegionId: req.RegionId,
@@ -594,7 +594,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 
 	bo := retry.NewBackoffer(ctx, -1)
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadMixed, nil)
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	ops := []StoreSelectorOption{WithMatchLabels([]*metapb.StoreLabel{{
 		Key:   "zone",
 		Value: zone,

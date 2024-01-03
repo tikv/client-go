@@ -48,9 +48,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -297,6 +297,9 @@ func (a *batchConn) fetchMorePendingRequests(
 
 const idleTimeout = 3 * time.Minute
 
+// BatchSendLoopPanicCounter is only used for testing.
+var BatchSendLoopPanicCounter int64 = 0
+
 func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -304,7 +307,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			logutil.BgLogger().Error("batchSendLoop",
 				zap.Any("r", r),
 				zap.Stack("stack"))
-			logutil.BgLogger().Info("restart batchSendLoop")
+			atomic.AddInt64(&BatchSendLoopPanicCounter, 1)
+			logutil.BgLogger().Info("restart batchSendLoop", zap.Int64("count", atomic.LoadInt64(&BatchSendLoopPanicCounter)))
 			go a.batchSendLoop(cfg)
 		}
 	}()

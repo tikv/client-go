@@ -47,11 +47,11 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
@@ -422,7 +422,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		req.TxnScope = scope
 		req.ReadReplicaScope = scope
 		if isStaleness {
-			req.EnableStaleRead()
+			req.EnableStaleWithMixedReplicaRead()
 		}
 		timeout := client.ReadTimeoutMedium
 		if useConfigurableKVTimeout && s.readTimeout > 0 {
@@ -651,7 +651,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	req.ReadReplicaScope = scope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
-		req.EnableStaleRead()
+		req.EnableStaleWithMixedReplicaRead()
 	}
 	if len(matchStoreLabels) > 0 {
 		ops = append(ops, locate.WithMatchLabels(matchStoreLabels))

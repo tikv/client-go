@@ -56,10 +56,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -733,16 +733,19 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		leaderUnreachable := leader.store.getLivenessState() != reachable
 		leaderExhausted := state.IsLeaderExhausted(leader)
 		leaderInvalid := leaderEpochStale || leaderUnreachable || leaderExhausted
-		if len(state.option.labels) > 0 {
-			logutil.Logger(bo.GetCtx()).Warn("unable to find stores with given labels",
+		if len(state.option.labels) > 0 && !state.option.leaderOnly {
+			logutil.Logger(bo.GetCtx()).Warn("unable to find a store with given labels",
 				zap.Uint64("region", selector.region.GetID()),
-				zap.Bool("leader-epoch-stale", leaderEpochStale),
-				zap.Bool("leader-unreachable", leaderUnreachable),
-				zap.Bool("leader-exhausted", leaderExhausted),
-				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
 		}
 		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
+			logutil.Logger(bo.GetCtx()).Warn("unable to find valid leader",
+				zap.Uint64("region", selector.region.GetID()),
+				zap.Bool("epoch-stale", leaderEpochStale),
+				zap.Bool("unreachable", leaderUnreachable),
+				zap.Bool("exhausted", leaderExhausted),
+				zap.Bool("kv-timeout", leader.deadlineErrUsingConfTimeout),
+				zap.Bool("stale-read", state.isStaleRead))
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
@@ -910,9 +913,14 @@ func newReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
-	if cachedRegion == nil || !cachedRegion.isValid() {
-		return nil, nil
+	if cachedRegion == nil {
+		return nil, errors.New("cached region not found")
+	} else if cachedRegion.checkNeedReload() {
+		return nil, errors.New("cached region need reload")
+	} else if !cachedRegion.checkRegionCacheTTL(time.Now().Unix()) {
+		return nil, errors.New("cached region ttl expired")
 	}
+
 	regionStore := cachedRegion.getStore()
 	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
 	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
@@ -1288,7 +1296,8 @@ func (s *RegionRequestSender) getRPCContext(
 		if s.replicaSelector == nil {
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if selector == nil || err != nil {
-				return nil, err
+				s.rpcError = err
+				return nil, nil
 			}
 			s.replicaSelector = selector
 		}
@@ -1502,12 +1511,12 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
-		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
-			return nil, nil, retryTimes, err
-		}
 		rpcCtx.contextPatcher.applyTo(&req.Context)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
+		}
+		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+			return nil, nil, retryTimes, err
 		}
 
 		if err = backoffOnRetry(rpcCtx.Addr); err != nil {
@@ -1737,8 +1746,8 @@ func (s *RegionRequestSender) sendReqToRegion(
 	if !injectFailOnSend {
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
-		// Record timecost of external requests on related Store when ReplicaReadMode == PreferLeader.
-		if req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
+		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
+		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.recordSlowScoreStat(time.Since(start))
 		}
 		if s.Stats != nil {

@@ -42,11 +42,11 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/kvrpc"
 	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -201,7 +201,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	}
 
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
+	pdCli, err := pd.NewClientWithContext(ctx, pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
 		KeyPath:  opt.security.ClusterSSLKey,

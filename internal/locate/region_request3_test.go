@@ -49,11 +49,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -332,7 +332,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
 	cache.mu.Lock()
-	cache.insertRegionToCache(region, true)
+	cache.insertRegionToCache(region, true, true)
 	cache.mu.Unlock()
 
 	// Test accessFollower state with kv.ReplicaReadLearner request type.
@@ -383,7 +383,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
 	cache.mu.Lock()
-	cache.insertRegionToCache(region, true)
+	cache.insertRegionToCache(region, true, true)
 	cache.mu.Unlock()
 
 	// Verify creating the replicaSelector.
@@ -937,7 +937,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
 	for i := 0; i < 10; i++ {
-		req.EnableStaleRead()
+		req.EnableStaleWithMixedReplicaRead()
 		// The request may be sent to the leader directly. We have to distinguish it.
 		failureOnFollower := 0
 		failureOnLeader := 0
@@ -1194,7 +1194,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	req.ReplicaReadType = kv.ReplicaReadMixed
 	var ops []StoreSelectorOption
 	ops = append(ops, WithMatchLabels(leaderLabel))
@@ -1253,7 +1253,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			resetStats()
 			req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
 			if staleRead {
-				req.EnableStaleRead()
+				req.EnableStaleWithMixedReplicaRead()
 			} else {
 				req.ReplicaRead = tp.IsFollowerRead()
 				req.ReplicaReadType = tp
@@ -1271,7 +1271,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			// warn: must rest MaxExecutionDurationMs before retry.
 			resetStats()
 			if staleRead {
-				req.EnableStaleRead()
+				req.EnableStaleWithMixedReplicaRead()
 			} else {
 				req.ReplicaRead = tp.IsFollowerRead()
 				req.ReplicaReadType = tp
@@ -1368,7 +1368,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 			req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
 			req.ReadReplicaScope = oracle.GlobalTxnScope
 			req.TxnScope = oracle.GlobalTxnScope
-			req.EnableStaleRead()
+			req.EnableStaleWithMixedReplicaRead()
 			req.ReplicaReadType = kv.ReplicaReadMixed
 			var ops []StoreSelectorOption
 			if localLeader {
@@ -1429,7 +1429,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	req.ReplicaReadType = kv.ReplicaReadFollower
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1494,7 +1494,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			req.ReplicaRead = true
 			req.ReplicaReadType = kv.ReplicaReadFollower
 		case "stale_follower", "stale_leader":
-			req.EnableStaleRead()
+			req.EnableStaleWithMixedReplicaRead()
 		default:
 			panic("unreachable")
 		}
@@ -1577,7 +1577,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeo
 		return loc
 	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	loc := getLocFn()
 	var ops []StoreSelectorOption
 	ops = append(ops, WithMatchLabels(leaderLabel))
@@ -1613,7 +1613,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadLeader, nil)
 	req.ReadReplicaScope = oracle.GlobalTxnScope
 	req.TxnScope = oracle.GlobalTxnScope
-	req.EnableStaleRead()
+	req.EnableStaleWithMixedReplicaRead()
 	bo := retry.NewBackoffer(context.Background(), -1)
 	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
 	s.Nil(err)
