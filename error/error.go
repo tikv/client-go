@@ -64,13 +64,13 @@ var (
 	// ErrTiFlashServerTimeout is the error when tiflash server is timeout.
 	ErrTiFlashServerTimeout = errors.New("tiflash server timeout")
 	// ErrQueryInterrupted is the error when the query is interrupted.
-	ErrQueryInterrupted = errors.New("query interruppted")
+	ErrQueryInterrupted = errors.New("query interrupted")
 	// ErrTiKVStaleCommand is the error that the command is stale in tikv.
 	ErrTiKVStaleCommand = errors.New("tikv stale command")
 	// ErrTiKVMaxTimestampNotSynced is the error that tikv's max timestamp is not synced.
 	ErrTiKVMaxTimestampNotSynced = errors.New("tikv max timestamp not synced")
 	// ErrLockAcquireFailAndNoWaitSet is the error that acquire the lock failed while no wait is setted.
-	ErrLockAcquireFailAndNoWaitSet = errors.New("lock acquired failed and no wait is setted")
+	ErrLockAcquireFailAndNoWaitSet = errors.New("lock acquired failed and no wait is set")
 	// ErrResolveLockTimeout is the error that resolve lock timeout.
 	ErrResolveLockTimeout = errors.New("resolve lock timeout")
 	// ErrLockWaitTimeout is the error that wait for the lock is timeout.

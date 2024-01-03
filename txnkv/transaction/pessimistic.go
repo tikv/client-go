@@ -45,11 +45,11 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -212,18 +212,6 @@ func (action actionPessimisticLock) handleSingleBatch(
 			}
 			if finished {
 				return nil
-			}
-		}
-
-		// Handle the killed flag when waiting for the pessimistic lock.
-		// When a txn runs into LockKeys() and backoff here, it has no chance to call
-		// executor.Next() and check the killed flag.
-		if action.Killed != nil {
-			// Do not reset the killed flag here!
-			// actionPessimisticLock runs on each region parallelly, we have to consider that
-			// the error may be dropped.
-			if atomic.LoadUint32(action.Killed) == 1 {
-				return errors.WithStack(tikverr.ErrQueryInterrupted)
 			}
 		}
 	}
