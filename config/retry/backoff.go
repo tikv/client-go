@@ -218,7 +218,12 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	}
 
 	if b.vars != nil && b.vars.Killed != nil {
-		if atomic.LoadUint32(b.vars.Killed) == 1 {
+		killed := atomic.LoadUint32(b.vars.Killed)
+		if killed != 0 {
+			logutil.BgLogger().Info(
+				"backoff stops because a killed signal is received",
+				zap.Uint32("signal", killed),
+			)
 			return errors.WithStack(tikverr.ErrQueryInterrupted)
 		}
 	}

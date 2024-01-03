@@ -1478,8 +1478,15 @@ func (s *RegionRequestSender) SendReqCtx(
 
 		// recheck whether the session/query is killed during the Next()
 		boVars := bo.GetVars()
-		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
-			return nil, nil, retryTimes, errors.WithStack(tikverr.ErrQueryInterrupted)
+		if boVars != nil && boVars.Killed != nil {
+			killed := atomic.LoadUint32(boVars.Killed)
+			if killed != 0 {
+				logutil.BgLogger().Info(
+					"backoff stops because a killed signal is received",
+					zap.Uint32("signal", killed),
+				)
+				return nil, nil, retryTimes, errors.WithStack(tikverr.ErrQueryInterrupted)
+			}
 		}
 		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
 			if val.(bool) {
