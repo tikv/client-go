@@ -52,6 +52,7 @@ import (
 type commitDetailCtxKeyType struct{}
 type lockKeysDetailCtxKeyType struct{}
 type execDetailsCtxKeyType struct{}
+type ruDetailsCtxKeyType struct{}
 type traceExecDetailsCtxKeyType struct{}
 
 var (
@@ -63,6 +64,9 @@ var (
 
 	// ExecDetailsKey presents ExecDetail info key in context.
 	ExecDetailsKey = execDetailsCtxKeyType{}
+
+	// ruDetailsCtxKey presents RUDetals info key in context.
+	RUDetailsCtxKey = ruDetailsCtxKeyType{}
 
 	// traceExecDetailsKey is a context key whose value indicates whether to add ExecDetails to trace.
 	traceExecDetailsKey = traceExecDetailsCtxKeyType{}
@@ -609,12 +613,13 @@ type TimeDetail struct {
 	// cannot be excluded for now, like Mutex wait time, which is included in this field, so that
 	// this field is called wall time instead of CPU time.
 	ProcessTime time.Duration
-	// Cpu wall time elapsed that task is waiting in queue.
+	// Time elapsed when a coprocessor task yields itself.
 	SuspendTime time.Duration
 	// Off-cpu wall time elapsed in TiKV side. Usually this includes queue waiting time and
 	// other kind of waits in series.
 	WaitTime time.Duration
-	// KvReadWallTime is the time used in KV Scan/Get.
+	// KvReadWallTime is the time used in KV Scan/Get. For get/batch_get,
+	// this is total duration, which is almost the same with grpc duration.
 	KvReadWallTime time.Duration
 	// TotalRPCWallTime is Total wall clock time spent on this RPC in TiKV.
 	TotalRPCWallTime time.Duration
@@ -682,54 +687,74 @@ func (rd *ResolveLockDetail) Merge(resolveLock *ResolveLockDetail) {
 	rd.ResolveLockTime += resolveLock.ResolveLockTime
 }
 
-// RURuntimeStats is the runtime stats collector for RU.
-type RURuntimeStats struct {
-	readRU  *uatomic.Float64
-	writeRU *uatomic.Float64
+// RUDetails contains RU detail info.
+type RUDetails struct {
+	readRU         *uatomic.Float64
+	writeRU        *uatomic.Float64
+	ruWaitDuration *uatomic.Duration
 }
 
-// NewRURuntimeStats creates a new RURuntimeStats.
-func NewRURuntimeStats() *RURuntimeStats {
-	return &RURuntimeStats{
-		readRU:  uatomic.NewFloat64(0),
-		writeRU: uatomic.NewFloat64(0),
+// NewRUDetails creates a new RUDetails.
+func NewRUDetails() *RUDetails {
+	return &RUDetails{
+		readRU:         uatomic.NewFloat64(0),
+		writeRU:        uatomic.NewFloat64(0),
+		ruWaitDuration: uatomic.NewDuration(0),
+	}
+}
+
+// NewRUDetails creates a new RUDetails with specifical values.
+// This function is used in tidb's unit test.
+func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
+	return &RUDetails{
+		readRU:         uatomic.NewFloat64(rru),
+		writeRU:        uatomic.NewFloat64(wru),
+		ruWaitDuration: uatomic.NewDuration(waitDur),
 	}
 }
 
 // Clone implements the RuntimeStats interface.
-func (rs *RURuntimeStats) Clone() *RURuntimeStats {
-	return &RURuntimeStats{
-		readRU:  uatomic.NewFloat64(rs.readRU.Load()),
-		writeRU: uatomic.NewFloat64(rs.writeRU.Load()),
+func (rd *RUDetails) Clone() *RUDetails {
+	return &RUDetails{
+		readRU:         uatomic.NewFloat64(rd.readRU.Load()),
+		writeRU:        uatomic.NewFloat64(rd.writeRU.Load()),
+		ruWaitDuration: uatomic.NewDuration(rd.ruWaitDuration.Load()),
 	}
 }
 
 // Merge implements the RuntimeStats interface.
-func (rs *RURuntimeStats) Merge(other *RURuntimeStats) {
-	rs.readRU.Add(other.readRU.Load())
-	rs.writeRU.Add(other.writeRU.Load())
+func (rd *RUDetails) Merge(other *RUDetails) {
+	rd.readRU.Add(other.readRU.Load())
+	rd.writeRU.Add(other.writeRU.Load())
+	rd.ruWaitDuration.Add(other.ruWaitDuration.Load())
 }
 
 // String implements fmt.Stringer interface.
-func (rs *RURuntimeStats) String() string {
-	return fmt.Sprintf("RRU:%f, WRU:%f", rs.readRU.Load(), rs.writeRU.Load())
+func (rd *RUDetails) String() string {
+	return fmt.Sprintf("RRU:%f, WRU:%f, WaitDuration:%v", rd.readRU.Load(), rd.writeRU.Load(), rd.ruWaitDuration.Load())
 }
 
 // RRU returns the read RU.
-func (rs RURuntimeStats) RRU() float64 {
-	return rs.readRU.Load()
+func (rd *RUDetails) RRU() float64 {
+	return rd.readRU.Load()
 }
 
 // WRU returns the write RU.
-func (rs RURuntimeStats) WRU() float64 {
-	return rs.writeRU.Load()
+func (rd *RUDetails) WRU() float64 {
+	return rd.writeRU.Load()
+}
+
+// RUWaitDuration returns the time duration waiting for available RU.
+func (rd *RUDetails) RUWaitDuration() time.Duration {
+	return rd.ruWaitDuration.Load()
 }
 
 // Update updates the RU runtime stats with the given consumption info.
-func (rs *RURuntimeStats) Update(consumption *rmpb.Consumption) {
-	if rs == nil || consumption == nil {
+func (rd *RUDetails) Update(consumption *rmpb.Consumption, waitDuration time.Duration) {
+	if rd == nil || consumption == nil {
 		return
 	}
-	rs.readRU.Add(consumption.RRU)
-	rs.writeRU.Add(consumption.WRU)
+	rd.readRU.Add(consumption.RRU)
+	rd.writeRU.Add(consumption.WRU)
+	rd.ruWaitDuration.Add(waitDuration)
 }

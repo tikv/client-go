@@ -41,6 +41,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	pdhttp "github.com/tikv/pd/client/http"
 )
 
 // Storage represent the kv.Storage runs on TiKV.
@@ -68,6 +69,9 @@ type Storage interface {
 
 	// GetTiKVClient gets the TiKV client.
 	GetTiKVClient() Client
+
+	// GetPDHTTPClient gets the PD HTTP client.
+	GetPDHTTPClient() pdhttp.Client
 
 	// Closed returns the closed channel.
 	Closed() <-chan struct{}
