@@ -704,9 +704,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				idx = state.lastIdx
 			} else {
 				// randomly select next replica, but skip state.lastIdx
-				if (i+offset)%replicaSize == 0 {
+				if (i+offset)%replicaSize == int(state.leaderIdx) {
 					offset++
 				}
+				idx = AccessIndex((i + offset) % replicaSize)
 			}
 		} else {
 			idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
