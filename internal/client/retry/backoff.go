@@ -217,6 +217,28 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		atomic.AddInt64(&detail.BackoffCount, 1)
 	}
 
+	err2 := b.checkKilled()
+	if err2 != nil {
+		return err2
+	}
+
+	var startTs interface{}
+	if ts := b.ctx.Value(TxnStartKey); ts != nil {
+		startTs = ts
+	}
+	logutil.Logger(b.ctx).Debug(
+		"retry later",
+		zap.Error(err),
+		zap.Int("totalSleep", b.totalSleep),
+		zap.Int("excludedSleep", b.excludedSleep),
+		zap.Int("maxSleep", b.maxSleep),
+		zap.Stringer("type", cfg),
+		zap.Reflect("txnStartTS", startTs),
+	)
+	return nil
+}
+
+func (b *Backoffer) checkKilled() error {
 	if b.vars != nil && b.vars.Killed != nil {
 		killed := atomic.LoadUint32(b.vars.Killed)
 		if killed != 0 {
@@ -227,18 +249,6 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 			return errors.WithStack(tikverr.ErrQueryInterrupted)
 		}
 	}
-
-	var startTs interface{}
-	if ts := b.ctx.Value(TxnStartKey); ts != nil {
-		startTs = ts
-	}
-	logutil.Logger(b.ctx).Debug("retry later",
-		zap.Error(err),
-		zap.Int("totalSleep", b.totalSleep),
-		zap.Int("excludedSleep", b.excludedSleep),
-		zap.Int("maxSleep", b.maxSleep),
-		zap.Stringer("type", cfg),
-		zap.Reflect("txnStartTS", startTs))
 	return nil
 }
 
