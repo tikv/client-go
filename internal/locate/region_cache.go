@@ -3204,9 +3204,9 @@ func (c *RegionCache) listTiflashComputeStores() (stores []*Store, needReload bo
 }
 
 func (c *RegionCache) setTiflashComputeStores(stores []*Store) {
-	// TODO(zyguan): needReload seems to be always true, do we need to set it to false here?
 	c.tiflashComputeStoreMu.Lock()
 	c.tiflashComputeStoreMu.stores = stores
+	c.tiflashComputeStoreMu.needReload = false
 	c.tiflashComputeStoreMu.Unlock()
 }
 
