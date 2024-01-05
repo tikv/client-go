@@ -179,9 +179,7 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 				Value: fmt.Sprintf("%v", testcase.storeID),
 			},
 		}
-		stores := s.cache.listStores(listStoreOptions{
-			filter: func(s *Store) bool { return s.IsLabelsMatch(labels) },
-		})
+		stores := s.cache.filterStores(nil, func(s *Store) bool { return s.IsLabelsMatch(labels) })
 		s.Equal(len(stores), 1)
 		s.Equal(stores[0].labels, labels)
 	}

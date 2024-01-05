@@ -633,10 +633,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 		}
 	}()
 
-	for _, store := range c.listStores(listStoreOptions{
-		target: needCheckStores,
-		filter: needCheck,
-	}) {
+	for _, store := range c.filterStores(needCheckStores, needCheck) {
 		_, err := store.reResolve(c)
 		tikverr.Log(err)
 	}
@@ -1613,21 +1610,15 @@ func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
 
 // GetStoresByType gets stores by type `typ`
 func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
-	return c.listStores(listStoreOptions{
-		filter: func(s *Store) bool {
-			return s.getResolveState() == resolved && s.storeType == typ
-		},
-		copy: true,
+	return c.filterStores(nil, func(s *Store) bool {
+		return s.getResolveState() == resolved && s.storeType == typ
 	})
 }
 
 // GetAllStores gets TiKV and TiFlash stores.
 func (c *RegionCache) GetAllStores() []*Store {
-	return c.listStores(listStoreOptions{
-		filter: func(s *Store) bool {
-			return s.getResolveState() == resolved && (s.storeType == tikvrpc.TiKV || s.storeType == tikvrpc.TiFlash)
-		},
-		copy: true,
+	return c.filterStores(nil, func(s *Store) bool {
+		return s.getResolveState() == resolved && (s.storeType == tikvrpc.TiKV || s.storeType == tikvrpc.TiFlash)
 	})
 }
 
@@ -2059,10 +2050,8 @@ func (c *RegionCache) PDClient() pd.Client {
 
 // GetTiFlashStores returns the information of all tiflash nodes.
 func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
-	return c.listStores(listStoreOptions{
-		filter: func(s *Store) bool {
-			return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels)
-		},
+	return c.filterStores(nil, func(s *Store) bool {
+		return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels)
 	})
 }
 
@@ -3155,44 +3144,15 @@ func (c *RegionCache) forEachStore(f func(*Store)) {
 	}
 }
 
-func (c *RegionCache) listStores(opts listStoreOptions) []*Store {
+func (c *RegionCache) filterStores(dst []*Store, predicate func(*Store) bool) []*Store {
 	c.storeMu.RLock()
 	for _, store := range c.storeMu.stores {
-		if opts.filter == nil || opts.filter(store) {
-			opts.append(store)
+		if predicate == nil || predicate(store) {
+			dst = append(dst, store)
 		}
 	}
 	c.storeMu.RUnlock()
-	return opts.target
-}
-
-type listStoreOptions struct {
-	target []*Store
-	filter func(store *Store) bool
-	// TODO(zyguan): why we need copy semantics when GetStoresByType and GetAllStores?
-	// ref https://github.com/pingcap/tidb/commit/75913fdc9cce920a5a49c532bf55078b2928fc92#diff-625dbb0d6c1c2727cc16393b810d430d9a4fb0f99b35129071d99f04541b5b76R1083-R1087
-	copy bool
-}
-
-func (opts *listStoreOptions) append(store *Store) {
-	if !opts.copy {
-		opts.target = append(opts.target, store)
-		return
-	}
-	labels := make([]*metapb.StoreLabel, 0, len(store.labels))
-	for _, label := range store.labels {
-		labels = append(labels, &metapb.StoreLabel{
-			Key:   label.Key,
-			Value: label.Value,
-		})
-	}
-	opts.target = append(opts.target, &Store{
-		addr:      store.addr,
-		peerAddr:  store.peerAddr,
-		storeID:   store.storeID,
-		storeType: store.storeType,
-		labels:    labels,
-	})
+	return dst
 }
 
 func (c *RegionCache) listTiflashComputeStores() (stores []*Store, needReload bool) {
