@@ -2073,7 +2073,7 @@ func (c *RegionCache) GetTiFlashComputeStores(bo *retry.Backoffer) (res []*Store
 	if needReload {
 		stores, err = reloadTiFlashComputeStores(bo.GetCtx(), c.pdClient)
 		if err == nil {
-			c.setTiflashCoumputStores(stores)
+			c.setTiflashComputeStores(stores)
 		}
 		return stores, err
 	}
@@ -3203,7 +3203,7 @@ func (c *RegionCache) listTiflashComputeStores() (stores []*Store, needReload bo
 	return
 }
 
-func (c *RegionCache) setTiflashCoumputStores(stores []*Store) {
+func (c *RegionCache) setTiflashComputeStores(stores []*Store) {
 	// TODO(zyguan): needReload seems to be always true, do we need to set it to false here?
 	c.tiflashComputeStoreMu.Lock()
 	c.tiflashComputeStoreMu.stores = stores
