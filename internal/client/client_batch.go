@@ -399,10 +399,10 @@ func (a *batchConn) getClientAndSend() {
 	if cli == nil {
 		logutil.BgLogger().Warn("no available connections", zap.String("target", target), zap.String("reason", reason))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
-		if reason == SendFailedReasonTryLockForSendFail {
-			// Please ensure the error is handled in region cache correctly.
-			a.reqBuilder.cancel(errors.New("no available connections"))
-		}
+		//if reason == SendFailedReasonTryLockForSendFail {
+		//	// Please ensure the error is handled in region cache correctly.
+		//	a.reqBuilder.cancel(errors.New("no available connections"))
+		//}
 		return
 	}
 	defer cli.unlockForSend()
