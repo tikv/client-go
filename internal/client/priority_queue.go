@@ -19,6 +19,8 @@ import "container/heap"
 // Item is the interface that all entries in a priority queue must implement.
 type Item interface {
 	priority() uint64
+	// isCanceled returns true if the item is canceled by the caller.
+	isCanceled() bool
 }
 
 // entry is an entry in a priority queue.
@@ -97,6 +99,14 @@ func (pq *PriorityQueue) All() []Item {
 		items = append(items, pq.ps[i].entry)
 	}
 	return items
+}
+
+func (pq *PriorityQueue) clean() {
+	for i := 0; i < pq.Len(); i++ {
+		if pq.ps[i].entry.isCanceled() {
+			heap.Remove(&pq.ps, pq.ps[i].index)
+		}
+	}
 }
 
 // Reset clear all entry in the queue.

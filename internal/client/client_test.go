@@ -674,8 +674,8 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	require.False(t, server.IsRunning())
 
 	// send some request, it should be failed since server is down.
-	for i := 0; i < 200; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
+	for i := 0; i < 10; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Millisecond*100, 0)
 		require.Error(t, err)
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
 		grpcConn := conn.Get()

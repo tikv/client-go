@@ -29,6 +29,10 @@ func (f *FakeItem) priority() uint64 {
 	return f.pri
 }
 
+func (f *FakeItem) isCanceled() bool {
+	return false
+}
+
 func TestPriority(t *testing.T) {
 	re := require.New(t)
 	pq := NewPriorityQueue()
