@@ -2060,7 +2060,7 @@ func (c *RegionCache) GetTiFlashComputeStores(bo *retry.Backoffer) (res []*Store
 	stores, needReload := c.listTiflashComputeStores()
 
 	if needReload {
-		stores, err = reloadTiFlashComputeStores(bo.GetCtx(), c.pdClient)
+		stores, err = reloadTiFlashComputeStores(bo.GetCtx(), c)
 		if err == nil {
 			c.setTiflashComputeStores(stores)
 		}
@@ -2069,8 +2069,8 @@ func (c *RegionCache) GetTiFlashComputeStores(bo *retry.Backoffer) (res []*Store
 	return stores, nil
 }
 
-func reloadTiFlashComputeStores(ctx context.Context, pdClient pd.Client) (res []*Store, _ error) {
-	stores, err := pdClient.GetAllStores(ctx)
+func reloadTiFlashComputeStores(ctx context.Context, registry storeRegistry) (res []*Store, _ error) {
+	stores, err := registry.fetchAllStores(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2542,7 +2542,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 	var store *metapb.Store
 	for {
 		start := time.Now()
-		store, err = c.pdClient.GetStore(bo.GetCtx(), s.storeID)
+		store, err = c.fetchStore(bo.GetCtx(), s.storeID)
 		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
@@ -2590,7 +2590,7 @@ func isStoreNotFoundError(err error) bool {
 // deleted.
 func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	var addr string
-	store, err := c.pdClient.GetStore(context.Background(), s.storeID)
+	store, err := c.fetchStore(context.Background(), s.storeID)
 	if err != nil {
 		metrics.RegionCacheCounterWithGetStoreError.Inc()
 	} else {
@@ -3104,6 +3104,19 @@ func (c *RegionCache) getMockRequestLiveness() livenessFunc {
 
 func (c *RegionCache) setMockRequestLiveness(f livenessFunc) {
 	c.testingKnobs.mockRequestLiveness.Store(&f)
+}
+
+type storeRegistry interface {
+	fetchStore(ctx context.Context, id uint64) (*metapb.Store, error)
+	fetchAllStores(ctx context.Context) ([]*metapb.Store, error)
+}
+
+func (c *RegionCache) fetchStore(ctx context.Context, id uint64) (*metapb.Store, error) {
+	return c.pdClient.GetStore(ctx, id)
+}
+
+func (c *RegionCache) fetchAllStores(ctx context.Context) ([]*metapb.Store, error) {
+	return c.pdClient.GetAllStores(ctx)
 }
 
 func (c *RegionCache) getStore(id uint64) (store *Store, exists bool) {
