@@ -345,8 +345,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(bestBatchWaitSize), cfg.MaxBatchWaitTime)
 			}
 		}
-		a.pendingRequests.Observe(float64(len(a.batchCommandsCh)))
-		a.batchSize.Observe(float64(a.reqBuilder.len()))
+		a.pendingRequests.Observe(float64(len(a.batchCommandsCh) + a.reqBuilder.len()))
 		length := a.reqBuilder.len()
 		if uint(length) == 0 {
 			// The batch command channel is closed.
@@ -358,7 +357,10 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			bestBatchWaitSize++
 		}
 
-		a.getClientAndSend()
+		batch := a.getClientAndSend()
+		if batch != 0 {
+			a.batchSize.Observe(float64(a.reqBuilder.len()))
+		}
 		metrics.TiKVBatchSendLatency.Observe(float64(time.Since(start)))
 	}
 }
@@ -368,7 +370,7 @@ const (
 	SendFailedReasonTryLockForSendFail = "tryLockForSend fail"
 )
 
-func (a *batchConn) getClientAndSend() {
+func (a *batchConn) getClientAndSend() int {
 	if val, err := util.EvalFailpoint("mockBatchClientSendDelay"); err == nil {
 		if timeout, ok := val.(int); ok && timeout > 0 {
 			time.Sleep(time.Duration(timeout * int(time.Millisecond)))
@@ -400,14 +402,11 @@ func (a *batchConn) getClientAndSend() {
 	if cli == nil {
 		logutil.BgLogger().Warn("no available connections", zap.String("target", target), zap.String("reason", reason))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
-		//if reason == SendFailedReasonTryLockForSendFail {
-		//	// Please ensure the error is handled in region cache correctly.
-		//	a.reqBuilder.cancel(errors.New("no available connections"))
-		//}
-		return
+		return 0
 	}
 	defer cli.unlockForSend()
 	available := cli.maxConcurrencyRequestLimit.Load() - cli.sent.Load()
+	batch := 0
 	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
 		cli.sent.Add(1)
@@ -416,11 +415,14 @@ func (a *batchConn) getClientAndSend() {
 		}
 	})
 	if req != nil {
+		batch += len(req.RequestIds)
 		cli.send("", req)
 	}
 	for forwardedHost, req := range forwardingReqs {
+		batch += len(req.RequestIds)
 		cli.send(forwardedHost, req)
 	}
+	return batch
 }
 
 type tryLock struct {
