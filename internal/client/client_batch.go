@@ -153,6 +153,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 	return req, b.forwardingReqs
 }
 
+// cancel all requests, only used in test.
 func (b *batchCommandsBuilder) cancel(e error) {
 	for _, entry := range b.entries.All() {
 		entry.(*batchCommandsEntry).error(e)
