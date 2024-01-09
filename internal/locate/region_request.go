@@ -625,22 +625,26 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		leader := selector.replicas[state.leaderIdx]
 		leaderEpochStale := leader.isEpochStale()
 		leaderUnreachable := leader.store.getLivenessState() != reachable
-		leaderInvalid := leaderEpochStale || leaderUnreachable || state.IsLeaderExhausted(leader)
-		if len(state.option.labels) > 0 {
-			logutil.BgLogger().Warn("unable to find stores with given labels",
+		leaderExhausted := state.IsLeaderExhausted(leader)
+		leaderTimeout := leader.deadlineErrUsingConfTimeout
+		if len(state.option.labels) > 0 && !state.option.leaderOnly {
+			logutil.BgLogger().Warn("unable to find a store with given labels",
 				zap.Uint64("region", selector.region.GetID()),
-				zap.Bool("leader-epoch-stale", leaderEpochStale),
-				zap.Bool("leader-unreachable", leaderUnreachable),
-				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
 		}
-		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
+		if leaderEpochStale || leaderUnreachable || leaderExhausted || leaderTimeout {
+			logutil.BgLogger().Warn("unable to find a valid leader",
+				zap.Uint64("region", selector.region.GetID()),
+				zap.Bool("stale-read", state.isStaleRead),
+				zap.Bool("epoch-stale", leaderEpochStale),
+				zap.Bool("unreachable", leaderUnreachable),
+				zap.Bool("exhausted", leaderExhausted),
+				zap.Bool("timeout", leaderTimeout))
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
-			// If leader tried and received deadline exceeded error, try follower.
-			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
+			if state.isStaleRead && (leaderEpochStale || leaderUnreachable) {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -905,6 +909,7 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 	switch req.Type {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
 		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+
 		if target := s.targetReplica(); target != nil {
 			target.deadlineErrUsingConfTimeout = true
 		}
