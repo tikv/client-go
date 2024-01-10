@@ -153,6 +153,7 @@ type KVSnapshot struct {
 	}
 	sampleStep uint32
 	*util.RequestSource
+	isPipelined bool
 }
 
 // NewTiKVSnapshot creates a snapshot of an TiKV store.
@@ -200,10 +201,20 @@ func (s *KVSnapshot) IsInternal() bool {
 // The map will not contain nonexistent keys.
 // NOTE: Don't modify keys. Some codes rely on the order of keys.
 func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	return s.BatchGetWithTier(ctx, keys, BatchGetSnapshotTier)
+}
+
+const (
+	BatchGetSnapshotTier = 1 << iota
+	BatchGetBufferTier
+)
+
+// BatchGetWithTier gets all the keys' value from kv-server with given tier and returns a map contains key/value pairs.
+func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTier int) (map[string][]byte, error) {
 	// Check the cached value first.
 	m := make(map[string][]byte)
 	s.mu.RLock()
-	if s.mu.cached != nil {
+	if s.mu.cached != nil && readTier == BatchGetSnapshotTier {
 		tmp := make([][]byte, 0, len(keys))
 		for _, key := range keys {
 			if val, ok := s.mu.cached[string(key)]; ok {
@@ -238,7 +249,7 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
-	err := s.batchGetKeysByRegions(bo, keys, func(k, v []byte) {
+	err := s.batchGetKeysByRegions(bo, keys, readTier, func(k, v []byte) {
 		if len(v) == 0 {
 			return
 		}
@@ -255,6 +266,10 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	err = s.store.CheckVisibility(s.version)
 	if err != nil {
 		return nil, err
+	}
+
+	if readTier != BatchGetSnapshotTier {
+		return m, nil
 	}
 
 	// Update the cache.
@@ -323,7 +338,7 @@ func appendBatchKeysBySize(b []batchKeys, region locate.RegionVerID, keys [][]by
 	return b
 }
 
-func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, collectF func(k, v []byte)) error {
+func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, readTier int, collectF func(k, v []byte)) error {
 	defer func(start time.Time) {
 		if s.IsInternal() {
 			metrics.TxnCmdHistogramWithBatchGetInternal.Observe(time.Since(start).Seconds())
@@ -351,7 +366,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 		return nil
 	}
 	if len(batches) == 1 {
-		return s.batchGetSingleRegion(bo, batches[0], collectF)
+		return s.batchGetSingleRegion(bo, batches[0], readTier, collectF)
 	}
 	ch := make(chan error)
 	for _, batch1 := range batches {
@@ -359,12 +374,12 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 		go func() {
 			backoffer, cancel := bo.Fork()
 			defer cancel()
-			ch <- s.batchGetSingleRegion(backoffer, batch, collectF)
+			ch <- s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
 		}()
 	}
 	for i := 0; i < len(batches); i++ {
 		if e := <-ch; e != nil {
-			logutil.BgLogger().Debug("snapshot batchGet failed",
+			logutil.BgLogger().Debug("snapshot BatchGetWithTier failed",
 				zap.Error(e),
 				zap.Uint64("txnStartTS", s.version))
 			err = errors.WithStack(e)
@@ -373,7 +388,40 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, c
 	return err
 }
 
-func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, collectF func(k, v []byte)) error {
+func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, readTier int) (*tikvrpc.Request, error) {
+	ctx := kvrpcpb.Context{
+		Priority:         s.priority.ToPB(),
+		NotFillCache:     s.notFillCache,
+		TaskId:           s.mu.taskID,
+		ResourceGroupTag: s.mu.resourceGroupTag,
+		IsolationLevel:   s.isolationLevel.ToPB(),
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
+			ResourceGroupName: s.mu.resourceGroupName,
+		},
+		BusyThresholdMs: uint32(busyThresholdMs),
+	}
+	switch readTier {
+	case BatchGetSnapshotTier:
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
+			Keys:    keys,
+			Version: s.version,
+		}, s.mu.replicaRead, &s.replicaReadSeed, ctx)
+		return req, nil
+	case BatchGetBufferTier:
+		if !s.isPipelined {
+			return nil, errors.New("only snapshot with pipelined dml can read from buffer")
+		}
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBufferBatchGet, &kvrpcpb.BufferBatchGetRequest{
+			Keys:    keys,
+			Version: s.version,
+		}, s.mu.replicaRead, &s.replicaReadSeed, ctx)
+		return req, nil
+	default:
+		return nil, errors.Errorf("unknown read tier %d", readTier)
+	}
+}
+
+func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, readTier int, collectF func(k, v []byte)) error {
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
@@ -393,20 +441,10 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	var readType string
 	for {
 		s.mu.RLock()
-		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdBatchGet, &kvrpcpb.BatchGetRequest{
-			Keys:    pending,
-			Version: s.version,
-		}, s.mu.replicaRead, &s.replicaReadSeed, kvrpcpb.Context{
-			Priority:         s.priority.ToPB(),
-			NotFillCache:     s.notFillCache,
-			TaskId:           s.mu.taskID,
-			ResourceGroupTag: s.mu.resourceGroupTag,
-			IsolationLevel:   s.isolationLevel.ToPB(),
-			ResourceControlContext: &kvrpcpb.ResourceControlContext{
-				ResourceGroupName: s.mu.resourceGroupName,
-			},
-			BusyThresholdMs: uint32(busyThresholdMs),
-		})
+		req, err := s.buildBatchGetRequest(pending, busyThresholdMs, readTier)
+		if err != nil {
+			return err
+		}
 		req.InputRequestSource = s.GetRequestSource()
 		if readType != "" {
 			req.ReadType = readType
@@ -467,17 +505,32 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			if same {
 				continue
 			}
-			return s.batchGetKeysByRegions(bo, pending, collectF)
+			return s.batchGetKeysByRegions(bo, pending, readTier, collectF)
 		}
 		if resp.Resp == nil {
 			return errors.WithStack(tikverr.ErrBodyMissing)
 		}
-		batchGetResp := resp.Resp.(*kvrpcpb.BatchGetResponse)
 		var (
 			lockedKeys [][]byte
 			locks      []*txnlock.Lock
+
+			keyErr  *kvrpcpb.KeyError
+			pairs   []*kvrpcpb.KvPair
+			details *kvrpcpb.ExecDetailsV2
 		)
-		if keyErr := batchGetResp.GetError(); keyErr != nil {
+		switch v := resp.Resp.(type) {
+		case *kvrpcpb.BatchGetResponse:
+			keyErr = v.GetError()
+			pairs = v.Pairs
+			details = v.GetExecDetailsV2()
+		case *kvrpcpb.BufferBatchGetResponse:
+			keyErr = v.GetError()
+			pairs = v.Pairs
+			details = v.GetExecDetailsV2()
+		default:
+			return errors.Errorf("unknown response %T", v)
+		}
+		if keyErr != nil {
 			// If a response-level error happens, skip reading pairs.
 			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err != nil {
@@ -486,7 +539,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			lockedKeys = append(lockedKeys, lock.Key)
 			locks = append(locks, lock)
 		} else {
-			for _, pair := range batchGetResp.Pairs {
+			for _, pair := range pairs {
 				keyErr := pair.GetError()
 				if keyErr == nil {
 					collectF(pair.GetKey(), pair.GetValue())
@@ -500,17 +553,17 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				locks = append(locks, lock)
 			}
 		}
-		if batchGetResp.ExecDetailsV2 != nil {
-			readKeys := len(batchGetResp.Pairs)
+		if details != nil {
+			readKeys := len(pairs)
 			var readTime float64
-			if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetailV2(); timeDetail != nil {
+			if timeDetail := details.GetTimeDetailV2(); timeDetail != nil {
 				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
-			} else if timeDetail := batchGetResp.ExecDetailsV2.GetTimeDetail(); timeDetail != nil {
+			} else if timeDetail := details.GetTimeDetail(); timeDetail != nil {
 				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
 			}
-			readSize := float64(batchGetResp.ExecDetailsV2.GetScanDetailV2().GetProcessedVersionsSize())
+			readSize := float64(details.GetScanDetailV2().GetProcessedVersionsSize())
 			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
-			s.mergeExecDetail(batchGetResp.ExecDetailsV2)
+			s.mergeExecDetail(details)
 		}
 		if len(lockedKeys) > 0 {
 			if resolvingRecordToken == nil {
@@ -536,14 +589,14 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				return err
 			}
 			if msBeforeExpired > 0 {
-				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("batchGet lockedKeys: %d", len(lockedKeys)))
+				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("BatchGetWithTier lockedKeys: %d", len(lockedKeys)))
 				if err != nil {
 					return err
 				}
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
 			// lockedKeys may be incomplete.
-			if batchGetResp.GetError() == nil {
+			if keyErr == nil {
 				pending = lockedKeys
 			}
 			continue
@@ -1023,6 +1076,17 @@ func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {
 		return nil
 	}
 	return s.mu.stats.resolveLockDetail
+}
+
+// SetPipelined sets the snapshot to pipelined mode.
+func (s *KVSnapshot) SetPipelined(ts uint64) {
+	s.isPipelined = true
+	// In pipelined mode, some locks are flushed into stores during the execution.
+	// If a read request encounters these pipelined locks, it'll be a situation where lock.ts == start_ts.
+	// In order to allow the snapshot to proceed normally, we need to skip these locks.
+	// Otherwise, the transaction will attempt to resolve its own lock, leading to a mutual wait with the primary key TTL.
+	// Currently, we skip these locks by resolvedLocks mechanism.
+	s.resolvedLocks.Put(ts)
 }
 
 // SnapshotRuntimeStats records the runtime stats of snapshot.

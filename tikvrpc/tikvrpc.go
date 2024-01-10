@@ -74,6 +74,8 @@ const (
 	CmdCheckSecondaryLocks
 	CmdFlashbackToVersion
 	CmdPrepareFlashbackToVersion
+	CmdFlush
+	CmdBufferBatchGet
 
 	CmdRawGet CmdType = 256 + iota
 	CmdRawBatchGet
@@ -212,6 +214,10 @@ func (t CmdType) String() string {
 		return "PrepareFlashbackToVersion"
 	case CmdGetTiFlashSystemTable:
 		return "GetTiFlashSystemTable"
+	case CmdFlush:
+		return "Flush"
+	case CmdBufferBatchGet:
+		return "BufferBatchGet"
 	}
 	return "Unknown"
 }
@@ -542,9 +548,19 @@ func (req *Request) FlashbackToVersion() *kvrpcpb.FlashbackToVersionRequest {
 	return req.Req.(*kvrpcpb.FlashbackToVersionRequest)
 }
 
-// PrepareFlashbackToVersion returns PrepareFlashbackToVersion in request.
+// PrepareFlashbackToVersion returns PrepareFlashbackToVersionRequest in request.
 func (req *Request) PrepareFlashbackToVersion() *kvrpcpb.PrepareFlashbackToVersionRequest {
 	return req.Req.(*kvrpcpb.PrepareFlashbackToVersionRequest)
+}
+
+// Flush returns FlushRequest in request.
+func (req *Request) Flush() *kvrpcpb.FlushRequest {
+	return req.Req.(*kvrpcpb.FlushRequest)
+}
+
+// BufferBatchGet returns BufferBatchGetRequest in request.
+func (req *Request) BufferBatchGet() *kvrpcpb.BufferBatchGetRequest {
+	return req.Req.(*kvrpcpb.BufferBatchGetRequest)
 }
 
 // ToBatchCommandsRequest converts the request to an entry in BatchCommands request.
@@ -606,6 +622,10 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_FlashbackToVersion{FlashbackToVersion: req.FlashbackToVersion()}}
 	case CmdPrepareFlashbackToVersion:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_PrepareFlashbackToVersion{PrepareFlashbackToVersion: req.PrepareFlashbackToVersion()}}
+	case CmdFlush:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Flush{Flush: req.Flush()}}
+	case CmdBufferBatchGet:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_BufferBatchGet{BufferBatchGet: req.BufferBatchGet()}}
 	}
 	return nil
 }
@@ -677,6 +697,10 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 		return &Response{Resp: res.CheckTxnStatus}, nil
 	case *tikvpb.BatchCommandsResponse_Response_CheckSecondaryLocks:
 		return &Response{Resp: res.CheckSecondaryLocks}, nil
+	case *tikvpb.BatchCommandsResponse_Response_Flush:
+		return &Response{Resp: res.Flush}, nil
+	case *tikvpb.BatchCommandsResponse_Response_BufferBatchGet:
+		return &Response{Resp: res.BufferBatchGet}, nil
 	}
 	panic("unreachable")
 }
@@ -801,6 +825,10 @@ func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 		req.FlashbackToVersion().Context = ctx
 	case CmdPrepareFlashbackToVersion:
 		req.PrepareFlashbackToVersion().Context = ctx
+	case CmdFlush:
+		req.Flush().Context = ctx
+	case CmdBufferBatchGet:
+		req.BufferBatchGet().Context = ctx
 	default:
 		return false
 	}
@@ -969,6 +997,14 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		}
 	case CmdPrepareFlashbackToVersion:
 		p = &kvrpcpb.PrepareFlashbackToVersionResponse{
+			RegionError: e,
+		}
+	case CmdFlush:
+		p = &kvrpcpb.FlushResponse{
+			RegionError: e,
+		}
+	case CmdBufferBatchGet:
+		p = &kvrpcpb.BufferBatchGetResponse{
 			RegionError: e,
 		}
 	default:
@@ -1141,6 +1177,10 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.KvPrepareFlashbackToVersion(ctx, req.PrepareFlashbackToVersion())
 	case CmdGetTiFlashSystemTable:
 		resp.Resp, err = client.GetTiFlashSystemTable(ctx, req.GetTiFlashSystemTable())
+	case CmdFlush:
+		resp.Resp, err = client.KvFlush(ctx, req.Flush())
+	case CmdBufferBatchGet:
+		resp.Resp, err = client.KvBufferBatchGet(ctx, req.BufferBatchGet())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}
@@ -1304,7 +1344,8 @@ func (req *Request) IsTxnWriteRequest() bool {
 		req.Type == CmdTxnHeartBeat ||
 		req.Type == CmdResolveLock ||
 		req.Type == CmdFlashbackToVersion ||
-		req.Type == CmdPrepareFlashbackToVersion {
+		req.Type == CmdPrepareFlashbackToVersion ||
+		req.Type == CmdFlush {
 		return true
 	}
 	return false
@@ -1357,7 +1398,11 @@ func (req *Request) GetStartTS() uint64 {
 	case CmdFlashbackToVersion:
 		return req.FlashbackToVersion().GetStartTs()
 	case CmdPrepareFlashbackToVersion:
-		req.PrepareFlashbackToVersion().GetStartTs()
+		return req.PrepareFlashbackToVersion().GetStartTs()
+	case CmdFlush:
+		return req.Flush().GetStartTs()
+	case CmdBufferBatchGet:
+		return req.BufferBatchGet().GetVersion()
 	case CmdCop:
 		return req.Cop().GetStartTs()
 	case CmdCopStream:

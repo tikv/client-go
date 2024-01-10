@@ -855,6 +855,13 @@ func WithStartTS(startTS uint64) TxnOption {
 	}
 }
 
+// WithPipelinedMemDB creates transaction with pipelined memdb.
+func WithPipelinedMemDB() TxnOption {
+	return func(st *transaction.TxnOptions) {
+		st.PipelinedMemDB = true
+	}
+}
+
 // TODO: remove once tidb and br are ready
 
 // KVTxn contains methods to interact with a TiKV transaction.

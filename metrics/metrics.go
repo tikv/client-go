@@ -105,6 +105,9 @@ var (
 	TiKVStaleReadCounter                     *prometheus.CounterVec
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
 	TiKVStaleReadBytes                       *prometheus.CounterVec
+	TiKVPipelinedFlushLenHistogram           prometheus.Histogram
+	TiKVPipelinedFlushSizeHistogram          prometheus.Histogram
+	TiKVPipelinedFlushDuration               prometheus.Histogram
 )
 
 // Label constants.
@@ -736,6 +739,33 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Counter of stale read requests bytes",
 		}, []string{LblResult, LblDirection})
 
+	TiKVPipelinedFlushLenHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "pipelined_flush_len",
+			Help:      "Bucketed histogram of length of pipelined flushed memdb",
+			Buckets:   prometheus.ExponentialBuckets(1000, 2, 16), // 1K ~ 32M
+		})
+
+	TiKVPipelinedFlushSizeHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "pipelined_flush_size",
+			Help:      "Bucketed histogram of size of pipelined flushed memdb",
+			Buckets:   prometheus.ExponentialBuckets(16*1024*1024, 1.2, 13), // 16M ~ 142M
+		})
+
+	TiKVPipelinedFlushDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "pipelined_flush_duration",
+			Help:      "Flush time of pipelined memdb.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
+		})
+
 	initShortcuts()
 }
 
@@ -820,6 +850,9 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadCounter)
 	prometheus.MustRegister(TiKVStaleReadReqCounter)
 	prometheus.MustRegister(TiKVStaleReadBytes)
+	prometheus.MustRegister(TiKVPipelinedFlushLenHistogram)
+	prometheus.MustRegister(TiKVPipelinedFlushSizeHistogram)
+	prometheus.MustRegister(TiKVPipelinedFlushDuration)
 }
 
 // readCounter reads the value of a prometheus.Counter.
