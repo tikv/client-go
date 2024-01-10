@@ -2502,3 +2502,13 @@ func (s *testCommitterSuite) TestExtractKeyExistsErr() {
 	s.True(txn.GetMemBuffer().TryLock())
 	txn.GetMemBuffer().Unlock()
 }
+
+func (s *testCommitterSuite) TestKillSignal() {
+	txn := s.begin()
+	err := txn.Set([]byte("key"), []byte("value"))
+	s.Nil(err)
+	var killed uint32 = 2
+	txn.SetVars(kv.NewVariables(&killed))
+	err = txn.Commit(context.Background())
+	s.ErrorContains(err, "query interrupted")
+}

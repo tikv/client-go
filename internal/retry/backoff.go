@@ -210,10 +210,9 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		atomic.AddInt64(&detail.BackoffCount, 1)
 	}
 
-	if b.vars != nil && b.vars.Killed != nil {
-		if atomic.LoadUint32(b.vars.Killed) == 1 {
-			return errors.WithStack(tikverr.ErrQueryInterrupted)
-		}
+	err2 := b.CheckKilled()
+	if err2 != nil {
+		return err2
 	}
 
 	var startTs interface{}
@@ -374,4 +373,18 @@ func (b *Backoffer) longestSleepCfg() (*Config, int) {
 		}
 	}
 	return nil, 0
+}
+
+func (b *Backoffer) CheckKilled() error {
+	if b.vars != nil && b.vars.Killed != nil {
+		killed := atomic.LoadUint32(b.vars.Killed)
+		if killed != 0 {
+			logutil.BgLogger().Info(
+				"backoff stops because a killed signal is received",
+				zap.Uint32("signal", killed),
+			)
+			return errors.WithStack(tikverr.ErrQueryInterrupted)
+		}
+	}
+	return nil
 }
