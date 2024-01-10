@@ -157,6 +157,11 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 	return locate.WithMatchLabels(labels)
 }
 
+// WithExperimentalArgs sets the experimental arguments for the replica selector.
+func WithExperimentalArgs(args tikvrpc.ExperimentalSelectorArgs) StoreSelectorOption {
+	return locate.WithExperimentalArgs(args)
+}
+
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
 func NewRegionRequestRuntimeStats() RegionRequestRuntimeStats {
 	return locate.NewRegionRequestRuntimeStats()

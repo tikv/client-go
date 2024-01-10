@@ -139,8 +139,10 @@ type KVSnapshot struct {
 		readReplicaScope string
 		// replicaReadAdjuster check and adjust the replica read type and store match labels.
 		replicaReadAdjuster ReplicaReadAdjuster
-		// MatchStoreLabels indicates the labels the store should be matched
+		// matchStoreLabels indicates the labels the store should be matched
 		matchStoreLabels []*metapb.StoreLabel
+		// selectorExpArgs indicates the experimental arguments for the replica selector.
+		selectorExpArgs tikvrpc.ExperimentalSelectorArgs
 		// resourceGroupTag is use to set the kv request resource group tag.
 		resourceGroupTag []byte
 		// resourceGroupTagger is use to set the kv request resource group tag if resourceGroupTag is nil.
@@ -396,6 +398,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		scope := s.mu.readReplicaScope
 		matchStoreLabels := s.mu.matchStoreLabels
+		selectorExpArgs := s.mu.selectorExpArgs
 		replicaAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
 		req.TxnScope = scope
@@ -409,7 +412,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			timeout = s.readTimeout
 		}
 		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
-		ops := make([]locate.StoreSelectorOption, 0, 2)
+		ops := make([]locate.StoreSelectorOption, 0, 3)
+		ops = append(ops, locate.WithExperimentalArgs(selectorExpArgs))
 		if len(matchStoreLabels) > 0 {
 			ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
 		}
@@ -609,15 +613,17 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	}
 	isStaleness := s.mu.isStaleness
 	matchStoreLabels := s.mu.matchStoreLabels
+	selectorExpArgs := s.mu.selectorExpArgs
 	scope := s.mu.readReplicaScope
 	replicaAdjuster := s.mu.replicaReadAdjuster
 	s.mu.RUnlock()
 	req.TxnScope = scope
 	req.ReadReplicaScope = scope
-	var ops []locate.StoreSelectorOption
 	if isStaleness {
 		req.EnableStaleRead()
 	}
+	ops := make([]locate.StoreSelectorOption, 0, 3)
+	ops = append(ops, locate.WithExperimentalArgs(selectorExpArgs))
 	if len(matchStoreLabels) > 0 {
 		ops = append(ops, locate.WithMatchLabels(matchStoreLabels))
 	}
@@ -844,6 +850,13 @@ func (s *KVSnapshot) SetMatchStoreLabels(labels []*metapb.StoreLabel) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mu.matchStoreLabels = labels
+}
+
+// SetExperimentalSelectorArgs sets experimental arguments for the replica selector.
+func (s *KVSnapshot) SetExperimentalSelectorArgs(args tikvrpc.ExperimentalSelectorArgs) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.selectorExpArgs = args
 }
 
 // SetResourceGroupTag sets resource group tag of the kv request.

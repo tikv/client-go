@@ -1280,9 +1280,6 @@ func (req *Request) IsTxnWriteRequest() bool {
 	return false
 }
 
-// ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
-type ResourceGroupTagger func(req *Request)
-
 // GetStartTS returns the `start_ts` of the request.
 func (req *Request) GetStartTS() uint64 {
 	switch req.Type {
@@ -1329,4 +1326,15 @@ func (req *Request) GetStartTS() uint64 {
 	default:
 	}
 	return 0
+}
+
+// ResourceGroupTagger is used to fill the ResourceGroupTag in the kvrpcpb.Context.
+type ResourceGroupTagger func(req *Request)
+
+// ExperimentalSelectorArgs defines experimental arguments of replica selector.
+type ExperimentalSelectorArgs struct {
+	StaleRead struct {
+		PreventRetryFollower bool
+		InternalRetryTimeout time.Duration
+	}
 }

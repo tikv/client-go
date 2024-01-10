@@ -644,7 +644,9 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
-			if state.isStaleRead && (leaderEpochStale || leaderUnreachable) {
+			// If leader tried and received deadline exceeded error, try follower.
+			if (state.isStaleRead && !state.option.StaleRead.PreventRetryFollower) ||
+				(!state.isStaleRead && leader.deadlineErrUsingConfTimeout) {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -669,6 +671,9 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	if resetStaleRead {
 		staleRead := false
 		rpcCtx.contextPatcher.staleRead = &staleRead
+		if state.option.StaleRead.InternalRetryTimeout > 0 {
+			rpcCtx.contextPatcher.readTimeout = &state.option.StaleRead.InternalRetryTimeout
+		}
 	}
 	return rpcCtx, nil
 }
@@ -909,7 +914,6 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 	switch req.Type {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
 		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
-
 		if target := s.targetReplica(); target != nil {
 			target.deadlineErrUsingConfTimeout = true
 		}
@@ -1202,7 +1206,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
-		rpcCtx.contextPatcher.applyTo(&req.Context)
+		timeout = rpcCtx.contextPatcher.applyTo(&req.Context, timeout)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
 		}

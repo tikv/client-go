@@ -576,20 +576,32 @@ func (c *RPCContext) String() string {
 type contextPatcher struct {
 	staleRead   *bool
 	replicaRead *bool
+	readTimeout *time.Duration
 }
 
-func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
+func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context, timeout time.Duration) time.Duration {
 	if patcher.staleRead != nil {
 		pbCtx.StaleRead = *patcher.staleRead
 	}
 	if patcher.replicaRead != nil {
 		pbCtx.ReplicaRead = *patcher.replicaRead
 	}
+	if patcher.readTimeout != nil {
+		delta := (*patcher.readTimeout - timeout).Milliseconds()
+		maxExecDur := int64(pbCtx.MaxExecutionDurationMs)
+		if delta+maxExecDur > 0 {
+			pbCtx.MaxExecutionDurationMs = uint64(delta + maxExecDur)
+			timeout = *patcher.readTimeout
+		}
+	}
+	return timeout
 }
 
 type storeSelectorOp struct {
 	leaderOnly bool
 	labels     []*metapb.StoreLabel
+
+	tikvrpc.ExperimentalSelectorArgs
 }
 
 // StoreSelectorOption configures storeSelectorOp.
@@ -606,6 +618,13 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 func WithLeaderOnly() StoreSelectorOption {
 	return func(op *storeSelectorOp) {
 		op.leaderOnly = true
+	}
+}
+
+// WithExperimentalArgs sets the experimental args for the replica selector.
+func WithExperimentalArgs(args tikvrpc.ExperimentalSelectorArgs) StoreSelectorOption {
+	return func(op *storeSelectorOp) {
+		op.ExperimentalSelectorArgs = args
 	}
 }
 
