@@ -1117,3 +1117,17 @@ func (rs *SnapshotRuntimeStats) String() string {
 	}
 	return buf.String()
 }
+
+// GetCmdRPCCount returns the count of the corresponding kind of rpc requests
+func (rs *SnapshotRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) int64 {
+	if rs.rpcStats.Stats == nil {
+		return 0
+	}
+
+	stats, ok := rs.rpcStats.Stats[cmd]
+	if !ok {
+		return 0
+	}
+
+	return stats.Count
+}
