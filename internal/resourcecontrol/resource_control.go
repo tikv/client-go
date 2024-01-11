@@ -15,16 +15,13 @@
 package resourcecontrol
 
 import (
-	"reflect"
 	"strings"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
-	"go.uber.org/zap"
 )
 
 // RequestInfo contains information about a request that is able to calculate the RU cost
@@ -140,7 +137,6 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 		// TODO: using a more accurate size rather than using the whole response size as the read bytes.
 		readBytes = uint64(r.Size())
 	default:
-		logutil.BgLogger().Debug("[kv resource] unknown response type to collect the info", zap.Any("type", reflect.TypeOf(r)))
 		return &ResponseInfo{}
 	}
 	// Try to get read bytes from the `detailsV2`.
