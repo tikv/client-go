@@ -703,6 +703,16 @@ func NewRUDetails() *RUDetails {
 	}
 }
 
+// NewRUDetails creates a new RUDetails with specifical values.
+// This function is used in tidb's unit test.
+func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
+	return &RUDetails{
+		readRU:         uatomic.NewFloat64(rru),
+		writeRU:        uatomic.NewFloat64(wru),
+		ruWaitDuration: uatomic.NewDuration(waitDur),
+	}
+}
+
 // Clone implements the RuntimeStats interface.
 func (rd *RUDetails) Clone() *RUDetails {
 	return &RUDetails{

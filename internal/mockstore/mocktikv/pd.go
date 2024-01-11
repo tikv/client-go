@@ -61,6 +61,16 @@ var tsMu = struct {
 
 const defaultResourceGroupName = "default"
 
+var _ pd.Client = (*pdClient)(nil)
+
+type MockPDOption func(*pdClient)
+
+func WithDelay(delay *atomic.Bool) MockPDOption {
+	return func(pc *pdClient) {
+		pc.delay = delay
+	}
+}
+
 type pdClient struct {
 	cluster *Cluster
 	// SafePoint set by `UpdateGCSafePoint`. Not to be confused with SafePointKV.
@@ -73,11 +83,13 @@ type pdClient struct {
 	externalTimestamp atomic.Uint64
 
 	groups map[string]*rmpb.ResourceGroup
+
+	delay *atomic.Bool
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
 // from a Cluster.
-func NewPDClient(cluster *Cluster) pd.Client {
+func NewPDClient(cluster *Cluster, ops ...MockPDOption) *pdClient {
 	mockCli := &pdClient{
 		cluster:           cluster,
 		serviceSafePoints: make(map[string]uint64),
@@ -96,6 +108,9 @@ func NewPDClient(cluster *Cluster) pd.Client {
 			},
 		},
 		Priority: 8,
+	}
+	for _, op := range ops {
+		op(mockCli)
 	}
 	return mockCli
 }
@@ -205,6 +220,12 @@ func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegi
 	region, peer, buckets, downPeers := c.cluster.GetRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
+	}
+	if c.delay != nil && c.delay.Load() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
@@ -340,11 +361,11 @@ func (c *pdClient) UpdateKeyspaceState(ctx context.Context, id uint32, state key
 	return nil, nil
 }
 
-func (c *pdClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, error) {
+func (c *pdClient) ListResourceGroups(ctx context.Context, opts ...pd.GetResourceGroupOption) ([]*rmpb.ResourceGroup, error) {
 	return nil, nil
 }
 
-func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
+func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string, opts ...pd.GetResourceGroupOption) (*rmpb.ResourceGroup, error) {
 	group, ok := c.groups[resourceGroupName]
 	if !ok {
 		return nil, fmt.Errorf("the group %s does not exist", resourceGroupName)

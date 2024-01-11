@@ -76,6 +76,11 @@ func (b *batchCommandsEntry) isCanceled() bool {
 	return atomic.LoadInt32(&b.canceled) == 1
 }
 
+// TODO: implement by the request priority.
+func (b *batchCommandsEntry) priority() int {
+	return 0
+}
+
 func (b *batchCommandsEntry) error(err error) {
 	b.err = err
 	close(b.res)
@@ -87,7 +92,7 @@ type batchCommandsBuilder struct {
 	// Each BatchCommandsRequest_Request sent to a store has a unique identity to
 	// distinguish its response.
 	idAlloc    uint64
-	entries    []*batchCommandsEntry
+	entries    *PriorityQueue
 	requests   []*tikvpb.BatchCommandsRequest_Request
 	requestIDs []uint64
 	// In most cases, there isn't any forwardingReq.
@@ -95,11 +100,11 @@ type batchCommandsBuilder struct {
 }
 
 func (b *batchCommandsBuilder) len() int {
-	return len(b.entries)
+	return b.entries.Len()
 }
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
-	b.entries = append(b.entries, entry)
+	b.entries.Push(entry)
 }
 
 // build builds BatchCommandsRequests and calls collect() for each valid entry.
@@ -108,7 +113,8 @@ func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 func (b *batchCommandsBuilder) build(
 	collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	for _, e := range b.entries {
+	for _, entry := range b.entries.All() {
+		e := entry.(*batchCommandsEntry)
 		if e.isCanceled() {
 			continue
 		}
@@ -140,8 +146,8 @@ func (b *batchCommandsBuilder) build(
 }
 
 func (b *batchCommandsBuilder) cancel(e error) {
-	for _, entry := range b.entries {
-		entry.error(e)
+	for _, entry := range b.entries.All() {
+		entry.(*batchCommandsEntry).error(e)
 	}
 }
 
@@ -152,10 +158,7 @@ func (b *batchCommandsBuilder) reset() {
 	// The data in the cap part of the slice would reference the prewrite keys whose
 	// underlying memory is borrowed from memdb. The reference cause GC can't release
 	// the memdb, leading to serious memory leak problems in the large transaction case.
-	for i := 0; i < len(b.entries); i++ {
-		b.entries[i] = nil
-	}
-	b.entries = b.entries[:0]
+	b.entries.Reset()
 	for i := 0; i < len(b.requests); i++ {
 		b.requests[i] = nil
 	}
@@ -170,7 +173,7 @@ func (b *batchCommandsBuilder) reset() {
 func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
 	return &batchCommandsBuilder{
 		idAlloc:        0,
-		entries:        make([]*batchCommandsEntry, 0, maxBatchSize),
+		entries:        NewPriorityQueue(),
 		requests:       make([]*tikvpb.BatchCommandsRequest_Request, 0, maxBatchSize),
 		requestIDs:     make([]uint64, 0, maxBatchSize),
 		forwardingReqs: make(map[string]*tikvpb.BatchCommandsRequest),

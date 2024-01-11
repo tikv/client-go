@@ -307,11 +307,11 @@ func (c *mockPDClient) UpdateKeyspaceState(ctx context.Context, id uint32, state
 	return nil, nil
 }
 
-func (c *mockPDClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, error) {
+func (c *mockPDClient) ListResourceGroups(ctx context.Context, opts ...pd.GetResourceGroupOption) ([]*rmpb.ResourceGroup, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
+func (c *mockPDClient) GetResourceGroup(ctx context.Context, resourceGroupName string, opts ...pd.GetResourceGroupOption) (*rmpb.ResourceGroup, error) {
 	return nil, nil
 }
 
