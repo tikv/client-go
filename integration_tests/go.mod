@@ -6,13 +6,13 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20231212100244-799fae176cfb
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pingcap/kvproto v0.0.0-20231222062942-c0c73f41d0b2
-	github.com/pingcap/tidb v1.1.0-beta.0.20231201112349-7353fbeea8c0
+	github.com/pingcap/kvproto v0.0.0-20231226064240-4f28b82c7860
+	github.com/pingcap/tidb v1.1.0-beta.0.20240111112854-1ad36eb0ef29
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20231225015355-db2e85c4631a
-	github.com/tikv/pd/client v0.0.0-20231227041826-d3551ea0bdbe
+	github.com/tikv/client-go/v2 v2.0.8-0.20231227070846-61c486af13a5
+	github.com/tikv/pd/client v0.0.0-20240109100024-dd8df25316e9
 	go.uber.org/goleak v1.3.0
 )
 
@@ -68,11 +68,11 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20230407040306-fb007c5aff21 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20231020070330-48d69d39c3d0 // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20240111112854-1ad36eb0ef29 // indirect
 	github.com/pingcap/tipb v0.0.0-20230919054518-dfd7d194838f // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
-	github.com/prometheus/client_golang v1.17.0 // indirect
+	github.com/prometheus/client_golang v1.18.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.45.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
@@ -98,10 +98,10 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.26.0 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
-	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
+	golang.org/x/exp v0.0.0-20240110193028-0dcbfd608b1e // indirect
 	golang.org/x/net v0.19.0 // indirect
 	golang.org/x/sync v0.5.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/sys v0.16.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	golang.org/x/tools v0.16.1 // indirect
@@ -117,8 +117,5 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	// remove this after tidb https://github.com/pingcap/tidb/pull/49833 is merged.
-	github.com/pingcap/tidb => github.com/glorv/tidb v1.1.0-beta.0.20231227062622-cf95945480de
-	github.com/pingcap/tidb/pkg/parser => github.com/glorv/tidb/pkg/parser v0.0.0-20231227062622-cf95945480de
 	github.com/tikv/client-go/v2 => ../
 )
