@@ -211,6 +211,10 @@ type batchConn struct {
 	batchSize       prometheus.Observer
 
 	index uint32
+	// isBusy is used to avoid busy loop.
+	// 0 for idle, 1 for busy.
+	// 0 ->1:
+	isBusy uint32
 }
 
 func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
@@ -222,6 +226,7 @@ func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 		reqBuilder:             newBatchCommandsBuilder(maxBatchSize),
 		idleNotify:             idleNotify,
 		idleDetect:             time.NewTimer(idleTimeout),
+		isBusy:                 0,
 	}
 }
 
@@ -358,10 +363,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			bestBatchWaitSize++
 		}
 
-		batch := a.getClientAndSend()
-		if batch != 0 {
-			a.batchSize.Observe(float64(a.reqBuilder.len()))
-		}
+		a.getClientAndSend()
 		metrics.TiKVBatchSendLatency.Observe(float64(time.Since(start)))
 	}
 }
@@ -371,7 +373,7 @@ const (
 	SendFailedReasonTryLockForSendFail = "tryLockForSend fail"
 )
 
-func (a *batchConn) getClientAndSend() int {
+func (a *batchConn) getClientAndSend() {
 	if val, err := util.EvalFailpoint("mockBatchClientSendDelay"); err == nil {
 		if timeout, ok := val.(int); ok && timeout > 0 {
 			time.Sleep(time.Duration(timeout * int(time.Millisecond)))
@@ -403,7 +405,22 @@ func (a *batchConn) getClientAndSend() int {
 	if cli == nil {
 		logutil.BgLogger().Warn("no available connections", zap.String("target", target), zap.String("reason", reason))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
-		return 0
+		// If no available connection, wait for a while to avoid busy loop.
+		if reason == SendFailedReasonNoAvailableLimit {
+			if !atomic.CompareAndSwapUint32(&a.isBusy, 0, 1) {
+				return
+			}
+			for {
+				if atomic.LoadUint32(&a.isBusy) == 0 {
+					break
+				}
+				select {
+				case <-time.After(time.Millisecond * 10):
+				}
+			}
+
+		}
+		return
 	}
 	defer cli.unlockForSend()
 	available := cli.maxConcurrencyRequestLimit.Load() - cli.sent.Load()
@@ -423,7 +440,10 @@ func (a *batchConn) getClientAndSend() int {
 		batch += len(req.RequestIds)
 		cli.send(forwardedHost, req)
 	}
-	return batch
+	if batch > 0 {
+		a.batchSize.Observe(float64(batch))
+	}
+	return
 }
 
 type tryLock struct {
@@ -538,6 +558,7 @@ type batchCommandsClient struct {
 	sent atomic.Int64
 	// limit is the max number of requests can be sent to tikv but not accept response.
 	maxConcurrencyRequestLimit atomic.Int64
+	isBusy                     *uint32
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -694,6 +715,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)
+			atomic.CompareAndSwapUint32(c.isBusy, 1, 0)
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()

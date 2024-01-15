@@ -740,7 +740,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 
 	// increase coverage for mock tikv
 	_ = req.Type.String()
-	_, _ = req.ToBatchCommandsRequest()
+	_ = req.ToBatchCommandsRequest()
 
 	reqCtx := &req.Context
 	resp := &tikvrpc.Response{}
