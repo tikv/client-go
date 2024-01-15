@@ -135,6 +135,81 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeader() {
 	resp, err := s.regionRequestSender.SendReq(bo, req, loc.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
+	s.Nil(resp.GetRegionError())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeaderErrorWithNewLeaderInfo() {
+	cnt := 0
+	var location *KeyLocation
+	cli := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		cnt++
+		switch cnt {
+		case 1:
+			region := s.cache.GetCachedRegionWithRLock(location.Region)
+			s.NotNil(region)
+			leaderPeerIdx := int(region.getStore().workTiKVIdx)
+			peers := region.meta.Peers
+			// return no leader with new leader info
+			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{
+					RegionId: req.RegionId,
+					Leader:   peers[(leaderPeerIdx+1)%len(peers)],
+				}},
+			}}
+		case 2:
+			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				Value: []byte("a"),
+			}}
+		default:
+			return nil, fmt.Errorf("unexpected request")
+		}
+		return response, err
+	}}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	var err error
+	location, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.NotNil(location)
+	bo := retry.NewBackoffer(context.Background(), 1000)
+	resp, _, _, err := NewRegionRequestSender(s.cache, cli).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Nil(regionErr)
+	// It's unreasoneable to retry in upper layer, such as cop request, the upper layer will need to rebuild cop request and retry, there are some unnecessary overhead.
+	s.Equal(cnt, 2)
+	r := s.cache.GetCachedRegionWithRLock(location.Region)
+	s.True(r.isValid())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestSliceIdentical() {
+	a := make([]int, 0)
+	b := a
+	s.True(sliceIdentical(a, b))
+	b = make([]int, 0)
+	s.False(sliceIdentical(a, b))
+
+	a = append(a, 1, 2, 3)
+	b = a
+	s.True(sliceIdentical(a, b))
+	b = a[:2]
+	s.False(sliceIdentical(a, b))
+	b = a[1:]
+	s.False(sliceIdentical(a, b))
+	a = a[1:]
+	s.True(sliceIdentical(a, b))
+
+	a = nil
+	b = nil
+
+	s.True(sliceIdentical(a, b))
+	a = make([]int, 0)
+	s.False(sliceIdentical(a, b))
+	a = append(a, 1)
+	s.False(sliceIdentical(a, b))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) loadAndGetLeaderStore() (*Store, string) {
