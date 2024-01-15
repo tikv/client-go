@@ -1009,6 +1009,8 @@ func (s *replicaSelector) proxyReplica() *replica {
 	return nil
 }
 
+// sliceIdentical checks whether two slices are referencing the same block of memory. Two `nil`s are also considered
+// the same.
 func sliceIdentical[T any](a, b []T) bool {
 	return len(a) == len(b) && unsafe.SliceData(a) == unsafe.SliceData(b)
 }
