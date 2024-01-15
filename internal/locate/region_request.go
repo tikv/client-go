@@ -45,6 +45,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -1008,6 +1009,10 @@ func (s *replicaSelector) proxyReplica() *replica {
 	return nil
 }
 
+func sliceIdentical[T any](a, b []T) bool {
+	return len(a) == len(b) && unsafe.SliceData(a) == unsafe.SliceData(b)
+}
+
 func (s *replicaSelector) refreshRegionStore() {
 	oldRegionStore := s.regionStore
 	newRegionStore := s.region.getStore()
@@ -1020,7 +1025,7 @@ func (s *replicaSelector) refreshRegionStore() {
 	// So we just compare the address here.
 	// When stores change, we mark this replicaSelector as invalid to let the caller
 	// recreate a new replicaSelector.
-	if &oldRegionStore.stores != &newRegionStore.stores {
+	if !sliceIdentical(oldRegionStore.stores, newRegionStore.stores) {
 		s.state = &invalidStore{}
 		return
 	}
