@@ -1043,8 +1043,9 @@ func (s *replicaSelector) refreshRegionStore() {
 			// request is sent to the leader.
 			newLeaderIdx := newRegionStore.workTiKVIdx
 			s.state = &accessKnownLeader{leaderIdx: newLeaderIdx}
-			if s.replicas[newLeaderIdx].attempts == maxReplicaAttempt {
-				s.replicas[newLeaderIdx].attempts--
+			if s.replicas[newLeaderIdx].isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) {
+				s.replicas[newLeaderIdx].attempts = maxReplicaAttempt - 1
+				s.replicas[newLeaderIdx].attemptedTime = 0
 			}
 		}
 	}
