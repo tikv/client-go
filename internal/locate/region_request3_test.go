@@ -535,7 +535,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.targetReplica(), nil)
 	s.Equal(replicaSelector.targetReplica().attempts, 1)
 	// If the NotLeader errors provides an unreachable leader, do not switch to it.
-	replicaSelector.onNotLeader(s.bo, rpcCtx, &errorpb.NotLeader{
+	replicaSelector.onNotLeader(rpcCtx, &errorpb.NotLeader{
 		RegionId: region.GetID(), Leader: &metapb.Peer{Id: s.peerIDs[regionStore.workTiKVIdx], StoreId: s.storeIDs[regionStore.workTiKVIdx]},
 	})
 	s.IsType(&tryFollower{}, replicaSelector.state)
@@ -1515,7 +1515,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	s.Nil(err)
 	regionErr, err := resp.GetRegionError()
 	s.Nil(err)
-	s.Equal(regionErrorToLabel(regionErr), "mismatch_peer_id")
+	s.Equal(getRegionErrorHandler(regionErr).label(), "mismatch_peer_id")
 	// return non-epoch-not-match region error and the upper layer can auto retry.
 	s.Nil(regionErr.GetEpochNotMatch())
 	// after region error returned, the region should be invalidated.
