@@ -85,6 +85,7 @@ type testRegionCacheSuite struct {
 	region1   uint64
 	cache     *RegionCache
 	bo        *retry.Backoffer
+	onClosed  func()
 }
 
 func (s *testRegionCacheSuite) SetupTest() {
@@ -104,6 +105,9 @@ func (s *testRegionCacheSuite) SetupTest() {
 func (s *testRegionCacheSuite) TearDownTest() {
 	s.cache.Close()
 	s.mvccStore.Close()
+	if s.onClosed != nil {
+		s.onClosed()
+	}
 }
 
 func (s *testRegionCacheSuite) storeAddr(id uint64) string {
@@ -306,6 +310,9 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 }
 
 func (s *testRegionCacheSuite) TestReloadRegionWithDownPeers() {
+	s.onClosed = func() { SetRegionCacheTTLSec(600) }
+	SetRegionCacheTTLSec(2)
+
 	cntGetRegion := 0
 	s.cache.pdClient = &inspectedPDClient{
 		Client: s.cache.pdClient,
@@ -316,8 +323,6 @@ func (s *testRegionCacheSuite) TestReloadRegionWithDownPeers() {
 	}
 	s.cluster.MarkPeerDown(s.peer2)
 
-	defer SetRegionCacheTTLSec(regionCacheTTLSec)
-	SetRegionCacheTTLSec(2)
 	for i := 0; i < 50; i++ {
 		time.Sleep(100 * time.Millisecond)
 		_, err := s.cache.LocateKey(s.bo, []byte("a"))
@@ -327,6 +332,9 @@ func (s *testRegionCacheSuite) TestReloadRegionWithDownPeers() {
 }
 
 func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
+	s.onClosed = func() { SetRegionCacheTTLSec(600) }
+	SetRegionCacheTTLSec(3)
+
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
 	s.cluster.AddStore(store3, s.storeAddr(store3))
@@ -357,8 +365,6 @@ func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
 	region = s.cache.GetCachedRegionWithRLock(loc.Region)
 	s.Equal(region.hasDownPeers, true)
 
-	defer SetRegionCacheTTLSec(regionCacheTTLSec)
-	SetRegionCacheTTLSec(3)
 	for i := 0; i <= 3; i++ {
 		time.Sleep(1 * time.Second)
 		loc, err = s.cache.LocateKey(s.bo, []byte("a"))

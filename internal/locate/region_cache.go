@@ -470,6 +470,7 @@ type RegionCache struct {
 	// Context for background jobs
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+	wg         sync.WaitGroup
 
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
@@ -511,16 +512,21 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		c.mu = *newRegionIndexMu(nil)
 	}
 
+	// TODO(zyguan): refine management of background cron jobs
+	c.wg.Add(1)
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
+	c.wg.Add(1)
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
 	if config.GetGlobalConfig().RegionsRefreshInterval > 0 {
 		c.timelyRefreshCache(config.GetGlobalConfig().RegionsRefreshInterval)
 	} else {
 		// cacheGC is not compatible with timelyRefreshCache
+		c.wg.Add(1)
 		go c.cacheGC()
 	}
+	c.wg.Add(1)
 	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
 	return c
 }
@@ -553,6 +559,7 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldReg
 // Close releases region cache's resource.
 func (c *RegionCache) Close() {
 	c.cancelFunc()
+	c.wg.Wait()
 }
 
 var reloadRegionInterval = int64(10 * time.Second)
@@ -562,6 +569,7 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	reloadRegionTicker := time.NewTicker(time.Duration(atomic.LoadInt64(&reloadRegionInterval)))
 	defer func() {
+		c.wg.Done()
 		ticker.Stop()
 		reloadRegionTicker.Stop()
 	}()
@@ -1754,8 +1762,12 @@ func (c *RegionCache) timelyRefreshCache(intervalS uint64) {
 		return
 	}
 	ticker := time.NewTicker(time.Duration(intervalS) * time.Second)
+	c.wg.Add(1)
 	go func() {
-		defer ticker.Stop()
+		defer func() {
+			c.wg.Done()
+			ticker.Stop()
+		}()
 		for {
 			select {
 			case <-c.ctx.Done():
@@ -2187,7 +2199,10 @@ const cleanRegionNumPerRound = 50
 // negligible.
 func (c *RegionCache) cacheGC() {
 	ticker := time.NewTicker(cleanCacheInterval)
-	defer ticker.Stop()
+	defer func() {
+		c.wg.Done()
+		ticker.Stop()
+	}()
 
 	beginning := newBtreeSearchItem([]byte(""))
 	iterItem := beginning
@@ -3009,7 +3024,10 @@ func (s *Store) markAlreadySlow() {
 // asyncUpdateStoreSlowScore updates the slow score of each store periodically.
 func (c *RegionCache) asyncUpdateStoreSlowScore(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	defer func() {
+		c.wg.Done()
+		ticker.Stop()
+	}()
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -3061,7 +3079,10 @@ func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
 // asyncReportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
 func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	defer func() {
+		c.wg.Done()
+		ticker.Stop()
+	}()
 	for {
 		select {
 		case <-c.ctx.Done():

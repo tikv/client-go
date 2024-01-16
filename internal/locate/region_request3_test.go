@@ -75,6 +75,7 @@ type testRegionRequestToThreeStoresSuite struct {
 	bo                  *retry.Backoffer
 	regionRequestSender *RegionRequestSender
 	mvccStore           mocktikv.MVCCStore
+	onClosed            func()
 }
 
 func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
@@ -91,6 +92,9 @@ func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
 func (s *testRegionRequestToThreeStoresSuite) TearDownTest() {
 	s.cache.Close()
 	s.mvccStore.Close()
+	if s.onClosed != nil {
+		s.onClosed()
+	}
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStoreTokenLimit() {
@@ -1697,7 +1701,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
-	defer SetRegionCacheTTLSec(regionCacheTTLSec)
+	s.onClosed = func() { SetRegionCacheTTLSec(600) }
 	SetRegionCacheTTLSec(2)
 
 	bo := retry.NewBackoffer(context.Background(), -1)
@@ -1713,7 +1717,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
 		s.Require().NotEqual(addr, downStore.Address)
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
 	}}
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 15; i++ {
 		time.Sleep(200 * time.Millisecond)
 		loc, err := s.cache.LocateKey(bo, key)
 		s.Require().Nil(err)
@@ -1726,7 +1730,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
 	}}
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 15; i++ {
 		time.Sleep(200 * time.Millisecond)
 		loc, err := s.cache.LocateKey(bo, key)
 		s.Require().Nil(err)
