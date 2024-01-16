@@ -195,6 +195,8 @@ type twoPhaseCommitter struct {
 	isInternal bool
 
 	forUpdateTSConstraints map[string]uint64
+
+	txnFileCtx txnFileCtx
 }
 
 type memBufferMutations struct {
@@ -734,6 +736,9 @@ func (c *twoPhaseCommitter) primary() []byte {
 		if c.mutations != nil {
 			return c.mutations.GetKey(0)
 		}
+		if c.txnFileCtx.slice.len() > 0 {
+			return c.txnFileCtx.slice.chunkRanges[0].smallest
+		}
 		return nil
 	}
 	return c.primaryKey
@@ -917,7 +922,7 @@ func (c *twoPhaseCommitter) preSplitRegion(ctx context.Context, group groupedMut
 // CommitSecondaryMaxBackoff is max sleep time of the 'commit' command
 const CommitSecondaryMaxBackoff = 41000
 
-// doActionOnGroupedMutations splits groups into batches (there is one group per region, and potentially many batches per group, but all mutations
+// doActionOnGroupedMutations splits groups into batches (there is one slice per region, and potentially many batches per slice, but all mutations
 // in a batch will belong to the same region).
 func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action twoPhaseCommitAction, groups []groupedMutations) error {
 	action.tiKVTxnRegionsNumHistogram().Observe(float64(len(groups)))
@@ -1195,7 +1200,7 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 			logutil.Logger(bo.GetCtx()).Info("send TxnHeartBeat",
 				zap.Uint64("startTS", c.startTS), zap.Uint64("newTTL", newTTL))
 			startTime := time.Now()
-			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL)
+			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL, c.txnFileCtx.slice.len() > 0)
 			if err != nil {
 				keepFail++
 				metrics.TxnHeartBeatHistogramError.Observe(time.Since(startTime).Seconds())
@@ -1217,11 +1222,12 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 	}
 }
 
-func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
+func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64, isTxnFile bool) (newTTL uint64, stopHeartBeat bool, err error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdTxnHeartBeat, &kvrpcpb.TxnHeartBeatRequest{
 		PrimaryLock:   primary,
 		StartVersion:  startTS,
 		AdviseLockTtl: ttl,
+		IsTxnFile:     isTxnFile,
 	})
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, primary)
