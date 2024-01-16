@@ -1067,7 +1067,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	// Receive a ServerIsBusy error
 	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 500,
-	})
+	}, nil)
 
 	rpcCtx, err = replicaSelector.next(bo)
 	s.Nil(err)
@@ -1078,7 +1078,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 
 	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 800,
-	})
+	}, nil)
 
 	rpcCtx, err = replicaSelector.next(bo)
 	s.Nil(err)
@@ -1091,7 +1091,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	// All peers are too busy
 	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 150,
-	})
+	}, nil)
 	lessBusyPeer := rpcCtx.Peer.Id
 
 	// Then, send to the leader again with no threshold.
@@ -1694,4 +1694,84 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 	s.Nil(err)
 	// `tryFollower` always try the local peer firstly
 	s.Equal(follower.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestRetryOnServerBusy() {
+	key := []byte("key")
+	region, err := s.regionRequestSender.regionCache.findRegionByKey(s.bo, key, false)
+	s.Nil(err)
+	regionStore := region.getStore()
+	leader, _, _, _ := region.WorkStorePeer(regionStore)
+	follower, _, _, _ := region.FollowerStorePeer(regionStore, 0, &storeSelectorOp{})
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+	req.EnableStaleWithMixedReplicaRead()
+
+	var (
+		bo        *retry.Backoffer
+		resp      *tikvrpc.Response
+		regionErr *errorpb.Error
+	)
+
+	// the target follower is busy, try leader immediately and return value
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if addr != follower.addr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{EstimatedWaitMs: 2000, Reason: "mock server busy"}}}}, nil
+	}}
+	bo = retry.NewBackoffer(context.Background(), -1)
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
+	s.Nil(err)
+	regionErr, _ = resp.GetRegionError()
+	s.Nil(regionErr)
+	s.Equal(leader.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+	s.Equal(0, bo.GetBackoffTimes()["tikvServerBusy"])
+
+	// try target follower, fallback to leader on data-not-ready error, then try the follower again and return value
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if req.StaleRead && addr == follower.addr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}}}, nil
+		}
+		if addr == leader.addr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{EstimatedWaitMs: 2000, Reason: "mock server busy"}}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
+	}}
+	bo = retry.NewBackoffer(context.Background(), -1)
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
+	s.Nil(err)
+	regionErr, _ = resp.GetRegionError()
+	s.Nil(regionErr)
+	s.Equal(follower.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+	s.Equal(0, bo.GetBackoffTimes()["tikvServerBusy"])
+
+	// all peers are busy, return fake region error with final server-busy backoff
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{EstimatedWaitMs: 2000, Reason: "mock server busy"}}}}, nil
+	}}
+	bo = retry.NewBackoffer(context.Background(), -1)
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
+	s.Nil(err)
+	regionErr, _ = resp.GetRegionError()
+	s.NotNil(regionErr)
+	s.True(IsFakeRegionError(regionErr))
+	s.Equal(1, bo.GetBackoffTimes()["tikvServerBusy"])
+
+	// followers are not initiallized and leader is busy, return fake region error with final server-busy backoff
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if addr == leader.addr {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{EstimatedWaitMs: 2000, Reason: "mock server busy"}}}}, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{RegionNotInitialized: &errorpb.RegionNotInitialized{}}}}, nil
+	}}
+	bo = retry.NewBackoffer(context.Background(), -1)
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
+	s.Nil(err)
+	regionErr, _ = resp.GetRegionError()
+	s.NotNil(regionErr)
+	s.True(IsFakeRegionError(regionErr))
+	s.Equal(1, bo.GetBackoffTimes()["tikvServerBusy"])
 }

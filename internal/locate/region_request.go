@@ -1104,14 +1104,21 @@ func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	s.state.onSendFailure(bo, s, err)
 }
 
-func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+func isReadWithTinyTimeout(req *tikvrpc.Request) bool {
 	if req.MaxExecutionDurationMs >= uint64(client.ReadTimeoutShort.Milliseconds()) {
-		// Configurable timeout should less than `ReadTimeoutShort`.
 		return false
 	}
 	switch req.Type {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
 		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+	if isReadWithTinyTimeout(req) {
 		if target := s.targetReplica(); target != nil {
 			target.deadlineErrUsingConfTimeout = true
 		}
@@ -1120,10 +1127,8 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
 		}
 		return true
-	default:
-		// Only work for read requests, return false for non-read requests.
-		return false
 	}
+	return false
 }
 
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
@@ -1210,6 +1215,7 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
+	onServerBusyFastRetry func(string),
 ) (shouldRetry bool, err error) {
 	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
 		estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
@@ -1246,6 +1252,14 @@ func (s *replicaSelector) onServerIsBusy(
 		if s.canFallback2Follower() {
 			return true, nil
 		}
+	}
+	if onServerBusyFastRetry != nil && isReadWithTinyTimeout(req) {
+		if target := s.targetReplica(); target != nil {
+			// avoid retrying on this replica again
+			target.deadlineErrUsingConfTimeout = true
+		}
+		onServerBusyFastRetry(serverIsBusy.GetReason())
+		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 	if err != nil {
@@ -1404,6 +1418,48 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
+	type backoffArgs struct {
+		cfg *retry.Config
+		err error
+	}
+	pendingBackoffs := make(map[string]*backoffArgs)
+	delayBoTiKVServerBusy := func(addr string, reason string) {
+		if _, ok := pendingBackoffs[addr]; !ok {
+			pendingBackoffs[addr] = &backoffArgs{
+				cfg: retry.BoTiKVServerBusy,
+				err: errors.Errorf("server is busy, reason: %s", reason),
+			}
+		}
+	}
+	backoffOnRetry := func(addr string) error {
+		if args, ok := pendingBackoffs[addr]; ok {
+			delete(pendingBackoffs, addr)
+			logutil.Logger(bo.GetCtx()).Warn(
+				"apply pending backoff on retry",
+				zap.String("target", addr),
+				zap.String("bo", args.cfg.String()),
+				zap.String("err", args.err.Error()))
+			return bo.Backoff(args.cfg, args.err)
+		}
+		return nil
+	}
+	backoffOnFakeErr := func() error {
+		var args *backoffArgs
+		// if there are multiple pending backoffs, choose the one with the largest base duration.
+		for _, it := range pendingBackoffs {
+			if args == nil || args.cfg.Base() < it.cfg.Base() {
+				args = it
+			}
+		}
+		if args != nil {
+			logutil.Logger(bo.GetCtx()).Warn(
+				"apply pending backoff on pseudo region error",
+				zap.String("bo", args.cfg.String()),
+				zap.String("err", args.err.Error()))
+			return bo.Backoff(args.cfg, args.err)
+		}
+		return nil
+	}
 	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
@@ -1436,6 +1492,9 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
+			if err = backoffOnFakeErr(); err != nil {
+				return nil, nil, retryTimes, err
+			}
 			s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, totalErrors)
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
@@ -1467,6 +1526,9 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 
+		if err = backoffOnRetry(rpcCtx.Addr); err != nil {
+			return nil, nil, retryTimes, err
+		}
 		var retry bool
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		req.IsRetryRequest = true
@@ -1505,7 +1567,9 @@ func (s *RegionRequestSender) SendReqCtx(
 		if regionErr != nil {
 			regionErrLogging := regionErrorToLogging(rpcCtx.Peer.GetId(), regionErr)
 			totalErrors[regionErrLogging]++
-			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
+			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr, func(reason string) {
+				delayBoTiKVServerBusy(rpcCtx.Addr, reason)
+			})
 			if err != nil {
 				msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
 				s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
@@ -1968,6 +2032,7 @@ func isDeadlineExceeded(e *errorpb.Error) bool {
 
 func (s *RegionRequestSender) onRegionError(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, regionErr *errorpb.Error,
+	onServerBusyFastRetry func(string),
 ) (shouldRetry bool, err error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("tikv.onRegionError", opentracing.ChildOf(span.Context()))
@@ -2132,7 +2197,7 @@ func (s *RegionRequestSender) onRegionError(
 			}
 		}
 		if s.replicaSelector != nil {
-			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
+			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy, onServerBusyFastRetry)
 		}
 		logutil.Logger(bo.GetCtx()).Warn(
 			"tikv reports `ServerIsBusy` retry later",
