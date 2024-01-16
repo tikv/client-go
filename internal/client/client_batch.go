@@ -407,18 +407,13 @@ func (a *batchConn) getClientAndSend() {
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
 		// If no available connection, wait for a while to avoid busy loop.
 		if reason == SendFailedReasonNoAvailableLimit {
-			if !atomic.CompareAndSwapUint32(&a.isBusy, 0, 1) {
-				return
-			}
+			atomic.StoreUint32(&a.isBusy, 1)
 			for {
 				if atomic.LoadUint32(&a.isBusy) == 0 {
 					break
 				}
-				select {
-				case <-time.After(time.Millisecond * 10):
-				}
+				time.Sleep(time.Millisecond * 10)
 			}
-
 		}
 		return
 	}
@@ -443,7 +438,6 @@ func (a *batchConn) getClientAndSend() {
 	if batch > 0 {
 		a.batchSize.Observe(float64(batch))
 	}
-	return
 }
 
 type tryLock struct {
