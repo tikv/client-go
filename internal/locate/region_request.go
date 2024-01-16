@@ -606,7 +606,7 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if candidateNum == 0 {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 		selector.invalidateReplicaStore(leader, errors.Errorf("all followers are tried as proxy but fail"))
-		selector.region.scheduleReload()
+		selector.region.setSyncFlag(needReloadOnAccess)
 		return nil, nil
 	}
 
@@ -916,7 +916,7 @@ func newReplicaSelector(
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion == nil {
 		return nil, errors.New("cached region not found")
-	} else if cachedRegion.checkNeedReload() {
+	} else if cachedRegion.checkSyncFlag(needReloadOnAccess) {
 		return nil, errors.New("cached region need reload")
 	} else if !cachedRegion.checkRegionCacheTTL(time.Now().Unix()) {
 		return nil, errors.New("cached region ttl expired")
