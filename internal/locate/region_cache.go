@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -148,14 +149,14 @@ const (
 
 // Region presents kv region
 type Region struct {
-	meta                       *metapb.Region // raw region meta from PD, immutable after init
-	store                      unsafe.Pointer // point to region store info, see RegionStore
-	syncFlag                   int32          // region need be sync in next turn
-	lastAccess                 int64          // last region access time, see checkRegionCacheTTL
-	invalidReason              InvalidReason  // the reason why the region is invalidated
-	asyncReload                atomic.Bool    // the region need to be reloaded in async mode
-	lastLoad                   int64          // last region load time
-	hasUnavailableTiFlashStore bool           // has unavailable TiFlash store, if yes, need to trigger async reload periodically
+	meta          *metapb.Region // raw region meta from PD, immutable after init
+	store         unsafe.Pointer // point to region store info, see RegionStore
+	lastLoad      int64          // last region load time
+	lastAccess    int64          // last region access time, see checkRegionCacheTTL
+	syncFlag      int32          // region need be sync in next turn
+	invalidReason InvalidReason  // the reason why the region is invalidated
+	asyncReload   atomic.Bool    // the region need to be reloaded in async mode
+	hasDownPeers  bool           // the region has down peers, if true, lastAccess won't be updated so that the cached region will expire after RegionCacheTTL.
 }
 
 // AccessIndex represent the index for accessIndex array
@@ -180,9 +181,10 @@ type regionStore struct {
 	// buckets is not accurate and it can change even if the region is not changed.
 	// It can be stale and buckets keys can be out of the region range.
 	buckets *metapb.Buckets
-	// record all storeIDs on which pending peers reside.
-	// key is storeID, val is peerID.
-	pendingTiFlashPeerStores map[uint64]uint64
+	// pendingPeers refers to pdRegion.PendingPeers. It's immutable and can be used to reconstruct pdRegions.
+	pendingPeers []*metapb.Peer
+	// downPeers refers to pdRegion.DownPeers. It's immutable and can be used to reconstruct pdRegions.
+	downPeers []*metapb.Peer
 }
 
 func (r *regionStore) accessStore(mode accessMode, idx AccessIndex) (int, *Store) {
@@ -275,12 +277,13 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	// regionStore pull used store from global store map
 	// to avoid acquire storeMu in later access.
 	rs := &regionStore{
-		workTiKVIdx:              0,
-		proxyTiKVIdx:             -1,
-		stores:                   make([]*Store, 0, len(r.meta.Peers)),
-		pendingTiFlashPeerStores: map[uint64]uint64{},
-		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
-		buckets:                  pdRegion.Buckets,
+		workTiKVIdx:  0,
+		proxyTiKVIdx: -1,
+		stores:       make([]*Store, 0, len(r.meta.Peers)),
+		storeEpochs:  make([]uint32, 0, len(r.meta.Peers)),
+		buckets:      pdRegion.Buckets,
+		pendingPeers: pdRegion.PendingPeers,
+		downPeers:    pdRegion.DownPeers,
 	}
 
 	leader := pdRegion.Leader
@@ -297,8 +300,8 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		if err != nil {
 			return nil, err
 		}
-		// Filter the peer on a tombstone store.
-		if addr == "" {
+		// Filter out the peer on a tombstone|down store.
+		if addr == "" || slices.ContainsFunc(pdRegion.DownPeers, func(dp *metapb.Peer) bool { return isSamePeer(dp, p) }) {
 			continue
 		}
 
@@ -321,11 +324,6 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		}
 		rs.stores = append(rs.stores, store)
 		rs.storeEpochs = append(rs.storeEpochs, atomic.LoadUint32(&store.epoch))
-		for _, pendingPeer := range pdRegion.PendingPeers {
-			if pendingPeer.Id == p.Id {
-				rs.pendingTiFlashPeerStores[store.storeID] = p.Id
-			}
-		}
 	}
 	// TODO(youjiali1995): It's possible the region info in PD is stale for now but it can recover.
 	// Maybe we need backoff here.
@@ -333,32 +331,10 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		return nil, errors.Errorf("no available peers, region: {%v}", r.meta)
 	}
 
-	for _, p := range pdRegion.DownPeers {
-		c.storeMu.RLock()
-		store, exists := c.storeMu.stores[p.StoreId]
-		c.storeMu.RUnlock()
-		if !exists {
-			store = c.getStoreByStoreID(p.StoreId)
-		}
-		addr, err := store.initResolve(bo, c)
-		if err != nil {
-			continue
-		}
-		// Filter the peer on a tombstone store.
-		if addr == "" {
-			continue
-		}
-
-		if store.storeType == tikvrpc.TiFlash {
-			r.hasUnavailableTiFlashStore = true
-			break
-		}
-	}
-
 	rs.workTiKVIdx = leaderAccessIdx
-	r.meta.Peers = availablePeers
-
 	r.setStore(rs)
+	r.meta.Peers = availablePeers
+	r.hasDownPeers = len(pdRegion.DownPeers) > 0
 
 	// mark region has been init accessed.
 	r.lastAccess = time.Now().Unix()
@@ -395,7 +371,7 @@ func (r *Region) checkRegionCacheTTL(ts int64) bool {
 		if ts-lastAccess > regionCacheTTLSec {
 			return false
 		}
-		if atomic.CompareAndSwapInt64(&r.lastAccess, lastAccess, ts) {
+		if r.hasDownPeers || atomic.CompareAndSwapInt64(&r.lastAccess, lastAccess, ts) {
 			return true
 		}
 	}
@@ -890,7 +866,7 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 		allStores = append(allStores, store.storeID)
 	}
 	for _, storeID := range allStores {
-		if _, ok := regionStore.pendingTiFlashPeerStores[storeID]; !ok {
+		if !slices.ContainsFunc(regionStore.pendingPeers, func(p *metapb.Peer) bool { return p.StoreId == storeID }) {
 			nonPendingStores = append(nonPendingStores, storeID)
 		}
 	}
@@ -905,11 +881,6 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
 		return nil, nil
-	}
-
-	if cachedRegion.hasUnavailableTiFlashStore && time.Now().Unix()-cachedRegion.lastLoad > regionCacheTTLSec {
-		/// schedule an async reload to avoid load balance issue, refer https://github.com/pingcap/tidb/issues/35418 for details
-		c.scheduleReloadRegion(cachedRegion)
 	}
 
 	regionStore := cachedRegion.getStore()
@@ -1618,7 +1589,7 @@ func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
 	if ts-lastAccess > regionCacheTTLSec {
 		return nil
 	}
-	if latestRegion != nil {
+	if !latestRegion.hasDownPeers {
 		atomic.CompareAndSwapInt64(&latestRegion.lastAccess, atomic.LoadInt64(&latestRegion.lastAccess), ts)
 	}
 	return latestRegion
@@ -1660,26 +1631,6 @@ func (c *RegionCache) GetAllStores() []*Store {
 	stores := c.GetStoresByType(tikvrpc.TiKV)
 	tiflashStores := c.GetStoresByType(tikvrpc.TiFlash)
 	return append(stores, tiflashStores...)
-}
-
-func filterUnavailablePeers(region *pd.Region) {
-	if len(region.DownPeers) == 0 {
-		return
-	}
-	new := region.Meta.Peers[:0]
-	for _, p := range region.Meta.Peers {
-		available := true
-		for _, downPeer := range region.DownPeers {
-			if p.Id == downPeer.Id && p.StoreId == downPeer.StoreId {
-				available = false
-				break
-			}
-		}
-		if available {
-			new = append(new, p)
-		}
-	}
-	region.Meta.Peers = new
 }
 
 // loadRegion loads region from pd client, and picks the first peer as leader.
@@ -1729,7 +1680,6 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 			backoffErr = errors.Errorf("region not found for key %q, encode_key: %q", util.HexRegionKeyStr(key), util.HexRegionKey(c.codec.EncodeRegionKey(key)))
 			continue
 		}
-		filterUnavailablePeers(reg)
 		if len(reg.Meta.Peers) == 0 {
 			return nil, errors.New("receive Region with no available peer")
 		}
@@ -1775,7 +1725,6 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 		if reg == nil || reg.Meta == nil {
 			return nil, errors.Errorf("region not found for regionID %d", regionID)
 		}
-		filterUnavailablePeers(reg)
 		if len(reg.Meta.Peers) == 0 {
 			return nil, errors.New("receive Region with no available peer")
 		}

@@ -58,6 +58,18 @@ import (
 	uatomic "go.uber.org/atomic"
 )
 
+type inspectedPDClient struct {
+	pd.Client
+	getRegion func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error)
+}
+
+func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+	if c.getRegion != nil {
+		return c.getRegion(ctx, c.Client, key, opts...)
+	}
+	return c.Client.GetRegion(ctx, key, opts...)
+}
+
 func TestRegionCache(t *testing.T) {
 	suite.Run(t, new(testRegionCacheSuite))
 }
@@ -293,7 +305,28 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
 }
 
-func (s *testRegionCacheSuite) TestTiFlashDownPeersAndAsyncReload() {
+func (s *testRegionCacheSuite) TestReloadRegionWithDownPeers() {
+	cntGetRegion := 0
+	s.cache.pdClient = &inspectedPDClient{
+		Client: s.cache.pdClient,
+		getRegion: func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+			cntGetRegion++
+			return cli.GetRegion(ctx, key, opts...)
+		},
+	}
+	s.cluster.MarkPeerDown(s.peer2)
+
+	defer SetRegionCacheTTLSec(regionCacheTTLSec)
+	SetRegionCacheTTLSec(2)
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		_, err := s.cache.LocateKey(s.bo, []byte("a"))
+		s.NoError(err)
+	}
+	s.Equal(2, cntGetRegion, "should reload region with down peers every RegionCacheTTL")
+}
+
+func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
 	s.cluster.AddStore(store3, s.storeAddr(store3))
@@ -313,8 +346,7 @@ func (s *testRegionCacheSuite) TestTiFlashDownPeersAndAsyncReload() {
 	s.Nil(err)
 	s.NotNil(ctx)
 	region := s.cache.GetCachedRegionWithRLock(loc.Region)
-	s.Equal(region.hasUnavailableTiFlashStore, false)
-	s.Equal(region.asyncReload.Load(), false)
+	s.Equal(region.hasDownPeers, false)
 	s.cache.clear()
 
 	s.cluster.MarkPeerDown(peer3)
@@ -323,24 +355,39 @@ func (s *testRegionCacheSuite) TestTiFlashDownPeersAndAsyncReload() {
 	s.Nil(err)
 	s.Equal(loc.Region.id, s.region1)
 	region = s.cache.GetCachedRegionWithRLock(loc.Region)
-	s.Equal(region.hasUnavailableTiFlashStore, true)
-	s.Equal(region.asyncReload.Load(), false)
+	s.Equal(region.hasDownPeers, true)
 
+	defer SetRegionCacheTTLSec(regionCacheTTLSec)
 	SetRegionCacheTTLSec(3)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i <= 3; i++ {
-			s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
-			time.Sleep(1 * time.Second)
+	for i := 0; i <= 3; i++ {
+		time.Sleep(1 * time.Second)
+		loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+		s.Nil(err)
+		rpcCtx, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+		s.Nil(err)
+		if rpcCtx != nil {
+			s.NotEqual(s.storeAddr(store3), rpcCtx.Addr, "should not access peer3 when it is down")
 		}
-	}()
-	wg.Wait()
-	s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
-	s.Equal(region.hasUnavailableTiFlashStore, true)
-	s.Equal(region.asyncReload.Load(), true)
+	}
+	newRegion := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.NotNil(newRegion)
+	s.Less(region.lastLoad, newRegion.lastLoad)
 
+	s.cluster.RemoveDownPeer(peer3)
+	for i := 0; ; i++ {
+		if i > 10 {
+			s.Fail("should access peer3 after it is up")
+			break
+		}
+		loc, err = s.cache.LocateKey(s.bo, []byte("a"))
+		s.Nil(err)
+		rpcCtx, err := s.cache.GetTiFlashRPCContext(s.bo, loc.Region, true, LabelFilterNoTiFlashWriteNode)
+		s.Nil(err)
+		if rpcCtx != nil && rpcCtx.Addr == s.storeAddr(store3) {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
 }
 
 // TestFilterDownPeersOrPeersOnTombstoneOrDroppedStore verifies the RegionCache filter
@@ -1306,7 +1353,6 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 		Meta:      cpMeta,
 		DownPeers: []*metapb.Peer{{Id: s.peer1, StoreId: s.store1}},
 	}
-	filterUnavailablePeers(cpRegion)
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
 	s.cache.insertRegionToCache(region, true, true)
@@ -2011,11 +2057,10 @@ func BenchmarkInsertRegionToCache(b *testing.B) {
 		},
 	}
 	rs := &regionStore{
-		workTiKVIdx:              0,
-		proxyTiKVIdx:             -1,
-		stores:                   make([]*Store, 0, len(r.meta.Peers)),
-		pendingTiFlashPeerStores: map[uint64]uint64{},
-		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
+		workTiKVIdx:  0,
+		proxyTiKVIdx: -1,
+		stores:       make([]*Store, 0, len(r.meta.Peers)),
+		storeEpochs:  make([]uint32, 0, len(r.meta.Peers)),
 	}
 	r.setStore(rs)
 	b.StartTimer()
@@ -2049,11 +2094,10 @@ func BenchmarkInsertRegionToCache2(b *testing.B) {
 		},
 	}
 	rs := &regionStore{
-		workTiKVIdx:              0,
-		proxyTiKVIdx:             -1,
-		stores:                   make([]*Store, 0, len(r.meta.Peers)),
-		pendingTiFlashPeerStores: map[uint64]uint64{},
-		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
+		workTiKVIdx:  0,
+		proxyTiKVIdx: -1,
+		stores:       make([]*Store, 0, len(r.meta.Peers)),
+		storeEpochs:  make([]uint32, 0, len(r.meta.Peers)),
 	}
 	r.setStore(rs)
 	b.StartTimer()
