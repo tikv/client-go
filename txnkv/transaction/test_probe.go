@@ -371,7 +371,7 @@ func (c CommitterProbe) CleanupMutations(ctx context.Context) error {
 
 // SendTxnHeartBeat renews a txn's ttl.
 func SendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
-	return sendTxnHeartBeat(bo, store, primary, startTS, ttl)
+	return sendTxnHeartBeat(bo, store, primary, startTS, ttl, false)
 }
 
 // ConfigProbe exposes configurations and global variables for testing purpose.

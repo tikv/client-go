@@ -154,7 +154,7 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
-	// resourceGroupName is the name of tenant resource group.
+	// resourceGroupName is the name of tenant resource slice.
 	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
@@ -296,7 +296,7 @@ func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
-// SetResourceGroupName set resource group name for both read and write.
+// SetResourceGroupName set resource slice name for both read and write.
 func (txn *KVTxn) SetResourceGroupName(name string) {
 	txn.resourceGroupName = name
 	txn.GetSnapshot().SetResourceGroupName(name)
@@ -502,6 +502,13 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 			}
 		}
 	}()
+	if committer.useTxnFile() {
+		err = committer.executeTxnFile(ctx)
+		if val == nil || sessionID > 0 {
+			txn.onCommitted(err)
+		}
+		return err
+	}
 	// latches disabled
 	// pessimistic transaction should also bypass latch.
 	if txn.store.TxnLatches() == nil || txn.IsPessimistic() {

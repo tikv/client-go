@@ -90,6 +90,9 @@ type TiKVClient struct {
 
 	// RemoteCoprocessorAddr is the address of the remote coprocessor.
 	RemoteCoprocessorAddr string `toml:"remote-coprocessor-addr" json:"remote-coprocessor-addr"`
+
+	// TxnChunkWriterAddr is the address of the txn chunk writer.
+	TxnChunkWriterAddr string `toml:"txn-chunk-writer-addr" json:"txn-chunk-writer-addr"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
