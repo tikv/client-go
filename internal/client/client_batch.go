@@ -211,10 +211,6 @@ type batchConn struct {
 	batchSize       prometheus.Observer
 
 	index uint32
-	// isBusy is used to avoid busy loop.
-	// 0 for idle, 1 for busy.
-	// 0 ->1:
-	isBusy uint32
 }
 
 func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
@@ -226,7 +222,6 @@ func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 		reqBuilder:             newBatchCommandsBuilder(maxBatchSize),
 		idleNotify:             idleNotify,
 		idleDetect:             time.NewTimer(idleTimeout),
-		isBusy:                 0,
 	}
 }
 
@@ -405,16 +400,6 @@ func (a *batchConn) getClientAndSend() {
 	if cli == nil {
 		logutil.BgLogger().Warn("no available connections", zap.String("target", target), zap.String("reason", reason))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
-		// If no available connection, wait for a while to avoid busy loop.
-		if reason == SendFailedReasonNoAvailableLimit {
-			atomic.StoreUint32(&a.isBusy, 1)
-			for {
-				if atomic.LoadUint32(&a.isBusy) == 0 {
-					break
-				}
-				time.Sleep(time.Millisecond * 10)
-			}
-		}
 		return
 	}
 	defer cli.unlockForSend()
@@ -552,7 +537,6 @@ type batchCommandsClient struct {
 	sent atomic.Int64
 	// limit is the max number of requests can be sent to tikv but not accept response.
 	maxConcurrencyRequestLimit atomic.Int64
-	isBusy                     *uint32
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -709,7 +693,6 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)
-			atomic.CompareAndSwapUint32(c.isBusy, 1, 0)
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
