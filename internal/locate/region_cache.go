@@ -2238,7 +2238,7 @@ func (c *RegionCache) cacheGC() {
 					regionStore := item.cachedRegion.getStore()
 					for i, store := range regionStore.stores {
 						// if the region has a stale or unreachable store, let it expire after TTL.
-						if store.epoch != regionStore.storeEpochs[i] || store.getLivenessState() != reachable {
+						if atomic.LoadUint32(&store.epoch) != regionStore.storeEpochs[i] || store.getLivenessState() != reachable {
 							item.cachedRegion.setSyncFlag(needExpireAfterTTL)
 							break
 						}
