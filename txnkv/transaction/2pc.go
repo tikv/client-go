@@ -1066,7 +1066,7 @@ func (c *twoPhaseCommitter) doActionOnBatches(
 			)
 			// TODO: There might be various signals besides a query interruption,
 			// but we are unable to differentiate them, because the definition is in TiDB.
-			return errors.WithStack(tikverr.ErrQueryInterrupted)
+			return errors.WithStack(tikverr.ErrQueryInterrupted{Signal: status})
 		}
 	}
 	if len(batches) == 0 {

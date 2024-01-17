@@ -246,7 +246,7 @@ func (b *Backoffer) checkKilled() error {
 				"backoff stops because a killed signal is received",
 				zap.Uint32("signal", killed),
 			)
-			return errors.WithStack(tikverr.ErrQueryInterrupted)
+			return errors.WithStack(tikverr.ErrQueryInterrupted{Signal: killed})
 		}
 	}
 	return nil
