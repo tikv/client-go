@@ -222,7 +222,9 @@ func (a *connArray) monitoredDial(ctx context.Context, connName, target string, 
 
 func (c *monitoredConn) Close() error {
 	if c.ClientConn != nil {
-		return c.ClientConn.Close()
+		err := c.ClientConn.Close()
+		logutil.BgLogger().Debug("close gRPC connection", zap.String("target", c.Name), zap.Error(err))
+		return err
 	}
 	return nil
 }
