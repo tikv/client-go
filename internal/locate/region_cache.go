@@ -43,6 +43,7 @@ import (
 	"math/rand"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3065,15 +3066,15 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 				zap.Stack("stack trace"))
 		}
 	}()
-	slowScoreMetrics := make(map[string]float64)
+	slowScoreMetrics := make(map[uint64]float64)
 	c.storeMu.RLock()
 	for _, store := range c.storeMu.stores {
 		store.updateSlowScoreStat()
-		slowScoreMetrics[store.addr] = float64(store.getSlowScore())
+		slowScoreMetrics[store.storeID] = float64(store.getSlowScore())
 	}
 	c.storeMu.RUnlock()
 	for store, score := range slowScoreMetrics {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(score)
 	}
 }
 
