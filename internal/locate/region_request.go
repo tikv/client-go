@@ -962,6 +962,16 @@ func newReplicaSelector(
 		}
 	}
 
+	if val, err := util.EvalFailpoint("newReplicaSelectorInitialAttemptedTime"); err == nil {
+		attemptedTime, err := time.ParseDuration(val.(string))
+		if err != nil {
+			panic(err)
+		}
+		for _, r := range replicas {
+			r.attemptedTime = attemptedTime
+		}
+	}
+
 	return &replicaSelector{
 		regionCache,
 		cachedRegion,
