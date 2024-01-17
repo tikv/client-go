@@ -551,7 +551,7 @@ func newTestRegionCache() *RegionCache {
 
 // clear clears all cached data in the RegionCache. It's only used in tests.
 func (c *RegionCache) clear() {
-	c.mu = *newRegionIndexMu(nil)
+	c.mu.refresh(nil)
 	c.storeMu.Lock()
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.storeMu.Unlock()
