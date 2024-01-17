@@ -426,4 +426,3 @@ func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 }
 
 func (m *pdClient) GetServiceDiscovery() pd.ServiceDiscovery { return nil }
-
