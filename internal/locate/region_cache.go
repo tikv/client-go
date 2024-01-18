@@ -427,19 +427,6 @@ func (r *Region) resetSyncFlags(flags int32) int32 {
 	}
 }
 
-// markAsyncReloadReady reverts async_reload_pending and set async_reload_ready if sync_flags has async_reload_pending.
-func (r *Region) markAsyncReloadReady() {
-	for {
-		flags := atomic.LoadInt32(&r.syncFlags)
-		if flags|needAsyncReloadPending == 0 {
-			return
-		}
-		if atomic.CompareAndSwapInt32(&r.syncFlags, flags, (flags&^needAsyncReloadPending)|needAsyncReloadReady) {
-			return
-		}
-	}
-}
-
 func (r *Region) isValid() bool {
 	return r != nil && !r.checkSyncFlags(needReloadOnAccess) && r.checkRegionCacheTTL(time.Now().Unix())
 }
@@ -2233,8 +2220,13 @@ func (c *RegionCache) cacheGC() {
 			// Check remaining regions and update sync flags
 			for _, region := range remaining {
 				syncFlags := region.getSyncFlags()
-				if syncFlags&needAsyncReloadReady == 0 && syncFlags&needAsyncReloadPending > 0 {
-					region.markAsyncReloadReady()
+				if syncFlags&needAsyncReloadReady > 0 {
+					// the region will be reload soon on access
+					continue
+				}
+				if syncFlags&needAsyncReloadPending > 0 {
+					region.setSyncFlags(needAsyncReloadReady)
+					// the region will be reload soon on access, no need to check if it needs to be expired
 					continue
 				}
 				if syncFlags&needExpireAfterTTL == 0 {
