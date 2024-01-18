@@ -107,17 +107,36 @@ func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries.Push(entry)
 }
 
+const highTaskPriority = 10
+
+func (b *batchCommandsBuilder) hasHighPriorityTask() bool {
+	item := b.entries.top()
+	if item == nil {
+		return false
+	}
+
+	return item.priority() >= highTaskPriority
+}
+
 // buildWithLimit builds BatchCommandsRequests and calls collect() for each valid entry.
 // The first return value is the request that doesn't need forwarding.
 // The second is a map that maps forwarded hosts to requests.
 func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	pri, pending := uint64(0), b.entries.Len()
+	pending := b.entries.Len()
 	for count, i := int64(0), 0; i < pending; i++ {
 		e := b.entries.Pop().(*batchCommandsEntry)
 		if e.isCanceled() {
 			continue
 		}
+		if e.priority() < highTaskPriority {
+			count++
+			if count > limit {
+				b.push(e)
+				break
+			}
+		}
+
 		if collect != nil {
 			collect(b.idAlloc, e)
 		}
@@ -133,15 +152,7 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 			batchReq.RequestIds = append(batchReq.RequestIds, b.idAlloc)
 			batchReq.Requests = append(batchReq.Requests, e.req)
 		}
-		if count == 0 {
-			pri = e.priority()
-		}
-		count++
 		b.idAlloc++
-		// keep one batch for each priority, don't max different priority request into one batch requests.
-		if count >= limit || e.priority() != pri {
-			break
-		}
 	}
 	var req *tikvpb.BatchCommandsRequest
 	if len(b.requests) > 0 {
@@ -381,12 +392,13 @@ func (a *batchConn) getClientAndSend() {
 		target string
 	)
 	reason := ""
+	hasHighPriorityTask := a.reqBuilder.hasHighPriorityTask()
 	for i := 0; i < len(a.batchCommandsClients); i++ {
 		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
 		target = a.batchCommandsClients[a.index].target
 		// The lock protects the batchCommandsClient from been closed while it's in use.
 		if c := a.batchCommandsClients[a.index]; c.tryLockForSend() {
-			if c.sent.Load() <= c.maxConcurrencyRequestLimit.Load() {
+			if hasHighPriorityTask || c.sent.Load() <= c.maxConcurrencyRequestLimit.Load() {
 				cli = c
 				break
 			} else {

@@ -722,13 +722,34 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 func TestLimitConcurrency(t *testing.T) {
 	re := require.New(t)
 	batch := newBatchConn(1, 128, nil)
-	for i := 0; i < 100; i++ {
+	{
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+		reqs, _ := batch.reqBuilder.buildWithLimit(1, func(_ uint64, _ *batchCommandsEntry) {})
+		re.Len(reqs.RequestIds, 1)
+		re.Equal(0, batch.reqBuilder.len())
+		batch.reqBuilder.reset()
 	}
-	re.Equal(100, batch.reqBuilder.len())
-	req, _ := batch.reqBuilder.buildWithLimit(1, func(_ uint64, _ *batchCommandsEntry) {})
-	re.Len(req.RequestIds, 1)
-	re.Equal(99, batch.reqBuilder.len())
+
+	{
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority})
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority - 1})
+		reqs, _ := batch.reqBuilder.buildWithLimit(0, func(_ uint64, _ *batchCommandsEntry) {})
+		re.Len(reqs.RequestIds, 1)
+		re.Equal(1, batch.reqBuilder.len())
+		batch.reqBuilder.reset()
+		batch.reqBuilder.entries.Reset()
+	}
+
+	{
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+		reqs, _ := batch.reqBuilder.buildWithLimit(2, func(_ uint64, _ *batchCommandsEntry) {})
+		re.Len(reqs.RequestIds, 2)
+		re.Equal(1, batch.reqBuilder.len())
+		batch.reqBuilder.reset()
+	}
+
 }
 
 func TestPrioritySentLimit(t *testing.T) {

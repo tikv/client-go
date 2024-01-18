@@ -92,6 +92,13 @@ func (pq *PriorityQueue) Pop() Item {
 	return heap.Pop(&pq.ps).(entry).entry
 }
 
+func (pq *PriorityQueue) top() Item {
+	if pq.Len() == 0 {
+		return nil
+	}
+	return pq.ps[0].entry
+}
+
 // All returns all entries in the priority queue not ensure the priority.
 func (pq *PriorityQueue) All() []Item {
 	items := make([]Item, 0, pq.Len())
