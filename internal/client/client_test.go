@@ -768,7 +768,8 @@ func TestPrioritySentLimit(t *testing.T) {
 	wait := sync.WaitGroup{}
 	bench := 10
 	wait.Add(bench * 2)
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancelFn := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancelFn()
 	sendFn := func(pri uint64, dur *atomic.Int64, qps *atomic.Int64) {
 		for i := 0; i < bench; i++ {
 			go func() {
@@ -777,7 +778,7 @@ func TestPrioritySentLimit(t *testing.T) {
 					req.ResourceControlContext = &kvrpcpb.ResourceControlContext{OverridePriority: pri}
 					now := time.Now()
 					rpcClient.SendRequest(context.Background(), addr, req, 100*time.Millisecond)
-					dur.Add(time.Now().Sub(now).Milliseconds())
+					dur.Add(time.Since(now).Microseconds())
 					qps.Add(1)
 					select {
 					case <-ctx.Done():

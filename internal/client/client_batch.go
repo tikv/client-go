@@ -410,7 +410,7 @@ func (a *batchConn) getClientAndSend() {
 		}
 	}
 	if cli == nil {
-		logutil.BgLogger().Warn("no available connections", zap.String("target", target), zap.String("reason", reason))
+		logutil.BgLogger().Info("no available connections", zap.String("target", target), zap.String("reason", reason))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
 		return
 	}
