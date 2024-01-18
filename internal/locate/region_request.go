@@ -273,6 +273,7 @@ type replicaSelector struct {
 	replicas    []*replica
 	labels      []*metapb.StoreLabel
 	state       selectorState
+	leaderIdx   AccessIndex
 	// replicas[targetIdx] is the replica handling the request this time
 	targetIdx AccessIndex
 	// replicas[proxyIdx] is the store used to redirect requests this time
@@ -399,14 +400,13 @@ func (s stateBase) onNoLeader(selector *replicaSelector) {
 // we should switch to tryFollower state.
 type accessKnownLeader struct {
 	stateBase
-	leaderIdx AccessIndex
 }
 
 func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	leader := selector.replicas[state.leaderIdx]
+	leader := selector.replicas[selector.leaderIdx]
 	liveness := leader.store.getLivenessState()
 	if liveness == unreachable && selector.regionCache.enableForwarding {
-		selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
+		selector.state = &tryNewProxy{}
 		return nil, stateChanged{}
 	}
 	// If hibernate region is enabled and the leader is not reachable, the raft group
@@ -414,19 +414,19 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	// a request. So, before the new leader is elected, we should not send requests
 	// to the unreachable old leader to avoid unnecessary timeout.
 	if liveness != reachable || leader.isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
+		selector.state = &tryFollower{lastIdx: selector.leaderIdx, fromAccessKnownLeader: true}
 		return nil, stateChanged{}
 	}
 	if selector.busyThreshold > 0 {
 		// If the leader is busy in our estimation, change to tryIdleReplica state to try other replicas.
 		// If other replicas are all busy, tryIdleReplica will try the leader again without busy threshold.
-		leaderEstimated := selector.replicas[state.leaderIdx].store.EstimatedWaitTime()
+		leaderEstimated := selector.replicas[selector.leaderIdx].store.EstimatedWaitTime()
 		if leaderEstimated > selector.busyThreshold {
-			selector.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
+			selector.state = &tryIdleReplica{}
 			return nil, stateChanged{}
 		}
 	}
-	selector.targetIdx = state.leaderIdx
+	selector.targetIdx = selector.leaderIdx
 	return selector.buildRPCContext(bo)
 }
 
@@ -434,11 +434,11 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 	liveness := selector.checkLiveness(bo, selector.targetReplica())
 	// Only enable forwarding when unreachable to avoid using proxy to access a TiKV that cannot serve.
 	if liveness == unreachable && len(selector.replicas) > 1 && selector.regionCache.enableForwarding {
-		selector.state = &accessByKnownProxy{leaderIdx: state.leaderIdx}
+		selector.state = &accessByKnownProxy{}
 		return
 	}
 	if liveness != reachable || selector.targetReplica().isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
+		selector.state = &tryFollower{lastIdx: selector.leaderIdx, fromAccessKnownLeader: true}
 	}
 	if liveness != reachable {
 		selector.invalidateReplicaStore(selector.targetReplica(), cause)
@@ -446,7 +446,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 }
 
 func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
-	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
+	selector.state = &tryFollower{lastIdx: selector.leaderIdx, fromAccessKnownLeader: true}
 }
 
 // tryFollower is the state where we cannot access the known leader
@@ -458,8 +458,7 @@ func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
 // the leader will be updated to replicas[0] and give it another chance.
 type tryFollower struct {
 	stateBase
-	leaderIdx AccessIndex
-	lastIdx   AccessIndex
+	lastIdx AccessIndex
 	// fromAccessKnownLeader indicates whether the state is changed from `accessKnownLeader`.
 	fromAccessKnownLeader bool
 	labels                []*metapb.StoreLabel
@@ -470,7 +469,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
 		for i := 0; i < len(selector.replicas); i++ {
 			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
-			if idx == state.leaderIdx {
+			if idx == selector.leaderIdx {
 				continue
 			}
 			selectReplica := selector.replicas[idx]
@@ -550,29 +549,28 @@ func (state *tryFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSe
 // regionStore.proxyTiKVIdx as a proxy.
 type accessByKnownProxy struct {
 	stateBase
-	leaderIdx AccessIndex
 }
 
 func (state *accessByKnownProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	leader := selector.replicas[state.leaderIdx]
+	leader := selector.replicas[selector.leaderIdx]
 	if leader.store.getLivenessState() == reachable {
 		selector.regionStore.unsetProxyStoreIfNeeded(selector.region)
-		selector.state = &accessKnownLeader{leaderIdx: state.leaderIdx}
+		selector.state = &accessKnownLeader{}
 		return nil, stateChanged{}
 	}
 
 	if selector.regionStore.proxyTiKVIdx >= 0 {
-		selector.targetIdx = state.leaderIdx
+		selector.targetIdx = selector.leaderIdx
 		selector.proxyIdx = selector.regionStore.proxyTiKVIdx
 		return selector.buildRPCContext(bo)
 	}
 
-	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
+	selector.state = &tryNewProxy{}
 	return nil, stateChanged{}
 }
 
 func (state *accessByKnownProxy) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
-	selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
+	selector.state = &tryNewProxy{}
 	if selector.checkLiveness(bo, selector.proxyReplica()) != reachable {
 		selector.invalidateReplicaStore(selector.proxyReplica(), cause)
 	}
@@ -584,20 +582,19 @@ func (state *accessByKnownProxy) onNoLeader(selector *replicaSelector) {
 
 // tryNewProxy is the state where we try to find a node from followers as proxy.
 type tryNewProxy struct {
-	leaderIdx AccessIndex
 }
 
 func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	leader := selector.replicas[state.leaderIdx]
+	leader := selector.replicas[selector.leaderIdx]
 	if leader.store.getLivenessState() == reachable {
 		selector.regionStore.unsetProxyStoreIfNeeded(selector.region)
-		selector.state = &accessKnownLeader{leaderIdx: state.leaderIdx}
+		selector.state = &accessKnownLeader{}
 		return nil, stateChanged{}
 	}
 
 	candidateNum := 0
 	for idx, replica := range selector.replicas {
-		if state.isCandidate(AccessIndex(idx), replica) {
+		if state.isCandidate(AccessIndex(idx), selector.leaderIdx, replica) {
 			candidateNum++
 		}
 	}
@@ -613,11 +610,11 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 	// Skip advanceCnt valid candidates to find a proxy peer randomly
 	advanceCnt := rand.Intn(candidateNum)
 	for idx, replica := range selector.replicas {
-		if !state.isCandidate(AccessIndex(idx), replica) {
+		if !state.isCandidate(AccessIndex(idx), selector.leaderIdx, replica) {
 			continue
 		}
 		if advanceCnt == 0 {
-			selector.targetIdx = state.leaderIdx
+			selector.targetIdx = selector.leaderIdx
 			selector.proxyIdx = AccessIndex(idx)
 			break
 		}
@@ -626,9 +623,9 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 	return selector.buildRPCContext(bo)
 }
 
-func (state *tryNewProxy) isCandidate(idx AccessIndex, replica *replica) bool {
+func (state *tryNewProxy) isCandidate(idx, leaderIdx AccessIndex, replica *replica) bool {
 	// Try each peer only once
-	return idx != state.leaderIdx && !replica.isExhausted(1)
+	return idx != leaderIdx && !replica.isExhausted(1)
 }
 
 func (state *tryNewProxy) onSendSuccess(selector *replicaSelector) {
@@ -753,9 +750,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// If leader tried and received deadline exceeded error, try follower.
 			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
 				selector.state = &tryFollower{
-					leaderIdx: state.leaderIdx,
-					lastIdx:   state.leaderIdx,
-					labels:    state.option.labels,
+					lastIdx: state.leaderIdx,
+					labels:  state.option.labels,
 				}
 				if leaderEpochStale {
 					selector.regionCache.scheduleReloadRegion(selector.region)
@@ -836,19 +832,18 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 // tryIdleReplica is the state where we find the leader is busy and retry the request using replica read.
 type tryIdleReplica struct {
 	stateBase
-	leaderIdx AccessIndex
 }
 
 func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
 	// Select a follower replica that has the lowest estimated wait duration
 	minWait := time.Duration(math.MaxInt64)
-	targetIdx := state.leaderIdx
+	targetIdx := selector.leaderIdx
 	startIdx := rand.Intn(len(selector.replicas))
 	for i := 0; i < len(selector.replicas); i++ {
 		idx := (i + startIdx) % len(selector.replicas)
 		r := selector.replicas[idx]
 		// Don't choose leader again by default.
-		if idx == int(state.leaderIdx) {
+		if idx == int(selector.leaderIdx) {
 			continue
 		}
 		// Skip replicas that have been tried.
@@ -872,9 +867,9 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 	if err != nil || rpcCtx == nil {
 		return nil, err
 	}
-	replicaRead := targetIdx != state.leaderIdx
+	replicaRead := targetIdx != selector.leaderIdx
 	rpcCtx.contextPatcher.replicaRead = &replicaRead
-	if targetIdx == state.leaderIdx {
+	if targetIdx == selector.leaderIdx {
 		// No threshold if all peers are too busy.
 		selector.busyThreshold = 0
 		rpcCtx.contextPatcher.busyThreshold = &selector.busyThreshold
@@ -942,9 +937,9 @@ func newReplicaSelector(
 	var state selectorState
 	if !req.ReplicaReadType.IsFollowerRead() {
 		if regionCache.enableForwarding && regionStore.proxyTiKVIdx >= 0 {
-			state = &accessByKnownProxy{leaderIdx: regionStore.workTiKVIdx}
+			state = &accessByKnownProxy{}
 		} else {
-			state = &accessKnownLeader{leaderIdx: regionStore.workTiKVIdx}
+			state = &accessKnownLeader{}
 		}
 	} else {
 		if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
@@ -968,6 +963,7 @@ func newReplicaSelector(
 		replicas,
 		option.labels,
 		state,
+		regionStore.workTiKVIdx,
 		-1,
 		-1,
 		time.Duration(req.BusyThresholdMs) * time.Millisecond,
@@ -979,14 +975,31 @@ const maxReplicaAttempt = 10
 // next creates the RPCContext of the current candidate replica.
 // It returns a SendError if runs out of all replicas or the cached region is invalidated.
 func (s *replicaSelector) next(bo *retry.Backoffer) (rpcCtx *RPCContext, err error) {
+	s.region = s.regionCache.GetCachedRegionWithRLock(s.region.VerID())
 	if !s.region.isValid() {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
 		return nil, nil
 	}
+	regionStore := s.region.getStore()
+	if len(regionStore.accessIndex[tiKVOnly]) != len(s.replicas) {
+		// region changed
+		return nil, nil
+	}
+	for i, storeIdx := range regionStore.accessIndex[tiKVOnly] {
+		store := regionStore.stores[storeIdx]
+		peer := s.region.meta.Peers[storeIdx]
+		r := s.replicas[i]
+		if r.store.storeID != store.storeID || r.peer.Id != peer.Id {
+			// region changed
+			return nil, nil
+		}
+		s.replicas[i].store = store
+		s.replicas[i].peer = peer
+		s.replicas[i].epoch = regionStore.storeEpochs[storeIdx]
+	}
 
 	s.targetIdx = -1
 	s.proxyIdx = -1
-	s.refreshRegionStore()
 	for {
 		rpcCtx, err = s.state.next(bo, s)
 		if _, isStateChanged := err.(stateChanged); !isStateChanged {
@@ -1013,41 +1026,6 @@ func (s *replicaSelector) proxyReplica() *replica {
 // the same.
 func sliceIdentical[T any](a, b []T) bool {
 	return len(a) == len(b) && unsafe.SliceData(a) == unsafe.SliceData(b)
-}
-
-func (s *replicaSelector) refreshRegionStore() {
-	oldRegionStore := s.regionStore
-	newRegionStore := s.region.getStore()
-	if oldRegionStore == newRegionStore {
-		return
-	}
-	s.regionStore = newRegionStore
-
-	// In the current implementation, if stores change, the address of it must change.
-	// So we just compare the address here.
-	// When stores change, we mark this replicaSelector as invalid to let the caller
-	// recreate a new replicaSelector.
-	if !sliceIdentical(oldRegionStore.stores, newRegionStore.stores) {
-		s.state = &invalidStore{}
-		return
-	}
-
-	// If leader has changed, it means a recent request succeeds an RPC
-	// on the new leader.
-	if oldRegionStore.workTiKVIdx != newRegionStore.workTiKVIdx {
-		switch state := s.state.(type) {
-		case *accessFollower:
-			state.leaderIdx = newRegionStore.workTiKVIdx
-		default:
-			// Try the new leader and give it an addition chance if the
-			// request is sent to the leader.
-			newLeaderIdx := newRegionStore.workTiKVIdx
-			s.state = &accessKnownLeader{leaderIdx: newLeaderIdx}
-			if s.replicas[newLeaderIdx].attempts == maxReplicaAttempt {
-				s.replicas[newLeaderIdx].attempts--
-			}
-		}
-	}
 }
 
 func (s *replicaSelector) buildRPCContext(bo *retry.Backoffer) (*RPCContext, error) {
@@ -1115,9 +1093,9 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 		if target := s.targetReplica(); target != nil {
 			target.deadlineErrUsingConfTimeout = true
 		}
-		if accessLeader, ok := s.state.(*accessKnownLeader); ok {
+		if _, ok := s.state.(*accessKnownLeader); ok {
 			// If leader return deadline exceeded error, we should try to access follower next time.
-			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+			s.state = &tryFollower{lastIdx: s.leaderIdx}
 		}
 		return true
 	default:
@@ -1162,9 +1140,6 @@ func (s *replicaSelector) onNotLeader(
 	if leader == nil {
 		// The region may be during transferring leader.
 		s.state.onNoLeader(s)
-		if err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx)); err != nil {
-			return false, err
-		}
 	} else {
 		s.updateLeader(notLeader.GetLeader())
 	}
@@ -1174,10 +1149,7 @@ func (s *replicaSelector) onNotLeader(
 // updateLeader updates the leader of the cached region.
 // If the leader peer isn't found in the region, the region will be invalidated.
 func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
-	if leader == nil {
-		return
-	}
-	for i, replica := range s.replicas {
+	for _, replica := range s.replicas {
 		if isSamePeer(replica.peer, leader) {
 			// If hibernate region is enabled and the leader is not reachable, the raft group
 			// will not be wakened up and re-elect the leader until the follower receives
@@ -1191,21 +1163,11 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 				// it won't result in infinite retry.
 				replica.attempts = maxReplicaAttempt - 1
 			}
-			s.state = &accessKnownLeader{leaderIdx: AccessIndex(i)}
-			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
-			if !s.region.switchWorkLeaderToPeer(leader) {
-				panic("the store must exist")
-			}
-			logutil.BgLogger().Debug(
-				"switch region leader to specific leader due to kv return NotLeader",
-				zap.Uint64("regionID", s.region.GetID()),
-				zap.Uint64("leaderStoreID", leader.GetStoreId()),
-			)
+			s.state = &accessKnownLeader{}
 			return
 		}
 	}
-	// Invalidate the region since the new leader is not in the cached version.
-	s.region.invalidate(StoreNotFound)
+	s.state = &invalidLeader{}
 }
 
 func (s *replicaSelector) onServerIsBusy(
@@ -1226,14 +1188,14 @@ func (s *replicaSelector) onServerIsBusy(
 			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
 				return false, nil
 			}
-			switch state := s.state.(type) {
+			switch s.state.(type) {
 			case *accessKnownLeader:
 				// Clear attempt history of the leader, so the leader can be accessed again.
-				s.replicas[state.leaderIdx].attempts = 0
-				s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
+				s.replicas[s.leaderIdx].attempts = 0
+				s.state = &tryIdleReplica{}
 				return true, nil
 			case *tryIdleReplica:
-				if s.targetIdx != state.leaderIdx {
+				if s.targetIdx != s.leaderIdx {
 					return true, nil
 				}
 				// backoff if still receiving ServerIsBusy after accessing leader again
@@ -1990,26 +1952,29 @@ func (s *RegionRequestSender) onRegionError(
 			zap.String("ctx", ctx.String()),
 		)
 
-		if s.replicaSelector != nil {
-			return s.replicaSelector.onNotLeader(bo, ctx, notLeader)
-		} else if notLeader.GetLeader() == nil {
+		if notLeader.GetLeader() == nil {
 			// The peer doesn't know who is the current leader. Generally it's because
 			// the Raft group is in an election, but it's possible that the peer is
 			// isolated and removed from the Raft group. So it's necessary to reload
 			// the region from PD.
-			s.regionCache.InvalidateCachedRegionWithReason(ctx.Region, NoLeader)
 			if err = bo.Backoff(
 				retry.BoRegionScheduling,
 				errors.Errorf("not leader: %v, ctx: %v", notLeader, ctx),
 			); err != nil {
 				return false, err
 			}
-			return false, nil
 		} else {
 			// don't backoff if a new leader is returned.
 			s.regionCache.UpdateLeader(ctx.Region, notLeader.GetLeader(), ctx.AccessIdx)
-			return true, nil
 		}
+		if s.replicaSelector != nil {
+			return s.replicaSelector.onNotLeader(bo, ctx, notLeader)
+		}
+		if notLeader.GetLeader() == nil {
+			s.regionCache.InvalidateCachedRegionWithReason(ctx.Region, NoLeader)
+			return false, nil
+		}
+		return true, nil
 	}
 
 	// Retry it when tikv disk full happens.
@@ -2107,9 +2072,6 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("ctx", ctx),
 		)
 		retry, err := s.regionCache.OnRegionEpochNotMatch(bo, ctx, epochNotMatch.CurrentRegions)
-		if !retry && s.replicaSelector != nil {
-			s.replicaSelector.invalidateRegion()
-		}
 		return retry, err
 	}
 
@@ -2269,9 +2231,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("req peer id", mismatch.GetRequestPeerId()),
 			zap.Uint64("store peer id", mismatch.GetStorePeerId()),
 		)
-		if s.replicaSelector != nil {
-			s.replicaSelector.invalidateRegion()
-		}
+		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		return false, nil
 	}
 
@@ -2348,15 +2308,15 @@ func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Res
 
 func (s *replicaSelector) replicaType(rpcCtx *RPCContext) string {
 	leaderIdx := -1
-	switch v := s.state.(type) {
+	switch s.state.(type) {
 	case *accessKnownLeader:
 		return "leader"
 	case *tryFollower:
 		return "follower"
 	case *accessFollower:
-		leaderIdx = int(v.leaderIdx)
+		leaderIdx = int(s.leaderIdx)
 	case *tryIdleReplica:
-		leaderIdx = int(v.leaderIdx)
+		leaderIdx = int(s.leaderIdx)
 	}
 	if leaderIdx > -1 && rpcCtx != nil && rpcCtx.Peer != nil {
 		for idx, replica := range s.replicas {
