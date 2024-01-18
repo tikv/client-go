@@ -388,16 +388,15 @@ func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
 	s.Nil(err)
 	s.NotNil(ctx)
 	region := s.cache.GetCachedRegionWithRLock(loc.Region)
-	s.Equal(region.checkSyncFlag(needExpireAfterTTL), false)
+	s.Equal(region.checkSyncFlags(needExpireAfterTTL), false)
 	s.cache.clear()
 
 	s.cluster.MarkPeerDown(peer3)
-	s.cache.reloadRegion(loc.Region.id)
 	loc, err = s.cache.LocateKey(s.bo, []byte("a"))
 	s.Nil(err)
 	s.Equal(loc.Region.id, s.region1)
 	region = s.cache.GetCachedRegionWithRLock(loc.Region)
-	s.Equal(region.checkSyncFlag(needExpireAfterTTL), true)
+	s.Equal(region.checkSyncFlags(needExpireAfterTTL), true)
 
 	for i := 0; i <= 3; i++ {
 		time.Sleep(1 * time.Second)
