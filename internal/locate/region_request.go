@@ -2421,7 +2421,9 @@ func (s *replicaSelector) patchRequestSource(req *tikvrpc.Request, rpcCtx *RPCCo
 }
 
 func (s *replicaSelector) recordAttemptedTime(duration time.Duration) {
-	s.targetReplica().attemptedTime += duration
+	if targetReplica := s.targetReplica(); targetReplica != nil {
+		targetReplica.attemptedTime += duration
+	}
 	if proxyReplica := s.proxyReplica(); proxyReplica != nil {
 		proxyReplica.attemptedTime += duration
 	}
