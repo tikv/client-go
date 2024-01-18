@@ -645,10 +645,6 @@ func TestTraceExecDetails(t *testing.T) {
 }
 
 func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.MaxBatchSize = 128
-	})()
-
 	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	require.True(t, server.IsRunning())
@@ -733,4 +729,51 @@ func TestLimitConcurrency(t *testing.T) {
 	req, _ := batch.reqBuilder.buildWithLimit(1, func(_ uint64, _ *batchCommandsEntry) {})
 	re.Len(req.RequestIds, 1)
 	re.Equal(99, batch.reqBuilder.len())
+}
+
+func TestPrioritySentLimit(t *testing.T) {
+	re := require.New(t)
+	restoreFn := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxConcurrencyRequestLimit = 2
+		conf.TiKVClient.GrpcConnectionCount = 1
+	})
+	defer restoreFn()
+
+	server, port := mockserver.StartMockTikvService()
+	re.Greater(port, 0)
+	rpcClient := NewRPCClient()
+	defer rpcClient.Close()
+	addr := server.Addr()
+	wait := sync.WaitGroup{}
+	bench := 10
+	wait.Add(bench * 2)
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*10)
+	sendFn := func(pri uint64, dur *atomic.Int64, qps *atomic.Int64) {
+		for i := 0; i < bench; i++ {
+			go func() {
+				for {
+					req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
+					req.ResourceControlContext = &kvrpcpb.ResourceControlContext{OverridePriority: pri}
+					now := time.Now()
+					rpcClient.SendRequest(context.Background(), addr, req, 100*time.Millisecond)
+					dur.Add(time.Now().Sub(now).Milliseconds())
+					qps.Add(1)
+					select {
+					case <-ctx.Done():
+						wait.Done()
+						return
+					default:
+					}
+				}
+			}()
+		}
+	}
+
+	highDur, mediumDur := atomic.Int64{}, atomic.Int64{}
+	highQps, mediumQps := atomic.Int64{}, atomic.Int64{}
+	go sendFn(16, &highDur, &highQps)
+	go sendFn(8, &mediumDur, &mediumQps)
+	wait.Wait()
+	re.Less(highDur.Load()/highQps.Load()*2, mediumDur.Load()/mediumQps.Load())
+	server.Stop()
 }
