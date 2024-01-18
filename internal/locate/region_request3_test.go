@@ -37,11 +37,13 @@ package locate
 import (
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -1312,4 +1314,107 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			s.Equal("test-retry_"+firstReplica+"_"+retryReplica, req.RequestSource)
 		}
 	}
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
+	key := []byte("key")
+	value := []byte("value1")
+
+	s.NoError(failpoint.Enable("tikvclient/injectLiveness", `return("reachable")`))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/injectLiveness"))
+	}()
+
+	region, err := s.regionRequestSender.regionCache.findRegionByKey(s.bo, key, false)
+	s.Nil(err)
+	regionStore := region.getStore()
+	oldLeader, oldLeaderPeer, _, _ := region.WorkStorePeer(regionStore)
+	// The follower will become the new leader later
+	follower, followerPeer, _, _ := region.FollowerStorePeer(regionStore, 0, &storeSelectorOp{})
+
+	currLeader := struct {
+		sync.Mutex
+		addr string
+		peer *metapb.Peer
+	}{
+		addr: oldLeader.addr,
+		peer: oldLeaderPeer,
+	}
+
+	requestHandled := false
+
+	s.regionRequestSender.client = &fnClient{
+		fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+			if addr == oldLeader.addr {
+				time.Sleep(timeout)
+				return nil, context.DeadlineExceeded
+			}
+
+			currLeader.Lock()
+			leaderAddr := currLeader.addr
+			leaderPeer := currLeader.peer
+			currLeader.Unlock()
+
+			if addr != leaderAddr {
+				return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{
+					RegionId: region.GetID(),
+					Leader:   leaderPeer,
+				}}}}, nil
+			}
+
+			requestHandled = true
+			return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+		},
+	}
+
+	// Simulate the attempted time is nearly reached so that the test won't take too much time to run.
+	// But the `replicaSelector` of the request sender is not initialized yet before sending any request.
+	// So try to control it by using a failpoint.
+	s.NoError(failpoint.Enable("tikvclient/newReplicaSelectorInitialAttemptedTime", fmt.Sprintf(`return("%s")`, (maxReplicaAttemptTime-time.Second).String())))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/newReplicaSelectorInitialAttemptedTime"))
+	}()
+
+	resCh := make(chan struct {
+		resp *tikvrpc.Response
+		err  error
+	})
+	startTime := time.Now()
+	go func() {
+		bo := retry.NewBackoffer(context.Background(), -1)
+		req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Op_Put,
+				Key:   key,
+				Value: value,
+			}},
+			StartVersion: 100,
+		})
+		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second*2, tikvrpc.TiKV)
+		resCh <- struct {
+			resp *tikvrpc.Response
+			err  error
+		}{resp: resp, err: err}
+	}()
+
+	select {
+	case res := <-resCh:
+		s.Fail("request finished too early", fmt.Sprintf("resp: %s, error: %+q", res.resp, res.err))
+	case <-time.After(time.Millisecond * 200):
+	}
+
+	s.cluster.ChangeLeader(region.GetID(), followerPeer.GetId())
+	currLeader.Lock()
+	currLeader.addr = follower.addr
+	currLeader.peer = followerPeer
+	currLeader.Unlock()
+
+	res := <-resCh
+	elapsed := time.Since(startTime)
+
+	s.NoError(res.err)
+	s.Nil(res.resp.GetRegionError())
+	s.IsType(&kvrpcpb.PrewriteResponse{}, res.resp.Resp)
+	s.Less(elapsed, time.Millisecond*2500)
+	s.True(requestHandled)
 }
