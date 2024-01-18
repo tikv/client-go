@@ -408,12 +408,6 @@ func (r *Region) invalidate(reason InvalidReason) {
 	atomic.StoreInt64(&r.lastAccess, invalidatedLastAccessTime)
 }
 
-// invalidateWithoutMetrics invalidates a region without metrics, next time it will got null result.
-func (r *Region) invalidateWithoutMetrics(reason InvalidReason) {
-	atomic.StoreInt32((*int32)(&r.invalidReason), int32(reason))
-	atomic.StoreInt64(&r.lastAccess, invalidatedLastAccessTime)
-}
-
 // scheduleReload schedules reload region request in next LocateKey.
 func (r *Region) scheduleReload() {
 	oldValue := atomic.LoadInt32(&r.syncFlag)
@@ -454,7 +448,7 @@ func newRegionIndexMu(rs []*Region) *regionIndexMu {
 	r.latestVersions = make(map[uint64]RegionVerID)
 	r.sorted = NewSortedRegions(btreeDegree)
 	for _, region := range rs {
-		r.insertRegionToCache(region, true, false)
+		r.insertRegionToCache(region)
 	}
 	return r
 }
@@ -570,8 +564,8 @@ func (c *RegionCache) clear() {
 }
 
 // thread unsafe, should use with lock
-func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool, shouldCount bool) bool {
-	return c.mu.insertRegionToCache(cachedRegion, invalidateOldRegion, shouldCount)
+func (c *RegionCache) insertRegionToCache(cachedRegion *Region) bool {
+	return c.mu.insertRegionToCache(cachedRegion)
 }
 
 // Close releases region cache's resource.
@@ -1125,7 +1119,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to cache-miss", lr.GetID())
 		r = lr
 		c.mu.Lock()
-		stale := !c.insertRegionToCache(r, true, true)
+		stale := !c.insertRegionToCache(r)
 		c.mu.Unlock()
 		// just retry once, it won't bring much overhead.
 		if stale {
@@ -1136,7 +1130,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			}
 			r = lr
 			c.mu.Lock()
-			c.insertRegionToCache(r, true, true)
+			c.insertRegionToCache(r)
 			c.mu.Unlock()
 		}
 	} else if r.checkNeedReloadAndMarkUpdated() {
@@ -1151,7 +1145,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			r = lr
 			c.mu.Lock()
-			c.insertRegionToCache(r, true, true)
+			c.insertRegionToCache(r)
 			c.mu.Unlock()
 		}
 	}
@@ -1292,7 +1286,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 			} else {
 				r = lr
 				c.mu.Lock()
-				c.insertRegionToCache(r, true, true)
+				c.insertRegionToCache(r)
 				c.mu.Unlock()
 			}
 		}
@@ -1311,7 +1305,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 	}
 
 	c.mu.Lock()
-	c.insertRegionToCache(r, true, true)
+	c.insertRegionToCache(r)
 	c.mu.Unlock()
 	return &KeyLocation{
 		Region:   r.VerID(),
@@ -1349,7 +1343,7 @@ func (c *RegionCache) reloadRegion(regionID uint64) {
 		return
 	}
 	c.mu.Lock()
-	c.insertRegionToCache(lr, false, false)
+	c.insertRegionToCache(lr)
 	c.mu.Unlock()
 }
 
@@ -1439,7 +1433,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	// TODO(youjiali1995): scanRegions always fetch regions from PD and these regions don't contain buckets information
 	// for less traffic, so newly inserted regions in region cache don't have buckets information. We should improve it.
 	for _, region := range regions {
-		c.insertRegionToCache(region, true, false)
+		c.insertRegionToCache(region)
 	}
 
 	return
@@ -1516,7 +1510,7 @@ func (mu *regionIndexMu) removeVersionFromCache(oldVer RegionVerID, regionID uin
 // if `invalidateOldRegion` is false, the old region cache should be still valid,
 // and it may still be used by some kv requests.
 // Moreover, it will return false if the region is stale.
-func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOldRegion bool, shouldCount bool) bool {
+func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region) bool {
 	newVer := cachedRegion.VerID()
 	oldVer, ok := mu.latestVersions[newVer.id]
 	// There are two or more situations in which the region we got is stale.
@@ -1565,15 +1559,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	// The intersecting regions in the cache are probably stale, clear them.
 	for _, region := range intersectedRegions {
 		mu.removeVersionFromCache(region.cachedRegion.VerID(), region.cachedRegion.GetID())
-		// If the old region is still valid, do not invalidate it to avoid unnecessary backoff.
-		if invalidateOldRegion {
-			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
-			if shouldCount {
-				region.cachedRegion.invalidate(Other)
-			} else {
-				region.cachedRegion.invalidateWithoutMetrics(Other)
-			}
-		}
+		region.cachedRegion.invalidate(Other)
 	}
 	// update related vars.
 	mu.regions[newVer] = cachedRegion
@@ -2104,7 +2090,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 
 	c.mu.Lock()
 	for _, region := range newRegions {
-		c.insertRegionToCache(region, true, true)
+		c.insertRegionToCache(region)
 	}
 	c.mu.Unlock()
 
@@ -2222,7 +2208,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 				return
 			}
 			c.mu.Lock()
-			c.insertRegionToCache(new, true, true)
+			c.insertRegionToCache(new)
 			c.mu.Unlock()
 		}()
 	}

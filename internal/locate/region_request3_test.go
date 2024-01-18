@@ -407,7 +407,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
 	cache.mu.Lock()
-	cache.insertRegionToCache(region, true, true)
+	cache.insertRegionToCache(region)
 	cache.mu.Unlock()
 
 	// Test accessFollower state with kv.ReplicaReadLearner request type.
@@ -458,7 +458,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	cache := NewRegionCache(s.cache.pdClient)
 	defer cache.Close()
 	cache.mu.Lock()
-	cache.insertRegionToCache(region, true, true)
+	cache.insertRegionToCache(region)
 	cache.mu.Unlock()
 
 	// Verify creating the replicaSelector.
