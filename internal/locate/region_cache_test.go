@@ -170,7 +170,7 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 	}
 	for _, testcase := range testcases {
 		s.T().Log(testcase.storeID)
-		store := s.cache.getStoreByStoreID(testcase.storeID)
+		store := s.cache.getStoreOrInsertDefault(testcase.storeID)
 		_, err := store.initResolve(s.bo, s.cache)
 		s.Nil(err)
 		labels := []*metapb.StoreLabel{
@@ -179,7 +179,7 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 				Value: fmt.Sprintf("%v", testcase.storeID),
 			},
 		}
-		stores := s.cache.getStoresByLabels(labels)
+		stores := s.cache.filterStores(nil, func(s *Store) bool { return s.IsLabelsMatch(labels) })
 		s.Equal(len(stores), 1)
 		s.Equal(stores[0].labels, labels)
 	}
@@ -209,7 +209,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 
 	// Check resolving normal stores. The resolve state should be resolved.
 	for _, storeMeta := range s.cluster.GetAllStores() {
-		store := cache.getStoreByStoreID(storeMeta.GetId())
+		store := cache.getStoreOrInsertDefault(storeMeta.GetId())
 		s.Equal(store.getResolveState(), unresolved)
 		addr, err := store.initResolve(bo, cache)
 		s.Nil(err)
@@ -227,26 +227,26 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	}
 
 	// Mark the store needCheck. The resolve state should be resolved soon.
-	store := cache.getStoreByStoreID(s.store1)
-	store.markNeedCheck(cache.notifyCheckCh)
+	store := cache.getStoreOrInsertDefault(s.store1)
+	cache.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), resolved)
 
 	// Mark the store needCheck and it becomes a tombstone. The resolve state should be tombstone.
 	s.cluster.MarkTombstone(s.store1)
-	store.markNeedCheck(cache.notifyCheckCh)
+	cache.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), tombstone)
 	s.cluster.StartStore(s.store1)
 
 	// Mark the store needCheck and it's deleted from PD. The resolve state should be tombstone.
 	cache.clear()
-	store = cache.getStoreByStoreID(s.store1)
+	store = cache.getStoreOrInsertDefault(s.store1)
 	store.initResolve(bo, cache)
 	s.Equal(store.getResolveState(), resolved)
 	storeMeta := s.cluster.GetStore(s.store1)
 	s.cluster.RemoveStore(s.store1)
-	store.markNeedCheck(cache.notifyCheckCh)
+	cache.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), tombstone)
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
@@ -254,14 +254,14 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	// Mark the store needCheck and its address and labels are changed.
 	// The resolve state should be deleted and a new store is added to the cache.
 	cache.clear()
-	store = cache.getStoreByStoreID(s.store1)
+	store = cache.getStoreOrInsertDefault(s.store1)
 	store.initResolve(bo, cache)
 	s.Equal(store.getResolveState(), resolved)
 	s.cluster.UpdateStoreAddr(s.store1, store.addr+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
-	store.markNeedCheck(cache.notifyCheckCh)
+	cache.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), deleted)
-	newStore := cache.getStoreByStoreID(s.store1)
+	newStore := cache.getStoreOrInsertDefault(s.store1)
 	s.Equal(newStore.getResolveState(), resolved)
 	s.Equal(newStore.addr, store.addr+"0")
 	s.Equal(newStore.labels, []*metapb.StoreLabel{{Key: "k", Value: "v"}})
@@ -269,7 +269,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
 	cache.clear()
 	s.cluster.MarkTombstone(s.store1)
-	store = cache.getStoreByStoreID(s.store1)
+	store = cache.getStoreOrInsertDefault(s.store1)
 	for i := 0; i < 2; i++ {
 		addr, err := store.initResolve(bo, cache)
 		s.Nil(err)
@@ -283,7 +283,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	cache.clear()
 	storeMeta = s.cluster.GetStore(s.store1)
 	s.cluster.RemoveStore(s.store1)
-	store = cache.getStoreByStoreID(s.store1)
+	store = cache.getStoreOrInsertDefault(s.store1)
 	for i := 0; i < 2; i++ {
 		addr, err := store.initResolve(bo, cache)
 		s.Nil(err)
@@ -1542,7 +1542,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	newMeta := proto.Clone(cachedRegion.meta).(*metapb.Region)
 	newMeta.RegionEpoch.Version++
 	newMeta.RegionEpoch.ConfVer++
-	_, err = s.cache.OnRegionEpochNotMatch(s.bo, &RPCContext{Region: cachedRegion.VerID(), Store: s.cache.getStoreByStoreID(s.store1)}, []*metapb.Region{newMeta})
+	_, err = s.cache.OnRegionEpochNotMatch(s.bo, &RPCContext{Region: cachedRegion.VerID(), Store: s.cache.getStoreOrInsertDefault(s.store1)}, []*metapb.Region{newMeta})
 	s.Nil(err)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(newBuckets, cachedRegion.getStore().buckets)

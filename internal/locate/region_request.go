@@ -1145,12 +1145,7 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 }
 
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
-	store := accessReplica.store
-	liveness := store.requestLiveness(bo, s.regionCache)
-	if liveness != reachable {
-		store.startHealthCheckLoopIfNeeded(s.regionCache, liveness)
-	}
-	return liveness
+	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache)
 }
 
 func (s *replicaSelector) invalidateReplicaStore(replica *replica, cause error) {
@@ -1164,7 +1159,7 @@ func (s *replicaSelector) invalidateReplicaStore(replica *replica, cause error) 
 		)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
-		store.markNeedCheck(s.regionCache.notifyCheckCh)
+		s.regionCache.markStoreNeedCheck(store)
 		store.markAlreadySlow()
 	}
 }
@@ -2197,7 +2192,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("storeNotMatch", storeNotMatch),
 			zap.Stringer("ctx", ctx),
 		)
-		ctx.Store.markNeedCheck(s.regionCache.notifyCheckCh)
+		s.regionCache.markStoreNeedCheck(ctx.Store)
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		// It's possible the address of store is not changed but the DNS resolves to a different address in k8s environment,
 		// so we always reconnect in this case.
