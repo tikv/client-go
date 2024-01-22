@@ -290,7 +290,8 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Second)
 	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Millisecond)
 	snapshot := s.store.GetSnapshot(0)
-	snapshot.SetRuntimeStats(&txnkv.SnapshotRuntimeStats{})
+	runtimeStats := &txnkv.SnapshotRuntimeStats{}
+	snapshot.SetRuntimeStats(runtimeStats)
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	snapshot.MergeRegionRequestStats(reqStats.Stats)
 	bo := tikv.NewBackofferWithVars(context.Background(), 2000, nil)
@@ -300,6 +301,7 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	snapshot.RecordBackoffInfo(bo)
 	expect := "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}"
 	s.Equal(expect, snapshot.FormatStats())
+	s.Equal(int64(4), runtimeStats.GetCmdRPCCount(tikvrpc.CmdGet))
 	detail := &kvrpcpb.ExecDetailsV2{
 		TimeDetail: &kvrpcpb.TimeDetail{
 			WaitWallTimeMs:    100,
