@@ -2699,7 +2699,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
-		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved), livenessState: atomic.LoadUint32(&s.livenessState)}
 		c.storeMu.Lock()
 		if s.addr == addr {
 			newStore.slowScore = s.slowScore
@@ -2869,15 +2869,21 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessSt
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		go s.checkUntilHealth(c)
+		go s.checkUntilHealth(c, liveness, 30*time.Second)
 	}
 }
 
-func (s *Store) checkUntilHealth(c *RegionCache) {
-	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
-
+func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResolveInterval time.Duration) {
 	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		if liveness != reachable {
+			logutil.BgLogger().Warn("[health check] store was still not reachable at the end of health check loop",
+				zap.Uint64("storeID", s.storeID),
+				zap.String("state", s.getResolveState().String()),
+				zap.String("liveness", s.getLivenessState().String()))
+		}
+	}()
 	lastCheckPDTime := time.Now()
 
 	for {
@@ -2885,26 +2891,38 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			if time.Since(lastCheckPDTime) > time.Second*30 {
+			if time.Since(lastCheckPDTime) > reResolveInterval {
 				lastCheckPDTime = time.Now()
 
 				valid, err := s.reResolve(c)
 				if err != nil {
 					logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 				} else if !valid {
-					logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr))
+					if s.getResolveState() == deleted {
+						// if the store is deleted, a new store must be inserted (guaranteed by reResolve).
+						c.storeMu.RLock()
+						newStore := c.storeMu.stores[s.storeID]
+						c.storeMu.RUnlock()
+						logutil.BgLogger().Info("[health check] store meta changed",
+							zap.Uint64("storeID", s.storeID),
+							zap.String("oldAddr", s.addr),
+							zap.String("oldLabels", fmt.Sprintf("%v", s.labels)),
+							zap.String("newAddr", newStore.addr),
+							zap.String("newLabels", fmt.Sprintf("%v", newStore.labels)))
+						go newStore.checkUntilHealth(c, liveness, reResolveInterval)
+					}
 					return
 				}
 			}
 
 			bo := retry.NewNoopBackoff(c.ctx)
-			l := s.requestLiveness(bo, c)
-			if l == reachable {
+			liveness = s.requestLiveness(bo, c)
+			if liveness == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
-
+				atomic.StoreUint32(&s.livenessState, uint32(reachable))
 				return
 			}
-			atomic.StoreUint32(&s.livenessState, uint32(l))
+			atomic.StoreUint32(&s.livenessState, uint32(liveness))
 		}
 	}
 }
