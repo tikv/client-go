@@ -84,7 +84,7 @@ func (s *testRegionCacheStaleReadSuite) SetupTest() {
 }
 
 func (s *testRegionCacheStaleReadSuite) TearDownTest() {
-	s.cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(nil))
+	s.cache.setMockRequestLiveness(nil)
 	s.cache.Close()
 	s.mvccStore.Close()
 }
@@ -222,14 +222,13 @@ func (s *testRegionCacheStaleReadSuite) setClient() {
 		return
 	}}
 
-	tf := func(store *Store, bo *retry.Backoffer) livenessState {
+	s.cache.setMockRequestLiveness(func(ctx context.Context, store *Store) livenessState {
 		_, ok := s.injection.unavailableStoreIDs[store.storeID]
 		if ok {
 			return unreachable
 		}
 		return reachable
-	}
-	s.cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	})
 }
 
 func (s *testRegionCacheStaleReadSuite) extractResp(resp *tikvrpc.Response) (uint64, string, SuccessReadType) {
