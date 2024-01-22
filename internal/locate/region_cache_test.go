@@ -1812,7 +1812,7 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	s.cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 
 	// start health check loop
-	atomic.StoreUint32(&store1.livenessState, uint32(store1Liveness))
+	atomic.StoreUint32(&store1.livenessState, store1Liveness)
 	go store1.checkUntilHealth(s.cache, livenessState(store1Liveness), 2*time.Second)
 
 	// update store meta after 1s
