@@ -1805,7 +1805,7 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	store1Liveness := uint32(unreachable)
 	s.cache.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
 		if s.storeID == store1.storeID {
-			return livenessState(store1Liveness)
+			return livenessState(atomic.LoadUint32(&store1Liveness))
 		}
 		return reachable
 	})
