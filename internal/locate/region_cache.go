@@ -2617,7 +2617,9 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
-		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved), livenessState: atomic.LoadUint32(&s.livenessState)}
+		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
+		newStore.unreachableSince = s.unreachableSince
 		if s.addr == addr {
 			newStore.slowScore = s.slowScore
 		}
@@ -2783,7 +2785,13 @@ func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoff
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		go s.checkUntilHealth(c, liveness, 30*time.Second)
+		reResolveInterval := 30 * time.Second
+		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
+			if dur, err := time.ParseDuration(val.(string)); err == nil {
+				reResolveInterval = dur
+			}
+		}
+		go s.checkUntilHealth(c, liveness, reResolveInterval)
 	}
 	return
 }
@@ -2844,7 +2852,20 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 func (s *Store) requestLiveness(ctx context.Context, tk testingKnobs) (l livenessState) {
 	// It's not convenient to mock liveness in integration tests. Use failpoint to achieve that instead.
 	if val, err := util.EvalFailpoint("injectLiveness"); err == nil {
-		switch val.(string) {
+		liveness := val.(string)
+		if strings.Contains(liveness, " ") {
+			for _, item := range strings.Split(liveness, " ") {
+				kv := strings.Split(item, ":")
+				if len(kv) != 2 {
+					continue
+				}
+				if kv[0] == s.addr {
+					liveness = kv[1]
+					break
+				}
+			}
+		}
+		switch liveness {
 		case "unreachable":
 			return unreachable
 		case "reachable":
