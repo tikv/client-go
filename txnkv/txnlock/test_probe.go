@@ -58,7 +58,7 @@ func (l LockResolverProbe) ResolveLock(bo *retry.Backoffer, lock *Lock) error {
 
 // ResolvePessimisticLock resolves single pessimistic lock.
 func (l LockResolverProbe) ResolvePessimisticLock(bo *retry.Backoffer, lock *Lock) error {
-	return l.resolvePessimisticLock(bo, lock)
+	return l.resolvePessimisticLock(bo, lock, false, make(map[locate.RegionVerID]struct{}))
 }
 
 // GetTxnStatus sends the CheckTxnStatus request to the TiKV server.

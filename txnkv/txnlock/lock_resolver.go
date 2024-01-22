@@ -160,6 +160,11 @@ func (s TxnStatus) StatusCacheable() bool {
 	return false
 }
 
+func (s TxnStatus) String() string {
+	// TODO: print primary lock after redact is introduced.
+	return fmt.Sprintf("ttl:%v commit_ts:%v action: %v", s.ttl, s.commitTS, s.action)
+}
+
 // Lock represents a lock from tikv server.
 type Lock struct {
 	Key             []byte
@@ -261,7 +266,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 			//
 			// `resolvePessimisticLock` should be called after calling `getTxnStatus`.
 			// See: https://github.com/pingcap/tidb/issues/45134
-			err := lr.resolvePessimisticLock(bo, l)
+			err := lr.resolvePessimisticLock(bo, l, false, nil)
 			if err != nil {
 				return false, err
 			}
@@ -350,11 +355,12 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 
 // ResolveLocksOptions is the options struct for calling resolving lock.
 type ResolveLocksOptions struct {
-	CallerStartTS uint64
-	Locks         []*Lock
-	Lite          bool
-	ForRead       bool
-	Detail        *util.ResolveLockDetail
+	CallerStartTS            uint64
+	Locks                    []*Lock
+	Lite                     bool
+	ForRead                  bool
+	Detail                   *util.ResolveLockDetail
+	PessimisticRegionResolve bool
 }
 
 // ResolveLockResult is the result struct for resolving lock.
@@ -441,7 +447,7 @@ func (lr *LockResolver) ResolveLocksDone(callerStartTS uint64, token int) {
 }
 
 func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptions) (ResolveLockResult, error) {
-	callerStartTS, locks, forRead, lite, detail := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail
+	callerStartTS, locks, forRead, lite, detail, pessimisticRegionResolve := opts.CallerStartTS, opts.Locks, opts.ForRead, opts.Lite, opts.Detail, opts.PessimisticRegionResolve
 	if lr.testingKnobs.meetLock != nil {
 		lr.testingKnobs.meetLock(locks)
 	}
@@ -464,6 +470,7 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 	// TxnID -> []Region, record resolved Regions.
 	// TODO: Maybe put it in LockResolver and share by all txns.
 	cleanTxns := make(map[uint64]map[locate.RegionVerID]struct{})
+	pessimisticCleanTxns := make(map[uint64]map[locate.RegionVerID]struct{})
 	var resolve func(*Lock, bool) (TxnStatus, error)
 	resolve = func(l *Lock, forceSyncCommit bool) (TxnStatus, error) {
 		status, err := lr.getTxnStatusFromLock(bo, l, callerStartTS, forceSyncCommit, detail)
@@ -482,7 +489,8 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			return status, nil
 		}
 
-		// If the lock is committed or rollbacked, resolve lock.
+		// If the lock is committed or rolled back, resolve lock.
+		// If the lock is regarded as an expired pessimistic lock, pessimistic rollback it.
 		metrics.LockResolverCountWithExpired.Inc()
 		cleanRegions, exists := cleanTxns[l.TxnID]
 		if !exists {
@@ -504,7 +512,16 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		}
 		if l.LockType == kvrpcpb.Op_PessimisticLock {
 			// pessimistic locks don't block read so it needn't be async.
-			err = lr.resolvePessimisticLock(bo, l)
+			if pessimisticRegionResolve {
+				pessimisticCleanRegions, exists := pessimisticCleanTxns[l.TxnID]
+				if !exists {
+					pessimisticCleanRegions = make(map[locate.RegionVerID]struct{})
+					pessimisticCleanTxns[l.TxnID] = pessimisticCleanRegions
+				}
+				err = lr.resolvePessimisticLock(bo, l, true, pessimisticCleanRegions)
+			} else {
+				err = lr.resolvePessimisticLock(bo, l, false, nil)
+			}
 		} else {
 			if forRead {
 				asyncCtx := context.WithValue(lr.asyncResolveCtx, util.RequestSourceKey, bo.GetCtx().Value(util.RequestSourceKey))
@@ -669,7 +686,8 @@ func (lr *LockResolver) getTxnStatusFromLock(bo *retry.Backoffer, l *Lock, calle
 		if lr.store.GetOracle().UntilExpired(l.TxnID, l.TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) <= 0 {
 			logutil.Logger(bo.GetCtx()).Warn("lock txn not found, lock has expired",
 				zap.Uint64("CallerStartTs", callerStartTS),
-				zap.Stringer("lock str", l))
+				zap.Stringer("lock str", l),
+				zap.Stringer("status", status))
 			if l.LockType == kvrpcpb.Op_PessimisticLock {
 				if _, err := util.EvalFailpoint("txnExpireRetTTL"); err == nil {
 					return TxnStatus{action: kvrpcpb.Action_LockNotExistDoNothing},
@@ -1178,7 +1196,10 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 
 // resolvePessimisticLock handles pessimistic locks after checking txn status.
 // Note that this function assumes `CheckTxnStatus` is done (or `getTxnStatusFromLock` has been called) on the lock.
-func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) error {
+// When "pessimisticRegionResolve" is set to false, only pessimistic rollback input lock. Otherwise, the corresponding
+// region will be scanned, and all relevant pessimistic locks that are read will be rolled back at the same time,
+// similar to the `resolveLock` function.
+func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock, pessimisticRegionResolve bool, pessimisticCleanRegions map[locate.RegionVerID]struct{}) error {
 	metrics.LockResolverCountWithResolveLocks.Inc()
 	// The lock has been resolved by getTxnStatusFromLock.
 	if bytes.Equal(l.Key, l.Primary) {
@@ -1189,6 +1210,11 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) err
 		if err != nil {
 			return err
 		}
+		if pessimisticRegionResolve && pessimisticCleanRegions != nil {
+			if _, ok := pessimisticCleanRegions[loc.Region]; ok {
+				return nil
+			}
+		}
 		forUpdateTS := l.LockForUpdateTS
 		if forUpdateTS == 0 {
 			forUpdateTS = math.MaxUint64
@@ -1196,7 +1222,9 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) err
 		pessimisticRollbackReq := &kvrpcpb.PessimisticRollbackRequest{
 			StartVersion: l.TxnID,
 			ForUpdateTs:  forUpdateTS,
-			Keys:         [][]byte{l.Key},
+		}
+		if !pessimisticRegionResolve {
+			pessimisticRollbackReq.Keys = [][]byte{l.Key}
 		}
 		req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, pessimisticRollbackReq, kvrpcpb.Context{
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
@@ -1227,6 +1255,9 @@ func (lr *LockResolver) resolvePessimisticLock(bo *retry.Backoffer, l *Lock) err
 			err = errors.Errorf("unexpected resolve pessimistic lock err: %s, lock: %v", keyErr[0], l)
 			logutil.Logger(bo.GetCtx()).Error("resolveLock error", zap.Error(err))
 			return err
+		}
+		if pessimisticRegionResolve && pessimisticCleanRegions != nil {
+			pessimisticCleanRegions[loc.Region] = struct{}{}
 		}
 		return nil
 	}
