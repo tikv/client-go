@@ -911,7 +911,7 @@ func (state *invalidLeader) next(_ *retry.Backoffer, _ *replicaSelector) (*RPCCo
 
 // newReplicaSelector creates a replicaSelector which selects replicas according to reqType and opts.
 // opts is currently only effective for follower read.
-func newReplicaSelector(
+func newReplicaSelectorV1(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
@@ -1475,7 +1475,7 @@ func (s *RegionRequestSender) SendReqCtx(
 
 		rpcCtx.contextPatcher.applyTo(&req.Context)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
-			s.replicaSelector.patchRequestSource(req, rpcCtx)
+			patchRequestSource(req, s.replicaSelector.replicaType(rpcCtx))
 		}
 		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 			return nil, nil, retryTimes, err
@@ -2389,7 +2389,7 @@ func (s *replicaSelector) replicaType(rpcCtx *RPCContext) string {
 	return "unknown"
 }
 
-func (s *replicaSelector) patchRequestSource(req *tikvrpc.Request, rpcCtx *RPCContext) {
+func patchRequestSource(req *tikvrpc.Request, replicaType string) {
 	var sb strings.Builder
 	defer func() {
 		// TiKV does the limit control by the last part of the request source.
@@ -2397,8 +2397,6 @@ func (s *replicaSelector) patchRequestSource(req *tikvrpc.Request, rpcCtx *RPCCo
 		sb.WriteString(req.InputRequestSource)
 		req.RequestSource = sb.String()
 	}()
-
-	replicaType := s.replicaType(rpcCtx)
 
 	if req.IsRetryRequest {
 		sb.WriteString("retry_")
