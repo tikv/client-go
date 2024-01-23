@@ -2837,12 +2837,11 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 			}
 
 			liveness = s.requestLiveness(c.ctx, c)
+			atomic.StoreUint32(&s.livenessState, uint32(liveness))
 			if liveness == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
-				atomic.StoreUint32(&s.livenessState, uint32(reachable))
 				return
 			}
-			atomic.StoreUint32(&s.livenessState, uint32(liveness))
 		}
 	}
 }

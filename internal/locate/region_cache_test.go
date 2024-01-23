@@ -1812,10 +1812,9 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 
 	// start health check loop
 	atomic.StoreUint32(&store1.livenessState, store1Liveness)
-	go store1.checkUntilHealth(s.cache, livenessState(store1Liveness), 2*time.Second)
+	go store1.checkUntilHealth(s.cache, livenessState(store1Liveness), time.Second)
 
-	// update store meta after 1s
-	time.Sleep(time.Second)
+	// update store meta
 	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr+"'", store1.labels...)
 
 	// assert that the old store should be deleted and it's not reachable
