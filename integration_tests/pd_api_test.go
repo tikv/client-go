@@ -205,7 +205,7 @@ func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
 
 func (s *apiTestSuite) TearDownTest() {
 	if s.store != nil {
-		s.Require().Nil(s.store.Close())
+		s.Require().NoError(s.store.Close())
 	}
 	s.Require().NoError(failpoint.Disable("tikvclient/mockFastSafeTSUpdater"))
 }
