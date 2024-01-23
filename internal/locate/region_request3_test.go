@@ -761,7 +761,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.NotNil(regionStore)
 
 	reloadRegion := func() {
-		s.regionRequestSender.replicaSelector.region.invalidate(Other)
+		s.regionRequestSender.replicaSelector.invalidateRegion()
 		region, _ = s.cache.LocateRegionByID(s.bo, s.regionID)
 		regionStore = s.cache.GetCachedRegionWithRLock(region.Region).getStore()
 	}
@@ -792,7 +792,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	resp, _, err = sender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 	s.Nil(err)
 	s.NotNil(resp)
-	s.Equal(sender.replicaSelector.targetIdx, AccessIndex(1))
+	selector, ok := sender.replicaSelector.(*replicaSelector)
+	s.True(ok)
+	s.Equal(selector.targetIdx, AccessIndex(1))
 	s.True(bo.GetTotalBackoffTimes() == 1)
 	s.cluster.StartStore(s.storeIDs[0])
 	atomic.StoreUint32(&regionStore.stores[0].livenessState, uint32(reachable))
@@ -803,7 +805,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	resp, _, err = sender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 	s.Nil(err)
 	s.NotNil(resp)
-	s.Equal(sender.replicaSelector.targetIdx, AccessIndex(1))
+	selector, ok = sender.replicaSelector.(*replicaSelector)
+	s.True(ok)
+	s.Equal(selector.targetIdx, AccessIndex(1))
 	s.True(bo.GetTotalBackoffTimes() == 0)
 
 	// Switch to the next peer due to leader failure but the new leader is not elected.
@@ -834,13 +838,17 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.Equal(bo.GetTotalBackoffTimes(), 3)
-	s.False(sender.replicaSelector.region.isValid())
+	selector, ok = sender.replicaSelector.(*replicaSelector)
+	s.True(ok)
+	s.False(selector.region.isValid())
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
 
 	// The leader store is alive but can't provide service.
 	reachable.injectConstantLiveness(s.cache)
 	s.Eventually(func() bool {
-		stores := s.regionRequestSender.replicaSelector.regionStore.stores
+		selector, ok = s.regionRequestSender.replicaSelector.(*replicaSelector)
+		s.True(ok)
+		stores := selector.regionStore.stores
 		return stores[0].getLivenessState() == reachable &&
 			stores[1].getLivenessState() == reachable &&
 			stores[2].getLivenessState() == reachable
@@ -852,7 +860,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
-	s.False(sender.replicaSelector.region.isValid())
+	selector, ok = sender.replicaSelector.(*replicaSelector)
+	s.True(ok)
+	s.False(selector.region.isValid())
 	s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
 	s.cluster.StartStore(s.storeIDs[0])
 
@@ -886,7 +896,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 			resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 			s.Nil(err)
 			s.True(hasFakeRegionError(resp))
-			s.False(sender.replicaSelector.region.isValid())
+			selector, ok = sender.replicaSelector.(*replicaSelector)
+			s.True(ok)
+			s.False(selector.region.isValid())
 			s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
 		}()
 	}
@@ -906,7 +918,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.True(hasFakeRegionError(resp))
-		s.False(sender.replicaSelector.region.isValid())
+		selector, ok = sender.replicaSelector.(*replicaSelector)
+		s.True(ok)
+		s.False(selector.region.isValid())
 		s.Equal(bo.GetTotalBackoffTimes(), 0)
 	}()
 
@@ -925,7 +939,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.True(hasFakeRegionError(resp))
-		s.False(sender.replicaSelector.region.isValid())
+		selector, ok = sender.replicaSelector.(*replicaSelector)
+		s.True(ok)
+		s.False(selector.region.isValid())
 		s.Equal(bo.GetTotalBackoffTimes(), 0)
 	}()
 
@@ -958,7 +974,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 				regionErr, _ := resp.GetRegionError()
 				s.NotNil(regionErr)
 			}
-			s.False(sender.replicaSelector.region.isValid())
+			selector, ok = sender.replicaSelector.(*replicaSelector)
+			s.True(ok)
+			s.False(selector.region.isValid())
 			s.Equal(bo.GetTotalBackoffTimes(), 0)
 		}()
 	}
@@ -974,7 +992,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.True(bo.GetTotalBackoffTimes() == 3)
-	s.False(sender.replicaSelector.region.isValid())
+	selector, ok = sender.replicaSelector.(*replicaSelector)
+	s.True(ok)
+	s.False(selector.region.isValid())
 	for _, store := range s.storeIDs {
 		s.cluster.StartStore(store)
 	}
@@ -983,7 +1003,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.cluster.ChangeLeader(region.Region.id, s.peerIDs[0])
 	reachable.injectConstantLiveness(s.cache)
 	s.Eventually(func() bool {
-		stores := s.regionRequestSender.replicaSelector.regionStore.stores
+		selector, ok = s.regionRequestSender.replicaSelector.(*replicaSelector)
+		s.True(ok)
+		stores := selector.regionStore.stores
 		return stores[0].getLivenessState() == reachable &&
 			stores[1].getLivenessState() == reachable &&
 			stores[2].getLivenessState() == reachable
@@ -1009,7 +1031,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 			}
 		}}
 		sender.SendReq(bo, req, region.Region, time.Second)
-		state, ok := sender.replicaSelector.state.(*accessFollower)
+		selector, ok = sender.replicaSelector.(*replicaSelector)
+		s.True(ok)
+		state, ok := selector.state.(*accessFollower)
 		s.True(ok)
 		s.True(failureOnFollower <= 1) // any retry should go to the leader, hence at most one failure on the follower allowed
 		if failureOnFollower == 0 && failureOnLeader == 0 {
@@ -1588,7 +1612,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			setTargetReplica(replicaSelector, firstReplica)
 			rpcCtx, err := replicaSelector.buildRPCContext(bo)
 			s.Nil(err)
-			replicaSelector.patchRequestSource(req, rpcCtx)
+			patchRequestSource(req, replicaSelector.replicaType(rpcCtx))
 			s.Equal(firstReplica+"_test", req.RequestSource)
 
 			// retry
@@ -1599,7 +1623,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			rpcCtx, err = replicaSelector.buildRPCContext(bo)
 			s.Nil(err)
 			req.IsRetryRequest = true
-			replicaSelector.patchRequestSource(req, rpcCtx)
+			patchRequestSource(req, replicaSelector.replicaType(rpcCtx))
 			s.Equal("retry_"+firstReplica+"_"+retryReplica+"_test", req.RequestSource)
 		}
 	}

@@ -107,7 +107,7 @@ type RegionRequestSender struct {
 	client            client.Client
 	storeAddr         string
 	rpcError          error
-	replicaSelector   *replicaSelector
+	replicaSelector   ReplicaSelector
 	failStoreIDs      map[uint64]struct{}
 	failProxyStoreIDs map[uint64]struct{}
 	RegionRequestRuntimeStats
@@ -911,7 +911,7 @@ func (state *invalidLeader) next(_ *retry.Backoffer, _ *replicaSelector) (*RPCCo
 
 // newReplicaSelector creates a replicaSelector which selects replicas according to reqType and opts.
 // opts is currently only effective for follower read.
-func newReplicaSelectorV1(
+func newReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
@@ -1184,6 +1184,10 @@ func (s *replicaSelector) onNotLeader(
 	return true, nil
 }
 
+func (s *replicaSelector) onFlashbackInProgress() {
+	s.busyThreshold = 0
+}
+
 // updateLeader updates the leader of the cached region.
 // If the leader peer isn't found in the region, the region will be invalidated.
 func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
@@ -1418,6 +1422,11 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
+	option := storeSelectorOp{}
+	for _, op := range opts {
+		op(&option)
+	}
+
 	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
@@ -1458,7 +1467,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		var isLocalTraffic bool
 		if staleReadCollector != nil && s.replicaSelector != nil {
 			if target := s.replicaSelector.targetReplica(); target != nil {
-				isLocalTraffic = target.store.IsLabelsMatch(s.replicaSelector.labels)
+				isLocalTraffic = target.store.IsLabelsMatch(option.labels)
 				staleReadCollector.onReq(req, isLocalTraffic)
 			}
 		}
@@ -1703,9 +1712,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		rpcDuration := time.Since(start)
-		if s.replicaSelector != nil {
-			s.replicaSelector.recordAttemptedTime(rpcDuration)
-		}
+		recordAttemptedTime(s.replicaSelector, rpcDuration)
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.recordSlowScoreStat(rpcDuration)
@@ -2074,7 +2081,7 @@ func (s *RegionRequestSender) onRegionError(
 			// if the failure is caused by replica read, we can retry it with leader safely.
 			if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
 				req.BusyThresholdMs = 0
-				s.replicaSelector.busyThreshold = 0
+				s.replicaSelector.onFlashbackInProgress()
 				ctx.contextPatcher.replicaRead = nil
 				ctx.contextPatcher.busyThreshold = nil
 				return true, nil
@@ -2413,7 +2420,10 @@ func patchRequestSource(req *tikvrpc.Request, replicaType string) {
 	sb.WriteString(req.ReadType)
 }
 
-func (s *replicaSelector) recordAttemptedTime(duration time.Duration) {
+func recordAttemptedTime(s ReplicaSelector, duration time.Duration) {
+	if s == nil {
+		return
+	}
 	if targetReplica := s.targetReplica(); targetReplica != nil {
 		targetReplica.attemptedTime += duration
 	}
