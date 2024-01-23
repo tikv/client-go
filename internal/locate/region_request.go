@@ -253,6 +253,7 @@ type replica struct {
 	attemptedTime time.Duration
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
+	dataIsNotReady              bool
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -995,7 +996,7 @@ const (
 
 // next creates the RPCContext of the current candidate replica.
 // It returns a SendError if runs out of all replicas or the cached region is invalidated.
-func (s *replicaSelector) next(bo *retry.Backoffer) (rpcCtx *RPCContext, err error) {
+func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
 	if !s.region.isValid() {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
 		return nil, nil
@@ -1188,6 +1189,8 @@ func (s *replicaSelector) onFlashbackInProgress() {
 	s.busyThreshold = 0
 }
 
+func (s *replicaSelector) onDataIsNotReady() {}
+
 // updateLeader updates the leader of the cached region.
 // If the leader peer isn't found in the region, the region will be invalidated.
 func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
@@ -1305,14 +1308,14 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
-			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
+			selector, err := NewReplicaSelector(s.regionCache, regionID, req, opts...)
 			if selector == nil || err != nil {
 				s.rpcError = err
 				return nil, nil
 			}
 			s.replicaSelector = selector
 		}
-		return s.replicaSelector.next(bo)
+		return s.replicaSelector.next(bo, req)
 	case tikvrpc.TiFlash:
 		// Should ignore WN, because in disaggregated tiflash mode, TiDB will build rpcCtx itself.
 		return s.regionCache.GetTiFlashRPCContext(bo, regionID, true, LabelFilterNoTiFlashWriteNode)
@@ -2280,6 +2283,9 @@ func (s *RegionRequestSender) onRegionError(
 			if err != nil {
 				return false, err
 			}
+		}
+		if s.replicaSelector != nil {
+			s.replicaSelector.onDataIsNotReady()
 		}
 		return true, nil
 	}
