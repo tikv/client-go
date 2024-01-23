@@ -2822,10 +2822,8 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 					logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 				} else if !valid {
 					if s.getResolveState() == deleted {
-						// if the store is deleted, a new store must be inserted (guaranteed by reResolve).
-						c.storeMu.RLock()
-						newStore := c.storeMu.stores[s.storeID]
-						c.storeMu.RUnlock()
+						// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
+						newStore, _ := c.getStore(s.storeID)
 						logutil.BgLogger().Info("[health check] store meta changed",
 							zap.Uint64("storeID", s.storeID),
 							zap.String("oldAddr", s.addr),
