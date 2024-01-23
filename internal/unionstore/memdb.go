@@ -38,7 +38,6 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"reflect"
 	"sync"
 	"unsafe"
 
@@ -837,12 +836,8 @@ func (n *memdbNode) setBlack() {
 }
 
 func (n *memdbNode) getKey() []byte {
-	var ret []byte
-	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
-	hdr.Data = uintptr(unsafe.Pointer(&n.flags)) + kv.FlagBytes
-	hdr.Len = int(n.klen)
-	hdr.Cap = int(n.klen)
-	return ret
+	base := unsafe.Add(unsafe.Pointer(&n.flags), kv.FlagBytes)
+	return unsafe.Slice((*byte)(base), int(n.klen))
 }
 
 const (

@@ -38,7 +38,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -168,11 +167,7 @@ func String(b []byte) (s string) {
 	if len(b) == 0 {
 		return ""
 	}
-	pbytes := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-	pstring := (*reflect.StringHeader)(unsafe.Pointer(&s))
-	pstring.Data = pbytes.Data
-	pstring.Len = pbytes.Len
-	return
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 // ToUpperASCIIInplace bytes.ToUpper but zero-cost
