@@ -60,7 +60,7 @@ import (
 
 var (
 	withTiKV = flag.Bool("with-tikv", false, "run tests with TiKV cluster started. (not use the mock server)")
-	pdAddrs  = flag.String("pd-addrs", "127.0.0.1:2379", "pd addrs")
+	pdAddrs  = flag.String("pd-addrs", "http://127.0.0.1:2379", "pd addrs")
 )
 
 // NewTestStore creates a KVStore for testing purpose.
