@@ -21,8 +21,9 @@ import (
 )
 
 type FakeItem struct {
-	pri   uint64
-	value int
+	pri      uint64
+	value    int
+	canceled bool
 }
 
 func (f *FakeItem) priority() uint64 {
@@ -30,19 +31,43 @@ func (f *FakeItem) priority() uint64 {
 }
 
 func (f *FakeItem) isCanceled() bool {
-	return false
+	return f.canceled
 }
 
 func TestPriority(t *testing.T) {
 	re := require.New(t)
-	pq := NewPriorityQueue()
-	for i := 1; i <= 5; i++ {
-		pq.Push(&FakeItem{value: i, pri: uint64(i)})
+	testFunc := func(aq *PriorityQueue) {
+		for i := 1; i <= 5; i++ {
+			aq.Push(&FakeItem{value: i, pri: uint64(i)})
+		}
+		re.Equal(5, aq.Len())
+		re.Equal(uint64(5), aq.highestPriority())
+		aq.Clean()
+		re.Equal(5, aq.Len())
+
+		arr := aq.Take(1)
+		re.Len(arr, 1)
+		re.Equal(uint64(5), arr[0].priority())
+		re.Equal(uint64(4), aq.highestPriority())
+
+		arr = aq.Take(2)
+		re.Len(arr, 2)
+		re.Equal(uint64(4), arr[0].priority())
+		re.Equal(uint64(3), arr[1].priority())
+		re.Equal(uint64(2), aq.highestPriority())
+
+		arr = aq.Take(5)
+		re.Len(arr, 2)
+		re.Equal(uint64(2), arr[0].priority())
+		re.Equal(uint64(1), arr[1].priority())
+		re.Equal(uint64(0), aq.highestPriority())
+		re.Equal(0, aq.Len())
+
+		aq.Push(&FakeItem{value: 1, pri: 1, canceled: true})
+		re.Equal(1, aq.Len())
+		aq.Clean()
+		re.Equal(0, aq.Len())
 	}
-	re.Equal(5, pq.Len())
-	arr := pq.All()
-	re.Len(arr, 5)
-	for i := pq.Len(); i > 0; i-- {
-		re.Equal(i, pq.Pop().(*FakeItem).value)
-	}
+	hq := NewPriorityQueue()
+	testFunc(hq)
 }

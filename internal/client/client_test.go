@@ -730,24 +730,32 @@ func TestLimitConcurrency(t *testing.T) {
 		batch.reqBuilder.reset()
 	}
 
+	// highest priority task will be sent immediately, not limited by concurrency
 	{
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority})
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority - 1})
 		reqs, _ := batch.reqBuilder.buildWithLimit(0, func(_ uint64, _ *batchCommandsEntry) {})
 		re.Len(reqs.RequestIds, 1)
-		re.Equal(1, batch.reqBuilder.len())
 		batch.reqBuilder.reset()
-		batch.reqBuilder.entries.Reset()
+		re.Equal(1, batch.reqBuilder.len())
 	}
 
+	// medium priority tasks are limited by concurrency
 	{
-		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
 		reqs, _ := batch.reqBuilder.buildWithLimit(2, func(_ uint64, _ *batchCommandsEntry) {})
 		re.Len(reqs.RequestIds, 2)
 		re.Equal(1, batch.reqBuilder.len())
 		batch.reqBuilder.reset()
+	}
+
+	// the expired tasks should be removed from the queue.
+	{
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, canceled: 1})
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, canceled: 1})
+		batch.reqBuilder.reset()
+		re.Equal(1, batch.reqBuilder.len())
 	}
 
 }

@@ -87,16 +87,43 @@ func (pq *PriorityQueue) Push(item Item) {
 	heap.Push(&pq.ps, entry{entry: item})
 }
 
-// Pop removes the highest priority entry from the priority queue.
-func (pq *PriorityQueue) Pop() Item {
-	return heap.Pop(&pq.ps).(entry).entry
-}
-
-func (pq *PriorityQueue) top() Item {
-	if pq.Len() == 0 {
+// pop removes the highest priority entry from the priority queue.
+func (pq *PriorityQueue) pop() Item {
+	e := heap.Pop(&pq.ps)
+	if e == nil {
 		return nil
 	}
-	return pq.ps[0].entry
+	return e.(entry).entry
+}
+
+// Take returns the highest priority entries from the priority queue.
+func (pq *PriorityQueue) Take(n int) []Item {
+	if n <= 0 {
+		return nil
+	}
+	if n >= pq.Len() {
+		ret := make([]Item, pq.Len())
+		for i := 0; i < pq.Len(); i++ {
+			ret[i] = pq.ps[i].entry
+		}
+
+		pq.ps = pq.ps[:0]
+		return ret
+	} else {
+		ret := make([]Item, n)
+		for i := 0; i < n; i++ {
+			ret[i] = pq.pop()
+		}
+		return ret
+	}
+
+}
+
+func (pq *PriorityQueue) highestPriority() uint64 {
+	if pq.Len() == 0 {
+		return 0
+	}
+	return pq.ps[0].entry.priority()
 }
 
 // All returns all entries in the priority queue not ensure the priority.
@@ -108,11 +135,13 @@ func (pq *PriorityQueue) All() []Item {
 	return items
 }
 
-func (pq *PriorityQueue) clean() {
-	for i := 0; i < pq.Len(); i++ {
+func (pq *PriorityQueue) Clean() {
+	for i := 0; i < pq.Len(); {
 		if pq.ps[i].entry.isCanceled() {
 			heap.Remove(&pq.ps, pq.ps[i].index)
+			continue
 		}
+		i++
 	}
 }
 
