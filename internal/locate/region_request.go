@@ -254,6 +254,7 @@ type replica struct {
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
 	dataIsNotReady              bool
+	notLeader                   bool
 }
 
 func (r *replica) getEpoch() uint32 {

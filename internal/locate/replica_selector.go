@@ -74,8 +74,7 @@ func newReplicaSelectorV2(
 	isReadOnlyReq := false
 	switch req.Type {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
-		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream,
-		tikvrpc.CmdRawGet, tikvrpc.CmdRawBatchGet, tikvrpc.CmdRawScan:
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
 		isReadOnlyReq = true
 	}
 
@@ -163,7 +162,8 @@ type ReplicaSelectLeaderStrategy struct{}
 
 func (s ReplicaSelectLeaderStrategy) next(replicas []*replica, region *Region) *replica {
 	leader := replicas[region.getStore().workTiKVIdx]
-	if leader.store.getLivenessState() == reachable && !leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) && !leader.deadlineErrUsingConfTimeout {
+	if leader.store.getLivenessState() == reachable && !leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) &&
+		!leader.deadlineErrUsingConfTimeout && !leader.notLeader {
 		if !leader.isEpochStale() { // check leader epoch here, if leader.epoch failed, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
 			return leader
 		}
@@ -305,8 +305,10 @@ func (s *replicaSelectorV2) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
 	leader := notLeader.GetLeader()
+	if s.target != nil {
+		s.target.notLeader = true
+	}
 	if leader == nil {
-		s.replicaReadType = kv.ReplicaReadMixed
 		if err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx)); err != nil {
 			return false, err
 		}
@@ -335,6 +337,7 @@ func (s *replicaSelectorV2) updateLeader(leader *metapb.Peer) {
 				replica.attempts = maxReplicaAttempt - 1
 				replica.attemptedTime = 0
 			}
+			replica.notLeader = false
 			s.replicaReadType = kv.ReplicaReadLeader
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
 			if !s.region.switchWorkLeaderToPeer(leader) {
