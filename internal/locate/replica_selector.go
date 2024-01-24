@@ -129,9 +129,17 @@ func (s *replicaSelectorV2) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpc
 			s.target = strategy.next(s, s.region)
 			if s.target != nil {
 				if s.isStaleRead && s.attempts == 1 {
-					// stale-read will only be used when first access.
-					req.StaleRead = true
-					req.ReplicaRead = false
+					// stale-read request first access.
+					if !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
+						// If the target replica's labels is not match and not leader, use replica read.
+						// This is for compatible with old version.
+						req.StaleRead = false
+						req.ReplicaRead = true
+					} else {
+						// use stale read.
+						req.StaleRead = true
+						req.ReplicaRead = false
+					}
 				} else {
 					// always use replica.
 					req.StaleRead = false

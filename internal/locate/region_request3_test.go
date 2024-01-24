@@ -1416,7 +1416,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 
 	accessRecords := []string{}
 	dataIsNotReady := false
-	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		accessRecords = append(accessRecords, fmt.Sprintf("addr: %v, stale_read: %v, replica_read: %v", addr, req.StaleRead, req.ReplicaRead))
 		select {
 		case <-ctx.Done():
@@ -1442,6 +1442,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
 	}}
 
+	sender := NewRegionRequestSender(s.cache, fnClient)
 	for _, localLeader := range []bool{true, false} {
 		dataIsNotReady = true
 		// data is not ready, then server is busy in the first round,
@@ -1463,7 +1464,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Second)
 			bo := retry.NewBackoffer(ctx, -1)
 			s.Nil(err)
-			resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
+			resp, _, _, err := sender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
 			s.Nil(err)
 
 			regionErr, err := resp.GetRegionError()
@@ -1475,7 +1476,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 				s.NotEqual(string(getResp.Value), "store"+leaderLabel[0].Value)
 			} else {
 				if i == 1 {
-					_, isV2 := s.regionRequestSender.replicaSelector.(*replicaSelectorV2)
+					_, isV2 := sender.replicaSelector.(*replicaSelectorV2)
 					if isV2 {
 						s.Equal(string(getResp.Value), "store3")
 						s.Equal(accessRecords, []string{
