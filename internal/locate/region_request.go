@@ -1781,7 +1781,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 				return nil, false, err
 			}
 		}
-		if e := s.onSendFail(bo, rpcCtx, req, err); e != nil {
+		if e := s.onSendFail(bo, rpcCtx, sendToAddr, req, err); e != nil {
 			return nil, false, err
 		}
 		return nil, true, nil
@@ -1811,7 +1811,7 @@ func (s *RegionRequestSender) releaseStoreToken(st *Store) {
 	logutil.BgLogger().Warn("release store token failed, count equals to 0")
 }
 
-func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, err error) error {
+func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, addr string, req *tikvrpc.Request, err error) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("regionRequest.onSendFail", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -1836,8 +1836,8 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 			// For the case of canceled by keepalive, we need to re-establish the connection, otherwise following requests will always fail.
 			// Canceled by gRPC remote may happen when tikv is killed and exiting.
 			// Close the connection, backoff, and retry.
-			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.Error(err))
-			s.client.CloseAddr(ctx.Addr)
+			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.String("addr", addr), zap.Error(err))
+			s.client.CloseAddr(addr)
 		}
 	}
 
