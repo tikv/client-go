@@ -19,3 +19,14 @@ linters:
     - typecheck
     - unconvert
     - unused
+
+linters-settings:
+  depguard:
+    rules:
+      main:
+        list-mode: lax # everything is allowed unless it is denied.
+        deny:
+          - pkg: "log"
+            desc: logging is allowed only by pingcap/log
+          - pkg: "github.com/juju/errors"
+            desc: error handling is allowed only by pingcap/errors

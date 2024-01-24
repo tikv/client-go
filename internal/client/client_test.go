@@ -79,12 +79,18 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
-	assert.Nil(t, client.CloseAddr(addr))
+	ver := conn2.ver
+	assert.Nil(t, client.CloseAddr(addr, ver-1))
 	_, ok := client.conns[addr]
+	assert.True(t, ok)
+	assert.Nil(t, client.CloseAddr(addr, ver))
+	_, ok = client.conns[addr]
 	assert.False(t, ok)
+
 	conn3, err := client.getConnArray(addr, true)
 	assert.Nil(t, err)
 	assert.NotNil(t, conn3)
+	assert.Equal(t, ver+1, conn3.ver)
 
 	client.Close()
 	conn4, err := client.getConnArray(addr, true)
@@ -99,7 +105,7 @@ func TestGetConnAfterClose(t *testing.T) {
 	addr := "127.0.0.1:6379"
 	connArray, err := client.getConnArray(addr, true)
 	assert.Nil(t, err)
-	assert.Nil(t, client.CloseAddr(addr))
+	assert.Nil(t, client.CloseAddr(addr, connArray.ver))
 	conn := connArray.Get()
 	state := conn.GetState()
 	assert.True(t, state == connectivity.Shutdown)
@@ -149,7 +155,7 @@ func (c *chanClient) Close() error {
 	return nil
 }
 
-func (c *chanClient) CloseAddr(addr string) error {
+func (c *chanClient) CloseAddr(addr string, ver uint64) error {
 	return nil
 }
 

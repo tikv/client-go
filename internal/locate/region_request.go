@@ -1837,7 +1837,11 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, a
 			// Canceled by gRPC remote may happen when tikv is killed and exiting.
 			// Close the connection, backoff, and retry.
 			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.String("addr", addr), zap.Error(err))
-			s.client.CloseAddr(addr)
+			var errConn client.ErrConn
+			if errors.As(err, &errConn) {
+				logutil.Logger(bo.GetCtx()).Debug("close connection", zap.Error(&errConn))
+				s.client.CloseAddr(errConn.Addr, errConn.Ver)
+			}
 		}
 	}
 
@@ -2195,7 +2199,7 @@ func (s *RegionRequestSender) onRegionError(
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		// It's possible the address of store is not changed but the DNS resolves to a different address in k8s environment,
 		// so we always reconnect in this case.
-		s.client.CloseAddr(ctx.Addr)
+		s.client.CloseAddr(ctx.Addr, math.MaxUint64)
 		return false, nil
 	}
 

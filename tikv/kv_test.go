@@ -101,8 +101,8 @@ func (c *storeSafeTsMockClient) Close() error {
 	return c.Client.Close()
 }
 
-func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
-	return c.Client.CloseAddr(addr)
+func (c *storeSafeTsMockClient) CloseAddr(addr string, ver uint64) error {
+	return c.Client.CloseAddr(addr, ver)
 }
 
 func (s *testKVSuite) TestMinSafeTs() {
