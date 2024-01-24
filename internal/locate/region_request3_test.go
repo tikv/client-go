@@ -981,7 +981,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 	regionStore := region.getStore()
 	leaderAddr = regionStore.stores[regionStore.workTiKVIdx].addr
 	s.NotEqual(leaderAddr, "")
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 30; i++ {
 		bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
 		resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 		s.Nil(err)

@@ -72,7 +72,8 @@ func TestBackoffErrorType(t *testing.T) {
 		err = b.Backoff(BoTxnNotFound, errors.New("txn not found"))
 		if err != nil {
 			// Next backoff should return error of backoff that sleeps for longest time.
-			assert.ErrorIs(t, err, BoTxnNotFound.err)
+			cfg, _ := b.longestSleepCfg()
+			assert.ErrorIs(t, err, cfg.err)
 			return
 		}
 	}
