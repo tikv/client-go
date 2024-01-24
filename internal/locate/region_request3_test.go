@@ -36,6 +36,7 @@ package locate
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1390,7 +1391,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
 			}},
 			StartVersion: 100,
 		})
-		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second*2, tikvrpc.TiKV)
+		resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second*2, tikvrpc.TiKV)
 		resCh <- struct {
 			resp *tikvrpc.Response
 			err  error
