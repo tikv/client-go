@@ -17,13 +17,10 @@ package locate
 import (
 	"testing"
 
-	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	util.EnableFailpoints()
-
 	opts := []goleak.Option{
 		goleak.IgnoreTopFunction("github.com/pingcap/goleveldb/leveldb.(*DB).mpoolDrain"),
 	}
