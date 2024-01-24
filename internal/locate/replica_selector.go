@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -11,10 +12,8 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"go.uber.org/zap"
-	"sync/atomic"
-
-	"github.com/pkg/errors"
 	"math/rand"
+	"sync/atomic"
 )
 
 type ReplicaSelector interface {
@@ -23,7 +22,7 @@ type ReplicaSelector interface {
 	proxyReplica() *replica
 	replicaType(rpcCtx *RPCContext) string
 	invalidateRegion()
-	onSendSuccess()
+	onSendSuccess(req *tikvrpc.Request)
 	String() string
 	onSendFailure(bo *retry.Backoffer, err error)
 	// Following methods are used to handle region errors.
@@ -37,8 +36,9 @@ type ReplicaSelector interface {
 func NewReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (ReplicaSelector, error) {
-	v2Enabled := false
-	if v2Enabled && regionCache.enableForwarding == false {
+	//v2Enabled := false
+	v2Enabled := true
+	if v2Enabled && regionCache.enableForwarding == false && req.BusyThresholdMs == 0 {
 		return newReplicaSelectorV2(regionCache, regionID, req, opts...)
 	}
 	return newReplicaSelector(regionCache, regionID, req, opts...)
@@ -65,18 +65,7 @@ func newReplicaSelectorV2(
 		return nil, errors.New("cached region invalid")
 	}
 
-	regionStore := cachedRegion.getStore()
-	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
-	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
-		replicas = append(
-			replicas, &replica{
-				store:    regionStore.stores[storeIdx],
-				peer:     cachedRegion.meta.Peers[storeIdx],
-				epoch:    regionStore.storeEpochs[storeIdx],
-				attempts: 0,
-			},
-		)
-	}
+	replicas := buildTiKVReplicas(cachedRegion)
 	option := storeSelectorOp{}
 	for _, op := range opts {
 		op(&option)
@@ -191,7 +180,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
 		liveness := r.store.getLivenessState()
-		if epochStale && liveness == reachable && r.store.getResolveState() == resolved {
+		if epochStale && ((liveness == reachable && r.store.getResolveState() == resolved) || AccessIndex(i) == leaderIdx) {
 			reloadRegion = true
 		}
 		if epochStale || liveness == unreachable {
@@ -421,8 +410,8 @@ func (s *replicaSelectorV2) checkLiveness(bo *retry.Backoffer, accessReplica *re
 	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache)
 }
 
-func (s *replicaSelectorV2) onSendSuccess() {
-	if s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() {
+func (s *replicaSelectorV2) onSendSuccess(req *tikvrpc.Request) {
+	if s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() && req != nil && req.StaleRead == false && req.ReplicaRead == false {
 		s.region.switchWorkLeaderToPeer(s.target.peer)
 	}
 }

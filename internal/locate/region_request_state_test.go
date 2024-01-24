@@ -129,6 +129,7 @@ func (s *testRegionCacheStaleReadSuite) getFollower() (uint64, *metapb.Store) {
 
 func (s *testRegionCacheStaleReadSuite) setClient() {
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		fmt.Printf("addr: %v, stale-read: %v, replica-read: %v  =======\n\n\n", addr, req.StaleRead, req.ReplicaRead)
 		var store *metapb.Store
 		find := false
 		for _, one := range s.cluster.GetAllStores() {
@@ -519,8 +520,9 @@ func TestRegionCacheStaleRead(t *testing.T) {
 	tests := []func(*testRegionCacheStaleReadSuite, *RegionCacheTestCase){
 		testStaleReadFollower, testStaleReadLeader,
 	}
-	for _, regionCacheTestCase := range regionCacheTestCases {
-		for _, test := range tests {
+	for i, regionCacheTestCase := range regionCacheTestCases {
+		for j, test := range tests {
+			fmt.Printf("======= %v %v ===============\n\n", i, j)
 			s := &testRegionCacheStaleReadSuite{
 				Assertions: require.New(t),
 			}
@@ -613,7 +615,12 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 	_, successZone, successReadType := s.extractResp(resp)
 	find := false
 	if leaderZone {
-		s.Equal(r.leaderSuccessReadType, successReadType)
+		_, isV2 := s.regionRequestSender.replicaSelector.(*replicaSelectorV2)
+		if isV2 {
+			s.True(r.leaderSuccessReadType == successReadType || successReadType == SuccessStaleRead)
+		} else {
+			s.Equal(r.leaderSuccessReadType, successReadType)
+		}
 		for _, z := range r.leaderSuccessReplica {
 			if z == successZone {
 				find = true

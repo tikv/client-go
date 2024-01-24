@@ -1310,6 +1310,7 @@ func (c *RegionCache) scheduleReloadRegion(region *Region) {
 		// async reload scheduled by other thread.
 		return
 	}
+	logutil.Logger(context.Background()).Info("schedule to reload region", zap.Uint64("regionID", region.GetID()), zap.Stack("stack"))
 	regionID := region.GetID()
 	if regionID > 0 {
 		c.regionsNeedReload.Lock()

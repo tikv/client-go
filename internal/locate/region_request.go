@@ -924,19 +924,8 @@ func newReplicaSelector(
 		return nil, errors.New("cached region ttl expired")
 	}
 
+	replicas := buildTiKVReplicas(cachedRegion)
 	regionStore := cachedRegion.getStore()
-	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
-	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
-		replicas = append(
-			replicas, &replica{
-				store:    regionStore.stores[storeIdx],
-				peer:     cachedRegion.meta.Peers[storeIdx],
-				epoch:    regionStore.storeEpochs[storeIdx],
-				attempts: 0,
-			},
-		)
-	}
-
 	option := storeSelectorOp{}
 	for _, op := range opts {
 		op(&option)
@@ -963,16 +952,6 @@ func newReplicaSelector(
 		}
 	}
 
-	if val, err := util.EvalFailpoint("newReplicaSelectorInitialAttemptedTime"); err == nil {
-		attemptedTime, err := time.ParseDuration(val.(string))
-		if err != nil {
-			panic(err)
-		}
-		for _, r := range replicas {
-			r.attemptedTime = attemptedTime
-		}
-	}
-
 	return &replicaSelector{
 		regionCache,
 		cachedRegion,
@@ -984,6 +963,32 @@ func newReplicaSelector(
 		-1,
 		time.Duration(req.BusyThresholdMs) * time.Millisecond,
 	}, nil
+}
+
+func buildTiKVReplicas(region *Region) []*replica {
+	regionStore := region.getStore()
+	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
+	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
+		replicas = append(
+			replicas, &replica{
+				store:    regionStore.stores[storeIdx],
+				peer:     region.meta.Peers[storeIdx],
+				epoch:    regionStore.storeEpochs[storeIdx],
+				attempts: 0,
+			},
+		)
+	}
+
+	if val, err := util.EvalFailpoint("newReplicaSelectorInitialAttemptedTime"); err == nil {
+		attemptedTime, err := time.ParseDuration(val.(string))
+		if err != nil {
+			panic(err)
+		}
+		for _, r := range replicas {
+			r.attemptedTime = attemptedTime
+		}
+	}
+	return replicas
 }
 
 const (
@@ -1165,7 +1170,7 @@ func (s *replicaSelector) invalidateReplicaStore(replica *replica, cause error) 
 	}
 }
 
-func (s *replicaSelector) onSendSuccess() {
+func (s *replicaSelector) onSendSuccess(_ *tikvrpc.Request) {
 	s.state.onSendSuccess(s)
 }
 
@@ -1544,7 +1549,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, totalErrors)
 		} else {
 			if s.replicaSelector != nil {
-				s.replicaSelector.onSendSuccess()
+				s.replicaSelector.onSendSuccess(req)
 			}
 		}
 		if staleReadCollector != nil {
