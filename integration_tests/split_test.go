@@ -390,3 +390,7 @@ func (c *mockPDClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID 
 func (c *mockPDClient) WatchGCSafePointV2(ctx context.Context, revision int64) (chan []*pdpb.SafePointEvent, error) {
 	panic("unimplemented")
 }
+
+func (c *mockPDClient) GetServiceDiscovery() pd.ServiceDiscovery {
+	panic("unimplemented")
+}

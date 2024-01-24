@@ -43,6 +43,7 @@ import (
 	"math"
 	"math/rand"
 	"runtime/trace"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -1314,8 +1315,8 @@ func deduplicateKeys(keys [][]byte) [][]byte {
 		return keys
 	}
 
-	sort.Slice(keys, func(i, j int) bool {
-		return bytes.Compare(keys[i], keys[j]) < 0
+	slices.SortFunc(keys, func(i, j []byte) int {
+		return bytes.Compare(i, j)
 	})
 	deduped := keys[:1]
 	for i := 1; i < len(keys); i++ {
