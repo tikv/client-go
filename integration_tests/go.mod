@@ -117,6 +117,6 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb v1.1.0-beta.0.20240111112854-1ad36eb0ef29 => github.com/lance6716/tidb v1.1.0-beta.0.20240122062808-a97cf692ef80
+	github.com/pingcap/tidb v1.1.0-beta.0.20240111112854-1ad36eb0ef29 => github.com/lance6716/tidb v1.1.0-beta.0.20240122070601-bddfc7704131
 	github.com/tikv/client-go/v2 => ../
 )
