@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -358,8 +359,8 @@ func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...pd.Get
 		regions = append(regions, region)
 	}
 
-	sort.Slice(regions, func(i, j int) bool {
-		return bytes.Compare(regions[i].Meta.GetStartKey(), regions[j].Meta.GetStartKey()) < 0
+	slices.SortFunc(regions, func(i, j *Region) int {
+		return bytes.Compare(i.Meta.GetStartKey(), j.Meta.GetStartKey())
 	})
 
 	startPos := sort.Search(len(regions), func(i int) bool {
