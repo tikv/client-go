@@ -17,11 +17,11 @@ require (
 	github.com/pingcap/kvproto v0.0.0-20231222062942-c0c73f41d0b2
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
-	github.com/prometheus/client_golang v1.15.1
-	github.com/prometheus/client_model v0.3.0
+	github.com/prometheus/client_golang v1.18.0
+	github.com/prometheus/client_model v0.5.0
 	github.com/stretchr/testify v1.8.2
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20231227041826-d3551ea0bdbe
+	github.com/tikv/pd/client v0.0.0-20240124074521-ca8fd3db3e33
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.10
 	go.etcd.io/etcd/client/v3 v3.5.10
@@ -40,13 +40,11 @@ require (
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/onsi/gomega v1.20.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/common v0.42.0 // indirect
-	github.com/prometheus/procfs v0.9.0 // indirect
+	github.com/prometheus/common v0.46.0 // indirect
+	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
-	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.10 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230711005742-c3f37128e5a4 // indirect

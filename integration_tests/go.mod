@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.8-0.20231227070846-61c486af13a5
-	github.com/tikv/pd/client v0.0.0-20240109100024-dd8df25316e9
+	github.com/tikv/pd/client v0.0.0-20240124074521-ca8fd3db3e33
 	go.uber.org/goleak v1.3.0
 )
 
@@ -74,7 +74,7 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
 	github.com/prometheus/client_golang v1.18.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
-	github.com/prometheus/common v0.45.0 // indirect
+	github.com/prometheus/common v0.46.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.11.0 // indirect
