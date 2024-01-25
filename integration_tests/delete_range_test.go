@@ -57,7 +57,7 @@ type testDeleteRangeSuite struct {
 }
 
 func (s *testDeleteRangeSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil, nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithMultiRegions(cluster, []byte("b"), []byte("c"), []byte("d"))
 	s.cluster = cluster

@@ -58,7 +58,7 @@ type testRawKVSuite struct {
 }
 
 func (s *testRawKVSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil, nil)
 	s.Require().NoError(err)
 	s.Require().Nil(err)
 	testutils.BootstrapWithSingleStore(cluster)

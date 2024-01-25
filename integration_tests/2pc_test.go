@@ -92,7 +92,7 @@ func (s *testCommitterSuite) TearDownSuite() {
 }
 
 func (s *testCommitterSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil, nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithMultiRegions(cluster, []byte("a"), []byte("b"), []byte("c"))
 	s.cluster = cluster
