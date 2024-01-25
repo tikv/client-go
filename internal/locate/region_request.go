@@ -255,6 +255,7 @@ type replica struct {
 	deadlineErrUsingConfTimeout bool
 	dataIsNotReady              bool
 	notLeader                   bool
+	serverIsBusy                bool
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -283,6 +284,9 @@ type baseReplicaSelector struct {
 	regionCache *RegionCache
 	region      *Region
 	replicas    []*replica
+	// TiKV can reject the request when its estimated wait duration exceeds busyThreshold.
+	// Then, the client will receive a ServerIsBusy error and choose another replica to retry.
+	busyThreshold time.Duration
 }
 
 type replicaSelector struct {
@@ -294,9 +298,6 @@ type replicaSelector struct {
 	targetIdx AccessIndex
 	// replicas[proxyIdx] is the store used to redirect requests this time
 	proxyIdx AccessIndex
-	// TiKV can reject the request when its estimated wait duration exceeds busyThreshold.
-	// Then, the client will receive a ServerIsBusy error and choose another replica to retry.
-	busyThreshold time.Duration
 }
 
 func selectorStateToString(state selectorState) string {
@@ -975,16 +976,16 @@ func newReplicaSelector(
 
 	return &replicaSelector{
 		baseReplicaSelector: baseReplicaSelector{
-			regionCache: regionCache,
-			region:      cachedRegion,
-			replicas:    replicas,
+			regionCache:   regionCache,
+			region:        cachedRegion,
+			replicas:      replicas,
+			busyThreshold: time.Duration(req.BusyThresholdMs) * time.Millisecond,
 		},
-		regionStore:   regionStore,
-		labels:        option.labels,
-		state:         state,
-		targetIdx:     -1,
-		proxyIdx:      -1,
-		busyThreshold: time.Duration(req.BusyThresholdMs) * time.Millisecond,
+		regionStore: regionStore,
+		labels:      option.labels,
+		state:       state,
+		targetIdx:   -1,
+		proxyIdx:    -1,
 	}, nil
 }
 
