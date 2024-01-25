@@ -104,11 +104,15 @@ type Client interface {
 	// Close should release all data.
 	Close() error
 	// CloseAddr closes gRPC connections to the address. It will reconnect the next time it's used.
-	// `ver` is used to avoid unnecessary closing after the address has been reconnected.
-	// Pass `math.Uint64` if you want to close forcedly.
-	CloseAddr(addr string, ver uint64) error
+	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+}
+
+type ClientExt interface {
+	// `ver` is used to avoid unnecessary closing after the address has been reconnected.
+	// Pass `math.Uint64` if you want to close forcedly.
+	CloseAddrVer(addr string, ver uint64) error
 }
 
 type ErrConn struct {
@@ -830,7 +834,11 @@ func (c *RPCClient) Close() error {
 }
 
 // CloseAddr closes gRPC connections to the address.
-func (c *RPCClient) CloseAddr(addr string, ver uint64) error {
+func (c *RPCClient) CloseAddr(addr string) error {
+	return c.CloseAddrVer(addr, math.MaxUint64)
+}
+
+func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
 	c.Lock()
 	conn, ok := c.conns[addr]
 	if ok {

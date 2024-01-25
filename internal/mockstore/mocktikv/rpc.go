@@ -1092,6 +1092,6 @@ func (c *RPCClient) Close() error {
 }
 
 // CloseAddr does nothing.
-func (c *RPCClient) CloseAddr(addr string, ver uint64) error {
+func (c *RPCClient) CloseAddr(addr string) error {
 	return nil
 }

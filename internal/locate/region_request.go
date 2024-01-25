@@ -105,6 +105,7 @@ type RegionRequestSender struct {
 	regionCache       *RegionCache
 	apiVersion        kvrpcpb.APIVersion
 	client            client.Client
+	clientExt         client.ClientExt
 	storeAddr         string
 	rpcError          error
 	replicaSelector   *replicaSelector
@@ -197,11 +198,21 @@ func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats,
 }
 
 // NewRegionRequestSender creates a new sender.
-func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
+func NewRegionRequestSender(regionCache *RegionCache, cli client.Client) *RegionRequestSender {
+	// check whether client implements ClientExt interface
+	// var clientExt client.ClientExt
+	// if _, ok := client.(client.ClientExt); ok {
+	// 	clientExt = client
+	// }
+
+	var i interface{} = cli
+	cliExt, _ := i.(client.ClientExt)
+
 	return &RegionRequestSender{
 		regionCache: regionCache,
 		apiVersion:  regionCache.codec.GetAPIVersion(),
-		client:      client,
+		client:      cli,
+		clientExt:   cliExt,
 	}
 }
 
@@ -1840,7 +1851,12 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, a
 			var errConn *client.ErrConn
 			if errors.As(err, &errConn) {
 				logutil.Logger(bo.GetCtx()).Debug("close connection", zap.Error(errConn))
-				s.client.CloseAddr(errConn.Addr, errConn.Ver)
+
+				if s.clientExt != nil {
+					s.clientExt.CloseAddrVer(errConn.Addr, errConn.Ver)
+				} else {
+					s.client.CloseAddr(errConn.Addr)
+				}
 			}
 		}
 	}
@@ -2199,7 +2215,7 @@ func (s *RegionRequestSender) onRegionError(
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		// It's possible the address of store is not changed but the DNS resolves to a different address in k8s environment,
 		// so we always reconnect in this case.
-		s.client.CloseAddr(ctx.Addr, math.MaxUint64)
+		s.client.CloseAddr(ctx.Addr)
 		return false, nil
 	}
 

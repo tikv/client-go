@@ -107,7 +107,11 @@ func (f *fnClient) Close() error {
 	return nil
 }
 
-func (f *fnClient) CloseAddr(addr string, ver uint64) error {
+func (f *fnClient) CloseAddr(addr string) error {
+	return f.CloseAddrVer(addr, math.MaxUint64)
+}
+
+func (f *fnClient) CloseAddrVer(addr string, ver uint64) error {
 	f.closedAddr = addr
 	f.closedVer = ver
 	return nil
@@ -828,4 +832,30 @@ func (s *testRegionRequestToSingleStoreSuite) TestCountReplicaNumber() {
 		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
 		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers)) // Only count 1 tiflash replica for tiflash write-nodes.
 	}
+}
+
+type emptyClient struct{}
+
+func (c emptyClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	return nil, nil
+}
+
+func (c emptyClient) Close() error {
+	return nil
+}
+
+func (c emptyClient) CloseAddr(addr string) error {
+	return nil
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestClientExt() {
+	var cli client.Client = client.NewRPCClient()
+	sender := NewRegionRequestSender(s.cache, cli)
+	s.NotNil(sender.client)
+	s.NotNil(sender.clientExt)
+
+	cli = &emptyClient{}
+	sender = NewRegionRequestSender(s.cache, cli)
+	s.NotNil(sender.client)
+	s.Nil(sender.clientExt)
 }
