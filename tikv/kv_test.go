@@ -46,7 +46,7 @@ type testKVSuite struct {
 }
 
 func (s *testKVSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil, nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithSingleStore(cluster)
 	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)

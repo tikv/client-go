@@ -39,7 +39,7 @@ import (
 )
 
 // NewTiKVAndPDClient creates a TiKV client and PD client from options.
-func NewTiKVAndPDClient(path string, coprHandler CoprRPCHandler) (*RPCClient, *Cluster, pd.Client, error) {
+func NewTiKVAndPDClient(path string, pdAddrs []string, coprHandler CoprRPCHandler) (*RPCClient, *Cluster, pd.Client, error) {
 	mvccStore, err := NewMVCCLevelDB(path)
 	if err != nil {
 		return nil, nil, nil, err
