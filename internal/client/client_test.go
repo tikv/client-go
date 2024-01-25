@@ -752,7 +752,7 @@ func TestErrConn(t *testing.T) {
 	assert.EqualError(t, errConn.Err, "conn error")
 
 	assert.True(t, errors.As(err3, &errConn))
-	assert.EqualError(t, e3, errConn.Err.Error())
+	assert.EqualError(t, e3, "conn error 3")
 
 	assert.False(t, errors.As(err4, &errConn))
 

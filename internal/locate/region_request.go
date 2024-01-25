@@ -215,7 +215,8 @@ func (s *RegionRequestSender) GetClient() client.Client {
 	return s.client
 }
 
-// getClientExt returns the RPC client with extension functions.
+// getClientExt returns the client with ClientExt interface.
+// Return nil if the client does not implement ClientExt.
 // Don't use in critical path.
 func (s *RegionRequestSender) getClientExt() client.ClientExt {
 	ext, _ := s.client.(client.ClientExt)
