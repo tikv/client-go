@@ -24,7 +24,7 @@ type ReplicaSelector interface {
 	onSendFailure(bo *retry.Backoffer, err error)
 	// Following methods are used to handle region errors.
 	onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error)
-	onFlashbackInProgress()
+	onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) (handled bool)
 	onDataIsNotReady()
 	onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error)
 	onReadReqConfigurableTimeout(req *tikvrpc.Request) bool
@@ -147,7 +147,7 @@ func (s *replicaSelectorV2) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpc
 	if s.target == nil {
 		return nil, nil
 	}
-	return s.buildRPCContext(bo, s.target)
+	return s.buildRPCContext(bo, s.target, nil)
 }
 
 type ReplicaSelectLeaderStrategy struct{}
@@ -266,10 +266,6 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	return score
 }
 
-func (s *replicaSelectorV2) buildRPCContext(bo *retry.Backoffer, r *replica) (*RPCContext, error) {
-	return s.baseReplicaSelector.buildRPCContext(bo, r, nil)
-}
-
 func (s *replicaSelectorV2) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
@@ -286,7 +282,9 @@ func (s *replicaSelectorV2) onNotLeader(
 	return true, nil
 }
 
-func (s *replicaSelectorV2) onFlashbackInProgress() {}
+func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
+	return false
+}
 
 func (s *replicaSelectorV2) onDataIsNotReady() {
 	if s.target != nil {
@@ -297,7 +295,13 @@ func (s *replicaSelectorV2) onDataIsNotReady() {
 func (s *replicaSelectorV2) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
-	// todo: ?
+	s.updateServerLoadStats(ctx, serverIsBusy)
+	if serverIsBusy.EstimatedWaitMs != 0 {
+		// todo?
+	} else if s.replicaReadType != kv.ReplicaReadLeader {
+		// fast retry next follower
+		return true, nil
+	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 	if err != nil {
 		return false, err
@@ -307,8 +311,8 @@ func (s *replicaSelectorV2) onServerIsBusy(
 
 func (s *replicaSelectorV2) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
 	if isReadReqConfigurableTimeout(req) {
-		if target := s.targetReplica(); target != nil {
-			target.deadlineErrUsingConfTimeout = true
+		if s.target != nil {
+			s.target.deadlineErrUsingConfTimeout = true
 		}
 		return true
 	}

@@ -1238,8 +1238,16 @@ func (s *baseReplicaSelector) onNotLeader(
 	return s.updateLeader(leader), nil
 }
 
-func (s *replicaSelector) onFlashbackInProgress() {
-	s.busyThreshold = 0
+func (s *replicaSelector) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
+	// if the failure is caused by replica read, we can retry it with leader safely.
+	if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
+		req.BusyThresholdMs = 0
+		s.busyThreshold = 0
+		ctx.contextPatcher.replicaRead = nil
+		ctx.contextPatcher.busyThreshold = nil
+		return true
+	}
+	return false
 }
 
 func (s *replicaSelector) onDataIsNotReady() {}
@@ -1280,41 +1288,27 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
-	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
-		estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
-		// Update the estimated wait time of the store.
-		loadStats := &storeLoadStats{
-			estimatedWait:     estimatedWait,
-			waitTimeUpdatedAt: time.Now(),
+	s.updateServerLoadStats(ctx, serverIsBusy)
+	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil && s.busyThreshold != 0 {
+		// do not retry with batched coprocessor requests.
+		// it'll be region misses if we send the tasks to replica.
+		if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
+			return false, nil
 		}
-		ctx.Store.loadStats.Store(loadStats)
-
-		if s.busyThreshold != 0 {
-			// do not retry with batched coprocessor requests.
-			// it'll be region misses if we send the tasks to replica.
-			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
-				return false, nil
-			}
-			switch state := s.state.(type) {
-			case *accessKnownLeader:
-				// Clear attempt history of the leader, so the leader can be accessed again.
-				s.replicas[state.leaderIdx].attempts = 0
-				s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
-				return true, nil
-			case *tryIdleReplica:
-				if s.targetIdx != state.leaderIdx {
-					return true, nil
-				}
-				// backoff if still receiving ServerIsBusy after accessing leader again
-			}
-		}
-	} else if ctx != nil && ctx.Store != nil {
-		// Mark the server is busy (the next incoming READs could be redirect
-		// to expected followers. )
-		ctx.Store.markAlreadySlow()
-		if s.canFallback2Follower() {
+		switch state := s.state.(type) {
+		case *accessKnownLeader:
+			// Clear attempt history of the leader, so the leader can be accessed again.
+			s.replicas[state.leaderIdx].attempts = 0
+			s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
 			return true, nil
+		case *tryIdleReplica:
+			if s.targetIdx != state.leaderIdx {
+				return true, nil
+			}
+			// backoff if still receiving ServerIsBusy after accessing leader again
 		}
+	} else if ctx != nil && ctx.Store != nil && s.canFallback2Follower() {
+		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 	if err != nil {
@@ -1338,6 +1332,24 @@ func (s *replicaSelector) canFallback2Follower() bool {
 	}
 	// can fallback to follower only when the leader is exhausted.
 	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
+}
+
+func (s *baseReplicaSelector) updateServerLoadStats(ctx *RPCContext, serverIsBusy *errorpb.ServerIsBusy) {
+	if ctx != nil && ctx.Store != nil {
+		if serverIsBusy.EstimatedWaitMs != 0 {
+			estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
+			// Update the estimated wait time of the store.
+			loadStats := &storeLoadStats{
+				estimatedWait:     estimatedWait,
+				waitTimeUpdatedAt: time.Now(),
+			}
+			ctx.Store.loadStats.Store(loadStats)
+		} else {
+			// Mark the server is busy (the next incoming READs could be redirect
+			// to expected followers. )
+			ctx.Store.markAlreadySlow()
+		}
+	}
 }
 
 func (s *baseReplicaSelector) invalidateRegion() {
@@ -2129,12 +2141,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("ctx", ctx),
 		)
 		if req != nil {
-			// if the failure is caused by replica read, we can retry it with leader safely.
-			if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
-				req.BusyThresholdMs = 0
-				s.replicaSelector.onFlashbackInProgress()
-				ctx.contextPatcher.replicaRead = nil
-				ctx.contextPatcher.busyThreshold = nil
+			if s.replicaSelector != nil && s.replicaSelector.onFlashbackInProgress(ctx, req) {
 				return true, nil
 			}
 			if req.ReplicaReadType.IsFollowerRead() {
