@@ -16,6 +16,7 @@ type ReplicaSelector interface {
 	next(bo *retry.Backoffer, req *tikvrpc.Request) (*RPCContext, error)
 	targetReplica() *replica
 	proxyReplica() *replica
+	getAllReplicas() []*replica
 	replicaType(rpcCtx *RPCContext) string
 	invalidateRegion()
 	onSendSuccess(req *tikvrpc.Request)
