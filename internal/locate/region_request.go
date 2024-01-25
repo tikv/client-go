@@ -105,7 +105,6 @@ type RegionRequestSender struct {
 	regionCache       *RegionCache
 	apiVersion        kvrpcpb.APIVersion
 	client            client.Client
-	clientExt         client.ClientExt
 	storeAddr         string
 	rpcError          error
 	replicaSelector   *replicaSelector
@@ -198,21 +197,11 @@ func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats,
 }
 
 // NewRegionRequestSender creates a new sender.
-func NewRegionRequestSender(regionCache *RegionCache, cli client.Client) *RegionRequestSender {
-	// check whether client implements ClientExt interface
-	// var clientExt client.ClientExt
-	// if _, ok := client.(client.ClientExt); ok {
-	// 	clientExt = client
-	// }
-
-	var i interface{} = cli
-	cliExt, _ := i.(client.ClientExt)
-
+func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
 	return &RegionRequestSender{
 		regionCache: regionCache,
 		apiVersion:  regionCache.codec.GetAPIVersion(),
-		client:      cli,
-		clientExt:   cliExt,
+		client:      client,
 	}
 }
 
@@ -224,6 +213,13 @@ func (s *RegionRequestSender) GetRegionCache() *RegionCache {
 // GetClient returns the RPC client.
 func (s *RegionRequestSender) GetClient() client.Client {
 	return s.client
+}
+
+// getClientExt returns the RPC client with extension functions.
+// Don't use in critical path.
+func (s *RegionRequestSender) getClientExt() client.ClientExt {
+	ext, _ := s.client.(client.ClientExt)
+	return ext
 }
 
 // SetStoreAddr specifies the dest store address.
@@ -1792,7 +1788,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 				return nil, false, err
 			}
 		}
-		if e := s.onSendFail(bo, rpcCtx, sendToAddr, req, err); e != nil {
+		if e := s.onSendFail(bo, rpcCtx, req, err); e != nil {
 			return nil, false, err
 		}
 		return nil, true, nil
@@ -1822,7 +1818,7 @@ func (s *RegionRequestSender) releaseStoreToken(st *Store) {
 	logutil.BgLogger().Warn("release store token failed, count equals to 0")
 }
 
-func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, addr string, req *tikvrpc.Request, err error) error {
+func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, err error) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("regionRequest.onSendFail", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -1847,13 +1843,11 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, a
 			// For the case of canceled by keepalive, we need to re-establish the connection, otherwise following requests will always fail.
 			// Canceled by gRPC remote may happen when tikv is killed and exiting.
 			// Close the connection, backoff, and retry.
-			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.String("addr", addr), zap.Error(err))
+			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.Error(err))
 			var errConn *client.ErrConn
 			if errors.As(err, &errConn) {
-				logutil.Logger(bo.GetCtx()).Debug("close connection", zap.Error(errConn))
-
-				if s.clientExt != nil {
-					s.clientExt.CloseAddrVer(errConn.Addr, errConn.Ver)
+				if ext := s.getClientExt(); ext != nil {
+					ext.CloseAddrVer(errConn.Addr, errConn.Ver)
 				} else {
 					s.client.CloseAddr(errConn.Addr)
 				}

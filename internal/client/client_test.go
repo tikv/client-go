@@ -105,7 +105,7 @@ func TestGetConnAfterClose(t *testing.T) {
 	addr := "127.0.0.1:6379"
 	connArray, err := client.getConnArray(addr, true)
 	assert.Nil(t, err)
-	assert.Nil(t, client.CloseAddrVer(addr, connArray.ver))
+	assert.Nil(t, client.CloseAddr(addr))
 	conn := connArray.Get()
 	state := conn.GetState()
 	assert.True(t, state == connectivity.Shutdown)
@@ -732,8 +732,8 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 func TestErrConn(t *testing.T) {
 	e := errors.New("conn error")
-	err1 := &ErrConn{Err: e, Addr: "addr", Ver: 10}
-	err2 := &ErrConn{Err: e, Addr: "addr", Ver: 10}
+	err1 := &ErrConn{Err: e, Addr: "127.0.0.1", Ver: 10}
+	err2 := &ErrConn{Err: e, Addr: "127.0.0.1", Ver: 10}
 
 	e3 := errors.New("conn error 3")
 	err3 := &ErrConn{Err: e3}
@@ -747,9 +747,9 @@ func TestErrConn(t *testing.T) {
 
 	var errConn *ErrConn
 	assert.True(t, errors.As(err1, &errConn))
-	assert.Equal(t, "addr", errConn.Addr)
+	assert.Equal(t, "127.0.0.1", errConn.Addr)
 	assert.EqualValues(t, 10, errConn.Ver)
-	assert.EqualError(t, e, errConn.Err.Error())
+	assert.EqualError(t, errConn.Err, "conn error")
 
 	assert.True(t, errors.As(err3, &errConn))
 	assert.EqualError(t, e3, errConn.Err.Error())

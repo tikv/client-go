@@ -834,28 +834,19 @@ func (s *testRegionRequestToSingleStoreSuite) TestCountReplicaNumber() {
 	}
 }
 
-type emptyClient struct{}
-
-func (c emptyClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	return nil, nil
-}
-
-func (c emptyClient) Close() error {
-	return nil
-}
-
-func (c emptyClient) CloseAddr(addr string) error {
-	return nil
+type emptyClient struct {
+	client.Client
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestClientExt() {
 	var cli client.Client = client.NewRPCClient()
 	sender := NewRegionRequestSender(s.cache, cli)
 	s.NotNil(sender.client)
-	s.NotNil(sender.clientExt)
+	s.NotNil(sender.getClientExt())
+	cli.Close()
 
 	cli = &emptyClient{}
 	sender = NewRegionRequestSender(s.cache, cli)
 	s.NotNil(sender.client)
-	s.Nil(sender.clientExt)
+	s.Nil(sender.getClientExt())
 }

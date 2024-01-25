@@ -109,12 +109,15 @@ type Client interface {
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 }
 
+// ClientExt is a client has extended interfaces.
 type ClientExt interface {
-	// `ver` is used to avoid unnecessary closing after the address has been reconnected.
-	// Pass `math.Uint64` if you want to close forcedly.
+	// CloseAddrVer closes gRPC connections to the address with additional `ver` parameter.
+	// Each new connection will have an incremented `ver` value, and attempts to close a previous `ver` will be ignored.
+	// Passing `math.MaxUint64` as the `ver` parameter will forcefully close all connections to the address.
 	CloseAddrVer(addr string, ver uint64) error
 }
 
+// ErrConn wraps error with target address and version of the connection.
 type ErrConn struct {
 	Err  error
 	Addr string
@@ -143,7 +146,8 @@ func WrapErrConn(err error, conn *connArray) error {
 type connArray struct {
 	// The target host.
 	target string
-	ver    uint64
+	// version of the connection array, increase by 1 when reconnect.
+	ver uint64
 
 	index uint32
 	v     []*monitoredConn

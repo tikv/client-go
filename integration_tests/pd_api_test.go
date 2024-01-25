@@ -95,7 +95,7 @@ func (c *storeSafeTsMockClient) Close() error {
 	return c.Client.Close()
 }
 
-func (c *storeSafeTsMockClient) CloseAddrVer(addr string) error {
+func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 	return c.Client.CloseAddr(addr)
 }
 
