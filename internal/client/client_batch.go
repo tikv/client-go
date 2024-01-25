@@ -796,8 +796,8 @@ func sendBatchRequest(
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
 	case <-batchConn.closed:
-		logutil.Logger(ctx).Debug("send request is cancelled (batchConn is closed)", zap.String("to", addr))
-		return nil, errors.New("batchConn is closed")
+		logutil.Logger(ctx).Debug("send request is cancelled (batchConn closed)", zap.String("to", addr))
+		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
@@ -817,8 +817,8 @@ func sendBatchRequest(
 		return nil, errors.WithStack(ctx.Err())
 	case <-batchConn.closed:
 		atomic.StoreInt32(&entry.canceled, 1)
-		logutil.Logger(ctx).Debug("wait response is cancelled (batchConn is closed)", zap.String("to", addr))
-		return nil, errors.New("batchConn is closed")
+		logutil.Logger(ctx).Debug("wait response is cancelled (batchConn closed)", zap.String("to", addr))
+		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
 		reason := fmt.Sprintf("wait recvLoop timeout,timeout:%s, wait_duration:%s:", timeout, waitDuration)
@@ -830,18 +830,16 @@ func (c *RPCClient) recycleIdleConnArray() {
 	start := time.Now()
 
 	var addrs []string
-	var vers []uint64
 	c.RLock()
 	for _, conn := range c.conns {
 		if conn.batchConn != nil && conn.isIdle() {
 			addrs = append(addrs, conn.target)
-			vers = append(vers, conn.ver)
 		}
 	}
 	c.RUnlock()
 
-	for i, addr := range addrs {
-		c.CloseAddr(addr, vers[i])
+	for _, addr := range addrs {
+		c.CloseAddr(addr)
 	}
 
 	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())

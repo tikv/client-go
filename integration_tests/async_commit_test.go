@@ -76,7 +76,7 @@ type unistoreClientWrapper struct {
 	*unistore.RPCClient
 }
 
-func (c *unistoreClientWrapper) CloseAddr(addr string, ver uint64) error {
+func (c *unistoreClientWrapper) CloseAddr(addr string) error {
 	return nil
 }
 
