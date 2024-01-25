@@ -35,7 +35,7 @@ func NewReplicaSelector(
 ) (ReplicaSelector, error) {
 	//v2Enabled := false
 	v2Enabled := true
-	if v2Enabled && regionCache.enableForwarding == false && req.BusyThresholdMs == 0 {
+	if v2Enabled && req.BusyThresholdMs == 0 {
 		return newReplicaSelectorV2(regionCache, regionID, req, opts...)
 	}
 	return newReplicaSelector(regionCache, regionID, req, opts...)
@@ -49,6 +49,7 @@ type replicaSelectorV2 struct {
 
 	option   storeSelectorOp
 	target   *replica
+	proxy    *replica
 	attempts int
 }
 
@@ -96,13 +97,20 @@ func (s *replicaSelectorV2) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpc
 
 	s.attempts++
 	s.target = nil
+	s.proxy = nil
 	switch s.replicaReadType {
 	case kv.ReplicaReadLeader:
-		strategy := ReplicaSelectLeaderStrategy{}
-		s.target = strategy.next(s.replicas, s.region)
+		if s.regionCache.enableForwarding {
+			strategy := ReplicaSelectLeaderWithProxyStrategy{}
+			s.target, s.proxy = strategy.next(s.replicas, s.region)
+		}
 		if s.target == nil {
-			strategy := ReplicaSelectMixedStrategy{}
-			s.target = strategy.next(s, s.region)
+			strategy := ReplicaSelectLeaderStrategy{}
+			s.target = strategy.next(s.replicas, s.region)
+			if s.target == nil {
+				strategy := ReplicaSelectMixedStrategy{}
+				s.target = strategy.next(s, s.region)
+			}
 		}
 	default:
 		if s.isStaleRead && s.attempts == 2 {
@@ -147,7 +155,7 @@ func (s *replicaSelectorV2) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpc
 	if s.target == nil {
 		return nil, nil
 	}
-	return s.buildRPCContext(bo, s.target, nil)
+	return s.buildRPCContext(bo, s.target, s.proxy)
 }
 
 type ReplicaSelectLeaderStrategy struct{}
@@ -156,7 +164,7 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica, region *Region) *
 	leader := replicas[region.getStore().workTiKVIdx]
 	if leader.store.getLivenessState() == reachable && !leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) &&
 		!leader.deadlineErrUsingConfTimeout && !leader.notLeader {
-		if !leader.isEpochStale() { // check leader epoch here, if leader.epoch failed, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+		if !leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
 			return leader
 		}
 	}
@@ -266,6 +274,29 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	return score
 }
 
+type ReplicaSelectLeaderWithProxyStrategy struct{}
+
+func (s ReplicaSelectLeaderWithProxyStrategy) next(replicas []*replica, region *Region) (leader *replica, proxy *replica) {
+	rs := region.getStore()
+	leaderIdx := rs.workTiKVIdx
+	leader = replicas[leaderIdx]
+	if leader.store.getLivenessState() == reachable {
+		// if leader's store is reachable, no need use proxy.
+		rs.unsetProxyStoreIfNeeded(region)
+		return nil, nil
+	}
+	for i, r := range replicas {
+		if AccessIndex(i) == leaderIdx || r.isExhausted(1, 0) || r.store.getLivenessState() != reachable {
+			continue
+		}
+		if r.isEpochStale() { // check epoch here, if epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+			continue
+		}
+		return leader, r
+	}
+	return nil, nil
+}
+
 func (s *replicaSelectorV2) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
@@ -323,6 +354,10 @@ func (s *replicaSelectorV2) onSendFailure(bo *retry.Backoffer, err error) {
 	metrics.RegionCacheCounterWithSendFail.Inc()
 	// todo: mark store need check and return to fast retry.
 	liveness := s.checkLiveness(bo, s.targetReplica())
+	if s.replicaReadType == kv.ReplicaReadLeader && liveness == unreachable && len(s.replicas) > 1 && s.regionCache.enableForwarding {
+		// just return to use proxy.
+		return
+	}
 	if liveness != reachable {
 		s.invalidateReplicaStore(s.targetReplica(), err)
 	}
@@ -339,10 +374,10 @@ func (s *replicaSelectorV2) targetReplica() *replica {
 }
 
 func (s *replicaSelectorV2) proxyReplica() *replica {
-	return nil
+	return s.proxy
 }
 
-func (s *replicaSelectorV2) replicaType(rpcCtx *RPCContext) string {
+func (s *replicaSelectorV2) replicaType(_ *RPCContext) string {
 	if s.target != nil {
 		if s.target.peer.Id == s.region.GetLeaderPeerID() {
 			return "leader"

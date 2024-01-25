@@ -227,7 +227,8 @@ func (s *testRegionRequestToThreeStoresSuite) loadAndGetLeaderStore() (*Store, s
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
-	s.regionRequestSender.regionCache.enableForwarding = true
+	sender := NewRegionRequestSender(s.cache, s.regionRequestSender.client)
+	sender.regionCache.enableForwarding = true
 
 	// First get the leader's addr from region cache
 	leaderStore, leaderAddr := s.loadAndGetLeaderStore()
@@ -235,8 +236,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	bo := retry.NewBackoffer(context.Background(), 10000)
 
 	// Simulate that the leader is network-partitioned but can be accessed by forwarding via a follower
-	innerClient := s.regionRequestSender.client
-	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	innerClient := sender.client
+	sender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 		if addr == leaderAddr {
 			return nil, errors.New("simulated rpc error")
 		}
@@ -247,21 +248,21 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		return innerClient.SendRequest(ctx, addr, req, timeout)
 	}}
 	var storeState = uint32(unreachable)
-	s.regionRequestSender.regionCache.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
+	sender.regionCache.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
 		if s.addr == leaderAddr {
 			return livenessState(atomic.LoadUint32(&storeState))
 		}
 		return reachable
 	})
 
-	loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("k"))
+	loc, err := sender.regionCache.LocateKey(bo, []byte("k"))
 	s.Nil(err)
 	s.Equal(loc.Region.GetID(), s.regionID)
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("k"),
 		Value: []byte("v1"),
 	})
-	resp, ctx, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err := sender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err := resp.GetRegionError()
 	s.Nil(err)
@@ -273,7 +274,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	s.Nil(err)
 
 	// Simulate recovering to normal
-	s.regionRequestSender.client = innerClient
+	sender.client = innerClient
 	atomic.StoreUint32(&storeState, uint32(reachable))
 	start := time.Now()
 	for {
@@ -288,7 +289,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	atomic.StoreUint32(&storeState, uint32(unreachable))
 
 	req = tikvrpc.NewRequest(tikvrpc.CmdRawGet, &kvrpcpb.RawGetRequest{Key: []byte("k")})
-	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err = sender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err = resp.GetRegionError()
 	s.Nil(err)
@@ -297,7 +298,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	s.Nil(ctx.ProxyStore)
 
 	// Simulate server down
-	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	sender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 		if addr == leaderAddr || req.ForwardedHost == leaderAddr {
 			return nil, errors.New("simulated rpc error")
 		}
@@ -321,7 +322,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		Key:   []byte("k"),
 		Value: []byte("v2"),
 	})
-	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err = sender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err = resp.GetRegionError()
 	s.Nil(err)
@@ -329,19 +330,19 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	// Then SendReqCtx will throw a pseudo EpochNotMatch to tell the caller to reload the region.
 	s.NotNil(regionErr.EpochNotMatch)
 	s.Nil(ctx)
-	s.Equal(len(s.regionRequestSender.failStoreIDs), 0)
-	s.Equal(len(s.regionRequestSender.failProxyStoreIDs), 0)
-	region := s.regionRequestSender.regionCache.GetCachedRegionWithRLock(loc.Region)
+	s.Equal(len(sender.failStoreIDs), 0)
+	s.Equal(len(sender.failProxyStoreIDs), 0)
+	region := sender.regionCache.GetCachedRegionWithRLock(loc.Region)
 	s.NotNil(region)
 	s.False(region.isValid())
 
-	loc, err = s.regionRequestSender.regionCache.LocateKey(bo, []byte("k"))
+	loc, err = sender.regionCache.LocateKey(bo, []byte("k"))
 	s.Nil(err)
 	req = tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("k"),
 		Value: []byte("v2"),
 	})
-	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	resp, ctx, _, err = sender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	regionErr, err = resp.GetRegionError()
 	s.Nil(err)
