@@ -1837,9 +1837,9 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, a
 			// Canceled by gRPC remote may happen when tikv is killed and exiting.
 			// Close the connection, backoff, and retry.
 			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.String("addr", addr), zap.Error(err))
-			var errConn client.ErrConn
+			var errConn *client.ErrConn
 			if errors.As(err, &errConn) {
-				logutil.Logger(bo.GetCtx()).Debug("close connection", zap.Error(&errConn))
+				logutil.Logger(bo.GetCtx()).Debug("close connection", zap.Error(errConn))
 				s.client.CloseAddr(errConn.Addr, errConn.Ver)
 			}
 		}

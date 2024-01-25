@@ -729,3 +729,34 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestErrConn(t *testing.T) {
+	e := errors.New("conn error")
+	err1 := &ErrConn{Err: e, Addr: "addr", Ver: 10}
+	err2 := &ErrConn{Err: e, Addr: "addr", Ver: 10}
+
+	e3 := errors.New("conn error 3")
+	err3 := &ErrConn{Err: e3}
+
+	err4 := errors.New("not ErrConn")
+
+	assert.True(t, errors.Is(err1, err1))
+	assert.True(t, errors.Is(fmt.Errorf("%w", err1), err1))
+	assert.False(t, errors.Is(fmt.Errorf("%w", err2), err1)) // err2 != err1
+	assert.False(t, errors.Is(fmt.Errorf("%w", err4), err1))
+
+	var errConn *ErrConn
+	assert.True(t, errors.As(err1, &errConn))
+	assert.Equal(t, "addr", errConn.Addr)
+	assert.EqualValues(t, 10, errConn.Ver)
+	assert.EqualError(t, e, errConn.Err.Error())
+
+	assert.True(t, errors.As(err3, &errConn))
+	assert.EqualError(t, e3, errConn.Err.Error())
+
+	assert.False(t, errors.As(err4, &errConn))
+
+	errMsg := errors.New("unknown")
+	assert.True(t, errors.As(err1, &errMsg))
+	assert.EqualError(t, err1, errMsg.Error())
+}
