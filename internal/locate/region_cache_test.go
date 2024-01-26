@@ -338,7 +338,7 @@ func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 	s.Run("WithStaleStores", func() {
 		cntGetRegion = 0
 		s.cache.clear()
-		store2 := s.cache.getStoreByStoreID(s.store2)
+		store2 := s.cache.getStoreOrInsertDefault(s.store2)
 
 		for i := 0; i < 50; i++ {
 			atomic.StoreUint32(&store2.epoch, uint32(i))
@@ -352,7 +352,7 @@ func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 	s.Run("WithUnreachableStores", func() {
 		cntGetRegion = 0
 		s.cache.clear()
-		store2 := s.cache.getStoreByStoreID(s.store2)
+		store2 := s.cache.getStoreOrInsertDefault(s.store2)
 		atomic.StoreUint32(&store2.livenessState, uint32(unreachable))
 		defer atomic.StoreUint32(&store2.livenessState, uint32(reachable))
 
