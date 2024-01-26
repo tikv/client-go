@@ -106,7 +106,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStoreTokenLimit() {
 	s.NotNil(region)
 	oldStoreLimit := kv.StoreLimit.Load()
 	kv.StoreLimit.Store(500)
-	s.cache.getStoreByStoreID(s.storeIDs[0]).tokenCount.Store(500)
+	s.cache.getStoreOrInsertDefault(s.storeIDs[0]).tokenCount.Store(500)
 	// cause there is only one region in this cluster, regionID maps this leader.
 	resp, _, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.NotNil(err)
@@ -251,13 +251,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		return innerClient.SendRequest(ctx, addr, req, timeout)
 	}}
 	var storeState = uint32(unreachable)
-	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+	s.regionRequestSender.regionCache.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
 		if s.addr == leaderAddr {
 			return livenessState(atomic.LoadUint32(&storeState))
 		}
 		return reachable
-	}
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	})
 
 	loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("k"))
 	s.Nil(err)
@@ -525,10 +524,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
-	tf := func(s *Store, bo *retry.Backoffer) livenessState {
-		return unreachable
-	}
-	cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	unreachable.injectConstantLiveness(cache)
 	s.IsType(&accessKnownLeader{}, replicaSelector.state)
 	_, err = replicaSelector.next(s.bo)
 	s.Nil(err)
@@ -564,11 +560,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Do not try to use proxy if livenessState is unknown instead of unreachable.
 	refreshEpochs(regionStore)
 	cache.enableForwarding = true
-	tf = func(s *Store, bo *retry.Backoffer) livenessState {
-		return unknown
-	}
-	cache.testingKnobs.mockRequestLiveness.Store(
-		(*livenessFunc)(&tf))
+	unknown.injectConstantLiveness(cache)
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
@@ -590,10 +582,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
-	tf = func(s *Store, bo *retry.Backoffer) livenessState {
-		return unreachable
-	}
-	cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	unreachable.injectConstantLiveness(cache)
 	s.Eventually(func() bool {
 		return regionStore.stores[regionStore.workTiKVIdx].getLivenessState() == unreachable
 	}, 3*time.Second, 200*time.Millisecond)
@@ -853,11 +842,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
 
 	// The leader store is alive but can't provide service.
-
-	tf := func(s *Store, bo *retry.Backoffer) livenessState {
-		return reachable
-	}
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	reachable.injectConstantLiveness(s.cache)
 	s.Eventually(func() bool {
 		stores := s.regionRequestSender.replicaSelector.regionStore.stores
 		return stores[0].getLivenessState() == reachable &&
@@ -983,10 +968,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	}
 
 	// Runs out of all replicas and then returns a send error.
-	tf = func(s *Store, bo *retry.Backoffer) livenessState {
-		return unreachable
-	}
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	unreachable.injectConstantLiveness(s.cache)
 	reloadRegion()
 	for _, store := range s.storeIDs {
 		s.cluster.StopStore(store)
@@ -1003,10 +985,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 
 	// Verify switch to the leader immediately when stale read requests with global txn scope meet region errors.
 	s.cluster.ChangeLeader(region.Region.id, s.peerIDs[0])
-	tf = func(s *Store, bo *retry.Backoffer) livenessState {
-		return reachable
-	}
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	reachable.injectConstantLiveness(s.cache)
 	s.Eventually(func() bool {
 		stores := s.regionRequestSender.replicaSelector.regionStore.stores
 		return stores[0].getLivenessState() == reachable &&
@@ -1185,7 +1164,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 	regionStore := region.getStore()
 	leaderAddr = regionStore.stores[regionStore.workTiKVIdx].addr
 	s.NotEqual(leaderAddr, "")
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 30; i++ {
 		bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
 		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 		s.Nil(err)
@@ -1371,10 +1350,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 	}
 
 	// Test for write request.
-	tf := func(s *Store, bo *retry.Backoffer) livenessState {
-		return reachable
-	}
-	s.regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+	reachable.injectConstantLiveness(s.cache)
 	resetStats()
 	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{})
 	req.ReplicaReadType = kv.ReplicaReadLeader
@@ -1700,6 +1676,71 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 	s.Nil(err)
 	// `tryFollower` always try the local peer firstly
 	s.Equal(follower.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestPreferLeader() {
+	key := []byte("key")
+	bo := retry.NewBackoffer(context.Background(), -1)
+
+	// load region into cache
+	loc, err := s.cache.LocateKey(bo, key)
+	s.Require().NoError(err)
+
+	region := s.cache.GetCachedRegionWithRLock(loc.Region)
+	leader, _, _, _ := region.WorkStorePeer(region.getStore())
+
+	// make request
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadPreferLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+
+	// setup mock client
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		val := "follower"
+		if addr == leader.addr {
+			val = "leader"
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(val)}}, nil
+	}}
+
+	// access leader when all peers are reachable
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err := resp.GetRegionError()
+	s.NoError(err)
+	s.Nil(regionErr)
+	s.Equal("leader", string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+
+	// access follower when leader is unreachable
+	atomic.StoreUint32(&leader.livenessState, uint32(unreachable))
+
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err = resp.GetRegionError()
+	s.NoError(err)
+	s.Nil(regionErr)
+	s.Equal("follower", string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+
+	// access the rest follower when leader and one follower are unreachable
+	follower, _, _, _ := region.FollowerStorePeer(region.getStore(), 0, &storeSelectorOp{})
+	atomic.StoreUint32(&follower.livenessState, uint32(unreachable))
+
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err = resp.GetRegionError()
+	s.NoError(err)
+	s.Nil(regionErr)
+	s.Equal("follower", string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+
+	// return fake error when all peers are unreachable
+	follower, _, _, _ = region.FollowerStorePeer(region.getStore(), 1, &storeSelectorOp{})
+	atomic.StoreUint32(&follower.livenessState, uint32(unreachable))
+
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err = resp.GetRegionError()
+	s.NoError(err)
+	s.True(IsFakeRegionError(regionErr))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {

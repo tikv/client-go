@@ -290,11 +290,9 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	var leaderAccessIdx AccessIndex
 	availablePeers := r.meta.GetPeers()[:0]
 	for _, p := range r.meta.Peers {
-		c.storeMu.RLock()
-		store, exists := c.storeMu.stores[p.StoreId]
-		c.storeMu.RUnlock()
+		store, exists := c.getStore(p.StoreId)
 		if !exists {
-			store = c.getStoreByStoreID(p.StoreId)
+			store = c.getStoreOrInsertDefault(p.StoreId)
 		}
 		addr, err := store.initResolve(bo, c)
 		if err != nil {
@@ -458,7 +456,7 @@ func (mu *regionIndexMu) refresh(r []*Region) {
 	mu.sorted = newMu.sorted
 }
 
-type livenessFunc func(s *Store, bo *retry.Backoffer) livenessState
+type livenessFunc func(ctx context.Context, s *Store) livenessState
 
 // RegionCache caches Regions loaded from PD.
 // All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
@@ -555,9 +553,7 @@ func newTestRegionCache() *RegionCache {
 // clear clears all cached data in the RegionCache. It's only used in tests.
 func (c *RegionCache) clear() {
 	c.mu.refresh(nil)
-	c.storeMu.Lock()
-	c.storeMu.stores = make(map[uint64]*Store)
-	c.storeMu.Unlock()
+	c.clearStores()
 }
 
 // thread unsafe, should use with lock
@@ -584,7 +580,7 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-c.notifyCheckCh:
+		case <-c.getCheckStoreEvents():
 			c.checkAndResolve(needCheckStores, func(s *Store) bool {
 				return s.getResolveState() == needCheck
 			})
@@ -612,15 +608,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 		}
 	}()
 
-	c.storeMu.RLock()
-	for _, store := range c.storeMu.stores {
-		if needCheck(store) {
-			needCheckStores = append(needCheckStores, store)
-		}
-	}
-	c.storeMu.RUnlock()
-
-	for _, store := range needCheckStores {
+	for _, store := range c.filterStores(needCheckStores, needCheck) {
 		_, err := store.reResolve(c)
 		tikverr.Log(err)
 	}
@@ -628,16 +616,14 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
 func (c *RegionCache) SetRegionCacheStore(id uint64, addr string, peerAddr string, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
-	c.storeMu.Lock()
-	defer c.storeMu.Unlock()
-	c.storeMu.stores[id] = &Store{
+	c.putStore(&Store{
 		storeID:   id,
 		storeType: storeType,
 		state:     state,
 		labels:    labels,
 		addr:      addr,
 		peerAddr:  peerAddr,
-	}
+	})
 }
 
 // SetPDClient replaces pd client,for testing only
@@ -1201,7 +1187,7 @@ func (c *RegionCache) markRegionNeedBeRefill(s *Store, storeIdx int, rs *regionS
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 	}
 	// schedule a store addr resolve.
-	s.markNeedCheck(c.notifyCheckCh)
+	c.markStoreNeedCheck(s)
 	return incEpochStoreIdx
 }
 
@@ -1571,41 +1557,17 @@ func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
 }
 
 // GetStoresByType gets stores by type `typ`
-// TODO: revise it by get store by closure.
 func (c *RegionCache) GetStoresByType(typ tikvrpc.EndpointType) []*Store {
-	c.storeMu.Lock()
-	defer c.storeMu.Unlock()
-	stores := make([]*Store, 0)
-	for _, store := range c.storeMu.stores {
-		if store.getResolveState() != resolved {
-			continue
-		}
-		if store.storeType == typ {
-			//TODO: revise it with store.clone()
-			storeLabel := make([]*metapb.StoreLabel, 0)
-			for _, label := range store.labels {
-				storeLabel = append(storeLabel, &metapb.StoreLabel{
-					Key:   label.Key,
-					Value: label.Value,
-				})
-			}
-			stores = append(stores, &Store{
-				addr:      store.addr,
-				peerAddr:  store.peerAddr,
-				storeID:   store.storeID,
-				labels:    storeLabel,
-				storeType: typ,
-			})
-		}
-	}
-	return stores
+	return c.filterStores(nil, func(s *Store) bool {
+		return s.getResolveState() == resolved && s.storeType == typ
+	})
 }
 
 // GetAllStores gets TiKV and TiFlash stores.
 func (c *RegionCache) GetAllStores() []*Store {
-	stores := c.GetStoresByType(tikvrpc.TiKV)
-	tiflashStores := c.GetStoresByType(tikvrpc.TiFlash)
-	return append(stores, tiflashStores...)
+	return c.filterStores(nil, func(s *Store) bool {
+		return s.getResolveState() == resolved && (s.storeType == tikvrpc.TiKV || s.storeType == tikvrpc.TiFlash)
+	})
 }
 
 // loadRegion loads region from pd client, and picks the first peer as leader.
@@ -1855,7 +1817,7 @@ func (c *RegionCache) getStoreAddr(bo *retry.Backoffer, region *Region, store *S
 		addr, err = store.initResolve(bo, c)
 		return
 	case deleted:
-		addr = c.changeToActiveStore(region, store)
+		addr = c.changeToActiveStore(region, store.storeID)
 		return
 	case tombstone:
 		return "", nil
@@ -1908,10 +1870,8 @@ func (c *RegionCache) getProxyStore(region *Region, store *Store, rs *regionStor
 
 // changeToActiveStore replace the deleted store in the region by an up-to-date store in the stores map.
 // The order is guaranteed by reResolve() which adds the new store before marking old store deleted.
-func (c *RegionCache) changeToActiveStore(region *Region, store *Store) (addr string) {
-	c.storeMu.RLock()
-	store = c.storeMu.stores[store.storeID]
-	c.storeMu.RUnlock()
+func (c *RegionCache) changeToActiveStore(region *Region, storeID uint64) (addr string) {
+	store, _ := c.getStore(storeID)
 	for {
 		oldRegionStore := region.getStore()
 		newRegionStore := oldRegionStore.clone()
@@ -1929,32 +1889,6 @@ func (c *RegionCache) changeToActiveStore(region *Region, store *Store) (addr st
 	}
 	addr = store.addr
 	return
-}
-
-func (c *RegionCache) getStoreByStoreID(storeID uint64) (store *Store) {
-	var ok bool
-	c.storeMu.Lock()
-	store, ok = c.storeMu.stores[storeID]
-	if ok {
-		c.storeMu.Unlock()
-		return
-	}
-	store = &Store{storeID: storeID}
-	c.storeMu.stores[storeID] = store
-	c.storeMu.Unlock()
-	return
-}
-
-func (c *RegionCache) getStoresByLabels(labels []*metapb.StoreLabel) []*Store {
-	c.storeMu.RLock()
-	defer c.storeMu.RUnlock()
-	s := make([]*Store, 0)
-	for _, store := range c.storeMu.stores {
-		if store.IsLabelsMatch(labels) {
-			s = append(s, store)
-		}
-	}
-	return s
 }
 
 // OnBucketVersionNotMatch removes the old buckets meta if the version is stale.
@@ -2046,35 +1980,27 @@ func (c *RegionCache) PDClient() pd.Client {
 
 // GetTiFlashStores returns the information of all tiflash nodes.
 func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
-	c.storeMu.RLock()
-	defer c.storeMu.RUnlock()
-	var stores []*Store
-	for _, s := range c.storeMu.stores {
-		if s.storeType == tikvrpc.TiFlash {
-			if !labelFilter(s.labels) {
-				continue
-			}
-			stores = append(stores, s)
-		}
-	}
-	return stores
+	return c.filterStores(nil, func(s *Store) bool {
+		return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels)
+	})
 }
 
 // GetTiFlashComputeStores returns all stores with lable <engine, tiflash_compute>.
 func (c *RegionCache) GetTiFlashComputeStores(bo *retry.Backoffer) (res []*Store, err error) {
-	c.tiflashComputeStoreMu.RLock()
-	needReload := c.tiflashComputeStoreMu.needReload
-	stores := c.tiflashComputeStoreMu.stores
-	c.tiflashComputeStoreMu.RUnlock()
+	stores, needReload := c.listTiflashComputeStores()
 
 	if needReload {
-		return c.reloadTiFlashComputeStores(bo)
+		stores, err = reloadTiFlashComputeStores(bo.GetCtx(), c)
+		if err == nil {
+			c.setTiflashComputeStores(stores)
+		}
+		return stores, err
 	}
 	return stores, nil
 }
 
-func (c *RegionCache) reloadTiFlashComputeStores(bo *retry.Backoffer) (res []*Store, _ error) {
-	stores, err := c.pdClient.GetAllStores(bo.GetCtx())
+func reloadTiFlashComputeStores(ctx context.Context, registry storeRegistry) (res []*Store, _ error) {
+	stores, err := registry.fetchAllStores(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2091,10 +2017,6 @@ func (c *RegionCache) reloadTiFlashComputeStores(bo *retry.Backoffer) (res []*St
 			})
 		}
 	}
-
-	c.tiflashComputeStoreMu.Lock()
-	c.tiflashComputeStoreMu.stores = res
-	c.tiflashComputeStoreMu.Unlock()
 	return res, nil
 }
 
@@ -2120,9 +2042,7 @@ func (c *RegionCache) InvalidateTiFlashComputeStoresIfGRPCError(err error) bool 
 // InvalidateTiFlashComputeStores set needReload be true,
 // and will refresh tiflash_compute store cache next time.
 func (c *RegionCache) InvalidateTiFlashComputeStores() {
-	c.tiflashComputeStoreMu.Lock()
-	defer c.tiflashComputeStoreMu.Unlock()
-	c.tiflashComputeStoreMu.needReload = true
+	c.markTiflashComputeStoresNeedReload()
 }
 
 // UpdateBucketsIfNeeded queries PD to update the buckets of the region in the cache if
@@ -2584,7 +2504,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c *RegionCache) (addr string, e
 	var store *metapb.Store
 	for {
 		start := time.Now()
-		store, err = c.pdClient.GetStore(bo.GetCtx(), s.storeID)
+		store, err = c.fetchStore(bo.GetCtx(), s.storeID)
 		metrics.LoadRegionCacheHistogramWithGetStore.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetStoreError.Inc()
@@ -2632,7 +2552,7 @@ func isStoreNotFoundError(err error) bool {
 // deleted.
 func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	var addr string
-	store, err := c.pdClient.GetStore(context.Background(), s.storeID)
+	store, err := c.fetchStore(context.Background(), s.storeID)
 	if err != nil {
 		metrics.RegionCacheCounterWithGetStoreError.Inc()
 	} else {
@@ -2660,12 +2580,12 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
-		c.storeMu.Lock()
+		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
+		newStore.unreachableSince = s.unreachableSince
 		if s.addr == addr {
 			newStore.slowScore = s.slowScore
 		}
-		c.storeMu.stores[newStore.storeID] = newStore
-		c.storeMu.Unlock()
+		c.putStore(newStore)
 		s.setResolveState(deleted)
 		return false, nil
 	}
@@ -2705,16 +2625,6 @@ func (s *Store) changeResolveStateTo(from, to resolveState) bool {
 				zap.String("to", to.String()),
 				zap.String("liveness-state", s.getLivenessState().String()))
 			return true
-		}
-	}
-}
-
-// markNeedCheck marks resolved store to be async resolve to check store addr change.
-func (s *Store) markNeedCheck(notifyCheckCh chan struct{}) {
-	if s.changeResolveStateTo(resolved, needCheck) {
-		select {
-		case notifyCheckCh <- struct{}{}:
-		default:
 		}
 	}
 }
@@ -2782,6 +2692,10 @@ func (s *Store) getLivenessState() livenessState {
 
 type livenessState uint32
 
+func (l livenessState) injectConstantLiveness(tk testingKnobs) {
+	tk.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState { return l })
+}
+
 var (
 	livenessSf singleflight.Group
 	// storeLivenessTimeout is the max duration of resolving liveness of a TiKV instance.
@@ -2818,7 +2732,11 @@ func (s livenessState) String() string {
 	}
 }
 
-func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
+func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoffer, c *RegionCache) (liveness livenessState) {
+	liveness = s.requestLiveness(bo.GetCtx(), c)
+	if liveness == reachable {
+		return
+	}
 	// This mechanism doesn't support non-TiKV stores currently.
 	if s.storeType != tikvrpc.TiKV {
 		logutil.BgLogger().Info("[health check] skip running health check loop for non-tikv store",
@@ -2829,15 +2747,28 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessSt
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		go s.checkUntilHealth(c)
+		reResolveInterval := 30 * time.Second
+		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
+			if dur, err := time.ParseDuration(val.(string)); err == nil {
+				reResolveInterval = dur
+			}
+		}
+		go s.checkUntilHealth(c, liveness, reResolveInterval)
 	}
+	return
 }
 
-func (s *Store) checkUntilHealth(c *RegionCache) {
-	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
-
+func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResolveInterval time.Duration) {
 	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		if liveness != reachable {
+			logutil.BgLogger().Warn("[health check] store was still not reachable at the end of health check loop",
+				zap.Uint64("storeID", s.storeID),
+				zap.String("state", s.getResolveState().String()),
+				zap.String("liveness", s.getLivenessState().String()))
+		}
+	}()
 	lastCheckPDTime := time.Now()
 
 	for {
@@ -2845,34 +2776,55 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			if time.Since(lastCheckPDTime) > time.Second*30 {
+			if time.Since(lastCheckPDTime) > reResolveInterval {
 				lastCheckPDTime = time.Now()
 
 				valid, err := s.reResolve(c)
 				if err != nil {
 					logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 				} else if !valid {
-					logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr))
+					if s.getResolveState() == deleted {
+						// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
+						newStore, _ := c.getStore(s.storeID)
+						logutil.BgLogger().Info("[health check] store meta changed",
+							zap.Uint64("storeID", s.storeID),
+							zap.String("oldAddr", s.addr),
+							zap.String("oldLabels", fmt.Sprintf("%v", s.labels)),
+							zap.String("newAddr", newStore.addr),
+							zap.String("newLabels", fmt.Sprintf("%v", newStore.labels)))
+						go newStore.checkUntilHealth(c, liveness, reResolveInterval)
+					}
 					return
 				}
 			}
 
-			bo := retry.NewNoopBackoff(c.ctx)
-			l := s.requestLiveness(bo, c)
-			if l == reachable {
+			liveness = s.requestLiveness(c.ctx, c)
+			atomic.StoreUint32(&s.livenessState, uint32(liveness))
+			if liveness == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
-
 				return
 			}
-			atomic.StoreUint32(&s.livenessState, uint32(l))
 		}
 	}
 }
 
-func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l livenessState) {
+func (s *Store) requestLiveness(ctx context.Context, tk testingKnobs) (l livenessState) {
 	// It's not convenient to mock liveness in integration tests. Use failpoint to achieve that instead.
 	if val, err := util.EvalFailpoint("injectLiveness"); err == nil {
-		switch val.(string) {
+		liveness := val.(string)
+		if strings.Contains(liveness, " ") {
+			for _, item := range strings.Split(liveness, " ") {
+				kv := strings.Split(item, ":")
+				if len(kv) != 2 {
+					continue
+				}
+				if kv[0] == s.addr {
+					liveness = kv[1]
+					break
+				}
+			}
+		}
+		switch liveness {
 		case "unreachable":
 			return unreachable
 		case "reachable":
@@ -2882,10 +2834,10 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 		}
 	}
 
-	if c != nil {
-		livenessFunc := c.testingKnobs.mockRequestLiveness.Load()
+	if tk != nil {
+		livenessFunc := tk.getMockRequestLiveness()
 		if livenessFunc != nil {
-			return (*livenessFunc)(s, bo)
+			return livenessFunc(ctx, s)
 		}
 	}
 
@@ -2901,12 +2853,6 @@ func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l liveness
 	rsCh := livenessSf.DoChan(addr, func() (interface{}, error) {
 		return invokeKVStatusAPI(addr, storeLivenessTimeout), nil
 	})
-	var ctx context.Context
-	if bo != nil {
-		ctx = bo.GetCtx()
-	} else {
-		ctx = context.Background()
-	}
 	select {
 	case rs := <-rsCh:
 		l = rs.Val.(livenessState)
@@ -3046,12 +2992,10 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 		}
 	}()
 	slowScoreMetrics := make(map[uint64]float64)
-	c.storeMu.RLock()
-	for _, store := range c.storeMu.stores {
+	c.forEachStore(func(store *Store) {
 		store.updateSlowScoreStat()
 		slowScoreMetrics[store.storeID] = float64(store.getSlowScore())
-	}
-	c.storeMu.RUnlock()
+	})
 	for store, score := range slowScoreMetrics {
 		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(score)
 	}
@@ -3084,14 +3028,12 @@ func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			c.storeMu.RLock()
-			for _, store := range c.storeMu.stores {
+			c.forEachStore(func(store *Store) {
 				for destType := toLeader; destType < numReplicaFlowsType; destType++ {
 					metrics.TiKVPreferLeaderFlowsGauge.WithLabelValues(destType.String(), store.addr).Set(float64(store.getReplicaFlowsStats(destType)))
 					store.resetReplicaFlowsStats(destType)
 				}
-			}
-			c.storeMu.RUnlock()
+			})
 		}
 	}
 }
@@ -3149,4 +3091,117 @@ func isSamePeer(lhs *metapb.Peer, rhs *metapb.Peer) bool {
 func contains(startKey, endKey, key []byte) bool {
 	return bytes.Compare(startKey, key) <= 0 &&
 		(bytes.Compare(key, endKey) < 0 || len(endKey) == 0)
+}
+
+type testingKnobs interface {
+	getMockRequestLiveness() livenessFunc
+	setMockRequestLiveness(f livenessFunc)
+}
+
+func (c *RegionCache) getMockRequestLiveness() livenessFunc {
+	f := c.testingKnobs.mockRequestLiveness.Load()
+	if f == nil {
+		return nil
+	}
+	return *f
+}
+
+func (c *RegionCache) setMockRequestLiveness(f livenessFunc) {
+	c.testingKnobs.mockRequestLiveness.Store(&f)
+}
+
+type storeRegistry interface {
+	fetchStore(ctx context.Context, id uint64) (*metapb.Store, error)
+	fetchAllStores(ctx context.Context) ([]*metapb.Store, error)
+}
+
+func (c *RegionCache) fetchStore(ctx context.Context, id uint64) (*metapb.Store, error) {
+	return c.pdClient.GetStore(ctx, id)
+}
+
+func (c *RegionCache) fetchAllStores(ctx context.Context) ([]*metapb.Store, error) {
+	return c.pdClient.GetAllStores(ctx)
+}
+
+func (c *RegionCache) getStore(id uint64) (store *Store, exists bool) {
+	c.storeMu.RLock()
+	store, exists = c.storeMu.stores[id]
+	c.storeMu.RUnlock()
+	return
+}
+
+func (c *RegionCache) getStoreOrInsertDefault(id uint64) *Store {
+	c.storeMu.Lock()
+	store, exists := c.storeMu.stores[id]
+	if !exists {
+		store = &Store{storeID: id}
+		c.storeMu.stores[id] = store
+	}
+	c.storeMu.Unlock()
+	return store
+}
+
+func (c *RegionCache) putStore(store *Store) {
+	c.storeMu.Lock()
+	c.storeMu.stores[store.storeID] = store
+	c.storeMu.Unlock()
+}
+
+func (c *RegionCache) clearStores() {
+	c.storeMu.Lock()
+	c.storeMu.stores = make(map[uint64]*Store)
+	c.storeMu.Unlock()
+}
+
+func (c *RegionCache) forEachStore(f func(*Store)) {
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	for _, s := range c.storeMu.stores {
+		f(s)
+	}
+}
+
+func (c *RegionCache) filterStores(dst []*Store, predicate func(*Store) bool) []*Store {
+	c.storeMu.RLock()
+	for _, store := range c.storeMu.stores {
+		if predicate == nil || predicate(store) {
+			dst = append(dst, store)
+		}
+	}
+	c.storeMu.RUnlock()
+	return dst
+}
+
+func (c *RegionCache) listTiflashComputeStores() (stores []*Store, needReload bool) {
+	c.tiflashComputeStoreMu.RLock()
+	needReload = c.tiflashComputeStoreMu.needReload
+	stores = c.tiflashComputeStoreMu.stores
+	c.tiflashComputeStoreMu.RUnlock()
+	return
+}
+
+func (c *RegionCache) setTiflashComputeStores(stores []*Store) {
+	c.tiflashComputeStoreMu.Lock()
+	c.tiflashComputeStoreMu.stores = stores
+	c.tiflashComputeStoreMu.needReload = false
+	c.tiflashComputeStoreMu.Unlock()
+}
+
+func (c *RegionCache) markTiflashComputeStoresNeedReload() {
+	c.tiflashComputeStoreMu.Lock()
+	c.tiflashComputeStoreMu.needReload = true
+	c.tiflashComputeStoreMu.Unlock()
+}
+
+func (c *RegionCache) markStoreNeedCheck(store *Store) {
+	if store.changeResolveStateTo(resolved, needCheck) {
+		select {
+		case c.notifyCheckCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (c *RegionCache) getCheckStoreEvents() <-chan struct{} {
+	return c.notifyCheckCh
 }

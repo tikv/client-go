@@ -198,11 +198,19 @@ func WithPDHTTPClient(
 	opts ...pdhttp.ClientOption,
 ) Option {
 	return func(o *KVStore) {
-		o.pdHttpClient = pdhttp.NewClient(
-			source,
-			pdAddrs,
-			opts...,
-		)
+		if cli := o.GetPDClient(); cli != nil {
+			o.pdHttpClient = pdhttp.NewClientWithServiceDiscovery(
+				source,
+				o.pdClient.GetServiceDiscovery(),
+				opts...,
+			)
+		} else {
+			o.pdHttpClient = pdhttp.NewClient(
+				source,
+				pdAddrs,
+				opts...,
+			)
+		}
 	}
 }
 
