@@ -117,9 +117,9 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	if s.regionCache.enableForwarding {
 		strategy := ReplicaSelectLeaderWithProxyStrategy{}
 		s.target, s.proxy = strategy.next(s.replicas, s.region)
-	}
-	if s.target != nil {
-		return
+		if s.target != nil {
+			return
+		}
 	}
 	strategy := ReplicaSelectLeaderStrategy{}
 	s.target = strategy.next(s.replicas, s.region)
@@ -321,16 +321,28 @@ func (s ReplicaSelectLeaderWithProxyStrategy) next(replicas []*replica, region *
 		rs.unsetProxyStoreIfNeeded(region)
 		return nil, nil
 	}
+	proxyIdx := rs.proxyTiKVIdx
+	if proxyIdx >= 0 && int(proxyIdx) < len(replicas) && s.isCandidate(replicas[proxyIdx], proxyIdx == leaderIdx) {
+		return leader, replicas[proxyIdx]
+	}
+
 	for i, r := range replicas {
-		if AccessIndex(i) == leaderIdx || r.isExhausted(1, 0) || r.store.getLivenessState() != reachable {
-			continue
+		if s.isCandidate(r, AccessIndex(i) == leaderIdx) {
+			return leader, r
 		}
-		if r.isEpochStale() { // check epoch here, if epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
-			continue
-		}
-		return leader, r
 	}
 	return nil, nil
+}
+
+func (s ReplicaSelectLeaderWithProxyStrategy) isCandidate(r *replica, isLeader bool) bool {
+	if isLeader ||
+		r.isExhausted(1, 0) ||
+		r.store.getLivenessState() != reachable ||
+		r.isEpochStale() {
+		// check epoch here, if epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+		return false
+	}
+	return true
 }
 
 func (s *replicaSelectorV2) onNotLeader(
@@ -406,17 +418,30 @@ func (s *replicaSelectorV2) onReadReqConfigurableTimeout(req *tikvrpc.Request) b
 func (s *replicaSelectorV2) onSendFailure(bo *retry.Backoffer, err error) {
 	metrics.RegionCacheCounterWithSendFail.Inc()
 	// todo: mark store need check and return to fast retry.
-	liveness := s.checkLiveness(bo, s.targetReplica())
-	if s.replicaReadType == kv.ReplicaReadLeader && liveness == unreachable && len(s.replicas) > 1 && s.regionCache.enableForwarding {
+	target := s.target
+	if s.proxy != nil {
+		target = s.proxy
+	}
+	liveness := s.checkLiveness(bo, target)
+	if s.replicaReadType == kv.ReplicaReadLeader && s.proxy == nil && s.target != nil && s.target.peer.Id == s.region.GetLeaderPeerID() &&
+		liveness == unreachable && len(s.replicas) > 1 && s.regionCache.enableForwarding {
 		// just return to use proxy.
 		return
 	}
 	if liveness != reachable {
-		s.invalidateReplicaStore(s.targetReplica(), err)
+		s.invalidateReplicaStore(target, err)
 	}
 }
 
 func (s *replicaSelectorV2) onSendSuccess(req *tikvrpc.Request) {
+	if s.proxy != nil && s.target != nil {
+		for idx, r := range s.replicas {
+			if r.peer.Id == s.proxy.peer.Id {
+				s.region.getStore().setProxyStoreIdx(s.region, AccessIndex(idx))
+				break
+			}
+		}
+	}
 	if s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() && req != nil && req.StaleRead == false && req.ReplicaRead == false {
 		s.region.switchWorkLeaderToPeer(s.target.peer)
 	}
