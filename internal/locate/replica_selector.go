@@ -19,11 +19,12 @@ type ReplicaSelector interface {
 	next(bo *retry.Backoffer, req *tikvrpc.Request) (*RPCContext, error)
 	targetReplica() *replica
 	proxyReplica() *replica
-	getAllReplicas() []*replica
 	replicaType(rpcCtx *RPCContext) string
 	invalidateRegion()
 	onSendSuccess(req *tikvrpc.Request)
 	String() string
+	getAllReplicas() []*replica
+	getBaseReplicaSelector() *baseReplicaSelector
 	onSendFailure(bo *retry.Backoffer, err error)
 	// Following methods are used to handle region errors.
 	onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error)
@@ -131,9 +132,10 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 			s.target = idleTarget
 			req.ReplicaRead = true
 		} else {
-			// No threshold if all peers are too busy.
+			// No threshold if all peers are too busy, remove busy threshold and still use leader.
 			s.busyThreshold = 0
 			req.BusyThresholdMs = 0
+			req.ReplicaRead = false
 		}
 	}
 	if s.target != nil {
@@ -252,6 +254,10 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 		// todo: use store slow score to select a faster one.
 		idx := maxScoreIdxes[rand.Intn(len(maxScoreIdxes))]
 		return replicas[idx]
+	}
+	if s.busyThreshold > 0 {
+		// when can't find an idle replica, no need to invalidate region.
+		return nil
 	}
 
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()

@@ -1188,6 +1188,10 @@ func (s *baseReplicaSelector) getAllReplicas() []*replica {
 	return s.replicas
 }
 
+func (s *baseReplicaSelector) getBaseReplicaSelector() *baseReplicaSelector {
+	return s
+}
+
 func (s *baseReplicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
 	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache)
 }
