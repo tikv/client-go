@@ -576,15 +576,22 @@ func (c *RPCContext) String() string {
 type contextPatcher struct {
 	staleRead   *bool
 	replicaRead *bool
+
+	timeoutFactor float64
 }
 
-func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
+func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context, timeout time.Duration) time.Duration {
 	if patcher.staleRead != nil {
 		pbCtx.StaleRead = *patcher.staleRead
 	}
 	if patcher.replicaRead != nil {
 		pbCtx.ReplicaRead = *patcher.replicaRead
 	}
+	if patcher.timeoutFactor > 0 {
+		pbCtx.MaxExecutionDurationMs = uint64(float64(pbCtx.MaxExecutionDurationMs) * patcher.timeoutFactor)
+		timeout = time.Duration(float64(timeout) * patcher.timeoutFactor)
+	}
+	return timeout
 }
 
 type storeSelectorOp struct {
