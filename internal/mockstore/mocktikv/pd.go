@@ -424,3 +424,5 @@ func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd
 func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
 	return nil, 0, nil
 }
+
+func (m *pdClient) GetServiceDiscovery() pd.ServiceDiscovery { return nil }

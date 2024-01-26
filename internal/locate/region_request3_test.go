@@ -1188,7 +1188,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown()
 	regionStore := region.getStore()
 	leaderAddr = regionStore.stores[regionStore.workTiKVIdx].addr
 	s.NotEqual(leaderAddr, "")
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 30; i++ {
 		bo := retry.NewBackofferWithVars(context.Background(), 100, nil)
 		resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 		s.Nil(err)
@@ -1722,6 +1722,71 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 	s.Nil(err)
 	// `tryFollower` always try the local peer firstly
 	s.Equal(follower.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestPreferLeader() {
+	key := []byte("key")
+	bo := retry.NewBackoffer(context.Background(), -1)
+
+	// load region into cache
+	loc, err := s.cache.LocateKey(bo, key)
+	s.Require().NoError(err)
+
+	region := s.cache.GetCachedRegionWithRLock(loc.Region)
+	leader, _, _, _ := region.WorkStorePeer(region.getStore())
+
+	// make request
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadPreferLeader, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+
+	// setup mock client
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		val := "follower"
+		if addr == leader.addr {
+			val = "leader"
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(val)}}, nil
+	}}
+
+	// access leader when all peers are reachable
+	resp, _, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err := resp.GetRegionError()
+	s.NoError(err)
+	s.Nil(regionErr)
+	s.Equal("leader", string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+
+	// access follower when leader is unreachable
+	atomic.StoreUint32(&leader.livenessState, uint32(unreachable))
+
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err = resp.GetRegionError()
+	s.NoError(err)
+	s.Nil(regionErr)
+	s.Equal("follower", string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+
+	// access the rest follower when leader and one follower are unreachable
+	follower, _, _, _ := region.FollowerStorePeer(region.getStore(), 0, &storeSelectorOp{})
+	atomic.StoreUint32(&follower.livenessState, uint32(unreachable))
+
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err = resp.GetRegionError()
+	s.NoError(err)
+	s.Nil(regionErr)
+	s.Equal("follower", string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+
+	// return fake error when all peers are unreachable
+	follower, _, _, _ = region.FollowerStorePeer(region.getStore(), 1, &storeSelectorOp{})
+	atomic.StoreUint32(&follower.livenessState, uint32(unreachable))
+
+	resp, _, _, err = s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV)
+	s.NoError(err)
+	regionErr, err = resp.GetRegionError()
+	s.NoError(err)
+	s.True(IsFakeRegionError(regionErr))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {

@@ -59,6 +59,8 @@ type TiKVClient struct {
 	GrpcKeepAliveTimeout uint `toml:"grpc-keepalive-timeout" json:"grpc-keepalive-timeout"`
 	// GrpcCompressionType is the compression type for gRPC channel: none or gzip.
 	GrpcCompressionType string `toml:"grpc-compression-type" json:"grpc-compression-type"`
+	// GrpcSharedBufferPool is the flag to control whether to share the buffer pool in the TiKV gRPC clients.
+	GrpcSharedBufferPool bool `toml:"grpc-shared-buffer-pool" json:"grpc-shared-buffer-pool"`
 	// CommitTimeout is the max time which command 'commit' will wait.
 	CommitTimeout string      `toml:"commit-timeout" json:"commit-timeout"`
 	AsyncCommit   AsyncCommit `toml:"async-commit" json:"async-commit"`
@@ -125,6 +127,7 @@ func DefaultTiKVClient() TiKVClient {
 		GrpcKeepAliveTime:    10,
 		GrpcKeepAliveTimeout: 3,
 		GrpcCompressionType:  "none",
+		GrpcSharedBufferPool: false,
 		CommitTimeout:        "41s",
 		AsyncCommit: AsyncCommit{
 			// FIXME: Find an appropriate default limit.

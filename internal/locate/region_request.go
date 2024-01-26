@@ -729,9 +729,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				idx = state.lastIdx
 			} else {
 				// randomly select next replica, but skip state.lastIdx
-				if (i+offset)%replicaSize == 0 {
+				if (i+offset)%replicaSize == int(state.leaderIdx) {
 					offset++
 				}
+				idx = AccessIndex((i + offset) % replicaSize)
 			}
 		} else {
 			idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
@@ -1571,8 +1572,9 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		// recheck whether the session/query is killed during the Next()
-		if err2 := bo.CheckKilled(); err2 != nil {
-			return nil, nil, retryTimes, err2
+		boVars := bo.GetVars()
+		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
+			return nil, nil, retryTimes, errors.WithStack(tikverr.ErrQueryInterrupted)
 		}
 		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
 			if val.(bool) {

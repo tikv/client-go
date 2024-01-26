@@ -2619,6 +2619,8 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
+		newStore.unreachableSince = s.unreachableSince
 		if s.addr == addr {
 			newStore.slowScore = s.slowScore
 		}
@@ -2784,16 +2786,28 @@ func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoff
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		go s.checkUntilHealth(c)
+		reResolveInterval := 30 * time.Second
+		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
+			if dur, err := time.ParseDuration(val.(string)); err == nil {
+				reResolveInterval = dur
+			}
+		}
+		go s.checkUntilHealth(c, liveness, reResolveInterval)
 	}
 	return
 }
 
-func (s *Store) checkUntilHealth(c *RegionCache) {
-	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
-
+func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResolveInterval time.Duration) {
 	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		if liveness != reachable {
+			logutil.BgLogger().Warn("[health check] store was still not reachable at the end of health check loop",
+				zap.Uint64("storeID", s.storeID),
+				zap.String("state", s.getResolveState().String()),
+				zap.String("liveness", s.getLivenessState().String()))
+		}
+	}()
 	lastCheckPDTime := time.Now()
 
 	for {
@@ -2801,25 +2815,34 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			if time.Since(lastCheckPDTime) > time.Second*30 {
+			if time.Since(lastCheckPDTime) > reResolveInterval {
 				lastCheckPDTime = time.Now()
 
 				valid, err := s.reResolve(c)
 				if err != nil {
 					logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 				} else if !valid {
-					logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr))
+					if s.getResolveState() == deleted {
+						// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
+						newStore, _ := c.getStore(s.storeID)
+						logutil.BgLogger().Info("[health check] store meta changed",
+							zap.Uint64("storeID", s.storeID),
+							zap.String("oldAddr", s.addr),
+							zap.String("oldLabels", fmt.Sprintf("%v", s.labels)),
+							zap.String("newAddr", newStore.addr),
+							zap.String("newLabels", fmt.Sprintf("%v", newStore.labels)))
+						go newStore.checkUntilHealth(c, liveness, reResolveInterval)
+					}
 					return
 				}
 			}
 
-			l := s.requestLiveness(c.ctx, c)
-			if l == reachable {
+			liveness = s.requestLiveness(c.ctx, c)
+			atomic.StoreUint32(&s.livenessState, uint32(liveness))
+			if liveness == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
-
 				return
 			}
-			atomic.StoreUint32(&s.livenessState, uint32(l))
 		}
 	}
 }
@@ -2827,7 +2850,20 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 func (s *Store) requestLiveness(ctx context.Context, tk testingKnobs) (l livenessState) {
 	// It's not convenient to mock liveness in integration tests. Use failpoint to achieve that instead.
 	if val, err := util.EvalFailpoint("injectLiveness"); err == nil {
-		switch val.(string) {
+		liveness := val.(string)
+		if strings.Contains(liveness, " ") {
+			for _, item := range strings.Split(liveness, " ") {
+				kv := strings.Split(item, ":")
+				if len(kv) != 2 {
+					continue
+				}
+				if kv[0] == s.addr {
+					liveness = kv[1]
+					break
+				}
+			}
+		}
+		switch liveness {
 		case "unreachable":
 			return unreachable
 		case "reachable":
