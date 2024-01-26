@@ -3,6 +3,7 @@ package locate
 import (
 	"context"
 	"fmt"
+
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/config/retry"
