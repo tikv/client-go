@@ -876,6 +876,9 @@ func sendBatchRequest(
 		logutil.Logger(ctx).Debug("send request is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
+	case <-batchConn.closed:
+		logutil.Logger(ctx).Debug("send request is cancelled (batchConn closed)", zap.String("to", addr))
+		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
@@ -893,6 +896,10 @@ func sendBatchRequest(
 		logutil.Logger(ctx).Debug("wait response is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
+	case <-batchConn.closed:
+		atomic.StoreInt32(&entry.canceled, 1)
+		logutil.Logger(ctx).Debug("wait response is cancelled (batchConn closed)", zap.String("to", addr))
+		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
 		reason := fmt.Sprintf("wait recvLoop timeout,timeout:%s, wait_duration:%s:", timeout, waitDuration)
