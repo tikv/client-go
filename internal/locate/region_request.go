@@ -215,6 +215,14 @@ func (s *RegionRequestSender) GetClient() client.Client {
 	return s.client
 }
 
+// getClientExt returns the client with ClientExt interface.
+// Return nil if the client does not implement ClientExt.
+// Don't use in critical path.
+func (s *RegionRequestSender) getClientExt() client.ClientExt {
+	ext, _ := s.client.(client.ClientExt)
+	return ext
+}
+
 // SetStoreAddr specifies the dest store address.
 func (s *RegionRequestSender) SetStoreAddr(addr string) {
 	s.storeAddr = addr
@@ -1836,7 +1844,14 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 			// Canceled by gRPC remote may happen when tikv is killed and exiting.
 			// Close the connection, backoff, and retry.
 			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.Error(err))
-			s.client.CloseAddr(ctx.Addr)
+			var errConn *client.ErrConn
+			if errors.As(err, &errConn) {
+				if ext := s.getClientExt(); ext != nil {
+					ext.CloseAddrVer(errConn.Addr, errConn.Ver)
+				} else {
+					s.client.CloseAddr(errConn.Addr)
+				}
+			}
 		}
 	}
 
