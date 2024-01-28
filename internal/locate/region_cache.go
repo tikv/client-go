@@ -1053,7 +1053,7 @@ func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 
 	// buckets contains region's start/end key, so i==0 means it can't find a suitable bucket
 	// which can happen if the bucket information is stale.
-	if found || i == 0 ||
+	if !found || i == 0 ||
 		// the key isn't located in the last range.
 		(i == searchLen && len(keys[searchLen]) != 0 && bytes.Compare(key, keys[searchLen]) >= 0) {
 		return nil
