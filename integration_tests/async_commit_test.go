@@ -504,7 +504,7 @@ func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 		if fallback {
 			req.Req.(*kvrpcpb.PrewriteRequest).MaxCommitTs = 1
 		}
-		resp, err := s.store.SendReq(bo, req, loc.Region, 5000)
+		resp, err := s.store.SendReq(bo, req, loc.Region, 5*time.Second)
 		s.Nil(err)
 		s.NotNil(resp.Resp)
 	}
