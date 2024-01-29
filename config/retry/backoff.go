@@ -217,9 +217,10 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		atomic.AddInt64(&detail.BackoffCount, 1)
 	}
 
-	err2 := b.CheckKilled()
-	if err2 != nil {
-		return err2
+	if b.vars != nil && b.vars.Killed != nil {
+		if atomic.LoadUint32(b.vars.Killed) == 1 {
+			return errors.WithStack(tikverr.ErrQueryInterrupted)
+		}
 	}
 
 	var startTs interface{}
