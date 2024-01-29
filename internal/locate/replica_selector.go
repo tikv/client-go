@@ -141,7 +141,7 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	if s.target != nil {
 		return
 	}
-	mixedStrategy := ReplicaSelectMixedStrategy{}
+	mixedStrategy := ReplicaSelectMixedStrategy{leaderOnly: s.option.leaderOnly}
 	s.target = mixedStrategy.next(s, s.region)
 }
 
@@ -159,6 +159,7 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 	strategy := ReplicaSelectMixedStrategy{
 		tryLeader:    req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader,
 		preferLeader: req.ReplicaReadType == kv.ReplicaReadPreferLeader,
+		leaderOnly:   s.option.leaderOnly,
 		learnerOnly:  req.ReplicaReadType == kv.ReplicaReadLearner,
 		labels:       s.option.labels,
 		stores:       s.option.stores,
@@ -201,6 +202,7 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica, region *Region) *
 type ReplicaSelectMixedStrategy struct {
 	tryLeader     bool
 	preferLeader  bool
+	leaderOnly    bool
 	learnerOnly   bool
 	labels        []*metapb.StoreLabel
 	stores        []uint64
@@ -216,23 +218,11 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
 		liveness := r.store.getLivenessState()
-		if epochStale && ((liveness == reachable && r.store.getResolveState() == resolved) || AccessIndex(i) == leaderIdx) {
+		isLeader := AccessIndex(i) == leaderIdx
+		if epochStale && ((liveness == reachable && r.store.getResolveState() == resolved) || isLeader) {
 			reloadRegion = true
 		}
-		if epochStale || liveness == unreachable {
-			// the replica is not available or attempts is exhausted, skip it.
-			continue
-		}
-		maxAttempt := 1
-		if r.dataIsNotReady {
-			// If the replica is failed by data not ready with stale read, we can retry it with stale read.
-			maxAttempt = 2
-		}
-		if r.isExhausted(maxAttempt, 0) {
-			continue
-		}
-		isLeader := AccessIndex(i) == leaderIdx
-		if s.busyThreshold > 0 && (r.store.EstimatedWaitTime() > s.busyThreshold || r.serverIsBusy || isLeader) {
+		if !s.isCandidate(r, isLeader, epochStale, liveness) {
 			continue
 		}
 		score := s.calculateScore(r, isLeader)
@@ -269,6 +259,29 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	}
 	selector.invalidateRegion() // is exhausted, Is need to invalidate the region?
 	return nil
+}
+
+func (s ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epochStale bool, liveness livenessState) bool {
+	if epochStale || liveness == unreachable {
+		// the replica is not available, skip it.
+		return false
+	}
+	maxAttempt := 1
+	if r.dataIsNotReady {
+		// If the replica is failed by data not ready with stale read, we can retry it with replica-read.
+		maxAttempt = 2
+	}
+	if r.isExhausted(maxAttempt, 0) {
+		// attempts is exhausted, skip it.
+		return false
+	}
+	if s.leaderOnly && !isLeader {
+		return false
+	}
+	if s.busyThreshold > 0 && (r.store.EstimatedWaitTime() > s.busyThreshold || r.serverIsBusy || isLeader) {
+		return false
+	}
+	return true
 }
 
 const (

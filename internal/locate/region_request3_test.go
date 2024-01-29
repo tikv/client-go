@@ -1017,19 +1017,19 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2() {
 		AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[accessIdx], nil)
 	}
 
-	// Test accessFollower state with leaderOnly option
-	//atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
-	//refreshEpochs(regionStore)
-	//for i := 0; i < 5; i++ {
-	//	replicaSelector, err = newReplicaSelectorV2(cache, regionLoc.Region, req, WithLeaderOnly()) // this usage is invalid?
-	//	s.NotNil(replicaSelector)
-	//	s.Nil(err)
-	//	rpcCtx, err = replicaSelector.next(s.bo, req)
-	//	s.Nil(err)
-	//	// Should always access the leader.
-	//	s.Equal(region.GetLeaderPeerID(), replicaSelector.targetReplica().peer.Id)
-	//	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
-	//}
+	// Test with leaderOnly option
+	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshEpochs(regionStore)
+	for i := 0; i < 5; i++ {
+		replicaSelector, err = newReplicaSelectorV2(cache, regionLoc.Region, req, WithLeaderOnly()) // this usage is invalid?
+		s.NotNil(replicaSelector)
+		s.Nil(err)
+		rpcCtx, err = replicaSelector.next(s.bo, req)
+		s.Nil(err)
+		// Should always access the leader.
+		s.Equal(region.GetLeaderPeerID(), replicaSelector.targetReplica().peer.Id)
+		AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
+	}
 
 	// Test accessFollower state with kv.ReplicaReadMixed request type.
 	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
