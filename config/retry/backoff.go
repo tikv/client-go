@@ -217,10 +217,9 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		atomic.AddInt64(&detail.BackoffCount, 1)
 	}
 
-	if b.vars != nil && b.vars.Killed != nil {
-		if atomic.LoadUint32(b.vars.Killed) == 1 {
-			return errors.WithStack(tikverr.ErrQueryInterrupted)
-		}
+	err2 := b.CheckKilled()
+	if err2 != nil {
+		return err2
 	}
 
 	var startTs interface{}
@@ -391,7 +390,7 @@ func (b *Backoffer) CheckKilled() error {
 				"backoff stops because a killed signal is received",
 				zap.Uint32("signal", killed),
 			)
-			return errors.WithStack(tikverr.ErrQueryInterrupted{Signal: killed})
+			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: killed})
 		}
 	}
 	return nil
