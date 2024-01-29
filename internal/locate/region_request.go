@@ -56,6 +56,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -212,6 +213,14 @@ func (s *RegionRequestSender) GetRegionCache() *RegionCache {
 // GetClient returns the RPC client.
 func (s *RegionRequestSender) GetClient() client.Client {
 	return s.client
+}
+
+// getClientExt returns the client with ClientExt interface.
+// Return nil if the client does not implement ClientExt.
+// Don't use in critical path.
+func (s *RegionRequestSender) getClientExt() client.ClientExt {
+	ext, _ := s.client.(client.ClientExt)
+	return ext
 }
 
 // SetStoreAddr specifies the dest store address.
@@ -1275,7 +1284,7 @@ func (s *RegionRequestSender) getRPCContext(
 	opts ...StoreSelectorOption,
 ) (*RPCContext, error) {
 	switch et {
-	case tikvrpc.TiKV:
+	case tikvrpc.TiKV, tikvrpc.TiKVRemoteCoprocessor:
 		if s.replicaSelector == nil {
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if selector == nil || err != nil {
@@ -1607,6 +1616,32 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 	return extraInfo
 }
 
+func (s *RegionRequestSender) countReplicaNumber(peers []*metapb.Peer) int {
+	isTiFlashWriteNode := func(storeId uint64) bool {
+		store := s.regionCache.getStoreByStoreID(storeId)
+		engine, _ := store.GetLabelValue("engine")
+		engineRole, _ := store.GetLabelValue("engine_role")
+		return engine == "tiflash" && engineRole == "write"
+	}
+	// In disaggregated-mode(tiflash write-node), only count 1 replica for tiflash, no matter how many tiflash write-nodes there are.
+	replicaNumber := 0
+	hasTiFlashWriteNode := false
+	for _, peer := range peers {
+		role := peer.GetRole()
+		if role == metapb.PeerRole_Voter {
+			replicaNumber++
+		} else if role == metapb.PeerRole_Learner {
+			if !isTiFlashWriteNode(peer.StoreId) {
+				replicaNumber++
+			} else if !hasTiFlashWriteNode {
+				hasTiFlashWriteNode = true
+				replicaNumber++
+			}
+		}
+	}
+	return replicaNumber
+}
+
 func (s *RegionRequestSender) sendReqToRegion(
 	bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration,
 ) (resp *tikvrpc.Response, retry bool, err error) {
@@ -1634,17 +1669,14 @@ func (s *RegionRequestSender) sendReqToRegion(
 		req.ForwardedHost = rpcCtx.Addr
 		sendToAddr = rpcCtx.ProxyAddr
 	}
+	if req.StoreTp == tikvrpc.TiKVRemoteCoprocessor {
+		sendToAddr = config.GetGlobalConfig().TiKVClient.RemoteCoprocessorAddr
+	}
 
 	// Count the replica number as the RU cost factor.
 	req.ReplicaNumber = 1
 	if rpcCtx.Meta != nil && len(rpcCtx.Meta.GetPeers()) > 0 {
-		req.ReplicaNumber = 0
-		for _, peer := range rpcCtx.Meta.GetPeers() {
-			role := peer.GetRole()
-			if role == metapb.PeerRole_Voter || role == metapb.PeerRole_Learner {
-				req.ReplicaNumber++
-			}
-		}
+		req.ReplicaNumber = int64(s.countReplicaNumber(rpcCtx.Meta.GetPeers()))
 	}
 
 	var sessionID uint64
@@ -1808,10 +1840,19 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		case <-bo.GetCtx().Done():
 			return errors.WithStack(err)
 		default:
-			// If we don't cancel, but the error code is Canceled, it must be from grpc remote.
-			// This may happen when tikv is killed and exiting.
-			// Backoff and retry in this case.
-			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal from remote", zap.Error(err))
+			// If we don't cancel, but the error code is Canceled, it may be canceled by keepalive or gRPC remote.
+			// For the case of canceled by keepalive, we need to re-establish the connection, otherwise following requests will always fail.
+			// Canceled by gRPC remote may happen when tikv is killed and exiting.
+			// Close the connection, backoff, and retry.
+			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.Error(err))
+			var errConn *client.ErrConn
+			if errors.As(err, &errConn) {
+				if ext := s.getClientExt(); ext != nil {
+					ext.CloseAddrVer(errConn.Addr, errConn.Ver)
+				} else {
+					s.client.CloseAddr(errConn.Addr)
+				}
+			}
 		}
 	}
 

@@ -37,6 +37,7 @@ package locate
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"net"
 	"sync"
@@ -99,6 +100,7 @@ func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 type fnClient struct {
 	fn         func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 	closedAddr string
+	closedVer  uint64
 }
 
 func (f *fnClient) Close() error {
@@ -106,7 +108,12 @@ func (f *fnClient) Close() error {
 }
 
 func (f *fnClient) CloseAddr(addr string) error {
+	return f.CloseAddrVer(addr, math.MaxUint64)
+}
+
+func (f *fnClient) CloseAddrVer(addr string, ver uint64) error {
 	f.closedAddr = addr
+	f.closedVer = ver
 	return nil
 }
 
@@ -664,6 +671,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestCloseConnectionOnStoreNotMatch
 	regionErr, _ := resp.GetRegionError()
 	s.NotNil(regionErr)
 	s.Equal(target, client.closedAddr)
+	var expected uint64 = math.MaxUint64
+	s.Equal(expected, client.closedVer)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
@@ -783,4 +792,61 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 	wg.Wait()
 	// batchSendLoop should not panic.
 	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicCounter), int64(0))
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestCountReplicaNumber() {
+	fmt.Println("TestCountReplicaNumber")
+	fmt.Println(s.cache.storeMu.stores)
+	tikvLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tikv"}}
+	tiflashLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tiflash"}}
+	tiflashWNLabels := []*metapb.StoreLabel{{Key: "engine", Value: "tiflash"}, {Key: "engine_role", Value: "write"}}
+
+	s.cache.SetRegionCacheStore(1, "", "", tikvrpc.TiKV, 0, tikvLabels)
+	s.cache.SetRegionCacheStore(2, "", "", tikvrpc.TiKV, 0, tikvLabels)
+	s.cache.SetRegionCacheStore(3, "", "", tikvrpc.TiKV, 0, tikvLabels)
+	s.cache.SetRegionCacheStore(4, "", "", tikvrpc.TiFlash, 0, tiflashLabels)
+	s.cache.SetRegionCacheStore(5, "", "", tikvrpc.TiFlash, 0, tiflashLabels)
+	{
+		peers := []*metapb.Peer{{StoreId: 1, Role: metapb.PeerRole_Voter}}
+		s.Equal(1, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 2, Role: metapb.PeerRole_Voter})
+		s.Equal(2, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 3, Role: metapb.PeerRole_Voter})
+		s.Equal(3, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 4, Role: metapb.PeerRole_Learner})
+		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
+		s.Equal(5, s.regionRequestSender.countReplicaNumber(peers))
+	}
+	s.cache.SetRegionCacheStore(4, "", "", tikvrpc.TiFlash, 0, tiflashWNLabels)
+	s.cache.SetRegionCacheStore(5, "", "", tikvrpc.TiFlash, 0, tiflashWNLabels)
+	{
+		peers := []*metapb.Peer{{StoreId: 1, Role: metapb.PeerRole_Voter}}
+		s.Equal(1, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 2, Role: metapb.PeerRole_Voter})
+		s.Equal(2, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 3, Role: metapb.PeerRole_Voter})
+		s.Equal(3, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 4, Role: metapb.PeerRole_Learner})
+		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers))
+		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
+		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers)) // Only count 1 tiflash replica for tiflash write-nodes.
+	}
+}
+
+type emptyClient struct {
+	client.Client
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestClientExt() {
+	var cli client.Client = client.NewRPCClient()
+	sender := NewRegionRequestSender(s.cache, cli)
+	s.NotNil(sender.client)
+	s.NotNil(sender.getClientExt())
+	cli.Close()
+
+	cli = &emptyClient{}
+	sender = NewRegionRequestSender(s.cache, cli)
+	s.NotNil(sender.client)
+	s.Nil(sender.getClientExt())
 }

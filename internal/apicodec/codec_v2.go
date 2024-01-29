@@ -270,7 +270,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		req.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
-		r.Key = c.EncodeRegionKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		req.Req = &r
 	case tikvrpc.CmdSplitRegion:
 		r := *req.SplitRegion()
@@ -568,6 +568,11 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 			return nil, err
 		}
 		r.Range, err = c.decodeCopRange(r.Range)
+		if err != nil {
+			return nil, err
+		}
+		// decodes batch responses
+		r.BatchResponses, err = c.decodeBatchTaskResps(r.BatchResponses)
 		if err != nil {
 			return nil, err
 		}
@@ -1000,4 +1005,22 @@ func (c *codecV2) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
 		}
 	}
 	return ks, nil
+}
+
+func (c *codecV2) decodeBatchTaskResps(responses []*coprocessor.StoreBatchTaskResponse) ([]*coprocessor.StoreBatchTaskResponse, error) {
+	for _, r := range responses {
+		if r == nil {
+			continue
+		}
+		var err error
+		r.RegionError, err = c.decodeRegionError(r.RegionError)
+		if err != nil {
+			return nil, err
+		}
+		r.Locked, err = c.decodeLockInfo(r.Locked)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return responses, nil
 }
