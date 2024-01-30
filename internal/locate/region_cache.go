@@ -412,7 +412,7 @@ func (r *Region) setSyncFlags(flags int32) {
 	}
 }
 
-// resetSyncFlags reverts flags from sync_flags (that is sync_flags&^flags), returns old flags (0 means no flags are reverted).
+// resetSyncFlags reverts flags from sync_flags (that is sync_flags&^flags), returns the flags that are reset (0 means no flags are reverted).
 func (r *Region) resetSyncFlags(flags int32) int32 {
 	for {
 		oldFlags := atomic.LoadInt32(&r.syncFlags)
