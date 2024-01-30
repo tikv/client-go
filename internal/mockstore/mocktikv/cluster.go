@@ -57,7 +57,7 @@ var _ cluster.Cluster = &Cluster{}
 //  1. Region: A Region is a fragment of TiKV's data whose range is [start, end).
 //     The data of a Region is duplicated to multiple Peers and distributed in
 //     multiple Stores.
-//  2. Peer: A Peer is a replica of a Region's data. All peers of a Region form
+//  2. Peer: A Peer is a replica of a Region's data. all peers of a Region form
 //     a group, each group elects a Leader to provide services.
 //  3. Store: A Store is a storage/service node. Try to think it as a TiKV server
 //     process. Only the store with request's Region's leader Peer could respond

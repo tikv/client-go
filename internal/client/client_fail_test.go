@@ -155,7 +155,7 @@ func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
 	}
 	// Should only reconnect once.
 	assert.Equal(t, atomic.LoadUint64(&batchClient.epoch), epoch+1)
-	// All streams are refreshed.
+	// all streams are refreshed.
 	assert.NotEqual(t, batchClient.client.Tikv_BatchCommandsClient, clientSave)
 	assert.Equal(t, len(batchClient.forwardedClients), len(forwardedClientsSave))
 	for host, clientSave := range forwardedClientsSave {

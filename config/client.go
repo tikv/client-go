@@ -90,8 +90,8 @@ type TiKVClient struct {
 	// TTLRefreshedTxnSize controls whether a transaction should update its TTL or not.
 	TTLRefreshedTxnSize      int64  `toml:"ttl-refreshed-txn-size" json:"ttl-refreshed-txn-size"`
 	ResolveLockLiteThreshold uint64 `toml:"resolve-lock-lite-threshold" json:"resolve-lock-lite-threshold"`
-	// MaxBatchGetRequestCount is the max concurrency number of request to be sent the tikv
-	// 0 means auto adjust by feedback .
+	// MaxConcurrencyRequestLimit is the max concurrency number of request to be sent the tikv
+	// 0 means auto adjust by feedback.
 	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
 }
 

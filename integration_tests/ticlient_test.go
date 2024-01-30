@@ -66,7 +66,7 @@ func (s *testTiclientSuite) SetupSuite() {
 }
 
 func (s *testTiclientSuite) TearDownSuite() {
-	// Clean all data, or it may pollute other data.
+	// clean all data, or it may pollute other data.
 	txn := s.beginTxn()
 	scanner, err := txn.Iter(encodeKey(s.prefix, ""), nil)
 	require := s.Require()

@@ -572,7 +572,7 @@ func (txn *KVTxn) Rollback() error {
 	}
 
 	start := time.Now()
-	// Clean up pessimistic lock.
+	// clean up pessimistic lock.
 	if txn.IsPessimistic() && txn.committer != nil {
 		var err error
 		if !skipPessimisticRollback {
@@ -730,7 +730,7 @@ func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 	txn.aggressiveLockingContext.currentLockedKeys = make(map[string]tempLockBufferEntry)
 }
 
-// CancelAggressiveLocking cancels the current aggressive locking state. All pessimistic locks that were acquired
+// CancelAggressiveLocking cancels the current aggressive locking state. all pessimistic locks that were acquired
 // during the aggressive locking state will be rolled back by PessimisticRollback.
 func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {

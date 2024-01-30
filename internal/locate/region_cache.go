@@ -467,7 +467,7 @@ func (mu *regionIndexMu) refresh(r []*Region) {
 type livenessFunc func(ctx context.Context, s *Store) livenessState
 
 // RegionCache caches Regions loaded from PD.
-// All public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
+// all public methods of this struct should be thread-safe, unless explicitly pointed out or the method is for testing
 // purposes only.
 type RegionCache struct {
 	pdClient         pd.Client

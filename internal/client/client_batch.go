@@ -170,16 +170,16 @@ func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint6
 
 // cancel all requests, only used in test.
 func (b *batchCommandsBuilder) cancel(e error) {
-	for _, entry := range b.entries.All() {
+	for _, entry := range b.entries.all() {
 		entry.(*batchCommandsEntry).error(e)
 	}
-	b.entries.Reset()
+	b.entries.reset()
 }
 
 // reset resets the builder to the initial state.
 // Should call it before collecting a new batch.
 func (b *batchCommandsBuilder) reset() {
-	b.entries.Clean()
+	b.entries.clean()
 	// NOTE: We can't simply set entries = entries[:0] here.
 	// The data in the cap part of the slice would reference the prewrite keys whose
 	// underlying memory is borrowed from memdb. The reference cause GC can't release
@@ -549,9 +549,9 @@ type batchCommandsClient struct {
 	closed int32
 	// tryLock protects client when re-create the streaming.
 	tryLock
-	// sent is the counter of sent requests to tikv but not accept response.
+	// sent is the number of the requests are processed by tikv server.
 	sent atomic.Int64
-	// limit is the max number of requests can be sent to tikv but not accept response.
+	// maxConcurrencyRequestLimit is the max allowed number of requests to be sent the tikv
 	maxConcurrencyRequestLimit atomic.Int64
 }
 

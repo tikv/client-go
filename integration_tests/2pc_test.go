@@ -2192,7 +2192,7 @@ func (m *mockClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.
 	if pr, ok := req.Req.(*kvrpcpb.PrewriteRequest); ok {
 		if pr.UseAsyncCommit {
 			if isPrimary(pr) {
-				// The primary key should not be included, nor should there be any duplicates. All keys should be present.
+				// The primary key should not be included, nor should there be any duplicates. all keys should be present.
 				if !includesPrimary(pr) && allKeysNoDups(pr) {
 					atomic.StoreUint32(&m.seenPrimaryReq, 1)
 				}

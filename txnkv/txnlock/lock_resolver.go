@@ -820,7 +820,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 	}
 }
 
-// asyncResolveData is data contributed by multiple goroutines when resolving locks using the async commit protocol. All
+// asyncResolveData is data contributed by multiple goroutines when resolving locks using the async commit protocol. all
 // data should be protected by the mutex field.
 type asyncResolveData struct {
 	mutex sync.Mutex

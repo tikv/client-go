@@ -188,7 +188,7 @@ const (
 // EncodeComparableVarint encodes an int64 to a mem-comparable bytes.
 func EncodeComparableVarint(b []byte, v int64) []byte {
 	if v < 0 {
-		// All negative value has a tag byte prefix (negativeTagEnd - length).
+		// all negative value has a tag byte prefix (negativeTagEnd - length).
 		// Smaller negative value encodes to more bytes, has smaller tag.
 		if v >= -0xff {
 			return append(b, negativeTagEnd-1, byte(v))

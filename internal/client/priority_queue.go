@@ -126,8 +126,8 @@ func (pq *PriorityQueue) highestPriority() uint64 {
 	return pq.ps[0].entry.priority()
 }
 
-// All returns all entries in the priority queue not ensure the priority.
-func (pq *PriorityQueue) All() []Item {
+// all returns all entries in the priority queue not ensure the priority.
+func (pq *PriorityQueue) all() []Item {
 	items := make([]Item, 0, pq.Len())
 	for i := 0; i < pq.Len(); i++ {
 		items = append(items, pq.ps[i].entry)
@@ -135,7 +135,8 @@ func (pq *PriorityQueue) All() []Item {
 	return items
 }
 
-func (pq *PriorityQueue) Clean() {
+// clean removes all canceled entries from the priority queue.
+func (pq *PriorityQueue) clean() {
 	for i := 0; i < pq.Len(); {
 		if pq.ps[i].entry.isCanceled() {
 			heap.Remove(&pq.ps, pq.ps[i].index)
@@ -145,8 +146,8 @@ func (pq *PriorityQueue) Clean() {
 	}
 }
 
-// Reset clear all entry in the queue.
-func (pq *PriorityQueue) Reset() {
+// reset clear all entry in the queue.
+func (pq *PriorityQueue) reset() {
 	for i := 0; i < pq.Len(); i++ {
 		pq.ps[i].entry = nil
 	}

@@ -42,7 +42,7 @@ func TestPriority(t *testing.T) {
 		}
 		re.Equal(5, aq.Len())
 		re.Equal(uint64(5), aq.highestPriority())
-		aq.Clean()
+		aq.clean()
 		re.Equal(5, aq.Len())
 
 		arr := aq.Take(1)
@@ -65,7 +65,7 @@ func TestPriority(t *testing.T) {
 
 		aq.Push(&FakeItem{value: 1, pri: 1, canceled: true})
 		re.Equal(1, aq.Len())
-		aq.Clean()
+		aq.clean()
 		re.Equal(0, aq.Len())
 	}
 	hq := NewPriorityQueue()
