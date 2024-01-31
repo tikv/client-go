@@ -1048,7 +1048,7 @@ func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1
 	i, found := slices.BinarySearchFunc(keys, key, func(a, b []byte) int {
-		return bytes.Compare(a, b)
+		return -bytes.Compare(a, b)
 	})
 
 	// buckets contains region's start/end key, so i==0 means it can't find a suitable bucket
