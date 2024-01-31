@@ -42,7 +42,6 @@ import (
 	"math"
 	"math/rand"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,7 +67,6 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
-	atomic2 "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
@@ -220,7 +218,7 @@ type regionStore struct {
 	// accessIndex[tiKVOnly][proxyTiKVIdx] is the index of TiKV that can forward requests to the leader in stores, -1 means not using proxy.
 	proxyTiKVIdx AccessIndex
 	// accessIndex[tiFlashOnly][workTiFlashIdx] is the index of the current working TiFlash in stores.
-	workTiFlashIdx atomic2.Int32
+	workTiFlashIdx atomic.Int32
 	// buckets is not accurate and it can change even if the region is not changed.
 	// It can be stale and buckets keys can be out of the region range.
 	buckets *metapb.Buckets
@@ -1049,13 +1047,13 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 func (l *KeyLocation) locateBucket(key []byte) *Bucket {
 	keys := l.Buckets.GetKeys()
 	searchLen := len(keys) - 1
-	i := sort.Search(searchLen, func(i int) bool {
-		return bytes.Compare(key, keys[i]) < 0
+	i, found := slices.BinarySearchFunc(keys, key, func(a, b []byte) int {
+		return bytes.Compare(a, b)
 	})
 
 	// buckets contains region's start/end key, so i==0 means it can't find a suitable bucket
 	// which can happen if the bucket information is stale.
-	if i == 0 ||
+	if found || i == 0 ||
 		// the key isn't located in the last range.
 		(i == searchLen && len(keys[searchLen]) != 0 && bytes.Compare(key, keys[searchLen]) >= 0) {
 		return nil
@@ -2512,9 +2510,9 @@ type Store struct {
 	resolveMutex sync.Mutex           // protect pd from concurrent init requests
 	epoch        uint32               // store fail epoch, see RegionStore.storeEpochs
 	storeType    tikvrpc.EndpointType // type of the store
-	tokenCount   atomic2.Int64        // used store token count
+	tokenCount   atomic.Int64         // used store token count
 
-	loadStats atomic2.Pointer[storeLoadStats]
+	loadStats atomic.Pointer[storeLoadStats]
 
 	// whether the store is unreachable due to some reason, therefore requests to the store needs to be
 	// forwarded by other stores. this is also the flag that a checkUntilHealth goroutine is running for this store.
