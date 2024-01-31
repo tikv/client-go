@@ -211,7 +211,7 @@ func (s *testRegionCacheSuite) TestSimple() {
 	s.checkCache(1)
 	s.Equal(r.GetMeta(), r.meta)
 	s.Equal(r.GetLeaderPeerID(), r.meta.Peers[r.getStore().workTiKVIdx].Id)
-	s.cache.mu.regions[r.VerID()].lastAccess = 0
+	s.cache.mu.regions[r.VerID()].ttl = 0
 	r = s.cache.searchCachedRegion([]byte("a"), true)
 	s.Nil(r)
 }
@@ -310,8 +310,8 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 }
 
 func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
-	s.onClosed = func() { SetRegionCacheTTLSec(600) }
-	SetRegionCacheTTLSec(2)
+	s.onClosed = func() { SetRegionCacheTTLWithJitter(600, 60) }
+	SetRegionCacheTTLWithJitter(2, 0)
 
 	cntGetRegion := 0
 	s.cache.pdClient = &inspectedPDClient{
@@ -366,8 +366,8 @@ func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 }
 
 func (s *testRegionCacheSuite) TestTiFlashRecoveredFromDown() {
-	s.onClosed = func() { SetRegionCacheTTLSec(600) }
-	SetRegionCacheTTLSec(3)
+	s.onClosed = func() { SetRegionCacheTTLWithJitter(600, 60) }
+	SetRegionCacheTTLWithJitter(3, 0)
 
 	store3 := s.cluster.AllocID()
 	peer3 := s.cluster.AllocID()
@@ -1597,7 +1597,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	fakeRegion := &Region{
 		meta:          cachedRegion.meta,
 		syncFlags:     cachedRegion.syncFlags,
-		lastAccess:    cachedRegion.lastAccess,
+		ttl:           cachedRegion.ttl,
 		invalidReason: cachedRegion.invalidReason,
 	}
 	fakeRegion.setStore(cachedRegion.getStore().clone())
@@ -1817,7 +1817,7 @@ func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
 	now := time.Now().Unix()
 	for verID, r := range s.cache.mu.regions {
 		if verID.id%3 == 0 {
-			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+			atomic.StoreInt64(&r.ttl, now-10)
 		} else {
 			remaining++
 		}
@@ -1837,7 +1837,7 @@ func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
 	now = time.Now().Unix()
 	for verID, r := range s.cache.mu.regions {
 		if verID.id%3 == 1 {
-			atomic.StoreInt64(&r.lastAccess, now-regionCacheTTLSec-10)
+			atomic.StoreInt64(&r.ttl, now-10)
 		} else {
 			remaining++
 		}
@@ -1929,7 +1929,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	v2 := region.Region.confVer + 1
 	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
 	st := &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true, true)
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 2)
@@ -2006,7 +2006,7 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 	fakeRegion := &Region{
 		meta:          r.meta,
 		syncFlags:     r.syncFlags,
-		lastAccess:    r.lastAccess,
+		ttl:           r.ttl,
 		invalidReason: r.invalidReason,
 	}
 	fakeRegion.setStore(r.getStore().clone())

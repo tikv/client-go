@@ -81,9 +81,9 @@ import (
 )
 
 const (
-	btreeDegree               = 32
-	invalidatedLastAccessTime = -1
-	defaultRegionsPerBatch    = 128
+	btreeDegree            = 32
+	expiredTTL             = -1
+	defaultRegionsPerBatch = 128
 )
 
 // LabelFilter returns false means label doesn't match, and will ignore this store.
@@ -121,6 +121,29 @@ func SetRegionCacheTTLSec(t int64) {
 	regionCacheTTLSec = t
 }
 
+// regionCacheTTLJitterSec is the max jitter time for region cache TTL.
+var regionCacheTTLJitterSec int64 = 60
+
+// SetRegionCacheTTLWithJitter sets region cache TTL with jitter. The real TTL is in range of [base, base+jitter).
+func SetRegionCacheTTLWithJitter(base int64, jitter int64) {
+	regionCacheTTLSec = base
+	regionCacheTTLJitterSec = jitter
+}
+
+// nextTTL returns a random TTL in range [ts+base, ts+base+jitter).
+func nextTTL(ts int64) int64 {
+	jitter := int64(0)
+	if regionCacheTTLJitterSec > 0 {
+		jitter = rand.Int63n(regionCacheTTLJitterSec)
+	}
+	return ts + regionCacheTTLSec + jitter
+}
+
+// nextTTLWithoutJitter is used for test.
+func nextTTLWithoutJitter(ts int64) int64 {
+	return ts + regionCacheTTLSec
+}
+
 const (
 	needReloadOnAccess       int32 = 1 << iota // indicates the region will be reloaded on next access
 	needExpireAfterTTL                         // indicates the region will expire after RegionCacheTTL (even when it's accessed continuously)
@@ -154,7 +177,7 @@ const (
 type Region struct {
 	meta          *metapb.Region // raw region meta from PD, immutable after init
 	store         unsafe.Pointer // point to region store info, see RegionStore
-	lastAccess    int64          // last region access time, see checkRegionCacheTTL
+	ttl           int64          // region TTL in epoch seconds, see checkRegionCacheTTL
 	syncFlags     int32          // region need be sync later, see needReloadOnAccess, needExpireAfterTTL
 	invalidReason InvalidReason  // the reason why the region is invalidated
 }
@@ -338,7 +361,7 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	}
 
 	// mark region has been init accessed.
-	r.lastAccess = time.Now().Unix()
+	r.ttl = nextTTL(time.Now().Unix())
 	return r, nil
 }
 
@@ -356,8 +379,7 @@ func (r *Region) compareAndSwapStore(oldStore, newStore *regionStore) bool {
 }
 
 func (r *Region) isCacheTTLExpired(ts int64) bool {
-	lastAccess := atomic.LoadInt64(&r.lastAccess)
-	return ts-lastAccess > regionCacheTTLSec
+	return ts > atomic.LoadInt64(&r.ttl)
 }
 
 // checkRegionCacheTTL returns false means the region cache is expired.
@@ -366,28 +388,36 @@ func (r *Region) checkRegionCacheTTL(ts int64) bool {
 	if _, err := util.EvalFailpoint("invalidateRegionCache"); err == nil {
 		r.invalidate(Other)
 	}
+	newTTL := int64(0)
 	for {
-		lastAccess := atomic.LoadInt64(&r.lastAccess)
-		if ts-lastAccess > regionCacheTTLSec {
+		ttl := atomic.LoadInt64(&r.ttl)
+		if ts > ttl {
 			return false
 		}
-		if r.checkSyncFlags(needExpireAfterTTL) || atomic.CompareAndSwapInt64(&r.lastAccess, lastAccess, ts) {
+		// skip updating TTL when:
+		// 1. the region has been marked as `needExpireAfterTTL`
+		// 2. the TTL is far away from ts (still within jitter time)
+		if r.checkSyncFlags(needExpireAfterTTL) || ttl > ts+regionCacheTTLSec {
+			return true
+		}
+		if newTTL == 0 {
+			newTTL = nextTTL(ts)
+		}
+		// now we have ts <= ttl <= ts+regionCacheTTLSec <= newTTL = ts+regionCacheTTLSec+randomJitter
+		if atomic.CompareAndSwapInt64(&r.ttl, ttl, newTTL) {
 			return true
 		}
 	}
 }
 
 // invalidate invalidates a region, next time it will got null result.
-func (r *Region) invalidate(reason InvalidReason) {
-	metrics.RegionCacheCounterWithInvalidateRegionFromCacheOK.Inc()
-	atomic.StoreInt32((*int32)(&r.invalidReason), int32(reason))
-	atomic.StoreInt64(&r.lastAccess, invalidatedLastAccessTime)
-}
-
-// invalidateWithoutMetrics invalidates a region without metrics, next time it will got null result.
-func (r *Region) invalidateWithoutMetrics(reason InvalidReason) {
-	atomic.StoreInt32((*int32)(&r.invalidReason), int32(reason))
-	atomic.StoreInt64(&r.lastAccess, invalidatedLastAccessTime)
+func (r *Region) invalidate(reason InvalidReason, nocount ...bool) {
+	if atomic.CompareAndSwapInt32((*int32)(&r.invalidReason), int32(Ok), int32(reason)) {
+		if len(nocount) == 0 || !nocount[0] {
+			metrics.RegionCacheCounterWithInvalidateRegionFromCacheOK.Inc()
+		}
+		atomic.StoreInt64(&r.ttl, expiredTTL)
+	}
 }
 
 func (r *Region) getSyncFlags() int32 {
@@ -1500,11 +1530,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		// If the old region is still valid, do not invalidate it to avoid unnecessary backoff.
 		if invalidateOldRegion {
 			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
-			if shouldCount {
-				region.cachedRegion.invalidate(Other)
-			} else {
-				region.cachedRegion.invalidateWithoutMetrics(Other)
-			}
+			region.cachedRegion.invalidate(Other, !shouldCount)
 		}
 	}
 	// update related vars.
@@ -1546,14 +1572,10 @@ func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
 			zap.Uint64("regionID", regionID), zap.Stringer("version", &ver))
 		return nil
 	}
-	lastAccess := atomic.LoadInt64(&latestRegion.lastAccess)
-	if ts-lastAccess > regionCacheTTLSec {
-		return nil
+	if latestRegion.checkRegionCacheTTL(ts) {
+		return latestRegion
 	}
-	if !latestRegion.checkSyncFlags(needExpireAfterTTL) {
-		atomic.CompareAndSwapInt64(&latestRegion.lastAccess, atomic.LoadInt64(&latestRegion.lastAccess), ts)
-	}
-	return latestRegion
+	return nil
 }
 
 // GetStoresByType gets stores by type `typ`

@@ -356,6 +356,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 	s.Nil(ctx.ProxyStore)
 }
 
+func refreshRegionTTL(region *Region) {
+	atomic.StoreInt64(&region.ttl, nextTTLWithoutJitter(time.Now().Unix()))
+	atomic.StoreInt32((*int32)(&region.invalidReason), int32(Ok))
+}
+
 func refreshEpochs(regionStore *regionStore) {
 	for i, store := range regionStore.stores {
 		regionStore.storeEpochs[i] = atomic.LoadUint32(&store.epoch)
@@ -405,7 +410,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	region = &Region{
 		meta: region.GetMeta(),
 	}
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	region.meta.Peers = append(region.meta.Peers, tikvLearner)
 	atomic.StorePointer(&region.store, unsafe.Pointer(regionStore))
 
@@ -416,7 +421,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	cache.mu.Unlock()
 
 	// Test accessFollower state with kv.ReplicaReadLearner request type.
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	refreshEpochs(regionStore)
 	req.ReplicaReadType = kv.ReplicaReadLearner
 	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, req)
@@ -425,7 +430,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 
 	accessLearner, _ := replicaSelector.state.(*accessFollower)
 	// Invalidate the region if the leader is not in the region.
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	rpcCtx, err := replicaSelector.next(s.bo)
 	s.Nil(err)
 	// Should switch to the next follower.
@@ -456,7 +461,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	region = &Region{
 		meta: region.GetMeta(),
 	}
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	region.meta.Peers = append(region.meta.Peers, tiflash)
 	atomic.StorePointer(&region.store, unsafe.Pointer(regionStore))
 
@@ -520,7 +525,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.False(replicaSelector.region.isValid())
 
 	// Test switching to tryFollower if leader is unreachable
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
@@ -680,7 +685,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Nil(err)
 
 	// Test accessFollower state filtering epoch-stale stores.
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	refreshEpochs(regionStore)
 	// Mark all followers as stale.
 	tiKVNum := regionStore.accessStoreNum(tiKVOnly)
@@ -699,7 +704,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
 
 	// Test accessFollower state filtering label-not-match stores.
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	refreshEpochs(regionStore)
 	labels := []*metapb.StoreLabel{
 		{
@@ -721,7 +726,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	}
 
 	// Test accessFollower state with leaderOnly option
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	refreshEpochs(regionStore)
 	for i := 0; i < 5; i++ {
 		replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req, WithLeaderOnly())
@@ -734,7 +739,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	}
 
 	// Test accessFollower state with kv.ReplicaReadMixed request type.
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	refreshEpochs(regionStore)
 	req.ReplicaReadType = kv.ReplicaReadMixed
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
@@ -742,7 +747,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Nil(err)
 
 	// Invalidate the region if the leader is not in the region.
-	atomic.StoreInt64(&region.lastAccess, time.Now().Unix())
+	refreshRegionTTL(region)
 	replicaSelector.updateLeader(&metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID()})
 	s.False(region.isValid())
 	// Don't try next replica if the region is invalidated.
@@ -1847,8 +1852,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
-	s.onClosed = func() { SetRegionCacheTTLSec(600) }
-	SetRegionCacheTTLSec(2)
+	s.onClosed = func() { SetRegionCacheTTLWithJitter(600, 60) }
+	SetRegionCacheTTLWithJitter(2, 0)
 
 	bo := retry.NewBackoffer(context.Background(), -1)
 	key := []byte("key")
