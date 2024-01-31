@@ -402,12 +402,12 @@ func (a *batchConn) getClientAndSend() {
 		target = a.batchCommandsClients[a.index].target
 		// The lock protects the batchCommandsClient from been closed while it's in use.
 		c := a.batchCommandsClients[a.index]
-		if hasHighPriorityTask || c.sent.Load() <= c.maxConcurrencyRequestLimit.Load() {
+		if hasHighPriorityTask || c.available() > 0 {
 			if c.tryLockForSend() {
 				cli = c
 				break
 			} else {
-				reason = SendFailedReasonNoAvailableLimit
+				reason = SendFailedReasonTryLockForSendFail
 			}
 		} else {
 			reason = SendFailedReasonNoAvailableLimit
@@ -419,7 +419,7 @@ func (a *batchConn) getClientAndSend() {
 		return
 	}
 	defer cli.unlockForSend()
-	available := cli.maxConcurrencyRequestLimit.Load() - cli.sent.Load()
+	available := cli.available()
 	batch := 0
 	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
@@ -557,6 +557,10 @@ type batchCommandsClient struct {
 
 func (c *batchCommandsClient) isStopped() bool {
 	return atomic.LoadInt32(&c.closed) != 0
+}
+
+func (c *batchCommandsClient) available() int64 {
+	return c.maxConcurrencyRequestLimit.Load() - c.sent.Load()
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
