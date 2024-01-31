@@ -557,9 +557,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 	s.Nil(err)
 	s.NotNil(regionLoc)
 
-	s.cache.mu.RLock()
-	region := s.cache.getRegionByIDFromCache(s.regionID)
-	s.cache.mu.RUnlock()
+	region, _ := s.cache.searchCachedRegionByID(s.regionID)
 	defer func() {
 		var (
 			valid       bool
@@ -662,10 +660,9 @@ func followerDown(s *testRegionCacheStaleReadSuite) {
 }
 
 func followerDownAndUp(s *testRegionCacheStaleReadSuite) {
-	s.cache.mu.RLock()
-	cachedRegion := s.cache.getRegionByIDFromCache(s.regionID)
-	s.cache.mu.RUnlock()
+	cachedRegion, expired := s.cache.searchCachedRegionByID(s.regionID)
 	_, follower := s.getFollower()
+	s.False(expired)
 	s.NotNil(cachedRegion)
 	s.NotNil(follower)
 	regionStore := cachedRegion.getStore()
@@ -751,10 +748,9 @@ func leaderDown(s *testRegionCacheStaleReadSuite) {
 }
 
 func leaderDownAndUp(s *testRegionCacheStaleReadSuite) {
-	s.cache.mu.RLock()
-	cachedRegion := s.cache.getRegionByIDFromCache(s.regionID)
-	s.cache.mu.RUnlock()
+	cachedRegion, expired := s.cache.searchCachedRegionByID(s.regionID)
 	_, leader := s.getLeader()
+	s.False(expired)
 	s.NotNil(cachedRegion)
 	s.NotNil(leader)
 	regionStore := cachedRegion.getStore()

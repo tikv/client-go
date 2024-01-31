@@ -1098,8 +1098,9 @@ func (c *RegionCache) LocateEndKey(bo *retry.Backoffer, key []byte) (*KeyLocatio
 }
 
 func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey bool) (r *Region, err error) {
-	r = c.searchCachedRegion(key, isEndKey)
-	if r == nil {
+	var expired bool
+	r, expired = c.searchCachedRegionByKey(key, isEndKey)
+	if r == nil || expired {
 		// load region when it is not exists or expired.
 		lr, err := c.loadRegion(bo, key, isEndKey, pd.WithAllowFollowerHandle())
 		if err != nil {
@@ -1152,8 +1153,9 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 }
 
 func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
-	r = c.searchCachedRegion(key, isEndKey)
-	if r == nil || r.checkSyncFlags(needReloadOnAccess) {
+	var expired bool
+	r, expired = c.searchCachedRegionByKey(key, isEndKey)
+	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess) {
 		return nil
 	}
 	return r
@@ -1272,10 +1274,8 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 
 // LocateRegionByID searches for the region with ID.
 func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*KeyLocation, error) {
-	c.mu.RLock()
-	r := c.getRegionByIDFromCache(regionID)
-	c.mu.RUnlock()
-	if r != nil {
+	r, expired := c.searchCachedRegionByID(regionID)
+	if r != nil && !expired {
 		if flags := r.resetSyncFlags(needReloadOnAccess); flags > 0 {
 			reloadOnAccess := flags&needReloadOnAccess > 0
 			lr, err := c.loadRegionByID(bo, regionID)
@@ -1539,43 +1539,33 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	return true
 }
 
-// searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
-// it should be called with c.mu.RLock(), and the returned Region should not be
-// used after c.mu is RUnlock().
-// If the given key is the end key of the region that you want, you may set the second argument to true. This is useful
-// when processing in reverse order.
-func (c *RegionCache) searchCachedRegion(key []byte, isEndKey bool) *Region {
-	ts := time.Now().Unix()
-	var r *Region
+// searchCachedRegionByKey finds the region from cache by key.
+func (c *RegionCache) searchCachedRegionByKey(key []byte, isEndKey bool) (*Region, bool) {
 	c.mu.RLock()
-	r = c.mu.sorted.DescendLessOrEqual(key, isEndKey, ts)
+	region := c.mu.sorted.SearchByKey(key, isEndKey)
 	c.mu.RUnlock()
-	if r != nil && (!isEndKey && r.Contains(key) || isEndKey && r.ContainsByEnd(key)) {
-		return r
+	if region == nil {
+		return nil, false
 	}
-	return nil
+	return region, !region.checkRegionCacheTTL(time.Now().Unix())
 }
 
-// getRegionByIDFromCache tries to get region by regionID from cache. Like
-// `getCachedRegion`, it should be called with c.mu.RLock(), and the returned
-// Region should not be used after c.mu is RUnlock().
-func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
-	ts := time.Now().Unix()
+// searchCachedRegionByID finds the region from cache by id.
+func (c *RegionCache) searchCachedRegionByID(regionID uint64) (*Region, bool) {
+	c.mu.RLock()
 	ver, ok := c.mu.latestVersions[regionID]
 	if !ok {
-		return nil
+		c.mu.RUnlock()
+		return nil, false
 	}
-	latestRegion, ok := c.mu.regions[ver]
+	region, ok := c.mu.regions[ver]
+	c.mu.RUnlock()
 	if !ok {
 		// should not happen
-		logutil.BgLogger().Warn("region version not found",
-			zap.Uint64("regionID", regionID), zap.Stringer("version", &ver))
-		return nil
+		logutil.BgLogger().Warn("region not found", zap.Uint64("id", regionID), zap.Stringer("ver", &ver))
+		return nil, false
 	}
-	if latestRegion.checkRegionCacheTTL(ts) {
-		return latestRegion
-	}
-	return nil
+	return region, !region.checkRegionCacheTTL(time.Now().Unix())
 }
 
 // GetStoresByType gets stores by type `typ`

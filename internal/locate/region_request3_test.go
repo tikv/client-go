@@ -1253,7 +1253,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback() {
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: value}}, nil
 	}}
 
-	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	region, _ := s.cache.searchCachedRegionByID(regionLoc.Region.GetID())
 	s.True(region.isValid())
 
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)
@@ -1485,7 +1485,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 		}}}, nil
 	}}
 
-	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
+	region, _ := s.cache.searchCachedRegionByID(regionLoc.Region.GetID())
 	s.True(region.isValid())
 
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")}, kv.ReplicaReadLeader, nil)

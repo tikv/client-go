@@ -149,7 +149,8 @@ func validRegions(regions map[RegionVerID]*Region, ts int64) (len int) {
 func (s *testRegionCacheSuite) getRegion(key []byte) *Region {
 	_, err := s.cache.LocateKey(s.bo, key)
 	s.Nil(err)
-	r := s.cache.searchCachedRegion(key, false)
+	r, expired := s.cache.searchCachedRegionByKey(key, false)
+	s.False(expired)
 	s.NotNil(r)
 	return r
 }
@@ -157,7 +158,8 @@ func (s *testRegionCacheSuite) getRegion(key []byte) *Region {
 func (s *testRegionCacheSuite) getRegionWithEndKey(key []byte) *Region {
 	_, err := s.cache.LocateEndKey(s.bo, key)
 	s.Nil(err)
-	r := s.cache.searchCachedRegion(key, true)
+	r, expired := s.cache.searchCachedRegionByKey(key, true)
+	s.False(expired)
 	s.NotNil(r)
 	return r
 }
@@ -212,8 +214,10 @@ func (s *testRegionCacheSuite) TestSimple() {
 	s.Equal(r.GetMeta(), r.meta)
 	s.Equal(r.GetLeaderPeerID(), r.meta.Peers[r.getStore().workTiKVIdx].Id)
 	s.cache.mu.regions[r.VerID()].ttl = 0
-	r = s.cache.searchCachedRegion([]byte("a"), true)
-	s.Nil(r)
+	var expired bool
+	r, expired = s.cache.searchCachedRegionByKey([]byte("a"), true)
+	s.True(expired)
+	s.NotNil(r)
 }
 
 // TestResolveStateTransition verifies store's resolve state transition. For example,
@@ -1508,7 +1512,7 @@ func BenchmarkOnRequestFail(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	region := cache.getRegionByIDFromCache(loc.Region.id)
+	region, _ := cache.searchCachedRegionByID(loc.Region.id)
 	b.ResetTimer()
 	regionStore := region.getStore()
 	store, peer, accessIdx, _ := region.WorkStorePeer(regionStore)
