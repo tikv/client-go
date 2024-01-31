@@ -670,7 +670,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Equal(regionStore.workTiKVIdx, state3.lastIdx)
 	s.Equal(replicaSelector.targetIdx, state3.lastIdx)
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.replicas[regionStore.workTiKVIdx], nil)
-	// all replicas are exhausted.
+	// All replicas are exhausted.
 	rpcCtx, err = replicaSelector.next(s.bo)
 	s.Nil(rpcCtx)
 	s.Nil(err)
@@ -1069,7 +1069,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	s.IsType(&tryIdleReplica{}, replicaSelector.state)
 	s.True(*rpcCtx.contextPatcher.replicaRead)
 
-	// all peers are too busy
+	// All peers are too busy
 	replicaSelector.onServerIsBusy(bo, rpcCtx, req, &errorpb.ServerIsBusy{
 		EstimatedWaitMs: 150,
 	})

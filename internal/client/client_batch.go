@@ -113,7 +113,9 @@ func (b *batchCommandsBuilder) hasHighPriorityTask() bool {
 	return b.entries.highestPriority() >= highTaskPriority
 }
 
-// buildWithLimit builds BatchCommandsRequests and calls collect() for each valid entry.
+// buildWithLimit builds BatchCommandsRequests with the given limit.
+// the highest priority tasks don't consume any limit,
+// so the limit only works for normal tasks.
 // The first return value is the request that doesn't need forwarding.
 // The second is a map that maps forwarded hosts to requests.
 func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint64, e *batchCommandsEntry),

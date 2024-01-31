@@ -599,7 +599,7 @@ func (s *testLockSuite) TestZeroMinCommitTS() {
 	s.Len(pushed, 1)
 	s.Equal(expire, int64(0))
 
-	// clean up this test.
+	// Clean up this test.
 	lock.TTL = uint64(0)
 	expire, err = s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
 	s.Nil(err)
