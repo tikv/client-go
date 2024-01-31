@@ -56,6 +56,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -172,6 +173,25 @@ const (
 	// is removed from the cluster, fail to send requests to the store.
 	Other
 )
+
+func (r InvalidReason) String() string {
+	switch r {
+	case Ok:
+		return "Ok"
+	case Other:
+		return "Other"
+	case EpochNotMatch:
+		return "EpochNotMatch"
+	case RegionNotFound:
+		return "RegionNotFound"
+	case StoreNotFound:
+		return "StoreNotFound"
+	case NoLeader:
+		return "NoLeader"
+	default:
+		return "Unknown"
+	}
+}
 
 // Region presents kv region
 type Region struct {
@@ -1100,8 +1120,13 @@ func (c *RegionCache) LocateEndKey(bo *retry.Backoffer, key []byte) (*KeyLocatio
 func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey bool) (r *Region, err error) {
 	var expired bool
 	r, expired = c.searchCachedRegionByKey(key, isEndKey)
+	tag := "ByKey"
+	if isEndKey {
+		tag = "ByEndKey"
+	}
 	if r == nil || expired {
 		// load region when it is not exists or expired.
+		observeLoadRegion(tag, r, expired, 0)
 		lr, err := c.loadRegion(bo, key, isEndKey, pd.WithAllowFollowerHandle())
 		if err != nil {
 			// no region data, return error if failure.
@@ -1114,6 +1139,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		c.mu.Unlock()
 		// just retry once, it won't bring much overhead.
 		if stale {
+			observeLoadRegion(tag+":Retry", r, expired, 0)
 			lr, err = c.loadRegion(bo, key, isEndKey)
 			if err != nil {
 				// no region data, return error if failure.
@@ -1132,8 +1158,10 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			err error
 		)
 		if reloadOnAccess {
+			observeLoadRegion(tag, r, expired, flags)
 			lr, err = c.loadRegion(bo, key, isEndKey)
 		} else {
+			observeLoadRegion("ByID", r, expired, flags)
 			lr, err = c.loadRegionByID(bo, r.GetID())
 		}
 		if err != nil {
@@ -1276,8 +1304,9 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*KeyLocation, error) {
 	r, expired := c.searchCachedRegionByID(regionID)
 	if r != nil && !expired {
-		if flags := r.resetSyncFlags(needReloadOnAccess); flags > 0 {
+		if flags := r.resetSyncFlags(needReloadOnAccess | needDelayedReloadReady); flags > 0 {
 			reloadOnAccess := flags&needReloadOnAccess > 0
+			observeLoadRegion("ByID", r, expired, flags)
 			lr, err := c.loadRegionByID(bo, regionID)
 			if err != nil {
 				// ignore error and use old region info.
@@ -1299,6 +1328,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 		return loc, nil
 	}
 
+	observeLoadRegion("ByID", r, expired, 0)
 	r, err := c.loadRegionByID(bo, regionID)
 	if err != nil {
 		return nil, err
@@ -1580,6 +1610,53 @@ func (c *RegionCache) GetAllStores() []*Store {
 	return c.filterStores(nil, func(s *Store) bool {
 		return s.getResolveState() == resolved && (s.storeType == tikvrpc.TiKV || s.storeType == tikvrpc.TiFlash)
 	})
+}
+
+var loadRegionCounters sync.Map
+
+const (
+	loadRegionReasonMissing        = "Missing"
+	loadRegionReasonExpiredNormal  = "Expired:Normal"
+	loadRegionReasonExpiredFrozen  = "Expired:Frozen"
+	loadRegionReasonExpiredInvalid = "Expired:Invalid:"
+	loadRegionReasonReloadOnAccess = "Reload:OnAccess"
+	loadRegionReasonReloadDelayed  = "Reload:Delayed"
+	loadRegionReasonUpdateBuckets  = "UpdateBuckets"
+	loadRegionReasonUnknown        = "Unknown"
+)
+
+func observeLoadRegion(tag string, region *Region, expired bool, reloadFlags int32, explicitReason ...string) {
+	reason := loadRegionReasonUnknown
+	if len(explicitReason) > 0 {
+		reason = strings.Join(explicitReason, ":")
+	} else if region == nil {
+		reason = loadRegionReasonMissing
+	} else if expired {
+		invalidReason := InvalidReason(atomic.LoadInt32((*int32)(&region.invalidReason)))
+		if invalidReason != Ok {
+			reason = loadRegionReasonExpiredInvalid + invalidReason.String()
+		} else if region.checkSyncFlags(needExpireAfterTTL) {
+			reason = loadRegionReasonExpiredFrozen
+		} else {
+			reason = loadRegionReasonExpiredNormal
+		}
+	} else if reloadFlags > 0 {
+		if reloadFlags&needReloadOnAccess > 0 {
+			reason = loadRegionReasonReloadOnAccess
+		} else if reloadFlags&needDelayedReloadReady > 0 {
+			reason = loadRegionReasonReloadDelayed
+		}
+	}
+	type key struct {
+		t string
+		r string
+	}
+	counter, ok := loadRegionCounters.Load(key{tag, reason})
+	if !ok {
+		counter = metrics.TiKVLoadRegionCounter.WithLabelValues(tag, reason)
+		loadRegionCounters.Store(key{tag, reason}, counter)
+	}
+	counter.(prometheus.Counter).Inc()
 }
 
 // loadRegion loads region from pd client, and picks the first peer as leader.
@@ -2074,6 +2151,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 		// TODO(youjiali1995): use singleflight.
 		go func() {
 			bo := retry.NewBackoffer(context.Background(), 20000)
+			observeLoadRegion("ByID", r, false, 0, loadRegionReasonUpdateBuckets)
 			new, err := c.loadRegionByID(bo, regionID.id)
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Error("failed to update buckets",
