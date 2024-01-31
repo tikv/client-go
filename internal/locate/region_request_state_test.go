@@ -250,13 +250,10 @@ func (s *testRegionCacheStaleReadSuite) setTimeout(id uint64) { //nolint: unused
 }
 
 func TestRegionCacheStaleRead(t *testing.T) {
-	originReloadRegionInterval := atomic.LoadInt64(&reloadRegionInterval)
 	originBoTiKVServerBusy := retry.BoTiKVServerBusy
 	defer func() {
-		atomic.StoreInt64(&reloadRegionInterval, originReloadRegionInterval)
 		retry.BoTiKVServerBusy = originBoTiKVServerBusy
 	}()
-	atomic.StoreInt64(&reloadRegionInterval, int64(24*time.Hour)) // disable reload region
 	retry.BoTiKVServerBusy = retry.NewConfig("tikvServerBusy", &metrics.BackoffHistogramServerBusy, retry.NewBackoffFnCfg(2, 10, retry.EqualJitter), tikverr.ErrTiKVServerBusy)
 	regionCacheTestCases := []RegionCacheTestCase{
 		{
@@ -581,14 +578,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			return
 		}
 
-		s.cache.regionsNeedReload.Lock()
-		if *asyncReload {
-			s.Len(s.cache.regionsNeedReload.regions, 1)
-			s.Equal(s.cache.regionsNeedReload.regions[0], s.regionID)
-		} else {
-			s.Empty(s.cache.regionsNeedReload.regions)
-		}
-		s.cache.regionsNeedReload.Unlock()
+		s.Equal(*asyncReload, region.checkSyncFlags(needDelayedReloadPending))
 	}()
 
 	bo := retry.NewBackoffer(ctx, -1)
