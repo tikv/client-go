@@ -471,9 +471,10 @@ func (action actionPrewrite) handleSingleBatch(
 			c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *resolvingRecordToken)
 		}
 		resolveLockOpts := txnlock.ResolveLocksOptions{
-			CallerStartTS: c.startTS,
-			Locks:         locks,
-			Detail:        &c.getDetail().ResolveLock,
+			CallerStartTS:            c.startTS,
+			Locks:                    locks,
+			Detail:                   &c.getDetail().ResolveLock,
+			PessimisticRegionResolve: false,
 		}
 		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {
