@@ -578,7 +578,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			return
 		}
 
-		s.Equal(*asyncReload, region.checkSyncFlags(needAsyncReloadPending))
+		s.Equal(*asyncReload, region.checkSyncFlags(needDelayedReloadPending))
 	}()
 
 	bo := retry.NewBackoffer(ctx, -1)

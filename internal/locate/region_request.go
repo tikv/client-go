@@ -727,7 +727,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		}
 	}
 	if reloadRegion {
-		selector.region.setSyncFlags(needAsyncReloadPending)
+		selector.region.setSyncFlags(needDelayedReloadPending)
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
@@ -760,7 +760,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 					labels:    state.option.labels,
 				}
 				if leaderEpochStale {
-					selector.region.setSyncFlags(needAsyncReloadPending)
+					selector.region.setSyncFlags(needDelayedReloadPending)
 				}
 				return nil, stateChanged{}
 			}

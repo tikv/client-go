@@ -122,10 +122,10 @@ func SetRegionCacheTTLSec(t int64) {
 }
 
 const (
-	needReloadOnAccess     int32 = 1 << iota // indicates the region will be reloaded on next access
-	needExpireAfterTTL                       // indicates the region will expire after RegionCacheTTL (even when it's accessed continuously)
-	needAsyncReloadPending                   // indicates the region will be reloaded in async mode
-	needAsyncReloadReady                     // indicates the region is ready to be reloaded in async mode
+	needReloadOnAccess       int32 = 1 << iota // indicates the region will be reloaded on next access
+	needExpireAfterTTL                         // indicates the region will expire after RegionCacheTTL (even when it's accessed continuously)
+	needDelayedReloadPending                   // indicates the region will be reloaded later after it's scanned by GC
+	needDelayedReloadReady                     // indicates the region has been scanned by GC and can be reloaded by id on next access
 )
 
 // InvalidReason is the reason why a cached region is invalidated.
@@ -1093,7 +1093,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			c.insertRegionToCache(r, true, true)
 			c.mu.Unlock()
 		}
-	} else if flags := r.resetSyncFlags(needReloadOnAccess | needAsyncReloadReady); flags > 0 {
+	} else if flags := r.resetSyncFlags(needReloadOnAccess | needDelayedReloadReady); flags > 0 {
 		// load region when it be marked as need reload.
 		reloadOnAccess := flags&needReloadOnAccess > 0
 		var (
@@ -2140,12 +2140,12 @@ func (c *RegionCache) cacheGC() {
 			// Check remaining regions and update sync flags
 			for _, region := range remaining {
 				syncFlags := region.getSyncFlags()
-				if syncFlags&needAsyncReloadReady > 0 {
+				if syncFlags&needDelayedReloadReady > 0 {
 					// the region will be reload soon on access
 					continue
 				}
-				if syncFlags&needAsyncReloadPending > 0 {
-					region.setSyncFlags(needAsyncReloadReady)
+				if syncFlags&needDelayedReloadPending > 0 {
+					region.setSyncFlags(needDelayedReloadReady)
 					// the region will be reload soon on access, no need to check if it needs to be expired
 					continue
 				}
