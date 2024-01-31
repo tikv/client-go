@@ -1032,6 +1032,7 @@ func (s *testLockWithTiKVSuite) SetupTest() {
 		s.cleanupLocks()
 	} else {
 		s.store = tikv.StoreProbe{KVStore: NewTestUniStore(s.T())}
+		s.cleanupLocks()
 	}
 }
 
@@ -1609,17 +1610,11 @@ func (s *testLockWithTiKVSuite) mustResolve(ctx context.Context, bo *retry.Backo
 
 		lockAfterResolve, err := s.store.ScanLocks(ctx, startKey, endKey, callerTS)
 		s.NoError(err)
-		s.Len(lockAfterResolve, 0)
+		s.Len(lockAfterResolve, 0, "expected=%v actual=%v", 0, len(lockAfterResolve))
 	}
 }
 
 func (s *testLockWithTiKVSuite) TestPessimisticRollbackWithRead() {
-	// The test relies on the pessimistic rollback read phase implementations in tikv
-	// https://github.com/tikv/tikv/pull/16185, which is not implemented in mockstore by now.
-	if !*withTiKV {
-		return
-	}
-
 	s.NoError(failpoint.Enable("tikvclient/shortPessimisticLockTTL", "return"))
 	s.NoError(failpoint.Enable("tikvclient/twoPCShortLockTTL", "return"))
 	defer func() {
@@ -1627,8 +1622,10 @@ func (s *testLockWithTiKVSuite) TestPessimisticRollbackWithRead() {
 		s.NoError(failpoint.Disable("tikvclient/twoPCShortLockTTL"))
 	}()
 	test := func(inMemoryLock bool) {
-		recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", inMemoryLock)
-		defer recoverFunc()
+		if *withTiKV {
+			recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", inMemoryLock)
+			defer recoverFunc()
+		}
 
 		// Init, cleanup possible left locks.
 		bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
