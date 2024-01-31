@@ -24,13 +24,12 @@ type Item interface {
 }
 
 // entry is an entry in a priority queue.
-type entry struct {
-	entry Item
-	index int
-}
+//type entry struct {
+//	entry Item
+//}
 
 // prioritySlice implements heap.Interface and holds Entries.
-type prioritySlice []entry
+type prioritySlice []Item
 
 // Len returns the length of the priority queue.
 func (ps prioritySlice) Len() int {
@@ -40,20 +39,17 @@ func (ps prioritySlice) Len() int {
 // Less compares two entries in the priority queue.
 // The higher priority entry is the one with the lower value.
 func (ps prioritySlice) Less(i, j int) bool {
-	return ps[i].entry.priority() > ps[j].entry.priority()
+	return ps[i].priority() > ps[j].priority()
 }
 
 // Swap swaps two entries in the priority queue.
 func (ps prioritySlice) Swap(i, j int) {
 	ps[i], ps[j] = ps[j], ps[i]
-	ps[i].index = i
-	ps[j].index = j
 }
 
 // Push adds an entry to the priority queue.
 func (ps *prioritySlice) Push(x interface{}) {
-	item := x.(entry)
-	item.index = len(*ps)
+	item := x.(Item)
 	*ps = append(*ps, item)
 }
 
@@ -62,7 +58,6 @@ func (ps *prioritySlice) Pop() interface{} {
 	old := *ps
 	n := len(old)
 	item := old[n-1]
-	item.index = -1
 	*ps = old[0 : n-1]
 	return item
 }
@@ -84,7 +79,7 @@ func (pq *PriorityQueue) Len() int {
 
 // Push adds an entry to the priority queue.
 func (pq *PriorityQueue) Push(item Item) {
-	heap.Push(&pq.ps, entry{entry: item})
+	heap.Push(&pq.ps, item)
 }
 
 // pop removes the highest priority entry from the priority queue.
@@ -93,7 +88,7 @@ func (pq *PriorityQueue) pop() Item {
 	if e == nil {
 		return nil
 	}
-	return e.(entry).entry
+	return e.(Item)
 }
 
 // Take returns the highest priority entries from the priority queue.
@@ -102,11 +97,7 @@ func (pq *PriorityQueue) Take(n int) []Item {
 		return nil
 	}
 	if n >= pq.Len() {
-		ret := make([]Item, pq.Len())
-		for i := 0; i < pq.Len(); i++ {
-			ret[i] = pq.ps[i].entry
-		}
-
+		ret := pq.ps
 		pq.ps = pq.ps[:0]
 		return ret
 	} else {
@@ -123,14 +114,14 @@ func (pq *PriorityQueue) highestPriority() uint64 {
 	if pq.Len() == 0 {
 		return 0
 	}
-	return pq.ps[0].entry.priority()
+	return pq.ps[0].priority()
 }
 
 // all returns all entries in the priority queue not ensure the priority.
 func (pq *PriorityQueue) all() []Item {
 	items := make([]Item, 0, pq.Len())
 	for i := 0; i < pq.Len(); i++ {
-		items = append(items, pq.ps[i].entry)
+		items = append(items, pq.ps[i])
 	}
 	return items
 }
@@ -138,8 +129,8 @@ func (pq *PriorityQueue) all() []Item {
 // clean removes all canceled entries from the priority queue.
 func (pq *PriorityQueue) clean() {
 	for i := 0; i < pq.Len(); {
-		if pq.ps[i].entry.isCanceled() {
-			heap.Remove(&pq.ps, pq.ps[i].index)
+		if pq.ps[i].isCanceled() {
+			heap.Remove(&pq.ps, i)
 			continue
 		}
 		i++
@@ -149,7 +140,7 @@ func (pq *PriorityQueue) clean() {
 // reset clear all entry in the queue.
 func (pq *PriorityQueue) reset() {
 	for i := 0; i < pq.Len(); i++ {
-		pq.ps[i].entry = nil
+		pq.ps[i] = nil
 	}
 	pq.ps = pq.ps[:0]
 }
