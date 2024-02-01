@@ -131,7 +131,7 @@ func SetRegionCacheTTLWithJitter(base int64, jitter int64) {
 	regionCacheTTLJitterSec = jitter
 }
 
-// nextTTL returns a random TTL in range [ts+base, ts+base+jitter).
+// nextTTL returns a random TTL in range [ts+base, ts+base+jitter). The input ts should be an epoch timestamp in seconds.
 func nextTTL(ts int64) int64 {
 	jitter := int64(0)
 	if regionCacheTTLJitterSec > 0 {
