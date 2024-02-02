@@ -63,21 +63,19 @@ func (s *SortedRegions) ReplaceOrInsert(cachedRegion *Region) *Region {
 	return nil
 }
 
-// DescendLessOrEqual returns all items that are less than or equal to the key.
-func (s *SortedRegions) DescendLessOrEqual(key []byte, isEndKey bool, ts int64) (r *Region) {
+// SearchByKey returns the region which contains the key. Note that the region might be expired and it's caller's duty to check the region TTL.
+func (s *SortedRegions) SearchByKey(key []byte, isEndKey bool) (r *Region) {
 	s.b.DescendLessOrEqual(newBtreeSearchItem(key), func(item *btreeItem) bool {
-		r = item.cachedRegion
-		if isEndKey && bytes.Equal(r.StartKey(), key) {
-			r = nil     // clear result
+		region := item.cachedRegion
+		if isEndKey && bytes.Equal(region.StartKey(), key) {
 			return true // iterate next item
 		}
-		if !r.checkRegionCacheTTL(ts) {
-			r = nil
-			return true
+		if !isEndKey && region.Contains(key) || isEndKey && region.ContainsByEnd(key) {
+			r = region
 		}
 		return false
 	})
-	return r
+	return
 }
 
 // AscendGreaterOrEqual returns all items that are greater than or equal to the key.
