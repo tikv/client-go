@@ -143,7 +143,13 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	if b.noop {
 		return err
 	}
-	if b.maxSleep > 0 && (b.totalSleep-b.excludedSleep) >= b.maxSleep {
+	maxBackoffTimeExceeded := (b.totalSleep - b.excludedSleep) >= b.maxSleep
+	maxExcludedTimeExceeded := false
+	if maxLimit, ok := isSleepExcluded[cfg.name]; ok {
+		maxExcludedTimeExceeded = b.excludedSleep >= maxLimit && b.excludedSleep >= b.maxSleep
+	}
+	maxTimeExceeded := maxBackoffTimeExceeded || maxExcludedTimeExceeded
+	if b.maxSleep > 0 && maxTimeExceeded {
 		longestSleepCfg, longestSleepTime := b.longestSleepCfg()
 		errMsg := fmt.Sprintf("%s backoffer.maxSleep %dms is exceeded, errors:", cfg.String(), b.maxSleep)
 		for i, err := range b.errors {
@@ -163,7 +169,8 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 			backoffDetail.WriteString(":")
 			backoffDetail.WriteString(strconv.Itoa(times))
 		}
-		errMsg += fmt.Sprintf("\ntotal-backoff-times: %v, backoff-detail: %v", totalTimes, backoffDetail.String())
+		errMsg += fmt.Sprintf("\ntotal-backoff-times: %v, backoff-detail: %v, maxBackoffTimeExceeded: %v, maxExcludedTimeExceeded: %v",
+			totalTimes, backoffDetail.String(), maxBackoffTimeExceeded, maxExcludedTimeExceeded)
 		returnedErr := err
 		if longestSleepCfg != nil {
 			errMsg += fmt.Sprintf("\nlongest sleep type: %s, time: %dms", longestSleepCfg.String(), longestSleepTime)
@@ -210,7 +217,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		atomic.AddInt64(&detail.BackoffCount, 1)
 	}
 
-	err2 := b.CheckKilled()
+	err2 := b.checkKilled()
 	if err2 != nil {
 		return err2
 	}
@@ -219,13 +226,29 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 	if ts := b.ctx.Value(TxnStartKey); ts != nil {
 		startTs = ts
 	}
-	logutil.Logger(b.ctx).Debug("retry later",
+	logutil.Logger(b.ctx).Debug(
+		"retry later",
 		zap.Error(err),
 		zap.Int("totalSleep", b.totalSleep),
 		zap.Int("excludedSleep", b.excludedSleep),
 		zap.Int("maxSleep", b.maxSleep),
 		zap.Stringer("type", cfg),
-		zap.Reflect("txnStartTS", startTs))
+		zap.Reflect("txnStartTS", startTs),
+	)
+	return nil
+}
+
+func (b *Backoffer) checkKilled() error {
+	if b.vars != nil && b.vars.Killed != nil {
+		killed := atomic.LoadUint32(b.vars.Killed)
+		if killed != 0 {
+			logutil.BgLogger().Info(
+				"backoff stops because a killed signal is received",
+				zap.Uint32("signal", killed),
+			)
+			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: killed})
+		}
+	}
 	return nil
 }
 
@@ -373,18 +396,4 @@ func (b *Backoffer) longestSleepCfg() (*Config, int) {
 		}
 	}
 	return nil, 0
-}
-
-func (b *Backoffer) CheckKilled() error {
-	if b.vars != nil && b.vars.Killed != nil {
-		killed := atomic.LoadUint32(b.vars.Killed)
-		if killed != 0 {
-			logutil.BgLogger().Info(
-				"backoff stops because a killed signal is received",
-				zap.Uint32("signal", killed),
-			)
-			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: killed})
-		}
-	}
-	return nil
 }
