@@ -381,7 +381,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 }
 
 const (
-	SendFailedReasonNoAvailableLimit   = "no available limit"
+	SendFailedReasonNoAvailableLimit   = "concurrency limit exceeded"
 	SendFailedReasonTryLockForSendFail = "tryLockForSend fail"
 )
 
@@ -397,7 +397,7 @@ func (a *batchConn) getClientAndSend() {
 		cli    *batchCommandsClient
 		target string
 	)
-	reason := ""
+	reasons := make([]string, 0)
 	hasHighPriorityTask := a.reqBuilder.hasHighPriorityTask()
 	for i := 0; i < len(a.batchCommandsClients); i++ {
 		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
@@ -409,14 +409,14 @@ func (a *batchConn) getClientAndSend() {
 				cli = c
 				break
 			} else {
-				reason = SendFailedReasonTryLockForSendFail
+				reasons = append(reasons, SendFailedReasonTryLockForSendFail)
 			}
 		} else {
-			reason = SendFailedReasonNoAvailableLimit
+			reasons = append(reasons, SendFailedReasonNoAvailableLimit)
 		}
 	}
 	if cli == nil {
-		logutil.BgLogger().Info("no available connections", zap.String("target", target), zap.String("reason", reason))
+		logutil.BgLogger().Info("no available connections", zap.String("target", target), zap.Any("reasons", reasons))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
 		return
 	}
