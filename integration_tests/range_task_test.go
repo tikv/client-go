@@ -85,7 +85,7 @@ func (s *testRangeTaskSuite) SetupTest() {
 	}
 	allRegionRanges = append(allRegionRanges, makeRange("z", ""))
 
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil, nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithMultiRegions(cluster, splitKeys...)
 	s.cluster = cluster

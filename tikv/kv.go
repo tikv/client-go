@@ -194,23 +194,14 @@ func WithPool(gp Pool) Option {
 // Source is to mark where the HTTP client is created, which is used for metrics and logs.
 func WithPDHTTPClient(
 	source string,
-	pdAddrs []string,
 	opts ...pdhttp.ClientOption,
 ) Option {
 	return func(o *KVStore) {
-		if cli := o.GetPDClient(); cli != nil {
-			o.pdHttpClient = pdhttp.NewClientWithServiceDiscovery(
-				source,
-				o.pdClient.GetServiceDiscovery(),
-				opts...,
-			)
-		} else {
-			o.pdHttpClient = pdhttp.NewClient(
-				source,
-				pdAddrs,
-				opts...,
-			)
-		}
+		o.pdHttpClient = pdhttp.NewClientWithServiceDiscovery(
+			source,
+			o.pdClient.GetServiceDiscovery(),
+			opts...,
+		)
 	}
 }
 

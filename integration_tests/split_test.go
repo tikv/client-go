@@ -64,7 +64,7 @@ type testSplitSuite struct {
 }
 
 func (s *testSplitSuite) SetupTest() {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil, nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithSingleStore(cluster)
 	s.cluster = cluster

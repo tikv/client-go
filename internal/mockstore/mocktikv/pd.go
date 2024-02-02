@@ -38,9 +38,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/asaskevich/govalidator"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -50,6 +52,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
+	"google.golang.org/grpc"
 )
 
 // Use global variables to prevent pdClients from creating duplicate timestamps.
@@ -85,6 +88,8 @@ type pdClient struct {
 	groups map[string]*rmpb.ResourceGroup
 
 	delay *atomic.Bool
+
+	pdAddrs []string
 }
 
 // NewPDClient creates a mock pd.Client that uses local timestamp and meta data
@@ -425,4 +430,113 @@ func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 	return nil, 0, nil
 }
 
-func (m *pdClient) GetServiceDiscovery() pd.ServiceDiscovery { return nil }
+func (m *pdClient) GetServiceDiscovery() pd.ServiceDiscovery {
+	return newMockPDServiceDiscovery(m.pdAddrs)
+}
+
+var _ pd.ServiceDiscovery = (*mockPDServiceDiscovery)(nil)
+var _ pd.ServiceClient = (*mockPDServiceClient)(nil)
+
+type mockPDServiceClient struct {
+	addr string
+}
+
+func newMockPDServiceClient(addr string) pd.ServiceClient {
+	if !strings.HasPrefix(addr, "http") {
+		addr = fmt.Sprintf("%s://%s", "http", addr)
+	}
+	return &mockPDServiceClient{addr: addr}
+}
+
+func (c *mockPDServiceClient) GetAddress() string {
+	return c.addr
+}
+
+func (c *mockPDServiceClient) GetHTTPAddress() string {
+	return c.addr
+}
+
+func (c *mockPDServiceClient) GetClientConn() *grpc.ClientConn {
+	return nil
+}
+
+func (c *mockPDServiceClient) BuildGRPCTargetContext(ctx context.Context, _ bool) context.Context {
+	return ctx
+}
+
+func (c *mockPDServiceClient) Available() bool {
+	return true
+}
+
+func (c *mockPDServiceClient) NeedRetry(*pdpb.Error, error) bool {
+	return false
+}
+
+func (c *mockPDServiceClient) IsConnectedToLeader() bool {
+	return true
+}
+
+type mockPDServiceDiscovery struct {
+	addrs []string
+	clis  []pd.ServiceClient
+}
+
+func newMockPDServiceDiscovery(addrs []string) pd.ServiceDiscovery {
+	addresses := make([]string, 0)
+	clis := make([]pd.ServiceClient, 0)
+	for _, addr := range addrs {
+		if check := govalidator.IsURL(addr); !check {
+			continue
+		}
+		addresses = append(addresses, addr)
+		clis = append(clis, newMockPDServiceClient(addr))
+	}
+	return &mockPDServiceDiscovery{addrs: addresses, clis: clis}
+}
+
+func (c *mockPDServiceDiscovery) Init() error {
+	return nil
+}
+
+func (c *mockPDServiceDiscovery) Close() {}
+
+func (c *mockPDServiceDiscovery) GetClusterID() uint64 { return 0 }
+
+func (c *mockPDServiceDiscovery) GetKeyspaceID() uint32 { return 0 }
+
+func (c *mockPDServiceDiscovery) GetKeyspaceGroupID() uint32 { return 0 }
+
+func (c *mockPDServiceDiscovery) GetServiceURLs() []string {
+	return c.addrs
+}
+
+func (c *mockPDServiceDiscovery) GetServingEndpointClientConn() *grpc.ClientConn { return nil }
+
+func (c *mockPDServiceDiscovery) GetClientConns() *sync.Map { return nil }
+
+func (c *mockPDServiceDiscovery) GetServingAddr() string { return "" }
+
+func (c *mockPDServiceDiscovery) GetBackupAddrs() []string { return nil }
+
+func (c *mockPDServiceDiscovery) GetServiceClient() pd.ServiceClient {
+	if len(c.clis) > 0 {
+		return c.clis[0]
+	}
+	return nil
+}
+
+func (c *mockPDServiceDiscovery) GetAllServiceClients() []pd.ServiceClient {
+	return c.clis
+}
+
+func (c *mockPDServiceDiscovery) GetOrCreateGRPCConn(addr string) (*grpc.ClientConn, error) {
+	return nil, nil
+}
+
+func (c *mockPDServiceDiscovery) ScheduleCheckMemberChanged() {}
+
+func (c *mockPDServiceDiscovery) CheckMemberChanged() error { return nil }
+
+func (c *mockPDServiceDiscovery) AddServingAddrSwitchedCallback(callbacks ...func()) {}
+
+func (c *mockPDServiceDiscovery) AddServiceAddrsSwitchedCallback(callbacks ...func()) {}

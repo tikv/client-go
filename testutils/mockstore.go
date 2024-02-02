@@ -42,8 +42,8 @@ type MockClient = mocktikv.RPCClient
 type RPCSession = mocktikv.Session
 
 // NewMockTiKV creates a TiKV client and PD client from options.
-func NewMockTiKV(path string, coprHandler CoprRPCHandler) (*MockClient, *MockCluster, pd.Client, error) {
-	return mocktikv.NewTiKVAndPDClient(path, coprHandler)
+func NewMockTiKV(path string, pdAddrs []string, coprHandler CoprRPCHandler) (*MockClient, *MockCluster, pd.Client, error) {
+	return mocktikv.NewTiKVAndPDClient(path, pdAddrs, coprHandler)
 }
 
 // BootstrapWithSingleStore initializes a Cluster with 1 Region and 1 Store.

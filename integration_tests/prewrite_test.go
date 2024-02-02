@@ -89,7 +89,7 @@ func TestSetMinCommitTSInAsyncCommit(t *testing.T) {
 func TestIsRetryRequestFlagWithRegionError(t *testing.T) {
 	require := require.New(t)
 
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil, nil)
 	require.Nil(err)
 	_, peerID, regionID := testutils.BootstrapWithSingleStore(cluster)
 	store, err := tikv.NewTestTiKVStore(client, pdClient, nil, nil, 0)

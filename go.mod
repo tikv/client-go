@@ -3,6 +3,7 @@ module github.com/tikv/client-go/v2
 go 1.21
 
 require (
+	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
 	github.com/gogo/protobuf v1.3.2

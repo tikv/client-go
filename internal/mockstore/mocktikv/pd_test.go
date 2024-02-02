@@ -15,10 +15,10 @@
 // NOTE: The code in this file is based on code from the
 // TiDB project, licensed under the Apache License v 2.0
 //
-// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/mockstore/mocktikv/mock.go
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/mockstore/mocktikv/pd.go
 //
 
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2016 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,16 +35,28 @@
 package mocktikv
 
 import (
-	pd "github.com/tikv/pd/client"
+	"fmt"
+	"testing"
+
+	"github.com/asaskevich/govalidator"
+	"github.com/stretchr/testify/require"
 )
 
-// NewTiKVAndPDClient creates a TiKV client and PD client from options.
-func NewTiKVAndPDClient(path string, pdAddrs []string, coprHandler CoprRPCHandler) (*RPCClient, *Cluster, pd.Client, error) {
-	mvccStore, err := NewMVCCLevelDB(path)
-	if err != nil {
-		return nil, nil, nil, err
+func TestMockPDServiceDiscovery(t *testing.T) {
+	re := require.New(t)
+	pdAddrs := []string{"invalid_pd_address", "127.0.0.1:2379", "http://172.32.21.32:2379"}
+	for i, addr := range pdAddrs {
+		check := govalidator.IsURL(addr)
+		fmt.Println(i)
+		if i > 0 {
+			re.True(check)
+		} else {
+			re.False(check)
+		}
 	}
-	cluster := NewCluster(mvccStore)
-
-	return NewRPCClient(cluster, mvccStore, coprHandler), cluster, NewPDClient(cluster), nil
+	sd := newMockPDServiceDiscovery(pdAddrs)
+	clis := sd.GetAllServiceClients()
+	re.Len(clis, 2)
+	re.Equal(clis[0].GetHTTPAddress(), "http://127.0.0.1:2379")
+	re.Equal(clis[1].GetHTTPAddress(), "http://172.32.21.32:2379")
 }
