@@ -64,6 +64,7 @@ var (
 	// ErrTiFlashServerTimeout is the error when tiflash server is timeout.
 	ErrTiFlashServerTimeout = errors.New("tiflash server timeout")
 	// ErrQueryInterrupted is the error when the query is interrupted.
+	// This is deprecated. Keep it only to pass CI :-(. We can remove this later.
 	ErrQueryInterrupted = errors.New("query interrupted")
 	// ErrTiKVStaleCommand is the error that the command is stale in tikv.
 	ErrTiKVStaleCommand = errors.New("tikv stale command")
@@ -96,10 +97,18 @@ var (
 	// ErrIsWitness is the error when a request is send to a witness.
 	ErrIsWitness = errors.New("peer is witness")
 	// ErrUnknown is the unknow error.
-	ErrUnknown = errors.New("unknow")
+	ErrUnknown = errors.New("unknown")
 	// ErrResultUndetermined is the error when execution result is unknown.
 	ErrResultUndetermined = errors.New("execution result undetermined")
 )
+
+type ErrQueryInterruptedWithSignal struct {
+	Signal uint32
+}
+
+func (e ErrQueryInterruptedWithSignal) Error() string {
+	return fmt.Sprintf("query interrupted by signal %d", e.Signal)
+}
 
 // MismatchClusterID represents the message that the cluster ID of the PD client does not match the PD.
 const MismatchClusterID = "mismatch cluster id"
