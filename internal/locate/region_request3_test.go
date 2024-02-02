@@ -77,6 +77,7 @@ type testRegionRequestToThreeStoresSuite struct {
 	bo                  *retry.Backoffer
 	regionRequestSender *RegionRequestSender
 	mvccStore           mocktikv.MVCCStore
+	onClosed            func()
 }
 
 func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
@@ -93,6 +94,9 @@ func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
 func (s *testRegionRequestToThreeStoresSuite) TearDownTest() {
 	s.cache.Close()
 	s.mvccStore.Close()
+	if s.onClosed != nil {
+		s.onClosed()
+	}
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStoreTokenLimit() {
@@ -1840,4 +1844,47 @@ func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
 	s.IsType(&kvrpcpb.PrewriteResponse{}, res.resp.Resp)
 	s.Less(elapsed, time.Millisecond*2500)
 	s.True(requestHandled)
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
+	s.onClosed = func() { SetRegionCacheTTLSec(600) }
+	SetRegionCacheTTLSec(2)
+
+	bo := retry.NewBackoffer(context.Background(), -1)
+	key := []byte("key")
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadMixed, nil)
+	req.ReadReplicaScope = oracle.GlobalTxnScope
+	req.TxnScope = oracle.GlobalTxnScope
+
+	downStore := s.cluster.GetStore(s.storeIDs[2])
+	s.cluster.MarkPeerDown(s.peerIDs[2])
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		s.Require().NotEqual(addr, downStore.Address)
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
+	}}
+	for i := 0; i < 15; i++ {
+		time.Sleep(200 * time.Millisecond)
+		loc, err := s.cache.LocateKey(bo, key)
+		s.Require().Nil(err)
+		resp, rpcCtx, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV, WithMatchLabels(downStore.Labels))
+		s.Require().Nil(err)
+		s.Require().Equal(rpcCtx.Addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value), "should access other peers")
+	}
+
+	s.cluster.RemoveDownPeer(s.peerIDs[2])
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
+	}}
+	for i := 0; i < 15; i++ {
+		time.Sleep(200 * time.Millisecond)
+		loc, err := s.cache.LocateKey(bo, key)
+		s.Require().Nil(err)
+		_, rpcCtx, _, err := s.regionRequestSender.SendReqCtx(bo, req, loc.Region, time.Second, tikvrpc.TiKV, WithMatchLabels(downStore.Labels))
+		s.Require().Nil(err)
+		if rpcCtx.Addr == downStore.Address {
+			return
+		}
+	}
+	s.Require().Fail("should access recovered peer after region reloading within RegionCacheTTL")
 }
