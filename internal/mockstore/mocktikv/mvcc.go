@@ -269,7 +269,7 @@ type MVCCStore interface {
 	ReverseScan(startKey, endKey []byte, limit int, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) []Pair
 	BatchGet(ks [][]byte, startTS uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) []Pair
 	PessimisticLock(req *kvrpcpb.PessimisticLockRequest) *kvrpcpb.PessimisticLockResponse
-	PessimisticRollback(keys [][]byte, startTS, forUpdateTS uint64) []error
+	PessimisticRollback(session *Session, keys [][]byte, startTS, forUpdateTS uint64) []error
 	Prewrite(req *kvrpcpb.PrewriteRequest) []error
 	Commit(keys [][]byte, startTS, commitTS uint64) error
 	Rollback(keys [][]byte, startTS uint64) error

@@ -732,13 +732,13 @@ func (mvcc *MVCCLevelDB) pessimisticLockMutation(batch *leveldb.Batch, mutation 
 }
 
 // PessimisticRollback implements the MVCCStore interface.
-func (mvcc *MVCCLevelDB) PessimisticRollback(keys [][]byte, startTS, forUpdateTS uint64) []error {
+func (mvcc *MVCCLevelDB) PessimisticRollback(session *Session, keys [][]byte, startTS, forUpdateTS uint64) []error {
 	mvcc.mu.Lock()
 	defer mvcc.mu.Unlock()
 
 	// Scan the whole region for corresponding pessimistic locks.
 	if len(keys) == 0 {
-		iter, currKey, err := newScanIterator(mvcc.getDB(""), []byte(""), []byte("u"))
+		iter, currKey, err := newScanIterator(mvcc.getDB(""), session.startKey, session.endKey)
 		defer iter.Release()
 		if err != nil {
 			return []error{err}
