@@ -474,7 +474,7 @@ func (action actionPrewrite) handleSingleBatch(
 			CallerStartTS:            c.startTS,
 			Locks:                    locks,
 			Detail:                   &c.getDetail().ResolveLock,
-			PessimisticRegionResolve: false,
+			PessimisticRegionResolve: true,
 		}
 		resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 		if err != nil {

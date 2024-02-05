@@ -7,7 +7,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20231212100244-799fae176cfb
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
 	github.com/pingcap/kvproto v0.0.0-20240109063850-932639606bcf
-	github.com/pingcap/tidb v1.1.0-beta.0.20240126041650-de177d85b19e
+	github.com/pingcap/tidb v1.1.0-beta.0.20240131080924-732fa8c98695
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.14.1
@@ -54,7 +54,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/influxdata/tdigest v0.0.1 // indirect
 	github.com/jellydator/ttlcache/v3 v3.0.1 // indirect
-	github.com/klauspost/compress v1.17.1 // indirect
+	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
