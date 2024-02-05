@@ -277,7 +277,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionWhenCtxCanceled(
 	_, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	// Check this kind of error won't cause region cache drop.
 	s.Equal(errors.Cause(err), context.Canceled)
-	s.NotNil(sender.regionCache.getRegionByIDFromCache(s.region))
+	r, expired := sender.regionCache.searchCachedRegionByID(s.region)
+	s.False(expired)
+	s.NotNil(r)
 }
 
 // cancelContextClient wraps rpcClient and always cancels context before sending requests.
@@ -547,7 +549,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 	cancel()
 	_, _, err = sender.SendReq(bo, req, region.Region, 3*time.Second)
 	s.Equal(errors.Cause(err), context.Canceled)
-	s.NotNil(s.cache.getRegionByIDFromCache(s.region))
+	r, expired := sender.regionCache.searchCachedRegionByID(s.region)
+	s.False(expired)
+	s.NotNil(r)
 
 	// Just for covering error code = codes.Canceled.
 	client1 := &cancelContextClient{
@@ -604,8 +608,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	// test kv epochNotMatch return empty regions
 	s.cache.OnRegionEpochNotMatch(s.bo, &RPCContext{Region: region.Region, Store: &Store{storeID: s.store}}, []*metapb.Region{})
 	s.Nil(err)
-	r := s.cache.getRegionByIDFromCache(s.region)
-	s.Nil(r)
+	r, expired := s.cache.searchCachedRegionByID(s.region)
+	s.True(expired)
+	s.NotNil(r)
 
 	// refill cache
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
@@ -616,7 +621,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	v2 := region.Region.confVer + 1
 	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
 	st := &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true, true)
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)
@@ -626,7 +631,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	v3 := region.Region.confVer + 1
 	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: v3, ConfVer: region.Region.confVer}, StartKey: []byte{2}}
 	st = &Store{storeID: s.store}
-	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), lastAccess: time.Now().Unix()}, true, true)
+	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	s.NotNil(region)

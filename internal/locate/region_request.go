@@ -607,7 +607,7 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if candidateNum == 0 {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 		selector.invalidateReplicaStore(leader, errors.Errorf("all followers are tried as proxy but fail"))
-		selector.region.scheduleReload()
+		selector.region.setSyncFlags(needReloadOnAccess)
 		return nil, nil
 	}
 
@@ -727,7 +727,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		}
 	}
 	if reloadRegion {
-		selector.regionCache.scheduleReloadRegion(selector.region)
+		selector.region.setSyncFlags(needDelayedReloadPending)
 	}
 	// If there is no candidate, fallback to the leader.
 	if selector.targetIdx < 0 {
@@ -760,7 +760,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 					labels:    state.option.labels,
 				}
 				if leaderEpochStale {
-					selector.regionCache.scheduleReloadRegion(selector.region)
+					selector.region.setSyncFlags(needDelayedReloadPending)
 				}
 				return nil, stateChanged{}
 			}
@@ -918,7 +918,7 @@ func newReplicaSelector(
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion == nil {
 		return nil, errors.New("cached region not found")
-	} else if cachedRegion.checkNeedReload() {
+	} else if cachedRegion.checkSyncFlags(needReloadOnAccess) {
 		return nil, errors.New("cached region need reload")
 	} else if !cachedRegion.checkRegionCacheTTL(time.Now().Unix()) {
 		return nil, errors.New("cached region ttl expired")
@@ -1499,9 +1499,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		// recheck whether the session/query is killed during the Next()
-		boVars := bo.GetVars()
-		if boVars != nil && boVars.Killed != nil && atomic.LoadUint32(boVars.Killed) == 1 {
-			return nil, nil, retryTimes, errors.WithStack(tikverr.ErrQueryInterrupted)
+		if err2 := bo.CheckKilled(); err2 != nil {
+			return nil, nil, retryTimes, err2
 		}
 		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
 			if val.(bool) {
