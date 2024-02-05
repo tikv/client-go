@@ -209,6 +209,8 @@ type ReplicaSelectMixedStrategy struct {
 	busyThreshold time.Duration
 }
 
+var randIntn = rand.Intn
+
 func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *Region) *replica {
 	leaderIdx := region.getStore().workTiKVIdx
 	replicas := selector.replicas
@@ -242,7 +244,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	} else if len(maxScoreIdxes) > 1 {
 		// if there are more than one replica with the same max score, we will randomly select one
 		// todo: use store slow score to select a faster one.
-		idx := maxScoreIdxes[rand.Intn(len(maxScoreIdxes))]
+		idx := maxScoreIdxes[randIntn(len(maxScoreIdxes))]
 		return replicas[idx]
 	}
 	if s.busyThreshold > 0 {
@@ -455,7 +457,7 @@ func (s *replicaSelectorV2) onSendSuccess(req *tikvrpc.Request) {
 			}
 		}
 	}
-	if s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() && req != nil && req.StaleRead == false && req.ReplicaRead == false {
+	if s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() && req != nil && !req.StaleRead && !req.ReplicaRead {
 		s.region.switchWorkLeaderToPeer(s.target.peer)
 	}
 }

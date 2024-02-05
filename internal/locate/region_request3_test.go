@@ -2207,3 +2207,230 @@ func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
 	s.Less(elapsed, time.Millisecond*2500)
 	s.True(requestHandled)
 }
+
+type RegionErrorType int
+
+const (
+	NotLeaderErr RegionErrorType = iota + 1
+	RegionNotFoundErr
+	KeyNotInRegionErr
+	EpochNotMatchErr
+	ServerIsBusyErr
+	StaleCommandErr
+	StoreNotMatchErr
+	RaftEntryTooLargeErr
+	MaxTimestampNotSyncedErr
+	ReadIndexNotReadyErr
+	ProposalInMergingModeErr
+	DataIsNotReadyErr
+	RegionNotInitializedErr
+	DiskFullErr
+	RecoveryInProgressErr
+	FlashbackInProgressErr
+	FlashbackNotPreparedErr
+	IsWitnessErr
+	MismatchPeerIdErr
+	BucketVersionNotMatchErr
+)
+
+func (tp RegionErrorType) GenError() *errorpb.Error {
+	err := &errorpb.Error{}
+	switch tp {
+	case NotLeaderErr:
+		err.NotLeader = &errorpb.NotLeader{}
+	case RegionNotFoundErr:
+		err.RegionNotFound = &errorpb.RegionNotFound{}
+	case KeyNotInRegionErr:
+		err.KeyNotInRegion = &errorpb.KeyNotInRegion{}
+	case EpochNotMatchErr:
+		err.EpochNotMatch = &errorpb.EpochNotMatch{}
+	case ServerIsBusyErr:
+		err.ServerIsBusy = &errorpb.ServerIsBusy{}
+	case StaleCommandErr:
+		err.StaleCommand = &errorpb.StaleCommand{}
+	case StoreNotMatchErr:
+		err.StoreNotMatch = &errorpb.StoreNotMatch{}
+	case RaftEntryTooLargeErr:
+		err.RaftEntryTooLarge = &errorpb.RaftEntryTooLarge{}
+	case MaxTimestampNotSyncedErr:
+		err.MaxTimestampNotSynced = &errorpb.MaxTimestampNotSynced{}
+	case ReadIndexNotReadyErr:
+		err.ReadIndexNotReady = &errorpb.ReadIndexNotReady{}
+	case ProposalInMergingModeErr:
+		err.ProposalInMergingMode = &errorpb.ProposalInMergingMode{}
+	case DataIsNotReadyErr:
+		err.DataIsNotReady = &errorpb.DataIsNotReady{}
+	case RegionNotInitializedErr:
+		err.RegionNotInitialized = &errorpb.RegionNotInitialized{}
+	case DiskFullErr:
+		err.DiskFull = &errorpb.DiskFull{}
+	case RecoveryInProgressErr:
+		err.RecoveryInProgress = &errorpb.RecoveryInProgress{}
+	case FlashbackInProgressErr:
+		err.FlashbackInProgress = &errorpb.FlashbackInProgress{}
+	case FlashbackNotPreparedErr:
+		err.FlashbackNotPrepared = &errorpb.FlashbackNotPrepared{}
+	case IsWitnessErr:
+		err.IsWitness = &errorpb.IsWitness{}
+	case MismatchPeerIdErr:
+		err.MismatchPeerId = &errorpb.MismatchPeerId{}
+	case BucketVersionNotMatchErr:
+		err.BucketVersionNotMatch = &errorpb.BucketVersionNotMatch{}
+	default:
+		return nil
+	}
+	return err
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorByLeaderWithError() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+
+	fakeRegionError := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, since no replica is available.
+	cases := []struct {
+		accessErr       []RegionErrorType
+		access          []string
+		respErr         string
+		respRegionError *errorpb.Error
+	}{
+		{
+			accessErr: []RegionErrorType{NotLeaderErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+				"addr: store2, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+		},
+		{
+			accessErr: []RegionErrorType{NotLeaderErr, NotLeaderErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+				"addr: store2, replica-read: false, stale-read: false, deadline_ms: 30000",
+				"addr: store3, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+		},
+		{
+			accessErr: []RegionErrorType{NotLeaderErr, NotLeaderErr, NotLeaderErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+				"addr: store2, replica-read: false, stale-read: false, deadline_ms: 30000",
+				"addr: store3, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			accessErr: []RegionErrorType{RaftEntryTooLargeErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+			respErr: RaftEntryTooLargeErr.GenError().String(),
+		},
+		{
+			accessErr: []RegionErrorType{FlashbackInProgressErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+			respErr: "region 0 is in flashback progress, FlashbackStartTS is 0",
+		},
+		{
+			accessErr: []RegionErrorType{FlashbackNotPreparedErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+			respErr: "region 0 is not prepared for the flashback",
+		},
+	}
+	// ServerIsBusyErr
+	// StaleCommandErr,
+	// ReadIndexNotReadyErr,
+	// DataIsNotReadyErr,
+	//BucketVersionNotMatchErr,
+
+	retryRegionErrorTypes := []RegionErrorType{ServerIsBusyErr, StaleCommandErr, MaxTimestampNotSyncedErr, ProposalInMergingModeErr, ReadIndexNotReadyErr, RegionNotInitializedErr, DiskFullErr}
+	for _, ca := range retryRegionErrorTypes {
+		cases = append(cases, struct {
+			accessErr       []RegionErrorType
+			access          []string
+			respErr         string
+			respRegionError *errorpb.Error
+		}{
+			accessErr: []RegionErrorType{ca},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+		})
+	}
+	noRetryRegionErrorTypes := []RegionErrorType{RegionNotFoundErr, KeyNotInRegionErr, EpochNotMatchErr, StoreNotMatchErr, RecoveryInProgressErr, IsWitnessErr, MismatchPeerIdErr}
+	for _, ca := range noRetryRegionErrorTypes {
+		cases = append(cases, struct {
+			accessErr       []RegionErrorType
+			access          []string
+			respErr         string
+			respRegionError *errorpb.Error
+		}{
+			accessErr: []RegionErrorType{ca},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false, deadline_ms: 30000",
+			},
+			respRegionError: ca.GenError(),
+		})
+	}
+
+	randIntn = func(n int) int {
+		return 0
+	}
+	for i, ca := range cases {
+		msg := fmt.Sprintf("test case idx: %v, access_err: %v", i, ca.accessErr)
+		access := []string{}
+		fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+			defer func() {
+				//regionErr, _ := response.GetRegionError()
+				//fmt.Printf("%v ===========\n\n", regionErr)
+			}()
+			idx := len(access)
+			access = append(access, fmt.Sprintf("addr: %v, replica-read: %v, stale-read: %v, deadline_ms: %v",
+				addr, req.ReplicaRead, req.StaleRead, req.MaxExecutionDurationMs))
+			//fmt.Printf("%v ===========\n\n", access[idx])
+			if idx < len(ca.accessErr) {
+				regionErr := ca.accessErr[idx].GenError()
+				if regionErr != nil {
+					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+						RegionError: regionErr,
+					}}, nil
+				}
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				Value: []byte("hello world"),
+			}}, nil
+		}}
+		sender := NewRegionRequestSender(s.cache, fnClient)
+		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+			Key: []byte("key"),
+		})
+		loc, err = s.cache.LocateKey(s.bo, []byte("key"))
+		s.Nil(err)
+		bo := retry.NewBackofferWithVars(context.Background(), 10000, nil)
+		resp, _, err := sender.SendReq(bo, req, loc.Region, client.ReadTimeoutShort)
+		s.Equal(ca.access, access, msg)
+		if ca.respErr == "" {
+			s.Nil(err, msg)
+			s.NotNil(resp, msg)
+			regionErr, err := resp.GetRegionError()
+			s.Nil(err, msg)
+			if ca.respRegionError == nil {
+				s.Nil(regionErr, msg)
+				s.Equal([]byte("hello world"), resp.Resp.(*kvrpcpb.GetResponse).Value, msg)
+			} else {
+				s.NotNil(regionErr)
+				s.Equal(ca.respRegionError, regionErr)
+				if IsFakeRegionError(regionErr) {
+					s.False(sender.replicaSelector.getBaseReplicaSelector().region.isValid()) // region must be invalidated.
+				}
+			}
+		} else {
+			s.NotNil(err)
+			s.Equal(ca.respErr, err.Error(), msg)
+		}
+		sender.replicaSelector.invalidateRegion() // invalidate region to reload.
+	}
+}
