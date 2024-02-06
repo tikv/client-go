@@ -110,6 +110,12 @@ type Client interface {
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 }
 
+type HealthFeedbackHandler = func(feedback *tikvpb.HealthFeedback)
+
+type HealthFeedbackReceiver interface {
+	SetHealthFeedbackHandler(handler HealthFeedbackHandler)
+}
+
 type connArray struct {
 	// The target host.
 	target string
@@ -127,7 +133,7 @@ type connArray struct {
 }
 
 func newConnArray(maxSize uint, addr string, security config.Security,
-	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, opts []grpc.DialOption) (*connArray, error) {
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, healthFeedbackHandler *atomic.Pointer[HealthFeedbackHandler], opts []grpc.DialOption) (*connArray, error) {
 	a := &connArray{
 		index:         0,
 		v:             make([]*monitoredConn, maxSize),
@@ -136,7 +142,7 @@ func newConnArray(maxSize uint, addr string, security config.Security,
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
-	if err := a.Init(addr, security, idleNotify, enableBatch, opts...); err != nil {
+	if err := a.Init(addr, security, idleNotify, enableBatch, healthFeedbackHandler, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -228,7 +234,7 @@ func (c *monitoredConn) Close() error {
 	return nil
 }
 
-func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, opts ...grpc.DialOption) error {
+func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, healthFeedbackHandler *atomic.Pointer[HealthFeedbackHandler], opts ...grpc.DialOption) error {
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -307,16 +313,17 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 
 		if allowBatch {
 			batchClient := &batchCommandsClient{
-				target:           a.target,
-				conn:             conn.ClientConn,
-				forwardedClients: make(map[string]*batchCommandsStream),
-				batched:          sync.Map{},
-				epoch:            0,
-				closed:           0,
-				tikvClientCfg:    cfg.TiKVClient,
-				tikvLoad:         &a.tikvTransportLayerLoad,
-				dialTimeout:      a.dialTimeout,
-				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
+				target:                a.target,
+				conn:                  conn.ClientConn,
+				forwardedClients:      make(map[string]*batchCommandsStream),
+				batched:               sync.Map{},
+				epoch:                 0,
+				closed:                0,
+				tikvClientCfg:         cfg.TiKVClient,
+				tikvLoad:              &a.tikvTransportLayerLoad,
+				dialTimeout:           a.dialTimeout,
+				tryLock:               tryLock{sync.NewCond(new(sync.Mutex)), false},
+				healthFeedbackHandler: healthFeedbackHandler,
 			}
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
 		}
@@ -400,6 +407,8 @@ type RPCClient struct {
 	isClosed bool
 
 	connMonitor *connMonitor
+
+	healthFeedbackHandler *atomic.Pointer[HealthFeedbackHandler]
 }
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
@@ -409,7 +418,8 @@ func NewRPCClient(opts ...Opt) *RPCClient {
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
-		connMonitor: &connMonitor{},
+		connMonitor:           &connMonitor{},
+		healthFeedbackHandler: new(atomic.Pointer[HealthFeedbackHandler]),
 	}
 	for _, opt := range opts {
 		opt(cli.option)
@@ -461,6 +471,7 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 			enableBatch,
 			c.option.dialTimeout,
 			c.connMonitor,
+			c.healthFeedbackHandler,
 			c.option.gRPCDialOptions)
 
 		if err != nil {
@@ -806,6 +817,10 @@ func (c *RPCClient) CloseAddr(addr string) error {
 		conn.Close()
 	}
 	return nil
+}
+
+func (c *RPCClient) SetHealthFeedbackHandler(handler HealthFeedbackHandler) {
+	c.healthFeedbackHandler.Store(&handler)
 }
 
 type spanInfo struct {

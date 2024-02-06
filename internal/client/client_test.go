@@ -107,7 +107,7 @@ func TestGetConnAfterClose(t *testing.T) {
 
 func TestCancelTimeoutRetErr(t *testing.T) {
 	req := new(tikvpb.BatchCommandsRequest_Request)
-	a := newBatchConn(1, 1, nil)
+	a := newBatchConn(1, 1, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	cancel()

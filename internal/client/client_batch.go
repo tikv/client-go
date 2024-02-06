@@ -507,6 +507,8 @@ type batchCommandsClient struct {
 	closed int32
 	// tryLock protects client when re-create the streaming.
 	tryLock
+
+	healthFeedbackHandler *atomic.Pointer[HealthFeedbackHandler]
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -641,6 +643,10 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			continue
 		}
 
+		if resp.GetHealthFeedback() != nil {
+
+		}
+
 		responses := resp.GetResponses()
 		for i, requestID := range resp.GetRequestIds() {
 			value, ok := c.batched.Load(requestID)
@@ -668,6 +674,12 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(tikvTransportLayerLoad, transportLayerLoad)
 		}
+	}
+}
+
+func (c *batchCommandsClient) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	if h := c.healthFeedbackHandler.Load(); h != nil {
+		(*h)(feedback)
 	}
 }
 

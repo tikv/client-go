@@ -55,6 +55,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
@@ -3294,4 +3295,8 @@ func (c *RegionCache) markStoreNeedCheck(store *Store) {
 
 func (c *RegionCache) getCheckStoreEvents() <-chan struct{} {
 	return c.notifyCheckCh
+}
+
+func (c *RegionCache) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+
 }
