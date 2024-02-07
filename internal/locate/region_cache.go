@@ -2508,7 +2508,6 @@ const (
 
 	tikvSlowScoreUpdateInterval       = time.Millisecond * 100
 	tikvSlowScoreUpdateFromPDInterval = time.Minute
-	tikvSlowScoreFilterCutFreq        = 1.
 )
 
 type StoreHealthStatus struct {
@@ -2631,18 +2630,6 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 
 	lastScore = s.tikvSideSlowScore.score.Load()
 	newScore := score
-
-	if lastUpdateTime != nil {
-		// It must be positive, otherwise the function exits when checking the update interval.
-		elapsedSecs := currTime.Sub(*lastUpdateTime).Seconds()
-
-		// We do a simple RC low-pass filter at 1Hz to ease possible jitter.
-		const twoPiInvert = 1. / (2 * math.Pi)
-		alpha := elapsedSecs * tikvSlowScoreFilterCutFreq / (elapsedSecs*tikvSlowScoreFilterCutFreq + twoPiInvert)
-		newScore = int64(
-			alpha*float64(score) + (1-alpha)*float64(lastScore),
-		)
-	}
 
 	newUpdateTime := new(time.Time)
 	*newUpdateTime = currTime
