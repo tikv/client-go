@@ -3298,5 +3298,10 @@ func (c *RegionCache) getCheckStoreEvents() <-chan struct{} {
 }
 
 func (c *RegionCache) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	store, ok := c.getStore(feedback.GetStoreId())
+	if !ok {
+		logutil.BgLogger().Info("dropped health feedback info due to unknown store id", zap.Uint64("storeID", feedback.GetStoreId()))
+		return
+	}
 
 }

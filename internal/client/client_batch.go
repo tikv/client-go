@@ -644,7 +644,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 
 		if resp.GetHealthFeedback() != nil {
-
+			c.onHealthFeedback(resp.GetHealthFeedback())
 		}
 
 		responses := resp.GetResponses()
