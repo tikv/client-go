@@ -14,12 +14,9 @@
 
 package client
 
-func (s) TestSharedBufferPool(t *testing.T) {
-	pools := []SharedBufferPool{
-		nopBufferPool{},
-		NewSharedBufferPool(),
-	}
+import "testing"
 
+func TestSharedBufferPool(t *testing.T) {
 	lengths := []int{
 		level4PoolMaxSize + 1,
 		level4PoolMaxSize,
@@ -28,15 +25,13 @@ func (s) TestSharedBufferPool(t *testing.T) {
 		level1PoolMaxSize,
 		level0PoolMaxSize,
 	}
-
-	for _, p := range pools {
-		for _, l := range lengths {
-			bs := p.Get(l)
-			if len(bs) != l {
-				t.Fatalf("Expected buffer of length %d, got %d", l, len(bs))
-			}
-
-			p.Put(&bs)
+	p := NewSharedBufferPool()
+	for _, l := range lengths {
+		bs := p.Get(l)
+		if len(bs) != l {
+			t.Fatalf("Expected buffer of length %d, got %d", l, len(bs))
 		}
+
+		p.Put(&bs)
 	}
 }

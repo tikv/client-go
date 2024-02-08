@@ -14,22 +14,29 @@
 
 package client
 
-func NewSharedBufferPool() SharedBufferPool {
+import (
+	"runtime"
+	"sync"
+
+	"google.golang.org/grpc"
+)
+
+func NewSharedBufferPool() grpc.SharedBufferPool {
 	return &simpleSharedBufferPool{
-		pools: [poolArraySize]simpleSharedBufferChildPool{
+		pools: [poolArraySize]*bufferPool{
 			newBytesPool(level0PoolMaxSize),
 			newBytesPool(level1PoolMaxSize),
 			newBytesPool(level2PoolMaxSize),
 			newBytesPool(level3PoolMaxSize),
 			newBytesPool(level4PoolMaxSize),
-			newBytesPool(0),
+			newBytesPool(level4PoolMaxSize),
 		},
 	}
 }
 
 // simpleSharedBufferPool is a simple implementation of SharedBufferPool.
 type simpleSharedBufferPool struct {
-	pools [poolArraySize]simpleSharedBufferChildPool
+	pools [poolArraySize]*bufferPool
 }
 
 func (p *simpleSharedBufferPool) Get(size int) []byte {
@@ -98,13 +105,14 @@ func (p *bufferPool) Get(size int) []byte {
 	return (*bs)[:size]
 }
 
-func (p *bufferPool) Put(i any) {
-	runtime.SetFinalizer(bs, func() {
-		bs := bs[:0]
-		p.Pool.Put(bs)
+func (p *bufferPool) Put(i *[]byte) {
+	(*i) = (*i)[:0]
+	runtime.SetFinalizer(i, func(i *[]byte) {
+		p.Pool.Put(i)
 	})
 }
-func newBytesPool(size int) simpleSharedBufferChildPool {
+
+func newBytesPool(size int) *bufferPool {
 	return &bufferPool{
 		Pool: sync.Pool{
 			New: func() any {
