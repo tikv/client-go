@@ -297,7 +297,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 			}),
 		}, opts...)
 		if cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
+			opts = append(opts, experimental.WithRecvBufferPool(NewSharedBufferPool()))
 		}
 		conn, err := a.monitoredDial(
 			ctx,
