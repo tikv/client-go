@@ -82,11 +82,6 @@ const (
 	poolArraySize
 )
 
-type simpleSharedBufferChildPool interface {
-	Get(size int) []byte
-	Put(any)
-}
-
 type bufferPool struct {
 	sync.Pool
 
