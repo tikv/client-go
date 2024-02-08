@@ -101,8 +101,8 @@ func (p *bufferPool) Get(size int) []byte {
 }
 
 func (p *bufferPool) Put(i *[]byte) {
-	(*i) = (*i)[:0]
 	runtime.SetFinalizer(i, func(i *[]byte) {
+		(*i) = (*i)[:0]
 		p.Pool.Put(i)
 	})
 }
