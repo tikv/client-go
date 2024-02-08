@@ -2528,7 +2528,7 @@ type StoreHealthStatus struct {
 	}
 }
 
-type SlownessDetail struct {
+type HealthStatusDetail struct {
 	ClientSideSlowScore int64
 	TiKVSideSlowScore   int64
 }
@@ -2538,8 +2538,8 @@ func (s *StoreHealthStatus) IsSlow() bool {
 	return s.isSlow.Load()
 }
 
-func (s *StoreHealthStatus) GetHealthStatusDetail() SlownessDetail {
-	return SlownessDetail{
+func (s *StoreHealthStatus) GetHealthStatusDetail() HealthStatusDetail {
+	return HealthStatusDetail{
 		ClientSideSlowScore: int64(s.clientSideSlowScore.getSlowScore()),
 		TiKVSideSlowScore:   s.tikvSideSlowScore.score.Load(),
 	}
@@ -2642,49 +2642,6 @@ func (s *StoreHealthStatus) updateSlowFlag() {
 	isSlow := s.clientSideSlowScore.isSlow() || s.tikvSideSlowScore.score.Load() >= tikvSlowScoreSlowThreshold
 	s.isSlow.Store(isSlow)
 }
-
-//func (s *StoreHealthStatus) IsSlow(currTime time.Time) bool {
-//	isSlow := s.tikvIsSlow.Load()
-//	if !isSlow {
-//		return false
-//	}
-//
-//	if !s.checkTiKVSideSlowScoreDecay(currTime) {
-//		return true
-//	}
-//	return s.tikvIsSlow.Load()
-//}
-//
-//func (s *StoreHealthStatus) checkTiKVSideSlowScoreDecay(currTime time.Time) bool {
-//	lastCheckDecayTime := s.tikvSideSlowScoreInternal.lastCheckDecayTime.Load()
-//	if lastCheckDecayTime == nil || currTime.Sub(*lastCheckDecayTime) < tikvSlowScoreCheckDecayDuration {
-//		return false
-//	}
-//
-//	if !s.tikvSideSlowScoreInternal.TryLock() {
-//		// It's being updated. Skip.
-//		return false
-//	}
-//	defer s.tikvSideSlowScoreInternal.Unlock()
-//
-//	// Recalculate elapsed time as it might be already concurrently updated
-//	lastCheckDecayTime = s.tikvSideSlowScoreInternal.lastCheckDecayTime.Load()
-//	elapsed := currTime.Sub(*lastCheckDecayTime)
-//	if elapsed < tikvSlowScoreCheckDecayDuration {
-//		// Concurrently updated before acquiring mutex. Behave like successfully updated in this case.
-//		return true
-//	}
-//
-//	s.tikvSideSlowScoreInternal.score -= elapsed.Seconds() * tikvSlowScoreDecayRate
-//	if s.tikvSideSlowScoreInternal.score < 0 {
-//		s.tikvSideSlowScoreInternal.score = 0
-//	}
-//
-//	if s.tikvSideSlowScoreInternal.score < tikvSlowScoreSlowThreshold {
-//		s.tikvIsSlow.Store(false)
-//	}
-//	return true
-//}
 
 // Store contains a kv process's address.
 type Store struct {
@@ -3240,14 +3197,14 @@ func (c *RegionCache) checkAndUpdateStoreHealthStats() {
 				zap.Stack("stack trace"))
 		}
 	}()
-	clientSideSlowScoreMetrics := make(map[uint64]float64)
+	healthDetails := make(map[uint64]HealthStatusDetail)
 	c.forEachStore(func(store *Store) {
 		store.healthStatus.update()
-		healthStatusDetail := store.healthStatus.GetHealthStatusDetail()
-		clientSideSlowScoreMetrics[store.storeID] = float64(healthStatusDetail.ClientSideSlowScore)
+		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
 	})
-	for store, score := range clientSideSlowScoreMetrics {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(score)
+	for store, details := range healthDetails {
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.ClientSideSlowScore))
+		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.TiKVSideSlowScore))
 	}
 }
 
