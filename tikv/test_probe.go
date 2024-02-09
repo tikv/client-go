@@ -37,6 +37,7 @@ package tikv
 import (
 	"bytes"
 	"context"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -240,5 +241,5 @@ func (c ConfigProbe) StorePreSplitSizeThreshold(v uint32) {
 
 // SetOracleUpdateInterval sets the interval of updating cached ts.
 func (c ConfigProbe) SetOracleUpdateInterval(v int) {
-	oracleUpdateInterval = v
+	defaultOracleUpdateInterval = time.Duration(v) * time.Millisecond
 }
