@@ -40,11 +40,19 @@ type simpleSharedBufferPool struct {
 }
 
 func (p *simpleSharedBufferPool) Get(size int) []byte {
-	return p.pools[p.poolIdx(size)].Get(size)
+	idx := p.poolIdx(size)
+	if idx == levelMaxPoolIdx {
+		return make([]byte, size)
+	}
+	return p.pools[idx].Get(size)
 }
 
 func (p *simpleSharedBufferPool) Put(bs *[]byte) {
-	p.pools[p.poolIdx(cap(*bs))].Put(bs)
+	idx := p.poolIdx(cap(*bs))
+	if idx == levelMaxPoolIdx {
+		return
+	}
+	p.pools[idx].Put(bs)
 }
 
 func (p *simpleSharedBufferPool) poolIdx(size int) int {
@@ -69,7 +77,7 @@ const (
 	level1PoolMaxSize = level0PoolMaxSize * 16 // 256  B
 	level2PoolMaxSize = level1PoolMaxSize * 16 //   4 KB
 	level3PoolMaxSize = level2PoolMaxSize * 16 //  64 KB
-	level4PoolMaxSize = level3PoolMaxSize * 16 //   1 MB
+	level4PoolMaxSize = level3PoolMaxSize * 2  //   128 MB
 )
 
 const (
