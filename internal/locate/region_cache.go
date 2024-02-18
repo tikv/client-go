@@ -667,14 +667,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
 func (c *RegionCache) SetRegionCacheStore(id uint64, addr string, peerAddr string, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
-	c.putStore(&Store{
-		storeID:   id,
-		storeType: storeType,
-		state:     state,
-		labels:    labels,
-		addr:      addr,
-		peerAddr:  peerAddr,
-	})
+	c.putStore(newStore(id, addr, peerAddr, "", storeType, resolveState(state), labels))
 }
 
 // SetPDClient replaces pd client,for testing only
@@ -2096,15 +2089,15 @@ func reloadTiFlashComputeStores(ctx context.Context, registry storeRegistry) (re
 	}
 	for _, s := range stores {
 		if s.GetState() == metapb.StoreState_Up && isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) {
-			res = append(res, &Store{
-				storeID:   s.GetId(),
-				addr:      s.GetAddress(),
-				peerAddr:  s.GetPeerAddress(),
-				saddr:     s.GetStatusAddress(),
-				storeType: tikvrpc.GetStoreTypeByMeta(s),
-				labels:    s.GetLabels(),
-				state:     uint64(resolved),
-			})
+			res = append(res, newStore(
+				s.GetId(),
+				s.GetAddress(),
+				s.GetPeerAddress(),
+				s.GetStatusAddress(),
+				tikvrpc.GetStoreTypeByMeta(s),
+				resolved,
+				s.GetLabels(),
+			))
 		}
 	}
 	return res, nil
@@ -2516,7 +2509,7 @@ type StoreHealthStatus struct {
 	// A statistic for counting the request latency to this store
 	clientSideSlowScore SlowScoreStat
 
-	tikvSideSlowScore *struct {
+	tikvSideSlowScore struct {
 		// Assuming the type `Store` is always used in heap instead of in stack
 		sync.Mutex
 
@@ -2664,7 +2657,7 @@ type Store struct {
 	livenessState    uint32
 	unreachableSince time.Time
 
-	healthStatus StoreHealthStatus
+	healthStatus *StoreHealthStatus
 	// A statistic for counting the flows of different replicas on this store
 	replicaFlowsStats [numReplicaFlowsType]uint64
 }
@@ -2707,6 +2700,37 @@ func (s resolveState) String() string {
 		return "tombstone"
 	default:
 		return fmt.Sprintf("unknown-%v", uint64(s))
+	}
+}
+
+func newStore(
+	id uint64,
+	addr string,
+	peerAddr string,
+	statusAddr string,
+	storeType tikvrpc.EndpointType,
+	state resolveState,
+	labels []*metapb.StoreLabel,
+) *Store {
+	return &Store{
+		storeID:   id,
+		storeType: storeType,
+		state:     uint64(state),
+		labels:    labels,
+		addr:      addr,
+		peerAddr:  peerAddr,
+		saddr:     statusAddr,
+		// Make sure healthStatus field is never null.
+		healthStatus: &StoreHealthStatus{},
+	}
+}
+
+// newUninitializedStore creates a `Store` instance with only storeID initialized.
+func newUninitializedStore(id uint64) *Store {
+	return &Store{
+		storeID: id,
+		// Make sure healthStatus field is never null.
+		healthStatus: &StoreHealthStatus{},
 	}
 }
 
@@ -2810,7 +2834,15 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
-		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore := newStore(
+			s.storeID,
+			addr,
+			store.GetPeerAddress(),
+			store.GetStatusAddress(),
+			storeType,
+			resolved,
+			store.GetLabels(),
+		)
 		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
 		newStore.unreachableSince = s.unreachableSince
 		if s.addr == addr {
@@ -3196,12 +3228,16 @@ func (c *RegionCache) checkAndUpdateStoreHealthStats() {
 				zap.Any("r", r),
 				zap.Stack("stack trace"))
 		}
+		if _, err := util.EvalFailpoint("doNotRecoverStoreHealthCheckPanic"); err == nil {
+			panic(r)
+		}
 	}()
 	healthDetails := make(map[uint64]HealthStatusDetail)
 	c.forEachStore(func(store *Store) {
 		store.healthStatus.update()
 		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
 	})
+	logutil.BgLogger().Info("checkAndUpdateStoreHealthStats: get health details", zap.Reflect("details", healthDetails))
 	for store, details := range healthDetails {
 		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.ClientSideSlowScore))
 		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.TiKVSideSlowScore))
@@ -3345,7 +3381,7 @@ func (c *RegionCache) getStoreOrInsertDefault(id uint64) *Store {
 	c.storeMu.Lock()
 	store, exists := c.storeMu.stores[id]
 	if !exists {
-		store = &Store{storeID: id}
+		store = newUninitializedStore(id)
 		c.storeMu.stores[id] = store
 	}
 	c.storeMu.Unlock()

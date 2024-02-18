@@ -47,6 +47,7 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
@@ -100,6 +101,8 @@ func (s *testRegionCacheSuite) SetupTest() {
 	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
+
+	s.NoError(failpoint.Enable("tikvclient/doNotRecoverStoreHealthCheckPanic", "return"))
 }
 
 func (s *testRegionCacheSuite) TearDownTest() {
@@ -108,6 +111,8 @@ func (s *testRegionCacheSuite) TearDownTest() {
 	if s.onClosed != nil {
 		s.onClosed()
 	}
+
+	s.NoError(failpoint.Disable("tikvclient/doNotRecoverStoreHealthCheckPanic"))
 }
 
 func (s *testRegionCacheSuite) storeAddr(id uint64) string {
@@ -1932,7 +1937,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
 	v2 := region.Region.confVer + 1
 	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
-	st := &Store{storeID: s.store}
+	st := newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
