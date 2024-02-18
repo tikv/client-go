@@ -1174,12 +1174,16 @@ func isReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
 		// Configurable timeout should less than `ReadTimeoutShort`.
 		return false
 	}
-	switch req.Type {
+	// Only work for read requests, return false for non-read requests.
+	return isReadReq(req.Type)
+}
+
+func isReadReq(tp tikvrpc.CmdType) bool {
+	switch tp {
 	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
 		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
 		return true
 	default:
-		// Only work for read requests, return false for non-read requests.
 		return false
 	}
 }
