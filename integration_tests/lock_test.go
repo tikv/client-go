@@ -56,6 +56,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -1028,13 +1029,28 @@ type testLockWithTiKVSuite struct {
 func (s *testLockWithTiKVSuite) SetupTest() {
 	if *withTiKV {
 		s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
+		s.cleanupLocks()
 	} else {
 		s.store = tikv.StoreProbe{KVStore: NewTestUniStore(s.T())}
+		s.cleanupLocks()
 	}
 }
 
 func (s *testLockWithTiKVSuite) TearDownTest() {
 	s.store.Close()
+}
+
+func (s *testLockWithTiKVSuite) cleanupLocks() {
+	// Cleanup possible left locks.
+	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
+	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.NoError(err)
+	remainingLocks, err := s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
+	s.NoError(err)
+	if len(remainingLocks) > 0 {
+		s.mustResolve(ctx, bo, remainingLocks, currentTS, []byte("k"), []byte("l"))
+	}
 }
 
 // TODO: Migrate FairLocking related tests here.
@@ -1558,4 +1574,131 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	v, err = snapshot.Get(ctx, k3)
 	s.NoError(err)
 	s.Equal(v3, v)
+}
+
+func (s *testLockWithTiKVSuite) makeLock(startTS uint64, forUpdateTS uint64, key []byte, primary []byte) *txnlock.Lock {
+	return &txnlock.Lock{
+		Key:             key,
+		Primary:         primary,
+		TxnID:           startTS,
+		TTL:             10,
+		TxnSize:         1024,
+		LockType:        kvrpcpb.Op_PessimisticLock,
+		UseAsyncCommit:  false,
+		LockForUpdateTS: forUpdateTS,
+		MinCommitTS:     forUpdateTS,
+	}
+}
+
+func (s *testLockWithTiKVSuite) mustLockNum(ctx context.Context, expectedNum int, scanTS uint64, startKey []byte, endKey []byte) {
+	remainingLocks, err := s.store.ScanLocks(ctx, startKey, endKey, scanTS)
+	s.NoError(err)
+	s.Len(remainingLocks, expectedNum)
+}
+
+func (s *testLockWithTiKVSuite) mustResolve(ctx context.Context, bo *retry.Backoffer, remainingLocks []*txnlock.Lock, callerTS uint64, startKey []byte, endKey []byte) {
+	if len(remainingLocks) > 0 {
+		_, err := s.store.GetLockResolver().ResolveLocksWithOpts(bo, txnlock.ResolveLocksOptions{
+			CallerStartTS:            callerTS,
+			Locks:                    remainingLocks,
+			Lite:                     false,
+			ForRead:                  false,
+			Detail:                   nil,
+			PessimisticRegionResolve: true,
+		})
+		s.NoError(err)
+
+		lockAfterResolve, err := s.store.ScanLocks(ctx, startKey, endKey, callerTS)
+		s.NoError(err)
+		s.Len(lockAfterResolve, 0, "expected=%v actual=%v", 0, len(lockAfterResolve))
+	}
+}
+
+func (s *testLockWithTiKVSuite) TestPessimisticRollbackWithRead() {
+	s.NoError(failpoint.Enable("tikvclient/shortPessimisticLockTTL", "return"))
+	s.NoError(failpoint.Enable("tikvclient/twoPCShortLockTTL", "return"))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/shortPessimisticLockTTL"))
+		s.NoError(failpoint.Disable("tikvclient/twoPCShortLockTTL"))
+	}()
+	test := func(inMemoryLock bool) {
+		if *withTiKV {
+			recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", inMemoryLock)
+			defer recoverFunc()
+		}
+
+		// Init, cleanup possible left locks.
+		bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
+		ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
+		s.cleanupLocks()
+
+		// Basic case, three keys could be rolled back within one pessimistic rollback request.
+		k1, k2, k3 := []byte("k1"), []byte("k2"), []byte("k3")
+		txn1, err := s.store.Begin()
+		s.NoError(err)
+		startTS := txn1.StartTS()
+		txn1.SetPessimistic(true)
+		lockCtx := kv.NewLockCtx(startTS, 200, time.Now())
+		err = txn1.LockKeys(ctx, lockCtx, k1, k2, k3)
+		s.NoError(err)
+		txn1.GetCommitter().CloseTTLManager()
+
+		time.Sleep(time.Millisecond * 100)
+		s.mustLockNum(ctx, 3, startTS+1, []byte("k"), []byte("l"))
+		locks := []*txnlock.Lock{
+			s.makeLock(startTS, startTS, k3, k1),
+		}
+		s.mustResolve(ctx, bo, locks, startTS+1, []byte("k"), []byte("l"))
+
+		time.Sleep(time.Millisecond * 100)
+		s.mustLockNum(ctx, 0, startTS+1, []byte("k"), []byte("l"))
+
+		// Acquire pessimistic locks for more than 256(RESOLVE_LOCK_BATCH_SIZE) keys.
+		formatKey := func(prefix rune, i int) []byte {
+			return []byte(fmt.Sprintf("%c%04d", prefix, i))
+		}
+		numKeys := 1000
+		prewriteKeys := make([][]byte, 0, numKeys/2)
+		pessimisticLockKeys := make([][]byte, 0, numKeys/2)
+		for i := 0; i < numKeys; i++ {
+			key := formatKey('k', i)
+			if i%2 == 0 {
+				err = txn1.LockKeys(ctx, lockCtx, key)
+				pessimisticLockKeys = append(pessimisticLockKeys, key)
+			} else {
+				err = txn1.Set(key, []byte("val"))
+				s.NoError(err)
+				prewriteKeys = append(prewriteKeys, key)
+			}
+			s.NoError(err)
+		}
+		committer, err := txn1.NewCommitter(1)
+		s.NoError(err)
+		mutations := committer.MutationsOfKeys(prewriteKeys)
+		err = committer.PrewriteMutations(ctx, mutations)
+		s.NoError(err)
+
+		// All the pessimistic locks belonging to the same transaction are pessimistic
+		// rolled back within one request.
+		time.Sleep(time.Millisecond * 100)
+		pessimisticLock := s.makeLock(startTS, startTS, pessimisticLockKeys[1], pessimisticLockKeys[0])
+		_, err = s.store.GetLockResolver().ResolveLocksWithOpts(bo, txnlock.ResolveLocksOptions{
+			CallerStartTS:            startTS + 1,
+			Locks:                    []*txnlock.Lock{pessimisticLock},
+			Lite:                     false,
+			ForRead:                  false,
+			Detail:                   nil,
+			PessimisticRegionResolve: true,
+		})
+		s.NoError(err)
+
+		time.Sleep(time.Millisecond * 100)
+		s.mustLockNum(ctx, numKeys/2, startTS+1, []byte("k"), []byte("l"))
+
+		// Cleanup.
+		err = txn1.Rollback()
+		s.NoError(err)
+	}
+	test(false)
+	test(true)
 }

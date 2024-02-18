@@ -41,7 +41,9 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,6 +56,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -79,9 +82,9 @@ import (
 )
 
 const (
-	btreeDegree               = 32
-	invalidatedLastAccessTime = -1
-	defaultRegionsPerBatch    = 128
+	btreeDegree            = 32
+	expiredTTL             = -1
+	defaultRegionsPerBatch = 128
 )
 
 // LabelFilter returns false means label doesn't match, and will ignore this store.
@@ -119,9 +122,34 @@ func SetRegionCacheTTLSec(t int64) {
 	regionCacheTTLSec = t
 }
 
+// regionCacheTTLJitterSec is the max jitter time for region cache TTL.
+var regionCacheTTLJitterSec int64 = 60
+
+// SetRegionCacheTTLWithJitter sets region cache TTL with jitter. The real TTL is in range of [base, base+jitter).
+func SetRegionCacheTTLWithJitter(base int64, jitter int64) {
+	regionCacheTTLSec = base
+	regionCacheTTLJitterSec = jitter
+}
+
+// nextTTL returns a random TTL in range [ts+base, ts+base+jitter). The input ts should be an epoch timestamp in seconds.
+func nextTTL(ts int64) int64 {
+	jitter := int64(0)
+	if regionCacheTTLJitterSec > 0 {
+		jitter = rand.Int63n(regionCacheTTLJitterSec)
+	}
+	return ts + regionCacheTTLSec + jitter
+}
+
+// nextTTLWithoutJitter is used for test.
+func nextTTLWithoutJitter(ts int64) int64 {
+	return ts + regionCacheTTLSec
+}
+
 const (
-	updated  int32 = iota // region is updated and no need to reload.
-	needSync              // need sync new region info.
+	needReloadOnAccess       int32 = 1 << iota // indicates the region will be reloaded on next access
+	needExpireAfterTTL                         // indicates the region will expire after RegionCacheTTL (even when it's accessed continuously)
+	needDelayedReloadPending                   // indicates the region will be reloaded later after it's scanned by GC
+	needDelayedReloadReady                     // indicates the region has been scanned by GC and can be reloaded by id on next access
 )
 
 // InvalidReason is the reason why a cached region is invalidated.
@@ -146,16 +174,32 @@ const (
 	Other
 )
 
+func (r InvalidReason) String() string {
+	switch r {
+	case Ok:
+		return "Ok"
+	case Other:
+		return "Other"
+	case EpochNotMatch:
+		return "EpochNotMatch"
+	case RegionNotFound:
+		return "RegionNotFound"
+	case StoreNotFound:
+		return "StoreNotFound"
+	case NoLeader:
+		return "NoLeader"
+	default:
+		return "Unknown"
+	}
+}
+
 // Region presents kv region
 type Region struct {
-	meta                       *metapb.Region // raw region meta from PD, immutable after init
-	store                      unsafe.Pointer // point to region store info, see RegionStore
-	syncFlag                   int32          // region need be sync in next turn
-	lastAccess                 int64          // last region access time, see checkRegionCacheTTL
-	invalidReason              InvalidReason  // the reason why the region is invalidated
-	asyncReload                atomic.Bool    // the region need to be reloaded in async mode
-	lastLoad                   int64          // last region load time
-	hasUnavailableTiFlashStore bool           // has unavailable TiFlash store, if yes, need to trigger async reload periodically
+	meta          *metapb.Region // raw region meta from PD, immutable after init
+	store         unsafe.Pointer // point to region store info, see RegionStore
+	ttl           int64          // region TTL in epoch seconds, see checkRegionCacheTTL
+	syncFlags     int32          // region need be sync later, see needReloadOnAccess, needExpireAfterTTL
+	invalidReason InvalidReason  // the reason why the region is invalidated
 }
 
 // AccessIndex represent the index for accessIndex array
@@ -180,9 +224,10 @@ type regionStore struct {
 	// buckets is not accurate and it can change even if the region is not changed.
 	// It can be stale and buckets keys can be out of the region range.
 	buckets *metapb.Buckets
-	// record all storeIDs on which pending peers reside.
-	// key is storeID, val is peerID.
-	pendingTiFlashPeerStores map[uint64]uint64
+	// pendingPeers refers to pdRegion.PendingPeers. It's immutable and can be used to reconstruct pdRegions.
+	pendingPeers []*metapb.Peer
+	// downPeers refers to pdRegion.DownPeers. It's immutable and can be used to reconstruct pdRegions.
+	downPeers []*metapb.Peer
 }
 
 func (r *regionStore) accessStore(mode accessMode, idx AccessIndex) (int, *Store) {
@@ -275,12 +320,13 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 	// regionStore pull used store from global store map
 	// to avoid acquire storeMu in later access.
 	rs := &regionStore{
-		workTiKVIdx:              0,
-		proxyTiKVIdx:             -1,
-		stores:                   make([]*Store, 0, len(r.meta.Peers)),
-		pendingTiFlashPeerStores: map[uint64]uint64{},
-		storeEpochs:              make([]uint32, 0, len(r.meta.Peers)),
-		buckets:                  pdRegion.Buckets,
+		workTiKVIdx:  0,
+		proxyTiKVIdx: -1,
+		stores:       make([]*Store, 0, len(r.meta.Peers)),
+		storeEpochs:  make([]uint32, 0, len(r.meta.Peers)),
+		buckets:      pdRegion.Buckets,
+		pendingPeers: pdRegion.PendingPeers,
+		downPeers:    pdRegion.DownPeers,
 	}
 
 	leader := pdRegion.Leader
@@ -295,8 +341,8 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		if err != nil {
 			return nil, err
 		}
-		// Filter the peer on a tombstone store.
-		if addr == "" {
+		// Filter out the peer on a tombstone or down store.
+		if addr == "" || slices.ContainsFunc(pdRegion.DownPeers, func(dp *metapb.Peer) bool { return isSamePeer(dp, p) }) {
 			continue
 		}
 
@@ -319,11 +365,6 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		}
 		rs.stores = append(rs.stores, store)
 		rs.storeEpochs = append(rs.storeEpochs, atomic.LoadUint32(&store.epoch))
-		for _, pendingPeer := range pdRegion.PendingPeers {
-			if pendingPeer.Id == p.Id {
-				rs.pendingTiFlashPeerStores[store.storeID] = p.Id
-			}
-		}
 	}
 	// TODO(youjiali1995): It's possible the region info in PD is stale for now but it can recover.
 	// Maybe we need backoff here.
@@ -331,34 +372,16 @@ func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Regio
 		return nil, errors.Errorf("no available peers, region: {%v}", r.meta)
 	}
 
-	for _, p := range pdRegion.DownPeers {
-		store, exists := c.getStore(p.StoreId)
-		if !exists {
-			store = c.getStoreOrInsertDefault(p.StoreId)
-		}
-		addr, err := store.initResolve(bo, c)
-		if err != nil {
-			continue
-		}
-		// Filter the peer on a tombstone store.
-		if addr == "" {
-			continue
-		}
-
-		if store.storeType == tikvrpc.TiFlash {
-			r.hasUnavailableTiFlashStore = true
-			break
-		}
+	rs.workTiKVIdx = leaderAccessIdx
+	r.setStore(rs)
+	r.meta.Peers = availablePeers
+	// if the region has down peers, let it expire after TTL.
+	if len(pdRegion.DownPeers) > 0 {
+		r.syncFlags |= needExpireAfterTTL
 	}
 
-	rs.workTiKVIdx = leaderAccessIdx
-	r.meta.Peers = availablePeers
-
-	r.setStore(rs)
-
 	// mark region has been init accessed.
-	r.lastAccess = time.Now().Unix()
-	r.lastLoad = r.lastAccess
+	r.ttl = nextTTL(time.Now().Unix())
 	return r, nil
 }
 
@@ -376,8 +399,7 @@ func (r *Region) compareAndSwapStore(oldStore, newStore *regionStore) bool {
 }
 
 func (r *Region) isCacheTTLExpired(ts int64) bool {
-	lastAccess := atomic.LoadInt64(&r.lastAccess)
-	return ts-lastAccess > regionCacheTTLSec
+	return ts > atomic.LoadInt64(&r.ttl)
 }
 
 // checkRegionCacheTTL returns false means the region cache is expired.
@@ -386,55 +408,75 @@ func (r *Region) checkRegionCacheTTL(ts int64) bool {
 	if _, err := util.EvalFailpoint("invalidateRegionCache"); err == nil {
 		r.invalidate(Other)
 	}
+	newTTL := int64(0)
 	for {
-		lastAccess := atomic.LoadInt64(&r.lastAccess)
-		if ts-lastAccess > regionCacheTTLSec {
+		ttl := atomic.LoadInt64(&r.ttl)
+		if ts > ttl {
 			return false
 		}
-		if atomic.CompareAndSwapInt64(&r.lastAccess, lastAccess, ts) {
+		// skip updating TTL when:
+		// 1. the region has been marked as `needExpireAfterTTL`
+		// 2. the TTL is far away from ts (still within jitter time)
+		if r.checkSyncFlags(needExpireAfterTTL) || ttl > ts+regionCacheTTLSec {
+			return true
+		}
+		if newTTL == 0 {
+			newTTL = nextTTL(ts)
+		}
+		// now we have ts <= ttl <= ts+regionCacheTTLSec <= newTTL = ts+regionCacheTTLSec+randomJitter
+		if atomic.CompareAndSwapInt64(&r.ttl, ttl, newTTL) {
 			return true
 		}
 	}
 }
 
 // invalidate invalidates a region, next time it will got null result.
-func (r *Region) invalidate(reason InvalidReason) {
-	metrics.RegionCacheCounterWithInvalidateRegionFromCacheOK.Inc()
-	atomic.StoreInt32((*int32)(&r.invalidReason), int32(reason))
-	atomic.StoreInt64(&r.lastAccess, invalidatedLastAccessTime)
-}
-
-// invalidateWithoutMetrics invalidates a region without metrics, next time it will got null result.
-func (r *Region) invalidateWithoutMetrics(reason InvalidReason) {
-	atomic.StoreInt32((*int32)(&r.invalidReason), int32(reason))
-	atomic.StoreInt64(&r.lastAccess, invalidatedLastAccessTime)
-}
-
-// scheduleReload schedules reload region request in next LocateKey.
-func (r *Region) scheduleReload() {
-	oldValue := atomic.LoadInt32(&r.syncFlag)
-	if oldValue != updated {
-		return
+func (r *Region) invalidate(reason InvalidReason, nocount ...bool) {
+	if atomic.CompareAndSwapInt32((*int32)(&r.invalidReason), int32(Ok), int32(reason)) {
+		if len(nocount) == 0 || !nocount[0] {
+			metrics.RegionCacheCounterWithInvalidateRegionFromCacheOK.Inc()
+		}
+		atomic.StoreInt64(&r.ttl, expiredTTL)
 	}
-	atomic.CompareAndSwapInt32(&r.syncFlag, oldValue, needSync)
 }
 
-// checkNeedReloadAndMarkUpdated returns whether the region need reload and marks the region to be updated.
-func (r *Region) checkNeedReloadAndMarkUpdated() bool {
-	oldValue := atomic.LoadInt32(&r.syncFlag)
-	if oldValue == updated {
-		return false
+func (r *Region) getSyncFlags() int32 {
+	return atomic.LoadInt32(&r.syncFlags)
+}
+
+// checkSyncFlags returns true if sync_flags contains any of flags.
+func (r *Region) checkSyncFlags(flags int32) bool {
+	return atomic.LoadInt32(&r.syncFlags)&flags > 0
+}
+
+// setSyncFlags sets the sync_flags bits to sync_flags|flags.
+func (r *Region) setSyncFlags(flags int32) {
+	for {
+		oldFlags := atomic.LoadInt32(&r.syncFlags)
+		if oldFlags&flags == flags {
+			return
+		}
+		if atomic.CompareAndSwapInt32(&r.syncFlags, oldFlags, oldFlags|flags) {
+			return
+		}
 	}
-	return atomic.CompareAndSwapInt32(&r.syncFlag, oldValue, updated)
 }
 
-func (r *Region) checkNeedReload() bool {
-	v := atomic.LoadInt32(&r.syncFlag)
-	return v != updated
+// resetSyncFlags reverts flags from sync_flags (that is sync_flags&^flags), returns the flags that are reset (0 means no flags are reverted).
+func (r *Region) resetSyncFlags(flags int32) int32 {
+	for {
+		oldFlags := atomic.LoadInt32(&r.syncFlags)
+		if oldFlags&flags == 0 {
+			return 0
+		}
+		if atomic.CompareAndSwapInt32(&r.syncFlags, oldFlags, oldFlags&^flags) {
+			return oldFlags & flags
+		}
+	}
 }
 
 func (r *Region) isValid() bool {
-	return r != nil && !r.checkNeedReload() && r.checkRegionCacheTTL(time.Now().Unix())
+	return r != nil && !r.checkSyncFlags(needReloadOnAccess) && r.checkRegionCacheTTL(time.Now().Unix())
 }
 
 type regionIndexMu struct {
@@ -490,16 +532,12 @@ type RegionCache struct {
 	// Context for background jobs
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+	wg         sync.WaitGroup
 
 	testingKnobs struct {
 		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
 		// requestLiveness always returns unreachable.
 		mockRequestLiveness atomic.Pointer[livenessFunc]
-	}
-
-	regionsNeedReload struct {
-		sync.Mutex
-		regions []uint64
 	}
 }
 
@@ -531,16 +569,21 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		c.mu = *newRegionIndexMu(nil)
 	}
 
+	// TODO(zyguan): refine management of background cron jobs
+	c.wg.Add(1)
 	go c.asyncCheckAndResolveLoop(time.Duration(interval) * time.Second)
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
 	// Default use 15s as the update inerval.
+	c.wg.Add(1)
 	go c.asyncUpdateStoreSlowScore(time.Duration(interval/4) * time.Second)
 	if config.GetGlobalConfig().RegionsRefreshInterval > 0 {
 		c.timelyRefreshCache(config.GetGlobalConfig().RegionsRefreshInterval)
 	} else {
 		// cacheGC is not compatible with timelyRefreshCache
+		c.wg.Add(1)
 		go c.cacheGC()
 	}
+	c.wg.Add(1)
 	go c.asyncReportStoreReplicaFlows(time.Duration(interval/2) * time.Second)
 	return c
 }
@@ -559,7 +602,7 @@ func newTestRegionCache() *RegionCache {
 
 // clear clears all cached data in the RegionCache. It's only used in tests.
 func (c *RegionCache) clear() {
-	c.mu = *newRegionIndexMu(nil)
+	c.mu.refresh(nil)
 	c.clearStores()
 }
 
@@ -571,20 +614,17 @@ func (c *RegionCache) insertRegionToCache(cachedRegion *Region, invalidateOldReg
 // Close releases region cache's resource.
 func (c *RegionCache) Close() {
 	c.cancelFunc()
+	c.wg.Wait()
 }
-
-var reloadRegionInterval = int64(10 * time.Second)
 
 // asyncCheckAndResolveLoop with
 func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	reloadRegionTicker := time.NewTicker(time.Duration(atomic.LoadInt64(&reloadRegionInterval)))
 	defer func() {
+		c.wg.Done()
 		ticker.Stop()
-		reloadRegionTicker.Stop()
 	}()
 	var needCheckStores []*Store
-	reloadNextLoop := make(map[uint64]struct{})
 	for {
 		needCheckStores = needCheckStores[:0]
 		select {
@@ -602,21 +642,6 @@ func (c *RegionCache) asyncCheckAndResolveLoop(interval time.Duration) {
 				// there's a deleted store in the stores map which guaranteed by reReslve().
 				return state != unresolved && state != tombstone && state != deleted
 			})
-		case <-reloadRegionTicker.C:
-			for regionID := range reloadNextLoop {
-				c.reloadRegion(regionID)
-				delete(reloadNextLoop, regionID)
-			}
-			c.regionsNeedReload.Lock()
-			for _, regionID := range c.regionsNeedReload.regions {
-				// will reload in next tick, wait a while for two reasons:
-				// 1. there may an unavailable duration while recreating the connection.
-				// 2. the store may just be started, and wait safe ts synced to avoid the
-				// possible dataIsNotReady error.
-				reloadNextLoop[regionID] = struct{}{}
-			}
-			c.regionsNeedReload.regions = c.regionsNeedReload.regions[:0]
-			c.regionsNeedReload.Unlock()
 		}
 	}
 }
@@ -874,7 +899,7 @@ func (c *RegionCache) GetAllValidTiFlashStores(id RegionVerID, currentStore *Sto
 		allStores = append(allStores, store.storeID)
 	}
 	for _, storeID := range allStores {
-		if _, ok := regionStore.pendingTiFlashPeerStores[storeID]; !ok {
+		if !slices.ContainsFunc(regionStore.pendingPeers, func(p *metapb.Peer) bool { return p.StoreId == storeID }) {
 			nonPendingStores = append(nonPendingStores, storeID)
 		}
 	}
@@ -889,11 +914,6 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
 		return nil, nil
-	}
-
-	if cachedRegion.hasUnavailableTiFlashStore && time.Now().Unix()-cachedRegion.lastLoad > regionCacheTTLSec {
-		/// schedule an async reload to avoid load balance issue, refer https://github.com/pingcap/tidb/issues/35418 for details
-		c.scheduleReloadRegion(cachedRegion)
 	}
 
 	regionStore := cachedRegion.getStore()
@@ -1098,9 +1118,15 @@ func (c *RegionCache) LocateEndKey(bo *retry.Backoffer, key []byte) (*KeyLocatio
 }
 
 func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey bool) (r *Region, err error) {
-	r = c.searchCachedRegion(key, isEndKey)
-	if r == nil {
+	var expired bool
+	r, expired = c.searchCachedRegionByKey(key, isEndKey)
+	tag := "ByKey"
+	if isEndKey {
+		tag = "ByEndKey"
+	}
+	if r == nil || expired {
 		// load region when it is not exists or expired.
+		observeLoadRegion(tag, r, expired, 0)
 		lr, err := c.loadRegion(bo, key, isEndKey, pd.WithAllowFollowerHandle())
 		if err != nil {
 			// no region data, return error if failure.
@@ -1113,6 +1139,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		c.mu.Unlock()
 		// just retry once, it won't bring much overhead.
 		if stale {
+			observeLoadRegion(tag+":Retry", r, expired, 0)
 			lr, err = c.loadRegion(bo, key, isEndKey)
 			if err != nil {
 				// no region data, return error if failure.
@@ -1123,9 +1150,20 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			c.insertRegionToCache(r, true, true)
 			c.mu.Unlock()
 		}
-	} else if r.checkNeedReloadAndMarkUpdated() {
+	} else if flags := r.resetSyncFlags(needReloadOnAccess | needDelayedReloadReady); flags > 0 {
 		// load region when it be marked as need reload.
-		lr, err := c.loadRegion(bo, key, isEndKey)
+		reloadOnAccess := flags&needReloadOnAccess > 0
+		var (
+			lr  *Region
+			err error
+		)
+		if reloadOnAccess {
+			observeLoadRegion(tag, r, expired, flags)
+			lr, err = c.loadRegion(bo, key, isEndKey)
+		} else {
+			observeLoadRegion("ByID", r, expired, flags)
+			lr, err = c.loadRegionByID(bo, r.GetID())
+		}
 		if err != nil {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
@@ -1135,7 +1173,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			r = lr
 			c.mu.Lock()
-			c.insertRegionToCache(r, true, true)
+			c.insertRegionToCache(r, reloadOnAccess, reloadOnAccess)
 			c.mu.Unlock()
 		}
 	}
@@ -1143,8 +1181,9 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 }
 
 func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
-	r = c.searchCachedRegion(key, isEndKey)
-	if r == nil || r.checkNeedReloadAndMarkUpdated() {
+	var expired bool
+	r, expired = c.searchCachedRegionByKey(key, isEndKey)
+	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess) {
 		return nil
 	}
 	return r
@@ -1194,7 +1233,7 @@ func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, re
 
 	// force reload region when retry all known peers in region.
 	if scheduleReload {
-		r.scheduleReload()
+		r.setSyncFlags(needReloadOnAccess)
 	}
 }
 
@@ -1256,18 +1295,18 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 
 	// force reload region when retry all known peers in region.
 	if scheduleReload {
-		r.scheduleReload()
+		r.setSyncFlags(needReloadOnAccess)
 	}
 
 }
 
 // LocateRegionByID searches for the region with ID.
 func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*KeyLocation, error) {
-	c.mu.RLock()
-	r := c.getRegionByIDFromCache(regionID)
-	c.mu.RUnlock()
-	if r != nil {
-		if r.checkNeedReloadAndMarkUpdated() {
+	r, expired := c.searchCachedRegionByID(regionID)
+	if r != nil && !expired {
+		if flags := r.resetSyncFlags(needReloadOnAccess | needDelayedReloadReady); flags > 0 {
+			reloadOnAccess := flags&needReloadOnAccess > 0
+			observeLoadRegion("ByID", r, expired, flags)
 			lr, err := c.loadRegionByID(bo, regionID)
 			if err != nil {
 				// ignore error and use old region info.
@@ -1276,7 +1315,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 			} else {
 				r = lr
 				c.mu.Lock()
-				c.insertRegionToCache(r, true, true)
+				c.insertRegionToCache(r, reloadOnAccess, reloadOnAccess)
 				c.mu.Unlock()
 			}
 		}
@@ -1289,6 +1328,7 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 		return loc, nil
 	}
 
+	observeLoadRegion("ByID", r, expired, 0)
 	r, err := c.loadRegionByID(bo, regionID)
 	if err != nil {
 		return nil, err
@@ -1303,38 +1343,6 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 		EndKey:   r.EndKey(),
 		Buckets:  r.getStore().buckets,
 	}, nil
-}
-
-func (c *RegionCache) scheduleReloadRegion(region *Region) {
-	if region == nil || !region.asyncReload.CompareAndSwap(false, true) {
-		// async reload scheduled by other thread.
-		return
-	}
-	regionID := region.GetID()
-	if regionID > 0 {
-		c.regionsNeedReload.Lock()
-		c.regionsNeedReload.regions = append(c.regionsNeedReload.regions, regionID)
-		c.regionsNeedReload.Unlock()
-	}
-}
-
-func (c *RegionCache) reloadRegion(regionID uint64) {
-	bo := retry.NewNoopBackoff(context.Background())
-	lr, err := c.loadRegionByID(bo, regionID)
-	if err != nil {
-		// ignore error and use old region info.
-		logutil.Logger(bo.GetCtx()).Error("load region failure",
-			zap.Uint64("regionID", regionID), zap.Error(err))
-		c.mu.RLock()
-		if oldRegion := c.getRegionByIDFromCache(regionID); oldRegion != nil {
-			oldRegion.asyncReload.Store(false)
-		}
-		c.mu.RUnlock()
-		return
-	}
-	c.mu.Lock()
-	c.insertRegionToCache(lr, false, false)
-	c.mu.Unlock()
 }
 
 // GroupKeysByRegion separates keys into groups by their belonging Regions.
@@ -1552,11 +1560,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 		// If the old region is still valid, do not invalidate it to avoid unnecessary backoff.
 		if invalidateOldRegion {
 			// Invalidate the old region in case it's not invalidated and some requests try with the stale region information.
-			if shouldCount {
-				region.cachedRegion.invalidate(Other)
-			} else {
-				region.cachedRegion.invalidateWithoutMetrics(Other)
-			}
+			region.cachedRegion.invalidate(Other, !shouldCount)
 		}
 	}
 	// update related vars.
@@ -1565,47 +1569,33 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	return true
 }
 
-// searchCachedRegion finds a region from cache by key. Like `getCachedRegion`,
-// it should be called with c.mu.RLock(), and the returned Region should not be
-// used after c.mu is RUnlock().
-// If the given key is the end key of the region that you want, you may set the second argument to true. This is useful
-// when processing in reverse order.
-func (c *RegionCache) searchCachedRegion(key []byte, isEndKey bool) *Region {
-	ts := time.Now().Unix()
-	var r *Region
+// searchCachedRegionByKey finds the region from cache by key.
+func (c *RegionCache) searchCachedRegionByKey(key []byte, isEndKey bool) (*Region, bool) {
 	c.mu.RLock()
-	r = c.mu.sorted.DescendLessOrEqual(key, isEndKey, ts)
+	region := c.mu.sorted.SearchByKey(key, isEndKey)
 	c.mu.RUnlock()
-	if r != nil && (!isEndKey && r.Contains(key) || isEndKey && r.ContainsByEnd(key)) {
-		return r
+	if region == nil {
+		return nil, false
 	}
-	return nil
+	return region, !region.checkRegionCacheTTL(time.Now().Unix())
 }
 
-// getRegionByIDFromCache tries to get region by regionID from cache. Like
-// `getCachedRegion`, it should be called with c.mu.RLock(), and the returned
-// Region should not be used after c.mu is RUnlock().
-func (c *RegionCache) getRegionByIDFromCache(regionID uint64) *Region {
-	ts := time.Now().Unix()
+// searchCachedRegionByID finds the region from cache by id.
+func (c *RegionCache) searchCachedRegionByID(regionID uint64) (*Region, bool) {
+	c.mu.RLock()
 	ver, ok := c.mu.latestVersions[regionID]
 	if !ok {
-		return nil
+		c.mu.RUnlock()
+		return nil, false
 	}
-	latestRegion, ok := c.mu.regions[ver]
+	region, ok := c.mu.regions[ver]
+	c.mu.RUnlock()
 	if !ok {
 		// should not happen
-		logutil.BgLogger().Warn("region version not found",
-			zap.Uint64("regionID", regionID), zap.Stringer("version", &ver))
-		return nil
+		logutil.BgLogger().Warn("region not found", zap.Uint64("id", regionID), zap.Stringer("ver", &ver))
+		return nil, false
 	}
-	lastAccess := atomic.LoadInt64(&latestRegion.lastAccess)
-	if ts-lastAccess > regionCacheTTLSec {
-		return nil
-	}
-	if latestRegion != nil {
-		atomic.CompareAndSwapInt64(&latestRegion.lastAccess, atomic.LoadInt64(&latestRegion.lastAccess), ts)
-	}
-	return latestRegion
+	return region, !region.checkRegionCacheTTL(time.Now().Unix())
 }
 
 // GetStoresByType gets stores by type `typ`
@@ -1622,24 +1612,51 @@ func (c *RegionCache) GetAllStores() []*Store {
 	})
 }
 
-func filterUnavailablePeers(region *pd.Region) {
-	if len(region.DownPeers) == 0 {
-		return
-	}
-	new := region.Meta.Peers[:0]
-	for _, p := range region.Meta.Peers {
-		available := true
-		for _, downPeer := range region.DownPeers {
-			if p.Id == downPeer.Id && p.StoreId == downPeer.StoreId {
-				available = false
-				break
-			}
+var loadRegionCounters sync.Map
+
+const (
+	loadRegionReasonMissing        = "Missing"
+	loadRegionReasonExpiredNormal  = "Expired:Normal"
+	loadRegionReasonExpiredFrozen  = "Expired:Frozen"
+	loadRegionReasonExpiredInvalid = "Expired:Invalid:"
+	loadRegionReasonReloadOnAccess = "Reload:OnAccess"
+	loadRegionReasonReloadDelayed  = "Reload:Delayed"
+	loadRegionReasonUpdateBuckets  = "UpdateBuckets"
+	loadRegionReasonUnknown        = "Unknown"
+)
+
+func observeLoadRegion(tag string, region *Region, expired bool, reloadFlags int32, explicitReason ...string) {
+	reason := loadRegionReasonUnknown
+	if len(explicitReason) > 0 {
+		reason = strings.Join(explicitReason, ":")
+	} else if region == nil {
+		reason = loadRegionReasonMissing
+	} else if expired {
+		invalidReason := InvalidReason(atomic.LoadInt32((*int32)(&region.invalidReason)))
+		if invalidReason != Ok {
+			reason = loadRegionReasonExpiredInvalid + invalidReason.String()
+		} else if region.checkSyncFlags(needExpireAfterTTL) {
+			reason = loadRegionReasonExpiredFrozen
+		} else {
+			reason = loadRegionReasonExpiredNormal
 		}
-		if available {
-			new = append(new, p)
+	} else if reloadFlags > 0 {
+		if reloadFlags&needReloadOnAccess > 0 {
+			reason = loadRegionReasonReloadOnAccess
+		} else if reloadFlags&needDelayedReloadReady > 0 {
+			reason = loadRegionReasonReloadDelayed
 		}
 	}
-	region.Meta.Peers = new
+	type key struct {
+		t string
+		r string
+	}
+	counter, ok := loadRegionCounters.Load(key{tag, reason})
+	if !ok {
+		counter = metrics.TiKVLoadRegionCounter.WithLabelValues(tag, reason)
+		loadRegionCounters.Store(key{tag, reason}, counter)
+	}
+	counter.(prometheus.Counter).Inc()
 }
 
 // loadRegion loads region from pd client, and picks the first peer as leader.
@@ -1689,7 +1706,6 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 			backoffErr = errors.Errorf("region not found for key %q, encode_key: %q", util.HexRegionKeyStr(key), util.HexRegionKey(c.codec.EncodeRegionKey(key)))
 			continue
 		}
-		filterUnavailablePeers(reg)
 		if len(reg.Meta.Peers) == 0 {
 			return nil, errors.New("receive Region with no available peer")
 		}
@@ -1735,7 +1751,6 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 		if reg == nil || reg.Meta == nil {
 			return nil, errors.Errorf("region not found for regionID %d", regionID)
 		}
-		filterUnavailablePeers(reg)
 		if len(reg.Meta.Peers) == 0 {
 			return nil, errors.New("receive Region with no available peer")
 		}
@@ -1765,8 +1780,12 @@ func (c *RegionCache) timelyRefreshCache(intervalS uint64) {
 		return
 	}
 	ticker := time.NewTicker(time.Duration(intervalS) * time.Second)
+	c.wg.Add(1)
 	go func() {
-		defer ticker.Stop()
+		defer func() {
+			c.wg.Done()
+			ticker.Stop()
+		}()
 		for {
 			select {
 			case <-c.ctx.Done():
@@ -2132,6 +2151,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 		// TODO(youjiali1995): use singleflight.
 		go func() {
 			bo := retry.NewBackoffer(context.Background(), 20000)
+			observeLoadRegion("ByID", r, false, 0, loadRegionReasonUpdateBuckets)
 			new, err := c.loadRegionByID(bo, regionID.id)
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Error("failed to update buckets",
@@ -2156,11 +2176,15 @@ const cleanRegionNumPerRound = 50
 // negligible.
 func (c *RegionCache) cacheGC() {
 	ticker := time.NewTicker(cleanCacheInterval)
-	defer ticker.Stop()
+	defer func() {
+		c.wg.Done()
+		ticker.Stop()
+	}()
 
 	beginning := newBtreeSearchItem([]byte(""))
 	iterItem := beginning
 	expired := make([]*btreeItem, cleanRegionNumPerRound)
+	remaining := make([]*Region, cleanRegionNumPerRound)
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -2168,6 +2192,7 @@ func (c *RegionCache) cacheGC() {
 		case <-ticker.C:
 			count := 0
 			expired = expired[:0]
+			remaining = remaining[:0]
 
 			// Only RLock when checking TTL to avoid blocking other readers
 			c.mu.RLock()
@@ -2180,6 +2205,8 @@ func (c *RegionCache) cacheGC() {
 				count++
 				if item.cachedRegion.isCacheTTLExpired(ts) {
 					expired = append(expired, item)
+				} else {
+					remaining = append(remaining, item.cachedRegion)
 				}
 				return true
 			})
@@ -2190,6 +2217,7 @@ func (c *RegionCache) cacheGC() {
 				iterItem = beginning
 			}
 
+			// Clean expired regions
 			if len(expired) > 0 {
 				c.mu.Lock()
 				for _, item := range expired {
@@ -2197,6 +2225,30 @@ func (c *RegionCache) cacheGC() {
 					c.mu.removeVersionFromCache(item.cachedRegion.VerID(), item.cachedRegion.GetID())
 				}
 				c.mu.Unlock()
+			}
+
+			// Check remaining regions and update sync flags
+			for _, region := range remaining {
+				syncFlags := region.getSyncFlags()
+				if syncFlags&needDelayedReloadReady > 0 {
+					// the region will be reload soon on access
+					continue
+				}
+				if syncFlags&needDelayedReloadPending > 0 {
+					region.setSyncFlags(needDelayedReloadReady)
+					// the region will be reload soon on access, no need to check if it needs to be expired
+					continue
+				}
+				if syncFlags&needExpireAfterTTL == 0 {
+					regionStore := region.getStore()
+					for i, store := range regionStore.stores {
+						// if the region has a stale or unreachable store, let it expire after TTL.
+						if atomic.LoadUint32(&store.epoch) != regionStore.storeEpochs[i] || store.getLivenessState() != reachable {
+							region.setSyncFlags(needExpireAfterTTL)
+							break
+						}
+					}
+				}
 			}
 		}
 	}
@@ -3004,7 +3056,10 @@ func (s *Store) markAlreadySlow() {
 // asyncUpdateStoreSlowScore updates the slow score of each store periodically.
 func (c *RegionCache) asyncUpdateStoreSlowScore(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	defer func() {
+		c.wg.Done()
+		ticker.Stop()
+	}()
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -3026,13 +3081,13 @@ func (c *RegionCache) checkAndUpdateStoreSlowScores() {
 				zap.Stack("stack trace"))
 		}
 	}()
-	slowScoreMetrics := make(map[string]float64)
+	slowScoreMetrics := make(map[uint64]float64)
 	c.forEachStore(func(store *Store) {
 		store.updateSlowScoreStat()
-		slowScoreMetrics[store.addr] = float64(store.getSlowScore())
+		slowScoreMetrics[store.storeID] = float64(store.getSlowScore())
 	})
 	for store, score := range slowScoreMetrics {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(store).Set(score)
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(score)
 	}
 }
 
@@ -3054,7 +3109,10 @@ func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
 // asyncReportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
 func (c *RegionCache) asyncReportStoreReplicaFlows(interval time.Duration) {
 	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	defer func() {
+		c.wg.Done()
+		ticker.Stop()
+	}()
 	for {
 		select {
 		case <-c.ctx.Done():

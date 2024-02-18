@@ -264,7 +264,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 		}
 	}
 	if reloadRegion {
-		selector.regionCache.scheduleReloadRegion(selector.region)
+		selector.region.setSyncFlags(needDelayedReloadPending)
 	}
 	if len(maxScoreIdxes) == 1 {
 		idx := maxScoreIdxes[0]

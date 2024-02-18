@@ -356,8 +356,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *diagCtx.resolvingRecordToken)
 	}
 	resolveLockOpts := txnlock.ResolveLocksOptions{
-		CallerStartTS: 0,
-		Locks:         locks,
+		CallerStartTS:            0,
+		Locks:                    locks,
+		PessimisticRegionResolve: true,
 	}
 	if action.LockCtx.Stats != nil {
 		resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
@@ -484,8 +485,9 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 				c.store.GetLockResolver().UpdateResolvingLocks(locks, c.startTS, *diagCtx.resolvingRecordToken)
 			}
 			resolveLockOpts := txnlock.ResolveLocksOptions{
-				CallerStartTS: 0,
-				Locks:         locks,
+				CallerStartTS:            0,
+				Locks:                    locks,
+				PessimisticRegionResolve: true,
 			}
 			if action.LockCtx.Stats != nil {
 				resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock

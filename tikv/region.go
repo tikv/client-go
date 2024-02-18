@@ -194,9 +194,15 @@ func NewRegionRequestRuntimeStats() RegionRequestRuntimeStats {
 	return locate.NewRegionRequestRuntimeStats()
 }
 
-// SetRegionCacheTTLSec sets regionCacheTTLSec to t.
+// SetRegionCacheTTLSec sets the base value of region cache TTL.
+// Deprecated: use SetRegionCacheTTLWithJitter instead.
 func SetRegionCacheTTLSec(t int64) {
 	locate.SetRegionCacheTTLSec(t)
+}
+
+// SetRegionCacheTTLWithJitter sets region cache TTL with jitter. The real TTL is in range of [base, base+jitter).
+func SetRegionCacheTTLWithJitter(base int64, jitter int64) {
+	locate.SetRegionCacheTTLWithJitter(base, jitter)
 }
 
 // SetStoreLivenessTimeout sets storeLivenessTimeout to t.
