@@ -2597,9 +2597,9 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	s.tikvSideSlowScore.hasTiKVFeedback.Store(true)
 
 	lastScore := s.tikvSideSlowScore.score.Load()
+	logutil.BgLogger().Info("updateTiKVServerSideSlowScore called", zap.Int64("score", score), zap.Int64("lastScore", lastScore))
 
-	// Skip updating to avoid the overhead when it doesn't look slow.
-	if lastScore < 10 && score < 10 {
+	if lastScore == score {
 		return
 	}
 

@@ -643,6 +643,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			continue
 		}
 
+		logutil.BgLogger().Info("received batch response", zap.Stringer("feedback", resp.GetHealthFeedback()))
 		if resp.GetHealthFeedback() != nil {
 			c.onHealthFeedback(resp.GetHealthFeedback())
 		}
