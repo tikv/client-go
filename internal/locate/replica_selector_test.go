@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client"
 	"sync/atomic"
 	"time"
@@ -146,6 +147,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByPreferLeade
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixed() {
+	if !config.GetGlobalConfig().EnableReplicaSelectorV2 {
+		return
+	}
 	// case-1: mixed read, no label.
 	bo := retry.NewBackoffer(context.Background(), 1000)
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
@@ -283,6 +287,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixed() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByStaleRead() {
+	if !config.GetGlobalConfig().EnableReplicaSelectorV2 {
+		return
+	}
 	bo := retry.NewBackoffer(context.Background(), 1000)
 	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
 	req.EnableStaleWithMixedReplicaRead()
@@ -654,13 +661,15 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 
 	fakeRegionError := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, since no replica is available.
 	cases := []struct {
-		staleRead       bool
-		readType        kv.ReplicaReadType
-		label           *metapb.StoreLabel
-		accessErr       []RegionErrorType
-		access          []string
-		respErr         string
-		respRegionError *errorpb.Error
+		staleRead           bool
+		readType            kv.ReplicaReadType
+		label               *metapb.StoreLabel
+		accessErr           []RegionErrorType
+		access              []string
+		accessInV1          []string
+		respErr             string
+		respRegionError     *errorpb.Error
+		respRegionErrorInV1 *errorpb.Error
 	}{
 		// Test Leader read.
 		{
@@ -1039,6 +1048,28 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 			},
+			accessInV1: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			accessInV1: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
 		},
 		{
 			staleRead: true,
@@ -1048,6 +1079,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 				"addr: store2, replica-read: false, stale-read: true",
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
+			},
+			accessInV1: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
 			},
 		},
 		{
@@ -1070,6 +1106,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
+			accessInV1: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
 		},
 		{
 			staleRead: true,
@@ -1077,6 +1119,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			accessInV1: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
@@ -1092,19 +1141,26 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
+			accessInV1: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
 		},
 	}
 
 	retryRegionErrorTypes := []RegionErrorType{ServerIsBusyErr, StaleCommandErr, MaxTimestampNotSyncedErr, ProposalInMergingModeErr, ReadIndexNotReadyErr, RegionNotInitializedErr, DiskFullErr}
 	for _, ca := range retryRegionErrorTypes {
 		cases = append(cases, struct {
-			staleRead       bool
-			readType        kv.ReplicaReadType
-			label           *metapb.StoreLabel
-			accessErr       []RegionErrorType
-			access          []string
-			respErr         string
-			respRegionError *errorpb.Error
+			staleRead           bool
+			readType            kv.ReplicaReadType
+			label               *metapb.StoreLabel
+			accessErr           []RegionErrorType
+			access              []string
+			accessInV1          []string
+			respErr             string
+			respRegionError     *errorpb.Error
+			respRegionErrorInV1 *errorpb.Error
 		}{
 			accessErr: []RegionErrorType{ca},
 			access: []string{
@@ -1116,13 +1172,15 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 	noRetryRegionErrorTypes := []RegionErrorType{RegionNotFoundErr, KeyNotInRegionErr, EpochNotMatchErr, StoreNotMatchErr, RecoveryInProgressErr, IsWitnessErr, MismatchPeerIdErr, BucketVersionNotMatchErr}
 	for _, ca := range noRetryRegionErrorTypes {
 		cases = append(cases, struct {
-			staleRead       bool
-			readType        kv.ReplicaReadType
-			label           *metapb.StoreLabel
-			accessErr       []RegionErrorType
-			access          []string
-			respErr         string
-			respRegionError *errorpb.Error
+			staleRead           bool
+			readType            kv.ReplicaReadType
+			label               *metapb.StoreLabel
+			accessErr           []RegionErrorType
+			access              []string
+			accessInV1          []string
+			respErr             string
+			respRegionError     *errorpb.Error
+			respRegionErrorInV1 *errorpb.Error
 		}{
 			accessErr: []RegionErrorType{ca},
 			access: []string{
@@ -1137,7 +1195,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 	}
 	for i, ca := range cases {
 		reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
-		msg := fmt.Sprintf("test case idx: %v, access_err: %v", i, ca.accessErr)
+		msg := fmt.Sprintf("test case idx: %v, readType: %v, stale_read: %v, label: %v, access_err: %v", i, ca.readType, ca.staleRead, ca.label, ca.accessErr)
 		access := []string{}
 		fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			idx := len(access)
@@ -1166,6 +1224,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 			req.EnableStaleWithMixedReplicaRead()
 		} else {
 			req.ReplicaReadType = ca.readType
+			req.ReplicaRead = ca.readType.IsFollowerRead()
 		}
 		opts := []StoreSelectorOption{}
 		if ca.label != nil {
@@ -1184,18 +1243,24 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
 
 		bo := retry.NewBackofferWithVars(context.Background(), 10000, &kv.Variables{BackoffLockFast: 2, BackOffWeight: 1})
 		resp, _, _, err := sender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV, opts...)
-		s.Equal(ca.access, access, msg)
+		caRespRegionError := ca.respRegionError
+		if config.GetGlobalConfig().EnableReplicaSelectorV2 || len(ca.accessInV1) == 0 {
+			s.Equal(ca.access, access, msg)
+		} else {
+			s.Equal(ca.accessInV1, access, msg)
+			caRespRegionError = ca.respRegionErrorInV1
+		}
 		if ca.respErr == "" {
 			s.Nil(err, msg)
 			s.NotNil(resp, msg)
 			regionErr, err := resp.GetRegionError()
 			s.Nil(err, msg)
-			if ca.respRegionError == nil {
+			if caRespRegionError == nil {
 				s.Nil(regionErr, msg)
 				s.Equal([]byte("hello world"), resp.Resp.(*kvrpcpb.GetResponse).Value, msg)
 			} else {
 				s.NotNil(regionErr, msg)
-				s.Equal(ca.respRegionError, regionErr, msg)
+				s.Equal(caRespRegionError, regionErr, msg)
 				if IsFakeRegionError(regionErr) {
 					s.False(sender.replicaSelector.getBaseReplicaSelector().region.isValid()) // region must be invalidated.
 				}

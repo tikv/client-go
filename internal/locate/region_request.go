@@ -289,6 +289,7 @@ type baseReplicaSelector struct {
 	busyThreshold time.Duration
 }
 
+// TODO(crazycs520): remove this after replicaSelectorV2 stable.
 type replicaSelector struct {
 	baseReplicaSelector
 	regionStore *regionStore
@@ -691,13 +692,13 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	resetStaleRead := false
 	if state.lastIdx < 0 {
 		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
+			state.lastIdx = AccessIndex(randIntn(replicaSize))
 		} else {
 			if replicaSize <= 1 {
 				state.lastIdx = state.leaderIdx
 			} else {
 				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(replicaSize - 1))
+				state.lastIdx = AccessIndex(randIntn(replicaSize - 1))
 				if state.lastIdx >= state.leaderIdx {
 					state.lastIdx++
 				}
@@ -719,7 +720,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	var offset int
 	if state.lastIdx >= 0 {
-		offset = rand.Intn(replicaSize)
+		offset = randIntn(replicaSize)
 	}
 	reloadRegion := false
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
@@ -868,7 +869,7 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 	// Select a follower replica that has the lowest estimated wait duration
 	minWait := time.Duration(math.MaxInt64)
 	targetIdx := state.leaderIdx
-	startIdx := rand.Intn(len(selector.replicas))
+	startIdx := randIntn(len(selector.replicas))
 	for i := 0; i < len(selector.replicas); i++ {
 		idx := (i + startIdx) % len(selector.replicas)
 		r := selector.replicas[idx]
