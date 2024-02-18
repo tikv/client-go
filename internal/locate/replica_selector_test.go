@@ -3,7 +3,6 @@ package locate
 import (
 	"context"
 	"fmt"
-	"github.com/tikv/client-go/v2/oracle"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
@@ -680,6 +680,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		respRegionError     *errorpb.Error
 		respRegionErrorInV1 *errorpb.Error
 		backoffCnt          int
+		backoffCntInV1      int
 	}{
 		// Test Leader read.
 		{
@@ -785,14 +786,21 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		{
 			readType:  kv.ReplicaReadLeader,
 			timeout:   time.Second,
-			accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderErr, NotLeaderErr},
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: false, stale-read: false",
 				"addr: store3, replica-read: false, stale-read: false",
 			},
-			backoffCnt:      2,
-			respRegionError: fakeRegionError,
+			accessInV1: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			backoffCnt:          2,
+			backoffCntInV1:      2,
+			respRegionError:     fakeRegionError,
+			respRegionErrorInV1: fakeRegionError,
 		},
 
 		// Test follower Read.
@@ -810,7 +818,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			readType:  kv.ReplicaReadFollower,
@@ -820,7 +829,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 				"addr: store1, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 2,
 		},
 		{
 			readType:  kv.ReplicaReadFollower,
@@ -831,6 +841,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  3,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -841,7 +852,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 				"addr: store1, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 1,
+			backoffCnt:     1,
+			backoffCntInV1: 2,
 		},
 		{
 			readType:  kv.ReplicaReadFollower,
@@ -852,7 +864,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 				"addr: store1, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		// Test mixed Read.
 		{
@@ -869,7 +882,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: true, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			readType:  kv.ReplicaReadMixed,
@@ -879,7 +893,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			readType:  kv.ReplicaReadMixed,
@@ -890,6 +905,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -900,6 +916,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  1,
 			respRegionError: RegionNotFoundErr.GenRegionError(),
 		},
 		{
@@ -910,7 +927,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 1,
+			backoffCnt:     1,
+			backoffCntInV1: 2,
 		},
 		{
 			readType:  kv.ReplicaReadMixed,
@@ -921,7 +939,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 
 		// Test prefer-leader Read.
@@ -939,7 +958,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: true, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			readType:  kv.ReplicaReadPreferLeader,
@@ -949,7 +969,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			readType:  kv.ReplicaReadPreferLeader,
@@ -960,6 +981,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -970,6 +992,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  1,
 			respRegionError: RegionNotFoundErr.GenRegionError(),
 		},
 		{
@@ -980,7 +1003,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 1,
+			backoffCnt:     1,
+			backoffCntInV1: 2,
 		},
 		{
 			readType:  kv.ReplicaReadPreferLeader,
@@ -991,7 +1015,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 
 		// stale read test.
@@ -1017,7 +1042,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 0,
 		},
 		{
 			staleRead: true,
@@ -1028,7 +1054,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			staleRead: true,
@@ -1040,6 +1067,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -1051,7 +1079,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			staleRead: true,
@@ -1063,6 +1092,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -1074,7 +1104,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 1,
+			backoffCnt:     1,
+			backoffCntInV1: 2,
 		},
 		{
 			staleRead: true,
@@ -1086,6 +1117,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      1,
+			backoffCntInV1:  3,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -1096,7 +1128,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 1,
+			backoffCnt:     1,
+			backoffCntInV1: 2,
 		},
 		{
 			staleRead: true,
@@ -1107,7 +1140,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		// stale read test with label.
 		{
@@ -1153,7 +1187,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store1, replica-read: false, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			staleRead: true,
@@ -1171,7 +1206,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			staleRead: true,
@@ -1215,7 +1251,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 			},
-			backoffCnt: 0,
+			backoffCnt:     0,
+			backoffCntInV1: 1,
 		},
 		{
 			staleRead: true,
@@ -1235,6 +1272,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store3, replica-read: true, stale-read: false",
 			},
 			backoffCnt:      0,
+			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -1251,7 +1289,8 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store1, replica-read: false, stale-read: false",
 			},
-			backoffCnt: 1,
+			backoffCnt:     1,
+			backoffCntInV1: 2,
 		},
 		{
 			staleRead: true,
@@ -1286,6 +1325,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 			respRegionError     *errorpb.Error
 			respRegionErrorInV1 *errorpb.Error
 			backoffCnt          int
+			backoffCntInV1      int
 		}{
 			accessErr: []RegionErrorType{tp},
 			access: []string{
@@ -1314,6 +1354,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 			respRegionError     *errorpb.Error
 			respRegionErrorInV1 *errorpb.Error
 			backoffCnt          int
+			backoffCntInV1      int
 		}{
 			accessErr: []RegionErrorType{tp},
 			access: []string{
@@ -1329,7 +1370,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 	}
 	for i, ca := range cases {
 		reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
-		msg := fmt.Sprintf("test case idx: %v, readType: %v, stale_read: %v, label: %v, access_err: %v", i, ca.readType, ca.staleRead, ca.label, ca.accessErr)
+		msg := fmt.Sprintf("test case idx: %v, readType: %v, stale_read: %v, timeout: %v, label: %v, access_err: %v", i, ca.readType, ca.staleRead, ca.timeout, ca.label, ca.accessErr)
 		access := []string{}
 		fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			idx := len(access)
@@ -1377,7 +1418,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 			atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		}
 
-		bo := retry.NewBackofferWithVars(context.Background(), 10000, &kv.Variables{BackoffLockFast: 2, BackOffWeight: 1})
+		bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
 		timeout := ca.timeout
 		if timeout == 0 {
 			timeout = client.ReadTimeoutShort
@@ -1390,7 +1431,11 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 			s.Equal(ca.accessInV1, access, msg)
 			caRespRegionError = ca.respRegionErrorInV1
 		}
-		s.Equal(ca.backoffCnt, bo.GetTotalBackoffTimes(), msg)
+		caBackoffCnt := ca.backoffCnt
+		if !config.GetGlobalConfig().EnableReplicaSelectorV2 && ca.backoffCntInV1 > 0 {
+			caBackoffCnt = ca.backoffCntInV1
+		}
+		s.Equal(caBackoffCnt, bo.GetTotalBackoffTimes(), msg)
 		if ca.respErr == "" {
 			s.Nil(err, msg)
 			s.NotNil(resp, msg)
@@ -1406,7 +1451,9 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 					if ca.timeout == 0 {
 						s.False(sender.replicaSelector.getBaseReplicaSelector().region.isValid(), msg) // region must be invalidated.
 					} else {
-						s.True(sender.replicaSelector.getBaseReplicaSelector().region.isValid(), msg) // region must be invalidated.
+						if config.GetGlobalConfig().EnableReplicaSelectorV2 {
+							s.True(sender.replicaSelector.getBaseReplicaSelector().region.isValid(), msg)
+						}
 					}
 				}
 			}
