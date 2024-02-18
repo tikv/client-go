@@ -1057,6 +1057,10 @@ func (s *replicaSelector) proxyReplica() *replica {
 	return nil
 }
 
+func (s *replicaSelector) getLabels() []*metapb.StoreLabel {
+	return s.labels
+}
+
 // sliceIdentical checks whether two slices are referencing the same block of memory. Two `nil`s are also considered
 // the same.
 func sliceIdentical[T any](a, b []T) bool {
@@ -1495,11 +1499,6 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
-	option := storeSelectorOp{}
-	for _, op := range opts {
-		op(&option)
-	}
-
 	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
@@ -1540,7 +1539,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		var isLocalTraffic bool
 		if staleReadCollector != nil && s.replicaSelector != nil {
 			if target := s.replicaSelector.targetReplica(); target != nil {
-				isLocalTraffic = target.store.IsLabelsMatch(option.labels)
+				isLocalTraffic = target.store.IsLabelsMatch(s.replicaSelector.getLabels())
 				staleReadCollector.onReq(req, isLocalTraffic)
 			}
 		}

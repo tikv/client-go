@@ -59,6 +59,7 @@ type ReplicaSelector interface {
 	String() string
 	getAllReplicas() []*replica
 	getBaseReplicaSelector() *baseReplicaSelector
+	getLabels() []*metapb.StoreLabel
 	onSendFailure(bo *retry.Backoffer, err error)
 	// Following methods are used to handle region errors.
 	onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error)
@@ -495,6 +496,10 @@ func (s *replicaSelectorV2) targetReplica() *replica {
 
 func (s *replicaSelectorV2) proxyReplica() *replica {
 	return s.proxy
+}
+
+func (s *replicaSelectorV2) getLabels() []*metapb.StoreLabel {
+	return s.option.labels
 }
 
 func (s *replicaSelectorV2) replicaType(_ *RPCContext) string {
