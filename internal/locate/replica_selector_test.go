@@ -3,6 +3,10 @@ package locate
 import (
 	"context"
 	"fmt"
+	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/tikv/client-go/v2/internal/client"
+	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -548,5 +552,658 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixedCalcul
 			s.Equal(score, 4)
 		}
 		r.store.labels = nil
+	}
+}
+
+type RegionErrorType int
+
+const (
+	NotLeaderErr RegionErrorType = iota + 1
+	RegionNotFoundErr
+	KeyNotInRegionErr
+	EpochNotMatchErr
+	ServerIsBusyErr
+	StaleCommandErr
+	StoreNotMatchErr
+	RaftEntryTooLargeErr
+	MaxTimestampNotSyncedErr
+	ReadIndexNotReadyErr
+	ProposalInMergingModeErr
+	DataIsNotReadyErr
+	RegionNotInitializedErr
+	DiskFullErr
+	RecoveryInProgressErr
+	FlashbackInProgressErr
+	FlashbackNotPreparedErr
+	IsWitnessErr
+	MismatchPeerIdErr
+	BucketVersionNotMatchErr
+	// following error type is not region error.
+	DeadLineExceededErr
+)
+
+func (tp RegionErrorType) GenRegionError() *errorpb.Error {
+	err := &errorpb.Error{}
+	switch tp {
+	case NotLeaderErr:
+		err.NotLeader = &errorpb.NotLeader{}
+	case RegionNotFoundErr:
+		err.RegionNotFound = &errorpb.RegionNotFound{}
+	case KeyNotInRegionErr:
+		err.KeyNotInRegion = &errorpb.KeyNotInRegion{}
+	case EpochNotMatchErr:
+		err.EpochNotMatch = &errorpb.EpochNotMatch{}
+	case ServerIsBusyErr:
+		err.ServerIsBusy = &errorpb.ServerIsBusy{}
+	case StaleCommandErr:
+		err.StaleCommand = &errorpb.StaleCommand{}
+	case StoreNotMatchErr:
+		err.StoreNotMatch = &errorpb.StoreNotMatch{}
+	case RaftEntryTooLargeErr:
+		err.RaftEntryTooLarge = &errorpb.RaftEntryTooLarge{}
+	case MaxTimestampNotSyncedErr:
+		err.MaxTimestampNotSynced = &errorpb.MaxTimestampNotSynced{}
+	case ReadIndexNotReadyErr:
+		err.ReadIndexNotReady = &errorpb.ReadIndexNotReady{}
+	case ProposalInMergingModeErr:
+		err.ProposalInMergingMode = &errorpb.ProposalInMergingMode{}
+	case DataIsNotReadyErr:
+		err.DataIsNotReady = &errorpb.DataIsNotReady{}
+	case RegionNotInitializedErr:
+		err.RegionNotInitialized = &errorpb.RegionNotInitialized{}
+	case DiskFullErr:
+		err.DiskFull = &errorpb.DiskFull{}
+	case RecoveryInProgressErr:
+		err.RecoveryInProgress = &errorpb.RecoveryInProgress{}
+	case FlashbackInProgressErr:
+		err.FlashbackInProgress = &errorpb.FlashbackInProgress{}
+	case FlashbackNotPreparedErr:
+		err.FlashbackNotPrepared = &errorpb.FlashbackNotPrepared{}
+	case IsWitnessErr:
+		err.IsWitness = &errorpb.IsWitness{}
+	case MismatchPeerIdErr:
+		err.MismatchPeerId = &errorpb.MismatchPeerId{}
+	case BucketVersionNotMatchErr:
+		err.BucketVersionNotMatch = &errorpb.BucketVersionNotMatch{}
+	default:
+		return nil
+	}
+	return err
+}
+
+func (tp RegionErrorType) GenError() (*errorpb.Error, error) {
+	regionErr := tp.GenRegionError()
+	if regionErr != nil {
+		return regionErr, nil
+	}
+	switch tp {
+	case DeadLineExceededErr:
+		return nil, context.DeadlineExceeded
+	}
+	return nil, nil
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorAccessPath() {
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	r := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.NotNil(r)
+	s.Equal(r.GetLeaderStoreID(), uint64(1)) // leader in store1.
+	s.Equal(r.getStore().stores[0].labels[0].Key, "id")
+	s.Equal(r.getStore().stores[0].labels[0].Value, fmt.Sprintf("%v", r.getStore().stores[0].storeID))
+
+	fakeRegionError := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, since no replica is available.
+	cases := []struct {
+		staleRead       bool
+		readType        kv.ReplicaReadType
+		label           *metapb.StoreLabel
+		accessErr       []RegionErrorType
+		access          []string
+		respErr         string
+		respRegionError *errorpb.Error
+	}{
+		// Test Leader read.
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{NotLeaderErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{NotLeaderErr, NotLeaderErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{NotLeaderErr, NotLeaderErr, NotLeaderErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{RaftEntryTooLargeErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+			respErr: RaftEntryTooLargeErr.GenRegionError().String(),
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{FlashbackInProgressErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+			respErr: "region 0 is in flashback progress, FlashbackStartTS is 0",
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{FlashbackNotPreparedErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+			respErr: "region 0 is not prepared for the flashback",
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{DeadLineExceededErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderErr, NotLeaderErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false", // is this expected, should retry with replica-read?
+				"addr: store3, replica-read: false, stale-read: false", // ditto.
+			},
+			respRegionError: fakeRegionError,
+		},
+
+		// Test follower Read.
+		{
+			readType:  kv.ReplicaReadFollower,
+			accessErr: []RegionErrorType{},
+			access: []string{
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadFollower,
+			accessErr: []RegionErrorType{ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadFollower,
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+				"addr: store1, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadFollower,
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+				"addr: store1, replica-read: true, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			readType:  kv.ReplicaReadFollower,
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+				"addr: store1, replica-read: true, stale-read: false",
+			},
+		},
+		// Test mixed Read.
+		{
+			readType:  kv.ReplicaReadMixed,
+			accessErr: []RegionErrorType{},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadMixed,
+			accessErr: []RegionErrorType{ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadMixed,
+			accessErr: []RegionErrorType{ServerIsBusyErr, StaleCommandErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadMixed,
+			accessErr: []RegionErrorType{ServerIsBusyErr, StaleCommandErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			readType:  kv.ReplicaReadMixed,
+			accessErr: []RegionErrorType{ServerIsBusyErr, RegionNotFoundErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+			respRegionError: RegionNotFoundErr.GenRegionError(),
+		},
+		{
+			readType:  kv.ReplicaReadMixed,
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+
+		// Test prefer-leader Read.
+		{
+			readType:  kv.ReplicaReadPreferLeader,
+			accessErr: []RegionErrorType{},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadPreferLeader,
+			accessErr: []RegionErrorType{ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadPreferLeader,
+			accessErr: []RegionErrorType{ServerIsBusyErr, StaleCommandErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			readType:  kv.ReplicaReadPreferLeader,
+			accessErr: []RegionErrorType{ServerIsBusyErr, StaleCommandErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			readType:  kv.ReplicaReadPreferLeader,
+			accessErr: []RegionErrorType{ServerIsBusyErr, RegionNotFoundErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+			respRegionError: RegionNotFoundErr.GenRegionError(),
+		},
+		{
+			readType:  kv.ReplicaReadPreferLeader,
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: true, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+
+		// stale read test.
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false", // is this expected? since store1(leader) is busy, then retry it again is expected?
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false", // is this expected? since store1(leader) is busy, then retry it again is expected?
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		// stale read test with label.
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "1"},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+			},
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+			},
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "3"},
+			access: []string{
+				"addr: store3, replica-read: false, stale-read: true",
+			},
+		},
+
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, RegionNotFoundErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+			respRegionError: RegionNotFoundErr.GenRegionError(),
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: true, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+			respRegionError: fakeRegionError,
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: true, stale-read: false",
+			},
+		},
+	}
+
+	retryRegionErrorTypes := []RegionErrorType{ServerIsBusyErr, StaleCommandErr, MaxTimestampNotSyncedErr, ProposalInMergingModeErr, ReadIndexNotReadyErr, RegionNotInitializedErr, DiskFullErr}
+	for _, ca := range retryRegionErrorTypes {
+		cases = append(cases, struct {
+			staleRead       bool
+			readType        kv.ReplicaReadType
+			label           *metapb.StoreLabel
+			accessErr       []RegionErrorType
+			access          []string
+			respErr         string
+			respRegionError *errorpb.Error
+		}{
+			accessErr: []RegionErrorType{ca},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+		})
+	}
+	noRetryRegionErrorTypes := []RegionErrorType{RegionNotFoundErr, KeyNotInRegionErr, EpochNotMatchErr, StoreNotMatchErr, RecoveryInProgressErr, IsWitnessErr, MismatchPeerIdErr, BucketVersionNotMatchErr}
+	for _, ca := range noRetryRegionErrorTypes {
+		cases = append(cases, struct {
+			staleRead       bool
+			readType        kv.ReplicaReadType
+			label           *metapb.StoreLabel
+			accessErr       []RegionErrorType
+			access          []string
+			respErr         string
+			respRegionError *errorpb.Error
+		}{
+			accessErr: []RegionErrorType{ca},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+			},
+			respRegionError: ca.GenRegionError(),
+		})
+	}
+
+	randIntn = func(n int) int {
+		return 0
+	}
+	for i, ca := range cases {
+		reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
+		msg := fmt.Sprintf("test case idx: %v, access_err: %v", i, ca.accessErr)
+		access := []string{}
+		fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+			idx := len(access)
+			access = append(access, fmt.Sprintf("addr: %v, replica-read: %v, stale-read: %v", addr, req.ReplicaRead, req.StaleRead))
+			if idx < len(ca.accessErr) {
+				regionErr, err := ca.accessErr[idx].GenError()
+				if regionErr != nil {
+					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+						RegionError: regionErr,
+					}}, nil
+				}
+				if err != nil {
+					unreachable.injectConstantLiveness(s.cache) // inject unreachable liveness.
+					return nil, err
+				}
+			}
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				Value: []byte("hello world"),
+			}}, nil
+		}}
+		sender := NewRegionRequestSender(s.cache, fnClient)
+		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+			Key: []byte("key"),
+		})
+		if ca.staleRead {
+			req.EnableStaleWithMixedReplicaRead()
+		} else {
+			req.ReplicaReadType = ca.readType
+		}
+		opts := []StoreSelectorOption{}
+		if ca.label != nil {
+			opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
+		}
+
+		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+		s.Nil(err)
+
+		// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
+		stores := s.cache.GetAllStores()
+		for _, store := range stores {
+			store.slowScore = SlowScoreStat{}
+			atomic.StoreUint32(&store.livenessState, uint32(reachable))
+		}
+
+		bo := retry.NewBackofferWithVars(context.Background(), 10000, &kv.Variables{BackoffLockFast: 2, BackOffWeight: 1})
+		resp, _, _, err := sender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV, opts...)
+		s.Equal(ca.access, access, msg)
+		if ca.respErr == "" {
+			s.Nil(err, msg)
+			s.NotNil(resp, msg)
+			regionErr, err := resp.GetRegionError()
+			s.Nil(err, msg)
+			if ca.respRegionError == nil {
+				s.Nil(regionErr, msg)
+				s.Equal([]byte("hello world"), resp.Resp.(*kvrpcpb.GetResponse).Value, msg)
+			} else {
+				s.NotNil(regionErr, msg)
+				s.Equal(ca.respRegionError, regionErr, msg)
+				if IsFakeRegionError(regionErr) {
+					s.False(sender.replicaSelector.getBaseReplicaSelector().region.isValid()) // region must be invalidated.
+				}
+			}
+		} else {
+			s.NotNil(err, msg)
+			s.Equal(ca.respErr, err.Error(), msg)
+		}
+		sender.replicaSelector.invalidateRegion() // invalidate region to reload.
 	}
 }
