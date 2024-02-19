@@ -108,12 +108,19 @@ type Client interface {
 	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+	// SetHealthFeedbackHandler sets the callback for handling health feedback information received by this client.
+	// Only used when building KVStore on it. Do not call this method in other places.
+	SetHealthFeedbackHandler(handler HealthFeedbackHandler) error
 }
 
 type HealthFeedbackHandler = func(feedback *tikvpb.HealthFeedback)
 
-type HealthFeedbackReceiver interface {
-	SetHealthFeedbackHandler(handler HealthFeedbackHandler)
+// NoHealthFeedbackClient is the helper for implementing clients that doesn't support receiving health feedback. These kinds
+// of implementations are usually mocks.
+type NoHealthFeedbackClient struct{}
+
+func (NoHealthFeedbackClient) SetHealthFeedbackHandler(_ HealthFeedbackHandler) error {
+	return errors.New("health feedback not supported by this client type")
 }
 
 type connArray struct {
@@ -819,8 +826,9 @@ func (c *RPCClient) CloseAddr(addr string) error {
 	return nil
 }
 
-func (c *RPCClient) SetHealthFeedbackHandler(handler HealthFeedbackHandler) {
+func (c *RPCClient) SetHealthFeedbackHandler(handler HealthFeedbackHandler) error {
 	c.healthFeedbackHandler.Store(&handler)
+	return nil
 }
 
 type spanInfo struct {

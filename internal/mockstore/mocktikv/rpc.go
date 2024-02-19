@@ -49,6 +49,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 )
@@ -680,6 +681,7 @@ type CoprRPCHandler interface {
 // RPCClient sends kv RPC calls to mock cluster. RPCClient mocks the behavior of
 // a rpc client at tikv's side.
 type RPCClient struct {
+	client.NoHealthFeedbackClient
 	Cluster     *Cluster
 	MvccStore   MVCCStore
 	coprHandler CoprRPCHandler

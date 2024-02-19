@@ -3227,9 +3227,9 @@ func (c *RegionCache) checkAndUpdateStoreHealthStats() {
 			logutil.BgLogger().Error("panic in the checkAndUpdateStoreHealthStats goroutine",
 				zap.Any("r", r),
 				zap.Stack("stack trace"))
-		}
-		if _, err := util.EvalFailpoint("doNotRecoverStoreHealthCheckPanic"); err == nil {
-			panic(r)
+			if _, err := util.EvalFailpoint("doNotRecoverStoreHealthCheckPanic"); err == nil {
+				panic(r)
+			}
 		}
 	}()
 	healthDetails := make(map[uint64]HealthStatusDetail)

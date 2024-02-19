@@ -25,7 +25,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 )
 
-type emptyClient struct{}
+type emptyClient struct{ NoHealthFeedbackClient }
 
 func (c emptyClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	return nil, nil

@@ -107,7 +107,7 @@ func TestGetConnAfterClose(t *testing.T) {
 
 func TestCancelTimeoutRetErr(t *testing.T) {
 	req := new(tikvpb.BatchCommandsRequest_Request)
-	a := newBatchConn(1, 1, nil, nil)
+	a := newBatchConn(1, 1, nil)
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	cancel()
@@ -141,6 +141,7 @@ func TestSendWhenReconnect(t *testing.T) {
 
 // chanClient sends received requests to the channel.
 type chanClient struct {
+	NoHealthFeedbackClient
 	wg *sync.WaitGroup
 	ch chan<- *tikvrpc.Request
 }
