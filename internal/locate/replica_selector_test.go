@@ -1464,3 +1464,31 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		sender.replicaSelector.invalidateRegion() // invalidate region to reload.
 	}
 }
+
+func BenchmarkReplicaSelector(b *testing.B) {
+	s := new(testRegionRequestToThreeStoresSuite)
+	s.SetupTest()
+	defer s.TearDownTest()
+
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = true
+	})
+	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			Value: []byte("value"),
+		}}, nil
+	}}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+			Key: []byte("key"),
+		})
+		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+		if err != nil {
+			b.Fail()
+		}
+		sender := NewRegionRequestSender(s.cache, fnClient)
+		bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
+		sender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
+	}
+}
