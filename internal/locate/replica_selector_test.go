@@ -1504,7 +1504,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
 		stores := s.cache.GetAllStores()
 		for _, store := range stores {
-			store.slowScore = SlowScoreStat{}
+			store.slowScore.resetSlowScore()
 			atomic.StoreUint32(&store.livenessState, uint32(reachable))
 			store.setResolveState(resolved)
 		}
