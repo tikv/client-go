@@ -2597,7 +2597,6 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	s.tikvSideSlowScore.hasTiKVFeedback.Store(true)
 
 	lastScore := s.tikvSideSlowScore.score.Load()
-	logutil.BgLogger().Info("updateTiKVServerSideSlowScore called", zap.Int64("score", score), zap.Int64("lastScore", lastScore))
 
 	if lastScore == score {
 		return
@@ -3453,11 +3452,23 @@ func (c *RegionCache) getCheckStoreEvents() <-chan struct{} {
 	return c.notifyCheckCh
 }
 
-func (c *RegionCache) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (c *RegionCache) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
 	store, ok := c.getStore(feedback.GetStoreId())
 	if !ok {
 		logutil.BgLogger().Info("dropped health feedback info due to unknown store id", zap.Uint64("storeID", feedback.GetStoreId()))
 		return
 	}
 	store.recordHealthFeedback(feedback)
+}
+
+func (c *RegionCache) GetClientEventListener() client.ClientEventListener {
+	return &RegionCacheClientEventListener{c: c}
+}
+
+type RegionCacheClientEventListener struct {
+	c *RegionCache
+}
+
+func (l *RegionCacheClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	l.c.onHealthFeedback(feedback)
 }

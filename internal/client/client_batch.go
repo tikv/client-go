@@ -508,7 +508,7 @@ type batchCommandsClient struct {
 	// tryLock protects client when re-create the streaming.
 	tryLock
 
-	healthFeedbackHandler *atomic.Pointer[HealthFeedbackHandler]
+	eventListener *atomic.Pointer[ClientEventListener]
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -643,8 +643,14 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			continue
 		}
 
-		logutil.BgLogger().Info("received batch response", zap.Stringer("feedback", resp.GetHealthFeedback()))
 		if resp.GetHealthFeedback() != nil {
+			if val, err := util.EvalFailpoint("injectHealthFeedbackSlowScore"); err == nil {
+				v, ok := val.(int)
+				if !ok || v < 0 || v > 100 {
+					panic(fmt.Sprintf("invalid injection in failpoint injectHealthFeedbackSlowScore: %+q", v))
+				}
+				resp.GetHealthFeedback().SlowScore = int32(v)
+			}
 			c.onHealthFeedback(resp.GetHealthFeedback())
 		}
 
@@ -679,8 +685,8 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 }
 
 func (c *batchCommandsClient) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
-	if h := c.healthFeedbackHandler.Load(); h != nil {
-		(*h)(feedback)
+	if h := c.eventListener.Load(); h != nil {
+		(*h).OnHealthFeedback(feedback)
 	}
 }
 

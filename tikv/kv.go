@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -245,23 +244,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		gP:              NewSpool(128, 10*time.Second),
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
-
-	healthFeedbackHandlerSet := false
-	if r := store.clientMu.client.GetCallbackRegistry(); r != nil {
-		if err = r.SetHealthFeedbackHandler(regionCache.OnHealthFeedback); err == nil {
-			logutil.BgLogger().Debug("health feedback handler is set")
-			healthFeedbackHandlerSet = true
-		} else {
-			logutil.BgLogger().Warn("failed to set health feedback handler", zap.String("type", reflect.TypeOf(tikvclient).String()), zap.Error(err))
-		}
-	} else {
-		logutil.BgLogger().Warn("health feedback handler not set due to the client type doesn't support", zap.String("type", reflect.TypeOf(tikvclient).String()))
-	}
-	if _, err := util.EvalFailpoint("healthFeedbackMustSet"); err == nil {
-		if !healthFeedbackHandlerSet {
-			panic("health feedback handler not set ")
-		}
-	}
+	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)

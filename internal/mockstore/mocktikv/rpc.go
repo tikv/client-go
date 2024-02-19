@@ -1097,5 +1097,5 @@ func (c *RPCClient) CloseAddr(addr string) error {
 	return nil
 }
 
-// GetCallbackRegistry implements the ClientCallbackRegistry interface.
-func (c *RPCClient) GetCallbackRegistry() client.ClientCallbackRegistry { return nil }
+// SetEventListener does nothing.
+func (c *RPCClient) SetEventListener(listener client.ClientEventListener) {}

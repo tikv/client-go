@@ -115,9 +115,7 @@ func (f *fnClient) CloseAddr(addr string) error {
 	return nil
 }
 
-func (f *fnClient) GetCallbackRegistry() client.ClientCallbackRegistry {
-	return nil
-}
+func (f *fnClient) SetEventListener(listener client.ClientEventListener) {}
 
 func (f *fnClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	return f.fn(ctx, addr, req, timeout)
@@ -520,6 +518,14 @@ func (s *mockTikvGrpcServer) TabletSnapshot(_ tikvpb.Tikv_TabletSnapshotServer) 
 }
 
 func (s *mockTikvGrpcServer) GetTiFlashSystemTable(context.Context, *kvrpcpb.TiFlashSystemTableRequest) (*kvrpcpb.TiFlashSystemTableResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) KvFlush(ctx context.Context, request *kvrpcpb.FlushRequest) (*kvrpcpb.FlushResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) KvBufferBatchGet(ctx context.Context, request *kvrpcpb.BufferBatchGetRequest) (*kvrpcpb.BufferBatchGetResponse, error) {
 	return nil, errors.New("unreachable")
 }
 

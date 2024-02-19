@@ -153,9 +153,7 @@ func (c *chanClient) CloseAddr(addr string) error {
 	return nil
 }
 
-func (c *chanClient) GetCallbackRegistry() ClientCallbackRegistry {
-	return nil
-}
+func (c *chanClient) SetEventListener(listener ClientEventListener) {}
 
 func (c *chanClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	c.wg.Wait()
