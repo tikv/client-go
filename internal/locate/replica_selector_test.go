@@ -568,10 +568,13 @@ type RegionErrorType int
 
 const (
 	NotLeaderErr RegionErrorType = iota + 1
+	NotLeaderWithNewLeader2Err
+	NotLeaderWithNewLeader3Err
 	RegionNotFoundErr
 	KeyNotInRegionErr
 	EpochNotMatchErr
 	ServerIsBusyErr
+	ServerIsBusyWithEstimatedWaitMsErr
 	StaleCommandErr
 	StoreNotMatchErr
 	RaftEntryTooLargeErr
@@ -604,6 +607,8 @@ func (tp RegionErrorType) GenRegionError() *errorpb.Error {
 		err.EpochNotMatch = &errorpb.EpochNotMatch{}
 	case ServerIsBusyErr:
 		err.ServerIsBusy = &errorpb.ServerIsBusy{}
+	case ServerIsBusyWithEstimatedWaitMsErr:
+		err.ServerIsBusy = &errorpb.ServerIsBusy{EstimatedWaitMs: 10}
 	case StaleCommandErr:
 		err.StaleCommand = &errorpb.StaleCommand{}
 	case StoreNotMatchErr:
@@ -701,7 +706,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		},
 		{
 			readType:  kv.ReplicaReadLeader,
-			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+			accessErr: []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store1, replica-read: false, stale-read: false",
@@ -738,6 +743,25 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 			},
 			backoffCnt:      3,
 			respRegionError: fakeRegionError,
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{NotLeaderWithNewLeader3Err},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+			},
+			backoffCnt: 0, // no backoff
+		},
+		{
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{NotLeaderWithNewLeader3Err, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+			},
+			backoffCnt: 1,
 		},
 		{
 			readType:  kv.ReplicaReadLeader,
@@ -823,24 +847,24 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		},
 		{
 			readType:  kv.ReplicaReadFollower,
-			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+			accessErr: []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 				"addr: store1, replica-read: true, stale-read: false",
 			},
-			backoffCnt:     0,
+			backoffCnt:     1,
 			backoffCntInV1: 2,
 		},
 		{
 			readType:  kv.ReplicaReadFollower,
-			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 				"addr: store1, replica-read: true, stale-read: false",
 			},
-			backoffCnt:      0,
+			backoffCnt:      1,
 			backoffCntInV1:  3,
 			respRegionError: fakeRegionError,
 		},
@@ -898,13 +922,13 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		},
 		{
 			readType:  kv.ReplicaReadMixed,
-			accessErr: []RegionErrorType{ServerIsBusyErr, StaleCommandErr, ServerIsBusyErr},
+			accessErr: []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, StaleCommandErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store1, replica-read: true, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt:      0,
+			backoffCnt:      1,
 			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
@@ -1042,8 +1066,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 			},
-			backoffCnt:     0,
-			backoffCntInV1: 0,
+			backoffCnt: 0,
 		},
 		{
 			staleRead: true,
@@ -1059,15 +1082,15 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		},
 		{
 			staleRead: true,
-			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store1, replica-read: false, stale-read: true",
 				"addr: store1, replica-read: false, stale-read: false",
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt:      0,
-			backoffCntInV1:  2,
+			backoffCnt:      1,
+			backoffCntInV1:  3,
 			respRegionError: fakeRegionError,
 		},
 		{
@@ -1084,14 +1107,14 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		},
 		{
 			staleRead: true,
-			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store1, replica-read: false, stale-read: true",
 				"addr: store1, replica-read: false, stale-read: false", // is this expected? since store1(leader) is busy, then retry it again is expected?
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt:      0,
+			backoffCnt:      1,
 			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
@@ -1106,6 +1129,39 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 			},
 			backoffCnt:     1,
 			backoffCntInV1: 2,
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader3Err},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+			},
+			backoffCnt: 0,
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader3Err, ServerIsBusyErr, NotLeaderWithNewLeader2Err, ServerIsBusyErr},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false",
+			},
+			backoffCnt: 2,
+		},
+		{
+			staleRead: true,
+			accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader2Err},
+			access: []string{
+				"addr: store1, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store2, replica-read: false, stale-read: false",
+			},
+			backoffCnt: 0,
 		},
 		{
 			staleRead: true,
@@ -1228,6 +1284,18 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		{
 			staleRead: true,
 			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader3Err, ServerIsBusyErr},
+			access: []string{
+				"addr: store2, replica-read: false, stale-read: true",
+				"addr: store1, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+				"addr: store3, replica-read: false, stale-read: false",
+			},
+			backoffCnt: 1,
+		},
+		{
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
 			accessErr: []RegionErrorType{DataIsNotReadyErr, RegionNotFoundErr},
 			access: []string{
 				"addr: store2, replica-read: false, stale-read: true",
@@ -1257,7 +1325,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		{
 			staleRead: true,
 			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
-			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr, ServerIsBusyErr},
 			access: []string{
 				"addr: store2, replica-read: false, stale-read: true",
 				"addr: store1, replica-read: false, stale-read: false",
@@ -1271,7 +1339,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 				"addr: store2, replica-read: true, stale-read: false",
 				"addr: store3, replica-read: true, stale-read: false",
 			},
-			backoffCnt:      0,
+			backoffCnt:      1,
 			backoffCntInV1:  2,
 			respRegionError: fakeRegionError,
 		},
@@ -1371,12 +1439,38 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 	for i, ca := range cases {
 		reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
 		msg := fmt.Sprintf("test case idx: %v, readType: %v, stale_read: %v, timeout: %v, label: %v, access_err: %v", i, ca.readType, ca.staleRead, ca.timeout, ca.label, ca.accessErr)
+		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+		s.Nil(err)
 		access := []string{}
 		fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			idx := len(access)
 			access = append(access, fmt.Sprintf("addr: %v, replica-read: %v, stale-read: %v", addr, req.ReplicaRead, req.StaleRead))
 			if idx < len(ca.accessErr) {
-				regionErr, err := ca.accessErr[idx].GenError()
+				var regionErr *errorpb.Error
+				genNotLeaderErr := func(storeID uint64) *errorpb.Error {
+					rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+					var peerInStore *metapb.Peer
+					for _, peer := range rc.meta.Peers {
+						if peer.StoreId == storeID {
+							peerInStore = peer
+							break
+						}
+					}
+					return &errorpb.Error{
+						NotLeader: &errorpb.NotLeader{
+							RegionId: req.RegionId,
+							Leader:   peerInStore,
+						},
+					}
+				}
+				switch ca.accessErr[idx] {
+				case NotLeaderWithNewLeader2Err:
+					regionErr = genNotLeaderErr(2)
+				case NotLeaderWithNewLeader3Err:
+					regionErr = genNotLeaderErr(3)
+				default:
+					regionErr, err = ca.accessErr[idx].GenError()
+				}
 				if regionErr != nil {
 					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
 						RegionError: regionErr,
@@ -1407,10 +1501,6 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		if ca.label != nil {
 			opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
 		}
-
-		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-		s.Nil(err)
-
 		// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
 		stores := s.cache.GetAllStores()
 		for _, store := range stores {

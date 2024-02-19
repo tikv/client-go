@@ -431,9 +431,7 @@ func (s *replicaSelectorV2) onServerIsBusy(
 			if s.target != nil {
 				s.target.serverIsBusy = true
 			}
-			if s.replicaReadType == kv.ReplicaReadLeader {
-				return true, nil
-			}
+			return true, nil
 		}
 	} else if s.replicaReadType != kv.ReplicaReadLeader {
 		// fast retry next follower
