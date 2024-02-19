@@ -1416,6 +1416,7 @@ func TestReplicaSelectorAccessPath(t *testing.T) {
 		for _, store := range stores {
 			store.slowScore = SlowScoreStat{}
 			atomic.StoreUint32(&store.livenessState, uint32(reachable))
+			store.setResolveState(resolved)
 		}
 
 		bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
