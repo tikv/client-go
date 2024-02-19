@@ -1382,7 +1382,7 @@ func (s *RegionRequestSender) getRPCContext(
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
 			selector, err := NewReplicaSelector(s.regionCache, regionID, req, opts...)
-			if selector == nil || err != nil {
+			if err != nil {
 				s.rpcError = err
 				return nil, nil
 			}
