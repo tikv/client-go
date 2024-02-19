@@ -649,7 +649,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.NotEqual(regionStore.proxyTiKVIdx, replicaSelector.proxyIdx)
 	s.Equal(replicaSelector.targetReplica().attempts, 2)
 	s.Equal(replicaSelector.proxyReplica().attempts, 1)
-	//s.Equal(replicaSelector.proxyReplica().store.getLivenessState(), reachable) // should be reachable?
+	// FIXME: the chosen proxy-replica's store should be reachable.
+	//s.Equal(replicaSelector.proxyReplica().store.getLivenessState(), reachable)
 
 	// Test accessFollower state with kv.ReplicaReadFollower request type.
 	req = tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadFollower, nil)

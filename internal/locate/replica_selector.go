@@ -54,12 +54,12 @@ type ReplicaSelector interface {
 	targetReplica() *replica
 	proxyReplica() *replica
 	replicaType(rpcCtx *RPCContext) string
-	invalidateRegion()
-	onSendSuccess(req *tikvrpc.Request)
 	String() string
 	getBaseReplicaSelector() *baseReplicaSelector
 	getLabels() []*metapb.StoreLabel
+	onSendSuccess(req *tikvrpc.Request)
 	onSendFailure(bo *retry.Backoffer, err error)
+	invalidateRegion()
 	// Following methods are used to handle region errors.
 	onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error)
 	onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) (handled bool)
@@ -83,11 +83,10 @@ type replicaSelectorV2 struct {
 	replicaReadType kv.ReplicaReadType
 	isStaleRead     bool
 	isReadOnlyReq   bool
-
-	option   storeSelectorOp
-	target   *replica
-	proxy    *replica
-	attempts int
+	option          storeSelectorOp
+	target          *replica
+	proxy           *replica
+	attempts        int
 }
 
 func newReplicaSelectorV2(
@@ -97,13 +96,11 @@ func newReplicaSelectorV2(
 	if cachedRegion == nil || !cachedRegion.isValid() {
 		return nil, errors.New("cached region invalid")
 	}
-
 	replicas := buildTiKVReplicas(cachedRegion)
 	option := storeSelectorOp{}
 	for _, op := range opts {
 		op(&option)
 	}
-
 	return &replicaSelectorV2{
 		baseReplicaSelector: baseReplicaSelector{
 			regionCache:   regionCache,
@@ -152,7 +149,7 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	strategy := ReplicaSelectLeaderStrategy{}
 	s.target = strategy.next(s.replicas, s.region)
 	if s.target != nil && s.busyThreshold > 0 && (s.target.store.EstimatedWaitTime() > s.busyThreshold || s.target.serverIsBusy) {
-		// If the leader is busy in our estimation, change to tryIdleReplica state to try other replicas.
+		// If the leader is busy in our estimation, try other idle replicas.
 		// If other replicas are all busy, tryIdleReplica will try the leader again without busy threshold.
 		mixedStrategy := ReplicaSelectMixedStrategy{busyThreshold: s.busyThreshold}
 		idleTarget := mixedStrategy.next(s, s.region)
@@ -220,7 +217,8 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica, region *Region) *
 	leader := replicas[region.getStore().workTiKVIdx]
 	if leader.store.getLivenessState() == reachable && !leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) &&
 		!leader.deadlineErrUsingConfTimeout && !leader.notLeader {
-		if !leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+		// check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+		if !leader.isEpochStale() {
 			return leader
 		}
 	}
@@ -271,7 +269,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 		return replicas[idx]
 	} else if len(maxScoreIdxes) > 1 {
 		// if there are more than one replica with the same max score, we will randomly select one
-		// todo: use store slow score to select a faster one.
+		// todo: consider use store slow score to select a faster one.
 		idx := maxScoreIdxes[randIntn(len(maxScoreIdxes))]
 		return replicas[idx]
 	}
@@ -516,5 +514,5 @@ func (s *replicaSelectorV2) String() string {
 	if s == nil {
 		return ""
 	}
-	return fmt.Sprintf("replicaSelectorV2{replicaReadType: %v, %v}", s.replicaReadType.String(), s.baseReplicaSelector.String())
+	return fmt.Sprintf("replicaSelectorV2{replicaReadType: %v, attempts: %v, %v}", s.replicaReadType.String(), s.attempts, s.baseReplicaSelector.String())
 }
