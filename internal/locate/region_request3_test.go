@@ -948,13 +948,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2() {
 	s.Nil(err)
 	s.Nil(rpcCtx) // since all replica's store is unreachable now.
 	s.False(replicaSelector.region.isValid())
-	//s.NotNil(rpcCtx)
-	//AssertRPCCtxEqual(s, rpcCtx, replicaSelector.targetReplica(), replicaSelector.proxyReplica())
-	////s.Equal(regionStore.workTiKVIdx, state2.leaderIdx)
-	//s.Equal(replicaSelector.replicas[2].peer.Id, replicaSelector.target.peer.Id)
-	////s.NotEqual(regionStore.proxyTiKVIdx, replicaSelector.proxyIdx) ?
-	//s.Equal(replicaSelector.targetReplica().attempts, 2)
-	//s.Equal(replicaSelector.proxyReplica().attempts, 1)
 
 	// Test accessFollower state with kv.ReplicaReadFollower request type.
 	refreshRegionTTL(region)
@@ -1929,7 +1922,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 		default:
 			panic("unreachable")
 		}
-		for idx, replica := range selector.getAllReplicas() {
+		for idx, replica := range selector.getBaseReplicaSelector().replicas {
 			if replica.store.storeID == leaderStore.storeID && leader {
 				if v1, ok := selector.(*replicaSelector); ok {
 					v1.targetIdx = AccessIndex(idx)

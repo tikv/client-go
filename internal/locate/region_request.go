@@ -1193,10 +1193,6 @@ func isReadReq(tp tikvrpc.CmdType) bool {
 	}
 }
 
-func (s *baseReplicaSelector) getAllReplicas() []*replica {
-	return s.replicas
-}
-
 func (s *baseReplicaSelector) getBaseReplicaSelector() *baseReplicaSelector {
 	return s
 }
@@ -1304,23 +1300,25 @@ func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
 	s.updateServerLoadStats(ctx, serverIsBusy)
-	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil && s.busyThreshold != 0 {
-		// do not retry with batched coprocessor requests.
-		// it'll be region misses if we send the tasks to replica.
-		if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
-			return false, nil
-		}
-		switch state := s.state.(type) {
-		case *accessKnownLeader:
-			// Clear attempt history of the leader, so the leader can be accessed again.
-			s.replicas[state.leaderIdx].attempts = 0
-			s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
-			return true, nil
-		case *tryIdleReplica:
-			if s.targetIdx != state.leaderIdx {
-				return true, nil
+	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
+		if s.busyThreshold != 0 {
+			// do not retry with batched coprocessor requests.
+			// it'll be region misses if we send the tasks to replica.
+			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
+				return false, nil
 			}
-			// backoff if still receiving ServerIsBusy after accessing leader again
+			switch state := s.state.(type) {
+			case *accessKnownLeader:
+				// Clear attempt history of the leader, so the leader can be accessed again.
+				s.replicas[state.leaderIdx].attempts = 0
+				s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
+				return true, nil
+			case *tryIdleReplica:
+				if s.targetIdx != state.leaderIdx {
+					return true, nil
+				}
+				// backoff if still receiving ServerIsBusy after accessing leader again
+			}
 		}
 	} else if ctx != nil && ctx.Store != nil && s.canFallback2Follower() {
 		return true, nil

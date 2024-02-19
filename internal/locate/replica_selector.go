@@ -57,7 +57,6 @@ type ReplicaSelector interface {
 	invalidateRegion()
 	onSendSuccess(req *tikvrpc.Request)
 	String() string
-	getAllReplicas() []*replica
 	getBaseReplicaSelector() *baseReplicaSelector
 	getLabels() []*metapb.StoreLabel
 	onSendFailure(bo *retry.Backoffer, err error)
@@ -69,6 +68,7 @@ type ReplicaSelector interface {
 	onReadReqConfigurableTimeout(req *tikvrpc.Request) bool
 }
 
+// NewReplicaSelector returns a new ReplicaSelector.
 func NewReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (ReplicaSelector, error) {
@@ -423,20 +423,20 @@ func (s *replicaSelectorV2) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
 	s.updateServerLoadStats(ctx, serverIsBusy)
-	if serverIsBusy.EstimatedWaitMs != 0 && s.busyThreshold != 0 {
-		// do not retry with batched coprocessor requests.
-		// it'll be region misses if we send the tasks to replica.
-		if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
-			return false, nil
+	if serverIsBusy.EstimatedWaitMs != 0 {
+		if s.busyThreshold != 0 {
+			// do not retry with batched coprocessor requests.
+			// it'll be region misses if we send the tasks to replica.
+			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
+				return false, nil
+			}
+			if s.target != nil {
+				s.target.serverIsBusy = true
+			}
+			if s.replicaReadType == kv.ReplicaReadLeader {
+				return true, nil
+			}
 		}
-		if s.target != nil {
-			s.target.serverIsBusy = true
-		}
-		if s.replicaReadType == kv.ReplicaReadLeader {
-			return true, nil
-		}
-
-		return true, nil
 	} else if s.replicaReadType != kv.ReplicaReadLeader {
 		// fast retry next follower
 		return true, nil

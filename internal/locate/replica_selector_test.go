@@ -189,9 +189,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixed() {
 		},
 	}
 
-	for mi := range selector.getAllReplicas() {
+	for mi := range selector.getBaseReplicaSelector().replicas {
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
-		replicas := selector.getAllReplicas()
+		replicas := selector.getBaseReplicaSelector().replicas
 		replicas[mi].store.labels = labels
 		region, err = s.cache.LocateKey(s.bo, []byte("a"))
 		s.Nil(err)
@@ -369,7 +369,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByStaleRead()
 			Value: "us-west-1",
 		},
 	}
-	for mi := range selector.getAllReplicas() {
+	for mi := range selector.getBaseReplicaSelector().replicas {
 		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
 		req.EnableStaleWithMixedReplicaRead()
 		region, err = s.cache.LocateKey(s.bo, []byte("a"))
@@ -377,7 +377,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByStaleRead()
 		s.NotNil(region)
 		selector, err = NewReplicaSelector(s.cache, region.Region, req, WithMatchLabels(labels))
 		s.Nil(err)
-		replicas := selector.getAllReplicas()
+		replicas := selector.getBaseReplicaSelector().replicas
 		rc := s.cache.GetCachedRegionWithRLock(region.Region)
 		s.NotNil(rc)
 		leaderIdx := rc.getStore().workTiKVIdx
@@ -486,7 +486,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixedCalcul
 	s.NotNil(region)
 	selector, err := NewReplicaSelector(s.cache, region.Region, req)
 	s.Nil(err)
-	for i, r := range selector.getAllReplicas() {
+	for i, r := range selector.getBaseReplicaSelector().replicas {
 		rc := s.cache.GetCachedRegionWithRLock(region.Region)
 		s.NotNil(rc)
 		isLeader := r.peer.Id == rc.GetLeaderPeerID()
