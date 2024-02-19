@@ -43,6 +43,7 @@ import (
 // Client is a client that sends RPC.
 // It should not be used after calling Close().
 type Client = client.Client
+type ClientCallbackRegistry = client.ClientCallbackRegistry
 
 // ClientOpt defines the option to create RPC client.
 type ClientOpt = client.Opt

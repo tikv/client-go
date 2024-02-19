@@ -102,7 +102,6 @@ func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 }
 
 type fnClient struct {
-	client.NoHealthFeedbackClient
 	fn         func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 	closedAddr string
 }
@@ -113,6 +112,10 @@ func (f *fnClient) Close() error {
 
 func (f *fnClient) CloseAddr(addr string) error {
 	f.closedAddr = addr
+	return nil
+}
+
+func (f *fnClient) GetCallbackRegistry() client.ClientCallbackRegistry {
 	return nil
 }
 

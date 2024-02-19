@@ -141,7 +141,6 @@ func TestSendWhenReconnect(t *testing.T) {
 
 // chanClient sends received requests to the channel.
 type chanClient struct {
-	NoHealthFeedbackClient
 	wg *sync.WaitGroup
 	ch chan<- *tikvrpc.Request
 }
@@ -151,6 +150,10 @@ func (c *chanClient) Close() error {
 }
 
 func (c *chanClient) CloseAddr(addr string) error {
+	return nil
+}
+
+func (c *chanClient) GetCallbackRegistry() ClientCallbackRegistry {
 	return nil
 }
 

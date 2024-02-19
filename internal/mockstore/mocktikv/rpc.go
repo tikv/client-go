@@ -681,7 +681,6 @@ type CoprRPCHandler interface {
 // RPCClient sends kv RPC calls to mock cluster. RPCClient mocks the behavior of
 // a rpc client at tikv's side.
 type RPCClient struct {
-	client.NoHealthFeedbackClient
 	Cluster     *Cluster
 	MvccStore   MVCCStore
 	coprHandler CoprRPCHandler
@@ -1097,3 +1096,6 @@ func (c *RPCClient) Close() error {
 func (c *RPCClient) CloseAddr(addr string) error {
 	return nil
 }
+
+// GetCallbackRegistry implements the ClientCallbackRegistry interface.
+func (c *RPCClient) GetCallbackRegistry() client.ClientCallbackRegistry { return nil }

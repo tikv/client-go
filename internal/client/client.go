@@ -108,20 +108,19 @@ type Client interface {
 	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+	// GetCallbackRegistry returns the registry for setting callbacks for the client. For mocks that doesn't support
+	// this operation, nil might be returned.
+	GetCallbackRegistry() ClientCallbackRegistry
+}
+
+// ClientCallbackRegistry is the registry for setting callbacks for Client.
+type ClientCallbackRegistry interface {
 	// SetHealthFeedbackHandler sets the callback for handling health feedback information received by this client.
 	// Only used when building KVStore on it. Do not call this method in other places.
 	SetHealthFeedbackHandler(handler HealthFeedbackHandler) error
 }
 
 type HealthFeedbackHandler = func(feedback *tikvpb.HealthFeedback)
-
-// NoHealthFeedbackClient is the helper for implementing clients that doesn't support receiving health feedback. These kinds
-// of implementations are usually mocks.
-type NoHealthFeedbackClient struct{}
-
-func (NoHealthFeedbackClient) SetHealthFeedbackHandler(_ HealthFeedbackHandler) error {
-	return errors.New("health feedback not supported by this client type")
-}
 
 type connArray struct {
 	// The target host.
@@ -417,6 +416,9 @@ type RPCClient struct {
 
 	healthFeedbackHandler *atomic.Pointer[HealthFeedbackHandler]
 }
+
+var _ Client = &RPCClient{}
+var _ ClientCallbackRegistry = &RPCClient{}
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
@@ -824,6 +826,10 @@ func (c *RPCClient) CloseAddr(addr string) error {
 		conn.Close()
 	}
 	return nil
+}
+
+func (c *RPCClient) GetCallbackRegistry() ClientCallbackRegistry {
+	return c
 }
 
 func (c *RPCClient) SetHealthFeedbackHandler(handler HealthFeedbackHandler) error {
