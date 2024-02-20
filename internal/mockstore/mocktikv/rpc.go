@@ -269,7 +269,7 @@ func (h kvHandler) handleKvPessimisticRollback(req *kvrpcpb.PessimisticRollbackR
 			panic("KvPessimisticRollback: key not in region")
 		}
 	}
-	errs := h.mvccStore.PessimisticRollback(req.Keys, req.StartVersion, req.ForUpdateTs)
+	errs := h.mvccStore.PessimisticRollback(h.startKey, h.endKey, req.Keys, req.StartVersion, req.ForUpdateTs)
 	return &kvrpcpb.PessimisticRollbackResponse{
 		Errors: convertToKeyErrors(errs),
 	}
