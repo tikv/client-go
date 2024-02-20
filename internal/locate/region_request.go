@@ -827,12 +827,11 @@ func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
 	// 2. Data is not ready is returned from the leader peer.
 	// 3. Stale read flag is removed and processing falls back to snapshot read on the leader peer.
 	// 4. The leader peer should be retried again using snapshot read.
-	//if state.isStaleRead && state.option.leaderOnly && leader.dataIsNotReady {
-	//	return leader.isExhausted(2, 0)
-	//} else {
-	// no need upper logic, see https://github.com/tikv/tikv/pull/15726.
-	return leader.isExhausted(1, 0)
-	//}
+	if state.isStaleRead && state.option.leaderOnly && leader.dataIsNotReady {
+		return leader.isExhausted(2, 0)
+	} else {
+		return leader.isExhausted(1, 0)
+	}
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {

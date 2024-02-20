@@ -1880,6 +1880,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 			var regionErr *errorpb.Error
 			genNotLeaderErr := func(storeID uint64) *errorpb.Error {
 				rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+				s.NotNil(rc)
 				var peerInStore *metapb.Peer
 				for _, peer := range rc.meta.Peers {
 					if peer.StoreId == storeID {

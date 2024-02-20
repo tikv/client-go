@@ -175,10 +175,16 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		// For stale read second retry, try leader by leader read.
 		strategy := ReplicaSelectLeaderStrategy{}
 		s.target = strategy.next(s.replicas, s.region)
-		if s.target != nil && !s.target.isExhausted(1, 0) {
-			req.StaleRead = false
-			req.ReplicaRead = false
-			return
+		if s.target != nil {
+			maxAttempt := 1
+			if s.target.dataIsNotReady {
+				maxAttempt = 2
+			}
+			if !s.target.isExhausted(maxAttempt, 0) {
+				req.StaleRead = false
+				req.ReplicaRead = false
+				return
+			}
 		}
 	}
 	strategy := ReplicaSelectMixedStrategy{
@@ -295,7 +301,7 @@ func (s ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoch
 		return false
 	}
 	maxAttempt := 1
-	if r.dataIsNotReady && !isLeader {
+	if r.dataIsNotReady {
 		// If the replica is failed by data not ready with stale read, we can retry it with replica-read.
 		maxAttempt = 2
 	}
