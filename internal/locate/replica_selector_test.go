@@ -19,9 +19,11 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"go.uber.org/zap"
 )
 
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByLeader() {
@@ -1704,7 +1706,7 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	randIntn = func(n int) int {
 		return 0
 	}
-	f, err := os.Create("replicaSelectorAccessPathCase.txt")
+	f, err := os.Create("access_path_diff.txt")
 	s.Nil(err)
 	defer f.Close()
 	w := bufio.NewWriter(f)
@@ -1738,6 +1740,7 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 		}
 	}
 
+	count := 0
 	testCase := func(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool, timeout time.Duration, label *metapb.StoreLabel) {
 		accessErrGen := newAccessErrGenerator(req, readType, staleRead)
 		for {
@@ -1754,31 +1757,39 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 				accessErr: accessErr,
 			}
 			runCaseAndCompare(ca)
+			count++
 		}
 		w.Flush()
 	}
 
-	//_ = testCase
+	_ = testCase
+	ca := replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, DiskFullErr, FlashbackNotPreparedErr},
+	}
+	runCaseAndCompare(ca)
+	w.Flush()
+
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, nil)
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadFollower, false, 0, nil)
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadPreferLeader, false, 0, nil)
+	//testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, nil)
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, 0, nil)
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, time.Second, nil)
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, nil)
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
 	//
-	//ca := replicaSelectorAccessPathCase{
-	//	reqType:   tikvrpc.CmdGet,
-	//	readType:  kv.ReplicaReadMixed,
-	//	staleRead: true,
-	//	timeout:   0,
-	//	label:     &metapb.StoreLabel{Key: "id", Value: "2"},
-	//	accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader3Err, NotLeaderErr, FlashbackNotPreparedErr},
-	//}
-	//runCaseAndCompare(ca)
-	//w.Flush()
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, nil)
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "1"})
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "3"})
+	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
 
-	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, nil)
-	testCase(tikvrpc.CmdGet, kv.ReplicaReadFollower, false, 0, nil)
-	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, 0, nil)
-	testCase(tikvrpc.CmdGet, kv.ReplicaReadPreferLeader, false, 0, nil)
-	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, nil)
-
-	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, nil)
-	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
+	logutil.BgLogger().Info("TestReplicaSelectorAccessPath2 finished", zap.Int("count", count))
 }
 
 type accessErrGenerator struct {

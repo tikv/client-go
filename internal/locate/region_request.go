@@ -438,7 +438,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	// will not be wakened up and re-elect the leader until the follower receives
 	// a request. So, before the new leader is elected, we should not send requests
 	// to the unreachable old leader to avoid unnecessary timeout.
-	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) {
+	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) || leader.deadlineErrUsingConfTimeout {
 		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 		return nil, stateChanged{}
 	}
@@ -719,6 +719,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			resetStaleRead = true
 		}
 		state.lastIdx++
+		// label is only used for the first time, remove it when retry.
+		state.option.labels = nil
 	}
 
 	// If selector is under `ReplicaReadPreferLeader` mode, we should choose leader as high priority.
@@ -730,6 +732,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		offset = randIntn(replicaSize)
 	}
 	reloadRegion := false
+	fmt.Printf("-------------------------------begin---------------------------------------\n")
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		var idx AccessIndex
 		if state.option.preferLeader {
@@ -746,6 +749,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
 		}
 		selectReplica := selector.replicas[idx]
+		fmt.Printf("access follower, is candidate: %v, store: %v, attempt: %v ,idx: %v -------\n\n", state.isCandidate(idx, selectReplica), selectReplica.store.storeID, selectReplica.attempts, idx)
 		if state.isCandidate(idx, selectReplica) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
@@ -1635,7 +1639,6 @@ func (s *RegionRequestSender) SendReqCtx(
 		if staleReadCollector != nil {
 			staleReadCollector.onResp(req.Type, resp, isLocalTraffic)
 		}
-		//s.logSendReqError(bo, "send req succ -----------", regionID, retryTimes, req, totalErrors)
 		return resp, rpcCtx, retryTimes, nil
 	}
 }

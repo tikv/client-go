@@ -414,10 +414,8 @@ func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.
 		s.busyThreshold = 0
 		req.BusyThresholdMs = 0
 		if s.replicaReadType == kv.ReplicaReadLeader {
-			// never run into here?
 			return true
 		}
-		//req.ReplicaRead = false // should reset this flag? but v1 not reset it.
 	}
 	return false
 }
