@@ -1675,7 +1675,7 @@ type replicaSelectorAccessPathCase struct {
 	regionIsValid    bool
 }
 
-func TestReplicaSelectorAccessPath2(t *testing.T) {
+func TestReplicaSelectorAccessPathByCase(t *testing.T) {
 	s := new(testRegionRequestToThreeStoresSuite)
 	s.SetupTest()
 	s.SetT(t)
@@ -1697,11 +1697,119 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	s.Equal(r.getStore().stores[0].labels[0].Key, "id")
 	s.Equal(r.getStore().stores[0].labels[0].Value, fmt.Sprintf("%v", r.getStore().stores[0].storeID))
 
-	//var retryableRegionErrorTypes = []RegionErrorType{ServerIsBusyErr, StaleCommandErr, MaxTimestampNotSyncedErr, ProposalInMergingModeErr, ReadIndexNotReadyErr, RegionNotInitializedErr, DiskFullErr}
-	//var noRetryRegionErrorTypes = []RegionErrorType{RegionNotFoundErr, KeyNotInRegionErr, EpochNotMatchErr, StoreNotMatchErr, RecoveryInProgressErr, IsWitnessErr, MismatchPeerIdErr, BucketVersionNotMatchErr}
-	//allReadTypes := []kv.ReplicaReadType{kv.ReplicaReadLeader, kv.ReplicaReadFollower, kv.ReplicaReadMixed /*kv.ReplicaReadLearner,*/, kv.ReplicaReadPreferLeader}
-	//allReqTypes := []tikvrpc.CmdType{tikvrpc.CmdGet, tikvrpc.CmdRawPut}
-	//allReqLabelTypes := []*metapb.StoreLabel{nil, &metapb.StoreLabel{Key: "id", Value: "2"}}
+	randIntn = func(n int) int {
+		return 0
+	}
+	f, err := os.Create("access_path_diff.txt")
+	s.Nil(err)
+	w := bufio.NewWriter(f)
+	defer func() {
+		w.Flush()
+		f.Close()
+	}()
+
+	runCaseAndCompare := func(ca replicaSelectorAccessPathCase) {
+		ca2 := ca
+		config.UpdateGlobal(func(conf *config.Config) {
+			conf.EnableReplicaSelectorV2 = false
+		})
+		ca.run(s)
+		if ca.accessErrInValid {
+			// ignore this invalid case
+			return
+		}
+
+		config.UpdateGlobal(func(conf *config.Config) {
+			conf.EnableReplicaSelectorV2 = true
+		})
+		ca2.run(s)
+		msg := fmt.Sprintf("v1:%v\nv2:%v\n\n", ca.Format(), ca2.Format())
+		if !ca.Equal(ca2) {
+			_, err = w.WriteString(msg)
+			s.Nil(err)
+		}
+		s.Equal(ca.respErr, ca2.respErr, msg)
+		//s.Equal(ca.accessPath, ca2.accessPath, msg)
+		//s.Equal(ca.respRegionError, ca2.respRegionError, msg)
+		//s.Equal(ca.regionIsValid, ca2.regionIsValid, msg)
+		if ca.readType == kv.ReplicaReadLeader { // only leader read backoff case match.
+			s.Equal(ca.backoffDetail, ca2.backoffDetail, msg)
+		}
+	}
+
+	var ca replicaSelectorAccessPathCase
+	//ca = replicaSelectorAccessPathCase{
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadMixed,
+	//	staleRead: false,
+	//	timeout:   time.Second,
+	//	label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+	//	accessErr: []RegionErrorType{DeadLineExceededErr, DiskFullErr, FlashbackNotPreparedErr},
+	//}
+	//runCaseAndCompare(ca)
+
+	//ca = replicaSelectorAccessPathCase{
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadLeader,
+	//	staleRead: false,
+	//	timeout:   time.Second,
+	//	label:     nil,
+	//	accessErr: []RegionErrorType{DeadLineExceededErr, FlashbackInProgressErr},
+	//}
+	//runCaseAndCompare(ca)
+
+	//ca = replicaSelectorAccessPathCase{ // Don't invalid region in tryFollowers, since leader meets deadlineExceededErr.
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadLeader,
+	//	staleRead: false,
+	//	timeout:   time.Second,
+	//	label:     nil,
+	//	accessErr: []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader3Err, DeadLineExceededErr},
+	//}
+	//runCaseAndCompare(ca)
+
+	//ca = replicaSelectorAccessPathCase{ // Don't invalid region in accessFollower, since leader meets deadlineExceededErr.
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadMixed,
+	//	staleRead: false,
+	//	timeout:   time.Second,
+	//	label:     nil,
+	//	accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, DeadLineExceededErr},
+	//}
+	//runCaseAndCompare(ca)
+
+	ca = replicaSelectorAccessPathCase{ // Don't invalid region in accessFollower, since leader meets deadlineExceededErr.
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   0,
+		label:     &metapb.StoreLabel{Key: "id", Value: "3"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr},
+	}
+	runCaseAndCompare(ca)
+}
+
+func TestReplicaSelectorAccessPath2(t *testing.T) {
+	s := new(testRegionRequestToThreeStoresSuite)
+	s.SetupTest()
+	s.SetT(t)
+	s.SetS(s)
+	defer s.TearDownTest()
+
+	s.NoError(failpoint.Enable("tikvclient/fastBackoffBySkipSleep", `return`))
+	s.NoError(failpoint.Enable("tikvclient/skipStoreCheckUntilHealth", `return`))
+	defer func() {
+		s.NoError(failpoint.Disable("tikvclient/fastBackoffBySkipSleep"))
+		s.NoError(failpoint.Disable("tikvclient/skipStoreCheckUntilHealth"))
+	}()
+
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	r := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.NotNil(r)
+	s.Equal(r.GetLeaderStoreID(), uint64(1)) // leader in store1.
+	s.Equal(r.getStore().stores[0].labels[0].Key, "id")
+	s.Equal(r.getStore().stores[0].labels[0].Value, fmt.Sprintf("%v", r.getStore().stores[0].storeID))
 
 	randIntn = func(n int) int {
 		return 0
@@ -1762,32 +1870,35 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 		w.Flush()
 	}
 
-	_ = testCase
-	ca := replicaSelectorAccessPathCase{
-		reqType:   tikvrpc.CmdGet,
-		readType:  kv.ReplicaReadMixed,
-		staleRead: false,
-		timeout:   time.Second,
-		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
-		accessErr: []RegionErrorType{DeadLineExceededErr, DiskFullErr, FlashbackNotPreparedErr},
-	}
-	runCaseAndCompare(ca)
-	w.Flush()
+	//_ = testCase
+	//ca := replicaSelectorAccessPathCase{
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadMixed,
+	//	staleRead: false,
+	//	timeout:   time.Second,
+	//	label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+	//	accessErr: []RegionErrorType{DeadLineExceededErr, DiskFullErr, FlashbackNotPreparedErr},
+	//}
+	//runCaseAndCompare(ca)
+	//w.Flush()
 
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, nil)
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadFollower, false, 0, nil)
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadPreferLeader, false, 0, nil)
-	//testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, nil)
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, 0, nil)
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, time.Second, nil)
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, nil)
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
-	//
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, nil)
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "1"})
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "3"})
-	//testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
+	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadFollower, false, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadPreferLeader, false, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, time.Second, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, &metapb.StoreLabel{Key: "id", Value: "1"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, &metapb.StoreLabel{Key: "id", Value: "3"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "1"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "3"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "1"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "3"})
 
 	logutil.BgLogger().Info("TestReplicaSelectorAccessPath2 finished", zap.Int("count", count))
 }
@@ -1884,44 +1995,18 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 			if !ca.accessErr[idx].Valid(addr, req) {
 				// mark this case is invalid. just ignore this case.
 				ca.accessErrInValid = true
-				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-					Value: []byte("hello world"),
-				}}, nil
-			}
-			var regionErr *errorpb.Error
-			genNotLeaderErr := func(storeID uint64) *errorpb.Error {
+			} else {
 				rc := s.cache.GetCachedRegionWithRLock(loc.Region)
 				s.NotNil(rc)
-				var peerInStore *metapb.Peer
-				for _, peer := range rc.meta.Peers {
-					if peer.StoreId == storeID {
-						peerInStore = peer
-						break
-					}
+				regionErr, err := ca.genAccessErr(s, ca.accessErr[idx], rc)
+				if regionErr != nil {
+					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+						RegionError: regionErr,
+					}}, nil
 				}
-				return &errorpb.Error{
-					NotLeader: &errorpb.NotLeader{
-						RegionId: req.RegionId,
-						Leader:   peerInStore,
-					},
+				if err != nil {
+					return nil, err
 				}
-			}
-			switch ca.accessErr[idx] {
-			case NotLeaderWithNewLeader2Err:
-				regionErr = genNotLeaderErr(2)
-			case NotLeaderWithNewLeader3Err:
-				regionErr = genNotLeaderErr(3)
-			default:
-				regionErr, err = ca.accessErr[idx].GenError()
-			}
-			if regionErr != nil {
-				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-					RegionError: regionErr,
-				}}, nil
-			}
-			if err != nil {
-				unreachable.injectConstantLiveness(s.cache) // inject unreachable liveness.
-				return nil, err
 			}
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
@@ -1987,6 +2072,36 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 	ca.backoffDetail = detail
 	ca.regionIsValid = sender.replicaSelector.getBaseReplicaSelector().region.isValid()
 	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
+}
+
+func (ca *replicaSelectorAccessPathCase) genAccessErr(s *testRegionRequestToThreeStoresSuite, accessErr RegionErrorType, r *Region) (regionErr *errorpb.Error, err error) {
+	genNotLeaderErr := func(storeID uint64) *errorpb.Error {
+		var peerInStore *metapb.Peer
+		for _, peer := range r.meta.Peers {
+			if peer.StoreId == storeID {
+				peerInStore = peer
+				break
+			}
+		}
+		return &errorpb.Error{
+			NotLeader: &errorpb.NotLeader{
+				RegionId: r.meta.Id,
+				Leader:   peerInStore,
+			},
+		}
+	}
+	switch accessErr {
+	case NotLeaderWithNewLeader2Err:
+		regionErr = genNotLeaderErr(2)
+	case NotLeaderWithNewLeader3Err:
+		regionErr = genNotLeaderErr(3)
+	default:
+		regionErr, err = accessErr.GenError()
+	}
+	if err != nil {
+		unreachable.injectConstantLiveness(s.cache) // inject unreachable liveness.
+	}
+	return regionErr, err
 }
 
 func (c *replicaSelectorAccessPathCase) Equal(c2 replicaSelectorAccessPathCase) bool {

@@ -495,11 +495,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
 		for i := 0; i < len(selector.replicas); i++ {
 			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+			selectReplica := selector.replicas[idx]
+			hasDeadlineExceededErr = hasDeadlineExceededErr || selectReplica.deadlineErrUsingConfTimeout
 			if idx == state.leaderIdx {
 				continue
 			}
-			selectReplica := selector.replicas[idx]
-			hasDeadlineExceededErr = hasDeadlineExceededErr || selectReplica.deadlineErrUsingConfTimeout
 			if selectReplica.store.getLivenessState() != unreachable && !selectReplica.deadlineErrUsingConfTimeout &&
 				fn(selectReplica) {
 				return idx, selectReplica
@@ -717,10 +717,12 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			WithLeaderOnly()(&state.option)
 			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read.
 			resetStaleRead = true
+		} else {
+			// label is only used for the first time, remove it when retry.
+			// stale read will need the label to retry, so keep it.
+			state.option.labels = nil
 		}
 		state.lastIdx++
-		// label is only used for the first time, remove it when retry.
-		state.option.labels = nil
 	}
 
 	// If selector is under `ReplicaReadPreferLeader` mode, we should choose leader as high priority.
@@ -732,7 +734,6 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		offset = randIntn(replicaSize)
 	}
 	reloadRegion := false
-	fmt.Printf("-------------------------------begin---------------------------------------\n")
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		var idx AccessIndex
 		if state.option.preferLeader {
@@ -746,10 +747,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				idx = AccessIndex((i + offset) % replicaSize)
 			}
 		} else {
-			idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
+			//idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
+			idx = AccessIndex((offset + i) % replicaSize)
 		}
 		selectReplica := selector.replicas[idx]
-		fmt.Printf("access follower, is candidate: %v, store: %v, attempt: %v ,idx: %v -------\n\n", state.isCandidate(idx, selectReplica), selectReplica.store.storeID, selectReplica.attempts, idx)
+		//fmt.Printf("access follower, is candidate: %v, store: %v, attempt: %v ,idx: %v -------\n\n", state.isCandidate(idx, selectReplica), selectReplica.store.storeID, selectReplica.attempts, idx)
 		if state.isCandidate(idx, selectReplica) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
@@ -798,6 +800,12 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 					selector.region.setSyncFlags(needDelayedReloadPending)
 				}
 				return nil, stateChanged{}
+			}
+			for _, r := range selector.replicas {
+				if r.deadlineErrUsingConfTimeout {
+					// when meet deadline exceeded error, do fast retry without invalidate region cache.
+					return nil, nil
+				}
 			}
 			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
@@ -1178,7 +1186,7 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 		}
 		if accessLeader, ok := s.state.(*accessKnownLeader); ok {
 			// If leader return deadline exceeded error, we should try to access follower next time.
-			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx, fromAccessKnownLeader: true}
 		}
 		return true
 	}
@@ -1532,6 +1540,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		rpcCtx, err = s.getRPCContext(bo, req, regionID, et, opts...)
+		//s.logSendReqError(bo, "get req ctx--------", regionID, retryTimes, req, totalErrors)
 		if err != nil {
 			return nil, nil, retryTimes, err
 		}

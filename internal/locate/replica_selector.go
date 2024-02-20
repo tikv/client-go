@@ -249,6 +249,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	maxScoreIdxes := make([]int, 0, len(replicas))
 	maxScore := -1
 	reloadRegion := false
+	//fmt.Printf("-------------begin-----------\n")
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
 		liveness := r.store.getLivenessState()
@@ -260,6 +261,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 			continue
 		}
 		score := s.calculateScore(r, isLeader)
+		//fmt.Printf("replica store %v, score: %v  -----------\n", r.store.storeID, score)
 		if score > maxScore {
 			maxScore = score
 			maxScoreIdxes = append(maxScoreIdxes[:0], i)
