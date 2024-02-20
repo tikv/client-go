@@ -53,16 +53,14 @@ import (
 var _ oracle.Oracle = &pdOracle{}
 
 const slowDist = 30 * time.Millisecond
-const minTimestampUpdateInterval = 50 * time.Millisecond
-const maxTimestampUpdateInterval = 5 * time.Second
 
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
 	c pd.Client
 	// txn_scope (string) -> lastTSPointer (*atomic.Pointer[lastTSO])
-	lastTSMap      sync.Map
-	quit           chan struct{}
-	updateInterval time.Duration
+	lastTSMap            sync.Map
+	quit                 chan struct{}
+	lastTSUpdateInterval atomic.Int64
 }
 
 // lastTSO stores the last timestamp oracle gets from PD server and the local time when the TSO is fetched.
@@ -73,19 +71,23 @@ type lastTSO struct {
 
 // NewPdOracle create an Oracle that uses a pd client source.
 // Refer https://github.com/tikv/pd/blob/master/client/client.go for more details.
-// PdOracle mantains `lastTS` to store the last timestamp got from PD server. If
-// `GetTimestamp()` is not called after `updateInterval`, it will be called by
+// PdOracle maintains `lastTS` to store the last timestamp got from PD server. If
+// `GetTimestamp()` is not called after `lastTSUpdateInterval`, it will be called by
 // itself to keep up with the timestamp on PD server.
 func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracle, error) {
 	o := &pdOracle{
-		c:              pdClient,
-		quit:           make(chan struct{}),
-		updateInterval: updateInterval,
+		c:                    pdClient,
+		quit:                 make(chan struct{}),
+		lastTSUpdateInterval: atomic.Int64{},
+	}
+	err := o.SetLowResolutionTimestampUpdateInterval(updateInterval)
+	if err != nil {
+		return nil, err
 	}
 	ctx := context.TODO()
 	go o.updateTS(ctx)
 	// Initialize the timestamp of the global txnScope by Get.
-	_, err := o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	_, err = o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	if err != nil {
 		o.Close()
 		return nil, err
@@ -220,8 +222,8 @@ func (o *pdOracle) getLastTSWithArrivalTS(txnScope string) (*lastTSO, bool) {
 }
 
 func (o *pdOracle) updateTS(ctx context.Context) {
-	currentInterval := o.updateInterval
-	ticker := time.NewTicker(currentInterval)
+	currentInterval := o.lastTSUpdateInterval.Load()
+	ticker := time.NewTicker(time.Duration(currentInterval))
 	defer ticker.Stop()
 	for {
 		select {
@@ -237,9 +239,10 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 				o.setLastTS(ts, txnScope)
 				return true
 			})
-			if o.updateInterval != currentInterval {
-				currentInterval = o.updateInterval
-				ticker.Reset(currentInterval)
+			newInterval := o.lastTSUpdateInterval.Load()
+			if newInterval != currentInterval {
+				currentInterval = newInterval
+				ticker.Reset(time.Duration(currentInterval))
 			}
 		case <-o.quit:
 			return
@@ -274,10 +277,10 @@ func (f lowResolutionTsFuture) Wait() (uint64, error) {
 // SetLowResolutionTimestampUpdateInterval sets the refresh interval for low resolution timestamps. Note this will take
 // effect up to the previous update interval amount of time after being called.
 func (o *pdOracle) SetLowResolutionTimestampUpdateInterval(updateInterval time.Duration) error {
-	if updateInterval < minTimestampUpdateInterval || updateInterval > maxTimestampUpdateInterval {
-		return fmt.Errorf("invalid update interval `%s` must be in [%s, %s]", updateInterval, minTimestampUpdateInterval, maxTimestampUpdateInterval)
+	if updateInterval <= 0 {
+		return fmt.Errorf("updateInterval must be > 0")
 	}
-	o.updateInterval = updateInterval
+	o.lastTSUpdateInterval.Store(updateInterval.Nanoseconds())
 	return nil
 }
 

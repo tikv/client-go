@@ -36,7 +36,6 @@ package oracles_test
 
 import (
 	"context"
-	pd "github.com/tikv/pd/client"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -46,6 +45,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
+	pd "github.com/tikv/pd/client"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {
@@ -94,16 +94,7 @@ func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
 	ctx := context.TODO()
 	wg := sync.WaitGroup{}
 
-	// Too low, should error
-	err := o.SetLowResolutionTimestampUpdateInterval(time.Millisecond)
-	assert.NotNil(t, err)
-
-	// Too high, should error
-	err = o.SetLowResolutionTimestampUpdateInterval(time.Minute)
-	assert.NotNil(t, err)
-
-	// Should succeed
-	err = o.SetLowResolutionTimestampUpdateInterval(50 * time.Millisecond)
+	err := o.SetLowResolutionTimestampUpdateInterval(50 * time.Millisecond)
 	assert.Nil(t, err)
 
 	// First call to o.GetTimestamp just seeds the timestamp
@@ -115,27 +106,27 @@ func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
 	lowRes, err := o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
 	assert.Nil(t, err)
 	ts, err := o.GetTimestamp(ctx, &oracle.Option{})
+	assert.Nil(t, err)
 	assert.Greater(t, ts, lowRes)
 
-	waitForTimestampToChange := func(checkFrequency time.Duration) (time.Time, time.Time) {
+	waitForTimestampToChange := func(checkFrequency time.Duration) {
 		currTs, err := o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
 		assert.Nil(t, err)
-		start := time.Now()
 		assert.Eventually(t, func() bool {
 			nextTs, err := o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
 			assert.Nil(t, err)
 			return nextTs > currTs
 		}, 5*time.Second, checkFrequency)
-		return start, time.Now()
 	}
 
 	// Time based unit tests are inherently flaky. To reduce that
 	// this just asserts a loose lower and upper bound that should
 	// not be affected by timing inconsistencies across platforms
 	checkBounds := func(updateInterval time.Duration) {
-		start, _ := waitForTimestampToChange(10 * time.Millisecond)
-		_, end := waitForTimestampToChange(10 * time.Millisecond)
-		elapsed := end.Sub(start)
+		start := time.Now()
+		waitForTimestampToChange(10 * time.Millisecond)
+		waitForTimestampToChange(10 * time.Millisecond)
+		elapsed := time.Since(start)
 		assert.Greater(t, elapsed, updateInterval)
 		assert.LessOrEqual(t, elapsed, 3*updateInterval)
 	}

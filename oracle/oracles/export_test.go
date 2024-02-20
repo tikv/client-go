@@ -36,12 +36,12 @@ package oracles
 
 import (
 	"context"
-	pd "github.com/tikv/pd/client"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
+	pd "github.com/tikv/pd/client"
 )
 
 // SetOracleHookCurrentTime exports localOracle's time hook to test.
@@ -74,8 +74,8 @@ func StartTsUpdateLoop(o oracle.Oracle, ctx context.Context, wg *sync.WaitGroup)
 		panic("expected pdOracle")
 	}
 	pd.quit = make(chan struct{})
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		pd.updateTS(ctx)
 		wg.Done()
 	}()
