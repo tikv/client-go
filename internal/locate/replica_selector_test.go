@@ -664,7 +664,7 @@ func (tp RegionErrorType) GenError() (*errorpb.Error, error) {
 	return nil, nil
 }
 
-func (tp RegionErrorType) Valid(req *tikvrpc.Request) bool {
+func (tp RegionErrorType) Valid(addr string, req *tikvrpc.Request) bool {
 	// leader-read.
 	if req.StaleRead == false && req.ReplicaRead == false {
 		switch tp {
@@ -691,6 +691,14 @@ func (tp RegionErrorType) Valid(req *tikvrpc.Request) bool {
 			// NotLeaderErr will not return in stale read.
 			return false
 		}
+	}
+	// store2 can't return a not leader error with new leader in store2.
+	if addr == "store2" && tp == NotLeaderWithNewLeader2Err {
+		return false
+	}
+	// ditto.
+	if addr == "store3" && tp == NotLeaderWithNewLeader3Err {
+		return false
 	}
 	return true
 }
@@ -1673,8 +1681,10 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	defer s.TearDownTest()
 
 	s.NoError(failpoint.Enable("tikvclient/fastBackoffBySkipSleep", `return`))
+	s.NoError(failpoint.Enable("tikvclient/skipStoreCheckUntilHealth", `return`))
 	defer func() {
 		s.NoError(failpoint.Disable("tikvclient/fastBackoffBySkipSleep"))
+		s.NoError(failpoint.Disable("tikvclient/skipStoreCheckUntilHealth"))
 	}()
 
 	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
@@ -1698,105 +1708,156 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	s.Nil(err)
 	defer f.Close()
 	w := bufio.NewWriter(f)
+
+	runCaseAndCompare := func(ca replicaSelectorAccessPathCase) {
+		ca2 := ca
+		config.UpdateGlobal(func(conf *config.Config) {
+			conf.EnableReplicaSelectorV2 = false
+		})
+		ca.run(s)
+		if ca.accessErrInValid {
+			// ignore this invalid case
+			return
+		}
+
+		config.UpdateGlobal(func(conf *config.Config) {
+			conf.EnableReplicaSelectorV2 = true
+		})
+		ca2.run(s)
+		msg := fmt.Sprintf("v1:%v\nv2:%v\n\n", ca.Format(), ca2.Format())
+		if !ca.Equal(ca2) {
+			_, err = w.WriteString(msg)
+			s.Nil(err)
+		}
+		s.Equal(ca.respErr, ca2.respErr, msg)
+		//s.Equal(ca.accessPath, ca2.accessPath, msg)
+		//s.Equal(ca.respRegionError, ca2.respRegionError, msg)
+		//s.Equal(ca.regionIsValid, ca2.regionIsValid, msg)
+		if ca.readType == kv.ReplicaReadLeader { // only leader read backoff case match.
+			s.Equal(ca.backoffDetail, ca2.backoffDetail, msg)
+		}
+	}
+
 	testCase := func(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool, timeout time.Duration, label *metapb.StoreLabel) {
 		accessErrGen := newAccessErrGenerator(req, readType, staleRead)
 		for {
+			accessErr, done := accessErrGen.genAccessErr()
+			if done {
+				break
+			}
 			ca := replicaSelectorAccessPathCase{
 				reqType:   req,
 				readType:  readType,
 				staleRead: staleRead,
 				timeout:   timeout,
 				label:     label,
+				accessErr: accessErr,
 			}
-			accessErr, done := accessErrGen.genAccessErr()
-			if done {
-				break
-			}
-			ca.accessErr = accessErr
-
-			ca2 := ca
-			config.UpdateGlobal(func(conf *config.Config) {
-				conf.EnableReplicaSelectorV2 = false
-			})
-			ca.run(s)
-			if ca.accessErrInValid {
-				// ignore this invalid case
-				continue
-			}
-
-			config.UpdateGlobal(func(conf *config.Config) {
-				conf.EnableReplicaSelectorV2 = true
-			})
-			ca2.run(s)
-			//fmt.Printf("-------result------\n%v\n-----------------------\n", result)
-			msg := fmt.Sprintf("v1:%v\nv2:%v\n", ca.Format(), ca2.Format())
-			s.Equal(ca.accessPath, ca2.accessPath, msg)
-			s.Equal(ca.respErr, ca2.respErr, msg)
-			s.Equal(ca.respRegionError, ca2.respRegionError, msg)
-			if ca.readType == kv.ReplicaReadLeader { // only leader read backoff case match.
-				s.Equal(ca.backoffDetail, ca2.backoffDetail, msg)
-			}
-			s.Equal(ca.regionIsValid, ca2.regionIsValid, msg)
-
-			//_, err = w.WriteString(ca2.Format())
-			//s.Nil(err)
+			runCaseAndCompare(ca)
 		}
 		w.Flush()
 	}
 
+	//_ = testCase
+	//
+	//ca := replicaSelectorAccessPathCase{
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadMixed,
+	//	staleRead: true,
+	//	timeout:   0,
+	//	label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+	//	accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader3Err, NotLeaderErr, FlashbackNotPreparedErr},
+	//}
+	//runCaseAndCompare(ca)
+	//w.Flush()
+
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, nil)
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadFollower, false, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadPreferLeader, false, 0, nil)
+	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, nil)
+
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
 }
 
 type accessErrGenerator struct {
-	idx    int
-	mode   int
-	allErr []RegionErrorType
+	mode      int
+	idx       int
+	baseIdx   int
+	allErrs   []RegionErrorType
+	retryErrs []RegionErrorType
 }
 
 func newAccessErrGenerator(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool) *accessErrGenerator {
-	all := make([]RegionErrorType, 0, int(RegionErrorTypeMax))
-	for i := NotLeaderErr; i < RegionErrorTypeMax; i++ {
-		if !staleRead {
-			if i == DataIsNotReadyErr {
-				continue
-			}
+	retryableErr := []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, StaleCommandErr, MaxTimestampNotSyncedErr, ReadIndexNotReadyErr, ProposalInMergingModeErr, DataIsNotReadyErr, RegionNotInitializedErr /*FlashbackInProgressErr,*/, DiskFullErr, DeadLineExceededErr}
+	allErrs := make([]RegionErrorType, 0, int(RegionErrorTypeMax))
+	for tp := NotLeaderErr; tp < RegionErrorTypeMax; tp++ {
+		// read request won't meet RaftEntryTooLargeErr.
+		if isReadReq(req) && tp == RaftEntryTooLargeErr {
+			continue
 		}
-		all = append(all, i)
+		//if i == FlashbackInProgressErr {
+		//	continue
+		//}
+		allErrs = append(allErrs, tp)
 	}
 	return &accessErrGenerator{
-		idx:    0,
-		mode:   0,
-		allErr: all,
+		idx:       0,
+		mode:      0,
+		allErrs:   allErrs,
+		retryErrs: retryableErr,
 	}
 }
 
 func (a *accessErrGenerator) genAccessErr() ([]RegionErrorType, bool) {
-	switch a.mode {
-	case 0:
+	if a.mode == 0 {
 		a.idx = 0
 		a.mode = 1
 		return nil, false
-	case 1:
+	}
+	if a.mode == 1 {
 		idx := a.idx
 		a.idx++
-		if a.idx >= len(a.allErr) {
+		if a.idx >= len(a.allErrs) {
 			a.idx = 0
+			a.baseIdx = 0
 			a.mode = 2
 		}
-		return []RegionErrorType{a.allErr[idx]}, false
-	case 2:
-		idx := a.idx
-		a.idx++
-		if a.idx/len(a.allErr) >= len(a.allErr) {
-			a.mode = 3
+		return []RegionErrorType{a.allErrs[idx]}, false
+	}
+	for a.mode <= 4 {
+		errs := a.genAccessErrs(a.allErrs, a.retryErrs)
+		if len(errs) > 0 {
+			return errs, false
 		}
-		return []RegionErrorType{a.allErr[idx/len(a.allErr)], a.allErr[idx%len(a.allErr)]}, false
-	case 3:
-		a.mode = 4
-		return []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader3Err, ServerIsBusyWithEstimatedWaitMsErr}, false
+		a.baseIdx = 0
+		a.idx = 0
+		a.mode++
 	}
 	return nil, true
+}
+
+func (a *accessErrGenerator) genAccessErrs(allErrs, retryErrs []RegionErrorType) []RegionErrorType {
+	defer func() {
+		a.baseIdx++
+		if a.baseIdx >= len(allErrs) {
+			a.baseIdx = 0
+			a.idx++
+		}
+	}()
+	mode := a.mode
+	errs := make([]RegionErrorType, mode)
+	errs[mode-1] = allErrs[a.baseIdx%len(allErrs)]
+	value := a.idx
+	for i := mode - 2; i >= 0; i-- {
+		if i == 0 && value > len(retryErrs) {
+			return nil
+		}
+		errs[i] = retryErrs[value%len(retryErrs)]
+		value = value / len(retryErrs)
+	}
+	return errs
 }
 
 func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSuite) {
@@ -1809,10 +1870,12 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 		idx := len(access)
 		access = append(access, fmt.Sprintf("{addr: %v, replica-read: %v, stale-read: %v}", addr, req.ReplicaRead, req.StaleRead))
 		if idx < len(ca.accessErr) {
-			if !ca.accessErr[idx].Valid(req) {
+			if !ca.accessErr[idx].Valid(addr, req) {
 				// mark this case is invalid. just ignore this case.
 				ca.accessErrInValid = true
-				return &tikvrpc.Response{}, nil
+				return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+					Value: []byte("hello world"),
+				}}, nil
 			}
 			var regionErr *errorpb.Error
 			genNotLeaderErr := func(storeID uint64) *errorpb.Error {
@@ -1878,6 +1941,8 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
 	}
 	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
+	loc, err = s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
 	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
 	s.NotNil(rc)
 	for _, store := range rc.getStore().stores {
@@ -1912,6 +1977,12 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
 }
 
+func (c *replicaSelectorAccessPathCase) Equal(c2 replicaSelectorAccessPathCase) bool {
+	str1 := fmt.Sprintf("%v\n%v\n%v", c.accessPath, c.respRegionError, c.regionIsValid)
+	str2 := fmt.Sprintf("%v\n%v\n%v", c2.accessPath, c2.respRegionError, c2.regionIsValid)
+	return str1 == str2
+}
+
 func (c *replicaSelectorAccessPathCase) Format() string {
 	label := ""
 	if c.label != nil {
@@ -1937,7 +2008,7 @@ func (c *replicaSelectorAccessPathCase) Format() string {
 		"\tresp_region_err: %v\n"+
 		"\tbackoff_cnt: %v\n"+
 		"\tbackoff_detail: %v\n"+
-		"\tregion_is_valid: %v\n}\n",
+		"\tregion_is_valid: %v\n}",
 		c.reqType, c.readType, c.staleRead, c.timeout, label, strings.Join(accessErr, ", "), strings.Join(c.accessPath, ", "),
 		c.respErr, respRegionError, c.backoffCnt, strings.Join(c.backoffDetail, ", "), c.regionIsValid)
 }

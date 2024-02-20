@@ -507,10 +507,13 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		}
 		return -1, nil
 	}
-
 	if len(state.labels) > 0 {
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return selectReplica.store.IsLabelsMatch(state.labels)
+			maxAttempt := 1
+			if selectReplica.dataIsNotReady {
+				maxAttempt = 2
+			}
+			return selectReplica.store.IsLabelsMatch(state.labels) && !selectReplica.isExhausted(maxAttempt, 0)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -523,7 +526,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if selector.targetIdx < 0 {
 		// Search replica that is not attempted from the last accessed replica
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return !selectReplica.isExhausted(1, 0)
+			maxAttempt := 1
+			if selectReplica.dataIsNotReady {
+				maxAttempt = 2
+			}
+			return !selectReplica.isExhausted(maxAttempt, 0)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -820,11 +827,12 @@ func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
 	// 2. Data is not ready is returned from the leader peer.
 	// 3. Stale read flag is removed and processing falls back to snapshot read on the leader peer.
 	// 4. The leader peer should be retried again using snapshot read.
-	if state.isStaleRead && state.option.leaderOnly {
-		return leader.isExhausted(2, 0)
-	} else {
-		return leader.isExhausted(1, 0)
-	}
+	//if state.isStaleRead && state.option.leaderOnly && leader.dataIsNotReady {
+	//	return leader.isExhausted(2, 0)
+	//} else {
+	// no need upper logic, see https://github.com/tikv/tikv/pull/15726.
+	return leader.isExhausted(1, 0)
+	//}
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1224,15 +1232,21 @@ func (s *replicaSelector) onSendSuccess(_ *tikvrpc.Request) {
 func (s *replicaSelector) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
-	if notLeader.GetLeader() == nil {
-		s.state.onNoLeader(s)
-	}
 	leaderIdx, err := s.baseReplicaSelector.onNotLeader(bo, ctx, notLeader)
 	if err != nil {
 		return false, err
 	}
 	if leaderIdx >= 0 {
 		s.state = &accessKnownLeader{leaderIdx: AccessIndex(leaderIdx)}
+	} else {
+		if notLeader.GetLeader() != nil {
+			// switch to new leader failed(such as new leader is unreachable).
+			if accessLeader, ok := s.state.(*accessKnownLeader); ok {
+				s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+			}
+		} else {
+			s.state.onNoLeader(s)
+		}
 	}
 	return true, nil
 }
@@ -1261,7 +1275,11 @@ func (s *replicaSelector) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Re
 	return false
 }
 
-func (s *replicaSelector) onDataIsNotReady() {}
+func (s *replicaSelector) onDataIsNotReady() {
+	if target := s.targetReplica(); target != nil {
+		target.dataIsNotReady = true
+	}
+}
 
 // updateLeader updates the leader of the cached region.
 // If the leader peer isn't found in the region, the region will be invalidated.
@@ -1618,6 +1636,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		if staleReadCollector != nil {
 			staleReadCollector.onResp(req.Type, resp, isLocalTraffic)
 		}
+		//s.logSendReqError(bo, "send req succ -----------", regionID, retryTimes, req, totalErrors)
 		return resp, rpcCtx, retryTimes, nil
 	}
 }
@@ -2153,7 +2172,7 @@ func (s *RegionRequestSender) onRegionError(
 				return true, nil
 			}
 			if req.ReplicaReadType.IsFollowerRead() {
-				s.replicaSelector = nil
+				//s.replicaSelector = nil
 				req.ReplicaReadType = kv.ReplicaReadLeader
 				return true, nil
 			}

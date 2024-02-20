@@ -175,7 +175,7 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		// For stale read second retry, try leader by leader read.
 		strategy := ReplicaSelectLeaderStrategy{}
 		s.target = strategy.next(s.replicas, s.region)
-		if s.target != nil {
+		if s.target != nil && !s.target.isExhausted(1, 0) {
 			req.StaleRead = false
 			req.ReplicaRead = false
 			return
@@ -295,7 +295,7 @@ func (s ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoch
 		return false
 	}
 	maxAttempt := 1
-	if r.dataIsNotReady {
+	if r.dataIsNotReady && !isLeader {
 		// If the replica is failed by data not ready with stale read, we can retry it with replica-read.
 		maxAttempt = 2
 	}
@@ -403,10 +403,15 @@ func (s *replicaSelectorV2) onNotLeader(
 }
 
 func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
-	if s.busyThreshold > 0 && req.ReplicaRead && s.replicaReadType == kv.ReplicaReadLeader {
-		req.BusyThresholdMs = 0
+	// if the failure is caused by replica read, we can retry it with leader safely.
+	if req.ReplicaRead {
 		s.busyThreshold = 0
-		return true
+		req.BusyThresholdMs = 0
+		if s.replicaReadType == kv.ReplicaReadLeader {
+			// never run into here?
+			return true
+		}
+		//req.ReplicaRead = false // should reset this flag? but v1 not reset it.
 	}
 	return false
 }
