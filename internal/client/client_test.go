@@ -461,7 +461,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	builder.reset()
 	entries = entries[:0]
 	for i := 0; i < 3; i++ {
-		entry := &batchCommandsEntry{req: req, res: make(chan *tikvpb.BatchCommandsResponse_Response, 1)}
+		entry := &batchCommandsEntry{req: req, res: make(chan *tikvrpc.Response, 1)}
 		entries = append(entries, entry)
 		builder.push(entry)
 	}
@@ -804,6 +804,8 @@ func TestPrioritySentLimit(t *testing.T) {
 	go sendFn(16, &highDur, &highQps)
 	go sendFn(8, &mediumDur, &mediumQps)
 	wait.Wait()
-	re.Less(highDur.Load()/highQps.Load()*2, mediumDur.Load()/mediumQps.Load())
+	highAvg := highDur.Load() / highQps.Load()
+	mediumAvg := mediumDur.Load() / mediumQps.Load()
+	re.Less(highAvg, mediumAvg*2)
 	server.Stop()
 }

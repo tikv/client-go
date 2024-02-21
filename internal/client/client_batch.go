@@ -44,6 +44,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -63,7 +64,7 @@ import (
 type batchCommandsEntry struct {
 	ctx context.Context
 	req *tikvpb.BatchCommandsRequest_Request
-	res chan *tikvpb.BatchCommandsResponse_Response
+	res chan *tikvrpc.Response
 	// forwardedHost is the address of a store which will handle the request.
 	// It's different from the address the request sent to.
 	forwardedHost string
@@ -409,6 +410,7 @@ func (a *batchConn) getClientAndSend() {
 				cli = c
 				break
 			} else {
+
 				reasons = append(reasons, SendFailedReasonTryLockForSendFail)
 			}
 		} else {
@@ -552,8 +554,10 @@ type batchCommandsClient struct {
 	// tryLock protects client when re-create the streaming.
 	tryLock
 	// sent is the number of the requests are processed by tikv server.
-	sent atomic.Int64
-	// maxConcurrencyRequestLimit is the max allowed number of requests to be sent the tikv
+	sent     atomic.Int64
+	errorSum float64
+
+	// limit is the max number of requests can be sent to tikv but not accept response.
 	maxConcurrencyRequestLimit atomic.Int64
 }
 
@@ -711,7 +715,9 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			logutil.Eventf(entry.ctx, "receive %T response with other %d batched requests from %s", responses[i].GetCmd(), len(responses), c.target)
 			if atomic.LoadInt32(&entry.canceled) == 0 {
 				// Put the response only if the request is not canceled.
-				entry.res <- responses[i]
+				rsp, details := tikvrpc.FromBatchCommandsResponse(responses[i])
+				c.feedBack(details)
+				entry.res <- rsp
 			}
 			c.batched.Delete(requestID)
 			c.sent.Add(-1)
@@ -722,6 +728,46 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(tikvTransportLayerLoad, transportLayerLoad)
 		}
+	}
+}
+
+const (
+	Kp = 0.01
+	Ki = 0.001
+)
+
+func (c *batchCommandsClient) feedBack(details *kvrpcpb.ExecDetailsV2) {
+	if details == nil {
+		return
+	}
+	if limit := c.tikvClientCfg.MaxConcurrencyRequestLimit; limit != 0 {
+		c.maxConcurrencyRequestLimit.Store(limit)
+		return
+	}
+
+	expect := c.tikvClientCfg.GrpcExpectDuration
+	timeDetail := details.GetTimeDetailV2()
+	if timeDetail == nil || timeDetail.GetKvGrpcExecTimeNs() <= 0 {
+		return
+	}
+	exec := timeDetail.GetKvGrpcExecTimeNs() / 1_000
+	wait := timeDetail.GetKvGrpcWaitTimeNs() / 1_000
+
+	e := float64(exec*expect) - float64(wait)
+	if e > float64(exec*expect) {
+		e = float64(exec * expect)
+	}
+
+	if e < -float64(exec*expect) {
+		e = -float64(exec * expect)
+	}
+	// Not adjust the limit if the client is not busy enough.
+	if c.maxConcurrencyRequestLimit.Load() >= c.sent.Load()*2 && e > 0 {
+		return
+	}
+	c.errorSum += e
+	if limit := Kp*c.errorSum + Ki*e; limit > 1 {
+		c.maxConcurrencyRequestLimit.Store(int64(limit))
 	}
 }
 
@@ -838,7 +884,7 @@ func sendBatchRequest(
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
 		req:           req,
-		res:           make(chan *tikvpb.BatchCommandsResponse_Response, 1),
+		res:           make(chan *tikvrpc.Response, 1),
 		forwardedHost: forwardedHost,
 		canceled:      0,
 		err:           nil,
@@ -865,7 +911,7 @@ func sendBatchRequest(
 		if !ok {
 			return nil, errors.WithStack(entry.err)
 		}
-		return tikvrpc.FromBatchCommandsResponse(res)
+		return res, nil
 	case <-ctx.Done():
 		atomic.StoreInt32(&entry.canceled, 1)
 		logutil.Logger(ctx).Debug("wait response is cancelled",
