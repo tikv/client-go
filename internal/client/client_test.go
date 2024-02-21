@@ -725,6 +725,20 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	}
 }
 
+type testClientEventListener struct {
+	healthFeedbackCh chan *tikvpb.HealthFeedback
+}
+
+func newTestClientEventListener() *testClientEventListener {
+	return &testClientEventListener{
+		healthFeedbackCh: make(chan *tikvpb.HealthFeedback, 100),
+	}
+}
+
+func (l *testClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	l.healthFeedbackCh <- feedback
+}
+
 func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
@@ -738,7 +752,10 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 	conn, err := client.getConnArray(addr, true)
 	assert.NoError(t, err)
 	tikvClient := tikvpb.NewTikvClient(conn.Get())
-	stream, err := tikvClient.BatchCommands(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := tikvClient.BatchCommands(ctx)
 	assert.NoError(t, err)
 
 	for reqID := uint64(1); reqID <= 3; reqID++ {
@@ -760,4 +777,21 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 		assert.Equal(t, reqID, resp.GetHealthFeedback().GetFeedbackSeqNo())
 		assert.Equal(t, int32(1), resp.GetHealthFeedback().GetSlowScore())
 	}
+	cancel()
+
+	eventListener := newTestClientEventListener()
+	client.SetEventListener(eventListener)
+	ctx = context.Background()
+	resp, err := client.SendRequest(ctx, addr, tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}), time.Second)
+	assert.NoError(t, err)
+	assert.NotNil(t, resp.Resp)
+
+	select {
+	case feedback := <-eventListener.healthFeedbackCh:
+		assert.Equal(t, uint64(1), feedback.GetStoreId())
+		assert.Equal(t, int32(1), feedback.GetSlowScore())
+	default:
+		assert.Fail(t, "health feedback not received")
+	}
+
 }
