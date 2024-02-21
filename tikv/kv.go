@@ -191,6 +191,9 @@ func WithPool(gp Pool) Option {
 	}
 }
 
+// WithUpdateInterval sets the frequency with which to refresh read timestamps
+// from the PD client. Smaller updateInterval will lead to more HTTP calls to
+// PD and less staleness on reads, and vice versa.
 func WithUpdateInterval(updateInterval time.Duration) Option {
 	return func(o *KVStore) {
 		err := o.oracle.SetLowResolutionTimestampUpdateInterval(updateInterval)
