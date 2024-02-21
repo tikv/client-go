@@ -70,15 +70,15 @@ type batchCommandsEntry struct {
 	// canceled indicated the request is canceled or not.
 	canceled int32
 	err      error
+	pri      uint64
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
 	return atomic.LoadInt32(&b.canceled) == 1
 }
 
-// TODO: implement by the request priority.
-func (b *batchCommandsEntry) priority() int {
-	return 0
+func (b *batchCommandsEntry) priority() uint64 {
+	return b.pri
 }
 
 func (b *batchCommandsEntry) error(err error) {
@@ -107,33 +107,58 @@ func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries.Push(entry)
 }
 
-// build builds BatchCommandsRequests and calls collect() for each valid entry.
+const highTaskPriority = 10
+
+func (b *batchCommandsBuilder) hasHighPriorityTask() bool {
+	return b.entries.highestPriority() >= highTaskPriority
+}
+
+// buildWithLimit builds BatchCommandsRequests with the given limit.
+// the highest priority tasks don't consume any limit,
+// so the limit only works for normal tasks.
 // The first return value is the request that doesn't need forwarding.
 // The second is a map that maps forwarded hosts to requests.
-func (b *batchCommandsBuilder) build(
-	collect func(id uint64, e *batchCommandsEntry),
+func (b *batchCommandsBuilder) buildWithLimit(limit int64, collect func(id uint64, e *batchCommandsEntry),
 ) (*tikvpb.BatchCommandsRequest, map[string]*tikvpb.BatchCommandsRequest) {
-	for _, entry := range b.entries.All() {
-		e := entry.(*batchCommandsEntry)
-		if e.isCanceled() {
-			continue
-		}
-		if collect != nil {
-			collect(b.idAlloc, e)
-		}
-		if e.forwardedHost == "" {
-			b.requestIDs = append(b.requestIDs, b.idAlloc)
-			b.requests = append(b.requests, e.req)
-		} else {
-			batchReq, ok := b.forwardingReqs[e.forwardedHost]
-			if !ok {
-				batchReq = &tikvpb.BatchCommandsRequest{}
-				b.forwardingReqs[e.forwardedHost] = batchReq
+	count := int64(0)
+	build := func(reqs []Item) {
+		for _, e := range reqs {
+			e := e.(*batchCommandsEntry)
+			if e.isCanceled() {
+				continue
 			}
-			batchReq.RequestIds = append(batchReq.RequestIds, b.idAlloc)
-			batchReq.Requests = append(batchReq.Requests, e.req)
+			if e.priority() < highTaskPriority {
+				count++
+			}
+
+			if collect != nil {
+				collect(b.idAlloc, e)
+			}
+			if e.forwardedHost == "" {
+				b.requestIDs = append(b.requestIDs, b.idAlloc)
+				b.requests = append(b.requests, e.req)
+			} else {
+				batchReq, ok := b.forwardingReqs[e.forwardedHost]
+				if !ok {
+					batchReq = &tikvpb.BatchCommandsRequest{}
+					b.forwardingReqs[e.forwardedHost] = batchReq
+				}
+				batchReq.RequestIds = append(batchReq.RequestIds, b.idAlloc)
+				batchReq.Requests = append(batchReq.Requests, e.req)
+			}
+			b.idAlloc++
 		}
-		b.idAlloc++
+	}
+	for (count < limit && b.entries.Len() > 0) || b.hasHighPriorityTask() {
+		n := limit
+		if limit == 0 {
+			n = 1
+		}
+		reqs := b.entries.Take(int(n))
+		if len(reqs) == 0 {
+			break
+		}
+		build(reqs)
 	}
 	var req *tikvpb.BatchCommandsRequest
 	if len(b.requests) > 0 {
@@ -145,20 +170,22 @@ func (b *batchCommandsBuilder) build(
 	return req, b.forwardingReqs
 }
 
+// cancel all requests, only used in test.
 func (b *batchCommandsBuilder) cancel(e error) {
-	for _, entry := range b.entries.All() {
+	for _, entry := range b.entries.all() {
 		entry.(*batchCommandsEntry).error(e)
 	}
+	b.entries.reset()
 }
 
 // reset resets the builder to the initial state.
 // Should call it before collecting a new batch.
 func (b *batchCommandsBuilder) reset() {
+	b.entries.clean()
 	// NOTE: We can't simply set entries = entries[:0] here.
 	// The data in the cap part of the slice would reference the prewrite keys whose
 	// underlying memory is borrowed from memdb. The reference cause GC can't release
 	// the memdb, leading to serious memory leak problems in the large transaction case.
-	b.entries.Reset()
 	for i := 0; i < len(b.requests); i++ {
 		b.requests[i] = nil
 	}
@@ -336,8 +363,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(bestBatchWaitSize), cfg.MaxBatchWaitTime)
 			}
 		}
-		a.pendingRequests.Observe(float64(len(a.batchCommandsCh)))
-		a.batchSize.Observe(float64(a.reqBuilder.len()))
+		a.pendingRequests.Observe(float64(len(a.batchCommandsCh) + a.reqBuilder.len()))
 		length := a.reqBuilder.len()
 		if uint(length) == 0 {
 			// The batch command channel is closed.
@@ -354,6 +380,11 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	}
 }
 
+const (
+	SendFailedReasonNoAvailableLimit   = "concurrency limit exceeded"
+	SendFailedReasonTryLockForSendFail = "tryLockForSend fail"
+)
+
 func (a *batchConn) getClientAndSend() {
 	if val, err := util.EvalFailpoint("mockBatchClientSendDelay"); err == nil {
 		if timeout, ok := val.(int); ok && timeout > 0 {
@@ -366,36 +397,49 @@ func (a *batchConn) getClientAndSend() {
 		cli    *batchCommandsClient
 		target string
 	)
+	reasons := make([]string, 0)
+	hasHighPriorityTask := a.reqBuilder.hasHighPriorityTask()
 	for i := 0; i < len(a.batchCommandsClients); i++ {
 		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
 		target = a.batchCommandsClients[a.index].target
 		// The lock protects the batchCommandsClient from been closed while it's in use.
-		if a.batchCommandsClients[a.index].tryLockForSend() {
-			cli = a.batchCommandsClients[a.index]
-			break
+		c := a.batchCommandsClients[a.index]
+		if hasHighPriorityTask || c.available() > 0 {
+			if c.tryLockForSend() {
+				cli = c
+				break
+			} else {
+				reasons = append(reasons, SendFailedReasonTryLockForSendFail)
+			}
+		} else {
+			reasons = append(reasons, SendFailedReasonNoAvailableLimit)
 		}
 	}
 	if cli == nil {
-		logutil.BgLogger().Warn("no available connections", zap.String("target", target))
+		logutil.BgLogger().Info("no available connections", zap.String("target", target), zap.Any("reasons", reasons))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
-
-		// Please ensure the error is handled in region cache correctly.
-		a.reqBuilder.cancel(errors.New("no available connections"))
 		return
 	}
 	defer cli.unlockForSend()
-
-	req, forwardingReqs := a.reqBuilder.build(func(id uint64, e *batchCommandsEntry) {
+	available := cli.available()
+	batch := 0
+	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
+		cli.sent.Add(1)
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
 	})
 	if req != nil {
+		batch += len(req.RequestIds)
 		cli.send("", req)
 	}
 	for forwardedHost, req := range forwardingReqs {
+		batch += len(req.RequestIds)
 		cli.send(forwardedHost, req)
+	}
+	if batch > 0 {
+		a.batchSize.Observe(float64(batch))
 	}
 }
 
@@ -507,10 +551,18 @@ type batchCommandsClient struct {
 	closed int32
 	// tryLock protects client when re-create the streaming.
 	tryLock
+	// sent is the number of the requests are processed by tikv server.
+	sent atomic.Int64
+	// maxConcurrencyRequestLimit is the max allowed number of requests to be sent the tikv
+	maxConcurrencyRequestLimit atomic.Int64
 }
 
 func (c *batchCommandsClient) isStopped() bool {
 	return atomic.LoadInt32(&c.closed) != 0
+}
+
+func (c *batchCommandsClient) available() int64 {
+	return c.maxConcurrencyRequestLimit.Load() - c.sent.Load()
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
@@ -549,6 +601,7 @@ func (c *batchCommandsClient) failPendingRequests(err error) {
 		id, _ := key.(uint64)
 		entry, _ := value.(*batchCommandsEntry)
 		c.batched.Delete(id)
+		c.sent.Add(-1)
 		entry.error(err)
 		return true
 	})
@@ -661,6 +714,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				entry.res <- responses[i]
 			}
 			c.batched.Delete(requestID)
+			c.sent.Add(-1)
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
@@ -779,6 +833,7 @@ func sendBatchRequest(
 	batchConn *batchConn,
 	req *tikvpb.BatchCommandsRequest_Request,
 	timeout time.Duration,
+	priority uint64,
 ) (*tikvrpc.Response, error) {
 	entry := &batchCommandsEntry{
 		ctx:           ctx,
@@ -787,6 +842,7 @@ func sendBatchRequest(
 		forwardedHost: forwardedHost,
 		canceled:      0,
 		err:           nil,
+		pri:           priority,
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
