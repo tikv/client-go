@@ -1861,8 +1861,11 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	}
 	f, err := os.Create("access_path_diff.txt")
 	s.Nil(err)
-	defer f.Close()
 	w := bufio.NewWriter(f)
+	defer func() {
+		w.Flush()
+		f.Close()
+	}()
 
 	totalValidCaseCount := 0
 	runCaseAndCompare := func(ca replicaSelectorAccessPathCase) {
@@ -1901,9 +1904,10 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 
 	totalCaseCount := 0
 	testCase := func(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool, timeout time.Duration, label *metapb.StoreLabel) {
-		accessErrGen := newAccessErrGenerator(req, readType, staleRead)
+		isRead := isReadReq(req)
+		accessErrGen := newAccessErrGenerator(isRead, staleRead)
 		for {
-			accessErr, done := accessErrGen.genAccessErr()
+			accessErr, done := accessErrGen.genAccessErr(staleRead)
 			if done {
 				break
 			}
@@ -1918,20 +1922,7 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 			runCaseAndCompare(ca)
 			totalCaseCount++
 		}
-		w.Flush()
 	}
-
-	//_ = testCase
-	//ca := replicaSelectorAccessPathCase{
-	//	reqType:   tikvrpc.CmdGet,
-	//	readType:  kv.ReplicaReadMixed,
-	//	staleRead: false,
-	//	timeout:   time.Second,
-	//	label:     &metapb.StoreLabel{Key: "id", Value: "2"},
-	//	accessErr: []RegionErrorType{DeadLineExceededErr, DiskFullErr, FlashbackNotPreparedErr},
-	//}
-	//runCaseAndCompare(ca)
-	//w.Flush()
 
 	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, nil)
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, nil)
@@ -1965,19 +1956,25 @@ type accessErrGenerator struct {
 	retryErrs []RegionErrorType
 }
 
-func newAccessErrGenerator(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool) *accessErrGenerator {
-	retryableErr := []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, StaleCommandErr, MaxTimestampNotSyncedErr, ReadIndexNotReadyErr, ProposalInMergingModeErr, DataIsNotReadyErr, RegionNotInitializedErr /*FlashbackInProgressErr,*/, DiskFullErr, DeadLineExceededErr}
-	allErrs := make([]RegionErrorType, 0, int(RegionErrorTypeMax))
-	for tp := NotLeaderErr; tp < RegionErrorTypeMax; tp++ {
+func newAccessErrGenerator(isRead, staleRead bool) *accessErrGenerator {
+	filter := func(tp RegionErrorType) bool {
 		// read request won't meet RaftEntryTooLargeErr.
-		if isReadReq(req) && tp == RaftEntryTooLargeErr {
-			continue
+		if isRead && tp == RaftEntryTooLargeErr {
+			return false
 		}
-		//if i == FlashbackInProgressErr {
-		//	continue
-		//}
-		allErrs = append(allErrs, tp)
+		if staleRead == false && tp == DataIsNotReadyErr {
+			return false
+		}
+		// TODO: since v2 has come compatibility issue with v1, so skip FlashbackInProgressErr.
+		if tp == FlashbackInProgressErr {
+			return false
+		}
+		return true
 	}
+	allErrs := getAllRegionErrors(filter)
+	retryableErr := getAllRegionErrors(func(tp RegionErrorType) bool {
+		return filter(tp) && isRegionErrorRetryable(tp)
+	})
 	return &accessErrGenerator{
 		idx:       0,
 		mode:      0,
@@ -1986,7 +1983,28 @@ func newAccessErrGenerator(req tikvrpc.CmdType, readType kv.ReplicaReadType, sta
 	}
 }
 
-func (a *accessErrGenerator) genAccessErr() ([]RegionErrorType, bool) {
+func getAllRegionErrors(filter func(errorType RegionErrorType) bool) []RegionErrorType {
+	errs := make([]RegionErrorType, 0, int(RegionErrorTypeMax))
+	for tp := NotLeaderErr; tp < RegionErrorTypeMax; tp++ {
+		if filter != nil && filter(tp) == false {
+			continue
+		}
+		errs = append(errs, tp)
+	}
+	return errs
+}
+
+func isRegionErrorRetryable(tp RegionErrorType) bool {
+	switch tp {
+	case NotLeaderErr, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr,
+		StaleCommandErr, MaxTimestampNotSyncedErr, ReadIndexNotReadyErr, ProposalInMergingModeErr, DataIsNotReadyErr,
+		RegionNotInitializedErr, FlashbackInProgressErr, DiskFullErr, DeadLineExceededErr:
+		return true
+	}
+	return false
+}
+
+func (a *accessErrGenerator) genAccessErr(staleRead bool) ([]RegionErrorType, bool) {
 	if a.mode == 0 {
 		a.idx = 0
 		a.mode = 1
@@ -2002,8 +2020,25 @@ func (a *accessErrGenerator) genAccessErr() ([]RegionErrorType, bool) {
 		}
 		return []RegionErrorType{a.allErrs[idx]}, false
 	}
-	for a.mode <= 4 {
-		errs := a.genAccessErrs(a.allErrs, a.retryErrs)
+	for a.mode <= 6 {
+		allErrs := a.allErrs
+		retryErrs := a.retryErrs
+		if a.mode > 4 {
+			// if mode > 4, reduce the error type to avoid generating too many combinations.
+			allErrs = getAllRegionErrors(func(tp RegionErrorType) bool {
+				if staleRead == false && tp == DataIsNotReadyErr {
+					return false
+				}
+				switch tp {
+				case NotLeaderErr, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyWithEstimatedWaitMsErr, DataIsNotReadyErr,
+					RegionNotInitializedErr, DeadLineExceededErr:
+					return true
+				}
+				return false
+			})
+			retryErrs = allErrs
+		}
+		errs := a.genAccessErrs(allErrs, retryErrs)
 		if len(errs) > 0 {
 			return errs, false
 		}
@@ -2039,8 +2074,6 @@ func (a *accessErrGenerator) genAccessErrs(allErrs, retryErrs []RegionErrorType)
 func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSuite) {
 	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
 	msg := ca.Format()
-	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-	s.Nil(err)
 	access := []string{}
 	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		idx := len(access)
@@ -2050,6 +2083,8 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 				// mark this case is invalid. just ignore this case.
 				ca.accessErrInValid = true
 			} else {
+				loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+				s.Nil(err)
 				rc := s.cache.GetCachedRegionWithRLock(loc.Region)
 				s.NotNil(rc)
 				regionErr, err := ca.genAccessErr(s, ca.accessErr[idx], rc)
@@ -2092,7 +2127,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testRegionRequestToThreeStoresSu
 		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
 	}
 	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
-	loc, err = s.cache.LocateKey(s.bo, []byte("key"))
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
 	s.Nil(err)
 	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
 	s.NotNil(rc)
