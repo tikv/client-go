@@ -1667,12 +1667,17 @@ type replicaSelectorAccessPathCase struct {
 	label            *metapb.StoreLabel
 	accessErr        []RegionErrorType
 	accessErrInValid bool
-	accessPath       []string
-	respErr          string
-	respRegionError  *errorpb.Error
-	backoffCnt       int
-	backoffDetail    []string
-	regionIsValid    bool
+	accessPathResult                   // use to record the execution result.
+	expect           *accessPathResult //
+}
+
+type accessPathResult struct {
+	accessPath      []string
+	respErr         string
+	respRegionError *errorpb.Error
+	backoffCnt      int
+	backoffDetail   []string
+	regionIsValid   bool
 }
 
 func TestReplicaSelectorAccessPathByCase(t *testing.T) {
@@ -1718,13 +1723,21 @@ func TestReplicaSelectorAccessPathByCase(t *testing.T) {
 			// ignore this invalid case
 			return
 		}
+		if ca.expect != nil {
+			msg := fmt.Sprintf("%v\n\n", ca.Format())
+			result := ca.accessPathResult
+			s.Equal(ca.expect.accessPath, result.accessPath, msg)
+			s.Equal(ca.expect.respErr, result.respErr, msg)
+			s.Equal(ca.expect.respRegionError, result.respRegionError, msg)
+			s.Equal(ca.expect.regionIsValid, result.regionIsValid, msg)
+		}
 
 		config.UpdateGlobal(func(conf *config.Config) {
 			conf.EnableReplicaSelectorV2 = true
 		})
 		ca2.run(s)
 		msg := fmt.Sprintf("v1:%v\nv2:%v\n\n", ca.Format(), ca2.Format())
-		if !ca.Equal(ca2) {
+		if !ca.accessPathResult.Equal(&ca2.accessPathResult) {
 			_, err = w.WriteString(msg)
 			s.Nil(err)
 		}
@@ -1778,15 +1791,47 @@ func TestReplicaSelectorAccessPathByCase(t *testing.T) {
 	//}
 	//runCaseAndCompare(ca)
 
-	ca = replicaSelectorAccessPathCase{ // Don't invalid region in accessFollower, since leader meets deadlineExceededErr.
+	//ca = replicaSelectorAccessPathCase{ // Don't invalid region in accessFollower, since leader meets deadlineExceededErr.
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadMixed,
+	//	staleRead: true,
+	//	timeout:   0,
+	//	label:     &metapb.StoreLabel{Key: "id", Value: "3"},
+	//	accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr},
+	//}
+	//runCaseAndCompare(ca)
+
+	//ca = replicaSelectorAccessPathCase{
+	//	reqType:   tikvrpc.CmdGet,
+	//	readType:  kv.ReplicaReadMixed,
+	//	staleRead: false,
+	//	timeout:   time.Second,
+	//	label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+	//	accessErr: []RegionErrorType{FlashbackInProgressErr},
+	//}
+	//runCaseAndCompare(ca)
+
+	ca = replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
 		staleRead: true,
-		timeout:   0,
-		label:     &metapb.StoreLabel{Key: "id", Value: "3"},
-		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr},
+		timeout:   time.Microsecond * 100,
+		label:     &metapb.StoreLabel{Key: "id", Value: "1"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}", // don't retry leader(store1), since leader won't return DataIsNotReadyErr, so retry it with leader-read may got NotLeaderErr.
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   nil,
+			regionIsValid:   true,
+		},
 	}
 	runCaseAndCompare(ca)
+
 }
 
 func TestReplicaSelectorAccessPath2(t *testing.T) {
@@ -1819,6 +1864,7 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	defer f.Close()
 	w := bufio.NewWriter(f)
 
+	totalValidCaseCount := 0
 	runCaseAndCompare := func(ca replicaSelectorAccessPathCase) {
 		ca2 := ca
 		config.UpdateGlobal(func(conf *config.Config) {
@@ -1829,13 +1875,17 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 			// ignore this invalid case
 			return
 		}
+		if len(ca.accessErr) > 1 && ca.accessErr[len(ca.accessErr)-1] == FlashbackInProgressErr {
+			// if last error is FlashbackInProgressErr, skip it, since replica-selector v2 has come compatibility issue with v1.
+			return
+		}
 
 		config.UpdateGlobal(func(conf *config.Config) {
 			conf.EnableReplicaSelectorV2 = true
 		})
 		ca2.run(s)
 		msg := fmt.Sprintf("v1:%v\nv2:%v\n\n", ca.Format(), ca2.Format())
-		if !ca.Equal(ca2) {
+		if !ca.Equal(&ca2.accessPathResult) {
 			_, err = w.WriteString(msg)
 			s.Nil(err)
 		}
@@ -1846,9 +1896,10 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 		if ca.readType == kv.ReplicaReadLeader { // only leader read backoff case match.
 			s.Equal(ca.backoffDetail, ca2.backoffDetail, msg)
 		}
+		totalValidCaseCount++
 	}
 
-	count := 0
+	totalCaseCount := 0
 	testCase := func(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool, timeout time.Duration, label *metapb.StoreLabel) {
 		accessErrGen := newAccessErrGenerator(req, readType, staleRead)
 		for {
@@ -1865,7 +1916,7 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 				accessErr: accessErr,
 			}
 			runCaseAndCompare(ca)
-			count++
+			totalCaseCount++
 		}
 		w.Flush()
 	}
@@ -1900,7 +1951,10 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "3"})
 
-	logutil.BgLogger().Info("TestReplicaSelectorAccessPath2 finished", zap.Int("count", count))
+	logutil.BgLogger().Info("TestReplicaSelectorAccessPath2 finished",
+		zap.Int("total-case", totalCaseCount),
+		zap.Int("valid-case", totalValidCaseCount),
+		zap.Int("skipped-case", totalCaseCount-totalValidCaseCount))
 }
 
 type accessErrGenerator struct {
@@ -2104,7 +2158,7 @@ func (ca *replicaSelectorAccessPathCase) genAccessErr(s *testRegionRequestToThre
 	return regionErr, err
 }
 
-func (c *replicaSelectorAccessPathCase) Equal(c2 replicaSelectorAccessPathCase) bool {
+func (c *accessPathResult) Equal(c2 *accessPathResult) bool {
 	str1 := fmt.Sprintf("%v\n%v\n%v", c.accessPath, c.respRegionError, c.regionIsValid)
 	str2 := fmt.Sprintf("%v\n%v\n%v", c2.accessPath, c2.respRegionError, c2.regionIsValid)
 	return str1 == str2

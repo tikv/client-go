@@ -839,11 +839,13 @@ func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
 	// 2. Data is not ready is returned from the leader peer.
 	// 3. Stale read flag is removed and processing falls back to snapshot read on the leader peer.
 	// 4. The leader peer should be retried again using snapshot read.
-	if state.isStaleRead && state.option.leaderOnly && leader.dataIsNotReady {
-		return leader.isExhausted(2, 0)
-	} else {
-		return leader.isExhausted(1, 0)
-	}
+	//if state.isStaleRead && state.option.leaderOnly && leader.dataIsNotReady {
+	//	return leader.isExhausted(2, 0)
+	//} else {
+	// after https://github.com/tikv/tikv/pull/15726, the leader will not return DataIsNotReady error,
+	// then no need to retry leader again, if you try it again, you may got a NotLeader error.
+	return leader.isExhausted(1, 0)
+	//}
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1276,11 +1278,12 @@ func (s *baseReplicaSelector) onNotLeader(
 
 func (s *replicaSelector) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
 	// if the failure is caused by replica read, we can retry it with leader safely.
-	if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
+	if req.ReplicaRead && s.targetIdx != s.regionStore.workTiKVIdx {
 		req.BusyThresholdMs = 0
 		s.busyThreshold = 0
 		ctx.contextPatcher.replicaRead = nil
 		ctx.contextPatcher.busyThreshold = nil
+		s.state = &accessKnownLeader{leaderIdx: s.regionStore.workTiKVIdx}
 		return true
 	}
 	return false
@@ -2180,11 +2183,6 @@ func (s *RegionRequestSender) onRegionError(
 		)
 		if req != nil {
 			if s.replicaSelector != nil && s.replicaSelector.onFlashbackInProgress(ctx, req) {
-				return true, nil
-			}
-			if req.ReplicaReadType.IsFollowerRead() {
-				//s.replicaSelector = nil
-				req.ReplicaReadType = kv.ReplicaReadLeader
 				return true, nil
 			}
 		}

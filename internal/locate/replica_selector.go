@@ -175,16 +175,11 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		// For stale read second retry, try leader by leader read.
 		strategy := ReplicaSelectLeaderStrategy{}
 		s.target = strategy.next(s.replicas, s.region)
-		if s.target != nil {
-			maxAttempt := 1
-			if s.target.dataIsNotReady {
-				maxAttempt = 2
-			}
-			if !s.target.isExhausted(maxAttempt, 0) {
-				req.StaleRead = false
-				req.ReplicaRead = false
-				return
-			}
+		if s.target != nil && !s.target.isExhausted(1, 0) {
+			// For stale read, don't retry leader again if it is accessed at the first attempt.
+			req.StaleRead = false
+			req.ReplicaRead = false
+			return
 		}
 	}
 	strategy := ReplicaSelectMixedStrategy{
@@ -249,7 +244,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	maxScoreIdxes := make([]int, 0, len(replicas))
 	maxScore := -1
 	reloadRegion := false
-	//fmt.Printf("-------------begin-----------\n")
+	//fmt.Printf("-------------begin------%#v---%v--\n", s, selector.replicaReadType)
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
 		liveness := r.store.getLivenessState()
@@ -261,7 +256,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 			continue
 		}
 		score := s.calculateScore(r, isLeader)
-		//fmt.Printf("replica store %v, score: %v  -----------\n", r.store.storeID, score)
+		//fmt.Printf("replica store %v, score: %v  %v, %v-----------\n", r.store.storeID, score, isLeader, s.labels)
 		if score > maxScore {
 			maxScore = score
 			maxScoreIdxes = append(maxScoreIdxes[:0], i)
@@ -303,8 +298,10 @@ func (s ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoch
 		return false
 	}
 	maxAttempt := 1
-	if r.dataIsNotReady {
+	if r.dataIsNotReady && !isLeader {
 		// If the replica is failed by data not ready with stale read, we can retry it with replica-read.
+		// 	after https://github.com/tikv/tikv/pull/15726, the leader will not return DataIsNotReady error,
+		//	then no need to retry leader again, if you try it again, you may got a NotLeader error.
 		maxAttempt = 2
 	}
 	if r.isExhausted(maxAttempt, 0) {
@@ -338,15 +335,18 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 				// when has match labels, prefer leader than not-matched peers.
 				score += scoreOfPreferLeader
 			} else {
+				//fmt.Printf("store %v is normal peer , isleader: %v   %v------\n", r.store.storeID, isLeader, score)
 				score += scoreOfNormalPeer
 			}
 		}
 	} else {
 		if s.learnerOnly {
 			if r.peer.Role == metapb.PeerRole_Learner {
+				//fmt.Printf("store %v is normal peer , isleader: %v   %v------\n", r.store.storeID, isLeader, score)
 				score += scoreOfNormalPeer
 			}
 		} else {
+			//fmt.Printf("store %v is normal peer , isleader: %v   %v------\n", r.store.storeID, isLeader, score)
 			score += scoreOfNormalPeer
 		}
 	}
@@ -355,6 +355,7 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	}
 	if !r.store.isSlow() {
 		score += scoreOfNotSlow
+		//fmt.Printf("store %v is not slow ------\n", r.store.storeID)
 	}
 	return score
 }
@@ -412,12 +413,15 @@ func (s *replicaSelectorV2) onNotLeader(
 
 func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
 	// if the failure is caused by replica read, we can retry it with leader safely.
-	if req.ReplicaRead {
-		s.busyThreshold = 0
+	if req.ReplicaRead && s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() {
 		req.BusyThresholdMs = 0
-		if s.replicaReadType == kv.ReplicaReadLeader {
-			return true
-		}
+		s.busyThreshold = 0
+		ctx.contextPatcher.replicaRead = nil
+		ctx.contextPatcher.busyThreshold = nil
+		s.option.labels = nil // clear label, since we need to retry with leader.
+		s.replicaReadType = kv.ReplicaReadLeader
+		req.ReplicaReadType = kv.ReplicaReadLeader
+		return true
 	}
 	return false
 }
