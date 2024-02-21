@@ -724,3 +724,40 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestBatchClientReceiveHealthFeedback(t *testing.T) {
+	server, port := mockserver.StartMockTikvService()
+	require.True(t, port > 0)
+	require.True(t, server.IsRunning())
+	defer server.Stop()
+	addr := server.Addr()
+
+	client := NewRPCClient()
+	defer client.Close()
+
+	conn, err := client.getConnArray(addr, true)
+	assert.NoError(t, err)
+	tikvClient := tikvpb.NewTikvClient(conn.Get())
+	stream, err := tikvClient.BatchCommands(context.Background())
+	assert.NoError(t, err)
+
+	for reqID := uint64(1); reqID <= 3; reqID++ {
+		assert.NoError(t, stream.Send(&tikvpb.BatchCommandsRequest{
+			Requests: []*tikvpb.BatchCommandsRequest_Request{{
+				Cmd: &tikvpb.BatchCommandsRequest_Request_Get{Get: &kvrpcpb.GetRequest{
+					Context: &kvrpcpb.Context{},
+					Key:     []byte("k"),
+					Version: 1,
+				}},
+			}},
+			RequestIds: []uint64{reqID},
+		}))
+		resp, err := stream.Recv()
+		assert.NoError(t, err)
+		assert.Equal(t, []uint64{reqID}, resp.GetRequestIds())
+		assert.Len(t, resp.GetResponses(), 1)
+		assert.Equal(t, uint64(1), resp.GetHealthFeedback().GetStoreId())
+		assert.Equal(t, reqID, resp.GetHealthFeedback().GetFeedbackSeqNo())
+		assert.Equal(t, int32(1), resp.GetHealthFeedback().GetSlowScore())
+	}
+}
