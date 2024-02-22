@@ -434,11 +434,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 		selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
 		return nil, stateChanged{}
 	}
-	// If hibernate region is enabled and the leader is not reachable, the raft group
-	// will not be wakened up and re-elect the leader until the follower receives
-	// a request. So, before the new leader is elected, we should not send requests
-	// to the unreachable old leader to avoid unnecessary timeout.
-	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) || leader.deadlineErrUsingConfTimeout {
+	if !state.isCandidate(leader) {
 		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 		return nil, stateChanged{}
 	}
@@ -453,6 +449,19 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	}
 	selector.targetIdx = state.leaderIdx
 	return selector.buildRPCContext(bo)
+}
+
+// check leader is candidate or not.
+func (state *accessKnownLeader) isCandidate(leader *replica) bool {
+	liveness := leader.store.getLivenessState()
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) || leader.deadlineErrUsingConfTimeout {
+		return false
+	}
+	return true
 }
 
 func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1250,16 +1259,12 @@ func (s *replicaSelector) onNotLeader(
 		return false, err
 	}
 	if leaderIdx >= 0 {
-		s.state = &accessKnownLeader{leaderIdx: AccessIndex(leaderIdx)}
-	} else {
-		if notLeader.GetLeader() != nil {
-			// switch to new leader failed(such as new leader is unreachable).
-			if accessLeader, ok := s.state.(*accessKnownLeader); ok {
-				s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
-			}
-		} else {
-			s.state.onNoLeader(s)
+		state := &accessKnownLeader{leaderIdx: AccessIndex(leaderIdx)}
+		if state.isCandidate(s.replicas[leaderIdx]) {
+			s.state = state
 		}
+	} else {
+		s.state.onNoLeader(s)
 	}
 	return true, nil
 }

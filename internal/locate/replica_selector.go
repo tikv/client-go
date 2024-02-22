@@ -216,14 +216,21 @@ type ReplicaSelectLeaderStrategy struct{}
 
 func (s ReplicaSelectLeaderStrategy) next(replicas []*replica, region *Region) *replica {
 	leader := replicas[region.getStore().workTiKVIdx]
-	if leader.store.getLivenessState() == reachable && !leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) &&
-		!leader.deadlineErrUsingConfTimeout && !leader.notLeader {
-		// check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
-		if !leader.isEpochStale() {
-			return leader
-		}
+	if isLeaderCandidate(leader) {
+		return leader
 	}
 	return nil
+}
+
+func isLeaderCandidate(leader *replica) bool {
+	if leader.store.getLivenessState() != reachable ||
+		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
+		leader.deadlineErrUsingConfTimeout ||
+		leader.notLeader ||
+		leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+		return false
+	}
+	return true
 }
 
 type ReplicaSelectMixedStrategy struct {
@@ -406,7 +413,9 @@ func (s *replicaSelectorV2) onNotLeader(
 		return false, err
 	}
 	if leaderIdx >= 0 {
-		s.replicaReadType = kv.ReplicaReadLeader
+		if isLeaderCandidate(s.replicas[leaderIdx]) {
+			s.replicaReadType = kv.ReplicaReadLeader
+		}
 	}
 	return true, nil
 }
