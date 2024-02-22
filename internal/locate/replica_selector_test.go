@@ -104,6 +104,7 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
 		staleRead: true,
+		timeout:   time.Microsecond * 100,
 		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr},
 		expect: &accessPathResult{
 			accessPath: []string{
@@ -113,8 +114,8 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 			},
 			respErr:         "",
 			respRegionError: nil,
-			backoffCnt:      1,
-			backoffDetail:   []string{"tikvServerBusy+1"},
+			backoffCnt:      0,
+			backoffDetail:   []string{},
 			regionIsValid:   true,
 		},
 	}
@@ -131,6 +132,27 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Microsecond * 100,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
 			},
 			respErr:         "",
 			respRegionError: nil,
