@@ -42,7 +42,7 @@ import (
 	"reflect"
 	"strings"
 
-	"google.golang.org/protobuf/proto" //nolint:staticcheck
+	"github.com/golang/protobuf/proto" //nolint:staticcheck
 )
 
 // Hex defines a fmt.Stringer for proto.Message.
