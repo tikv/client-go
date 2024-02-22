@@ -577,8 +577,8 @@ func (r *bgRunner) schedule(f func(context.Context, time.Time) bool, interval ti
 			select {
 			case <-r.ctx.Done():
 				return
-			case t, ok := <-ticker.C:
-				if ok && f(r.ctx, t) {
+			case t := <-ticker.C:
+				if f(r.ctx, t) {
 					return
 				}
 			}
