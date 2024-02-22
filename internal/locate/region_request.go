@@ -498,7 +498,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	if len(state.labels) > 0 {
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return selectReplica.store.IsLabelsMatch(state.labels)
+			return selectReplica.store.IsLabelsMatch(state.labels) && !selectReplica.isExhausted(1, 0)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
