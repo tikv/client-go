@@ -616,29 +616,29 @@ type Response struct {
 }
 
 // FromBatchCommandsResponse converts a BatchCommands response to Response.
-func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Response, error) {
+func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Response, *kvrpcpb.ExecDetailsV2) {
 	if res.GetCmd() == nil {
-		return nil, errors.New("Unknown command response")
+		return nil, nil
 	}
 	switch res := res.GetCmd().(type) {
 	case *tikvpb.BatchCommandsResponse_Response_Get:
-		return &Response{Resp: res.Get}, nil
+		return &Response{Resp: res.Get}, res.Get.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_Scan:
 		return &Response{Resp: res.Scan}, nil
 	case *tikvpb.BatchCommandsResponse_Response_Prewrite:
-		return &Response{Resp: res.Prewrite}, nil
+		return &Response{Resp: res.Prewrite}, res.Prewrite.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_Commit:
-		return &Response{Resp: res.Commit}, nil
+		return &Response{Resp: res.Commit}, res.Commit.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_Cleanup:
 		return &Response{Resp: res.Cleanup}, nil
 	case *tikvpb.BatchCommandsResponse_Response_BatchGet:
-		return &Response{Resp: res.BatchGet}, nil
+		return &Response{Resp: res.BatchGet}, res.BatchGet.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_BatchRollback:
-		return &Response{Resp: res.BatchRollback}, nil
+		return &Response{Resp: res.BatchRollback}, res.BatchRollback.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_ScanLock:
-		return &Response{Resp: res.ScanLock}, nil
+		return &Response{Resp: res.ScanLock}, res.ScanLock.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_ResolveLock:
-		return &Response{Resp: res.ResolveLock}, nil
+		return &Response{Resp: res.ResolveLock}, res.ResolveLock.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_GC:
 		return &Response{Resp: res.GC}, nil
 	case *tikvpb.BatchCommandsResponse_Response_DeleteRange:
@@ -664,19 +664,19 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 	case *tikvpb.BatchCommandsResponse_Response_RawScan:
 		return &Response{Resp: res.RawScan}, nil
 	case *tikvpb.BatchCommandsResponse_Response_Coprocessor:
-		return &Response{Resp: res.Coprocessor}, nil
+		return &Response{Resp: res.Coprocessor}, res.Coprocessor.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_PessimisticLock:
-		return &Response{Resp: res.PessimisticLock}, nil
+		return &Response{Resp: res.PessimisticLock}, res.PessimisticLock.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_PessimisticRollback:
-		return &Response{Resp: res.PessimisticRollback}, nil
+		return &Response{Resp: res.PessimisticRollback}, res.PessimisticRollback.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_Empty:
 		return &Response{Resp: res.Empty}, nil
 	case *tikvpb.BatchCommandsResponse_Response_TxnHeartBeat:
-		return &Response{Resp: res.TxnHeartBeat}, nil
+		return &Response{Resp: res.TxnHeartBeat}, res.TxnHeartBeat.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_CheckTxnStatus:
-		return &Response{Resp: res.CheckTxnStatus}, nil
+		return &Response{Resp: res.CheckTxnStatus}, res.CheckTxnStatus.GetExecDetailsV2()
 	case *tikvpb.BatchCommandsResponse_Response_CheckSecondaryLocks:
-		return &Response{Resp: res.CheckSecondaryLocks}, nil
+		return &Response{Resp: res.CheckSecondaryLocks}, res.CheckSecondaryLocks.GetExecDetailsV2()
 	}
 	panic("unreachable")
 }

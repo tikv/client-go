@@ -92,7 +92,8 @@ type TiKVClient struct {
 	ResolveLockLiteThreshold uint64 `toml:"resolve-lock-lite-threshold" json:"resolve-lock-lite-threshold"`
 	// MaxConcurrencyRequestLimit is the max concurrency number of request to be sent the tikv
 	// 0 means auto adjust by feedback.
-	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
+	MaxConcurrencyRequestLimit int64  `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
+	GrpcExpectDuration         uint64 `toml:"grpc-expect-duration" json:"grpc-expect-duration"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -164,6 +165,7 @@ func DefaultTiKVClient() TiKVClient {
 
 		ResolveLockLiteThreshold:   16,
 		MaxConcurrencyRequestLimit: math.MaxInt64,
+		GrpcExpectDuration:         2,
 	}
 }
 
