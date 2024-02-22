@@ -122,6 +122,10 @@ func (o *MockOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *or
 	return o.GetTimestampAsync(ctx, opt)
 }
 
+func (o *MockOracle) SetLowResolutionTimestampUpdateInterval(time.Duration) error {
+	return nil
+}
+
 // IsExpired implements oracle.Oracle interface.
 func (o *MockOracle) IsExpired(lockTimestamp, TTL uint64, _ *oracle.Option) bool {
 	o.RLock()

@@ -35,10 +35,13 @@
 package oracles
 
 import (
+	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tikv/client-go/v2/oracle"
+	pd "github.com/tikv/pd/client"
 )
 
 // SetOracleHookCurrentTime exports localOracle's time hook to test.
@@ -57,6 +60,25 @@ func SetOracleHookCurrentTime(oc oracle.Oracle, t time.Time) {
 // NewEmptyPDOracle exports pdOracle struct to test
 func NewEmptyPDOracle() oracle.Oracle {
 	return &pdOracle{}
+}
+
+func NewPdOracleWithClient(client pd.Client) oracle.Oracle {
+	return &pdOracle{
+		c: client,
+	}
+}
+
+func StartTsUpdateLoop(o oracle.Oracle, ctx context.Context, wg *sync.WaitGroup) {
+	pd, ok := o.(*pdOracle)
+	if !ok {
+		panic("expected pdOracle")
+	}
+	pd.quit = make(chan struct{})
+	wg.Add(1)
+	go func() {
+		pd.updateTS(ctx)
+		wg.Done()
+	}()
 }
 
 // SetEmptyPDOracleLastTs exports PD oracle's global last ts to test.
