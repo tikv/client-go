@@ -483,11 +483,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
 		for i := 0; i < len(selector.replicas); i++ {
 			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
+			selectReplica := selector.replicas[idx]
+			hasDeadlineExceededErr = hasDeadlineExceededErr || selectReplica.deadlineErrUsingConfTimeout
 			if idx == state.leaderIdx {
 				continue
 			}
-			selectReplica := selector.replicas[idx]
-			hasDeadlineExceededErr = hasDeadlineExceededErr || selectReplica.deadlineErrUsingConfTimeout
 			if selectReplica.store.getLivenessState() != unreachable && !selectReplica.deadlineErrUsingConfTimeout &&
 				fn(selectReplica) {
 				return idx, selectReplica
