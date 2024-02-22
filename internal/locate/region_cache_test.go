@@ -49,6 +49,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -68,6 +69,142 @@ func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...p
 		return c.getRegion(ctx, c.Client, key, opts...)
 	}
 	return c.Client.GetRegion(ctx, key, opts...)
+}
+
+func TestBackgroundRunner(t *testing.T) {
+	t.Run("ShutdownWait", func(t *testing.T) {
+		dur := 100 * time.Millisecond
+		r := newBackgroundRunner(context.Background())
+		r.run(func(ctx context.Context) {
+			time.Sleep(dur)
+		})
+		start := time.Now()
+		r.shutdown(true)
+		require.True(t, time.Since(start) >= dur)
+	})
+
+	t.Run("ShutdownNoWait", func(t *testing.T) {
+		dur := 100 * time.Millisecond
+		done := make(chan struct{})
+		r := newBackgroundRunner(context.Background())
+		r.run(func(ctx context.Context) {
+			select {
+			case <-ctx.Done():
+				close(done)
+			case <-time.After(dur):
+				require.Fail(t, "run should be canceled by shutdown")
+			}
+		})
+		r.shutdown(false)
+		<-done
+	})
+
+	t.Run("RunAfterShutdown", func(t *testing.T) {
+		var called atomic.Bool
+		r := newBackgroundRunner(context.Background())
+		r.shutdown(false)
+		r.run(func(ctx context.Context) {
+			called.Store(true)
+		})
+		require.False(t, called.Load())
+		r.schedule(until(func() bool {
+			called.Store(true)
+			return true
+		}), time.Second)
+		require.False(t, called.Load())
+		r.scheduleWithTrigger(until(func() bool {
+			called.Store(true)
+			return true
+		}), time.Second, make(chan struct{}))
+		require.False(t, called.Load())
+	})
+
+	t.Run("Schedule", func(t *testing.T) {
+		var (
+			done     = make(chan struct{})
+			interval = 20 * time.Millisecond
+			history  = make([]int64, 0, 3)
+			start    = time.Now().UnixMilli()
+		)
+		r := newBackgroundRunner(context.Background())
+		r.schedule(func(_ context.Context, t time.Time) bool {
+			history = append(history, t.UnixMilli())
+			if len(history) == 3 {
+				close(done)
+				return true
+			}
+			return false
+		}, interval)
+		<-done
+		require.Equal(t, 3, len(history))
+		for i := range history {
+			require.LessOrEqual(t, int64(i+1)*interval.Milliseconds(), history[i]-start)
+		}
+
+		history = history[:0]
+		start = time.Now().UnixMilli()
+		r.schedule(func(ctx context.Context, t time.Time) bool {
+			history = append(history, t.UnixMilli())
+			return false
+		}, interval)
+		time.Sleep(interval*3 + interval/2)
+		r.shutdown(true)
+		require.Equal(t, 3, len(history))
+		for i := range history {
+			require.LessOrEqual(t, int64(i+1)*interval.Milliseconds(), history[i]-start)
+		}
+	})
+
+	t.Run("ScheduleWithTrigger", func(t *testing.T) {
+		var (
+			done     = make(chan struct{})
+			trigger  = make(chan struct{})
+			interval = 20 * time.Millisecond
+			history  = make([]int64, 0, 3)
+			start    = time.Now().UnixMilli()
+		)
+		r := newBackgroundRunner(context.Background())
+		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
+			if t.IsZero() {
+				history = append(history, -1)
+			} else {
+				history = append(history, t.UnixMilli())
+			}
+			if len(history) == 3 {
+				close(done)
+				return true
+			}
+			return false
+		}, interval, trigger)
+		trigger <- struct{}{}
+		time.Sleep(interval + interval/2)
+		trigger <- struct{}{}
+		<-done
+		require.Equal(t, 3, len(history))
+		require.Equal(t, int64(-1), history[0])
+		require.Equal(t, int64(-1), history[2])
+		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[1]-start)
+
+		history = history[:0]
+		start = time.Now().UnixMilli()
+		r.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
+			if t.IsZero() {
+				history = append(history, -1)
+			} else {
+				history = append(history, t.UnixMilli())
+			}
+			return false
+		}, interval, trigger)
+		trigger <- struct{}{}
+		trigger <- struct{}{}
+		close(trigger)
+		time.Sleep(interval + interval/2)
+		r.shutdown(true)
+		require.Equal(t, 3, len(history))
+		require.Equal(t, int64(-1), history[0])
+		require.Equal(t, int64(-1), history[1])
+		require.LessOrEqual(t, int64(1)*interval.Milliseconds(), history[2]-start)
+	})
 }
 
 func TestRegionCache(t *testing.T) {
@@ -1901,7 +2038,7 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 
 	// start health check loop
 	atomic.StoreUint32(&store1.livenessState, store1Liveness)
-	go store1.checkUntilHealth(s.cache, livenessState(store1Liveness), time.Second)
+	startHealthCheckLoop(s.cache, store1, livenessState(store1Liveness), time.Second)
 
 	// update store meta
 	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr+"'", store1.labels...)
