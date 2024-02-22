@@ -508,6 +508,7 @@ func (mu *regionIndexMu) refresh(r []*Region) {
 
 type livenessFunc func(ctx context.Context, s *Store) livenessState
 
+// repeat wraps a `func()` as a schedulable fuction for `bgRunner`.
 func repeat(f func()) func(context.Context, time.Time) bool {
 	return func(_ context.Context, _ time.Time) bool {
 		f()
@@ -515,6 +516,7 @@ func repeat(f func()) func(context.Context, time.Time) bool {
 	}
 }
 
+// until wraps a `func() bool` as a schedulable fuction for `bgRunner`.
 func until(f func() bool) func(context.Context, time.Time) bool {
 	return func(_ context.Context, _ time.Time) bool {
 		return f()
@@ -551,6 +553,7 @@ func (r *bgRunner) shutdown(wait bool) {
 	}
 }
 
+// run calls `f` once in background.
 func (r *bgRunner) run(f func(context.Context)) {
 	if r.closed() {
 		return
@@ -562,6 +565,7 @@ func (r *bgRunner) run(f func(context.Context)) {
 	}()
 }
 
+// schedule calls `f` every `interval`.
 func (r *bgRunner) schedule(f func(context.Context, time.Time) bool, interval time.Duration) {
 	if r.closed() {
 		return
@@ -586,6 +590,7 @@ func (r *bgRunner) schedule(f func(context.Context, time.Time) bool, interval ti
 	}()
 }
 
+// scheduleWithTrigger likes schedule, but also call `f` when `<-trigger`, in which case the time arg of `f` is zero.
 func (r *bgRunner) scheduleWithTrigger(f func(context.Context, time.Time) bool, interval time.Duration, trigger <-chan struct{}) {
 	if r.closed() {
 		return
