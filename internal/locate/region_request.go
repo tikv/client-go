@@ -255,6 +255,7 @@ type replica struct {
 	attemptedTime time.Duration
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
+	dataIsNotReady              bool
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -498,7 +499,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	if len(state.labels) > 0 {
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return selectReplica.store.IsLabelsMatch(state.labels) && !selectReplica.isExhausted(1, 0)
+			maxAttempt := 1
+			if selectReplica.dataIsNotReady {
+				maxAttempt = 2
+			}
+			return selectReplica.store.IsLabelsMatch(state.labels) && !selectReplica.isExhausted(maxAttempt, 0)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -511,7 +516,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if selector.targetIdx < 0 {
 		// Search replica that is not attempted from the last accessed replica
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return !selectReplica.isExhausted(1, 0)
+			maxAttempt := 1
+			if selectReplica.dataIsNotReady {
+				maxAttempt = 2
+			}
+			return !selectReplica.isExhausted(maxAttempt, 0)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -2270,6 +2279,11 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx),
 		)
+		if s.replicaSelector != nil {
+			if target := s.replicaSelector.targetReplica(); target != nil {
+				target.dataIsNotReady = true
+			}
+		}
 		if !req.IsGlobalStaleRead() {
 			// only backoff local stale reads as global should retry immediately against the leader as a normal read
 			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
