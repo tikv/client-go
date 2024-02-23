@@ -167,12 +167,32 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 		staleRead: true,
 		timeout:   time.Second,
 		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader2Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}"}, // retry the new leader.
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
 		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderWithNewLeader2Err},
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}"},
+				"{addr: store3, replica-read: true, stale-read: false}"}, // store2 has DeadLineExceededErr, so don't retry store2 even it is new leader.
 			respErr:         "",
 			respRegionError: nil,
 			backoffCnt:      0,

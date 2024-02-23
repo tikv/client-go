@@ -413,7 +413,11 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 		selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
 		return nil, stateChanged{}
 	}
-	if !state.isCandidate(leader) {
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) {
 		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 		return nil, stateChanged{}
 	}
@@ -428,19 +432,6 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	}
 	selector.targetIdx = state.leaderIdx
 	return selector.buildRPCContext(bo)
-}
-
-// check leader is candidate or not.
-func (state *accessKnownLeader) isCandidate(leader *replica) bool {
-	liveness := leader.store.getLivenessState()
-	// If hibernate region is enabled and the leader is not reachable, the raft group
-	// will not be wakened up and re-elect the leader until the follower receives
-	// a request. So, before the new leader is elected, we should not send requests
-	// to the unreachable old leader to avoid unnecessary timeout.
-	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) || leader.deadlineErrUsingConfTimeout {
-		return false
-	}
-	return true
 }
 
 func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1209,9 +1200,10 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 				replica.attempts = maxReplicaAttempt - 1
 				replica.attemptedTime = 0
 			}
-			state := &accessKnownLeader{leaderIdx: AccessIndex(i)}
-			if state.isCandidate(s.replicas[i]) {
-				s.state = state
+			if !replica.deadlineErrUsingConfTimeout {
+				// if the new leader doesn't meet deadline exceeded error, switch to the new leader.
+				// Otherwise, keep the state unchanged and retry the request.
+				s.state = &accessKnownLeader{leaderIdx: AccessIndex(i)}
 			}
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
 			if !s.region.switchWorkLeaderToPeer(leader) {
