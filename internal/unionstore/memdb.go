@@ -86,6 +86,8 @@ type MemDB struct {
 	vlogInvalid bool
 	dirty       bool
 	stages      []MemDBCheckpoint
+	// when the MemDB is wrapper by upper RWMutex, we can skip the internal mutex.
+	skipMutex bool
 }
 
 func newMemDB() *MemDB {
@@ -96,6 +98,7 @@ func newMemDB() *MemDB {
 	db.entrySizeLimit = math.MaxUint64
 	db.bufferSizeLimit = math.MaxUint64
 	db.vlog.memdb = db
+	db.skipMutex = false
 	return db
 }
 
@@ -103,8 +106,10 @@ func newMemDB() *MemDB {
 // Subsequent writes will be temporarily stored in this new staging buffer.
 // When you think all modifications looks good, you can call `Release` to public all of them to the upper level buffer.
 func (db *MemDB) Staging() int {
-	db.Lock()
-	defer db.Unlock()
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
 
 	db.stages = append(db.stages, db.vlog.checkpoint())
 	return len(db.stages)
@@ -112,8 +117,10 @@ func (db *MemDB) Staging() int {
 
 // Release publish all modifications in the latest staging buffer to upper level.
 func (db *MemDB) Release(h int) {
-	db.Lock()
-	defer db.Unlock()
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
 
 	if h != len(db.stages) {
 		// This should never happens in production environment.
@@ -133,8 +140,10 @@ func (db *MemDB) Release(h int) {
 // Cleanup cleanup the resources referenced by the StagingHandle.
 // If the changes are not published by `Release`, they will be discarded.
 func (db *MemDB) Cleanup(h int) {
-	db.Lock()
-	defer db.Unlock()
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
 
 	if h > len(db.stages) {
 		return
@@ -311,8 +320,10 @@ func (db *MemDB) Dirty() bool {
 }
 
 func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
-	db.Lock()
-	defer db.Unlock()
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
 
 	if db.vlogInvalid {
 		// panic for easier debugging.
@@ -876,4 +887,14 @@ func (db *MemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
 // Mem returns the current memory footprint
 func (db *MemDB) Mem() uint64 {
 	return db.allocator.capacity + db.vlog.capacity
+}
+
+// SetEntrySizeLimit sets the size limit for each entry and total buffer.
+func (db *MemDB) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
+	db.entrySizeLimit = entryLimit
+	db.bufferSizeLimit = bufferLimit
+}
+
+func (db *MemDB) setSkipMutex(skip bool) {
+	db.skipMutex = skip
 }

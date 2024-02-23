@@ -195,6 +195,11 @@ type twoPhaseCommitter struct {
 	isInternal bool
 
 	forUpdateTSConstraints map[string]uint64
+
+	pipelinedCommitInfo struct {
+		primaryOp                    kvrpcpb.Op
+		pipelinedStart, pipelinedEnd []byte
+	}
 }
 
 type memBufferMutations struct {
@@ -461,7 +466,7 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
 func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
-	return &twoPhaseCommitter{
+	committer := &twoPhaseCommitter{
 		store:             txn.store,
 		txn:               txn,
 		startTS:           txn.StartTS(),
@@ -471,7 +476,8 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		binlog:            txn.binlog,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		resourceGroupName: txn.resourceGroupName,
-	}, nil
+	}
+	return committer, nil
 }
 
 func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error {
@@ -543,7 +549,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	var size, putCnt, delCnt, lockCnt, checkCnt int
 
 	txn := c.txn
-	memBuf := txn.GetMemBuffer()
+	memBuf := txn.GetMemBuffer().GetMemDB()
 	sizeHint := txn.us.GetMemBuffer().Len()
 	c.mutations = newMemBufferMutations(sizeHint, memBuf)
 	c.isPessimistic = txn.IsPessimistic()
@@ -920,7 +926,9 @@ const CommitSecondaryMaxBackoff = 41000
 // doActionOnGroupedMutations splits groups into batches (there is one group per region, and potentially many batches per group, but all mutations
 // in a batch will belong to the same region).
 func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action twoPhaseCommitAction, groups []groupedMutations) error {
-	action.tiKVTxnRegionsNumHistogram().Observe(float64(len(groups)))
+	if histogram := action.tiKVTxnRegionsNumHistogram(); histogram != nil {
+		histogram.Observe(float64(len(groups)))
+	}
 
 	var sizeFunc = c.keySize
 
@@ -1387,7 +1395,9 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 
 		cleanupKeysCtx := context.WithValue(c.store.Ctx(), retry.TxnStartKey, ctx.Value(retry.TxnStartKey))
 		var err error
-		if !c.isOnePC() {
+		if c.txn.IsPipelined() {
+			// TODO: cleanup pipelined txn
+		} else if !c.isOnePC() {
 			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
 		} else if c.isPessimistic {
 			err = c.pessimisticRollbackMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
@@ -1460,23 +1470,25 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	commitDetail := c.getDetail()
 	commitTSMayBeCalculated := false
-	// Check async commit is available or not.
-	if c.checkAsyncCommit() {
-		commitTSMayBeCalculated = true
-		c.setAsyncCommit(true)
-		c.hasTriedAsyncCommit = true
-	}
-	// Check if 1PC is enabled.
-	if c.checkOnePC() {
-		commitTSMayBeCalculated = true
-		c.setOnePC(true)
-		c.hasTriedOnePC = true
+	if !c.txn.isPipelined {
+		// Check async commit is available or not.
+		if c.checkAsyncCommit() {
+			commitTSMayBeCalculated = true
+			c.setAsyncCommit(true)
+			c.hasTriedAsyncCommit = true
+		}
+		// Check if 1PC is enabled.
+		if c.checkOnePC() {
+			commitTSMayBeCalculated = true
+			c.setOnePC(true)
+			c.hasTriedOnePC = true
+		}
 	}
 
 	// if lazy uniqueness check is enabled in TiDB (@@constraint_check_in_place_pessimistic=0), for_update_ts might be
 	// zero for a pessimistic transaction. We set it to the start_ts to force the PrewritePessimistic path in TiKV.
 	// TODO: can we simply set for_update_ts = start_ts for all pessimistic transactions whose for_update_ts=0?
-	if c.forUpdateTS == 0 {
+	if c.forUpdateTS == 0 && !c.txn.isPipelined {
 		for i := 0; i < c.mutations.Len(); i++ {
 			if c.mutations.NeedConstraintCheckInPrewrite(i) {
 				c.forUpdateTS = c.startTS
@@ -1526,6 +1538,20 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	var binlogChan <-chan BinlogWriteResult
 	if c.shouldWriteBinlog() {
 		binlogChan = c.binlog.Prewrite(ctx, c.primary())
+	}
+
+	if c.txn.IsPipelined() {
+		if _, err = c.txn.GetMemBuffer().Flush(true); err != nil {
+			return err
+		}
+		if err = c.txn.GetMemBuffer().FlushWait(); err != nil {
+			return err
+		}
+		if len(c.pipelinedCommitInfo.pipelinedStart) == 0 || len(c.pipelinedCommitInfo.pipelinedEnd) == 0 {
+			return errors.Errorf("unexpected empty pipelinedStart(%s) or pipelinedEnd(%s)",
+				c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
+		}
+		return c.commitFlushedMutations(bo)
 	}
 
 	start := time.Now()
@@ -1719,7 +1745,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 }
 
 func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.CommitDetails) error {
-	c.txn.GetMemBuffer().DiscardValues()
+	c.txn.GetMemBuffer().GetMemDB().DiscardValues()
 	start := time.Now()
 
 	// Use the VeryLongMaxBackoff to commit the primary key.

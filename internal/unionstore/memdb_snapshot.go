@@ -35,6 +35,8 @@
 package unionstore
 
 import (
+	"context"
+
 	tikverr "github.com/tikv/client-go/v2/error"
 )
 
@@ -87,7 +89,7 @@ type memdbSnapGetter struct {
 	cp MemDBCheckpoint
 }
 
-func (snap *memdbSnapGetter) Get(key []byte) ([]byte, error) {
+func (snap *memdbSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
 	x := snap.db.traverse(key, false)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
