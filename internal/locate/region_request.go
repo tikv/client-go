@@ -73,6 +73,9 @@ import (
 // network error because tidb-server expect tikv client to exit as soon as possible.
 var shuttingDown uint32
 
+// randIntn is only use for testing.
+var randIntn = rand.Intn
+
 // StoreShuttingDown atomically stores ShuttingDown into v.
 func StoreShuttingDown(v uint32) {
 	atomic.StoreUint32(&shuttingDown, v)
@@ -612,7 +615,7 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 	}
 
 	// Skip advanceCnt valid candidates to find a proxy peer randomly
-	advanceCnt := rand.Intn(candidateNum)
+	advanceCnt := randIntn(candidateNum)
 	for idx, replica := range selector.replicas {
 		if !state.isCandidate(AccessIndex(idx), replica) {
 			continue
@@ -668,13 +671,13 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	resetStaleRead := false
 	if state.lastIdx < 0 {
 		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
+			state.lastIdx = AccessIndex(randIntn(replicaSize))
 		} else {
 			if replicaSize <= 1 {
 				state.lastIdx = state.leaderIdx
 			} else {
 				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(replicaSize - 1))
+				state.lastIdx = AccessIndex(randIntn(replicaSize - 1))
 				if state.lastIdx >= state.leaderIdx {
 					state.lastIdx++
 				}
@@ -696,7 +699,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	var offset int
 	if state.lastIdx >= 0 {
-		offset = rand.Intn(replicaSize)
+		offset = randIntn(replicaSize)
 	}
 	reloadRegion := false
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
@@ -791,16 +794,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 }
 
 func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
-	// Allow another extra retry for the following case:
-	// 1. The stale read is enabled and leader peer is selected as the target peer at first.
-	// 2. Data is not ready is returned from the leader peer.
-	// 3. Stale read flag is removed and processing falls back to snapshot read on the leader peer.
-	// 4. The leader peer should be retried again using snapshot read.
-	if state.isStaleRead && state.option.leaderOnly {
-		return leader.isExhausted(2, 0)
-	} else {
-		return leader.isExhausted(1, 0)
-	}
+	return leader.isExhausted(1, 0)
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -845,7 +839,7 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 	// Select a follower replica that has the lowest estimated wait duration
 	minWait := time.Duration(math.MaxInt64)
 	targetIdx := state.leaderIdx
-	startIdx := rand.Intn(len(selector.replicas))
+	startIdx := randIntn(len(selector.replicas))
 	for i := 0; i < len(selector.replicas); i++ {
 		idx := (i + startIdx) % len(selector.replicas)
 		r := selector.replicas[idx]
