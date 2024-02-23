@@ -567,12 +567,12 @@ func (r *bgRunner) run(f func(context.Context)) {
 
 // schedule calls `f` every `interval`.
 func (r *bgRunner) schedule(f func(context.Context, time.Time) bool, interval time.Duration) {
-	if r.closed() {
+	if r.closed() || interval <= 0 {
 		return
 	}
-	ticker := time.NewTicker(interval)
 	r.wg.Add(1)
 	go func() {
+		ticker := time.NewTicker(interval)
 		defer func() {
 			r.wg.Done()
 			ticker.Stop()
@@ -592,12 +592,12 @@ func (r *bgRunner) schedule(f func(context.Context, time.Time) bool, interval ti
 
 // scheduleWithTrigger likes schedule, but also call `f` when `<-trigger`, in which case the time arg of `f` is zero.
 func (r *bgRunner) scheduleWithTrigger(f func(context.Context, time.Time) bool, interval time.Duration, trigger <-chan struct{}) {
-	if r.closed() {
+	if r.closed() || interval <= 0 {
 		return
 	}
-	ticker := time.NewTicker(interval)
 	r.wg.Add(1)
 	go func() {
+		ticker := time.NewTicker(interval)
 		defer func() {
 			r.wg.Done()
 			ticker.Stop()
