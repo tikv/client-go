@@ -2253,8 +2253,8 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 const cleanCacheInterval = time.Second
 const cleanRegionNumPerRound = 50
 
-// gcScanItemHookKey is only used for testing
-type gcScanItemHookKey struct{}
+// gcScanItemHook is only used for testing
+var gcScanItemHook = new(atomic.Pointer[func(*btreeItem)])
 
 // The returned function is expected to run in a background goroutine.
 // It keeps iterating over the whole region cache, searching for stale region
@@ -2270,11 +2270,11 @@ func (c *RegionCache) gcRoundFunc(limit int) func(context.Context, time.Time) bo
 	expiredItems := make([]*btreeItem, limit)
 	needCheckRegions := make([]*Region, limit)
 
-	return func(ctx context.Context, t time.Time) bool {
+	return func(_ context.Context, t time.Time) bool {
 		expiredItems = expiredItems[:0]
 		needCheckRegions = needCheckRegions[:0]
 		hasMore, count, ts := false, 0, t.Unix()
-		onScanItem := ctx.Value(gcScanItemHookKey{})
+		onScanItem := gcScanItemHook.Load()
 
 		// Only RLock when checking TTL to avoid blocking other readers
 		c.mu.RLock()
@@ -2286,7 +2286,7 @@ func (c *RegionCache) gcRoundFunc(limit int) func(context.Context, time.Time) bo
 				return false
 			}
 			if onScanItem != nil {
-				onScanItem.(func(*btreeItem))(item)
+				(*onScanItem)(item)
 			}
 			if item.cachedRegion.isCacheTTLExpired(ts) {
 				expiredItems = append(expiredItems, item)
