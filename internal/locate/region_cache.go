@@ -614,9 +614,7 @@ func (r *bgRunner) scheduleWithTrigger(f func(context.Context, time.Time) bool, 
 			case _, ok := <-trigger:
 				if !ok {
 					triggerEnabled = false
-					break
-				}
-				if f(r.ctx, time.Time{}) {
+				} else if f(r.ctx, time.Time{}) {
 					return
 				}
 			}
