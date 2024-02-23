@@ -99,6 +99,7 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, cause by no replica is available.
 	var ca replicaSelectorAccessPathCase
 	ca = replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
@@ -258,6 +259,26 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 			backoffCnt:      1,
 			backoffDetail:   []string{"tikvRPC+1"},
 			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		staleRead: false,
+		timeout:   time.Second,
+		accessErr: []RegionErrorType{NotLeaderErr, DeadLineExceededErr, NotLeaderWithNewLeader2Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"regionScheduling+1"},
+			regionIsValid:   false,
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
