@@ -726,10 +726,6 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			WithLeaderOnly()(&state.option)
 			// retry on the leader should not use stale read flag to avoid possible DataIsNotReady error as it always can serve any read.
 			resetStaleRead = true
-		} else {
-			// label is only used for the first time, remove it when retry.
-			// stale read will need the label to retry, so keep it.
-			state.option.labels = nil
 		}
 		state.lastIdx++
 	}
@@ -799,7 +795,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
 			// If leader tried and received deadline exceeded error, try follower.
-			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
+			if state.isStaleRead || leader.deadlineErrUsingConfTimeout || len(state.option.labels) > 0 {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
