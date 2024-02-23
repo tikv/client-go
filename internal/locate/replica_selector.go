@@ -182,9 +182,16 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 			return
 		}
 	}
+	preferLeader := req.ReplicaReadType == kv.ReplicaReadPreferLeader
+	if s.attempts > 1 {
+		if req.ReplicaReadType == kv.ReplicaReadMixed {
+			// For mixed read retry, prefer retry leader first.
+			preferLeader = true
+		}
+	}
 	strategy := ReplicaSelectMixedStrategy{
 		tryLeader:    req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader,
-		preferLeader: req.ReplicaReadType == kv.ReplicaReadPreferLeader,
+		preferLeader: preferLeader,
 		leaderOnly:   s.option.leaderOnly,
 		learnerOnly:  req.ReplicaReadType == kv.ReplicaReadLearner,
 		labels:       s.option.labels,
