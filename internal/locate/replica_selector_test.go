@@ -2922,6 +2922,26 @@ func TestReplicaSelectorAccessPathByCase(t *testing.T) {
 	}
 	s.True(s.runCaseAndCompare(ca))
 	s.changeRegionLeader(1)
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		staleRead: false,
+		timeout:   time.Second,
+		accessErr: []RegionErrorType{NotLeaderErr, DeadLineExceededErr, NotLeaderWithNewLeader2Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"regionScheduling+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
 }
 
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
@@ -3167,9 +3187,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 				// mark this case is invalid. just ignore this case.
 				ca.accessErrInValid = true
 			} else {
-				loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-				s.Nil(err)
-				rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+				rc := s.getRegion()
 				s.NotNil(rc)
 				regionErr, err := ca.genAccessErr(s.cache, rc, ca.accessErr[idx])
 				if regionErr != nil {
@@ -3211,9 +3229,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
 	}
 	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
-	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-	s.Nil(err)
-	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+	rc := s.getRegion()
 	s.NotNil(rc)
 	for _, store := range rc.getStore().stores {
 		store.slowScore.resetSlowScore()
@@ -3226,7 +3242,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	if timeout == 0 {
 		timeout = client.ReadTimeoutShort
 	}
-	resp, _, _, err := sender.SendReqCtx(bo, req, loc.Region, timeout, tikvrpc.TiKV, opts...)
+	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
 	if err == nil {
 		s.NotNil(resp, msg)
 		regionErr, err := resp.GetRegionError()
@@ -3245,6 +3261,20 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	ca.backoffDetail = detail
 	ca.regionIsValid = sender.replicaSelector.getBaseReplicaSelector().region.isValid()
 	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
+}
+
+func (s *testReplicaSelectorSuite) getRegion() *Region {
+	for i := 0; i < 100; i++ {
+		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+		s.Nil(err)
+		rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+		if rc == nil {
+			time.Sleep(time.Millisecond * 10)
+			continue
+		}
+		return rc
+	}
+	return nil
 }
 
 func (ca *replicaSelectorAccessPathCase) genAccessErr(regionCache *RegionCache, r *Region, accessErr RegionErrorType) (regionErr *errorpb.Error, err error) {
