@@ -2460,6 +2460,29 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 	}
 	s.True(s.runCaseAndCompare(ca))
 
+	s.changeRegionLeader(2)
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: false, stale-read: false}", // try leader with leader read.
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+	s.changeRegionLeader(1)
+
 	ca = replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
@@ -2855,6 +2878,19 @@ func TestReplicaSelectorAccessPathByCase(t *testing.T) {
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
+}
+
+func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+	for _, peer := range rc.meta.Peers {
+		if peer.StoreId == storeId {
+			s.cluster.ChangeLeader(rc.meta.Id, peer.Id)
+		}
+	}
+	// Invalidate region cache to reload.
+	s.cache.InvalidateCachedRegion(loc.Region)
 }
 
 func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPathCase) bool {

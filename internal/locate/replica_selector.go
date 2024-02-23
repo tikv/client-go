@@ -364,6 +364,10 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 		score += scoreOfNotSlow
 		//fmt.Printf("store %v is not slow ------\n", r.store.storeID)
 	}
+	if score > 0 && r.attempts > 0 {
+		// if the replica already tried, decrease the score.
+		score = score - 1
+	}
 	return score
 }
 
