@@ -1952,6 +1952,18 @@ func (s *testRegionCacheSuite) TestBackgroundCacheGC() {
 	loadRegionsToCache(s.cache, regionCnt)
 	s.checkCache(regionCnt)
 
+	regionScanCount := make(map[uint64]int)
+	s.cache.bg.ctx = context.WithValue(s.cache.bg.ctx, gcScanItemHookKey{}, func(item *btreeItem) {
+		regionScanCount[item.cachedRegion.GetID()]++
+	})
+
+	// Check that region items are scanned uniformly.
+	time.Sleep(cleanCacheInterval*time.Duration(2*regionCnt/cleanRegionNumPerRound) + cleanCacheInterval/2)
+	s.Equal(regionCnt, len(regionScanCount))
+	for _, count := range regionScanCount {
+		s.Equal(2, count)
+	}
+
 	// Make parts of the regions stale
 	remaining := 0
 	s.cache.mu.Lock()

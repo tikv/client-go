@@ -698,10 +698,12 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		needCheckStores      []*Store
 	)
 	c.bg.scheduleWithTrigger(func(ctx context.Context, t time.Time) bool {
+		// check and resolve normal stores periodically by default.
 		filter := func(state resolveState) bool {
 			return state != unresolved && state != tombstone && state != deleted
 		}
 		if t.IsZero() {
+			// check and resolve needCheck stores because it's triggered by a CheckStoreEvent this time.
 			filter = func(state resolveState) bool { return state == needCheck }
 		}
 		needCheckStores = c.checkAndResolve(needCheckStores[:0], func(s *Store) bool { return filter(s.getResolveState()) })
@@ -2251,6 +2253,9 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 const cleanCacheInterval = time.Second
 const cleanRegionNumPerRound = 50
 
+// gcScanItemHookKey is only used for testing
+type gcScanItemHookKey struct{}
+
 // The returned function is expected to run in a background goroutine.
 // It keeps iterating over the whole region cache, searching for stale region
 // info. It runs at cleanCacheInterval and checks only cleanRegionNumPerRound
@@ -2265,10 +2270,11 @@ func (c *RegionCache) gcRoundFunc(limit int) func(context.Context, time.Time) bo
 	expiredItems := make([]*btreeItem, limit)
 	needCheckRegions := make([]*Region, limit)
 
-	return func(_ context.Context, t time.Time) bool {
+	return func(ctx context.Context, t time.Time) bool {
 		expiredItems = expiredItems[:0]
 		needCheckRegions = needCheckRegions[:0]
-		count, ts := 0, t.Unix()
+		hasMore, count, ts := false, 0, t.Unix()
+		onScanItem := ctx.Value(gcScanItemHookKey{})
 
 		// Only RLock when checking TTL to avoid blocking other readers
 		c.mu.RLock()
@@ -2276,7 +2282,11 @@ func (c *RegionCache) gcRoundFunc(limit int) func(context.Context, time.Time) bo
 			count++
 			if count > limit {
 				cursor = item
+				hasMore = true
 				return false
+			}
+			if onScanItem != nil {
+				onScanItem.(func(*btreeItem))(item)
 			}
 			if item.cachedRegion.isCacheTTLExpired(ts) {
 				expiredItems = append(expiredItems, item)
@@ -2288,7 +2298,7 @@ func (c *RegionCache) gcRoundFunc(limit int) func(context.Context, time.Time) bo
 		c.mu.RUnlock()
 
 		// Reach the end of the region cache, start from the beginning
-		if count < limit {
+		if !hasMore {
 			cursor = beginning
 		}
 
