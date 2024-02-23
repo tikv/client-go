@@ -2843,6 +2843,9 @@ func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoff
 				reResolveInterval = dur
 			}
 		}
+		if _, err := util.EvalFailpoint("skipStoreCheckUntilHealth"); err == nil {
+			return
+		}
 		go s.checkUntilHealth(c, liveness, reResolveInterval)
 	}
 	return

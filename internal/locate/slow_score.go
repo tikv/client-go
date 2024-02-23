@@ -153,6 +153,11 @@ func (ss *SlowScoreStat) markAlreadySlow() {
 	atomic.StoreUint64(&ss.avgScore, slowScoreMax)
 }
 
+// resetSlowScore resets the slow score to 0. It's used for test.
+func (ss *SlowScoreStat) resetSlowScore() {
+	atomic.StoreUint64(&ss.avgScore, 0)
+}
+
 func (ss *SlowScoreStat) isSlow() bool {
 	return ss.getSlowScore() >= slowScoreThreshold
 }
