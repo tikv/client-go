@@ -160,8 +160,28 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
-}
 
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderWithNewLeader2Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
 func (s *testReplicaSelectorSuite) runCaseAndCompare(ca2 replicaSelectorAccessPathCase) bool {
 	ca2.run(s)
 	if ca2.accessErrInValid {
