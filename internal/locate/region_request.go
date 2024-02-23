@@ -1210,10 +1210,11 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 				replica.attempts = maxReplicaAttempt - 1
 				replica.attemptedTime = 0
 			}
-			if !replica.deadlineErrUsingConfTimeout {
-				// if the new leader doesn't meet deadline exceeded error, switch to the new leader.
-				// Otherwise, keep the state unchanged and retry the request.
-				s.state = &accessKnownLeader{leaderIdx: AccessIndex(i)}
+			state := &accessKnownLeader{leaderIdx: AccessIndex(i)}
+			if state.isCandidate(s.replicas[i]) {
+				// If the new leader is candidate, switch to the new leader.
+				// the leader may have deadlineErrUsingConfTimeout and isn't candidate, if so, keep the state unchanged and retry the request.
+				s.state = state
 			}
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
 			if !s.region.switchWorkLeaderToPeer(leader) {
