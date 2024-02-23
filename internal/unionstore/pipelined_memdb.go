@@ -72,6 +72,7 @@ type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]by
 
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := newMemDB()
+	memdb.setSkipMutex(true)
 	return &PipelinedMemDB{
 		memDB:             memdb,
 		errCh:             make(chan error, 1),
@@ -149,21 +150,29 @@ func (p *PipelinedMemDB) UpdateFlags(k []byte, ops ...kv.FlagsOp) {
 
 // Set sets the value for key k in the MemBuffer.
 func (p *PipelinedMemDB) Set(key, value []byte) error {
+	p.Lock()
+	defer p.Unlock()
 	return p.memDB.Set(key, value)
 }
 
 // SetWithFlags sets the value for key k in the MemBuffer with flags.
 func (p *PipelinedMemDB) SetWithFlags(key, value []byte, ops ...kv.FlagsOp) error {
+	p.Lock()
+	defer p.Unlock()
 	return p.memDB.SetWithFlags(key, value, ops...)
 }
 
 // Delete deletes the key k in the MemBuffer.
 func (p *PipelinedMemDB) Delete(key []byte) error {
+	p.Lock()
+	defer p.Unlock()
 	return p.memDB.Delete(key)
 }
 
 // DeleteWithFlags deletes the key k in the MemBuffer with flags.
 func (p *PipelinedMemDB) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
+	p.Lock()
+	defer p.Unlock()
 	return p.memDB.DeleteWithFlags(key, ops...)
 }
 
@@ -189,6 +198,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.size += p.flushingMemDB.Size()
 	p.memDB = newMemDB()
 	p.memDB.SetEntrySizeLimit(p.entryLimit, p.bufferLimit)
+	p.memDB.setSkipMutex(true)
 	p.generation++
 	go func(generation uint64) {
 		util.EvalFailpoint("beforePipelinedFlush")
