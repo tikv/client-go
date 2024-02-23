@@ -50,7 +50,7 @@ func (s SnapshotProbe) FormatStats() string {
 
 // BatchGetSingleRegion gets a batch of keys from a region.
 func (s SnapshotProbe) BatchGetSingleRegion(bo *retry.Backoffer, region locate.RegionVerID, keys [][]byte, collectF func(k, v []byte)) error {
-	return s.batchGetSingleRegion(bo, batchKeys{region: region, keys: keys}, collectF)
+	return s.batchGetSingleRegion(bo, batchKeys{region: region, keys: keys}, BatchGetSnapshotTier, collectF)
 }
 
 // NewScanner returns a scanner to iterate given key range.

@@ -221,6 +221,10 @@ func (cd *CommitDetails) MergeCommitReqDetails(reqDuration time.Duration, region
 	}
 }
 
+func (cd *CommitDetails) MergeFlushReqDetails(reqDuration time.Duration, regionID uint64, addr string, execDetails *kvrpcpb.ExecDetailsV2) {
+	// leave it empty for now
+}
+
 // Clone returns a deep copy of itself.
 func (cd *CommitDetails) Clone() *CommitDetails {
 	commit := &CommitDetails{
