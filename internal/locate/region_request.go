@@ -766,7 +766,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
 			// If leader tried and received deadline exceeded error, try follower.
-			// If has labels, some followers's labels may not match, then can't be candidate, need to try follower.
+			// If labels are used, some followers would be filtered by the labels and can't be candidates, they still need to be retried.
 			if state.isStaleRead || leader.deadlineErrUsingConfTimeout || len(state.option.labels) > 0 {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
