@@ -3252,7 +3252,6 @@ func (c *RegionCache) checkAndUpdateStoreHealthStats() {
 		store.healthStatus.update(now)
 		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
 	})
-	logutil.BgLogger().Info("checkAndUpdateStoreHealthStats: get health details", zap.Reflect("details", healthDetails))
 	for store, details := range healthDetails {
 		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.ClientSideSlowScore))
 		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.TiKVSideSlowScore))
