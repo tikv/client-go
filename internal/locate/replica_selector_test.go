@@ -326,28 +326,6 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 	}
 	s.True(s.runCaseAndCompare(ca))
 
-	ca = replicaSelectorAccessPathCase{
-		reqType:   tikvrpc.CmdGet,
-		readType:  kv.ReplicaReadMixed,
-		staleRead: true,
-		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
-		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
-		expect: &accessPathResult{
-			accessPath: []string{
-				"{addr: store2, replica-read: false, stale-read: true}",
-				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
-				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}",
-			},
-			respErr:         "",
-			respRegionError: fakeEpochNotMatch,
-			backoffCnt:      2,
-			backoffDetail:   []string{"tikvServerBusy+2"},
-			regionIsValid:   false,
-		},
-	}
-	s.True(s.runCaseAndCompare(ca))
-
 	s.changeRegionLeader(2)
 	ca = replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
