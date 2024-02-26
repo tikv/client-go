@@ -113,7 +113,9 @@ type Client interface {
 	SetEventListener(listener ClientEventListener)
 }
 
+// ClientEventListener is a listener to handle events produced by `Client`.
 type ClientEventListener interface {
+	// OnHealthFeedback is called when `Client` receives a response that carries the HealthFeedback information.
 	OnHealthFeedback(feedback *tikvpb.HealthFeedback)
 }
 
