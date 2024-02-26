@@ -94,7 +94,7 @@ type accessPathResult struct {
 	regionIsValid   bool
 }
 
-func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
+func TestReplicaReadAccessPathByCase(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -348,6 +348,27 @@ func TestReplicaReadStaleReadAccessPathByCase(t *testing.T) {
 	}
 	s.True(s.runCaseAndCompare(ca))
 	s.changeRegionLeader(1)
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
 }
 
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
