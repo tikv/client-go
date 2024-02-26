@@ -50,6 +50,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -1927,6 +1928,123 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	s.Eventually(func() bool {
 		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
+}
+
+func (s *testRegionCacheSuite) TestTiKVSideSlowScore() {
+	stats := newStoreHealthStatus()
+	s.LessOrEqual(stats.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
+	now := time.Now()
+	stats.update(now)
+	s.LessOrEqual(stats.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
+	s.False(stats.tikvSideSlowScore.hasTiKVFeedback.Load())
+	s.False(stats.IsSlow())
+
+	now = now.Add(tikvSlowScoreUpdateInterval * 2)
+	stats.updateTiKVServerSideSlowScore(50, now)
+	s.Equal(int64(50), stats.GetHealthStatusDetail().TiKVSideSlowScore)
+	s.True(stats.tikvSideSlowScore.hasTiKVFeedback.Load())
+	s.False(stats.IsSlow())
+
+	now = now.Add(tikvSlowScoreUpdateInterval * 2)
+	stats.updateTiKVServerSideSlowScore(100, now)
+	s.Equal(int64(100), stats.GetHealthStatusDetail().TiKVSideSlowScore)
+	s.True(stats.IsSlow())
+
+	now = now.Add(time.Minute * 2)
+	stats.update(now)
+	s.Equal(int64(60), stats.GetHealthStatusDetail().TiKVSideSlowScore)
+	s.False(stats.IsSlow())
+
+	now = now.Add(time.Minute * 3)
+	stats.update(now)
+	s.Equal(int64(1), stats.GetHealthStatusDetail().TiKVSideSlowScore)
+	s.False(stats.IsSlow())
+
+	now = now.Add(time.Minute)
+	stats.update(now)
+	s.Equal(int64(1), stats.GetHealthStatusDetail().TiKVSideSlowScore)
+	s.False(stats.IsSlow())
+}
+
+func (s *testRegionCacheSuite) TestStoreHealthStatus() {
+	stats := newStoreHealthStatus()
+	now := time.Now()
+	s.False(stats.IsSlow())
+
+	for !stats.clientSideSlowScore.isSlow() {
+		stats.clientSideSlowScore.recordSlowScoreStat(time.Minute)
+	}
+	stats.update(now)
+	s.True(stats.IsSlow())
+	s.Equal(int64(stats.clientSideSlowScore.getSlowScore()), stats.GetHealthStatusDetail().ClientSideSlowScore)
+
+	now = now.Add(time.Second)
+	stats.updateTiKVServerSideSlowScore(100, now)
+	s.True(stats.IsSlow())
+	s.Equal(int64(100), stats.GetHealthStatusDetail().TiKVSideSlowScore)
+
+	for stats.clientSideSlowScore.isSlow() {
+		stats.clientSideSlowScore.recordSlowScoreStat(time.Millisecond)
+		stats.update(now)
+	}
+	s.True(stats.IsSlow())
+	s.Equal(int64(stats.clientSideSlowScore.getSlowScore()), stats.GetHealthStatusDetail().ClientSideSlowScore)
+
+	now = now.Add(time.Second)
+	stats.updateTiKVServerSideSlowScore(1, now)
+	s.False(stats.IsSlow())
+}
+
+func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
+	_, err := s.cache.LocateKey(s.bo, []byte("k"))
+	s.Nil(err)
+
+	store1, exists := s.cache.getStore(s.store1)
+	s.True(exists)
+	s.False(store1.healthStatus.IsSlow())
+
+	feedbackMsg := &tikvpb.HealthFeedback{
+		StoreId:       s.store1,
+		FeedbackSeqNo: 1,
+		SlowScore:     100,
+	}
+	s.cache.onHealthFeedback(feedbackMsg)
+	s.True(store1.healthStatus.IsSlow())
+	s.Equal(int64(100), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
+
+	feedbackMsg = &tikvpb.HealthFeedback{
+		StoreId:       s.store1,
+		FeedbackSeqNo: 2,
+		SlowScore:     90,
+	}
+	// Ignore too frequent update
+	s.cache.onHealthFeedback(feedbackMsg)
+	s.Equal(int64(100), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
+
+	feedbackMsg = &tikvpb.HealthFeedback{
+		StoreId:       s.store1,
+		FeedbackSeqNo: 3,
+		SlowScore:     90,
+	}
+	store1.healthStatus.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Second))
+	s.cache.onHealthFeedback(feedbackMsg)
+	s.Equal(int64(90), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
+
+	feedbackMsg = &tikvpb.HealthFeedback{
+		StoreId:       s.store1,
+		FeedbackSeqNo: 4,
+		SlowScore:     50,
+	}
+	store1.healthStatus.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Second))
+	s.cache.onHealthFeedback(feedbackMsg)
+	s.False(store1.healthStatus.IsSlow())
+	s.Equal(int64(50), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
+
+	store2, exists := s.cache.getStore(s.store2)
+	s.True(exists)
+	// Store 2 is never affected by updating store 1
+	s.LessOrEqual(store2.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
+	s.False(store2.healthStatus.IsSlow())
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {

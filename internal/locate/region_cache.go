@@ -2510,7 +2510,6 @@ type StoreHealthStatus struct {
 	clientSideSlowScore SlowScoreStat
 
 	tikvSideSlowScore struct {
-		// Assuming the type `Store` is always used in heap instead of in stack
 		sync.Mutex
 
 		// These atomic fields should be read with atomic operations and written with the mutex.
@@ -2526,6 +2525,10 @@ type HealthStatusDetail struct {
 	TiKVSideSlowScore   int64
 }
 
+func newStoreHealthStatus() *StoreHealthStatus {
+	return &StoreHealthStatus{}
+}
+
 // IsSlow returns whether current Store is slow or not.
 func (s *StoreHealthStatus) IsSlow() bool {
 	return s.isSlow.Load()
@@ -2539,26 +2542,28 @@ func (s *StoreHealthStatus) GetHealthStatusDetail() HealthStatusDetail {
 }
 
 // update updates the slow score of this store according to the timecost of current request.
-func (s *StoreHealthStatus) update() {
+func (s *StoreHealthStatus) update(now time.Time) {
 	s.clientSideSlowScore.updateSlowScore()
-	s.updateTiKVServerSideSlowScoreOnTick()
+	s.updateTiKVServerSideSlowScoreOnTick(now)
+	s.updateSlowFlag()
 }
 
 // recordClientSideSlowScoreStat records timecost of each request.
 func (s *StoreHealthStatus) recordClientSideSlowScoreStat(timecost time.Duration) {
 	s.clientSideSlowScore.recordSlowScoreStat(timecost)
+	s.updateSlowFlag()
 }
 
 // markAlreadySlow marks the related store already slow.
 func (s *StoreHealthStatus) markAlreadySlow() {
 	s.clientSideSlowScore.markAlreadySlow()
+	s.updateSlowFlag()
 }
 
-func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick() {
+func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {
 	if !s.tikvSideSlowScore.hasTiKVFeedback.Load() {
 		return
 	}
-	now := time.Now()
 	lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
 	if lastUpdateTime == nil || now.Sub(*lastUpdateTime) < tikvSlowScoreUpdateFromPDInterval {
 		return
@@ -2577,7 +2582,8 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick() {
 		return
 	}
 
-	// TODO: Try to get store status from PD.
+	// TODO: Try to get store status from PD here. But it's not mandatory.
+	//       Don't forget to update tests if getting slow score from PD is implemented here.
 
 	// If updating from PD is not successful: decay the slow score.
 	score := s.tikvSideSlowScore.score.Load()
@@ -2594,6 +2600,7 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick() {
 }
 
 func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime time.Time) {
+	defer s.updateSlowFlag()
 	s.tikvSideSlowScore.hasTiKVFeedback.Store(true)
 
 	lastScore := s.tikvSideSlowScore.score.Load()
@@ -2633,6 +2640,14 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 func (s *StoreHealthStatus) updateSlowFlag() {
 	isSlow := s.clientSideSlowScore.isSlow() || s.tikvSideSlowScore.score.Load() >= tikvSlowScoreSlowThreshold
 	s.isSlow.Store(isSlow)
+}
+
+// setTiKVSlowScoreLastUpdateTimeForTest force sets last update time of TiKV server side slow score to specified value.
+// For test purpose only.
+func (s *StoreHealthStatus) setTiKVSlowScoreLastUpdateTimeForTest(lastUpdateTime time.Time) {
+	s.tikvSideSlowScore.Lock()
+	defer s.tikvSideSlowScore.Unlock()
+	s.tikvSideSlowScore.lastUpdateTime.Store(&lastUpdateTime)
 }
 
 // Store contains a kv process's address.
@@ -2720,7 +2735,7 @@ func newStore(
 		peerAddr:  peerAddr,
 		saddr:     statusAddr,
 		// Make sure healthStatus field is never null.
-		healthStatus: &StoreHealthStatus{},
+		healthStatus: newStoreHealthStatus(),
 	}
 }
 
@@ -2729,7 +2744,7 @@ func newUninitializedStore(id uint64) *Store {
 	return &Store{
 		storeID: id,
 		// Make sure healthStatus field is never null.
-		healthStatus: &StoreHealthStatus{},
+		healthStatus: newStoreHealthStatus(),
 	}
 }
 
@@ -3232,8 +3247,9 @@ func (c *RegionCache) checkAndUpdateStoreHealthStats() {
 		}
 	}()
 	healthDetails := make(map[uint64]HealthStatusDetail)
+	now := time.Now()
 	c.forEachStore(func(store *Store) {
-		store.healthStatus.update()
+		store.healthStatus.update(now)
 		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
 	})
 	logutil.BgLogger().Info("checkAndUpdateStoreHealthStats: get health details", zap.Reflect("details", healthDetails))
