@@ -425,6 +425,17 @@ func TestCanSkipServerIsBusyBackoff(t *testing.T) {
 	skip := selector.canSkipServerIsBusyBackoff()
 	s.False(skip) // can't skip since no replica is available.
 	refreshLivenessStates(selector.regionStore)
+	skip = selector.canSkipServerIsBusyBackoff()
+	s.True(skip)
+	// mock all replica's store is slow.
+	for _, replica := range selector.replicas {
+		replica.store.markAlreadySlow()
+	}
+	skip = selector.canSkipServerIsBusyBackoff()
+	s.False(skip)
+	refreshStoreScores(selector.regionStore)
+	skip = selector.canSkipServerIsBusyBackoff()
+	s.True(skip)
 
 	// Test for leader read.
 	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})

@@ -373,6 +373,12 @@ func refreshLivenessStates(regionStore *regionStore) {
 	}
 }
 
+func refreshStoreScores(regionStore *regionStore) {
+	for _, store := range regionStore.stores {
+		store.slowScore.resetSlowScore()
+	}
+}
+
 func AssertRPCCtxEqual(s *testRegionRequestToThreeStoresSuite, rpcCtx *RPCContext, target *replica, proxy *replica) {
 	s.Equal(rpcCtx.Store, target.store)
 	s.Equal(rpcCtx.Peer, target.peer)
