@@ -256,6 +256,7 @@ type replica struct {
 	attemptedTime time.Duration
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
+	dataIsNotReady              bool
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -497,7 +498,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	if len(state.labels) > 0 {
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return selectReplica.store.IsLabelsMatch(state.labels)
+			return selectReplica.store.IsLabelsMatch(state.labels) && !state.isExhausted(selectReplica)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -510,7 +511,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if selector.targetIdx < 0 {
 		// Search replica that is not attempted from the last accessed replica
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return !selectReplica.isExhausted(1, 0)
+			return !state.isExhausted(selectReplica)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -541,6 +542,14 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	staleRead := false
 	rpcCtx.contextPatcher.staleRead = &staleRead
 	return rpcCtx, nil
+}
+
+func (state *tryFollower) isExhausted(replica *replica) bool {
+	if replica.dataIsNotReady {
+		// we can retry DataIsNotReady replica by replica-read.
+		return replica.isExhausted(2, 0)
+	}
+	return replica.isExhausted(1, 0)
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
@@ -766,7 +775,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
 			// If leader tried and received deadline exceeded error, try follower.
-			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
+			// If labels are used, some followers would be filtered by the labels and can't be candidates, they still need to be retried.
+			if state.isStaleRead || leader.deadlineErrUsingConfTimeout || len(state.option.labels) > 0 {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -1293,6 +1303,12 @@ func (s *replicaSelector) canFallback2Follower() bool {
 	}
 	// can fallback to follower only when the leader is exhausted.
 	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
+}
+
+func (s *replicaSelector) onDataIsNotReady() {
+	if target := s.targetReplica(); target != nil {
+		target.dataIsNotReady = true
+	}
 }
 
 func (s *replicaSelector) invalidateRegion() {
@@ -2277,6 +2293,9 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx),
 		)
+		if s.replicaSelector != nil {
+			s.replicaSelector.onDataIsNotReady()
+		}
 		if !req.IsGlobalStaleRead() {
 			// only backoff local stale reads as global should retry immediately against the leader as a normal read
 			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
