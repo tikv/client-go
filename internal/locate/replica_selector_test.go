@@ -319,8 +319,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
-			backoffCnt:      0,
-			backoffDetail:   []string{},
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
 			regionIsValid:   false,
 		},
 	}
@@ -341,8 +341,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
-			backoffCnt:      0,
-			backoffDetail:   []string{},
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
 			regionIsValid:   false,
 		},
 	}
@@ -390,6 +390,59 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
+}
+
+func TestCanSkipServerIsBusyBackoff(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.EnableStaleWithMixedReplicaRead()
+	selector, err := newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	for i := 0; i < 3; i++ {
+		_, err = selector.next(s.bo)
+		s.Nil(err)
+		skip := selector.canSkipServerIsBusyBackoff()
+		if i < 2 {
+			s.True(skip)
+		} else {
+			s.False(skip)
+		}
+	}
+
+	selector, err = newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	_, err = selector.next(s.bo)
+	s.Nil(err)
+	// mock all replica's store is unreachable.
+	for _, replica := range selector.replicas {
+		atomic.StoreUint32(&replica.store.livenessState, uint32(unreachable))
+	}
+	skip := selector.canSkipServerIsBusyBackoff()
+	s.False(skip) // can't skip since no replica is available.
+	refreshLivenessStates(selector.regionStore)
+
+	// Test for leader read.
+	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	selector, err = newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	for i := 0; i < 12; i++ {
+		_, err = selector.next(s.bo)
+		s.Nil(err)
+		skip := selector.canSkipServerIsBusyBackoff()
+		if i <= 8 {
+			s.False(skip) // can't skip since leader is available.
+		} else if i <= 10 {
+			s.True(skip)
+		} else {
+			s.False(skip)
+		}
+	}
 }
 
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {

@@ -1278,7 +1278,7 @@ func (s *replicaSelector) onServerIsBusy(
 		// to expected followers. )
 		ctx.Store.markAlreadySlow()
 	}
-	if s.canFallback2Follower() {
+	if s.canSkipServerIsBusyBackoff() {
 		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
@@ -1288,14 +1288,24 @@ func (s *replicaSelector) onServerIsBusy(
 	return true, nil
 }
 
-// For some reasons, the leader is unreachable by now, try followers instead.
-// the state is changed in accessFollower.next when leader is unavailable.
-func (s *replicaSelector) canFallback2Follower() bool {
+// canSkipServerIsBusyBackoff returns true if the request can be sent to next replica and can skip ServerIsBusy backoff.
+func (s *replicaSelector) canSkipServerIsBusyBackoff() bool {
 	if s == nil || s.state == nil {
 		return false
 	}
-	_, ok := s.state.(*accessKnownLeader)
-	return !ok
+	accessLeader, ok := s.state.(*accessKnownLeader)
+	if ok && accessLeader.isCandidate(s.replicas[accessLeader.leaderIdx]) {
+		// If leader is still candidate, the request will be sent to leader again,
+		// so don't skip since the leader is still busy.
+		return false
+	}
+	for _, replica := range s.replicas {
+		if replica.attempts == 0 && replica.store.getLivenessState() == reachable &&
+			!replica.isEpochStale() && !replica.store.isSlow() {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *replicaSelector) onDataIsNotReady() {
