@@ -44,6 +44,10 @@ type Variables struct {
 
 	// Pointer to SessionVars.Killed
 	// Killed is a flag to indicate that this query is killed.
+	// This is an enum value rather than a boolean. See sqlkiller.go
+	// in TiDB for its definition.
+	// When its value is 0, it's not killed
+	// When its value is not 0, it's killed, the value indicates concrete reason.
 	Killed *uint32
 }
 
