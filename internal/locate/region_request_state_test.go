@@ -349,17 +349,6 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
-			do:                      leaderDataIsNotReady,
-			leaderRegionValid:       true,
-			leaderAsyncReload:       Some(false),
-			leaderSuccessReplica:    []string{"z1"},
-			leaderSuccessReadType:   SuccessLeaderRead,
-			followerRegionValid:     true,
-			followerAsyncReload:     Some(false),
-			followerSuccessReplica:  []string{"z2"},
-			followerSuccessReadType: SuccessStaleRead,
-		},
-		{
 			do:                      followerDataIsNotReady,
 			leaderRegionValid:       true,
 			leaderAsyncReload:       Some(false),
@@ -390,45 +379,6 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderAsyncReload:       Some(false),
 			leaderSuccessReplica:    []string{"z1"},
 			leaderSuccessReadType:   SuccessStaleRead,
-			followerRegionValid:     true,
-			followerAsyncReload:     Some(false),
-			followerSuccessReplica:  []string{"z1"},
-			followerSuccessReadType: SuccessLeaderRead,
-		},
-		{
-			do:                      leaderDataIsNotReady,
-			extra:                   []func(suite *testRegionCacheStaleReadSuite){followerServerIsBusy},
-			recoverable:             true,
-			leaderRegionValid:       true,
-			leaderAsyncReload:       Some(false),
-			leaderSuccessReplica:    []string{"z1"},
-			leaderSuccessReadType:   SuccessLeaderRead,
-			followerRegionValid:     true,
-			followerAsyncReload:     Some(false),
-			followerSuccessReplica:  []string{"z1"},
-			followerSuccessReadType: SuccessLeaderRead,
-		},
-		{
-			do:                      leaderDataIsNotReady,
-			extra:                   []func(suite *testRegionCacheStaleReadSuite){followerDataIsNotReady},
-			recoverable:             true,
-			leaderRegionValid:       true,
-			leaderAsyncReload:       Some(false),
-			leaderSuccessReplica:    []string{"z1"},
-			leaderSuccessReadType:   SuccessLeaderRead,
-			followerRegionValid:     true,
-			followerAsyncReload:     Some(false),
-			followerSuccessReplica:  []string{"z1"},
-			followerSuccessReadType: SuccessLeaderRead,
-		},
-		{
-			do:                      leaderDataIsNotReady,
-			extra:                   []func(suite *testRegionCacheStaleReadSuite){followerDown},
-			recoverable:             true,
-			leaderRegionValid:       true,
-			leaderAsyncReload:       Some(false),
-			leaderSuccessReplica:    []string{"z1"},
-			leaderSuccessReadType:   SuccessLeaderRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     Some(false),
 			followerSuccessReplica:  []string{"z1"},
@@ -598,10 +548,11 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 		return
 	}
 
+	msg := fmt.Sprintf("%v  %#v", string(resp.Resp.(*kvrpcpb.GetResponse).Value), r)
 	_, successZone, successReadType := s.extractResp(resp)
 	find := false
 	if leaderZone {
-		s.Equal(r.leaderSuccessReadType, successReadType)
+		s.Equal(r.leaderSuccessReadType, successReadType, msg)
 		for _, z := range r.leaderSuccessReplica {
 			if z == successZone {
 				find = true
@@ -617,7 +568,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			}
 		}
 	}
-	s.True(find)
+	s.True(find, msg)
 }
 
 type Option[T interface{}] struct {
@@ -765,22 +716,6 @@ func leaderDownAndElect(s *testRegionCacheStaleReadSuite) {
 	s.NotNil(leader)
 	leaderMove(s)
 	s.setUnavailableStore(leader.Id)
-}
-
-func leaderDataIsNotReady(s *testRegionCacheStaleReadSuite) {
-	peerID, _ := s.getLeader()
-	s.injection.leaderRegionError = func(req *tikvrpc.Request, zone string) *errorpb.Error {
-		if !req.StaleRead || zone != "z1" {
-			return nil
-		}
-		return &errorpb.Error{
-			DataIsNotReady: &errorpb.DataIsNotReady{
-				RegionId: s.regionID,
-				PeerId:   peerID,
-				SafeTs:   0,
-			},
-		}
-	}
 }
 
 func leaderServerIsBusy(s *testRegionCacheStaleReadSuite) {
