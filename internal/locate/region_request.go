@@ -1265,12 +1265,6 @@ func (s *replicaSelector) onServerIsBusy(
 				// Clear attempt history of the leader, so the leader can be accessed again.
 				s.replicas[state.leaderIdx].attempts = 0
 				s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
-				return true, nil
-			case *tryIdleReplica:
-				if s.targetIdx != state.leaderIdx {
-					return true, nil
-				}
-				// backoff if still receiving ServerIsBusy after accessing leader again
 			}
 		}
 	} else if ctx != nil && ctx.Store != nil {
