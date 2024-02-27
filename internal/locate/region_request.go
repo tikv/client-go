@@ -1295,10 +1295,7 @@ func (s *replicaSelector) canFallback2Follower() bool {
 		return false
 	}
 	_, ok := s.state.(*accessKnownLeader)
-	if ok {
-		return false
-	}
-	return true
+	return !ok
 }
 
 func (s *replicaSelector) onDataIsNotReady() {
