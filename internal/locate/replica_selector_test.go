@@ -114,8 +114,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 			},
 			respErr:         "",
 			respRegionError: nil,
-			backoffCnt:      1,
-			backoffDetail:   []string{"tikvServerBusy+1"},
+			backoffCnt:      0,
+			backoffDetail:   []string{},
 			regionIsValid:   true,
 		},
 	}
@@ -297,8 +297,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 				"{addr: store2, replica-read: true, stale-read: false}"},
 			respErr:         "",
 			respRegionError: nil,
-			backoffCnt:      1,
-			backoffDetail:   []string{"tikvServerBusy+1"},
+			backoffCnt:      0,
+			backoffDetail:   []string{},
 			regionIsValid:   true,
 		},
 	}
@@ -319,8 +319,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
-			backoffCnt:      2,
-			backoffDetail:   []string{"tikvServerBusy+2"},
+			backoffCnt:      0,
+			backoffDetail:   []string{},
 			regionIsValid:   false,
 		},
 	}
@@ -341,8 +341,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
-			backoffCnt:      2,
-			backoffDetail:   []string{"tikvServerBusy+2"},
+			backoffCnt:      0,
+			backoffDetail:   []string{},
 			regionIsValid:   false,
 		},
 	}
@@ -363,8 +363,29 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 				"{addr: store3, replica-read: true, stale-read: false}"},
 			respErr:         "",
 			respRegionError: nil,
-			backoffCnt:      1,
-			backoffDetail:   []string{"tikvServerBusy+1"},
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Microsecond * 100,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
 			regionIsValid:   true,
 		},
 	}

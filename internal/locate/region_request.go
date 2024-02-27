@@ -1277,9 +1277,9 @@ func (s *replicaSelector) onServerIsBusy(
 		// Mark the server is busy (the next incoming READs could be redirect
 		// to expected followers. )
 		ctx.Store.markAlreadySlow()
-		if s.canFallback2Follower() {
-			return true, nil
-		}
+	}
+	if s.canFallback2Follower() {
+		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 	if err != nil {
@@ -1294,15 +1294,11 @@ func (s *replicaSelector) canFallback2Follower() bool {
 	if s == nil || s.state == nil {
 		return false
 	}
-	state, ok := s.state.(*accessFollower)
-	if !ok {
+	_, ok := s.state.(*accessKnownLeader)
+	if ok {
 		return false
 	}
-	if !state.isStaleRead {
-		return false
-	}
-	// can fallback to follower only when the leader is exhausted.
-	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
+	return true
 }
 
 func (s *replicaSelector) onDataIsNotReady() {
