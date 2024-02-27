@@ -298,8 +298,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 				"{addr: store3, replica-read: true, stale-read: false}"},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
-			backoffCnt:      2,
-			backoffDetail:   []string{"tikvServerBusy+2"},
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
 			regionIsValid:   true,
 		},
 	}
