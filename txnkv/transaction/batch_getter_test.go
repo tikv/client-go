@@ -83,7 +83,7 @@ func (s *mockBatchGetterStore) Len() int {
 	return len(s.index)
 }
 
-func (s *mockBatchGetterStore) Get(k []byte) ([]byte, error) {
+func (s *mockBatchGetterStore) Get(ctx context.Context, k []byte) ([]byte, error) {
 	for i, key := range s.index {
 		if kv.CmpKey(key, k) == 0 {
 			return s.value[i], nil
@@ -95,7 +95,7 @@ func (s *mockBatchGetterStore) Get(k []byte) ([]byte, error) {
 func (s *mockBatchGetterStore) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 	m := make(map[string][]byte)
 	for _, k := range keys {
-		v, err := s.Get(k)
+		v, err := s.Get(ctx, k)
 		if err == nil {
 			m[string(k)] = v
 			continue

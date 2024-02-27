@@ -46,6 +46,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -190,6 +191,11 @@ func newBackoffFn(base, cap, jitter int) backoffFn {
 		// when set maxSleepMs >= 0 in `tikv.BackoffWithMaxSleep` will force sleep maxSleepMs milliseconds.
 		if maxSleepMs >= 0 && realSleep > maxSleepMs {
 			realSleep = maxSleepMs
+		}
+		if _, err := util.EvalFailpoint("fastBackoffBySkipSleep"); err == nil {
+			attempts++
+			lastSleep = sleep
+			return realSleep
 		}
 		select {
 		case <-time.After(time.Duration(realSleep) * time.Millisecond):

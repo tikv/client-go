@@ -37,12 +37,15 @@ package oracles_test
 import (
 	"context"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
+	pd "github.com/tikv/pd/client"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {
@@ -71,6 +74,79 @@ func TestPdOracle_GetStaleTimestamp(t *testing.T) {
 	_, err = o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, math.MaxUint64)
 	assert.NotNil(t, err)
 	assert.Regexp(t, ".*invalid prevSecond.*", err.Error())
+}
+
+// A mock for pd.Client that only returns global transaction scoped
+// timestamps at the same physical time with increasing logical time
+type MockPdClient struct {
+	pd.Client
+
+	logicalTimestamp atomic.Int64
+}
+
+func (c *MockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
+	return 0, c.logicalTimestamp.Add(1), nil
+}
+
+func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
+	pdClient := MockPdClient{}
+	o := oracles.NewPdOracleWithClient(&pdClient)
+	ctx := context.TODO()
+	wg := sync.WaitGroup{}
+
+	err := o.SetLowResolutionTimestampUpdateInterval(50 * time.Millisecond)
+	assert.Nil(t, err)
+
+	// First call to o.GetTimestamp just seeds the timestamp
+	_, err = o.GetTimestamp(ctx, &oracle.Option{})
+	assert.Nil(t, err)
+
+	// Haven't started update loop yet so next call to GetTs should be 1
+	// while the low resolution timestamp stays at 0
+	lowRes, err := o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
+	assert.Nil(t, err)
+	ts, err := o.GetTimestamp(ctx, &oracle.Option{})
+	assert.Nil(t, err)
+	assert.Greater(t, ts, lowRes)
+
+	waitForTimestampToChange := func(checkFrequency time.Duration) {
+		currTs, err := o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
+		assert.Nil(t, err)
+		assert.Eventually(t, func() bool {
+			nextTs, err := o.GetLowResolutionTimestamp(ctx, &oracle.Option{})
+			assert.Nil(t, err)
+			return nextTs > currTs
+		}, 5*time.Second, checkFrequency)
+	}
+
+	// Time based unit tests are inherently flaky. To reduce that
+	// this just asserts a loose lower and upper bound that should
+	// not be affected by timing inconsistencies across platforms
+	checkBounds := func(updateInterval time.Duration) {
+		start := time.Now()
+		waitForTimestampToChange(10 * time.Millisecond)
+		waitForTimestampToChange(10 * time.Millisecond)
+		elapsed := time.Since(start)
+		assert.Greater(t, elapsed, updateInterval)
+		assert.LessOrEqual(t, elapsed, 3*updateInterval)
+	}
+
+	oracles.StartTsUpdateLoop(o, ctx, &wg)
+	// Check each update interval. Note that since these are in increasing
+	// order the time for the new interval to take effect is always less
+	// than the new interval. If we iterated in opposite order, then we'd have
+	// to first wait for the timestamp to change before checking bounds.
+	for _, updateInterval := range []time.Duration{
+		50 * time.Millisecond,
+		150 * time.Millisecond,
+		500 * time.Millisecond} {
+		err = o.SetLowResolutionTimestampUpdateInterval(updateInterval)
+		assert.Nil(t, err)
+		checkBounds(updateInterval)
+	}
+
+	o.Close()
+	wg.Wait()
 }
 
 func TestNonFutureStaleTSO(t *testing.T) {

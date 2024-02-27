@@ -521,19 +521,19 @@ func (s *mockTikvGrpcServer) GetTiFlashSystemTable(context.Context, *kvrpcpb.TiF
 	return nil, errors.New("unreachable")
 }
 
-func (s *mockTikvGrpcServer) KvFlush(ctx context.Context, request *kvrpcpb.FlushRequest) (*kvrpcpb.FlushResponse, error) {
-	return nil, errors.New("unreachable")
-}
-
-func (s *mockTikvGrpcServer) KvBufferBatchGet(ctx context.Context, request *kvrpcpb.BufferBatchGetRequest) (*kvrpcpb.BufferBatchGetResponse, error) {
-	return nil, errors.New("unreachable")
-}
-
 func (s *mockTikvGrpcServer) GetDisaggConfig(context.Context, *disaggregated.GetDisaggConfigRequest) (*disaggregated.GetDisaggConfigResponse, error) {
 	return nil, errors.New("unreachable")
 }
 
 func (s *mockTikvGrpcServer) CancelDisaggTask(context.Context, *disaggregated.CancelDisaggTaskRequest) (*disaggregated.CancelDisaggTaskResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) KvFlush(context.Context, *kvrpcpb.FlushRequest) (*kvrpcpb.FlushResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) KvBufferBatchGet(context.Context, *kvrpcpb.BufferBatchGetRequest) (*kvrpcpb.BufferBatchGetResponse, error) {
 	return nil, errors.New("unreachable")
 }
 
@@ -684,42 +684,6 @@ func (s *testRegionRequestToSingleStoreSuite) TestCloseConnectionOnStoreNotMatch
 	regionErr, _ := resp.GetRegionError()
 	s.NotNil(regionErr)
 	s.Equal(target, client.closedAddr)
-}
-
-func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
-	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
-		Key: []byte("key"),
-	})
-	req.EnableStaleWithMixedReplicaRead()
-	req.ReadReplicaScope = "z1" // not global stale read.
-	region, err := s.cache.LocateRegionByID(s.bo, s.region)
-	s.Nil(err)
-	s.NotNil(region)
-
-	oc := s.regionRequestSender.client
-	defer func() {
-		s.regionRequestSender.client = oc
-	}()
-
-	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		if req.StaleRead {
-			// Mock for stale-read request always return DataIsNotReady error when tikv `ResolvedTS` is blocked.
-			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-				RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}},
-			}}
-		} else {
-			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}
-		}
-		return response, nil
-	}}
-
-	bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
-	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
-	s.Nil(err)
-	s.NotNil(resp)
-	regionErr, _ := resp.GetRegionError()
-	s.Nil(regionErr)
-	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchClient() {

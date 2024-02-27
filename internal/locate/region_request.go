@@ -73,6 +73,9 @@ import (
 // network error because tidb-server expect tikv client to exit as soon as possible.
 var shuttingDown uint32
 
+// randIntn is only use for testing.
+var randIntn = rand.Intn
+
 // StoreShuttingDown atomically stores ShuttingDown into v.
 func StoreShuttingDown(v uint32) {
 	atomic.StoreUint32(&shuttingDown, v)
@@ -253,6 +256,7 @@ type replica struct {
 	attemptedTime time.Duration
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
+	dataIsNotReady              bool
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -410,11 +414,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 		selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
 		return nil, stateChanged{}
 	}
-	// If hibernate region is enabled and the leader is not reachable, the raft group
-	// will not be wakened up and re-elect the leader until the follower receives
-	// a request. So, before the new leader is elected, we should not send requests
-	// to the unreachable old leader to avoid unnecessary timeout.
-	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) {
+	if !state.isCandidate(leader) {
 		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 		return nil, stateChanged{}
 	}
@@ -429,6 +429,20 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	}
 	selector.targetIdx = state.leaderIdx
 	return selector.buildRPCContext(bo)
+}
+
+// check leader is candidate or not.
+func (state *accessKnownLeader) isCandidate(leader *replica) bool {
+	liveness := leader.store.getLivenessState()
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	// If leader.deadlineErrUsingConfTimeout is true, it means the leader is already tried and received deadline exceeded error, then don't retry it.
+	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) || leader.deadlineErrUsingConfTimeout {
+		return false
+	}
+	return true
 }
 
 func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -486,7 +500,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	if len(state.labels) > 0 {
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return selectReplica.store.IsLabelsMatch(state.labels)
+			return selectReplica.store.IsLabelsMatch(state.labels) && !state.isExhausted(selectReplica)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -499,7 +513,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if selector.targetIdx < 0 {
 		// Search replica that is not attempted from the last accessed replica
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
-			return !selectReplica.isExhausted(1, 0)
+			return !state.isExhausted(selectReplica)
 		})
 		if selectReplica != nil && idx >= 0 {
 			state.lastIdx = idx
@@ -528,6 +542,14 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	staleRead := false
 	rpcCtx.contextPatcher.staleRead = &staleRead
 	return rpcCtx, nil
+}
+
+func (state *tryFollower) isExhausted(replica *replica) bool {
+	if replica.dataIsNotReady {
+		// we can retry DataIsNotReady replica by replica-read.
+		return replica.isExhausted(2, 0)
+	}
+	return replica.isExhausted(1, 0)
 }
 
 func (state *tryFollower) onSendSuccess(selector *replicaSelector) {
@@ -612,7 +634,7 @@ func (state *tryNewProxy) next(bo *retry.Backoffer, selector *replicaSelector) (
 	}
 
 	// Skip advanceCnt valid candidates to find a proxy peer randomly
-	advanceCnt := rand.Intn(candidateNum)
+	advanceCnt := randIntn(candidateNum)
 	for idx, replica := range selector.replicas {
 		if !state.isCandidate(AccessIndex(idx), replica) {
 			continue
@@ -668,13 +690,13 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	resetStaleRead := false
 	if state.lastIdx < 0 {
 		if state.tryLeader {
-			state.lastIdx = AccessIndex(rand.Intn(replicaSize))
+			state.lastIdx = AccessIndex(randIntn(replicaSize))
 		} else {
 			if replicaSize <= 1 {
 				state.lastIdx = state.leaderIdx
 			} else {
 				// Randomly select a non-leader peer
-				state.lastIdx = AccessIndex(rand.Intn(replicaSize - 1))
+				state.lastIdx = AccessIndex(randIntn(replicaSize - 1))
 				if state.lastIdx >= state.leaderIdx {
 					state.lastIdx++
 				}
@@ -696,7 +718,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	}
 	var offset int
 	if state.lastIdx >= 0 {
-		offset = rand.Intn(replicaSize)
+		offset = randIntn(replicaSize)
 	}
 	reloadRegion := false
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
@@ -753,7 +775,8 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
 			// If leader tried and received deadline exceeded error, try follower.
-			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
+			// If labels are used, some followers would be filtered by the labels and can't be candidates, they still need to be retried.
+			if state.isStaleRead || leader.deadlineErrUsingConfTimeout || len(state.option.labels) > 0 {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -791,16 +814,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 }
 
 func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
-	// Allow another extra retry for the following case:
-	// 1. The stale read is enabled and leader peer is selected as the target peer at first.
-	// 2. Data is not ready is returned from the leader peer.
-	// 3. Stale read flag is removed and processing falls back to snapshot read on the leader peer.
-	// 4. The leader peer should be retried again using snapshot read.
-	if state.isStaleRead && state.option.leaderOnly {
-		return leader.isExhausted(2, 0)
-	} else {
-		return leader.isExhausted(1, 0)
-	}
+	return leader.isExhausted(1, 0)
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -845,7 +859,7 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 	// Select a follower replica that has the lowest estimated wait duration
 	minWait := time.Duration(math.MaxInt64)
 	targetIdx := state.leaderIdx
-	startIdx := rand.Intn(len(selector.replicas))
+	startIdx := randIntn(len(selector.replicas))
 	for i := 0; i < len(selector.replicas); i++ {
 		idx := (i + startIdx) % len(selector.replicas)
 		r := selector.replicas[idx]
@@ -1206,7 +1220,12 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 				replica.attempts = maxReplicaAttempt - 1
 				replica.attemptedTime = 0
 			}
-			s.state = &accessKnownLeader{leaderIdx: AccessIndex(i)}
+			state := &accessKnownLeader{leaderIdx: AccessIndex(i)}
+			if state.isCandidate(s.replicas[i]) {
+				// If the new leader is candidate, switch to the new leader.
+				// the leader may have deadlineErrUsingConfTimeout and isn't candidate, if so, keep the state unchanged and retry the request.
+				s.state = state
+			}
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
 			if !s.region.switchWorkLeaderToPeer(leader) {
 				panic("the store must exist")
@@ -1284,6 +1303,12 @@ func (s *replicaSelector) canFallback2Follower() bool {
 	}
 	// can fallback to follower only when the leader is exhausted.
 	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
+}
+
+func (s *replicaSelector) onDataIsNotReady() {
+	if target := s.targetReplica(); target != nil {
+		target.dataIsNotReady = true
+	}
 }
 
 func (s *replicaSelector) invalidateRegion() {
@@ -2268,6 +2293,9 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx),
 		)
+		if s.replicaSelector != nil {
+			s.replicaSelector.onDataIsNotReady()
+		}
 		if !req.IsGlobalStaleRead() {
 			// only backoff local stale reads as global should retry immediately against the leader as a normal read
 			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))

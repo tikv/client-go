@@ -37,6 +37,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"runtime"
 	"strconv"
@@ -111,10 +112,10 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	cancel()
-	_, err := sendBatchRequest(ctx, "", "", a, req, 2*time.Second)
+	_, err := sendBatchRequest(ctx, "", "", a, req, 2*time.Second, 0)
 	assert.Equal(t, errors.Cause(err), context.Canceled)
 
-	_, err = sendBatchRequest(context.Background(), "", "", a, req, 0)
+	_, err = sendBatchRequest(context.Background(), "", "", a, req, 0, 0)
 	assert.Equal(t, errors.Cause(err), context.DeadlineExceeded)
 }
 
@@ -134,8 +135,8 @@ func TestSendWhenReconnect(t *testing.T) {
 	}
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
-	_, err = rpcClient.SendRequest(context.Background(), addr, req, 100*time.Second)
-	assert.True(t, err.Error() == "no available connections")
+	_, err = rpcClient.SendRequest(context.Background(), addr, req, 5*time.Second)
+	assert.True(t, strings.Contains(err.Error(), "timeout"))
 	server.Stop()
 }
 
@@ -388,7 +389,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		assert.Equal(t, builder.len(), i+1)
 	}
 	entryMap := make(map[uint64]*batchCommandsEntry)
-	batchedReq, forwardingReqs := builder.build(func(id uint64, e *batchCommandsEntry) {
+	batchedReq, forwardingReqs := builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
 	assert.Equal(t, len(batchedReq.GetRequests()), 10)
@@ -414,7 +415,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		}
 	}
 	entryMap = make(map[uint64]*batchCommandsEntry)
-	batchedReq, forwardingReqs = builder.build(func(id uint64, e *batchCommandsEntry) {
+	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
 	assert.Equal(t, len(batchedReq.GetRequests()), 1)
@@ -424,8 +425,8 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		assert.Equal(t, len(forwardingReqs[host].GetRequests()), i+2)
 		assert.Equal(t, len(forwardingReqs[host].GetRequestIds()), i+2)
 	}
-	assert.Equal(t, builder.idAlloc, uint64(10+builder.len()))
-	assert.Equal(t, len(entryMap), builder.len())
+	assert.Equal(t, int(builder.idAlloc), 20)
+	assert.Equal(t, len(entryMap), 10)
 	for host, forwardingReq := range forwardingReqs {
 		for i, id := range forwardingReq.GetRequestIds() {
 			assert.Equal(t, entryMap[id].req, forwardingReq.GetRequests()[i])
@@ -446,7 +447,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 		builder.push(entry)
 	}
 	entryMap = make(map[uint64]*batchCommandsEntry)
-	batchedReq, forwardingReqs = builder.build(func(id uint64, e *batchCommandsEntry) {
+	batchedReq, forwardingReqs = builder.buildWithLimit(math.MaxInt64, func(id uint64, e *batchCommandsEntry) {
 		entryMap[id] = e
 	})
 	assert.Equal(t, len(batchedReq.GetRequests()), 2)
@@ -477,7 +478,6 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	// Test reset
 	builder.reset()
 	assert.Equal(t, builder.len(), 0)
-	assert.Equal(t, builder.entries.Len(), 0)
 	assert.Equal(t, len(builder.requests), 0)
 	assert.Equal(t, len(builder.requestIDs), 0)
 	assert.Equal(t, len(builder.forwardingReqs), 0)
@@ -647,10 +647,6 @@ func TestTraceExecDetails(t *testing.T) {
 }
 
 func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.MaxBatchSize = 128
-	})()
-
 	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
 	require.True(t, server.IsRunning())
@@ -667,7 +663,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
 
@@ -676,8 +672,8 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	require.False(t, server.IsRunning())
 
 	// send some request, it should be failed since server is down.
-	for i := 0; i < 200; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+	for i := 0; i < 10; i++ {
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Millisecond*100, 0)
 		require.Error(t, err)
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
 		grpcConn := conn.Get()
@@ -720,9 +716,98 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 
 	// send some request, it should be success again.
 	for i := 0; i < 100; i++ {
-		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20)
+		_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second*20, 0)
 		require.NoError(t, err)
 	}
+}
+
+func TestLimitConcurrency(t *testing.T) {
+	re := require.New(t)
+	batch := newBatchConn(1, 128, nil)
+	{
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+		reqs, _ := batch.reqBuilder.buildWithLimit(1, func(_ uint64, _ *batchCommandsEntry) {})
+		re.Len(reqs.RequestIds, 1)
+		re.Equal(0, batch.reqBuilder.len())
+		batch.reqBuilder.reset()
+	}
+
+	// highest priority task will be sent immediately, not limited by concurrency
+	{
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority})
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, pri: highTaskPriority - 1})
+		reqs, _ := batch.reqBuilder.buildWithLimit(0, func(_ uint64, _ *batchCommandsEntry) {})
+		re.Len(reqs.RequestIds, 1)
+		batch.reqBuilder.reset()
+		re.Equal(1, batch.reqBuilder.len())
+	}
+
+	// medium priority tasks are limited by concurrency
+	{
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}})
+		reqs, _ := batch.reqBuilder.buildWithLimit(2, func(_ uint64, _ *batchCommandsEntry) {})
+		re.Len(reqs.RequestIds, 2)
+		re.Equal(1, batch.reqBuilder.len())
+		batch.reqBuilder.reset()
+	}
+
+	// the expired tasks should be removed from the queue.
+	{
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, canceled: 1})
+		batch.reqBuilder.push(&batchCommandsEntry{req: &tikvpb.BatchCommandsRequest_Request{}, canceled: 1})
+		batch.reqBuilder.reset()
+		re.Equal(1, batch.reqBuilder.len())
+	}
+
+}
+
+func TestPrioritySentLimit(t *testing.T) {
+	re := require.New(t)
+	restoreFn := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxConcurrencyRequestLimit = 2
+		conf.TiKVClient.GrpcConnectionCount = 1
+	})
+	defer restoreFn()
+
+	server, port := mockserver.StartMockTikvService()
+	re.Greater(port, 0)
+	rpcClient := NewRPCClient()
+	defer rpcClient.Close()
+	addr := server.Addr()
+	wait := sync.WaitGroup{}
+	bench := 10
+	wait.Add(bench * 2)
+	ctx, cancelFn := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancelFn()
+	sendFn := func(pri uint64, dur *atomic.Int64, qps *atomic.Int64) {
+		for i := 0; i < bench; i++ {
+			go func() {
+				for {
+					req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
+					req.ResourceControlContext = &kvrpcpb.ResourceControlContext{OverridePriority: pri}
+					now := time.Now()
+					rpcClient.SendRequest(context.Background(), addr, req, 100*time.Millisecond)
+					dur.Add(time.Since(now).Microseconds())
+					qps.Add(1)
+					select {
+					case <-ctx.Done():
+						wait.Done()
+						return
+					default:
+					}
+				}
+			}()
+		}
+	}
+
+	highDur, mediumDur := atomic.Int64{}, atomic.Int64{}
+	highQps, mediumQps := atomic.Int64{}, atomic.Int64{}
+	go sendFn(16, &highDur, &highQps)
+	go sendFn(8, &mediumDur, &mediumQps)
+	wait.Wait()
+	re.Less(highDur.Load()/highQps.Load()*2, mediumDur.Load()/mediumQps.Load())
+	server.Stop()
 }
 
 type testClientEventListener struct {
@@ -793,5 +878,4 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 	default:
 		assert.Fail(t, "health feedback not received")
 	}
-
 }
