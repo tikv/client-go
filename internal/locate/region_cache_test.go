@@ -2091,7 +2091,7 @@ func (s *testRegionCacheSuite) TestTiKVSideSlowScore() {
 	stats := newStoreHealthStatus()
 	s.LessOrEqual(stats.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
 	now := time.Now()
-	stats.update(now)
+	stats.tick(now)
 	s.LessOrEqual(stats.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
 	s.False(stats.tikvSideSlowScore.hasTiKVFeedback.Load())
 	s.False(stats.IsSlow())
@@ -2108,17 +2108,17 @@ func (s *testRegionCacheSuite) TestTiKVSideSlowScore() {
 	s.True(stats.IsSlow())
 
 	now = now.Add(time.Minute * 2)
-	stats.update(now)
+	stats.tick(now)
 	s.Equal(int64(60), stats.GetHealthStatusDetail().TiKVSideSlowScore)
 	s.False(stats.IsSlow())
 
 	now = now.Add(time.Minute * 3)
-	stats.update(now)
+	stats.tick(now)
 	s.Equal(int64(1), stats.GetHealthStatusDetail().TiKVSideSlowScore)
 	s.False(stats.IsSlow())
 
 	now = now.Add(time.Minute)
-	stats.update(now)
+	stats.tick(now)
 	s.Equal(int64(1), stats.GetHealthStatusDetail().TiKVSideSlowScore)
 	s.False(stats.IsSlow())
 }
@@ -2131,7 +2131,7 @@ func (s *testRegionCacheSuite) TestStoreHealthStatus() {
 	for !stats.clientSideSlowScore.isSlow() {
 		stats.clientSideSlowScore.recordSlowScoreStat(time.Minute)
 	}
-	stats.update(now)
+	stats.tick(now)
 	s.True(stats.IsSlow())
 	s.Equal(int64(stats.clientSideSlowScore.getSlowScore()), stats.GetHealthStatusDetail().ClientSideSlowScore)
 
@@ -2142,7 +2142,7 @@ func (s *testRegionCacheSuite) TestStoreHealthStatus() {
 
 	for stats.clientSideSlowScore.isSlow() {
 		stats.clientSideSlowScore.recordSlowScoreStat(time.Millisecond)
-		stats.update(now)
+		stats.tick(now)
 	}
 	s.True(stats.IsSlow())
 	s.Equal(int64(stats.clientSideSlowScore.getSlowScore()), stats.GetHealthStatusDetail().ClientSideSlowScore)

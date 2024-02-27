@@ -2595,7 +2595,8 @@ type StoreHealthStatus struct {
 	tikvSideSlowScore struct {
 		sync.Mutex
 
-		// These atomic fields should be read with atomic operations and written with the mutex.
+		// The following atomic fields is designed to be able to be read by atomic options directly, but only written
+		// while holding the mutex.
 
 		hasTiKVFeedback atomic.Bool
 		score           atomic.Int64
@@ -2612,11 +2613,12 @@ func newStoreHealthStatus() *StoreHealthStatus {
 	return &StoreHealthStatus{}
 }
 
-// IsSlow returns whether current Store is slow or not.
+// IsSlow returns whether current Store is slow.
 func (s *StoreHealthStatus) IsSlow() bool {
 	return s.isSlow.Load()
 }
 
+// GetHealthStatusDetail gets the current detailed information about the store's health status.
 func (s *StoreHealthStatus) GetHealthStatusDetail() HealthStatusDetail {
 	return HealthStatusDetail{
 		ClientSideSlowScore: int64(s.clientSideSlowScore.getSlowScore()),
@@ -2624,14 +2626,15 @@ func (s *StoreHealthStatus) GetHealthStatusDetail() HealthStatusDetail {
 	}
 }
 
-// update updates the slow score of this store according to the timecost of current request.
-func (s *StoreHealthStatus) update(now time.Time) {
+// tick updates the health status that changes over time, such as slow score's decaying, etc. This function is expected
+// to be called periodically.
+func (s *StoreHealthStatus) tick(now time.Time) {
 	s.clientSideSlowScore.updateSlowScore()
 	s.updateTiKVServerSideSlowScoreOnTick(now)
 	s.updateSlowFlag()
 }
 
-// recordClientSideSlowScoreStat records timecost of each request.
+// recordClientSideSlowScoreStat records timecost of each request to update the client side slow score.
 func (s *StoreHealthStatus) recordClientSideSlowScoreStat(timecost time.Duration) {
 	s.clientSideSlowScore.recordSlowScoreStat(timecost)
 	s.updateSlowFlag()
@@ -2643,17 +2646,21 @@ func (s *StoreHealthStatus) markAlreadySlow() {
 	s.updateSlowFlag()
 }
 
+// updateTiKVServerSideSlowScoreOnTick updates the slow score actively, which is expected to be a periodic job.
+// It skips updating if the last update time didn't elapse long enough, or it's being updated concurrently.
 func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {
 	if !s.tikvSideSlowScore.hasTiKVFeedback.Load() {
+		// Do nothing if no feedback has been received from this store yet.
 		return
 	}
 	lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
 	if lastUpdateTime == nil || now.Sub(*lastUpdateTime) < tikvSlowScoreUpdateFromPDInterval {
+		// If the first feedback is
 		return
 	}
 
 	if !s.tikvSideSlowScore.TryLock() {
-		// It must be being updated.
+		// It must be being updated concurrently.
 		return
 	}
 	defer s.tikvSideSlowScore.Unlock()
@@ -2682,9 +2689,10 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {
 	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
 }
 
+// updateTiKVServerSideSlowScore updates the tikv side slow score with the given value.
+// Ignores if the last update time didn't elapse long enough, or it's being updated concurrently.
 func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime time.Time) {
 	defer s.updateSlowFlag()
-	s.tikvSideSlowScore.hasTiKVFeedback.Store(true)
 
 	lastScore := s.tikvSideSlowScore.score.Load()
 
@@ -2699,18 +2707,18 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	}
 
 	if !s.tikvSideSlowScore.TryLock() {
-		// It must be being updated. Skip.
+		// It must be being updated concurrently. Skip.
 		return
 	}
 	defer s.tikvSideSlowScore.Unlock()
 
+	s.tikvSideSlowScore.hasTiKVFeedback.Store(true)
 	// Reload update time as it might be updated concurrently before acquiring mutex
 	lastUpdateTime = s.tikvSideSlowScore.lastUpdateTime.Load()
 	if lastUpdateTime != nil && currTime.Sub(*lastUpdateTime) < tikvSlowScoreUpdateInterval {
 		return
 	}
 
-	lastScore = s.tikvSideSlowScore.score.Load()
 	newScore := score
 
 	newUpdateTime := new(time.Time)
@@ -3332,7 +3340,7 @@ func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
 	healthDetails := make(map[uint64]HealthStatusDetail)
 	now := time.Now()
 	c.forEachStore(func(store *Store) {
-		store.healthStatus.update(now)
+		store.healthStatus.tick(now)
 		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
 	})
 	for store, details := range healthDetails {
@@ -3547,14 +3555,18 @@ func (c *RegionCache) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
 	store.recordHealthFeedback(feedback)
 }
 
+// GetClientEventListener returns the listener to observe the RPC client's events and let the region cache respond to
+// them. When creating the `KVStore` using `tikv.NewKVStore` function, the listener will be setup immediately.
 func (c *RegionCache) GetClientEventListener() client.ClientEventListener {
-	return &RegionCacheClientEventListener{c: c}
+	return &regionCacheClientEventListener{c: c}
 }
 
-type RegionCacheClientEventListener struct {
+// regionCacheClientEventListener is the listener to let RegionCache respond to events in the RPC client.
+type regionCacheClientEventListener struct {
 	c *RegionCache
 }
 
-func (l *RegionCacheClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+// OnHealthFeedback implements the `client.ClientEventListener` interface.
+func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
 	l.c.onHealthFeedback(feedback)
 }

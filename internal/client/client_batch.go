@@ -557,6 +557,8 @@ type batchCommandsClient struct {
 	// maxConcurrencyRequestLimit is the max allowed number of requests to be sent the tikv
 	maxConcurrencyRequestLimit atomic.Int64
 
+	// eventListener is the listener set by external code to observe some events in the client. It's stored in a atomic
+	// pointer to make setting thread-safe.
 	eventListener *atomic.Pointer[ClientEventListener]
 }
 

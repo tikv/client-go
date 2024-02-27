@@ -108,8 +108,8 @@ type Client interface {
 	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
-	// SetEventListener registers an event listener for the Client instance. If called more than once, the previously
-	// set one will be replaced.
+	// SetEventListener registers an event listener for the Client instance. If it's called more than once, the
+	// previously set one will be replaced.
 	SetEventListener(listener ClientEventListener)
 }
 
@@ -826,6 +826,8 @@ func (c *RPCClient) CloseAddr(addr string) error {
 	return nil
 }
 
+// SetEventListener registers an event listener for the Client instance. If it's called more than once, the
+// previously set one will be replaced.
 func (c *RPCClient) SetEventListener(listener ClientEventListener) {
 	c.eventListener.Store(&listener)
 }
