@@ -3299,30 +3299,10 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	return
 }
 
-//// getSlowScore returns the slow score of store.
-//func (s *Store) getSlowScore() uint64 {
-//	return s.slowScore.getSlowScore()
-//}
-//
-//// isSlow returns whether current Store is slow or not.
-//func (s *Store) isSlow() bool {
-//	return s.slowScore.isSlow()
-//}
-//
-//// updateSlowScore updates the slow score of this store according to the timecost of current request.
-//func (s *Store) updateSlowScoreStat() {
-//	s.slowScore.updateSlowScore()
-//}
-//
-//// recordSlowScoreStat records timecost of each request.
-//func (s *Store) recordSlowScoreStat(timecost time.Duration) {
-//	s.slowScore.recordSlowScoreStat(timecost)
-//}
-//
-//// markAlreadySlow marks the related store already slow.
-//func (s *Store) markAlreadySlow() {
-//	s.slowScore.markAlreadySlow()
-//}
+// isSlow returns whether current Store is slow or not.
+func (s *Store) isSlow() bool {
+	return s.healthStatus.IsSlow()
+}
 
 // checkAndUpdateStoreHealthStatus checks and updates health stats on each store.
 func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
