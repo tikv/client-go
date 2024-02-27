@@ -278,7 +278,29 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 			respRegionError: fakeEpochNotMatch,
 			backoffCnt:      1,
 			backoffDetail:   []string{"regionScheduling+1"},
-			regionIsValid:   false,
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// Don't invalid region in tryFollowers, since leader meets deadlineExceededErr.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Second,
+		label:     nil,
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))

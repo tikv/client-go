@@ -481,7 +481,6 @@ type tryFollower struct {
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
-	hasDeadlineExceededErr := false
 	filterReplicas := func(fn func(*replica) bool) (AccessIndex, *replica) {
 		for i := 0; i < len(selector.replicas); i++ {
 			idx := AccessIndex((int(state.lastIdx) + i) % len(selector.replicas))
@@ -489,7 +488,6 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 				continue
 			}
 			selectReplica := selector.replicas[idx]
-			hasDeadlineExceededErr = hasDeadlineExceededErr || selectReplica.deadlineErrUsingConfTimeout
 			if selectReplica.store.getLivenessState() != unreachable && !selectReplica.deadlineErrUsingConfTimeout &&
 				fn(selectReplica) {
 				return idx, selectReplica
@@ -523,9 +521,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	// If all followers are tried and fail, backoff and retry.
 	if selector.targetIdx < 0 {
-		if hasDeadlineExceededErr {
-			// when meet deadline exceeded error, do fast retry without invalidate region cache.
-			return nil, nil
+		for _, replica := range selector.replicas {
+			if replica.deadlineErrUsingConfTimeout {
+				// when meet deadline exceeded error, do fast retry without invalidate region cache.
+				return nil, nil
+			}
 		}
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 		selector.invalidateRegion()
