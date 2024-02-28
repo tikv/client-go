@@ -145,12 +145,13 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 			return
 		}
 	}
-	strategy := ReplicaSelectLeaderStrategy{}
-	s.target = strategy.next(s.replicas, s.region)
+	leaderIdx := s.region.getStore().workTiKVIdx
+	strategy := ReplicaSelectLeaderStrategy{leaderIdx: leaderIdx}
+	s.target = strategy.next(s.replicas)
 	if s.target != nil && s.busyThreshold > 0 && (s.target.store.EstimatedWaitTime() > s.busyThreshold || s.target.serverIsBusy) {
 		// If the leader is busy in our estimation, try other idle replicas.
 		// If other replicas are all busy, tryIdleReplica will try the leader again without busy threshold.
-		mixedStrategy := ReplicaSelectMixedStrategy{busyThreshold: s.busyThreshold}
+		mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, busyThreshold: s.busyThreshold}
 		idleTarget := mixedStrategy.next(s, s.region)
 		if idleTarget != nil {
 			s.target = idleTarget
@@ -165,15 +166,22 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	if s.target != nil {
 		return
 	}
-	mixedStrategy := ReplicaSelectMixedStrategy{leaderOnly: s.option.leaderOnly}
+	mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, leaderOnly: s.option.leaderOnly}
 	s.target = mixedStrategy.next(s, s.region)
+	if s.target != nil {
+		if s.replicas[leaderIdx].deadlineErrUsingConfTimeout && s.isReadOnlyReq {
+			req.ReplicaRead = true
+			req.StaleRead = false
+		}
+	}
 }
 
 func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
+	leaderIdx := s.region.getStore().workTiKVIdx
 	if s.isStaleRead && s.attempts == 2 {
 		// For stale read second retry, try leader by leader read.
-		strategy := ReplicaSelectLeaderStrategy{}
-		s.target = strategy.next(s.replicas, s.region)
+		strategy := ReplicaSelectLeaderStrategy{leaderIdx: leaderIdx}
+		s.target = strategy.next(s.replicas)
 		if s.target != nil && !s.target.isExhausted(1, 0) {
 			// For stale read, don't retry leader again if it is accessed at the first attempt.
 			req.StaleRead = false
@@ -189,6 +197,7 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		}
 	}
 	strategy := ReplicaSelectMixedStrategy{
+		leaderIdx:    leaderIdx,
 		tryLeader:    req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader,
 		preferLeader: preferLeader,
 		leaderOnly:   s.option.leaderOnly,
@@ -218,10 +227,12 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 	}
 }
 
-type ReplicaSelectLeaderStrategy struct{}
+type ReplicaSelectLeaderStrategy struct {
+	leaderIdx AccessIndex
+}
 
-func (s ReplicaSelectLeaderStrategy) next(replicas []*replica, region *Region) *replica {
-	leader := replicas[region.getStore().workTiKVIdx]
+func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
+	leader := replicas[s.leaderIdx]
 	if isLeaderCandidate(leader) {
 		return leader
 	}
@@ -240,6 +251,7 @@ func isLeaderCandidate(leader *replica) bool {
 }
 
 type ReplicaSelectMixedStrategy struct {
+	leaderIdx     AccessIndex
 	tryLeader     bool
 	preferLeader  bool
 	leaderOnly    bool
@@ -250,7 +262,6 @@ type ReplicaSelectMixedStrategy struct {
 }
 
 func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *Region) *replica {
-	leaderIdx := region.getStore().workTiKVIdx
 	replicas := selector.replicas
 	maxScoreIdxes := make([]int, 0, len(replicas))
 	maxScore := -1
@@ -259,7 +270,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
 		liveness := r.store.getLivenessState()
-		isLeader := AccessIndex(i) == leaderIdx
+		isLeader := AccessIndex(i) == s.leaderIdx
 		if epochStale && ((liveness == reachable && r.store.getResolveState() == resolved) || isLeader) {
 			reloadRegion = true
 		}

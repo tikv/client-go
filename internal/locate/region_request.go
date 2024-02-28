@@ -1186,7 +1186,7 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 		}
 		if accessLeader, ok := s.state.(*accessKnownLeader); ok {
 			// If leader return deadline exceeded error, we should try to access follower next time.
-			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx, fromAccessKnownLeader: true}
+			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
 		}
 		return true
 	}
@@ -1342,8 +1342,10 @@ func (s *replicaSelector) onServerIsBusy(
 				// backoff if still receiving ServerIsBusy after accessing leader again
 			}
 		}
-	} else if ctx != nil && ctx.Store != nil && s.canFallback2Follower() {
-		return true, nil
+	} else if ctx != nil && ctx.Store != nil {
+		if s.canFallback2Follower() {
+			return true, nil
+		}
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 	if err != nil {
@@ -2355,9 +2357,6 @@ func (s *RegionRequestSender) onRegionError(
 			if err != nil {
 				return false, err
 			}
-		}
-		if s.replicaSelector != nil {
-			s.replicaSelector.onDataIsNotReady()
 		}
 		return true, nil
 	}

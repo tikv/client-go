@@ -501,7 +501,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixedCalcul
 		s.NotNil(rc)
 		isLeader := r.peer.Id == rc.GetLeaderPeerID()
 		s.Equal(isLeader, AccessIndex(i) == rc.getStore().workTiKVIdx)
-		strategy := ReplicaSelectMixedStrategy{}
+		strategy := ReplicaSelectMixedStrategy{leaderIdx: rc.getStore().workTiKVIdx}
 		score := strategy.calculateScore(r, isLeader)
 		s.Equal(r.store.isSlow(), false)
 		if isLeader {
@@ -543,6 +543,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixedCalcul
 		s.Equal(score, 0)
 
 		strategy = ReplicaSelectMixedStrategy{
+			leaderIdx: rc.getStore().workTiKVIdx,
 			tryLeader: true,
 			labels:    labels,
 		}
@@ -554,6 +555,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixedCalcul
 		}
 
 		strategy = ReplicaSelectMixedStrategy{
+			leaderIdx:    rc.getStore().workTiKVIdx,
 			preferLeader: true,
 			labels:       labels,
 		}
@@ -940,389 +942,6 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
-}
-
-func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
-	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-	s.Nil(err)
-	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
-	for _, peer := range rc.meta.Peers {
-		if peer.StoreId == storeId {
-			s.cluster.ChangeLeader(rc.meta.Id, peer.Id)
-		}
-	}
-	// Invalidate region cache to reload.
-	s.cache.InvalidateCachedRegion(loc.Region)
-}
-
-func (s *testReplicaSelectorSuite) runCaseAndCompare(ca2 replicaSelectorAccessPathCase) bool {
-	ca2.run(s)
-	if ca2.accessErrInValid {
-		// the case has been marked as invalid, just ignore it.
-		return false
-	}
-	if ca2.expect != nil {
-		msg := fmt.Sprintf("%v\n\n", ca2.Format())
-		expect := ca2.expect
-		result := ca2.accessPathResult
-		s.Equal(expect.accessPath, result.accessPath, msg)
-		s.Equal(expect.respErr, result.respErr, msg)
-		s.Equal(expect.respRegionError, result.respRegionError, msg)
-		s.Equal(expect.regionIsValid, result.regionIsValid, msg)
-		s.Equal(expect.backoffCnt, result.backoffCnt, msg)
-		s.Equal(expect.backoffDetail, result.backoffDetail, msg)
-	}
-	return true
-}
-
-func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
-	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
-	msg := ca.Format()
-	access := []string{}
-	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		idx := len(access)
-		access = append(access, fmt.Sprintf("{addr: %v, replica-read: %v, stale-read: %v}", addr, req.ReplicaRead, req.StaleRead))
-		if idx < len(ca.accessErr) {
-			if !ca.accessErr[idx].Valid(addr, req) {
-				// mark this case is invalid. just ignore this case.
-				ca.accessErrInValid = true
-			} else {
-				loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-				s.Nil(err)
-				rc := s.cache.GetCachedRegionWithRLock(loc.Region)
-				s.NotNil(rc)
-				regionErr, err := ca.genAccessErr(s.cache, rc, ca.accessErr[idx])
-				if regionErr != nil {
-					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-						RegionError: regionErr,
-					}}, nil
-				}
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-			Value: []byte("hello world"),
-		}}, nil
-	}}
-	sender := NewRegionRequestSender(s.cache, fnClient)
-	var req *tikvrpc.Request
-	switch ca.reqType {
-	case tikvrpc.CmdGet:
-		req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
-			Key: []byte("key"),
-		})
-	case tikvrpc.CmdPrewrite:
-		req = tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
-	default:
-		s.FailNow("unsupported reqType " + ca.reqType.String())
-	}
-	if ca.staleRead {
-		req.EnableStaleWithMixedReplicaRead()
-		req.ReadReplicaScope = oracle.GlobalTxnScope
-		req.TxnScope = oracle.GlobalTxnScope
-	} else {
-		req.ReplicaReadType = ca.readType
-		req.ReplicaRead = ca.readType.IsFollowerRead()
-	}
-	opts := []StoreSelectorOption{}
-	if ca.label != nil {
-		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
-	}
-	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
-	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-	s.Nil(err)
-	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
-	s.NotNil(rc)
-	for _, store := range rc.getStore().stores {
-		store.slowScore.resetSlowScore()
-		atomic.StoreUint32(&store.livenessState, uint32(reachable))
-		store.setResolveState(resolved)
-	}
-
-	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
-	timeout := ca.timeout
-	if timeout == 0 {
-		timeout = client.ReadTimeoutShort
-	}
-	resp, _, _, err := sender.SendReqCtx(bo, req, loc.Region, timeout, tikvrpc.TiKV, opts...)
-	if err == nil {
-		s.NotNil(resp, msg)
-		regionErr, err := resp.GetRegionError()
-		s.Nil(err, msg)
-		ca.respRegionError = regionErr
-	} else {
-		ca.respErr = err.Error()
-	}
-	ca.accessPath = access
-	ca.backoffCnt = bo.GetTotalBackoffTimes()
-	detail := make([]string, 0, len(bo.GetBackoffTimes()))
-	for tp, cnt := range bo.GetBackoffTimes() {
-		detail = append(detail, fmt.Sprintf("%v+%v", tp, cnt))
-	}
-	sort.Strings(detail)
-	ca.backoffDetail = detail
-	ca.regionIsValid = sender.replicaSelector.getBaseReplicaSelector().region.isValid()
-	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
-}
-
-func (ca *replicaSelectorAccessPathCase) genAccessErr(regionCache *RegionCache, r *Region, accessErr RegionErrorType) (regionErr *errorpb.Error, err error) {
-	genNotLeaderErr := func(storeID uint64) *errorpb.Error {
-		var peerInStore *metapb.Peer
-		for _, peer := range r.meta.Peers {
-			if peer.StoreId == storeID {
-				peerInStore = peer
-				break
-			}
-		}
-		return &errorpb.Error{
-			NotLeader: &errorpb.NotLeader{
-				RegionId: r.meta.Id,
-				Leader:   peerInStore,
-			},
-		}
-	}
-	switch accessErr {
-	case NotLeaderWithNewLeader1Err:
-		regionErr = genNotLeaderErr(1)
-	case NotLeaderWithNewLeader2Err:
-		regionErr = genNotLeaderErr(2)
-	case NotLeaderWithNewLeader3Err:
-		regionErr = genNotLeaderErr(3)
-	default:
-		regionErr, err = accessErr.GenError()
-	}
-	if err != nil {
-		// inject unreachable liveness.
-		unreachable.injectConstantLiveness(regionCache)
-	}
-	return regionErr, err
-}
-
-func (c *replicaSelectorAccessPathCase) Format() string {
-	label := ""
-	if c.label != nil {
-		label = fmt.Sprintf("%v->%v", c.label.Key, c.label.Value)
-	}
-	respRegionError := ""
-	if c.respRegionError != nil {
-		respRegionError = c.respRegionError.String()
-	}
-	accessErr := make([]string, len(c.accessErr))
-	for i := range c.accessErr {
-		accessErr[i] = c.accessErr[i].String()
-	}
-	return fmt.Sprintf("{\n"+
-		"\treq: %v\n"+
-		"\tread_type: %v\n"+
-		"\tstale_read: %v\n"+
-		"\ttimeout: %v\n"+
-		"\tlabel: %v\n"+
-		"\taccess_err: %v\n"+
-		"\taccess_path: %v\n"+
-		"\tresp_err: %v\n"+
-		"\tresp_region_err: %v\n"+
-		"\tbackoff_cnt: %v\n"+
-		"\tbackoff_detail: %v\n"+
-		"\tregion_is_valid: %v\n}",
-		c.reqType, c.readType, c.staleRead, c.timeout, label, strings.Join(accessErr, ", "), strings.Join(c.accessPath, ", "),
-		c.respErr, respRegionError, c.backoffCnt, strings.Join(c.backoffDetail, ", "), c.regionIsValid)
-}
-
-type RegionErrorType int
-
-const (
-	NotLeaderErr RegionErrorType = iota + 1
-	NotLeaderWithNewLeader1Err
-	NotLeaderWithNewLeader2Err
-	NotLeaderWithNewLeader3Err
-	RegionNotFoundErr
-	KeyNotInRegionErr
-	EpochNotMatchErr
-	ServerIsBusyErr
-	ServerIsBusyWithEstimatedWaitMsErr
-	StaleCommandErr
-	StoreNotMatchErr
-	RaftEntryTooLargeErr
-	MaxTimestampNotSyncedErr
-	ReadIndexNotReadyErr
-	ProposalInMergingModeErr
-	DataIsNotReadyErr
-	RegionNotInitializedErr
-	DiskFullErr
-	RecoveryInProgressErr
-	FlashbackInProgressErr
-	FlashbackNotPreparedErr
-	IsWitnessErr
-	MismatchPeerIdErr
-	BucketVersionNotMatchErr
-	// following error type is not region error.
-	DeadLineExceededErr
-	RegionErrorTypeMax
-)
-
-func (tp RegionErrorType) GenRegionError() *errorpb.Error {
-	err := &errorpb.Error{}
-	switch tp {
-	case NotLeaderErr:
-		err.NotLeader = &errorpb.NotLeader{}
-	case RegionNotFoundErr:
-		err.RegionNotFound = &errorpb.RegionNotFound{}
-	case KeyNotInRegionErr:
-		err.KeyNotInRegion = &errorpb.KeyNotInRegion{}
-	case EpochNotMatchErr:
-		err.EpochNotMatch = &errorpb.EpochNotMatch{}
-	case ServerIsBusyErr:
-		err.ServerIsBusy = &errorpb.ServerIsBusy{}
-	case ServerIsBusyWithEstimatedWaitMsErr:
-		err.ServerIsBusy = &errorpb.ServerIsBusy{EstimatedWaitMs: 10}
-	case StaleCommandErr:
-		err.StaleCommand = &errorpb.StaleCommand{}
-	case StoreNotMatchErr:
-		err.StoreNotMatch = &errorpb.StoreNotMatch{}
-	case RaftEntryTooLargeErr:
-		err.RaftEntryTooLarge = &errorpb.RaftEntryTooLarge{}
-	case MaxTimestampNotSyncedErr:
-		err.MaxTimestampNotSynced = &errorpb.MaxTimestampNotSynced{}
-	case ReadIndexNotReadyErr:
-		err.ReadIndexNotReady = &errorpb.ReadIndexNotReady{}
-	case ProposalInMergingModeErr:
-		err.ProposalInMergingMode = &errorpb.ProposalInMergingMode{}
-	case DataIsNotReadyErr:
-		err.DataIsNotReady = &errorpb.DataIsNotReady{}
-	case RegionNotInitializedErr:
-		err.RegionNotInitialized = &errorpb.RegionNotInitialized{}
-	case DiskFullErr:
-		err.DiskFull = &errorpb.DiskFull{}
-	case RecoveryInProgressErr:
-		err.RecoveryInProgress = &errorpb.RecoveryInProgress{}
-	case FlashbackInProgressErr:
-		err.FlashbackInProgress = &errorpb.FlashbackInProgress{}
-	case FlashbackNotPreparedErr:
-		err.FlashbackNotPrepared = &errorpb.FlashbackNotPrepared{}
-	case IsWitnessErr:
-		err.IsWitness = &errorpb.IsWitness{}
-	case MismatchPeerIdErr:
-		err.MismatchPeerId = &errorpb.MismatchPeerId{}
-	case BucketVersionNotMatchErr:
-		err.BucketVersionNotMatch = &errorpb.BucketVersionNotMatch{}
-	default:
-		return nil
-	}
-	return err
-}
-
-func (tp RegionErrorType) GenError() (*errorpb.Error, error) {
-	regionErr := tp.GenRegionError()
-	if regionErr != nil {
-		return regionErr, nil
-	}
-	switch tp {
-	case DeadLineExceededErr:
-		return nil, context.DeadlineExceeded
-	}
-	return nil, nil
-}
-
-func (tp RegionErrorType) Valid(addr string, req *tikvrpc.Request) bool {
-	// leader-read.
-	if !req.StaleRead && !req.ReplicaRead {
-		switch tp {
-		case DataIsNotReadyErr:
-			// DataIsNotReadyErr only return when req is a stale read.
-			return false
-		}
-	}
-	// replica-read.
-	if !req.StaleRead && req.ReplicaRead {
-		switch tp {
-		case NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err:
-			// NotLeaderErr will not return in replica read.
-			return false
-		case DataIsNotReadyErr:
-			// DataIsNotReadyErr only return when req is a stale read.
-			return false
-		}
-	}
-	// stale-read.
-	if req.StaleRead && !req.ReplicaRead {
-		switch tp {
-		case NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err:
-			// NotLeaderErr will not return in stale read.
-			return false
-		}
-	}
-	// store1 can't return a not leader error with new leader in store1.
-	if addr == "store1" && tp == NotLeaderWithNewLeader1Err {
-		return false
-	}
-	// ditto.
-	if addr == "store2" && tp == NotLeaderWithNewLeader2Err {
-		return false
-	}
-	// ditto.
-	if addr == "store3" && tp == NotLeaderWithNewLeader3Err {
-		return false
-	}
-	return true
-}
-
-func (tp RegionErrorType) String() string {
-	switch tp {
-	case NotLeaderErr:
-		return "NotLeaderErr"
-	case NotLeaderWithNewLeader1Err:
-		return "NotLeaderWithNewLeader1Err"
-	case NotLeaderWithNewLeader2Err:
-		return "NotLeaderWithNewLeader2Err"
-	case NotLeaderWithNewLeader3Err:
-		return "NotLeaderWithNewLeader3Err"
-	case RegionNotFoundErr:
-		return "RegionNotFoundErr"
-	case KeyNotInRegionErr:
-		return "KeyNotInRegionErr"
-	case EpochNotMatchErr:
-		return "EpochNotMatchErr"
-	case ServerIsBusyErr:
-		return "ServerIsBusyErr"
-	case ServerIsBusyWithEstimatedWaitMsErr:
-		return "ServerIsBusyWithEstimatedWaitMsErr"
-	case StaleCommandErr:
-		return "StaleCommandErr"
-	case StoreNotMatchErr:
-		return "StoreNotMatchErr"
-	case RaftEntryTooLargeErr:
-		return "RaftEntryTooLargeErr"
-	case MaxTimestampNotSyncedErr:
-		return "MaxTimestampNotSyncedErr"
-	case ReadIndexNotReadyErr:
-		return "ReadIndexNotReadyErr"
-	case ProposalInMergingModeErr:
-		return "ProposalInMergingModeErr"
-	case DataIsNotReadyErr:
-		return "DataIsNotReadyErr"
-	case RegionNotInitializedErr:
-		return "RegionNotInitializedErr"
-	case DiskFullErr:
-		return "DiskFullErr"
-	case RecoveryInProgressErr:
-		return "RecoveryInProgressErr"
-	case FlashbackInProgressErr:
-		return "FlashbackInProgressErr"
-	case FlashbackNotPreparedErr:
-		return "FlashbackNotPreparedErr"
-	case IsWitnessErr:
-		return "IsWitnessErr"
-	case MismatchPeerIdErr:
-		return "MismatchPeerIdErr"
-	case BucketVersionNotMatchErr:
-		return "BucketVersionNotMatchErr"
-	case DeadLineExceededErr:
-		return "DeadLineExceededErr"
-	default:
-		return "unknown_" + strconv.Itoa(int(tp))
-	}
 }
 
 func TestReplicaReadAccessPathBasic(t *testing.T) {
@@ -2530,46 +2149,6 @@ func TestReplicaSelectorAccessPathByCase(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
-//func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPathCase) bool {
-//	ca2 := ca1
-//	config.UpdateGlobal(func(conf *config.Config) {
-//		conf.EnableReplicaSelectorV2 = false
-//	})
-//	ca1.run(s)
-//	if ca1.accessErrInValid {
-//		// the case has been marked as invalid, just ignore it.
-//		return false
-//	}
-//	config.UpdateGlobal(func(conf *config.Config) {
-//		conf.EnableReplicaSelectorV2 = true
-//	})
-//	ca2.run(s)
-//	if ca2.expect != nil {
-//		msg := fmt.Sprintf("%v\n\n", ca2.Format())
-//		expect := ca2.expect
-//		result := ca2.accessPathResult
-//		s.Equal(expect.accessPath, result.accessPath, msg)
-//		s.Equal(expect.respErr, result.respErr, msg)
-//		s.Equal(expect.respRegionError, result.respRegionError, msg)
-//		s.Equal(expect.regionIsValid, result.regionIsValid, msg)
-//		s.Equal(expect.backoffCnt, result.backoffCnt, msg)
-//		s.Equal(expect.backoffDetail, result.backoffDetail, msg)
-//	}
-//	msg := fmt.Sprintf("v1:%v\nv2:%v\n\n", ca1.Format(), ca2.Format())
-//	v1 := ca1.accessPathResult
-//	v2 := ca2.accessPathResult
-//	s.Equal(v1.accessPath, v2.accessPath, msg)
-//	s.Equal(v1.respErr, v2.respErr, msg)
-//	s.Equal(v1.respRegionError, v2.respRegionError, msg)
-//	s.Equal(v1.regionIsValid, v2.regionIsValid, msg)
-//	if ca1.readType == kv.ReplicaReadLeader {
-//		// Currently, v2 has compatible backoff strategy with v1, so we don't compare backoff detail.
-//		s.Equal(v1.backoffCnt, v2.backoffCnt, msg)
-//		s.Equal(v1.backoffDetail, v2.backoffDetail, msg)
-//	}
-//	return true
-//}
-
 func TestReplicaSelectorAccessPath2(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
@@ -2623,6 +2202,407 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 		zap.Int("total-case", totalCaseCount),
 		zap.Int("valid-case", totalValidCaseCount),
 		zap.Int("skipped-case", totalCaseCount-totalValidCaseCount))
+}
+
+func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+	for _, peer := range rc.meta.Peers {
+		if peer.StoreId == storeId {
+			s.cluster.ChangeLeader(rc.meta.Id, peer.Id)
+		}
+	}
+	// Invalidate region cache to reload.
+	s.cache.InvalidateCachedRegion(loc.Region)
+}
+
+func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPathCase) bool {
+	ca2 := ca1
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = false
+	})
+	ca1.run(s)
+	if ca1.accessErrInValid {
+		// the case has been marked as invalid, just ignore it.
+		return false
+	}
+	ca1.checkResult(s, false)
+
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = true
+	})
+	ca2.run(s)
+	ca2.checkResult(s, true)
+	return true
+}
+
+func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite, v2 bool) {
+	if ca.expect == nil {
+		return
+	}
+	version := "v1"
+	if v2 {
+		version = "v2"
+	}
+	msg := fmt.Sprintf("%v\n%v\n\n", version, ca.Format())
+	expect := ca.expect
+	result := ca.accessPathResult
+	s.Equal(expect.accessPath, result.accessPath, msg)
+	s.Equal(expect.respErr, result.respErr, msg)
+	s.Equal(expect.respRegionError, result.respRegionError, msg)
+	s.Equal(expect.regionIsValid, result.regionIsValid, msg)
+	if !v2 {
+		// Currently, v2 has compatible backoff strategy with v1, so we don't compare backoff detail.
+		s.Equal(expect.backoffCnt, result.backoffCnt, msg)
+		s.Equal(expect.backoffDetail, result.backoffDetail, msg)
+	}
+}
+
+func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
+	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
+	msg := ca.Format()
+	access := []string{}
+	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		idx := len(access)
+		access = append(access, fmt.Sprintf("{addr: %v, replica-read: %v, stale-read: %v}", addr, req.ReplicaRead, req.StaleRead))
+		if idx < len(ca.accessErr) {
+			if !ca.accessErr[idx].Valid(addr, req) {
+				// mark this case is invalid. just ignore this case.
+				ca.accessErrInValid = true
+			} else {
+				rc := s.getRegion()
+				s.NotNil(rc)
+				regionErr, err := ca.genAccessErr(s.cache, rc, ca.accessErr[idx])
+				if regionErr != nil {
+					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+						RegionError: regionErr,
+					}}, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			Value: []byte("hello world"),
+		}}, nil
+	}}
+	sender := NewRegionRequestSender(s.cache, fnClient)
+	var req *tikvrpc.Request
+	switch ca.reqType {
+	case tikvrpc.CmdGet:
+		req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+			Key: []byte("key"),
+		})
+	case tikvrpc.CmdPrewrite:
+		req = tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
+	default:
+		s.FailNow("unsupported reqType " + ca.reqType.String())
+	}
+	if ca.staleRead {
+		req.EnableStaleWithMixedReplicaRead()
+		req.ReadReplicaScope = oracle.GlobalTxnScope
+		req.TxnScope = oracle.GlobalTxnScope
+	} else {
+		req.ReplicaReadType = ca.readType
+		req.ReplicaRead = ca.readType.IsFollowerRead()
+	}
+	opts := []StoreSelectorOption{}
+	if ca.label != nil {
+		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
+	}
+	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
+	rc := s.getRegion()
+	s.NotNil(rc)
+	for _, store := range rc.getStore().stores {
+		store.slowScore.resetSlowScore()
+		atomic.StoreUint32(&store.livenessState, uint32(reachable))
+		store.setResolveState(resolved)
+	}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
+	timeout := ca.timeout
+	if timeout == 0 {
+		timeout = client.ReadTimeoutShort
+	}
+	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
+	if err == nil {
+		s.NotNil(resp, msg)
+		regionErr, err := resp.GetRegionError()
+		s.Nil(err, msg)
+		ca.respRegionError = regionErr
+	} else {
+		ca.respErr = err.Error()
+	}
+	ca.accessPath = access
+	ca.backoffCnt = bo.GetTotalBackoffTimes()
+	detail := make([]string, 0, len(bo.GetBackoffTimes()))
+	for tp, cnt := range bo.GetBackoffTimes() {
+		detail = append(detail, fmt.Sprintf("%v+%v", tp, cnt))
+	}
+	sort.Strings(detail)
+	ca.backoffDetail = detail
+	ca.regionIsValid = sender.replicaSelector.getBaseReplicaSelector().region.isValid()
+	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
+}
+
+func (ca *replicaSelectorAccessPathCase) genAccessErr(regionCache *RegionCache, r *Region, accessErr RegionErrorType) (regionErr *errorpb.Error, err error) {
+	genNotLeaderErr := func(storeID uint64) *errorpb.Error {
+		var peerInStore *metapb.Peer
+		for _, peer := range r.meta.Peers {
+			if peer.StoreId == storeID {
+				peerInStore = peer
+				break
+			}
+		}
+		return &errorpb.Error{
+			NotLeader: &errorpb.NotLeader{
+				RegionId: r.meta.Id,
+				Leader:   peerInStore,
+			},
+		}
+	}
+	switch accessErr {
+	case NotLeaderWithNewLeader1Err:
+		regionErr = genNotLeaderErr(1)
+	case NotLeaderWithNewLeader2Err:
+		regionErr = genNotLeaderErr(2)
+	case NotLeaderWithNewLeader3Err:
+		regionErr = genNotLeaderErr(3)
+	default:
+		regionErr, err = accessErr.GenError()
+	}
+	if err != nil {
+		// inject unreachable liveness.
+		unreachable.injectConstantLiveness(regionCache)
+	}
+	return regionErr, err
+}
+
+func (c *replicaSelectorAccessPathCase) Format() string {
+	label := ""
+	if c.label != nil {
+		label = fmt.Sprintf("%v->%v", c.label.Key, c.label.Value)
+	}
+	respRegionError := ""
+	if c.respRegionError != nil {
+		respRegionError = c.respRegionError.String()
+	}
+	accessErr := make([]string, len(c.accessErr))
+	for i := range c.accessErr {
+		accessErr[i] = c.accessErr[i].String()
+	}
+	return fmt.Sprintf("{\n"+
+		"\treq: %v\n"+
+		"\tread_type: %v\n"+
+		"\tstale_read: %v\n"+
+		"\ttimeout: %v\n"+
+		"\tlabel: %v\n"+
+		"\taccess_err: %v\n"+
+		"\taccess_path: %v\n"+
+		"\tresp_err: %v\n"+
+		"\tresp_region_err: %v\n"+
+		"\tbackoff_cnt: %v\n"+
+		"\tbackoff_detail: %v\n"+
+		"\tregion_is_valid: %v\n}",
+		c.reqType, c.readType, c.staleRead, c.timeout, label, strings.Join(accessErr, ", "), strings.Join(c.accessPath, ", "),
+		c.respErr, respRegionError, c.backoffCnt, strings.Join(c.backoffDetail, ", "), c.regionIsValid)
+}
+
+type RegionErrorType int
+
+const (
+	NotLeaderErr RegionErrorType = iota + 1
+	NotLeaderWithNewLeader1Err
+	NotLeaderWithNewLeader2Err
+	NotLeaderWithNewLeader3Err
+	RegionNotFoundErr
+	KeyNotInRegionErr
+	EpochNotMatchErr
+	ServerIsBusyErr
+	ServerIsBusyWithEstimatedWaitMsErr
+	StaleCommandErr
+	StoreNotMatchErr
+	RaftEntryTooLargeErr
+	MaxTimestampNotSyncedErr
+	ReadIndexNotReadyErr
+	ProposalInMergingModeErr
+	DataIsNotReadyErr
+	RegionNotInitializedErr
+	DiskFullErr
+	RecoveryInProgressErr
+	FlashbackInProgressErr
+	FlashbackNotPreparedErr
+	IsWitnessErr
+	MismatchPeerIdErr
+	BucketVersionNotMatchErr
+	// following error type is not region error.
+	DeadLineExceededErr
+	RegionErrorTypeMax
+)
+
+func (tp RegionErrorType) GenRegionError() *errorpb.Error {
+	err := &errorpb.Error{}
+	switch tp {
+	case NotLeaderErr:
+		err.NotLeader = &errorpb.NotLeader{}
+	case RegionNotFoundErr:
+		err.RegionNotFound = &errorpb.RegionNotFound{}
+	case KeyNotInRegionErr:
+		err.KeyNotInRegion = &errorpb.KeyNotInRegion{}
+	case EpochNotMatchErr:
+		err.EpochNotMatch = &errorpb.EpochNotMatch{}
+	case ServerIsBusyErr:
+		err.ServerIsBusy = &errorpb.ServerIsBusy{}
+	case ServerIsBusyWithEstimatedWaitMsErr:
+		err.ServerIsBusy = &errorpb.ServerIsBusy{EstimatedWaitMs: 10}
+	case StaleCommandErr:
+		err.StaleCommand = &errorpb.StaleCommand{}
+	case StoreNotMatchErr:
+		err.StoreNotMatch = &errorpb.StoreNotMatch{}
+	case RaftEntryTooLargeErr:
+		err.RaftEntryTooLarge = &errorpb.RaftEntryTooLarge{}
+	case MaxTimestampNotSyncedErr:
+		err.MaxTimestampNotSynced = &errorpb.MaxTimestampNotSynced{}
+	case ReadIndexNotReadyErr:
+		err.ReadIndexNotReady = &errorpb.ReadIndexNotReady{}
+	case ProposalInMergingModeErr:
+		err.ProposalInMergingMode = &errorpb.ProposalInMergingMode{}
+	case DataIsNotReadyErr:
+		err.DataIsNotReady = &errorpb.DataIsNotReady{}
+	case RegionNotInitializedErr:
+		err.RegionNotInitialized = &errorpb.RegionNotInitialized{}
+	case DiskFullErr:
+		err.DiskFull = &errorpb.DiskFull{}
+	case RecoveryInProgressErr:
+		err.RecoveryInProgress = &errorpb.RecoveryInProgress{}
+	case FlashbackInProgressErr:
+		err.FlashbackInProgress = &errorpb.FlashbackInProgress{}
+	case FlashbackNotPreparedErr:
+		err.FlashbackNotPrepared = &errorpb.FlashbackNotPrepared{}
+	case IsWitnessErr:
+		err.IsWitness = &errorpb.IsWitness{}
+	case MismatchPeerIdErr:
+		err.MismatchPeerId = &errorpb.MismatchPeerId{}
+	case BucketVersionNotMatchErr:
+		err.BucketVersionNotMatch = &errorpb.BucketVersionNotMatch{}
+	default:
+		return nil
+	}
+	return err
+}
+
+func (tp RegionErrorType) GenError() (*errorpb.Error, error) {
+	regionErr := tp.GenRegionError()
+	if regionErr != nil {
+		return regionErr, nil
+	}
+	switch tp {
+	case DeadLineExceededErr:
+		return nil, context.DeadlineExceeded
+	}
+	return nil, nil
+}
+
+func (tp RegionErrorType) Valid(addr string, req *tikvrpc.Request) bool {
+	// leader-read.
+	if !req.StaleRead && !req.ReplicaRead {
+		switch tp {
+		case DataIsNotReadyErr:
+			// DataIsNotReadyErr only return when req is a stale read.
+			return false
+		}
+	}
+	// replica-read.
+	if !req.StaleRead && req.ReplicaRead {
+		switch tp {
+		case NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err:
+			// NotLeaderErr will not return in replica read.
+			return false
+		case DataIsNotReadyErr:
+			// DataIsNotReadyErr only return when req is a stale read.
+			return false
+		}
+	}
+	// stale-read.
+	if req.StaleRead && !req.ReplicaRead {
+		switch tp {
+		case NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err:
+			// NotLeaderErr will not return in stale read.
+			return false
+		}
+	}
+	// store1 can't return a not leader error with new leader in store1.
+	if addr == "store1" && tp == NotLeaderWithNewLeader1Err {
+		return false
+	}
+	// ditto.
+	if addr == "store2" && tp == NotLeaderWithNewLeader2Err {
+		return false
+	}
+	// ditto.
+	if addr == "store3" && tp == NotLeaderWithNewLeader3Err {
+		return false
+	}
+	return true
+}
+
+func (tp RegionErrorType) String() string {
+	switch tp {
+	case NotLeaderErr:
+		return "NotLeaderErr"
+	case NotLeaderWithNewLeader1Err:
+		return "NotLeaderWithNewLeader1Err"
+	case NotLeaderWithNewLeader2Err:
+		return "NotLeaderWithNewLeader2Err"
+	case NotLeaderWithNewLeader3Err:
+		return "NotLeaderWithNewLeader3Err"
+	case RegionNotFoundErr:
+		return "RegionNotFoundErr"
+	case KeyNotInRegionErr:
+		return "KeyNotInRegionErr"
+	case EpochNotMatchErr:
+		return "EpochNotMatchErr"
+	case ServerIsBusyErr:
+		return "ServerIsBusyErr"
+	case ServerIsBusyWithEstimatedWaitMsErr:
+		return "ServerIsBusyWithEstimatedWaitMsErr"
+	case StaleCommandErr:
+		return "StaleCommandErr"
+	case StoreNotMatchErr:
+		return "StoreNotMatchErr"
+	case RaftEntryTooLargeErr:
+		return "RaftEntryTooLargeErr"
+	case MaxTimestampNotSyncedErr:
+		return "MaxTimestampNotSyncedErr"
+	case ReadIndexNotReadyErr:
+		return "ReadIndexNotReadyErr"
+	case ProposalInMergingModeErr:
+		return "ProposalInMergingModeErr"
+	case DataIsNotReadyErr:
+		return "DataIsNotReadyErr"
+	case RegionNotInitializedErr:
+		return "RegionNotInitializedErr"
+	case DiskFullErr:
+		return "DiskFullErr"
+	case RecoveryInProgressErr:
+		return "RecoveryInProgressErr"
+	case FlashbackInProgressErr:
+		return "FlashbackInProgressErr"
+	case FlashbackNotPreparedErr:
+		return "FlashbackNotPreparedErr"
+	case IsWitnessErr:
+		return "IsWitnessErr"
+	case MismatchPeerIdErr:
+		return "MismatchPeerIdErr"
+	case BucketVersionNotMatchErr:
+		return "BucketVersionNotMatchErr"
+	case DeadLineExceededErr:
+		return "DeadLineExceededErr"
+	default:
+		return "unknown_" + strconv.Itoa(int(tp))
+	}
 }
 
 type accessErrGenerator struct {
@@ -2748,94 +2728,6 @@ func (a *accessErrGenerator) genAccessErrs(allErrs, retryErrs []RegionErrorType)
 	return errs
 }
 
-//func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
-//	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
-//	msg := ca.Format()
-//	access := []string{}
-//	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-//		idx := len(access)
-//		access = append(access, fmt.Sprintf("{addr: %v, replica-read: %v, stale-read: %v}", addr, req.ReplicaRead, req.StaleRead))
-//		if idx < len(ca.accessErr) {
-//			if !ca.accessErr[idx].Valid(addr, req) {
-//				// mark this case is invalid. just ignore this case.
-//				ca.accessErrInValid = true
-//			} else {
-//				rc := s.getRegion()
-//				s.NotNil(rc)
-//				regionErr, err := ca.genAccessErr(s.cache, rc, ca.accessErr[idx])
-//				if regionErr != nil {
-//					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-//						RegionError: regionErr,
-//					}}, nil
-//				}
-//				if err != nil {
-//					return nil, err
-//				}
-//			}
-//		}
-//		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-//			Value: []byte("hello world"),
-//		}}, nil
-//	}}
-//	sender := NewRegionRequestSender(s.cache, fnClient)
-//	var req *tikvrpc.Request
-//	switch ca.reqType {
-//	case tikvrpc.CmdGet:
-//		req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
-//			Key: []byte("key"),
-//		})
-//	case tikvrpc.CmdPrewrite:
-//		req = tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{})
-//	default:
-//		s.FailNow("unsupported reqType " + ca.reqType.String())
-//	}
-//	if ca.staleRead {
-//		req.EnableStaleWithMixedReplicaRead()
-//		req.ReadReplicaScope = oracle.GlobalTxnScope
-//		req.TxnScope = oracle.GlobalTxnScope
-//	} else {
-//		req.ReplicaReadType = ca.readType
-//		req.ReplicaRead = ca.readType.IsFollowerRead()
-//	}
-//	opts := []StoreSelectorOption{}
-//	if ca.label != nil {
-//		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
-//	}
-//	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
-//	rc := s.getRegion()
-//	s.NotNil(rc)
-//	for _, store := range rc.getStore().stores {
-//		store.slowScore.resetSlowScore()
-//		atomic.StoreUint32(&store.livenessState, uint32(reachable))
-//		store.setResolveState(resolved)
-//	}
-//
-//	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
-//	timeout := ca.timeout
-//	if timeout == 0 {
-//		timeout = client.ReadTimeoutShort
-//	}
-//	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
-//	if err == nil {
-//		s.NotNil(resp, msg)
-//		regionErr, err := resp.GetRegionError()
-//		s.Nil(err, msg)
-//		ca.respRegionError = regionErr
-//	} else {
-//		ca.respErr = err.Error()
-//	}
-//	ca.accessPath = access
-//	ca.backoffCnt = bo.GetTotalBackoffTimes()
-//	detail := make([]string, 0, len(bo.GetBackoffTimes()))
-//	for tp, cnt := range bo.GetBackoffTimes() {
-//		detail = append(detail, fmt.Sprintf("%v+%v", tp, cnt))
-//	}
-//	sort.Strings(detail)
-//	ca.backoffDetail = detail
-//	ca.regionIsValid = sender.replicaSelector.getBaseReplicaSelector().region.isValid()
-//	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
-//}
-
 func (s *testReplicaSelectorSuite) getRegion() *Region {
 	for i := 0; i < 100; i++ {
 		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
@@ -2849,12 +2741,6 @@ func (s *testReplicaSelectorSuite) getRegion() *Region {
 	}
 	return nil
 }
-
-//func (c *accessPathResult) Equal(c2 *accessPathResult) bool {
-//	str1 := fmt.Sprintf("%v\n%v\n%v", c.accessPath, c.respRegionError, c.regionIsValid)
-//	str2 := fmt.Sprintf("%v\n%v\n%v", c2.accessPath, c2.respRegionError, c2.regionIsValid)
-//	return str1 == str2
-//}
 
 func BenchmarkReplicaSelector(b *testing.B) {
 	s := new(testRegionRequestToThreeStoresSuite)
