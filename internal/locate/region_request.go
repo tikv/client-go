@@ -521,7 +521,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	// If all followers are tried and fail, backoff and retry.
 	if selector.targetIdx < 0 {
-		if meetDeadlineExceededError(selector.replicas) {
+		if hasDeadlineExceededError(selector.replicas) {
 			// when meet deadline exceeded error, do fast retry without invalidate region cache.
 			return nil, nil
 		}
@@ -785,7 +785,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				}
 				return nil, stateChanged{}
 			}
-			if meetDeadlineExceededError(selector.replicas) {
+			if hasDeadlineExceededError(selector.replicas) {
 				// when meet deadline exceeded error, do fast retry without invalidate region cache.
 				return nil, nil
 			}
@@ -851,7 +851,7 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 	return replica.store.IsStoreMatch(state.option.stores) && replica.store.IsLabelsMatch(state.option.labels)
 }
 
-func meetDeadlineExceededError(replicas []*replica) bool {
+func hasDeadlineExceededError(replicas []*replica) bool {
 	for _, replica := range replicas {
 		if replica.deadlineErrUsingConfTimeout {
 			// when meet deadline exceeded error, do fast retry without invalidate region cache.
