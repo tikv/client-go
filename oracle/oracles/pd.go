@@ -115,6 +115,11 @@ func (o *pdOracle) GetTimestamp(ctx context.Context, opt *oracle.Option) (uint64
 	return ts, nil
 }
 
+// GetMinTimestamp gets a minimum timestamp for all keyspace groups.
+func (o *pdOracle) GetMinTimestamp(ctx context.Context) (uint64, error) {
+	return o.getMinTimestamp(ctx)
+}
+
 type tsFuture struct {
 	pd.TSFuture
 	o        *pdOracle
@@ -161,6 +166,21 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 	dist := time.Since(now)
 	if dist > slowDist {
 		logutil.Logger(ctx).Warn("get timestamp too slow",
+			zap.Duration("cost time", dist))
+	}
+	return oracle.ComposeTS(physical, logical), nil
+}
+
+func (o *pdOracle) getMinTimestamp(ctx context.Context) (uint64, error) {
+	now := time.Now()
+
+	physical, logical, err := o.c.GetMinTS(ctx)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	dist := time.Since(now)
+	if dist > slowDist {
+		logutil.Logger(ctx).Warn("get minimum timestamp too slow",
 			zap.Duration("cost time", dist))
 	}
 	return oracle.ComposeTS(physical, logical), nil

@@ -93,6 +93,17 @@ func (o *MockOracle) GetTimestamp(ctx context.Context, _ *oracle.Option) (uint64
 	return ts, nil
 }
 
+// GetMinTimestamp implements oracle.Oracle interface.
+func (o *MockOracle) GetMinTimestamp(ctx context.Context) (uint64, error) {
+	o.RLock()
+	defer o.RUnlock()
+
+	if o.stop {
+		return 0, errors.WithStack(errStopped)
+	}
+	return oracle.GoTimeToTS(time.Now().Add(o.offset)), nil
+}
+
 // GetStaleTimestamp implements oracle.Oracle interface.
 func (o *MockOracle) GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (ts uint64, err error) {
 	return oracle.GoTimeToTS(time.Now().Add(-time.Second * time.Duration(prevSecond))), nil
