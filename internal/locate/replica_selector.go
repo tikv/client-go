@@ -36,7 +36,6 @@ package locate
 
 import (
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -249,8 +248,6 @@ type ReplicaSelectMixedStrategy struct {
 	stores        []uint64
 	busyThreshold time.Duration
 }
-
-var randIntn = rand.Intn
 
 func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *Region) *replica {
 	leaderIdx := region.getStore().workTiKVIdx

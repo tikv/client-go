@@ -86,6 +86,16 @@ func (l *localOracle) GetTimestamp(ctx context.Context, _ *oracle.Option) (uint6
 	return ts, nil
 }
 
+func (l *localOracle) GetMinTimestamp(ctx context.Context) (uint64, error) {
+	l.Lock()
+	defer l.Unlock()
+	now := time.Now()
+	if l.hook != nil {
+		now = l.hook.currentTime
+	}
+	return oracle.GoTimeToTS(now), nil
+}
+
 func (l *localOracle) GetTimestampAsync(ctx context.Context, _ *oracle.Option) oracle.Future {
 	return &future{
 		ctx: ctx,
@@ -99,6 +109,10 @@ func (l *localOracle) GetLowResolutionTimestamp(ctx context.Context, opt *oracle
 
 func (l *localOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
 	return l.GetTimestampAsync(ctx, opt)
+}
+
+func (l *localOracle) SetLowResolutionTimestampUpdateInterval(time.Duration) error {
+	return nil
 }
 
 // GetStaleTimestamp return physical

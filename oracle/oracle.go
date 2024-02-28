@@ -50,6 +50,7 @@ type Oracle interface {
 	GetTimestampAsync(ctx context.Context, opt *Option) Future
 	GetLowResolutionTimestamp(ctx context.Context, opt *Option) (uint64, error)
 	GetLowResolutionTimestampAsync(ctx context.Context, opt *Option) Future
+	SetLowResolutionTimestampUpdateInterval(time.Duration) error
 	GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (uint64, error)
 	IsExpired(lockTimestamp, TTL uint64, opt *Option) bool
 	UntilExpired(lockTimeStamp, TTL uint64, opt *Option) int64
@@ -57,6 +58,8 @@ type Oracle interface {
 
 	GetExternalTimestamp(ctx context.Context) (uint64, error)
 	SetExternalTimestamp(ctx context.Context, ts uint64) error
+
+	GetMinTimestamp(ctx context.Context) (uint64, error)
 }
 
 // Future is a future which promises to return a timestamp.
