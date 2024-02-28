@@ -79,6 +79,7 @@ func (s *MockServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 	if err := s.checkMetadata(ss.Context()); err != nil {
 		return err
 	}
+	var feedbackSeq uint64 = 1
 	for {
 		req, err := ss.Recv()
 		if err != nil {
@@ -98,7 +99,14 @@ func (s *MockServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 		err = ss.Send(&tikvpb.BatchCommandsResponse{
 			Responses:  responses,
 			RequestIds: req.GetRequestIds(),
+			HealthFeedback: &tikvpb.HealthFeedback{
+				StoreId:       1,
+				FeedbackSeqNo: feedbackSeq,
+				SlowScore:     1,
+			},
 		})
+		feedbackSeq++
+
 		if err != nil {
 			logutil.BgLogger().Error("batch commands send fail", zap.Error(err))
 			return err

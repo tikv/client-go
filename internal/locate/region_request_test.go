@@ -45,6 +45,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/disaggregated"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -89,11 +90,15 @@ func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
 	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+
+	s.NoError(failpoint.Enable("tikvclient/doNotRecoverStoreHealthCheckPanic", "return"))
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 	s.cache.Close()
 	s.mvccStore.Close()
+
+	s.NoError(failpoint.Disable("tikvclient/doNotRecoverStoreHealthCheckPanic"))
 }
 
 type fnClient struct {
@@ -109,6 +114,8 @@ func (f *fnClient) CloseAddr(addr string) error {
 	f.closedAddr = addr
 	return nil
 }
+
+func (f *fnClient) SetEventListener(listener client.ClientEventListener) {}
 
 func (f *fnClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	return f.fn(ctx, addr, req, timeout)
@@ -628,7 +635,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 	// test kv load new region with new start-key and new epoch
 	v2 := region.Region.confVer + 1
 	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
-	st := &Store{storeID: s.store}
+	st := newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
@@ -638,7 +645,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestGetRegionByIDFromCache() {
 
 	v3 := region.Region.confVer + 1
 	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: v3, ConfVer: region.Region.confVer}, StartKey: []byte{2}}
-	st = &Store{storeID: s.store}
+	st = newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	region, err = s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)

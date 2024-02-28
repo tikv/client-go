@@ -842,7 +842,7 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 	}
 	// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
 	// as candidates to serve the Read request.
-	if state.option.preferLeader && replica.store.isSlow() {
+	if state.option.preferLeader && replica.store.healthStatus.IsSlow() {
 		return false
 	}
 	// Choose a replica with matched labels.
@@ -1175,7 +1175,7 @@ func (s *replicaSelector) invalidateReplicaStore(replica *replica, cause error) 
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
 		s.regionCache.markStoreNeedCheck(store)
-		store.markAlreadySlow()
+		store.healthStatus.markAlreadySlow()
 	}
 }
 
@@ -1276,7 +1276,7 @@ func (s *replicaSelector) onServerIsBusy(
 	} else if ctx != nil && ctx.Store != nil {
 		// Mark the server is busy (the next incoming READs could be redirect
 		// to expected followers. )
-		ctx.Store.markAlreadySlow()
+		ctx.Store.healthStatus.markAlreadySlow()
 		if s.canFallback2Follower() {
 			return true, nil
 		}
@@ -1734,7 +1734,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 		}
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
-			rpcCtx.Store.recordSlowScoreStat(rpcDuration)
+			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
 			RecordRegionRequestRuntimeStats(s.Stats, req.Type, rpcDuration)
