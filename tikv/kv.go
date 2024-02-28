@@ -242,12 +242,13 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	regionCache := locate.NewRegionCache(pdClient)
 	store := &KVStore{
 		clusterID:       pdClient.GetClusterID(context.TODO()),
 		uuid:            uuid,
 		oracle:          o,
 		pdClient:        pdClient,
-		regionCache:     locate.NewRegionCache(pdClient),
+		regionCache:     regionCache,
 		kv:              spkv,
 		safePoint:       0,
 		spTime:          time.Now(),
@@ -257,6 +258,8 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		gP:              NewSpool(128, 10*time.Second),
 	}
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
+	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
+
 	store.lockResolver = txnlock.NewLockResolver(store)
 	loadOption(store, opt...)
 

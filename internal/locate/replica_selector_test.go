@@ -509,7 +509,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
 	s.NotNil(rc)
 	for _, store := range rc.getStore().stores {
-		store.slowScore.resetSlowScore()
+		store.healthStatus.clientSideSlowScore.resetSlowScore()
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)
 	}
