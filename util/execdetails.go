@@ -709,7 +709,6 @@ func NewRUDetailsWith(rru, wru float64, waitDur time.Duration) *RUDetails {
 		readRU:         uatomic.NewFloat64(rru),
 		writeRU:        uatomic.NewFloat64(wru),
 		ruWaitDuration: uatomic.NewDuration(waitDur),
-	}
 }
 
 // Clone implements the RuntimeStats interface.
