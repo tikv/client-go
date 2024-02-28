@@ -46,6 +46,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/namespace"
 	"go.uber.org/zap"
 )
 
@@ -117,16 +118,41 @@ func (w *MockSafePointKV) Close() error {
 	return nil
 }
 
+// option represents safePoint kv configuration.
+type option struct {
+	prefix string
+}
+
+// SafePointKVOpt is used to set safePoint kv option.
+type SafePointKVOpt func(*option)
+
+func WithPrefix(prefix string) SafePointKVOpt {
+	return func(opt *option) {
+		opt.prefix = prefix
+	}
+}
+
 // EtcdSafePointKV implements SafePointKV at runtime
 type EtcdSafePointKV struct {
 	cli *clientv3.Client
 }
 
 // NewEtcdSafePointKV creates an instance of EtcdSafePointKV
-func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config) (*EtcdSafePointKV, error) {
+func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config, opts ...SafePointKVOpt) (*EtcdSafePointKV, error) {
+	// Apply options.
+	opt := &option{}
+	for _, o := range opts {
+		o(opt)
+	}
 	etcdCli, err := createEtcdKV(addrs, tlsConfig)
 	if err != nil {
 		return nil, err
+	}
+	// If a prefix is specified, wrap the etcd client with the target namespace.
+	if opt.prefix != "" {
+		etcdCli.KV = namespace.NewKV(etcdCli.KV, opt.prefix)
+		etcdCli.Watcher = namespace.NewWatcher(etcdCli.Watcher, opt.prefix)
+		etcdCli.Lease = namespace.NewLease(etcdCli.Lease, opt.prefix)
 	}
 	return &EtcdSafePointKV{cli: etcdCli}, nil
 }
