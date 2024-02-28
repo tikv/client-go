@@ -55,6 +55,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
@@ -312,7 +313,7 @@ func (r *regionStore) kvPeer(seed uint32, op *storeSelectorOp) AccessIndex {
 func (r *regionStore) filterStoreCandidate(aidx AccessIndex, op *storeSelectorOp) bool {
 	_, s := r.accessStore(tiKVOnly, aidx)
 	// filter label unmatched store and slow stores when ReplicaReadMode == PreferLeader
-	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (aidx == r.workTiKVIdx && !s.isSlow()))
+	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (aidx == r.workTiKVIdx && !s.healthStatus.IsSlow()))
 }
 
 func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Region, error) {
@@ -707,7 +708,7 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		needCheckStores = c.checkAndResolve(needCheckStores[:0], func(s *Store) bool { return filter(s.getResolveState()) })
 		return false
 	}, time.Duration(refreshStoreInterval/4)*time.Second, c.getCheckStoreEvents())
-	c.bg.schedule(repeat(c.checkAndUpdateStoreSlowScores), time.Duration(refreshStoreInterval/4)*time.Second)
+	c.bg.schedule(repeat(c.checkAndUpdateStoreHealthStatus), time.Duration(refreshStoreInterval/4)*time.Second)
 	c.bg.schedule(repeat(c.reportStoreReplicaFlows), time.Duration(refreshStoreInterval/2)*time.Second)
 	if refreshCacheInterval := config.GetGlobalConfig().RegionsRefreshInterval; refreshCacheInterval > 0 {
 		c.bg.schedule(func(ctx context.Context, _ time.Time) bool {
@@ -773,14 +774,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only
 func (c *RegionCache) SetRegionCacheStore(id uint64, addr string, peerAddr string, storeType tikvrpc.EndpointType, state uint64, labels []*metapb.StoreLabel) {
-	c.putStore(&Store{
-		storeID:   id,
-		storeType: storeType,
-		state:     state,
-		labels:    labels,
-		addr:      addr,
-		peerAddr:  peerAddr,
-	})
+	c.putStore(newStore(id, addr, peerAddr, "", storeType, resolveState(state), labels))
 }
 
 // SetPDClient replaces pd client,for testing only
@@ -2195,15 +2189,15 @@ func reloadTiFlashComputeStores(ctx context.Context, registry storeRegistry) (re
 	}
 	for _, s := range stores {
 		if s.GetState() == metapb.StoreState_Up && isStoreContainLabel(s.GetLabels(), tikvrpc.EngineLabelKey, tikvrpc.EngineLabelTiFlashCompute) {
-			res = append(res, &Store{
-				storeID:   s.GetId(),
-				addr:      s.GetAddress(),
-				peerAddr:  s.GetPeerAddress(),
-				saddr:     s.GetStatusAddress(),
-				storeType: tikvrpc.GetStoreTypeByMeta(s),
-				labels:    s.GetLabels(),
-				state:     uint64(resolved),
-			})
+			res = append(res, newStore(
+				s.GetId(),
+				s.GetAddress(),
+				s.GetPeerAddress(),
+				s.GetStatusAddress(),
+				tikvrpc.GetStoreTypeByMeta(s),
+				resolved,
+				s.GetLabels(),
+			))
 		}
 	}
 	return res, nil
@@ -2602,6 +2596,169 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 		(bytes.Compare(key, r.meta.GetEndKey()) <= 0 || len(r.meta.GetEndKey()) == 0)
 }
 
+const (
+	tikvSlowScoreDecayRate     float64 = 20.0 / 60.0 // s^(-1), linear decaying
+	tikvSlowScoreSlowThreshold int64   = 80
+
+	tikvSlowScoreUpdateInterval       = time.Millisecond * 100
+	tikvSlowScoreUpdateFromPDInterval = time.Minute
+)
+
+type StoreHealthStatus struct {
+	isSlow atomic.Bool
+
+	// A statistic for counting the request latency to this store
+	clientSideSlowScore SlowScoreStat
+
+	tikvSideSlowScore struct {
+		sync.Mutex
+
+		// The following atomic fields is designed to be able to be read by atomic options directly, but only written
+		// while holding the mutex.
+
+		hasTiKVFeedback atomic.Bool
+		score           atomic.Int64
+		lastUpdateTime  atomic.Pointer[time.Time]
+	}
+}
+
+type HealthStatusDetail struct {
+	ClientSideSlowScore int64
+	TiKVSideSlowScore   int64
+}
+
+func newStoreHealthStatus() *StoreHealthStatus {
+	return &StoreHealthStatus{}
+}
+
+// IsSlow returns whether current Store is slow.
+func (s *StoreHealthStatus) IsSlow() bool {
+	return s.isSlow.Load()
+}
+
+// GetHealthStatusDetail gets the current detailed information about the store's health status.
+func (s *StoreHealthStatus) GetHealthStatusDetail() HealthStatusDetail {
+	return HealthStatusDetail{
+		ClientSideSlowScore: int64(s.clientSideSlowScore.getSlowScore()),
+		TiKVSideSlowScore:   s.tikvSideSlowScore.score.Load(),
+	}
+}
+
+// tick updates the health status that changes over time, such as slow score's decaying, etc. This function is expected
+// to be called periodically.
+func (s *StoreHealthStatus) tick(now time.Time) {
+	s.clientSideSlowScore.updateSlowScore()
+	s.updateTiKVServerSideSlowScoreOnTick(now)
+	s.updateSlowFlag()
+}
+
+// recordClientSideSlowScoreStat records timecost of each request to update the client side slow score.
+func (s *StoreHealthStatus) recordClientSideSlowScoreStat(timecost time.Duration) {
+	s.clientSideSlowScore.recordSlowScoreStat(timecost)
+	s.updateSlowFlag()
+}
+
+// markAlreadySlow marks the related store already slow.
+func (s *StoreHealthStatus) markAlreadySlow() {
+	s.clientSideSlowScore.markAlreadySlow()
+	s.updateSlowFlag()
+}
+
+// updateTiKVServerSideSlowScoreOnTick updates the slow score actively, which is expected to be a periodic job.
+// It skips updating if the last update time didn't elapse long enough, or it's being updated concurrently.
+func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {
+	if !s.tikvSideSlowScore.hasTiKVFeedback.Load() {
+		// Do nothing if no feedback has been received from this store yet.
+		return
+	}
+	lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
+	if lastUpdateTime == nil || now.Sub(*lastUpdateTime) < tikvSlowScoreUpdateFromPDInterval {
+		// If the first feedback is
+		return
+	}
+
+	if !s.tikvSideSlowScore.TryLock() {
+		// It must be being updated concurrently.
+		return
+	}
+	defer s.tikvSideSlowScore.Unlock()
+
+	// Reload update time as it might be updated concurrently before acquiring mutex
+	lastUpdateTime = s.tikvSideSlowScore.lastUpdateTime.Load()
+	elapsed := now.Sub(*lastUpdateTime)
+	if elapsed < tikvSlowScoreUpdateFromPDInterval {
+		return
+	}
+
+	// TODO: Try to get store status from PD here. But it's not mandatory.
+	//       Don't forget to update tests if getting slow score from PD is implemented here.
+
+	// If updating from PD is not successful: decay the slow score.
+	score := s.tikvSideSlowScore.score.Load()
+	if score < 1 {
+		return
+	}
+	// Linear decay by time
+	score = max(int64(math.Round(float64(score)-tikvSlowScoreDecayRate*elapsed.Seconds())), 1)
+	s.tikvSideSlowScore.score.Store(score)
+
+	newUpdateTime := new(time.Time)
+	*newUpdateTime = now
+	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
+}
+
+// updateTiKVServerSideSlowScore updates the tikv side slow score with the given value.
+// Ignores if the last update time didn't elapse long enough, or it's being updated concurrently.
+func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime time.Time) {
+	defer s.updateSlowFlag()
+
+	lastScore := s.tikvSideSlowScore.score.Load()
+
+	if lastScore == score {
+		return
+	}
+
+	lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
+
+	if lastUpdateTime != nil && currTime.Sub(*lastUpdateTime) < tikvSlowScoreUpdateInterval {
+		return
+	}
+
+	if !s.tikvSideSlowScore.TryLock() {
+		// It must be being updated concurrently. Skip.
+		return
+	}
+	defer s.tikvSideSlowScore.Unlock()
+
+	s.tikvSideSlowScore.hasTiKVFeedback.Store(true)
+	// Reload update time as it might be updated concurrently before acquiring mutex
+	lastUpdateTime = s.tikvSideSlowScore.lastUpdateTime.Load()
+	if lastUpdateTime != nil && currTime.Sub(*lastUpdateTime) < tikvSlowScoreUpdateInterval {
+		return
+	}
+
+	newScore := score
+
+	newUpdateTime := new(time.Time)
+	*newUpdateTime = currTime
+
+	s.tikvSideSlowScore.score.Store(newScore)
+	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
+}
+
+func (s *StoreHealthStatus) updateSlowFlag() {
+	isSlow := s.clientSideSlowScore.isSlow() || s.tikvSideSlowScore.score.Load() >= tikvSlowScoreSlowThreshold
+	s.isSlow.Store(isSlow)
+}
+
+// setTiKVSlowScoreLastUpdateTimeForTest force sets last update time of TiKV server side slow score to specified value.
+// For test purpose only.
+func (s *StoreHealthStatus) setTiKVSlowScoreLastUpdateTimeForTest(lastUpdateTime time.Time) {
+	s.tikvSideSlowScore.Lock()
+	defer s.tikvSideSlowScore.Unlock()
+	s.tikvSideSlowScore.lastUpdateTime.Store(&lastUpdateTime)
+}
+
 // Store contains a kv process's address.
 type Store struct {
 	addr         string               // loaded store address
@@ -2623,8 +2780,7 @@ type Store struct {
 	livenessState    uint32
 	unreachableSince time.Time
 
-	// A statistic for counting the request latency to this store
-	slowScore SlowScoreStat
+	healthStatus *StoreHealthStatus
 	// A statistic for counting the flows of different replicas on this store
 	replicaFlowsStats [numReplicaFlowsType]uint64
 }
@@ -2667,6 +2823,37 @@ func (s resolveState) String() string {
 		return "tombstone"
 	default:
 		return fmt.Sprintf("unknown-%v", uint64(s))
+	}
+}
+
+func newStore(
+	id uint64,
+	addr string,
+	peerAddr string,
+	statusAddr string,
+	storeType tikvrpc.EndpointType,
+	state resolveState,
+	labels []*metapb.StoreLabel,
+) *Store {
+	return &Store{
+		storeID:   id,
+		storeType: storeType,
+		state:     uint64(state),
+		labels:    labels,
+		addr:      addr,
+		peerAddr:  peerAddr,
+		saddr:     statusAddr,
+		// Make sure healthStatus field is never null.
+		healthStatus: newStoreHealthStatus(),
+	}
+}
+
+// newUninitializedStore creates a `Store` instance with only storeID initialized.
+func newUninitializedStore(id uint64) *Store {
+	return &Store{
+		storeID: id,
+		// Make sure healthStatus field is never null.
+		healthStatus: newStoreHealthStatus(),
 	}
 }
 
@@ -2770,11 +2957,19 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
-		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore := newStore(
+			s.storeID,
+			addr,
+			store.GetPeerAddress(),
+			store.GetStatusAddress(),
+			storeType,
+			resolved,
+			store.GetLabels(),
+		)
 		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
 		newStore.unreachableSince = s.unreachableSince
 		if s.addr == addr {
-			newStore.slowScore = s.slowScore
+			newStore.healthStatus = s.healthStatus
 		}
 		c.putStore(newStore)
 		s.setResolveState(deleted)
@@ -3122,48 +3317,28 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	return
 }
 
-// getSlowScore returns the slow score of store.
-func (s *Store) getSlowScore() uint64 {
-	return s.slowScore.getSlowScore()
-}
-
-// isSlow returns whether current Store is slow or not.
-func (s *Store) isSlow() bool {
-	return s.slowScore.isSlow()
-}
-
-// updateSlowScore updates the slow score of this store according to the timecost of current request.
-func (s *Store) updateSlowScoreStat() {
-	s.slowScore.updateSlowScore()
-}
-
-// recordSlowScoreStat records timecost of each request.
-func (s *Store) recordSlowScoreStat(timecost time.Duration) {
-	s.slowScore.recordSlowScoreStat(timecost)
-}
-
-// markAlreadySlow marks the related store already slow.
-func (s *Store) markAlreadySlow() {
-	s.slowScore.markAlreadySlow()
-}
-
-// checkAndUpdateStoreSlowScores checks and updates slowScore on each store.
-func (c *RegionCache) checkAndUpdateStoreSlowScores() {
+// checkAndUpdateStoreHealthStatus checks and updates health stats on each store.
+func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
 	defer func() {
 		r := recover()
 		if r != nil {
-			logutil.BgLogger().Error("panic in the checkAndUpdateStoreSlowScores goroutine",
+			logutil.BgLogger().Error("panic in the checkAndUpdateStoreHealthStatus goroutine",
 				zap.Any("r", r),
 				zap.Stack("stack trace"))
+			if _, err := util.EvalFailpoint("doNotRecoverStoreHealthCheckPanic"); err == nil {
+				panic(r)
+			}
 		}
 	}()
-	slowScoreMetrics := make(map[uint64]float64)
+	healthDetails := make(map[uint64]HealthStatusDetail)
+	now := time.Now()
 	c.forEachStore(func(store *Store) {
-		store.updateSlowScoreStat()
-		slowScoreMetrics[store.storeID] = float64(store.getSlowScore())
+		store.healthStatus.tick(now)
+		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
 	})
-	for store, score := range slowScoreMetrics {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(score)
+	for store, details := range healthDetails {
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.ClientSideSlowScore))
+		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.TiKVSideSlowScore))
 	}
 }
 
@@ -3180,6 +3355,13 @@ func (s *Store) resetReplicaFlowsStats(destType replicaFlowsType) {
 // recordReplicaFlowsStats records the statistics on the related replicaFlowsType.
 func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
 	atomic.AddUint64(&s.replicaFlowsStats[destType], 1)
+}
+
+func (s *Store) recordHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	// Note that the `FeedbackSeqNo` field of `HealthFeedback` is not used yet. It's a monotonic value that can help
+	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
+	// only a slow score. It's prepared for possible use in the future.
+	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), time.Now())
 }
 
 // reportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
@@ -3288,7 +3470,7 @@ func (c *RegionCache) getStoreOrInsertDefault(id uint64) *Store {
 	c.storeMu.Lock()
 	store, exists := c.storeMu.stores[id]
 	if !exists {
-		store = &Store{storeID: id}
+		store = newUninitializedStore(id)
 		c.storeMu.stores[id] = store
 	}
 	c.storeMu.Unlock()
@@ -3358,4 +3540,29 @@ func (c *RegionCache) markStoreNeedCheck(store *Store) {
 
 func (c *RegionCache) getCheckStoreEvents() <-chan struct{} {
 	return c.notifyCheckCh
+}
+
+func (c *RegionCache) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	store, ok := c.getStore(feedback.GetStoreId())
+	if !ok {
+		logutil.BgLogger().Info("dropped health feedback info due to unknown store id", zap.Uint64("storeID", feedback.GetStoreId()))
+		return
+	}
+	store.recordHealthFeedback(feedback)
+}
+
+// GetClientEventListener returns the listener to observe the RPC client's events and let the region cache respond to
+// them. When creating the `KVStore` using `tikv.NewKVStore` function, the listener will be setup immediately.
+func (c *RegionCache) GetClientEventListener() client.ClientEventListener {
+	return &regionCacheClientEventListener{c: c}
+}
+
+// regionCacheClientEventListener is the listener to let RegionCache respond to events in the RPC client.
+type regionCacheClientEventListener struct {
+	c *RegionCache
+}
+
+// OnHealthFeedback implements the `client.ClientEventListener` interface.
+func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	l.c.onHealthFeedback(feedback)
 }

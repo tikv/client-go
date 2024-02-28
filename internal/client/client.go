@@ -108,6 +108,15 @@ type Client interface {
 	CloseAddr(addr string) error
 	// SendRequest sends Request.
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
+	// SetEventListener registers an event listener for the Client instance. If it's called more than once, the
+	// previously set one will be replaced.
+	SetEventListener(listener ClientEventListener)
+}
+
+// ClientEventListener is a listener to handle events produced by `Client`.
+type ClientEventListener interface {
+	// OnHealthFeedback is called when `Client` receives a response that carries the HealthFeedback information.
+	OnHealthFeedback(feedback *tikvpb.HealthFeedback)
 }
 
 type connArray struct {
@@ -127,7 +136,7 @@ type connArray struct {
 }
 
 func newConnArray(maxSize uint, addr string, security config.Security,
-	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, opts []grpc.DialOption) (*connArray, error) {
+	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, eventListener *atomic.Pointer[ClientEventListener], opts []grpc.DialOption) (*connArray, error) {
 	a := &connArray{
 		index:         0,
 		v:             make([]*monitoredConn, maxSize),
@@ -136,7 +145,7 @@ func newConnArray(maxSize uint, addr string, security config.Security,
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
-	if err := a.Init(addr, security, idleNotify, enableBatch, opts...); err != nil {
+	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -228,7 +237,7 @@ func (c *monitoredConn) Close() error {
 	return nil
 }
 
-func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, opts ...grpc.DialOption) error {
+func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, eventListener *atomic.Pointer[ClientEventListener], opts ...grpc.DialOption) error {
 	a.target = addr
 
 	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -317,6 +326,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				tikvLoad:         &a.tikvTransportLayerLoad,
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
+				eventListener:    eventListener,
 			}
 			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
@@ -401,7 +411,11 @@ type RPCClient struct {
 	isClosed bool
 
 	connMonitor *connMonitor
+
+	eventListener *atomic.Pointer[ClientEventListener]
 }
+
+var _ Client = &RPCClient{}
 
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
@@ -410,7 +424,8 @@ func NewRPCClient(opts ...Opt) *RPCClient {
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
-		connMonitor: &connMonitor{},
+		connMonitor:   &connMonitor{},
+		eventListener: new(atomic.Pointer[ClientEventListener]),
 	}
 	for _, opt := range opts {
 		opt(cli.option)
@@ -462,6 +477,7 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 			enableBatch,
 			c.option.dialTimeout,
 			c.connMonitor,
+			c.eventListener,
 			c.option.gRPCDialOptions)
 
 		if err != nil {
@@ -808,6 +824,12 @@ func (c *RPCClient) CloseAddr(addr string) error {
 		conn.Close()
 	}
 	return nil
+}
+
+// SetEventListener registers an event listener for the Client instance. If it's called more than once, the
+// previously set one will be replaced.
+func (c *RPCClient) SetEventListener(listener ClientEventListener) {
+	c.eventListener.Store(&listener)
 }
 
 type spanInfo struct {
