@@ -3,6 +3,7 @@ package locate
 import (
 	"context"
 	"fmt"
+	"github.com/pkg/errors"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -353,6 +354,27 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
 		staleRead: true,
+		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: false, stale-read: false}", // try leader with leader read.
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0, // no backoff since request success.
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
 		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
 		expect: &accessPathResult{
 			accessPath: []string{
@@ -363,8 +385,8 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
-			backoffCnt:      2,
-			backoffDetail:   []string{"tikvServerBusy+2"},
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
 			regionIsValid:   false,
 		},
 	}
@@ -414,7 +436,43 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
-func TestCanSkipServerIsBusyBackoff(t *testing.T) {
+func TestCanFastRetry(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	// Test for non-leader read.
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.EnableStaleWithMixedReplicaRead()
+	selector, err := newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	for i := 0; i < 3; i++ {
+		_, err = selector.next(s.bo)
+		s.Nil(err)
+		selector.canFastRetry()
+		s.True(selector.canFastRetry())
+	}
+
+	// Test for leader read.
+	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	selector, err = newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	for i := 0; i < 12; i++ {
+		_, err = selector.next(s.bo)
+		s.Nil(err)
+		ok := selector.canFastRetry()
+		if i <= 8 {
+			s.False(ok) // can't skip since leader is available.
+		} else {
+			s.True(ok)
+		}
+	}
+}
+
+func TestPendingBackoff(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
@@ -425,57 +483,29 @@ func TestCanSkipServerIsBusyBackoff(t *testing.T) {
 	req.EnableStaleWithMixedReplicaRead()
 	selector, err := newReplicaSelector(s.cache, loc.Region, req)
 	s.Nil(err)
-	for i := 0; i < 3; i++ {
-		_, err = selector.next(s.bo)
-		s.Nil(err)
-		skip := selector.canSkipServerIsBusyBackoff()
-		if i < 2 {
-			s.True(skip)
-		} else {
-			s.False(skip)
-		}
-	}
-
-	selector, err = newReplicaSelector(s.cache, loc.Region, req)
+	selector.addPendingBackoff(0, retry.BoRegionScheduling, errors.New("err-0"))
+	s.Equal(1, len(selector.pendingBackoffs))
+	selector.addPendingBackoff(1, retry.BoTiKVRPC, errors.New("err-1"))
+	s.Equal(2, len(selector.pendingBackoffs))
+	selector.addPendingBackoff(2, retry.BoTiKVDiskFull, errors.New("err-2"))
+	s.Equal(3, len(selector.pendingBackoffs))
+	selector.addPendingBackoff(1, retry.BoTiKVServerBusy, errors.New("err-3"))
+	s.Equal(3, len(selector.pendingBackoffs))
+	bo := retry.NewNoopBackoff(context.Background())
+	_, ok := selector.pendingBackoffs[0]
+	s.True(ok)
+	err = selector.backoffOnRetry(bo, nil)
+	s.NotNil(err)
+	s.Equal("err-0", err.Error())
+	_, ok = selector.pendingBackoffs[0]
+	s.False(ok)
+	s.Equal(2, len(selector.pendingBackoffs))
+	err = selector.backoffOnRetry(bo, &Store{storeID: 10})
 	s.Nil(err)
-	_, err = selector.next(s.bo)
-	s.Nil(err)
-	// mock all replica's store is unreachable.
-	for _, replica := range selector.replicas {
-		atomic.StoreUint32(&replica.store.livenessState, uint32(unreachable))
-	}
-	skip := selector.canSkipServerIsBusyBackoff()
-	s.False(skip) // can't skip since no replica is available.
-	refreshLivenessStates(selector.regionStore)
-	skip = selector.canSkipServerIsBusyBackoff()
-	s.True(skip)
-	// mock all replica's store is slow.
-	for _, replica := range selector.replicas {
-		replica.store.markAlreadySlow()
-	}
-	skip = selector.canSkipServerIsBusyBackoff()
-	s.False(skip)
-	refreshStoreScores(selector.regionStore)
-	skip = selector.canSkipServerIsBusyBackoff()
-	s.True(skip)
-
-	// Test for leader read.
-	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
-	req.ReplicaReadType = kv.ReplicaReadLeader
-	selector, err = newReplicaSelector(s.cache, loc.Region, req)
-	s.Nil(err)
-	for i := 0; i < 12; i++ {
-		_, err = selector.next(s.bo)
-		s.Nil(err)
-		skip := selector.canSkipServerIsBusyBackoff()
-		if i <= 8 {
-			s.False(skip) // can't skip since leader is available.
-		} else if i <= 10 {
-			s.True(skip)
-		} else {
-			s.False(skip)
-		}
-	}
+	s.Equal(2, len(selector.pendingBackoffs))
+	err = selector.backoffOnNoCandidate(bo)
+	s.NotNil(err)
+	s.Equal("err-3", err.Error())
 }
 
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
@@ -572,7 +602,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
 	s.NotNil(rc)
 	for _, store := range rc.getStore().stores {
-		store.slowScore.resetSlowScore()
+		store.healthStatus.clientSideSlowScore.resetSlowScore()
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)
 	}

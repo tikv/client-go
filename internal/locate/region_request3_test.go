@@ -89,6 +89,8 @@ func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
 	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+
+	s.NoError(failpoint.Enable("tikvclient/doNotRecoverStoreHealthCheckPanic", "return"))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TearDownTest() {
@@ -97,6 +99,8 @@ func (s *testRegionRequestToThreeStoresSuite) TearDownTest() {
 	if s.onClosed != nil {
 		s.onClosed()
 	}
+
+	s.NoError(failpoint.Disable("tikvclient/doNotRecoverStoreHealthCheckPanic"))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStoreTokenLimit() {
@@ -373,12 +377,6 @@ func refreshLivenessStates(regionStore *regionStore) {
 	}
 }
 
-func refreshStoreScores(regionStore *regionStore) {
-	for _, store := range regionStore.stores {
-		store.slowScore.resetSlowScore()
-	}
-}
-
 func AssertRPCCtxEqual(s *testRegionRequestToThreeStoresSuite, rpcCtx *RPCContext, target *replica, proxy *replica) {
 	s.Equal(rpcCtx.Store, target.store)
 	s.Equal(rpcCtx.Peer, target.peer)
@@ -410,7 +408,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	tikvLearner := &metapb.Peer{Id: s.cluster.AllocID(), StoreId: storeID, Role: metapb.PeerRole_Learner}
 	tikvLearnerAccessIdx := len(regionStore.stores)
 	regionStore.accessIndex[tiKVOnly] = append(regionStore.accessIndex[tiKVOnly], tikvLearnerAccessIdx)
-	regionStore.stores = append(regionStore.stores, &Store{storeID: tikvLearner.StoreId})
+	regionStore.stores = append(regionStore.stores, newUninitializedStore(tikvLearner.StoreId))
 	regionStore.storeEpochs = append(regionStore.storeEpochs, 0)
 
 	region = &Region{
@@ -461,7 +459,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Add a TiFlash peer to the region.
 	tiflash := &metapb.Peer{Id: s.cluster.AllocID(), StoreId: s.cluster.AllocID()}
 	regionStore.accessIndex[tiFlashOnly] = append(regionStore.accessIndex[tiFlashOnly], len(regionStore.stores))
-	regionStore.stores = append(regionStore.stores, &Store{storeID: tiflash.StoreId, storeType: tikvrpc.TiFlash})
+	tiflashStore := newUninitializedStore(tiflash.StoreId)
+	tiflashStore.storeType = tikvrpc.TiFlash
+	regionStore.stores = append(regionStore.stores, tiflashStore)
 	regionStore.storeEpochs = append(regionStore.storeEpochs, 0)
 
 	region = &Region{

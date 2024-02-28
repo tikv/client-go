@@ -551,10 +551,15 @@ type batchCommandsClient struct {
 	closed int32
 	// tryLock protects client when re-create the streaming.
 	tryLock
+
 	// sent is the number of the requests are processed by tikv server.
 	sent atomic.Int64
 	// maxConcurrencyRequestLimit is the max allowed number of requests to be sent the tikv
 	maxConcurrencyRequestLimit atomic.Int64
+
+	// eventListener is the listener set by external code to observe some events in the client. It's stored in a atomic
+	// pointer to make setting thread-safe.
+	eventListener *atomic.Pointer[ClientEventListener]
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -694,6 +699,17 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			continue
 		}
 
+		if resp.GetHealthFeedback() != nil {
+			if val, err := util.EvalFailpoint("injectHealthFeedbackSlowScore"); err == nil {
+				v, ok := val.(int)
+				if !ok || v < 0 || v > 100 {
+					panic(fmt.Sprintf("invalid injection in failpoint injectHealthFeedbackSlowScore: %+q", v))
+				}
+				resp.GetHealthFeedback().SlowScore = int32(v)
+			}
+			c.onHealthFeedback(resp.GetHealthFeedback())
+		}
+
 		responses := resp.GetResponses()
 		for i, requestID := range resp.GetRequestIds() {
 			value, ok := c.batched.Load(requestID)
@@ -722,6 +738,12 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(tikvTransportLayerLoad, transportLayerLoad)
 		}
+	}
+}
+
+func (c *batchCommandsClient) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	if h := c.eventListener.Load(); h != nil {
+		(*h).OnHealthFeedback(feedback)
 	}
 }
 
