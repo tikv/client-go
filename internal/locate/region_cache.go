@@ -3299,11 +3299,6 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	return
 }
 
-// isSlow returns whether current Store is slow or not.
-func (s *Store) isSlow() bool {
-	return s.healthStatus.IsSlow()
-}
-
 // checkAndUpdateStoreHealthStatus checks and updates health stats on each store.
 func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
 	defer func() {
