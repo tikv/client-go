@@ -756,7 +756,6 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				idx = AccessIndex((i + offset) % replicaSize)
 			}
 		} else {
-			//idx = AccessIndex((int(state.lastIdx) + i) % replicaSize)
 			idx = AccessIndex((offset + i) % replicaSize)
 		}
 		selectReplica := selector.replicas[idx]
@@ -1320,7 +1319,9 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
-	s.updateServerLoadStats(ctx, serverIsBusy)
+	if ctx != nil && ctx.Store != nil {
+		ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
+	}
 	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
 		if s.busyThreshold != 0 {
 			// do not retry with batched coprocessor requests.
@@ -1366,24 +1367,6 @@ func (s *replicaSelector) canFallback2Follower() bool {
 	}
 	// can fallback to follower only when the leader is exhausted.
 	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
-}
-
-func (s *baseReplicaSelector) updateServerLoadStats(ctx *RPCContext, serverIsBusy *errorpb.ServerIsBusy) {
-	if ctx != nil && ctx.Store != nil {
-		if serverIsBusy.EstimatedWaitMs != 0 {
-			estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
-			// Update the estimated wait time of the store.
-			loadStats := &storeLoadStats{
-				estimatedWait:     estimatedWait,
-				waitTimeUpdatedAt: time.Now(),
-			}
-			ctx.Store.loadStats.Store(loadStats)
-		} else {
-			// Mark the server is busy (the next incoming READs could be redirect
-			// to expected followers. )
-			ctx.Store.markAlreadySlow()
-		}
-	}
 }
 
 func (s *replicaSelector) onDataIsNotReady() {

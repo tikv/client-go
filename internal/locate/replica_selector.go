@@ -452,22 +452,24 @@ func (s *replicaSelectorV2) onDataIsNotReady() {
 func (s *replicaSelectorV2) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
-	s.updateServerLoadStats(ctx, serverIsBusy)
-	if serverIsBusy.EstimatedWaitMs != 0 {
-		if s.busyThreshold != 0 {
-			// do not retry with batched coprocessor requests.
-			// it'll be region misses if we send the tasks to replica.
-			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
-				return false, nil
+	if ctx != nil && ctx.Store != nil {
+		ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
+		if serverIsBusy.EstimatedWaitMs != 0 {
+			if s.busyThreshold != 0 {
+				// do not retry with batched coprocessor requests.
+				// it'll be region misses if we send the tasks to replica.
+				if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
+					return false, nil
+				}
+				if s.target != nil {
+					s.target.serverIsBusy = true
+				}
+				return true, nil
 			}
-			if s.target != nil {
-				s.target.serverIsBusy = true
-			}
+		} else if s.replicaReadType != kv.ReplicaReadLeader {
+			// fast retry next follower
 			return true, nil
 		}
-	} else if s.replicaReadType != kv.ReplicaReadLeader {
-		// fast retry next follower
-		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
 	if err != nil {

@@ -3119,6 +3119,21 @@ func (s *Store) updateSlowScoreStat() {
 	s.slowScore.updateSlowScore()
 }
 
+func (s *Store) updateServerLoadStats(estimatedWaitMs uint32) {
+	if estimatedWaitMs != 0 {
+		estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
+		// Update the estimated wait time of the store.
+		loadStats := &storeLoadStats{
+			estimatedWait:     estimatedWait,
+			waitTimeUpdatedAt: time.Now(),
+		}
+		s.loadStats.Store(loadStats)
+	} else {
+		// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
+		s.markAlreadySlow()
+	}
+}
+
 // recordSlowScoreStat records timecost of each request.
 func (s *Store) recordSlowScoreStat(timecost time.Duration) {
 	s.slowScore.recordSlowScoreStat(timecost)
