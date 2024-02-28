@@ -2579,8 +2579,8 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 }
 
 const (
-	tikvSlowScoreDecayRate     = 20. / 60. // s^(-1), linear decaying
-	tikvSlowScoreSlowThreshold = 80.
+	tikvSlowScoreDecayRate     float64 = 20.0 / 60.0 // s^(-1), linear decaying
+	tikvSlowScoreSlowThreshold int64   = 80
 
 	tikvSlowScoreUpdateInterval       = time.Millisecond * 100
 	tikvSlowScoreUpdateFromPDInterval = time.Minute
@@ -3340,6 +3340,9 @@ func (s *Store) recordReplicaFlowsStats(destType replicaFlowsType) {
 }
 
 func (s *Store) recordHealthFeedback(feedback *tikvpb.HealthFeedback) {
+	// Note that the `FeedbackSeqNo` field of `HealthFeedback` is not used yet. It's a monotonic value that can help
+	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
+	// only a slow score. It's prepared for possible use in the future.
 	s.healthStatus.updateTiKVServerSideSlowScore(int64(feedback.GetSlowScore()), time.Now())
 }
 
