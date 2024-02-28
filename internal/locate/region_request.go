@@ -521,12 +521,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	// If all followers are tried and fail, backoff and retry.
 	if selector.targetIdx < 0 {
-		if hasDeadlineExceededError(selector.replicas) {
-			// when meet deadline exceeded error, do fast retry without invalidate region cache.
-			return nil, nil
+		// when meet deadline exceeded error, do fast retry without invalidate region cache.
+		if !hasDeadlineExceededError(selector.replicas) {
+			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+			selector.invalidateRegion()
 		}
-		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
-		selector.invalidateRegion()
 		return nil, nil
 	}
 	rpcCtx, err := selector.buildRPCContext(bo)
@@ -785,12 +784,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				}
 				return nil, stateChanged{}
 			}
-			if hasDeadlineExceededError(selector.replicas) {
-				// when meet deadline exceeded error, do fast retry without invalidate region cache.
-				return nil, nil
+			// when meet deadline exceeded error, do fast retry without invalidate region cache.
+			if !hasDeadlineExceededError(selector.replicas) {
+				metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+				selector.invalidateRegion()
 			}
-			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
-			selector.invalidateRegion()
 			return nil, nil
 		}
 		state.lastIdx = state.leaderIdx
