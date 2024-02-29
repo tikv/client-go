@@ -3,7 +3,6 @@ package locate
 import (
 	"context"
 	"fmt"
-	"github.com/pkg/errors"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
