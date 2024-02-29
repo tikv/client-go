@@ -287,17 +287,17 @@ type replicaSelector struct {
 	busyThreshold time.Duration
 	// pendingBackoffs records the pending backoff by store_id for fast retry. Here are some examples to show how it works:
 	// Example-1, fast retry and success:
-	// 	    1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
-	// 	    2. retry in store2, and success.
+	//      1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      2. retry in store2, and success.
 	//         Since the request is success, we can skip the backoff and fast return result to user.
 	// Example-2: fast retry different replicas but all failed:
-	// 	    1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
 	//      2. send req to store 2, got ServerIsBusy region error, record `store2 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
 	//      3. send req to store 3, got ServerIsBusy region error, record `store3 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
 	//      4. no candidate since all stores are busy. But before return no candidate error to up layer, we need to call backoffOnNoCandidate function
 	//         to apply a max pending backoff, the backoff is to avoid frequent access and increase the pressure on the cluster.
 	// Example-3: fast retry same replica:
-	// 	    1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
 	//      2. assume store 2 and store 3 are unreachable.
 	//      3. re-send req to store 1 with replica-read. But before re-send to store1, we need to call backoffOnRetry function
 	//         to apply pending BoTiKVServerBusy backoff, the backoff is to avoid frequent access and increase the pressure on the cluster.
