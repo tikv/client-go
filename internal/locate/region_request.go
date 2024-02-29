@@ -337,7 +337,7 @@ func (s *replicaSelector) String() string {
 		selectorStateStr = selectorStateToString(s.state)
 	}
 
-	return fmt.Sprintf("replicaSelector{selectorStateStr: %v, %v}", selectorStateStr, s.baseReplicaSelector.String())
+	return fmt.Sprintf("replicaSelector{state: %v, %v}", selectorStateStr, s.baseReplicaSelector.String())
 }
 
 func (s *baseReplicaSelector) String() string {
@@ -743,6 +743,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		offset = randIntn(replicaSize)
 	}
 	reloadRegion := false
+	//fmt.Printf("access follower   %v ----------------------- -------\n\n", state.option.preferLeader)
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		var idx AccessIndex
 		if state.option.preferLeader {
@@ -750,10 +751,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				idx = state.lastIdx
 			} else {
 				// randomly select next replica, but skip state.lastIdx
-				if (i+offset)%replicaSize == int(state.leaderIdx) {
+				// since i must be greater than or equal to 1, so use i-1 to try from the first replica to make test stable.
+				if (i-1+offset)%replicaSize == int(state.leaderIdx) {
 					offset++
 				}
-				idx = AccessIndex((i + offset) % replicaSize)
+				idx = AccessIndex((i - 1 + offset) % replicaSize)
 			}
 		} else {
 			idx = AccessIndex((offset + i) % replicaSize)
