@@ -285,7 +285,22 @@ type replicaSelector struct {
 	// TiKV can reject the request when its estimated wait duration exceeds busyThreshold.
 	// Then, the client will receive a ServerIsBusy error and choose another replica to retry.
 	busyThreshold time.Duration
-	// pendingBackoffs records the pending backoff for fast retry.
+	// pendingBackoffs records the pending backoff by store_id for fast retry. Here are some examples to show how it works:
+	// Example-1, fast retry and success:
+	// 		1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	// 		2. retry in store2, and success.
+	//      Since the request is success, we can skip the backoff and fast return result to user.
+	// Example-2: fast retry different replicas but all failed:
+	// 		1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	// 		2. send req to store 2, got ServerIsBusy region error, record `store2 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	// 		3. send req to store 3, got ServerIsBusy region error, record `store3 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      4. no candidate since all stores are busy. But before return no candidate error to up layer, we need to call backoffOnNoCandidate function
+	//         to apply a max pending backoff, the backoff is to avoid frequent access and increase the pressure on the cluster.
+	// Example-3: fast retry same replica:
+	// 		1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      2. assume store 2 and store 3 are unreachable.
+	//      4. re-send req to store 1 with replica-read. But before re-send to store1, we need to call backoffOnRetry function
+	//         to apply pending BoTiKVServerBusy backoff, the backoff is to avoid frequent access and increase the pressure on the cluster.
 	pendingBackoffs map[uint64]*backoffArgs
 }
 
@@ -2476,7 +2491,7 @@ func (s *replicaSelector) addPendingBackoff(store *Store, cfg *retry.Config, err
 	s.pendingBackoffs[storeId] = &backoffArgs{cfg, err}
 }
 
-// backoffOnRetry apply pending backoff on the store.
+// backoffOnRetry apply pending backoff on the store when retry in this store.
 func (s *replicaSelector) backoffOnRetry(store *Store, bo *retry.Backoffer) error {
 	storeId := uint64(0)
 	if store != nil {
