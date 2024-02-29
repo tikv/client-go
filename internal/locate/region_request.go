@@ -2483,10 +2483,9 @@ func (s *replicaSelector) backoffOnRetry(store *Store, bo *retry.Backoffer) erro
 // backoffOnNoCandidate apply the largest base pending backoff when no candidate.
 func (s *replicaSelector) backoffOnNoCandidate(bo *retry.Backoffer) error {
 	var args *backoffArgs
-	// if there are multiple pending backoffs, choose the one with the largest base duration.
-	for _, it := range s.pendingBackoffs {
-		if args == nil || args.cfg.Base() < it.cfg.Base() {
-			args = it
+	for _, pbo := range s.pendingBackoffs {
+		if args == nil || args.cfg.Base() < pbo.cfg.Base() {
+			args = pbo
 		}
 	}
 	if args == nil {
