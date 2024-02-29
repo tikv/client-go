@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -1884,8 +1886,6 @@ func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite
 }
 
 func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
-	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
-	msg := ca.Format()
 	access := []string{}
 	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		idx := len(access)
@@ -1913,6 +1913,15 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 		}}, nil
 	}}
 	sender := NewRegionRequestSender(s.cache, fnClient)
+	req, opts, timeout := ca.buildRequest(s)
+	rc := s.prepareBeforeRun()
+	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
+	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
+	ca.recordResult(s, bo, sender.replicaSelector.getBaseReplicaSelector().region, access, resp, err)
+	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
+}
+
+func (ca *replicaSelectorAccessPathCase) buildRequest(s *testReplicaSelectorSuite) (*tikvrpc.Request, []StoreSelectorOption, time.Duration) {
 	var req *tikvrpc.Request
 	switch ca.reqType {
 	case tikvrpc.CmdGet:
@@ -1932,25 +1941,22 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 		req.ReplicaReadType = ca.readType
 		req.ReplicaRead = ca.readType.IsFollowerRead()
 	}
+
 	opts := []StoreSelectorOption{}
 	if ca.label != nil {
 		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
 	}
-	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
-	rc := s.getRegion()
-	s.NotNil(rc)
-	for _, store := range rc.getStore().stores {
-		store.healthStatus.clientSideSlowScore.resetSlowScore()
-		atomic.StoreUint32(&store.livenessState, uint32(reachable))
-		store.setResolveState(resolved)
-	}
-
-	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
 	timeout := ca.timeout
 	if timeout == 0 {
 		timeout = client.ReadTimeoutShort
 	}
-	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
+	return req, opts, timeout
+}
+
+func (ca *replicaSelectorAccessPathCase) recordResult(s *testReplicaSelectorSuite, bo *retry.Backoffer, region *Region, access []string, resp *tikvrpc.Response, err error) {
+	ca.accessPath = access
+	ca.regionIsValid = region.isValid()
+	msg := ca.Format()
 	if err == nil {
 		s.NotNil(resp, msg)
 		regionErr, err := resp.GetRegionError()
@@ -1959,7 +1965,6 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	} else {
 		ca.respErr = err.Error()
 	}
-	ca.accessPath = access
 	ca.backoffCnt = bo.GetTotalBackoffTimes()
 	detail := make([]string, 0, len(bo.GetBackoffTimes()))
 	for tp, cnt := range bo.GetBackoffTimes() {
@@ -1967,8 +1972,6 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	}
 	sort.Strings(detail)
 	ca.backoffDetail = detail
-	ca.regionIsValid = sender.replicaSelector.getBaseReplicaSelector().region.isValid()
-	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
 }
 
 func (ca *replicaSelectorAccessPathCase) genAccessErr(regionCache *RegionCache, r *Region, accessErr RegionErrorType) (regionErr *errorpb.Error, err error) {
@@ -2032,6 +2035,19 @@ func (c *replicaSelectorAccessPathCase) Format() string {
 		"\tregion_is_valid: %v\n}",
 		c.reqType, c.readType, c.staleRead, c.timeout, label, strings.Join(accessErr, ", "), strings.Join(c.accessPath, ", "),
 		c.respErr, respRegionError, c.backoffCnt, strings.Join(c.backoffDetail, ", "), c.regionIsValid)
+}
+
+func (s *testReplicaSelectorSuite) prepareBeforeRun() *Region {
+	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
+	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
+	rc := s.getRegion()
+	s.NotNil(rc)
+	for _, store := range rc.getStore().stores {
+		store.healthStatus.resetSlowScore()
+		atomic.StoreUint32(&store.livenessState, uint32(reachable))
+		store.setResolveState(resolved)
+	}
+	return rc
 }
 
 type RegionErrorType int
@@ -2367,29 +2383,48 @@ func (s *testReplicaSelectorSuite) getRegion() *Region {
 }
 
 func BenchmarkReplicaSelector(b *testing.B) {
-	s := new(testRegionRequestToThreeStoresSuite)
-	s.SetupTest()
-	defer s.TearDownTest()
+	mvccStore := mocktikv.MustNewMVCCStore()
+	cluster := mocktikv.NewCluster(mvccStore)
+	mocktikv.BootstrapWithMultiStores(cluster, 3)
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	cache := NewRegionCache(pdCli)
+	defer func() {
+		cache.Close()
+		mvccStore.Close()
+	}()
 
 	config.UpdateGlobal(func(conf *config.Config) {
 		conf.EnableReplicaSelectorV2 = true
 	})
+	cnt := 0
+	allErrs := getAllRegionErrors(nil)
 	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		pberr, err := allErrs[cnt%len(allErrs)].GenError()
+		cnt++
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-			Value: []byte("value"),
-		}}, nil
+			RegionError: pberr,
+			Value:       []byte("value"),
+		}}, err
 	}}
+	f, _ := os.Create("cpu.profile")
+	pprof.StartCPUProfile(f)
+	defer func() {
+		pprof.StopCPUProfile()
+		f.Close()
+	}()
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
 		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
 			Key: []byte("key"),
 		})
-		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+		req.ReplicaReadType = kv.ReplicaReadMixed
+		loc, err := cache.LocateKey(bo, []byte("key"))
 		if err != nil {
 			b.Fail()
 		}
-		sender := NewRegionRequestSender(s.cache, fnClient)
-		bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
+		sender := NewRegionRequestSender(cache, fnClient)
 		sender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 	}
 }
