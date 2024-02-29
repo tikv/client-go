@@ -1248,9 +1248,9 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
-	storeId := uint64(0)
+	var store *Store
 	if ctx != nil && ctx.Store != nil {
-		storeId = ctx.Store.storeID
+		store = ctx.Store
 		ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
 		if serverIsBusy.EstimatedWaitMs != 0 {
 			if s.busyThreshold != 0 {
@@ -1270,7 +1270,7 @@ func (s *replicaSelector) onServerIsBusy(
 	}
 	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
 	if s.canFastRetry() {
-		s.addPendingBackoff(storeId, retry.BoTiKVServerBusy, backoffErr)
+		s.addPendingBackoff(store, retry.BoTiKVServerBusy, backoffErr)
 		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr)
@@ -1487,7 +1487,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 		if s.replicaSelector != nil {
-			if err := s.replicaSelector.backoffOnRetry(bo, rpcCtx.Store); err != nil {
+			if err := s.replicaSelector.backoffOnRetry(rpcCtx.Store, bo); err != nil {
 				return nil, nil, retryTimes, err
 			}
 		}
@@ -2454,14 +2454,20 @@ type backoffArgs struct {
 	err error
 }
 
-func (s *replicaSelector) addPendingBackoff(storeId uint64, cfg *retry.Config, err error) {
+// addPendingBackoff adds pending backoff for the store.
+func (s *replicaSelector) addPendingBackoff(store *Store, cfg *retry.Config, err error) {
+	storeId := uint64(0)
+	if store != nil {
+		storeId = store.storeID
+	}
 	if s.pendingBackoffs == nil {
 		s.pendingBackoffs = make(map[uint64]*backoffArgs)
 	}
 	s.pendingBackoffs[storeId] = &backoffArgs{cfg, err}
 }
 
-func (s *replicaSelector) backoffOnRetry(bo *retry.Backoffer, store *Store) error {
+// backoffOnRetry apply pending backoff on the store.
+func (s *replicaSelector) backoffOnRetry(store *Store, bo *retry.Backoffer) error {
 	storeId := uint64(0)
 	if store != nil {
 		storeId = store.storeID
@@ -2474,6 +2480,7 @@ func (s *replicaSelector) backoffOnRetry(bo *retry.Backoffer, store *Store) erro
 	return bo.Backoff(args.cfg, args.err)
 }
 
+// backoffOnNoCandidate apply the largest base pending backoff when no candidate.
 func (s *replicaSelector) backoffOnNoCandidate(bo *retry.Backoffer) error {
 	var args *backoffArgs
 	// if there are multiple pending backoffs, choose the one with the largest base duration.
