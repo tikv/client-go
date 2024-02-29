@@ -1446,27 +1446,31 @@ func TestReplicaReadDebug(t *testing.T) {
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+	_ = fakeEpochNotMatch
 	var ca replicaSelectorAccessPathCase
-	s.changeRegionLeader(3)
+	//s.changeRegionLeader(3)
 	ca = replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
-		readType:  kv.ReplicaReadPreferLeader,
-		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "1"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, DiskFullErr, StoreNotMatchErr},
 		expect: &accessPathResult{
 			accessPath: []string{
-				"{addr: store3, replica-read: true, stale-read: false}", // try leader first.
-				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: true}",
 				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
 			},
 			respErr:         "",
-			respRegionError: nil,
+			respRegionError: StoreNotMatchErr.GenRegionError(),
 			backoffCnt:      2,
-			backoffDetail:   []string{"tikvRPC+1", "tikvServerBusy+1"},
-			regionIsValid:   true,
+			backoffDetail:   []string{"tikvDiskFull+1", "tikvRPC+1"},
+			regionIsValid:   false,
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
-	s.changeRegionLeader(1)
+	//s.changeRegionLeader(1)
 }
 
 // TODO: Fix backoff cnt.
@@ -1863,10 +1867,6 @@ func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPa
 		conf.EnableReplicaSelectorV2 = false
 	})
 	ca1.run(s)
-	//if ca1.accessErrInValid {
-	//	// the case has been marked as invalid, just ignore it.
-	//	return false
-	//}
 	ca1.checkResult(s, false)
 
 	config.UpdateGlobal(func(conf *config.Config) {
@@ -1878,7 +1878,7 @@ func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPa
 		ca2.expect = &ca1.result
 	}
 	ca2.checkResult(s, true)
-	return ca1.accessErrInValid
+	return !ca1.accessErrInValid
 }
 
 func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite, v2 bool) {
