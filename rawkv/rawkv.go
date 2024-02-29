@@ -648,6 +648,10 @@ func (c *Client) Checksum(ctx context.Context, startKey, endKey []byte, options 
 // with the normal write operation in rawkv mode. If multiple clients exist, it's up to the clients the sync the atomic mode flag.
 // If some clients write in atomic mode but the other don't, the linearizability of TiKV will be violated.
 func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValue []byte, options ...RawOption) ([]byte, bool, error) {
+	return c.CompareAndSwapTTL(ctx, key, previousValue, newValue, 0, options...)
+}
+
+func (c *Client) CompareAndSwapTTL(ctx context.Context, key, previousValue, newValue []byte, ttl uint64, options ...RawOption) ([]byte, bool, error) {
 	if !c.atomic {
 		return nil, false, errors.New("using CompareAndSwap without enable atomic mode")
 	}
@@ -657,6 +661,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 		Key:   key,
 		Value: newValue,
 		Cf:    c.getColumnFamily(opts),
+		Ttl:  ttl,
 	}
 	if previousValue == nil {
 		reqArgs.PreviousNotExist = true
