@@ -39,6 +39,8 @@ func (c emptyClient) CloseAddr(addr string) error {
 	return nil
 }
 
+func (c emptyClient) SetEventListener(listener ClientEventListener) {}
+
 func TestInterceptedClient(t *testing.T) {
 	executed := false
 	client := NewInterceptedClient(emptyClient{})

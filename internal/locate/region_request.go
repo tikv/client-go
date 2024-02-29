@@ -543,14 +543,11 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 
 	// If all followers are tried and fail, backoff and retry.
 	if selector.targetIdx < 0 {
-		for _, replica := range selector.replicas {
-			if replica.deadlineErrUsingConfTimeout {
-				// when meet deadline exceeded error, do fast retry without invalidate region cache.
-				return nil, nil
-			}
+		// when meet deadline exceeded error, do fast retry without invalidate region cache.
+		if !hasDeadlineExceededError(selector.replicas) {
+			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+			selector.invalidateRegion()
 		}
-		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
-		selector.invalidateRegion()
 		return nil, nil
 	}
 	rpcCtx, err := selector.buildRPCContext(bo)
@@ -812,14 +809,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 				}
 				return nil, stateChanged{}
 			}
-			for _, r := range selector.replicas {
-				if r.deadlineErrUsingConfTimeout {
-					// when meet deadline exceeded error, do fast retry without invalidate region cache.
-					return nil, nil
-				}
+			// when meet deadline exceeded error, do fast retry without invalidate region cache.
+			if !hasDeadlineExceededError(selector.replicas) {
+				metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+				selector.invalidateRegion()
 			}
-			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
-			selector.invalidateRegion()
 			return nil, nil
 		}
 		state.lastIdx = state.leaderIdx
@@ -873,11 +867,21 @@ func (state *accessFollower) isCandidate(idx AccessIndex, replica *replica) bool
 	}
 	// And If the leader store is abnormal to be accessed under `ReplicaReadPreferLeader` mode, we should choose other valid followers
 	// as candidates to serve the Read request.
-	if state.option.preferLeader && replica.store.isSlow() {
+	if state.option.preferLeader && replica.store.healthStatus.IsSlow() {
 		return false
 	}
 	// Choose a replica with matched labels.
 	return replica.store.IsStoreMatch(state.option.stores) && replica.store.IsLabelsMatch(state.option.labels)
+}
+
+func hasDeadlineExceededError(replicas []*replica) bool {
+	for _, replica := range replicas {
+		if replica.deadlineErrUsingConfTimeout {
+			// when meet deadline exceeded error, do fast retry without invalidate region cache.
+			return true
+		}
+	}
+	return false
 }
 
 // tryIdleReplica is the state where we find the leader is busy and retry the request using replica read.
@@ -1234,7 +1238,7 @@ func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause err
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
 		s.regionCache.markStoreNeedCheck(store)
-		store.markAlreadySlow()
+		store.healthStatus.markAlreadySlow()
 	}
 }
 
@@ -1801,7 +1805,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 		recordAttemptedTime(s.replicaSelector, rpcDuration)
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
-			rpcCtx.Store.recordSlowScoreStat(rpcDuration)
+			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
 			RecordRegionRequestRuntimeStats(s.Stats, req.Type, rpcDuration)

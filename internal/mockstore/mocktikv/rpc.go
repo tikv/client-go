@@ -49,6 +49,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 )
@@ -1095,3 +1096,6 @@ func (c *RPCClient) Close() error {
 func (c *RPCClient) CloseAddr(addr string) error {
 	return nil
 }
+
+// SetEventListener does nothing.
+func (c *RPCClient) SetEventListener(listener client.ClientEventListener) {}

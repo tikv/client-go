@@ -28,93 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorV2ByMixedCalculateScore() {
-	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
-	region, err := s.cache.LocateKey(s.bo, []byte("a"))
-	s.Nil(err)
-	s.NotNil(region)
-	selector, err := NewReplicaSelector(s.cache, region.Region, req)
-	s.Nil(err)
-	for i, r := range selector.getBaseReplicaSelector().replicas {
-		rc := s.cache.GetCachedRegionWithRLock(region.Region)
-		s.NotNil(rc)
-		isLeader := r.peer.Id == rc.GetLeaderPeerID()
-		s.Equal(isLeader, AccessIndex(i) == rc.getStore().workTiKVIdx)
-		strategy := ReplicaSelectMixedStrategy{leaderIdx: rc.getStore().workTiKVIdx}
-		score := strategy.calculateScore(r, isLeader)
-		s.Equal(r.store.isSlow(), false)
-		if isLeader {
-			s.Equal(score, 4)
-		} else {
-			s.Equal(score, 5)
-		}
-		r.store.slowScore.avgScore = slowScoreThreshold + 1
-		s.Equal(r.store.isSlow(), true)
-		score = strategy.calculateScore(r, isLeader)
-		if isLeader {
-			s.Equal(score, 3)
-		} else {
-			s.Equal(score, 4)
-		}
-		strategy.tryLeader = true
-		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, 4)
-		strategy.preferLeader = true
-		score = strategy.calculateScore(r, isLeader)
-		if isLeader {
-			s.Equal(score, 5)
-		} else {
-			s.Equal(score, 4)
-		}
-		strategy.learnerOnly = true
-		strategy.tryLeader = false
-		strategy.preferLeader = false
-		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, 3)
-		labels := []*metapb.StoreLabel{
-			{
-				Key:   "zone",
-				Value: "us-west-1",
-			},
-		}
-		strategy.labels = labels
-		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, 0)
-
-		strategy = ReplicaSelectMixedStrategy{
-			leaderIdx: rc.getStore().workTiKVIdx,
-			tryLeader: true,
-			labels:    labels,
-		}
-		score = strategy.calculateScore(r, isLeader)
-		if isLeader {
-			s.Equal(score, 2)
-		} else {
-			s.Equal(score, 1)
-		}
-
-		strategy = ReplicaSelectMixedStrategy{
-			leaderIdx:    rc.getStore().workTiKVIdx,
-			preferLeader: true,
-			labels:       labels,
-		}
-		score = strategy.calculateScore(r, isLeader)
-		if isLeader {
-			s.Equal(score, 2)
-		} else {
-			s.Equal(score, 1)
-		}
-		r.store.labels = labels
-		score = strategy.calculateScore(r, isLeader)
-		if isLeader {
-			s.Equal(score, 5)
-		} else {
-			s.Equal(score, 4)
-		}
-		r.store.labels = nil
-	}
-}
-
 type testReplicaSelectorSuite struct {
 	suite.Suite
 	cluster    *mocktikv.Cluster
@@ -182,6 +95,97 @@ type accessPathResult struct {
 	backoffCnt      int
 	backoffDetail   []string
 	regionIsValid   bool
+}
+
+func TestReplicaSelectorCalculateScore(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
+	region, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.NotNil(region)
+	selector, err := NewReplicaSelector(s.cache, region.Region, req)
+	s.Nil(err)
+	for i, r := range selector.getBaseReplicaSelector().replicas {
+		rc := s.cache.GetCachedRegionWithRLock(region.Region)
+		s.NotNil(rc)
+		isLeader := r.peer.Id == rc.GetLeaderPeerID()
+		s.Equal(isLeader, AccessIndex(i) == rc.getStore().workTiKVIdx)
+		strategy := ReplicaSelectMixedStrategy{leaderIdx: rc.getStore().workTiKVIdx}
+		score := strategy.calculateScore(r, isLeader)
+		s.Equal(r.store.healthStatus.IsSlow(), false)
+		if isLeader {
+			s.Equal(score, 4)
+		} else {
+			s.Equal(score, 5)
+		}
+		r.store.healthStatus.markAlreadySlow()
+		s.Equal(r.store.healthStatus.IsSlow(), true)
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, 3)
+		} else {
+			s.Equal(score, 4)
+		}
+		strategy.tryLeader = true
+		score = strategy.calculateScore(r, isLeader)
+		s.Equal(score, 4)
+		strategy.preferLeader = true
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, 5)
+		} else {
+			s.Equal(score, 4)
+		}
+		strategy.learnerOnly = true
+		strategy.tryLeader = false
+		strategy.preferLeader = false
+		score = strategy.calculateScore(r, isLeader)
+		s.Equal(score, 3)
+		labels := []*metapb.StoreLabel{
+			{
+				Key:   "zone",
+				Value: "us-west-1",
+			},
+		}
+		strategy.labels = labels
+		score = strategy.calculateScore(r, isLeader)
+		s.Equal(score, 0)
+
+		strategy = ReplicaSelectMixedStrategy{
+			leaderIdx: rc.getStore().workTiKVIdx,
+			tryLeader: true,
+			labels:    labels,
+		}
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, 2)
+		} else {
+			s.Equal(score, 1)
+		}
+
+		strategy = ReplicaSelectMixedStrategy{
+			leaderIdx:    rc.getStore().workTiKVIdx,
+			preferLeader: true,
+			labels:       labels,
+		}
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, 2)
+		} else {
+			s.Equal(score, 1)
+		}
+		r.store.labels = labels
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, 5)
+		} else {
+			s.Equal(score, 4)
+		}
+		r.store.labels = nil
+	}
 }
 
 func TestReplicaReadAccessPathByCase(t *testing.T) {
@@ -384,6 +388,28 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// Don't invalid region in accessFollower, since leader meets deadlineExceededErr.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     nil,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: true, stale-read: false}",
 				"{addr: store2, replica-read: true, stale-read: false}",
 				"{addr: store3, replica-read: true, stale-read: false}"},
 			respErr:         "",
@@ -1914,7 +1940,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	rc := s.getRegion()
 	s.NotNil(rc)
 	for _, store := range rc.getStore().stores {
-		store.slowScore.resetSlowScore()
+		store.healthStatus.clientSideSlowScore.resetSlowScore()
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)
 	}

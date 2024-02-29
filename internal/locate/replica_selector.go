@@ -375,7 +375,7 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	if r.store.IsStoreMatch(s.stores) && r.store.IsLabelsMatch(s.labels) {
 		score += scoreOfLabelMatch
 	}
-	if !r.store.isSlow() {
+	if !r.store.healthStatus.IsSlow() {
 		score += scoreOfNotSlow
 		//fmt.Printf("store %v is not slow ------\n", r.store.storeID)
 	}
