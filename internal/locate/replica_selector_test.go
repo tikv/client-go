@@ -86,8 +86,8 @@ type replicaSelectorAccessPathCase struct {
 	label            *metapb.StoreLabel
 	accessErr        []RegionErrorType
 	accessErrInValid bool
-	accessPathResult                   // use to record the execution result.
-	expect           *accessPathResult //
+	expect           *accessPathResult
+	result           accessPathResult
 }
 
 type accessPathResult struct {
@@ -1775,16 +1775,18 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
-func TestReplicaSelectorAccessPath2(t *testing.T) {
+func TestReplicaReadAccessPathByGenError(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
+	maxAccessErrCnt := 6
 	totalValidCaseCount := 0
 	totalCaseCount := 0
+	lastLogCnt := 0
 	testCase := func(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool, timeout time.Duration, label *metapb.StoreLabel) {
 		isRead := isReadReq(req)
-		accessErrGen := newAccessErrGenerator(isRead, staleRead)
+		accessErrGen := newAccessErrGenerator(isRead, staleRead, maxAccessErrCnt)
 		for {
 			accessErr, done := accessErrGen.genAccessErr(staleRead)
 			if done {
@@ -1803,6 +1805,19 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 				totalValidCaseCount++
 			}
 			totalCaseCount++
+			if totalCaseCount-lastLogCnt > 100000 {
+				lastLogCnt = totalCaseCount
+				logutil.BgLogger().Info("TestReplicaReadAccessPathByGenError is running",
+					zap.Int("total-case", totalCaseCount),
+					zap.Int("valid-case", totalValidCaseCount),
+					zap.Int("invalid-case", totalCaseCount-totalValidCaseCount),
+					zap.String("req", req.String()),
+					zap.String("read-type", readType.String()),
+					zap.Bool("stale-read", staleRead),
+					zap.Duration("timeout", timeout),
+					zap.Any("label", label),
+				)
+			}
 		}
 	}
 
@@ -1823,11 +1838,10 @@ func TestReplicaSelectorAccessPath2(t *testing.T) {
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "1"})
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "2"})
 	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, &metapb.StoreLabel{Key: "id", Value: "3"})
-
-	logutil.BgLogger().Info("TestReplicaSelectorAccessPath2 finished",
+	logutil.BgLogger().Info("TestReplicaReadAccessPathByGenError Finished",
 		zap.Int("total-case", totalCaseCount),
 		zap.Int("valid-case", totalValidCaseCount),
-		zap.Int("skipped-case", totalCaseCount-totalValidCaseCount))
+		zap.Int("invalid-case", totalCaseCount-totalValidCaseCount))
 }
 
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
@@ -1849,18 +1863,22 @@ func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPa
 		conf.EnableReplicaSelectorV2 = false
 	})
 	ca1.run(s)
-	if ca1.accessErrInValid {
-		// the case has been marked as invalid, just ignore it.
-		return false
-	}
+	//if ca1.accessErrInValid {
+	//	// the case has been marked as invalid, just ignore it.
+	//	return false
+	//}
 	ca1.checkResult(s, false)
 
 	config.UpdateGlobal(func(conf *config.Config) {
 		conf.EnableReplicaSelectorV2 = true
 	})
 	ca2.run(s)
+	if ca2.expect == nil {
+		// compare with ca1 result.
+		ca2.expect = &ca1.result
+	}
 	ca2.checkResult(s, true)
-	return true
+	return ca1.accessErrInValid
 }
 
 func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite, v2 bool) {
@@ -1873,7 +1891,7 @@ func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite
 	}
 	msg := fmt.Sprintf("%v\n%v\n\n", version, ca.Format())
 	expect := ca.expect
-	result := ca.accessPathResult
+	result := ca.result
 	s.Equal(expect.accessPath, result.accessPath, msg)
 	s.Equal(expect.respErr, result.respErr, msg)
 	s.Equal(expect.respRegionError, result.respRegionError, msg)
@@ -1954,24 +1972,24 @@ func (ca *replicaSelectorAccessPathCase) buildRequest(s *testReplicaSelectorSuit
 }
 
 func (ca *replicaSelectorAccessPathCase) recordResult(s *testReplicaSelectorSuite, bo *retry.Backoffer, region *Region, access []string, resp *tikvrpc.Response, err error) {
-	ca.accessPath = access
-	ca.regionIsValid = region.isValid()
+	ca.result.accessPath = access
+	ca.result.regionIsValid = region.isValid()
 	msg := ca.Format()
 	if err == nil {
 		s.NotNil(resp, msg)
 		regionErr, err := resp.GetRegionError()
 		s.Nil(err, msg)
-		ca.respRegionError = regionErr
+		ca.result.respRegionError = regionErr
 	} else {
-		ca.respErr = err.Error()
+		ca.result.respErr = err.Error()
 	}
-	ca.backoffCnt = bo.GetTotalBackoffTimes()
+	ca.result.backoffCnt = bo.GetTotalBackoffTimes()
 	detail := make([]string, 0, len(bo.GetBackoffTimes()))
 	for tp, cnt := range bo.GetBackoffTimes() {
 		detail = append(detail, fmt.Sprintf("%v+%v", tp, cnt))
 	}
 	sort.Strings(detail)
-	ca.backoffDetail = detail
+	ca.result.backoffDetail = detail
 }
 
 func (ca *replicaSelectorAccessPathCase) genAccessErr(regionCache *RegionCache, r *Region, accessErr RegionErrorType) (regionErr *errorpb.Error, err error) {
@@ -2013,8 +2031,8 @@ func (c *replicaSelectorAccessPathCase) Format() string {
 		label = fmt.Sprintf("%v->%v", c.label.Key, c.label.Value)
 	}
 	respRegionError := ""
-	if c.respRegionError != nil {
-		respRegionError = c.respRegionError.String()
+	if c.result.respRegionError != nil {
+		respRegionError = c.result.respRegionError.String()
 	}
 	accessErr := make([]string, len(c.accessErr))
 	for i := range c.accessErr {
@@ -2033,8 +2051,8 @@ func (c *replicaSelectorAccessPathCase) Format() string {
 		"\tbackoff_cnt: %v\n"+
 		"\tbackoff_detail: %v\n"+
 		"\tregion_is_valid: %v\n}",
-		c.reqType, c.readType, c.staleRead, c.timeout, label, strings.Join(accessErr, ", "), strings.Join(c.accessPath, ", "),
-		c.respErr, respRegionError, c.backoffCnt, strings.Join(c.backoffDetail, ", "), c.regionIsValid)
+		c.reqType, c.readType, c.staleRead, c.timeout, label, strings.Join(accessErr, ", "), strings.Join(c.result.accessPath, ", "),
+		c.result.respErr, respRegionError, c.result.backoffCnt, strings.Join(c.result.backoffDetail, ", "), c.result.regionIsValid)
 }
 
 func (s *testReplicaSelectorSuite) prepareBeforeRun() *Region {
@@ -2246,14 +2264,15 @@ func (tp RegionErrorType) String() string {
 }
 
 type accessErrGenerator struct {
-	mode      int
-	idx       int
-	baseIdx   int
-	allErrs   []RegionErrorType
-	retryErrs []RegionErrorType
+	maxAccessErrCnt int
+	mode            int
+	idx             int
+	baseIdx         int
+	allErrs         []RegionErrorType
+	retryErrs       []RegionErrorType
 }
 
-func newAccessErrGenerator(isRead, staleRead bool) *accessErrGenerator {
+func newAccessErrGenerator(isRead, staleRead bool, maxAccessErrCnt int) *accessErrGenerator {
 	filter := func(tp RegionErrorType) bool {
 		// read request won't meet RaftEntryTooLargeErr.
 		if isRead && tp == RaftEntryTooLargeErr {
@@ -2273,10 +2292,11 @@ func newAccessErrGenerator(isRead, staleRead bool) *accessErrGenerator {
 		return filter(tp) && isRegionErrorRetryable(tp)
 	})
 	return &accessErrGenerator{
-		idx:       0,
-		mode:      0,
-		allErrs:   allErrs,
-		retryErrs: retryableErr,
+		maxAccessErrCnt: maxAccessErrCnt,
+		mode:            0,
+		idx:             0,
+		allErrs:         allErrs,
+		retryErrs:       retryableErr,
 	}
 }
 
@@ -2317,31 +2337,32 @@ func (a *accessErrGenerator) genAccessErr(staleRead bool) ([]RegionErrorType, bo
 		}
 		return []RegionErrorType{a.allErrs[idx]}, false
 	}
-	for a.mode <= 5 {
-		allErrs := a.allErrs
-		retryErrs := a.retryErrs
-		if a.mode > 4 {
-			// if mode > 4, reduce the error type to avoid generating too many combinations.
-			allErrs = getAllRegionErrors(func(tp RegionErrorType) bool {
-				if staleRead == false && tp == DataIsNotReadyErr {
-					return false
-				}
-				switch tp {
-				case NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyWithEstimatedWaitMsErr, DataIsNotReadyErr,
-					RegionNotInitializedErr, DeadLineExceededErr:
-					return true
-				}
-				return false
-			})
-			retryErrs = allErrs
-		}
-		errs := a.genAccessErrs(allErrs, retryErrs)
+	for a.mode <= a.maxAccessErrCnt {
+		errs := a.genAccessErrs(a.allErrs, a.retryErrs)
 		if len(errs) > 0 {
 			return errs, false
 		}
 		a.baseIdx = 0
 		a.idx = 0
 		a.mode++
+		// if mode >= 4 , reduce the error type to avoid generating too many combinations.
+		if a.mode > 4 {
+			if a.mode > 8 {
+				a.allErrs = []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr}
+			} else if a.mode > 7 {
+				a.allErrs = []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, DeadLineExceededErr}
+			} else if a.mode > 6 {
+				a.allErrs = []RegionErrorType{NotLeaderWithNewLeader2Err, ServerIsBusyWithEstimatedWaitMsErr, DeadLineExceededErr}
+			} else if a.mode > 5 {
+				a.allErrs = []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader2Err, ServerIsBusyWithEstimatedWaitMsErr, DeadLineExceededErr}
+			} else {
+				a.allErrs = []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyWithEstimatedWaitMsErr, RegionNotInitializedErr, DeadLineExceededErr}
+			}
+			if staleRead {
+				a.allErrs = append(a.allErrs, DataIsNotReadyErr)
+			}
+			a.retryErrs = a.allErrs
+		}
 	}
 	return nil, true
 }
