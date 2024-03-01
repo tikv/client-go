@@ -1177,10 +1177,6 @@ func (b *Bucket) Contains(key []byte) bool {
 
 // LocateKeyRange lists region and range that key in [start_key,end_key].
 func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byte) ([]*KeyLocation, error) {
-	if bytes.Equal(startKey, endKey) {
-		return nil, errors.Errorf("Return no region, because startKey is equals to endKey, which is: %q", util.HexRegionKeyStr(startKey))
-	}
-
 	var res []*KeyLocation
 	// 1. find tail regions from cache
 	for {
