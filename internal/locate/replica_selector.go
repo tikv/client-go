@@ -148,7 +148,7 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	leaderIdx := s.region.getStore().workTiKVIdx
 	strategy := ReplicaSelectLeaderStrategy{leaderIdx: leaderIdx}
 	s.target = strategy.next(s.replicas)
-	if s.target != nil && s.busyThreshold > 0 && (s.target.store.EstimatedWaitTime() > s.busyThreshold || s.target.serverIsBusy) {
+	if s.target != nil && s.busyThreshold > 0 && s.isReadOnlyReq && (s.target.store.EstimatedWaitTime() > s.busyThreshold || s.target.serverIsBusy) {
 		// If the leader is busy in our estimation, try other idle replicas.
 		// If other replicas are all busy, tryIdleReplica will try the leader again without busy threshold.
 		mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, busyThreshold: s.busyThreshold}
@@ -168,11 +168,9 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	}
 	mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, leaderOnly: s.option.leaderOnly}
 	s.target = mixedStrategy.next(s, s.region)
-	if s.target != nil {
-		if s.replicas[leaderIdx].deadlineErrUsingConfTimeout && s.isReadOnlyReq {
-			req.ReplicaRead = true
-			req.StaleRead = false
-		}
+	if s.target != nil && s.isReadOnlyReq && s.replicas[leaderIdx].deadlineErrUsingConfTimeout {
+		req.ReplicaRead = true
+		req.StaleRead = false
 	}
 }
 
@@ -239,7 +237,13 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 	return nil
 }
 
+// check leader is candidate or not.
 func isLeaderCandidate(leader *replica) bool {
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	// If leader.deadlineErrUsingConfTimeout is true, it means the leader is already tried and received deadline exceeded error, then don't retry it.
 	if leader.store.getLivenessState() != reachable ||
 		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
 		leader.deadlineErrUsingConfTimeout ||
