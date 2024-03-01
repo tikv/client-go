@@ -1182,8 +1182,26 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 	}
 
 	var res []*KeyLocation
+	// 1. find tail regions from cache
 	for {
-		// 1. find head regions from cache
+		r := c.tryFindRegionByKey(endKey, true)
+		if r != nil {
+			res = append(res, &KeyLocation{
+				Region:   r.VerID(),
+				StartKey: r.StartKey(),
+				EndKey:   r.EndKey(),
+				Buckets:  r.getStore().buckets,
+			})
+			if r.Contains(startKey) {
+				return res, nil
+			}
+			endKey = r.StartKey()
+		} else {
+			break
+		}
+	}
+	for {
+		// 2. find head regions from cache
 		for {
 			r := c.tryFindRegionByKey(startKey, false)
 			if r != nil {
@@ -1200,27 +1218,6 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 			} else {
 				break
 			}
-		}
-		// 2. find tail regions from cache
-		for {
-			r := c.tryFindRegionByKey(endKey, true)
-			if r != nil {
-				res = append(res, &KeyLocation{
-					Region:   r.VerID(),
-					StartKey: r.StartKey(),
-					EndKey:   r.EndKey(),
-					Buckets:  r.getStore().buckets,
-				})
-				if r.Contains(startKey) {
-					return res, nil
-				}
-				endKey = r.StartKey()
-			} else {
-				break
-			}
-		}
-		if bytes.Equal(startKey, endKey) {
-			return res, nil
 		}
 		// 3. load remaining regions from pd client
 		batchRegions, err := c.BatchLoadRegionsWithKeyRange(bo, startKey, endKey, defaultRegionsPerBatch)
