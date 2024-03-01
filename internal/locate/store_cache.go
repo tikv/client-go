@@ -33,7 +33,6 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
-	uatomic "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
@@ -183,9 +182,9 @@ type Store struct {
 	resolveMutex sync.Mutex           // protect pd from concurrent init requests
 	epoch        uint32               // store fail epoch, see RegionStore.storeEpochs
 	storeType    tikvrpc.EndpointType // type of the store
-	tokenCount   uatomic.Int64        // used store token count
+	tokenCount   atomic.Int64         // used store token count
 
-	loadStats uatomic.Pointer[storeLoadStats]
+	loadStats atomic.Pointer[storeLoadStats]
 
 	// whether the store is unreachable due to some reason, therefore requests to the store needs to be
 	// forwarded by other stores. this is also the flag that a health check loop is running for this store.

@@ -69,7 +69,6 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
-	uatomic "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -214,7 +213,7 @@ type regionStore struct {
 	// accessIndex[tiKVOnly][proxyTiKVIdx] is the index of TiKV that can forward requests to the leader in stores, -1 means not using proxy.
 	proxyTiKVIdx AccessIndex
 	// accessIndex[tiFlashOnly][workTiFlashIdx] is the index of the current working TiFlash in stores.
-	workTiFlashIdx uatomic.Int32
+	workTiFlashIdx atomic.Int32
 	// buckets is not accurate and it can change even if the region is not changed.
 	// It can be stale and buckets keys can be out of the region range.
 	buckets *metapb.Buckets
