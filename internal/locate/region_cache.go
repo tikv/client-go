@@ -1180,58 +1180,69 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 	if bytes.Equal(startKey, endKey) {
 		return nil, errors.Errorf("Return no region, because startKey is equals to endKey, which is: %q", util.HexRegionKeyStr(startKey))
 	}
+
 	var res []*KeyLocation
-	// 1. find head regions from cache
 	for {
-		r := c.tryFindRegionByKey(startKey, false)
-		if r != nil {
+	    // 1. find head regions from cache
+	    for {
+	    	r := c.tryFindRegionByKey(startKey, false)
+	    	if r != nil {
+	    		res = append(res, &KeyLocation{
+	    			Region:   r.VerID(),
+	    			StartKey: r.StartKey(),
+	    			EndKey:   r.EndKey(),
+	    			Buckets:  r.getStore().buckets,
+	    		})
+	    		if r.ContainsByEnd(endKey) {
+	    			return res, nil
+	    		}
+	    		startKey = r.EndKey()
+	    	} else {
+	    		break
+	    	}
+	    }
+	    // 2. find tail regions from cache
+	    for {
+	    	r := c.tryFindRegionByKey(endKey, true)
+	    	if r != nil {
+	    		res = append(res, &KeyLocation{
+	    			Region:   r.VerID(),
+	    			StartKey: r.StartKey(),
+	    			EndKey:   r.EndKey(),
+	    			Buckets:  r.getStore().buckets,
+	    		})
+	    		if r.Contains(startKey) {
+	    			return res, nil
+	    		}
+	    		endKey = r.StartKey()
+	    	} else {
+	    		break
+	    	}
+	    }
+		if bytes.Equal(startKey, endKey) {
+			return res, nil
+		}
+		// 3. load remaining regions from pd client
+		batchRegions, err := c.BatchLoadRegionsWithKeyRange(bo, startKey, endKey, defaultRegionsPerBatch)
+		if err != nil {
+			return nil, err
+		}
+		if len(batchRegions) == 0 {
+			// should never happen
+			break
+		}
+		for _, r := range batchRegions {
 			res = append(res, &KeyLocation{
 				Region:   r.VerID(),
 				StartKey: r.StartKey(),
 				EndKey:   r.EndKey(),
 				Buckets:  r.getStore().buckets,
 			})
-			if r.ContainsByEnd(endKey) {
-				return res, nil
-			}
-			startKey = r.EndKey()
-		} else {
+		endRegion := batchRegions[len(batchRegions)-1]
+		if endRegion.ContainsByEnd(endKey) {
 			break
 		}
-	}
-	// 2. find tail regions from cache
-	for {
-		r := c.tryFindRegionByKey(endKey, true)
-		if r != nil {
-			res = append(res, &KeyLocation{
-				Region:   r.VerID(),
-				StartKey: r.StartKey(),
-				EndKey:   r.EndKey(),
-				Buckets:  r.getStore().buckets,
-			})
-			if r.Contains(startKey) {
-				return res, nil
-			}
-			endKey = r.StartKey()
-		} else {
-			break
-		}
-	}
-	if bytes.Equal(startKey, endKey) {
-		return res, nil
-	}
-	// 3. load remaining regions from pd client
-	regions, err := c.LoadRegionsInKeyRange(bo, startKey, endKey)
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range regions {
-		res = append(res, &KeyLocation{
-			Region:   r.VerID(),
-			StartKey: r.StartKey(),
-			EndKey:   r.EndKey(),
-			Buckets:  r.getStore().buckets,
-		})
+		startKey = endRegion.EndKey()
 	}
 	return res, nil
 }
