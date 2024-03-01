@@ -1183,42 +1183,42 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 
 	var res []*KeyLocation
 	for {
-	    // 1. find head regions from cache
-	    for {
-	    	r := c.tryFindRegionByKey(startKey, false)
-	    	if r != nil {
-	    		res = append(res, &KeyLocation{
-	    			Region:   r.VerID(),
-	    			StartKey: r.StartKey(),
-	    			EndKey:   r.EndKey(),
-	    			Buckets:  r.getStore().buckets,
-	    		})
-	    		if r.ContainsByEnd(endKey) {
-	    			return res, nil
-	    		}
-	    		startKey = r.EndKey()
-	    	} else {
-	    		break
-	    	}
-	    }
-	    // 2. find tail regions from cache
-	    for {
-	    	r := c.tryFindRegionByKey(endKey, true)
-	    	if r != nil {
-	    		res = append(res, &KeyLocation{
-	    			Region:   r.VerID(),
-	    			StartKey: r.StartKey(),
-	    			EndKey:   r.EndKey(),
-	    			Buckets:  r.getStore().buckets,
-	    		})
-	    		if r.Contains(startKey) {
-	    			return res, nil
-	    		}
-	    		endKey = r.StartKey()
-	    	} else {
-	    		break
-	    	}
-	    }
+		// 1. find head regions from cache
+		for {
+			r := c.tryFindRegionByKey(startKey, false)
+			if r != nil {
+				res = append(res, &KeyLocation{
+					Region:   r.VerID(),
+					StartKey: r.StartKey(),
+					EndKey:   r.EndKey(),
+					Buckets:  r.getStore().buckets,
+				})
+				if r.ContainsByEnd(endKey) {
+					return res, nil
+				}
+				startKey = r.EndKey()
+			} else {
+				break
+			}
+		}
+		// 2. find tail regions from cache
+		for {
+			r := c.tryFindRegionByKey(endKey, true)
+			if r != nil {
+				res = append(res, &KeyLocation{
+					Region:   r.VerID(),
+					StartKey: r.StartKey(),
+					EndKey:   r.EndKey(),
+					Buckets:  r.getStore().buckets,
+				})
+				if r.Contains(startKey) {
+					return res, nil
+				}
+				endKey = r.StartKey()
+			} else {
+				break
+			}
+		}
 		if bytes.Equal(startKey, endKey) {
 			return res, nil
 		}
@@ -1238,6 +1238,7 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 				EndKey:   r.EndKey(),
 				Buckets:  r.getStore().buckets,
 			})
+		}
 		endRegion := batchRegions[len(batchRegions)-1]
 		if endRegion.ContainsByEnd(endKey) {
 			break
