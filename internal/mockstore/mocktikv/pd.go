@@ -340,11 +340,11 @@ func (c *pdClient) UpdateKeyspaceState(ctx context.Context, id uint32, state key
 	return nil, nil
 }
 
-func (c *pdClient) ListResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, error) {
+func (c *pdClient) ListResourceGroups(ctx context.Context, opts ...pd.GetResourceGroupOption) ([]*rmpb.ResourceGroup, error) {
 	return nil, nil
 }
 
-func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string) (*rmpb.ResourceGroup, error) {
+func (c *pdClient) GetResourceGroup(ctx context.Context, resourceGroupName string, opts ...pd.GetResourceGroupOption) (*rmpb.ResourceGroup, error) {
 	group, ok := c.groups[resourceGroupName]
 	if !ok {
 		return nil, fmt.Errorf("the group %s does not exist", resourceGroupName)
@@ -403,3 +403,5 @@ func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd
 func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
 	return nil, 0, nil
 }
+
+func (m *pdClient) GetServiceDiscovery() pd.ServiceDiscovery { return nil }
