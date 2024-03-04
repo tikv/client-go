@@ -776,6 +776,16 @@ func (s *Store) EstimatedWaitTime() time.Duration {
 	return loadStats.estimatedWait - timeSinceUpdated
 }
 
+func (s *Store) updateServerLoadStats(estimatedWaitMs uint32) {
+	estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
+	// Update the estimated wait time of the store.
+	loadStats := &storeLoadStats{
+		estimatedWait:     estimatedWait,
+		waitTimeUpdatedAt: time.Now(),
+	}
+	s.loadStats.Store(loadStats)
+}
+
 const (
 	tikvSlowScoreDecayRate     float64 = 20.0 / 60.0 // s^(-1), linear decaying
 	tikvSlowScoreSlowThreshold int64   = 80

@@ -1167,18 +1167,65 @@ func (b *Bucket) Contains(key []byte) bool {
 
 // LocateKeyRange lists region and range that key in [start_key,end_key].
 func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byte) ([]*KeyLocation, error) {
-	regions, err := c.LoadRegionsInKeyRange(bo, startKey, endKey)
-	if err != nil {
-		return nil, err
-	}
-	res := make([]*KeyLocation, 0, len(regions))
-	for _, r := range regions {
+	var res []*KeyLocation
+	// 1. find tail regions from cache
+	for {
+		r := c.tryFindRegionByKey(endKey, true)
+		if r == nil {
+			break
+		}
 		res = append(res, &KeyLocation{
 			Region:   r.VerID(),
 			StartKey: r.StartKey(),
 			EndKey:   r.EndKey(),
 			Buckets:  r.getStore().buckets,
 		})
+		if r.Contains(startKey) {
+			return res, nil
+		}
+		endKey = r.StartKey()
+	}
+	for {
+		// 2. find head regions from cache
+		for {
+			r := c.tryFindRegionByKey(startKey, false)
+			if r == nil {
+				break
+			}
+			res = append(res, &KeyLocation{
+				Region:   r.VerID(),
+				StartKey: r.StartKey(),
+				EndKey:   r.EndKey(),
+				Buckets:  r.getStore().buckets,
+			})
+			if r.ContainsByEnd(endKey) {
+				return res, nil
+			}
+			startKey = r.EndKey()
+		}
+		// 3. load remaining regions from pd client
+		batchRegions, err := c.BatchLoadRegionsWithKeyRange(bo, startKey, endKey, defaultRegionsPerBatch)
+		if err != nil {
+			return nil, err
+		}
+		if len(batchRegions) == 0 {
+			// should never happen
+			err := errors.Errorf("BatchLoadRegionsWithKeyRange return empty batchRegions without err")
+			return nil, err
+		}
+		for _, r := range batchRegions {
+			res = append(res, &KeyLocation{
+				Region:   r.VerID(),
+				StartKey: r.StartKey(),
+				EndKey:   r.EndKey(),
+				Buckets:  r.getStore().buckets,
+			})
+		}
+		endRegion := batchRegions[len(batchRegions)-1]
+		if endRegion.ContainsByEnd(endKey) {
+			break
+		}
+		startKey = endRegion.EndKey()
 	}
 	return res, nil
 }
