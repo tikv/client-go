@@ -2711,13 +2711,6 @@ func (s *StoreHealthStatus) markAlreadySlow() {
 	s.updateSlowFlag()
 }
 
-// resetSlowScore resets the slow score to 0. It's used for test.
-func (s *StoreHealthStatus) resetSlowScore() {
-	s.clientSideSlowScore.resetSlowScore()
-	s.updateTiKVServerSideSlowScore(0, time.Now())
-	s.updateSlowFlag()
-}
-
 // updateTiKVServerSideSlowScoreOnTick updates the slow score actively, which is expected to be a periodic job.
 // It skips updating if the last update time didn't elapse long enough, or it's being updated concurrently.
 func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {

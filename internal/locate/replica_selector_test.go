@@ -2156,6 +2156,50 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
+
+	cas := []replicaSelectorAccessPathCase{
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadMixed,
+			staleRead: true,
+			timeout:   0,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DeadLineExceededErr, DeadLineExceededErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store2, replica-read: false, stale-read: true}",
+					"{addr: store1, replica-read: false, stale-read: false}",
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      2,
+				backoffDetail:   []string{"tikvRPC+2"},
+				regionIsValid:   true,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadMixed,
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{ServerIsBusyErr},
+			beforeRun: func() { /* don't resetStoreState */ },
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: fakeEpochNotMatch,
+				backoffCnt:      1,
+				backoffDetail:   []string{"tikvServerBusy+1"},
+				regionIsValid:   false,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+	}
+	s.True(s.runMultiCaseAndCompare(cas))
 }
 
 func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
@@ -2673,7 +2717,9 @@ func (s *testReplicaSelectorSuite) resetStoreState() {
 	s.NotNil(rc)
 	for _, store := range rc.getStore().stores {
 		store.loadStats.Store(nil)
-		store.healthStatus.resetSlowScore()
+		store.healthStatus.clientSideSlowScore.resetSlowScore()
+		store.healthStatus.updateTiKVServerSideSlowScore(0, time.Now())
+		store.healthStatus.updateSlowFlag()
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)
 	}

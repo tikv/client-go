@@ -541,6 +541,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		}
 		return -1, nil
 	}
+
 	if len(state.labels) > 0 {
 		idx, selectReplica := filterReplicas(func(selectReplica *replica) bool {
 			return selectReplica.store.IsLabelsMatch(state.labels) && !state.isExhausted(selectReplica)
@@ -763,7 +764,6 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		offset = randIntn(replicaSize)
 	}
 	reloadRegion := false
-	//fmt.Printf("access follower   %v ----------------------- -------\n\n", state.option.preferLeader)
 	for i := 0; i < replicaSize && !state.option.leaderOnly; i++ {
 		var idx AccessIndex
 		if state.option.preferLeader {
@@ -781,7 +781,6 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			idx = AccessIndex((offset + i) % replicaSize)
 		}
 		selectReplica := selector.replicas[idx]
-		//fmt.Printf("access follower, is candidate: %v, store: %v, attempt: %v ,idx: %v -------\n\n", state.isCandidate(idx, selectReplica), selectReplica.store.storeID, selectReplica.attempts, idx)
 		if state.isCandidate(idx, selectReplica) {
 			state.lastIdx = idx
 			selector.targetIdx = idx
@@ -1092,7 +1091,7 @@ const (
 
 // next creates the RPCContext of the current candidate replica.
 // It returns a SendError if runs out of all replicas or the cached region is invalidated.
-func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
+func (s *replicaSelector) next(bo *retry.Backoffer, _ *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
 	if !s.region.isValid() {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
 		return nil, nil
@@ -1318,19 +1317,6 @@ func (s *baseReplicaSelector) onNotLeader(
 	return s.updateLeader(leader), nil
 }
 
-func (s *replicaSelector) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
-	// if the failure is caused by replica read, we can retry it with leader safely.
-	if req.ReplicaRead && s.targetIdx != s.regionStore.workTiKVIdx {
-		req.BusyThresholdMs = 0
-		s.busyThreshold = 0
-		ctx.contextPatcher.replicaRead = nil
-		ctx.contextPatcher.busyThreshold = nil
-		s.state = &accessKnownLeader{leaderIdx: s.regionStore.workTiKVIdx}
-		return true
-	}
-	return false
-}
-
 // updateLeader updates the leader of the cached region.
 // If the leader peer isn't found in the region, the region will be invalidated.
 func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
@@ -1385,10 +1371,10 @@ func (s *replicaSelector) onServerIsBusy(
 					s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
 				}
 			}
+		} else {
+			// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
+			ctx.Store.healthStatus.markAlreadySlow()
 		}
-	} else {
-		// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
-		ctx.Store.healthStatus.markAlreadySlow()
 	}
 	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
 	if s.canFastRetry() {
@@ -1554,7 +1540,6 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		rpcCtx, err = s.getRPCContext(bo, req, regionID, et, opts...)
-		//s.logSendReqError(bo, "get req ctx--------", regionID, retryTimes, req, totalErrors)
 		if err != nil {
 			return nil, nil, retryTimes, err
 		}
@@ -1837,7 +1822,9 @@ func (s *RegionRequestSender) sendReqToRegion(
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
 		rpcDuration := time.Since(start)
-		recordAttemptedTime(s.replicaSelector, rpcDuration)
+		if s.replicaSelector != nil {
+			recordAttemptedTime(s.replicaSelector, rpcDuration)
+		}
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
@@ -2439,7 +2426,6 @@ func (s *RegionRequestSender) onRegionError(
 	return false, nil
 }
 
-// onFlashbackInProgress
 func (s *RegionRequestSender) onFlashbackInProgressRegionError(ctx *RPCContext, req *tikvrpc.Request) bool {
 	switch selector := s.replicaSelector.(type) {
 	case *replicaSelector:
@@ -2562,9 +2548,6 @@ func patchRequestSource(req *tikvrpc.Request, replicaType string) {
 }
 
 func recordAttemptedTime(s ReplicaSelector, duration time.Duration) {
-	if s == nil {
-		return
-	}
 	if targetReplica := s.targetReplica(); targetReplica != nil {
 		targetReplica.attemptedTime += duration
 	}

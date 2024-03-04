@@ -61,7 +61,6 @@ type ReplicaSelector interface {
 	invalidateRegion()
 	// Following methods are used to handle region errors.
 	onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error)
-	onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) (handled bool)
 	onDataIsNotReady()
 	onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error)
 	onReadReqConfigurableTimeout(req *tikvrpc.Request) bool
@@ -253,7 +252,6 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 	maxScoreIdxes := make([]int, 0, len(replicas))
 	maxScore := -1
 	reloadRegion := false
-	//fmt.Printf("-------------begin------%#v---%v--\n", s, selector.replicaReadType)
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
 		liveness := r.store.getLivenessState()
@@ -265,7 +263,6 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 			continue
 		}
 		score := s.calculateScore(r, isLeader)
-		//fmt.Printf("replica store %v, score: %v  %v, %v-----------\n", r.store.storeID, score, isLeader, s.labels)
 		if score > maxScore {
 			maxScore = score
 			maxScoreIdxes = append(maxScoreIdxes[:0], i)
@@ -344,18 +341,15 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 				// when has match labels, prefer leader than not-matched peers.
 				score += scoreOfPreferLeader
 			} else {
-				//fmt.Printf("store %v is normal peer , isleader: %v   %v------\n", r.store.storeID, isLeader, score)
 				score += scoreOfNormalPeer
 			}
 		}
 	} else {
 		if s.learnerOnly {
 			if r.peer.Role == metapb.PeerRole_Learner {
-				//fmt.Printf("store %v is normal peer , isleader: %v   %v------\n", r.store.storeID, isLeader, score)
 				score += scoreOfNormalPeer
 			}
 		} else {
-			//fmt.Printf("store %v is normal peer , isleader: %v   %v------\n", r.store.storeID, isLeader, score)
 			score += scoreOfNormalPeer
 		}
 	}
@@ -364,10 +358,8 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	}
 	if !r.store.healthStatus.IsSlow() {
 		score += scoreOfNotSlow
-		//fmt.Printf("store %v is not slow ------\n", r.store.storeID)
 	}
 	if score > 0 && r.attempts > 0 {
-		// if the replica already tried, decrease the score.
 		score = score - 1
 	}
 	return score
@@ -431,9 +423,6 @@ func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.
 	if req.ReplicaRead && s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() {
 		req.BusyThresholdMs = 0
 		s.busyThreshold = 0
-		ctx.contextPatcher.replicaRead = nil
-		ctx.contextPatcher.busyThreshold = nil
-		s.option.labels = nil // clear label, since we need to retry with leader.
 		s.replicaReadType = kv.ReplicaReadLeader
 		req.ReplicaReadType = kv.ReplicaReadLeader
 		return true
