@@ -3299,6 +3299,16 @@ func (s *Store) GetPeerAddr() string {
 	return s.peerAddr
 }
 
+func (s *Store) updateServerLoadStats(estimatedWaitMs uint32) {
+	estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
+	// Update the estimated wait time of the store.
+	loadStats := &storeLoadStats{
+		estimatedWait:     estimatedWait,
+		waitTimeUpdatedAt: time.Now(),
+	}
+	s.loadStats.Store(loadStats)
+}
+
 // EstimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.
 // It's calculated by subtracting the time since the last update from the wait time returned from TiKV.
 func (s *Store) EstimatedWaitTime() time.Duration {
