@@ -1175,6 +1175,71 @@ func (b *Bucket) Contains(key []byte) bool {
 	return contains(b.StartKey, b.EndKey, key)
 }
 
+// LocateKeyRange lists region and range that key in [start_key,end_key].
+func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byte) ([]*KeyLocation, error) {
+	var res []*KeyLocation
+	// 1. find tail regions from cache
+	for {
+		r := c.tryFindRegionByKey(endKey, true)
+		if r == nil {
+			break
+		}
+		res = append(res, &KeyLocation{
+			Region:   r.VerID(),
+			StartKey: r.StartKey(),
+			EndKey:   r.EndKey(),
+			Buckets:  r.getStore().buckets,
+		})
+		if r.Contains(startKey) {
+			return res, nil
+		}
+		endKey = r.StartKey()
+	}
+	for {
+		// 2. find head regions from cache
+		for {
+			r := c.tryFindRegionByKey(startKey, false)
+			if r == nil {
+				break
+			}
+			res = append(res, &KeyLocation{
+				Region:   r.VerID(),
+				StartKey: r.StartKey(),
+				EndKey:   r.EndKey(),
+				Buckets:  r.getStore().buckets,
+			})
+			if r.ContainsByEnd(endKey) {
+				return res, nil
+			}
+			startKey = r.EndKey()
+		}
+		// 3. load remaining regions from pd client
+		batchRegions, err := c.BatchLoadRegionsWithKeyRange(bo, startKey, endKey, defaultRegionsPerBatch)
+		if err != nil {
+			return nil, err
+		}
+		if len(batchRegions) == 0 {
+			// should never happen
+			err := errors.Errorf("BatchLoadRegionsWithKeyRange return empty batchRegions without err")
+			return nil, err
+		}
+		for _, r := range batchRegions {
+			res = append(res, &KeyLocation{
+				Region:   r.VerID(),
+				StartKey: r.StartKey(),
+				EndKey:   r.EndKey(),
+				Buckets:  r.getStore().buckets,
+			})
+		}
+		endRegion := batchRegions[len(batchRegions)-1]
+		if endRegion.ContainsByEnd(endKey) {
+			break
+		}
+		startKey = endRegion.EndKey()
+	}
+	return res, nil
+}
+
 // LocateKey searches for the region and range that the key is located.
 func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, error) {
 	r, err := c.findRegionByKey(bo, key, false)
@@ -3241,6 +3306,16 @@ func (s *Store) GetPeerAddr() string {
 	return s.peerAddr
 }
 
+func (s *Store) updateServerLoadStats(estimatedWaitMs uint32) {
+	estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
+	// Update the estimated wait time of the store.
+	loadStats := &storeLoadStats{
+		estimatedWait:     estimatedWait,
+		waitTimeUpdatedAt: time.Now(),
+	}
+	s.loadStats.Store(loadStats)
+}
+
 // EstimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.
 // It's calculated by subtracting the time since the last update from the wait time returned from TiKV.
 func (s *Store) EstimatedWaitTime() time.Duration {
@@ -3304,21 +3379,6 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 
 	l = reachable
 	return
-}
-
-func (s *Store) updateServerLoadStats(estimatedWaitMs uint32) {
-	if estimatedWaitMs != 0 {
-		estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
-		// Update the estimated wait time of the store.
-		loadStats := &storeLoadStats{
-			estimatedWait:     estimatedWait,
-			waitTimeUpdatedAt: time.Now(),
-		}
-		s.loadStats.Store(loadStats)
-	} else {
-		// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
-		s.healthStatus.markAlreadySlow()
-	}
 }
 
 // checkAndUpdateStoreHealthStatus checks and updates health stats on each store.

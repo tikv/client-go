@@ -290,6 +290,23 @@ type baseReplicaSelector struct {
 	// TiKV can reject the request when its estimated wait duration exceeds busyThreshold.
 	// Then, the client will receive a ServerIsBusy error and choose another replica to retry.
 	busyThreshold time.Duration
+	// pendingBackoffs records the pending backoff by store_id for fast retry. Here are some examples to show how it works:
+	// Example-1, fast retry and success:
+	//      1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      2. retry in store2, and success.
+	//         Since the request is success, we can skip the backoff and fast return result to user.
+	// Example-2: fast retry different replicas but all failed:
+	//      1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      2. send req to store 2, got ServerIsBusy region error, record `store2 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      3. send req to store 3, got ServerIsBusy region error, record `store3 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      4. no candidate since all stores are busy. But before return no candidate error to up layer, we need to call backoffOnNoCandidate function
+	//         to apply a max pending backoff, the backoff is to avoid frequent access and increase the pressure on the cluster.
+	// Example-3: fast retry same replica:
+	//      1. send req to store 1, got ServerIsBusy region error, record `store1 -> BoTiKVServerBusy` backoff in pendingBackoffs and fast retry next replica.
+	//      2. assume store 2 and store 3 are unreachable.
+	//      3. re-send req to store 1 with replica-read. But before re-send to store1, we need to call backoffOnRetry function
+	//         to apply pending BoTiKVServerBusy backoff, the backoff is to avoid frequent access and increase the pressure on the cluster.
+	pendingBackoffs map[uint64]*backoffArgs
 }
 
 // TODO(crazycs520): remove this after replicaSelectorV2 stable.
@@ -454,6 +471,24 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	}
 	selector.targetIdx = state.leaderIdx
 	return selector.buildRPCContext(bo)
+}
+
+// check leader is candidate or not.
+func isLeaderCandidate(leader *replica) bool {
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	// If leader.deadlineErrUsingConfTimeout is true, it means the leader is already tried and received deadline exceeded error, then don't retry it.
+	// If leader.notLeader is true, it means the leader is already tried and received not leader error, then don't retry it.
+	if leader.store.getLivenessState() != reachable ||
+		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
+		leader.deadlineErrUsingConfTimeout ||
+		leader.notLeader ||
+		leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.{
+		return false
+	}
+	return true
 }
 
 func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1262,9 +1297,8 @@ func (s *replicaSelector) onNotLeader(
 		return false, err
 	}
 	if leaderIdx >= 0 {
-		state := &accessKnownLeader{leaderIdx: AccessIndex(leaderIdx)}
 		if isLeaderCandidate(s.replicas[leaderIdx]) {
-			s.state = state
+			s.state = &accessKnownLeader{leaderIdx: AccessIndex(leaderIdx)}
 		}
 	} else {
 		s.state.onNoLeader(s)
@@ -1333,56 +1367,39 @@ func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
+	var store *Store
 	if ctx != nil && ctx.Store != nil {
-		ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
-	}
-	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
-		if s.busyThreshold != 0 && isReadReq(req.Type) {
-			// do not retry with batched coprocessor requests.
-			// it'll be region misses if we send the tasks to replica.
-			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
-				return false, nil
-			}
-			switch state := s.state.(type) {
-			case *accessKnownLeader:
-				// Clear attempt history of the leader, so the leader can be accessed again.
-				s.replicas[state.leaderIdx].attempts = 0
-				s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
-				return true, nil
-			case *tryIdleReplica:
-				if s.targetIdx != state.leaderIdx {
-					return true, nil
+		store = ctx.Store
+		if serverIsBusy.EstimatedWaitMs != 0 {
+			ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
+			if s.busyThreshold != 0 && isReadReq(req.Type) {
+				// do not retry with batched coprocessor requests.
+				// it'll be region misses if we send the tasks to replica.
+				if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
+					return false, nil
 				}
-				// backoff if still receiving ServerIsBusy after accessing leader again
+				switch state := s.state.(type) {
+				case *accessKnownLeader:
+					// Clear attempt history of the leader, so the leader can be accessed again.
+					s.replicas[state.leaderIdx].attempts = 0
+					s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
+				}
 			}
 		}
-	} else if ctx != nil && ctx.Store != nil {
-		if s.canFallback2Follower() {
-			return true, nil
-		}
+	} else {
+		// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
+		ctx.Store.healthStatus.markAlreadySlow()
 	}
-	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
+	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
+	if s.canFastRetry() {
+		s.addPendingBackoff(store, retry.BoTiKVServerBusy, backoffErr)
+		return true, nil
+	}
+	err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr)
 	if err != nil {
 		return false, err
 	}
 	return true, nil
-}
-
-// For some reasons, the leader is unreachable by now, try followers instead.
-// the state is changed in accessFollower.next when leader is unavailable.
-func (s *replicaSelector) canFallback2Follower() bool {
-	if s == nil || s.state == nil {
-		return false
-	}
-	state, ok := s.state.(*accessFollower)
-	if !ok {
-		return false
-	}
-	if !state.isStaleRead {
-		return false
-	}
-	// can fallback to follower only when the leader is exhausted.
-	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
 }
 
 func (s *replicaSelector) onDataIsNotReady() {
@@ -1558,6 +1575,11 @@ func (s *RegionRequestSender) SendReqCtx(
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
 			s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, totalErrors)
+			if s.replicaSelector != nil {
+				if err := s.replicaSelector.getBaseReplicaSelector().backoffOnNoCandidate(bo); err != nil {
+					return nil, nil, retryTimes, err
+				}
+			}
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
 		}
@@ -1586,6 +1608,11 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 			return nil, nil, retryTimes, err
+		}
+		if s.replicaSelector != nil {
+			if err := s.replicaSelector.getBaseReplicaSelector().backoffOnRetry(rpcCtx.Store, bo); err != nil {
+				return nil, nil, retryTimes, err
+			}
 		}
 
 		var retry bool
@@ -2176,7 +2203,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("ctx", ctx),
 		)
 		if req != nil {
-			if s.replicaSelector != nil && s.replicaSelector.onFlashbackInProgress(ctx, req) {
+			if s.onFlashbackInProgressRegionError(ctx, req) {
 				return true, nil
 			}
 		}
@@ -2412,6 +2439,29 @@ func (s *RegionRequestSender) onRegionError(
 	return false, nil
 }
 
+// onFlashbackInProgress
+func (s *RegionRequestSender) onFlashbackInProgressRegionError(ctx *RPCContext, req *tikvrpc.Request) bool {
+	switch selector := s.replicaSelector.(type) {
+	case *replicaSelector:
+		// if the failure is caused by replica read, we can retry it with leader safely.
+		if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
+			req.BusyThresholdMs = 0
+			selector.busyThreshold = 0
+			ctx.contextPatcher.replicaRead = nil
+			ctx.contextPatcher.busyThreshold = nil
+			return true
+		}
+		if req.ReplicaReadType.IsFollowerRead() {
+			s.replicaSelector = nil
+			req.ReplicaReadType = kv.ReplicaReadLeader
+			return true
+		}
+	case *replicaSelectorV2:
+		return selector.onFlashbackInProgress(ctx, req)
+	}
+	return false
+}
+
 type staleReadMetricsCollector struct {
 }
 
@@ -2521,4 +2571,60 @@ func recordAttemptedTime(s ReplicaSelector, duration time.Duration) {
 	if proxyReplica := s.proxyReplica(); proxyReplica != nil {
 		proxyReplica.attemptedTime += duration
 	}
+}
+
+// canFastRetry returns true if the request can be sent to next replica.
+func (s *replicaSelector) canFastRetry() bool {
+	accessLeader, ok := s.state.(*accessKnownLeader)
+	if ok && isLeaderCandidate(s.replicas[accessLeader.leaderIdx]) {
+		// If leader is still candidate, the request will be sent to leader again,
+		// so don't skip since the leader is still busy.
+		return false
+	}
+	return true
+}
+
+type backoffArgs struct {
+	cfg *retry.Config
+	err error
+}
+
+// addPendingBackoff adds pending backoff for the store.
+func (s *baseReplicaSelector) addPendingBackoff(store *Store, cfg *retry.Config, err error) {
+	storeId := uint64(0)
+	if store != nil {
+		storeId = store.storeID
+	}
+	if s.pendingBackoffs == nil {
+		s.pendingBackoffs = make(map[uint64]*backoffArgs)
+	}
+	s.pendingBackoffs[storeId] = &backoffArgs{cfg, err}
+}
+
+// backoffOnRetry apply pending backoff on the store when retry in this store.
+func (s *baseReplicaSelector) backoffOnRetry(store *Store, bo *retry.Backoffer) error {
+	storeId := uint64(0)
+	if store != nil {
+		storeId = store.storeID
+	}
+	args, ok := s.pendingBackoffs[storeId]
+	if !ok {
+		return nil
+	}
+	delete(s.pendingBackoffs, storeId)
+	return bo.Backoff(args.cfg, args.err)
+}
+
+// backoffOnNoCandidate apply the largest base pending backoff when no candidate.
+func (s *baseReplicaSelector) backoffOnNoCandidate(bo *retry.Backoffer) error {
+	var args *backoffArgs
+	for _, pbo := range s.pendingBackoffs {
+		if args == nil || args.cfg.Base() < pbo.cfg.Base() {
+			args = pbo
+		}
+	}
+	if args == nil {
+		return nil
+	}
+	return bo.Backoff(args.cfg, args.err)
 }

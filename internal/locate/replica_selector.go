@@ -237,23 +237,6 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 	return nil
 }
 
-// check leader is candidate or not.
-func isLeaderCandidate(leader *replica) bool {
-	// If hibernate region is enabled and the leader is not reachable, the raft group
-	// will not be wakened up and re-elect the leader until the follower receives
-	// a request. So, before the new leader is elected, we should not send requests
-	// to the unreachable old leader to avoid unnecessary timeout.
-	// If leader.deadlineErrUsingConfTimeout is true, it means the leader is already tried and received deadline exceeded error, then don't retry it.
-	if leader.store.getLivenessState() != reachable ||
-		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
-		leader.deadlineErrUsingConfTimeout ||
-		leader.notLeader ||
-		leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
-		return false
-	}
-	return true
-}
-
 type ReplicaSelectMixedStrategy struct {
 	leaderIdx     AccessIndex
 	tryLeader     bool
@@ -467,10 +450,12 @@ func (s *replicaSelectorV2) onDataIsNotReady() {
 func (s *replicaSelectorV2) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
+	var store *Store
 	if ctx != nil && ctx.Store != nil {
-		ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
+		store = ctx.Store
 		if serverIsBusy.EstimatedWaitMs != 0 {
-			if s.busyThreshold != 0 {
+			ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
+			if s.busyThreshold != 0 && isReadReq(req.Type) {
 				// do not retry with batched coprocessor requests.
 				// it'll be region misses if we send the tasks to replica.
 				if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
@@ -479,18 +464,33 @@ func (s *replicaSelectorV2) onServerIsBusy(
 				if s.target != nil {
 					s.target.serverIsBusy = true
 				}
-				return true, nil
 			}
-		} else if s.replicaReadType != kv.ReplicaReadLeader {
-			// fast retry next follower
-			return true, nil
+		} else {
+			// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
+			ctx.Store.healthStatus.markAlreadySlow()
 		}
 	}
-	err = bo.Backoff(retry.BoTiKVServerBusy, errors.Errorf("server is busy, ctx: %v", ctx))
+	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
+	if s.canFastRetry() {
+		s.addPendingBackoff(store, retry.BoTiKVServerBusy, backoffErr)
+		return true, nil
+	}
+	err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr)
 	if err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *replicaSelectorV2) canFastRetry() bool {
+	if s.replicaReadType == kv.ReplicaReadLeader {
+		leaderIdx := s.region.getStore().workTiKVIdx
+		leader := s.replicas[leaderIdx]
+		if isLeaderCandidate(leader) && !leader.serverIsBusy {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *replicaSelectorV2) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
