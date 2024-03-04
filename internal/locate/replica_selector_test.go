@@ -2363,6 +2363,38 @@ func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
+func TestReplicaReadAccessPathByLearnerCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	// Add a TiKV learner peer to the region.
+	rc := s.getRegion()
+	storeID := uint64(4)
+	s.cluster.AddStore(storeID, fmt.Sprintf("store%d", storeID))
+	s.cluster.AddLearner(rc.meta.Id, storeID, s.cluster.AllocID())
+	rc.invalidate(Other) // invalid region cache to reload region.
+
+	var ca replicaSelectorAccessPathCase
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLearner,
+		accessErr: []RegionErrorType{ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store4, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
+
 func TestReplicaReadAccessPathByGenError(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
