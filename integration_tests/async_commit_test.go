@@ -44,7 +44,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
+	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -86,7 +86,7 @@ func (s *testAsyncCommitCommon) setUpTest() {
 		return
 	}
 
-	client, pdClient, cluster, err := unistore.New("")
+	client, pdClient, cluster, err := unistore.New("", nil)
 	s.Require().Nil(err)
 
 	unistore.BootstrapWithSingleStore(cluster)
