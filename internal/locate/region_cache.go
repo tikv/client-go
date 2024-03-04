@@ -3253,18 +3253,13 @@ func (s *Store) GetPeerAddr() string {
 }
 
 func (s *Store) updateServerLoadStats(estimatedWaitMs uint32) {
-	if estimatedWaitMs != 0 {
-		estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
-		// Update the estimated wait time of the store.
-		loadStats := &storeLoadStats{
-			estimatedWait:     estimatedWait,
-			waitTimeUpdatedAt: time.Now(),
-		}
-		s.loadStats.Store(loadStats)
-	} else {
-		// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
-		s.healthStatus.markAlreadySlow()
+	estimatedWait := time.Duration(estimatedWaitMs) * time.Millisecond
+	// Update the estimated wait time of the store.
+	loadStats := &storeLoadStats{
+		estimatedWait:     estimatedWait,
+		waitTimeUpdatedAt: time.Now(),
 	}
+	s.loadStats.Store(loadStats)
 }
 
 // EstimatedWaitTime returns an optimistic estimation of how long a request will wait in the store.

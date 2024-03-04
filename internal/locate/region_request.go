@@ -1276,8 +1276,8 @@ func (s *replicaSelector) onServerIsBusy(
 	var store *Store
 	if ctx != nil && ctx.Store != nil {
 		store = ctx.Store
-		ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
 		if serverIsBusy.EstimatedWaitMs != 0 {
+			ctx.Store.updateServerLoadStats(serverIsBusy.EstimatedWaitMs)
 			if s.busyThreshold != 0 {
 				// do not retry with batched coprocessor requests.
 				// it'll be region misses if we send the tasks to replica.
@@ -1291,6 +1291,9 @@ func (s *replicaSelector) onServerIsBusy(
 					s.state = &tryIdleReplica{leaderIdx: state.leaderIdx}
 				}
 			}
+		} else {
+			// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
+			ctx.Store.healthStatus.markAlreadySlow()
 		}
 	}
 	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
