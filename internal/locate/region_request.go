@@ -257,6 +257,7 @@ type replica struct {
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
 	dataIsNotReady              bool
+	notLeader                   bool
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -269,6 +270,16 @@ func (r *replica) isEpochStale() bool {
 
 func (r *replica) isExhausted(maxAttempt int, maxAttemptTime time.Duration) bool {
 	return r.attempts >= maxAttempt || (maxAttemptTime > 0 && r.attemptedTime >= maxAttemptTime)
+}
+
+func (r *replica) onUpdateLeader() {
+	if r.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) {
+		// Give the replica one more chance and because each follower is tried only once,
+		// it won't result in infinite retry.
+		r.attempts = maxReplicaAttempt - 1
+		r.attemptedTime = 0
+	}
+	r.notLeader = false
 }
 
 type replicaSelector struct {
@@ -301,6 +312,8 @@ func selectorStateToString(state selectorState) string {
 			replicaSelectorState = "tryFollower"
 		case *tryNewProxy:
 			replicaSelectorState = "tryNewProxy"
+		case *tryIdleReplica:
+			replicaSelectorState = "tryIdleReplica"
 		case *invalidLeader:
 			replicaSelectorState = "invalidLeader"
 		case *invalidStore:
@@ -414,7 +427,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 		selector.state = &tryNewProxy{leaderIdx: state.leaderIdx}
 		return nil, stateChanged{}
 	}
-	if !state.isCandidate(leader) {
+	if !isLeaderCandidate(leader) {
 		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 		return nil, stateChanged{}
 	}
@@ -432,14 +445,18 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 }
 
 // check leader is candidate or not.
-func (state *accessKnownLeader) isCandidate(leader *replica) bool {
+func isLeaderCandidate(leader *replica) bool {
 	liveness := leader.store.getLivenessState()
 	// If hibernate region is enabled and the leader is not reachable, the raft group
 	// will not be wakened up and re-elect the leader until the follower receives
 	// a request. So, before the new leader is elected, we should not send requests
 	// to the unreachable old leader to avoid unnecessary timeout.
 	// If leader.deadlineErrUsingConfTimeout is true, it means the leader is already tried and received deadline exceeded error, then don't retry it.
-	if liveness != reachable || leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) || leader.deadlineErrUsingConfTimeout {
+	// If leader.notLeader is true, it means the leader is already tried and received not leader error, then don't retry it.
+	if liveness != reachable ||
+		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
+		leader.deadlineErrUsingConfTimeout ||
+		leader.notLeader {
 		return false
 	}
 	return true
@@ -877,8 +894,7 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 		if idx == int(state.leaderIdx) {
 			continue
 		}
-		// Skip replicas that have been tried.
-		if r.isExhausted(1, 0) {
+		if !state.isCandidate(r) {
 			continue
 		}
 		estimated := r.store.EstimatedWaitTime()
@@ -893,6 +909,14 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 			break
 		}
 	}
+	if targetIdx == state.leaderIdx && !isLeaderCandidate(selector.replicas[targetIdx]) {
+		// when meet deadline exceeded error, do fast retry without invalidate region cache.
+		if !hasDeadlineExceededError(selector.replicas) {
+			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+			selector.invalidateRegion()
+		}
+		return nil, nil
+	}
 	selector.targetIdx = targetIdx
 	rpcCtx, err := selector.buildRPCContext(bo)
 	if err != nil || rpcCtx == nil {
@@ -906,6 +930,16 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 		rpcCtx.contextPatcher.busyThreshold = &selector.busyThreshold
 	}
 	return rpcCtx, nil
+}
+
+func (state *tryIdleReplica) isCandidate(replica *replica) bool {
+	if replica.isEpochStale() ||
+		replica.isExhausted(1, 0) ||
+		replica.store.getLivenessState() != reachable ||
+		replica.deadlineErrUsingConfTimeout {
+		return false
+	}
+	return true
 }
 
 func (state *tryIdleReplica) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1152,9 +1186,7 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 		// Configurable timeout should less than `ReadTimeoutShort`.
 		return false
 	}
-	switch req.Type {
-	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
-		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+	if isReadReq(req.Type) {
 		if target := s.targetReplica(); target != nil {
 			target.deadlineErrUsingConfTimeout = true
 		}
@@ -1163,8 +1195,17 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
 		}
 		return true
+	}
+	// Only work for read requests, return false for non-read requests.
+	return false
+}
+
+func isReadReq(tp tikvrpc.CmdType) bool {
+	switch tp {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
 	default:
-		// Only work for read requests, return false for non-read requests.
 		return false
 	}
 }
@@ -1196,6 +1237,9 @@ func (s *replicaSelector) onSendSuccess() {
 func (s *replicaSelector) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
+	if target := s.targetReplica(); target != nil {
+		target.notLeader = true
+	}
 	leader := notLeader.GetLeader()
 	if leader == nil {
 		// The region may be during transferring leader.
@@ -1224,17 +1268,11 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 			if replica.store.getLivenessState() != reachable {
 				return
 			}
-			if replica.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) {
-				// Give the replica one more chance and because each follower is tried only once,
-				// it won't result in infinite retry.
-				replica.attempts = maxReplicaAttempt - 1
-				replica.attemptedTime = 0
-			}
-			state := &accessKnownLeader{leaderIdx: AccessIndex(i)}
-			if state.isCandidate(s.replicas[i]) {
+			replica.onUpdateLeader()
+			if isLeaderCandidate(s.replicas[i]) {
 				// If the new leader is candidate, switch to the new leader.
 				// the leader may have deadlineErrUsingConfTimeout and isn't candidate, if so, keep the state unchanged and retry the request.
-				s.state = state
+				s.state = &accessKnownLeader{leaderIdx: AccessIndex(i)}
 			}
 			// Update the workTiKVIdx so that following requests can be sent to the leader immediately.
 			if !s.region.switchWorkLeaderToPeer(leader) {
@@ -1264,7 +1302,7 @@ func (s *replicaSelector) onServerIsBusy(
 		}
 		ctx.Store.loadStats.Store(loadStats)
 
-		if s.busyThreshold != 0 {
+		if s.busyThreshold != 0 && isReadReq(req.Type) {
 			// do not retry with batched coprocessor requests.
 			// it'll be region misses if we send the tasks to replica.
 			if req.Type == tikvrpc.CmdCop && len(req.Cop().Tasks) > 0 {
