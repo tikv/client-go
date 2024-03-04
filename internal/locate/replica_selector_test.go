@@ -2532,18 +2532,18 @@ func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPa
 	config.UpdateGlobal(func(conf *config.Config) {
 		conf.EnableReplicaSelectorV2 = false
 	})
-	ca1.run(s)
-	ca1.checkResult(s, "v1")
+	sender := ca1.run(s)
+	ca1.checkResult(s, "v1", sender)
 
 	config.UpdateGlobal(func(conf *config.Config) {
 		conf.EnableReplicaSelectorV2 = true
 	})
-	ca2.run(s)
+	sender = ca2.run(s)
 	if ca2.expect == nil {
 		// compare with ca1 result.
 		ca2.expect = &ca1.result
 	}
-	ca2.checkResult(s, "v2")
+	ca2.checkResult(s, "v2", sender)
 	return !ca1.accessErrInValid
 }
 
@@ -2551,12 +2551,12 @@ func (s *testReplicaSelectorSuite) runCase(ca replicaSelectorAccessPathCase, v2 
 	config.UpdateGlobal(func(conf *config.Config) {
 		conf.EnableReplicaSelectorV2 = v2
 	})
-	ca.run(s)
+	sender := ca.run(s)
 	version := "v1"
 	if v2 {
 		version = "v2"
 	}
-	ca.checkResult(s, version)
+	ca.checkResult(s, version, sender)
 	return !ca.accessErrInValid
 }
 
@@ -2567,8 +2567,8 @@ func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorA
 		conf.EnableReplicaSelectorV2 = false
 	})
 	for _, ca1 := range cas {
-		ca1.run(s)
-		ca1.checkResult(s, "v1")
+		sender := ca1.run(s)
+		ca1.checkResult(s, "v1", sender)
 		expects = append(expects, ca1.result)
 		valid = valid && !ca1.accessErrInValid
 	}
@@ -2577,22 +2577,22 @@ func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorA
 		conf.EnableReplicaSelectorV2 = true
 	})
 	for i, ca2 := range cas {
-		ca2.run(s)
+		sender := ca2.run(s)
 		if ca2.expect == nil {
 			// compare with ca1 result.
 			ca2.expect = &expects[i]
 		}
-		ca2.checkResult(s, "v2")
+		ca2.checkResult(s, "v2", sender)
 		valid = valid && !ca2.accessErrInValid
 	}
 	return valid
 }
 
-func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite, version string) {
+func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite, version string, sender *RegionRequestSender) {
 	if ca.expect == nil {
 		return
 	}
-	msg := fmt.Sprintf("enable_forwarding: %v\nversion: %v\n%v\n", s.cache.enableForwarding, version, ca.Format())
+	msg := fmt.Sprintf("enable_forwarding: %v\nversion: %v\n%v\nsender: %v\n", s.cache.enableForwarding, version, ca.Format(), sender.String())
 	expect := ca.expect
 	result := ca.result
 	s.Equal(expect.accessPath, result.accessPath, msg)
@@ -2603,7 +2603,7 @@ func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite
 	s.Equal(expect.backoffDetail, result.backoffDetail, msg)
 }
 
-func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
+func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) *RegionRequestSender {
 	access := []string{}
 	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		idx := len(access)
@@ -2644,6 +2644,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
 	ca.recordResult(s, bo, sender.replicaSelector.getBaseReplicaSelector().region, access, resp, err)
 	afterRun(ca, sender)
+	return sender
 }
 
 func beforeRun(s *testReplicaSelectorSuite, ca *replicaSelectorAccessPathCase) {
