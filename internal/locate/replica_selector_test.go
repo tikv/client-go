@@ -103,6 +103,45 @@ type accessPathResult struct {
 	regionIsValid   bool
 }
 
+func TestReplicaSelectorBasic(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
+	req.EnableStaleWithMixedReplicaRead()
+	rc := s.getRegion()
+	s.NotNil(rc)
+	rc.invalidate(Other)
+	selector, err := newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	s.NotNil(err)
+	s.Equal("cached region invalid", err.Error())
+	s.Nil(selector)
+	s.Equal("", selector.String())
+
+	rc = s.getRegion()
+	selector, err = newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	s.Nil(err)
+	s.NotNil(selector)
+	for _, reqSource := range []string{"leader", "follower", "follower", "unknown"} {
+		ctx, err := selector.next(s.bo, req)
+		s.Nil(err)
+		s.Equal(reqSource, selector.replicaType(ctx))
+	}
+
+	rc = s.getRegion()
+	selector, err = newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	s.Nil(err)
+	s.NotNil(selector)
+	ctx, err := selector.next(s.bo, req)
+	s.Nil(err)
+	s.NotNil(ctx)
+	rc.invalidate(Other)
+	ctx, err = selector.next(s.bo, req)
+	s.Nil(err)
+	s.Nil(ctx)
+}
+
 func TestReplicaSelectorCalculateScore(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
