@@ -1220,7 +1220,8 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 		}
 		if len(batchRegions) == 0 {
 			// should never happen
-			break
+			err := errors.Errorf("BatchLoadRegionsWithKeyRange return empty batchRegions without err")
+			return nil, err
 		}
 		for _, r := range batchRegions {
 			res = append(res, &KeyLocation{
