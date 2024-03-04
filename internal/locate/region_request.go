@@ -609,7 +609,7 @@ func (state *accessByKnownProxy) onSendFailure(bo *retry.Backoffer, selector *re
 }
 
 func (state *accessByKnownProxy) onNoLeader(selector *replicaSelector) {
-	selector.state = &invalidLeader{}
+	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 }
 
 // tryNewProxy is the state where we try to find a node from followers as proxy.
@@ -672,7 +672,7 @@ func (state *tryNewProxy) onSendFailure(bo *retry.Backoffer, selector *replicaSe
 }
 
 func (state *tryNewProxy) onNoLeader(selector *replicaSelector) {
-	selector.state = &invalidLeader{}
+	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
 }
 
 // accessFollower is the state where we are sending requests to TiKV followers.

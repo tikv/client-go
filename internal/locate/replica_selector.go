@@ -141,7 +141,7 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	if s.regionCache.enableForwarding {
 		strategy := ReplicaSelectLeaderWithProxyStrategy{}
 		s.target, s.proxy = strategy.next(s.replicas, s.region)
-		if s.target != nil {
+		if s.target != nil && s.proxy != nil {
 			return
 		}
 	}
@@ -396,7 +396,7 @@ func (s ReplicaSelectLeaderWithProxyStrategy) next(replicas []*replica, region *
 	rs := region.getStore()
 	leaderIdx := rs.workTiKVIdx
 	leader = replicas[leaderIdx]
-	if leader.store.getLivenessState() == reachable {
+	if leader.store.getLivenessState() == reachable || leader.notLeader {
 		// if leader's store is reachable, no need use proxy.
 		rs.unsetProxyStoreIfNeeded(region)
 		return nil, nil
