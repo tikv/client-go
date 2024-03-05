@@ -569,9 +569,9 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	if selector.targetIdx < 0 {
 		// when meet deadline exceeded error, do fast retry without invalidate region cache.
 		if !hasDeadlineExceededError(selector.replicas) {
-			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 		}
+		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 		return nil, nil
 	}
 	rpcCtx, err := selector.buildRPCContext(bo)
@@ -833,9 +833,9 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			}
 			// when meet deadline exceeded error, do fast retry without invalidate region cache.
 			if !hasDeadlineExceededError(selector.replicas) {
-				metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 				selector.invalidateRegion()
 			}
+			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			return nil, nil
 		}
 		state.lastIdx = state.leaderIdx
@@ -942,9 +942,9 @@ func (state *tryIdleReplica) next(bo *retry.Backoffer, selector *replicaSelector
 	if targetIdx == state.leaderIdx && !isLeaderCandidate(selector.replicas[targetIdx]) {
 		// when meet deadline exceeded error, do fast retry without invalidate region cache.
 		if !hasDeadlineExceededError(selector.replicas) {
-			metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 			selector.invalidateRegion()
 		}
+		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 		return nil, nil
 	}
 	selector.targetIdx = targetIdx
@@ -1372,7 +1372,7 @@ func (s *replicaSelector) onServerIsBusy(
 				}
 			}
 		} else {
-			// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
+			// Mark the server is busy (the next incoming READs could be redirected to expected followers.)
 			ctx.Store.healthStatus.markAlreadySlow()
 		}
 	}

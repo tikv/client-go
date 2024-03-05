@@ -278,7 +278,7 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 		return replicas[idx]
 	} else if len(maxScoreIdxes) > 1 {
 		// if there are more than one replica with the same max score, we will randomly select one
-		// todo: consider use store slow score to select a faster one.
+		// todo: consider use store statistics information to select a faster one.
 		idx := maxScoreIdxes[randIntn(len(maxScoreIdxes))]
 		return replicas[idx]
 	}
@@ -286,19 +286,15 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *R
 		// when can't find an idle replica, no need to invalidate region.
 		return nil
 	}
-
-	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
-	for _, r := range replicas {
-		if r.deadlineErrUsingConfTimeout {
-			// when meet deadline exceeded error, do fast retry without invalidate region cache.
-			return nil
-		}
+	// when meet deadline exceeded error, do fast retry without invalidate region cache.
+	if !hasDeadlineExceededError(selector.replicas) {
+		selector.invalidateRegion()
 	}
-	selector.invalidateRegion() // is exhausted, Is need to invalidate the region?
+	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 	return nil
 }
 
-func (s ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epochStale bool, liveness livenessState) bool {
+func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epochStale bool, liveness livenessState) bool {
 	if epochStale || liveness == unreachable {
 		// the replica is not available, skip it.
 		return false
@@ -455,7 +451,7 @@ func (s *replicaSelectorV2) onServerIsBusy(
 				}
 			}
 		} else {
-			// Mark the server is busy (the next incoming READs could be redirect to expected followers.)
+			// Mark the server is busy (the next incoming READs could be redirected to expected followers.)
 			ctx.Store.healthStatus.markAlreadySlow()
 		}
 	}
