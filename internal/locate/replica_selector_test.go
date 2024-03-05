@@ -162,33 +162,33 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		score := strategy.calculateScore(r, isLeader)
 		s.Equal(r.store.healthStatus.IsSlow(), false)
 		if isLeader {
-			s.Equal(score, 4)
+			s.Equal(score, flagLabelMatches+flagNotSlow)
 		} else {
-			s.Equal(score, 5)
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotSlow)
 		}
 		r.store.healthStatus.markAlreadySlow()
 		s.Equal(r.store.healthStatus.IsSlow(), true)
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, 3)
+			s.Equal(score, flagLabelMatches)
 		} else {
-			s.Equal(score, 4)
+			s.Equal(score, flagLabelMatches+flagNormalPeer)
 		}
 		strategy.tryLeader = true
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, 4)
+		s.Equal(score, flagLabelMatches+flagNormalPeer)
 		strategy.preferLeader = true
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, 5)
+			s.Equal(score, flagLabelMatches+flagPreferLeader)
 		} else {
-			s.Equal(score, 4)
+			s.Equal(score, flagLabelMatches+flagNormalPeer)
 		}
 		strategy.learnerOnly = true
 		strategy.tryLeader = false
 		strategy.preferLeader = false
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, 3)
+		s.Equal(score, flagLabelMatches)
 		labels := []*metapb.StoreLabel{
 			{
 				Key:   "zone",
@@ -206,9 +206,9 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, 2)
+			s.Equal(score, flagPreferLeader)
 		} else {
-			s.Equal(score, 1)
+			s.Equal(score, flagNormalPeer)
 		}
 
 		strategy = ReplicaSelectMixedStrategy{
@@ -218,16 +218,16 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, 2)
+			s.Equal(score, flagPreferLeader)
 		} else {
-			s.Equal(score, 1)
+			s.Equal(score, flagNormalPeer)
 		}
 		r.store.labels = labels
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, 5)
+			s.Equal(score, flagLabelMatches+flagPreferLeader)
 		} else {
-			s.Equal(score, 4)
+			s.Equal(score, flagLabelMatches+flagNormalPeer)
 		}
 		r.store.labels = nil
 	}

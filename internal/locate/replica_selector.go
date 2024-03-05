@@ -236,6 +236,8 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 	return nil
 }
 
+// ReplicaSelectMixedStrategy is used to select a replica by calculating a score for each replica, and then choose the one with the highest score.
+// Attention, if you want the leader replica must be chosen in some case, you should use ReplicaSelectLeaderStrategy, instead of use ReplicaSelectMixedStrategy with preferLeader flag.
 type ReplicaSelectMixedStrategy struct {
 	leaderIdx     AccessIndex
 	tryLeader     bool
@@ -320,40 +322,43 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 }
 
 const (
-	// define the score of priority.
-	scoreOfLabelMatch   = 3
-	scoreOfPreferLeader = 2
-	scoreOfNormalPeer   = 1
-	scoreOfNotSlow      = 1
+	// the definition of the score is:
+	// MSB                                                                               LSB
+	// [unused bits][1 bit: LabelMatches][1 bit: PreferLeader][2 bits: NormalPeer + NotSlow]
+	flagLabelMatches = 1 << 3
+	flagPreferLeader = 1 << 2
+	flagNormalPeer   = 1
+	flagNotSlow      = 1
 )
 
+// calculateScore calculates the score of the replica.
 func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) int {
 	score := 0
 	if isLeader {
 		if s.preferLeader {
-			score += scoreOfPreferLeader
+			score |= flagPreferLeader
 		} else if s.tryLeader {
 			if len(s.labels) > 0 {
 				// when has match labels, prefer leader than not-matched peers.
-				score += scoreOfPreferLeader
+				score |= flagPreferLeader
 			} else {
-				score += scoreOfNormalPeer
+				score |= flagNormalPeer
 			}
 		}
 	} else {
 		if s.learnerOnly {
 			if r.peer.Role == metapb.PeerRole_Learner {
-				score += scoreOfNormalPeer
+				score |= flagNormalPeer
 			}
 		} else {
-			score += scoreOfNormalPeer
+			score |= flagNormalPeer
 		}
 	}
 	if r.store.IsStoreMatch(s.stores) && r.store.IsLabelsMatch(s.labels) {
-		score += scoreOfLabelMatch
+		score |= flagLabelMatches
 	}
 	if !r.store.healthStatus.IsSlow() {
-		score += scoreOfNotSlow
+		score += flagNotSlow
 	}
 	if score > 0 && r.attempts > 0 {
 		score = score - 1
