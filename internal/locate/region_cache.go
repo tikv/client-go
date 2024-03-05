@@ -1178,25 +1178,8 @@ func (b *Bucket) Contains(key []byte) bool {
 // LocateKeyRange lists region and range that key in [start_key,end_key].
 func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byte) ([]*KeyLocation, error) {
 	var res []*KeyLocation
-	// 1. find tail regions from cache
 	for {
-		r := c.tryFindRegionByKey(endKey, true)
-		if r == nil {
-			break
-		}
-		res = append(res, &KeyLocation{
-			Region:   r.VerID(),
-			StartKey: r.StartKey(),
-			EndKey:   r.EndKey(),
-			Buckets:  r.getStore().buckets,
-		})
-		if r.Contains(startKey) {
-			return res, nil
-		}
-		endKey = r.StartKey()
-	}
-	for {
-		// 2. find head regions from cache
+		// 1. find regions from cache
 		for {
 			r := c.tryFindRegionByKey(startKey, false)
 			if r == nil {
@@ -1213,7 +1196,7 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 			}
 			startKey = r.EndKey()
 		}
-		// 3. load remaining regions from pd client
+		// 2. load remaining regions from pd client
 		batchRegions, err := c.BatchLoadRegionsWithKeyRange(bo, startKey, endKey, defaultRegionsPerBatch)
 		if err != nil {
 			return nil, err
