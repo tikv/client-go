@@ -317,8 +317,7 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 	defer s.TearDownTest()
 
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, cause by no replica is available.
-	var ca replicaSelectorAccessPathCase
-	ca = replicaSelectorAccessPathCase{
+	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
 		staleRead: true,
@@ -679,10 +678,9 @@ func TestReplicaReadAccessPathByCase2(t *testing.T) {
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
-	var ca replicaSelectorAccessPathCase
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 	// Following cases are found by other test, careful.
-	ca = replicaSelectorAccessPathCase{
+	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
 		staleRead: false,
@@ -1083,8 +1081,7 @@ func TestReplicaReadAccessPathByLeaderCase(t *testing.T) {
 	defer s.TearDownTest()
 
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, cause by no replica is available.
-	var ca replicaSelectorAccessPathCase
-	ca = replicaSelectorAccessPathCase{
+	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadLeader,
 		accessErr: nil,
@@ -1402,8 +1399,7 @@ func TestReplicaReadAccessPathByFollowerCase(t *testing.T) {
 	defer s.TearDownTest()
 
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
-	var ca replicaSelectorAccessPathCase
-	ca = replicaSelectorAccessPathCase{
+	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadFollower,
 		accessErr: nil,
@@ -1669,8 +1665,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 	defer s.TearDownTest()
 
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
-	var ca replicaSelectorAccessPathCase
-	ca = replicaSelectorAccessPathCase{
+	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
 		staleRead: true,
@@ -2414,8 +2409,7 @@ func TestReplicaReadAccessPathByLearnerCase(t *testing.T) {
 	s.cluster.AddLearner(rc.meta.Id, storeID, s.cluster.AllocID())
 	rc.invalidate(Other) // invalid region cache to reload region.
 
-	var ca replicaSelectorAccessPathCase
-	ca = replicaSelectorAccessPathCase{
+	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadLearner,
 		accessErr: []RegionErrorType{ServerIsBusyErr},

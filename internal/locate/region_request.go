@@ -485,7 +485,7 @@ func isLeaderCandidate(leader *replica) bool {
 		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
 		leader.deadlineErrUsingConfTimeout ||
 		leader.notLeader ||
-		leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.{
+		leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
 		return false
 	}
 	return true
