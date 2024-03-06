@@ -2795,6 +2795,15 @@ func (s *testReplicaSelectorSuite) resetStoreState() {
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)
 	}
+	regionStore := rc.getStore()
+	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
+		epoch := regionStore.storeEpochs[storeIdx]
+		storeEpoch := regionStore.stores[storeIdx].epoch
+		if epoch != storeEpoch {
+			rc.invalidate(EpochNotMatch)
+			break
+		}
+	}
 }
 
 type RegionErrorType int
