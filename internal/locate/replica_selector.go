@@ -302,7 +302,7 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 }
 
 const (
-	// the definition of the score is:
+	// The definition of the score is:
 	// MSB                                                                               LSB
 	// [unused bits][1 bit: LabelMatches][1 bit: PreferLeader][2 bits: NormalPeer + NotSlow]
 	flagLabelMatches = 1 << 3

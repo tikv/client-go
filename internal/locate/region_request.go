@@ -1319,6 +1319,7 @@ func (s *baseReplicaSelector) onNotLeader(
 
 // updateLeader updates the leader of the cached region.
 // If the leader peer isn't found in the region, the region will be invalidated.
+// If switch to new leader successfully, returns the AccessIndex of the new leader in the replicas.
 func (s *baseReplicaSelector) updateLeader(leader *metapb.Peer) int {
 	if leader == nil {
 		return -1
