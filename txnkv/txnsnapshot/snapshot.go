@@ -204,8 +204,12 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	return s.BatchGetWithTier(ctx, keys, BatchGetSnapshotTier)
 }
 
+// BatchGet tiers indicate the read tier of the batch get request.
+// BatchGet read keys in regions. The keys location and region error retry mechanism are shared.
 const (
+	// BatchGetSnapshotTier indicates the batch get reads from a snapshot.
 	BatchGetSnapshotTier = 1 << iota
+	// BatchGetBufferTier indicates the batch get reads from the pipelined flushed buffer, only read locks in the current txn.
 	BatchGetBufferTier
 )
 

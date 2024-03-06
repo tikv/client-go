@@ -44,6 +44,7 @@ type PipelinedMemDB struct {
 	len, size               int    // len and size records the total flushed and onflushing memdb.
 	generation              uint64
 	entryLimit, bufferLimit uint64
+	flushOption             flushOption
 }
 
 const (
@@ -56,6 +57,30 @@ const (
 	// ForceFlushSizeThreshold is the threshold to force flush MemDB, which controls the max memory consumption of PipelinedMemDB.
 	ForceFlushSizeThreshold = 128 * 1024 * 1024 // 128MB
 )
+
+type flushOption struct {
+	MinFlushKeys            int
+	MinFlushSize            int
+	ForceFlushSizeThreshold int
+}
+
+func newFlushOption() flushOption {
+	opt := flushOption{
+		MinFlushKeys:            MinFlushKeys,
+		MinFlushSize:            MinFlushSize,
+		ForceFlushSizeThreshold: ForceFlushSizeThreshold,
+	}
+	if val, err := util.EvalFailpoint("pipelinedMemDBMinFlushKeys"); err == nil && val != nil {
+		opt.MinFlushKeys = val.(int)
+	}
+	if val, err := util.EvalFailpoint("pipelinedMemDBMinFlushSize"); err == nil && val != nil {
+		opt.MinFlushSize = val.(int)
+	}
+	if val, err := util.EvalFailpoint("pipelinedMemDBForceFlushSizeThreshold"); err == nil && val != nil {
+		opt.ForceFlushSizeThreshold = val.(int)
+	}
+	return opt
+}
 
 type pipelinedMemDBSkipRemoteBuffer struct{}
 
@@ -73,6 +98,7 @@ type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]by
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := newMemDB()
 	memdb.setSkipMutex(true)
+	flushOptoin := newFlushOption()
 	return &PipelinedMemDB{
 		memDB:             memdb,
 		errCh:             make(chan error, 1),
@@ -82,6 +108,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		// keep entryLimit and bufferLimit same with the memdb's default values.
 		entryLimit:  memdb.entrySizeLimit,
 		bufferLimit: memdb.bufferSizeLimit,
+		flushOption: flushOptoin,
 	}
 }
 
@@ -221,10 +248,10 @@ func (p *PipelinedMemDB) needFlush() bool {
 	// MinFlushSize <= size < ForceFlushSizeThreshold && keys < MinFlushKeys, do not flush.
 	// MinFlushSize <= size < ForceFlushSizeThreshold && keys >= MinFlushKeys, flush.
 	// size >= ForceFlushSizeThreshold, flush.
-	if size < MinFlushSize || (p.memDB.Len() < MinFlushKeys && size < ForceFlushSizeThreshold) {
+	if size < p.flushOption.MinFlushSize || (p.memDB.Len() < p.flushOption.MinFlushKeys && size < p.flushOption.ForceFlushSizeThreshold) {
 		return false
 	}
-	if p.onFlushing.Load() && size < ForceFlushSizeThreshold {
+	if p.onFlushing.Load() && size < p.flushOption.ForceFlushSizeThreshold {
 		return false
 	}
 	return true

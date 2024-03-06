@@ -20,8 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/require"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func emptyBufferBatchGetter(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
@@ -296,4 +298,45 @@ func TestErrorIterator(t *testing.T) {
 	})
 	iteratorToErr(memdb.SnapshotIter(nil, nil))
 	iteratorToErr(memdb.SnapshotIterReverse(nil, nil))
+}
+
+func TestPipelinedAdjustFlushCondition(t *testing.T) {
+	util.EnableFailpoints()
+	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb.Set([]byte("key"), []byte("value"))
+	flushed, err := memdb.Flush(false)
+	require.Nil(t, err)
+	require.False(t, flushed)
+
+	// can flush even only 1 key
+	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(1)`))
+	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushSize", `return(1)`))
+	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb.Set([]byte("key"), []byte("value"))
+	flushed, err = memdb.Flush(false)
+	require.Nil(t, err)
+	require.True(t, flushed)
+
+	// need 2 keys to flush
+	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(2)`))
+	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushSize", `return(1)`))
+	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb.Set([]byte("key"), []byte("value"))
+	flushed, err = memdb.Flush(false)
+	require.Nil(t, err)
+	require.False(t, flushed)
+
+	// need 2 keys to flush, but force threshold reached
+	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(2)`))
+	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushSize", `return(1)`))
+	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBForceFlushSizeThreshold", `return(2)`))
+	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error { return nil })
+	memdb.Set([]byte("key"), []byte("value"))
+	flushed, err = memdb.Flush(false)
+	require.Nil(t, err)
+	require.True(t, flushed)
+
+	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushKeys"))
+	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushSize"))
+	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBForceFlushSizeThreshold"))
 }
