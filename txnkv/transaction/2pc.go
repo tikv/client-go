@@ -866,7 +866,8 @@ func (c *twoPhaseCommitter) groupMutations(bo *retry.Backoffer, mutations Commit
 		if uint32(group.mutations.Len()) >= preSplitDetectThresholdVal {
 			logutil.BgLogger().Info("2PC detect large amount of mutations on a single region",
 				zap.Uint64("region", group.region.GetID()),
-				zap.Int("mutations count", group.mutations.Len()))
+				zap.Int("mutations count", group.mutations.Len()),
+				zap.Uint64("startTS", c.startTS))
 			if c.preSplitRegion(bo.GetCtx(), group) {
 				didPreSplit = true
 			}
@@ -905,14 +906,15 @@ func (c *twoPhaseCommitter) preSplitRegion(ctx context.Context, group groupedMut
 	regionIDs, err := c.store.SplitRegions(ctx, splitKeys, true, nil)
 	if err != nil {
 		logutil.BgLogger().Warn("2PC split regions failed", zap.Uint64("regionID", group.region.GetID()),
-			zap.Int("keys count", keysLength), zap.Error(err))
+			zap.Int("keys count", keysLength), zap.Error(err), zap.Uint64("startTS", c.startTS))
 		return false
 	}
 
 	for _, regionID := range regionIDs {
 		err := c.store.WaitScatterRegionFinish(ctx, regionID, 0)
 		if err != nil {
-			logutil.BgLogger().Warn("2PC wait scatter region failed", zap.Uint64("regionID", regionID), zap.Error(err))
+			logutil.BgLogger().Warn("2PC wait scatter region failed", zap.Uint64("regionID", regionID), zap.Error(err),
+				zap.Uint64("startTS", c.startTS))
 		}
 	}
 	// Invalidate the old region cache information.
