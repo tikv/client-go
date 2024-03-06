@@ -210,6 +210,7 @@ const (
 	// BatchGetSnapshotTier indicates the batch get reads from a snapshot.
 	BatchGetSnapshotTier = 1 << iota
 	// BatchGetBufferTier indicates the batch get reads from the pipelined flushed buffer, only read locks in the current txn.
+	// this only works when the txn is created with a pipelined memdb, unless an error will be returned.
 	BatchGetBufferTier
 )
 
