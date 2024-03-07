@@ -319,7 +319,7 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 			score |= flagPreferLeader
 		} else if s.tryLeader {
 			if len(s.labels) > 0 {
-				// when has match labels, prefer leader than not-matched peers.
+				// When the leader has matching labels, prefer leader than other mismatching peers.
 				score |= flagPreferLeader
 			} else {
 				score |= flagNormalPeer
