@@ -28,6 +28,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/israce"
 	"go.uber.org/zap"
 )
 
@@ -2434,6 +2435,10 @@ func TestReplicaReadAccessPathByGenError(t *testing.T) {
 	defer s.TearDownTest()
 
 	maxAccessErrCnt := 6
+	if israce.RaceEnabled {
+		// When run this test with race, it will take a long time, so we reduce the maxAccessErrCnt to 3 to speed up test to avoid timeout.
+		maxAccessErrCnt = 3
+	}
 	totalValidCaseCount := 0
 	totalCaseCount := 0
 	lastLogCnt := 0
