@@ -765,3 +765,30 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 	// batchSendLoop should not panic.
 	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicCounter), int64(0))
 }
+
+func (s *testRegionRequestToSingleStoreSuite) TestClusterIDInReq() {
+	server, port := mockserver.StartMockTikvService()
+	s.True(port > 0)
+	rpcClient := client.NewRPCClient()
+	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		s.True(req.ClusterId > 0)
+		return rpcClient.SendRequest(ctx, server.Addr(), req, timeout)
+	}}
+	defer func() {
+		rpcClient.Close()
+		server.Stop()
+	}()
+
+	bo := retry.NewBackofferWithVars(context.Background(), 2000, nil)
+	region, err := s.cache.LocateRegionByID(bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a"), Version: 1})
+	// send a probe request to make sure the mock server is ready.
+	s.regionRequestSender.SendReq(retry.NewNoopBackoff(context.Background()), req, region.Region, time.Second)
+	resp, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Millisecond*10)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ := resp.GetRegionError()
+	s.Nil(regionErr)
+}
