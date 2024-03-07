@@ -93,7 +93,9 @@ func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations, gen
 			DiskFullOpt:            c.txn.diskFullOpt,
 			TxnSource:              c.txn.txnSource,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
-			RequestSource:          c.txn.GetRequestSource(),
+			// txn.GetRequestSource may cause data race because the upper layer may edit the source while the flush requests are built in background.
+			// So we use the fixed source from the upper layer to avoid the data race.
+			RequestSource: "external_pdml",
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: c.resourceGroupName,
 			},
