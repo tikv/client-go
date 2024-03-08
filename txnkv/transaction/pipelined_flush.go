@@ -39,6 +39,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// PipelinedRequestSource is the source of the Flush & ResolveLock requests in a txn with pipelined memdb.
+// txn.GetRequestSource may cause data race because the upper layer may edit the source while the flush requests are built in background.
+// So we use the fixed source from the upper layer to avoid the data race.
+// This also distinguishes the resource usage between p-DML(pipelined DML) and other small DMLs.
 const PipelinedRequestSource = "external_pdml"
 
 type actionPipelinedFlush struct {
@@ -95,9 +99,7 @@ func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations, gen
 			DiskFullOpt:            c.txn.diskFullOpt,
 			TxnSource:              c.txn.txnSource,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
-			// txn.GetRequestSource may cause data race because the upper layer may edit the source while the flush requests are built in background.
-			// So we use the fixed source from the upper layer to avoid the data race.
-			RequestSource: PipelinedRequestSource,
+			RequestSource:          PipelinedRequestSource,
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: c.resourceGroupName,
 			},
