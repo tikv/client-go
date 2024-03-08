@@ -96,6 +96,11 @@ func NewConfig(name string, metric *prometheus.Observer, backoffFnCfg *BackoffFn
 	}
 }
 
+// Base returns the base time of the backoff function.
+func (c *Config) Base() int {
+	return c.fnCfg.base
+}
+
 func (c *Config) String() string {
 	return c.name
 }
