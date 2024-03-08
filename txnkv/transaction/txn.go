@@ -742,6 +742,8 @@ func (txn *KVTxn) Rollback() error {
 		}
 	}
 	if txn.IsPipelined() && txn.committer != nil {
+		// wait all flush to finish, this avoids data race.
+		txn.GetMemBuffer().FlushWait()
 		txn.committer.ttlManager.close()
 	}
 	txn.close()
