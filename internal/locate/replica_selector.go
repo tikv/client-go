@@ -305,15 +305,19 @@ const (
 	// The definition of the score is:
 	// MSB                                                                               LSB
 	// [unused bits][1 bit: LabelMatches][1 bit: PreferLeader][2 bits: NormalPeer + NotSlow]
-	flagLabelMatches = 1 << 3
-	flagPreferLeader = 1 << 2
-	flagNormalPeer   = 1
-	flagNotSlow      = 1
+	flagLabelMatches = 1 << 4
+	flagPreferLeader = 1 << 3
+	flagNormalPeer   = 1 << 2
+	flagNotSlow      = 1 << 1
+	flagNotAttempt   = 1
 )
 
 // calculateScore calculates the score of the replica.
 func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) int {
 	score := 0
+	if r.store.IsStoreMatch(s.stores) && r.store.IsLabelsMatch(s.labels) {
+		score |= flagLabelMatches
+	}
 	if isLeader {
 		if s.preferLeader {
 			score |= flagPreferLeader
@@ -334,14 +338,11 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 			score |= flagNormalPeer
 		}
 	}
-	if r.store.IsStoreMatch(s.stores) && r.store.IsLabelsMatch(s.labels) {
-		score |= flagLabelMatches
-	}
 	if !r.store.healthStatus.IsSlow() {
-		score += flagNotSlow
+		score |= flagNotSlow
 	}
-	if score > 0 && r.attempts > 0 {
-		score = score - 1
+	if r.attempts == 0 {
+		score |= flagNotAttempt
 	}
 	return score
 }

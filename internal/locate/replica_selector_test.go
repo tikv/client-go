@@ -163,33 +163,33 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		score := strategy.calculateScore(r, isLeader)
 		s.Equal(r.store.healthStatus.IsSlow(), false)
 		if isLeader {
-			s.Equal(score, flagLabelMatches+flagNotSlow)
+			s.Equal(score, flagLabelMatches+flagNotSlow+flagNotAttempt)
 		} else {
-			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotSlow)
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotSlow+flagNotAttempt)
 		}
 		r.store.healthStatus.markAlreadySlow()
 		s.Equal(r.store.healthStatus.IsSlow(), true)
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, flagLabelMatches)
+			s.Equal(score, flagLabelMatches+flagNotAttempt)
 		} else {
-			s.Equal(score, flagLabelMatches+flagNormalPeer)
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
 		}
 		strategy.tryLeader = true
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagLabelMatches+flagNormalPeer)
+		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
 		strategy.preferLeader = true
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, flagLabelMatches+flagPreferLeader)
+			s.Equal(score, flagLabelMatches+flagPreferLeader+flagNotAttempt)
 		} else {
-			s.Equal(score, flagLabelMatches+flagNormalPeer)
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
 		}
 		strategy.learnerOnly = true
 		strategy.tryLeader = false
 		strategy.preferLeader = false
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagLabelMatches)
+		s.Equal(score, flagLabelMatches+flagNotAttempt)
 		labels := []*metapb.StoreLabel{
 			{
 				Key:   "zone",
@@ -198,7 +198,7 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		strategy.labels = labels
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, 0)
+		s.Equal(score, +flagNotAttempt)
 
 		strategy = ReplicaSelectMixedStrategy{
 			leaderIdx: rc.getStore().workTiKVIdx,
@@ -207,9 +207,9 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, flagPreferLeader)
+			s.Equal(score, flagPreferLeader+flagNotAttempt)
 		} else {
-			s.Equal(score, flagNormalPeer)
+			s.Equal(score, flagNormalPeer+flagNotAttempt)
 		}
 
 		strategy = ReplicaSelectMixedStrategy{
@@ -219,16 +219,16 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, flagPreferLeader)
+			s.Equal(score, flagPreferLeader+flagNotAttempt)
 		} else {
-			s.Equal(score, flagNormalPeer)
+			s.Equal(score, flagNormalPeer+flagNotAttempt)
 		}
 		r.store.labels = labels
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, flagLabelMatches+flagPreferLeader)
+			s.Equal(score, flagLabelMatches+flagPreferLeader+flagNotAttempt)
 		} else {
-			s.Equal(score, flagLabelMatches+flagNormalPeer)
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
 		}
 		r.store.labels = nil
 	}
