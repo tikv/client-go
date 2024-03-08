@@ -22,11 +22,13 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 const (
@@ -181,4 +183,35 @@ func (s *testPipelinedMemDBSuite) TestPipelinedSkipFlushedLock() {
 	val, err := txn.Get(context.Background(), []byte("key1"))
 	s.Nil(err)
 	s.Equal([]byte("value1"), val)
+}
+
+func (s *testPipelinedMemDBSuite) TestResolveLockRace() {
+	// This test should use `go test -race` to run.
+	// because pipelined memdb depends on ResolveLockRequest to commit the txn, we need to guarantee the ResolveLock won't lead to data race.
+	s.Nil(failpoint.Enable("tikvclient/pipelinedCommitFail", `return`))
+	defer func() {
+		failpoint.Disable("tikvclient/pipelinedCommitFail")
+	}()
+	for i := 0; i < 100; i++ {
+		txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+		startTS := txn.StartTS()
+		s.Nil(err)
+		for j := 0; j < 100; j++ {
+			key := []byte(strconv.Itoa(j))
+			value := key
+			txn.Set(key, value)
+		}
+		txn.Commit(context.Background())
+		ctx, cancel := context.WithCancel(context.Background())
+		bo := tikv.NewNoopBackoff(ctx)
+		loc, err := s.store.GetRegionCache().LocateKey(bo, []byte("1"))
+		s.Nil(err)
+		req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, &kvrpcpb.ResolveLockRequest{StartVersion: startTS})
+		go func() {
+			time.Sleep(time.Duration(i) * time.Microsecond)
+			cancel()
+		}()
+		s.store.SendReq(bo, req, loc.Region, 100*time.Millisecond)
+	}
+	time.Sleep(time.Second)
 }
