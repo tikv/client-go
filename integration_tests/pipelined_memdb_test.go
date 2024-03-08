@@ -213,4 +213,5 @@ func (s *testPipelinedMemDBSuite) TestResolveLockRace() {
 		}()
 		s.store.SendReq(bo, req, loc.Region, 100*time.Millisecond)
 	}
+	time.Sleep(time.Second)
 }

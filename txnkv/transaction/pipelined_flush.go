@@ -39,6 +39,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const PipelinedRequestSource = "external_pdml"
+
 type actionPipelinedFlush struct {
 	generation uint64
 }
@@ -95,7 +97,7 @@ func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations, gen
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 			// txn.GetRequestSource may cause data race because the upper layer may edit the source while the flush requests are built in background.
 			// So we use the fixed source from the upper layer to avoid the data race.
-			RequestSource: "external_pdml",
+			RequestSource: PipelinedRequestSource,
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: c.resourceGroupName,
 			},
@@ -336,7 +338,7 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 				CommitVersion: commitVersion,
 			}
 			req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
-				RequestSource: c.txn.GetRequestSource(),
+				RequestSource: PipelinedRequestSource,
 			})
 			bo := retry.NewBackoffer(ctx, maxBackOff)
 			loc, err := regionCache.LocateKey(bo, start)
