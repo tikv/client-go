@@ -160,6 +160,29 @@ func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
 	return v, nil
 }
 
+// GetLocal implements the MemBuffer interface.
+// It only checks the mutable memdb and the immutable memdb.
+// It does not check mutations that have been flushed to TiKV.
+func (p *PipelinedMemDB) GetLocal(_ context.Context, key []byte) ([]byte, error) {
+	v, err := p.memDB.Get(key)
+	if err == nil {
+		return v, nil
+	}
+	if !tikverr.IsErrKeyExist(err) {
+		return nil, err
+	}
+	if p.flushingMemDB != nil {
+		_, err = p.flushingMemDB.Get(key)
+		if err == nil {
+			return v, nil
+		}
+		if !tikverr.IsErrKeyExist(err) {
+			return nil, err
+		}
+	}
+	return nil, tikverr.ErrNotExist
+}
+
 func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 	f, err := p.memDB.GetFlags(k)
 	if p.flushingMemDB != nil && tikverr.IsErrNotFound(err) {

@@ -174,6 +174,9 @@ type MemBuffer interface {
 	RUnlock()
 	// Get gets the value for key k from the MemBuffer.
 	Get(context.Context, []byte) ([]byte, error)
+	// GetLocal gets the value from the buffer in local memory.
+	// It makes nonsense for MemDB, but makes a difference for pipelined DML.
+	GetLocal(context.Context, []byte) ([]byte, error)
 	// GetFlags gets the flags for key k from the MemBuffer.
 	GetFlags([]byte) (kv.KeyFlags, error)
 	// Set sets the value for key k in the MemBuffer.

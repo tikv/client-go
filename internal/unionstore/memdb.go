@@ -36,6 +36,7 @@ package unionstore
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"sync"
@@ -223,6 +224,11 @@ func (db *MemDB) Get(key []byte) ([]byte, error) {
 		return nil, tikverr.ErrNotExist
 	}
 	return db.vlog.getValue(x.vptr), nil
+}
+
+
+func (db *MemDB) GetLocal(_ context.Context, key []byte) ([]byte, error) {
+	return db.Get(key)
 }
 
 // SelectValueHistory select the latest value which makes `predicate` returns true from the modification history.
