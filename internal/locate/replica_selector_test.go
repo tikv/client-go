@@ -198,7 +198,7 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		strategy.labels = labels
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, +flagNotAttempt)
+		s.Equal(score, flagNotAttempt)
 
 		strategy = ReplicaSelectMixedStrategy{
 			leaderIdx: rc.getStore().workTiKVIdx,
@@ -815,7 +815,7 @@ func TestReplicaReadAccessPathByCase2(t *testing.T) {
 		staleRead: false,
 		timeout:   0,
 		label:     nil,
-		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderErr, NotLeaderWithNewLeader2Err, ServerIsBusyWithEstimatedWaitMsErr, DeadLineExceededErr},
+		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderErr, NotLeaderWithNewLeader2Err, ServerIsBusyErr, DeadLineExceededErr},
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
@@ -2020,7 +2020,7 @@ func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
 		reqType:         tikvrpc.CmdPrewrite,
 		readType:        kv.ReplicaReadLeader,
 		busyThresholdMs: 10,
-		accessErr:       []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyWithEstimatedWaitMsErr},
+		accessErr:       []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
