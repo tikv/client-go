@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,13 +19,17 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/israce"
+	"go.uber.org/zap"
 )
 
 type testReplicaSelectorSuite struct {
@@ -83,8 +89,10 @@ type replicaSelectorAccessPathCase struct {
 	label            *metapb.StoreLabel
 	accessErr        []RegionErrorType
 	accessErrInValid bool
-	accessPathResult                   // use to record the execution result.
-	expect           *accessPathResult //
+	expect           *accessPathResult
+	result           accessPathResult
+	beforeRun        func() // beforeRun will be called before the test case execute, if it is nil, resetStoreState will be called.
+	afterRun         func() // afterRun will be called after the test case execute, if it is nil, invalidateRegion will be called.
 }
 
 type accessPathResult struct {
@@ -96,14 +104,221 @@ type accessPathResult struct {
 	regionIsValid   bool
 }
 
+func TestReplicaSelectorBasic(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
+	req.EnableStaleWithMixedReplicaRead()
+	rc := s.getRegion()
+	s.NotNil(rc)
+	rc.invalidate(Other)
+	selector, err := newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	s.NotNil(err)
+	s.Equal("cached region invalid", err.Error())
+	s.Nil(selector)
+	s.Equal("", selector.String())
+
+	rc = s.getRegion()
+	selector, err = newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	s.Nil(err)
+	s.NotNil(selector)
+	for _, reqSource := range []string{"leader", "follower", "follower", "unknown"} {
+		ctx, err := selector.next(s.bo, req)
+		s.Nil(err)
+		s.Equal(reqSource, selector.replicaType(ctx))
+	}
+
+	rc = s.getRegion()
+	selector, err = newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	s.Nil(err)
+	s.NotNil(selector)
+	ctx, err := selector.next(s.bo, req)
+	s.Nil(err)
+	s.NotNil(ctx)
+	rc.invalidate(Other)
+	ctx, err = selector.next(s.bo, req)
+	s.Nil(err)
+	s.Nil(ctx)
+}
+
+func TestReplicaSelectorCalculateScore(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kv.ReplicaReadMixed, nil, kvrpcpb.Context{})
+	region, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.NotNil(region)
+	selector, err := NewReplicaSelector(s.cache, region.Region, req)
+	s.Nil(err)
+	for i, r := range selector.getBaseReplicaSelector().replicas {
+		rc := s.cache.GetCachedRegionWithRLock(region.Region)
+		s.NotNil(rc)
+		isLeader := r.peer.Id == rc.GetLeaderPeerID()
+		s.Equal(isLeader, AccessIndex(i) == rc.getStore().workTiKVIdx)
+		strategy := ReplicaSelectMixedStrategy{leaderIdx: rc.getStore().workTiKVIdx}
+		score := strategy.calculateScore(r, isLeader)
+		s.Equal(r.store.healthStatus.IsSlow(), false)
+		if isLeader {
+			s.Equal(score, flagLabelMatches+flagNotSlow+flagNotAttempt)
+		} else {
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotSlow+flagNotAttempt)
+		}
+		r.store.healthStatus.markAlreadySlow()
+		s.Equal(r.store.healthStatus.IsSlow(), true)
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, flagLabelMatches+flagNotAttempt)
+		} else {
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+		}
+		strategy.tryLeader = true
+		score = strategy.calculateScore(r, isLeader)
+		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+		strategy.preferLeader = true
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, flagLabelMatches+flagPreferLeader+flagNotAttempt)
+		} else {
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+		}
+		strategy.learnerOnly = true
+		strategy.tryLeader = false
+		strategy.preferLeader = false
+		score = strategy.calculateScore(r, isLeader)
+		s.Equal(score, flagLabelMatches+flagNotAttempt)
+		labels := []*metapb.StoreLabel{
+			{
+				Key:   "zone",
+				Value: "us-west-1",
+			},
+		}
+		strategy.labels = labels
+		score = strategy.calculateScore(r, isLeader)
+		s.Equal(score, flagNotAttempt)
+
+		strategy = ReplicaSelectMixedStrategy{
+			leaderIdx: rc.getStore().workTiKVIdx,
+			tryLeader: true,
+			labels:    labels,
+		}
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, flagPreferLeader+flagNotAttempt)
+		} else {
+			s.Equal(score, flagNormalPeer+flagNotAttempt)
+		}
+
+		strategy = ReplicaSelectMixedStrategy{
+			leaderIdx:    rc.getStore().workTiKVIdx,
+			preferLeader: true,
+			labels:       labels,
+		}
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, flagPreferLeader+flagNotAttempt)
+		} else {
+			s.Equal(score, flagNormalPeer+flagNotAttempt)
+		}
+		r.store.labels = labels
+		score = strategy.calculateScore(r, isLeader)
+		if isLeader {
+			s.Equal(score, flagLabelMatches+flagPreferLeader+flagNotAttempt)
+		} else {
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+		}
+		r.store.labels = nil
+	}
+}
+
+func TestCanFastRetry(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	// Test for non-leader read.
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.EnableStaleWithMixedReplicaRead()
+	selector, err := newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	for i := 0; i < 3; i++ {
+		_, err = selector.next(s.bo, req)
+		s.Nil(err)
+		selector.canFastRetry()
+		s.True(selector.canFastRetry())
+	}
+
+	// Test for leader read.
+	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	selector, err = newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	for i := 0; i < 12; i++ {
+		_, err = selector.next(s.bo, req)
+		s.Nil(err)
+		ok := selector.canFastRetry()
+		if i <= 8 {
+			s.False(ok) // can't skip since leader is available.
+		} else {
+			s.True(ok)
+		}
+	}
+}
+
+func TestPendingBackoff(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+	s.Nil(err)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	req.EnableStaleWithMixedReplicaRead()
+	selector, err := newReplicaSelector(s.cache, loc.Region, req)
+	s.Nil(err)
+	bo := retry.NewNoopBackoff(context.Background())
+	err = selector.backoffOnRetry(nil, bo)
+	s.Nil(err)
+	err = selector.backoffOnRetry(&Store{storeID: 1}, bo)
+	s.Nil(err)
+	err = selector.backoffOnNoCandidate(bo)
+	s.Nil(err)
+	selector.addPendingBackoff(nil, retry.BoRegionScheduling, errors.New("err-0"))
+	s.Equal(1, len(selector.pendingBackoffs))
+	selector.addPendingBackoff(&Store{storeID: 1}, retry.BoTiKVRPC, errors.New("err-1"))
+	s.Equal(2, len(selector.pendingBackoffs))
+	selector.addPendingBackoff(&Store{storeID: 2}, retry.BoTiKVDiskFull, errors.New("err-2"))
+	s.Equal(3, len(selector.pendingBackoffs))
+	selector.addPendingBackoff(&Store{storeID: 1}, retry.BoTiKVServerBusy, errors.New("err-3"))
+	s.Equal(3, len(selector.pendingBackoffs))
+	_, ok := selector.pendingBackoffs[0]
+	s.True(ok)
+	err = selector.backoffOnRetry(nil, bo)
+	s.NotNil(err)
+	s.Equal("err-0", err.Error())
+	_, ok = selector.pendingBackoffs[0]
+	s.False(ok)
+	s.Equal(2, len(selector.pendingBackoffs))
+	err = selector.backoffOnRetry(&Store{storeID: 10}, bo)
+	s.Nil(err)
+	s.Equal(2, len(selector.pendingBackoffs))
+	err = selector.backoffOnNoCandidate(bo)
+	s.NotNil(err)
+	s.Equal("err-3", err.Error())
+}
+
 func TestReplicaReadAccessPathByCase(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
 	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, cause by no replica is available.
-	var ca replicaSelectorAccessPathCase
-	ca = replicaSelectorAccessPathCase{
+	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
 		staleRead: true,
@@ -459,82 +674,1338 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
-func TestCanFastRetry(t *testing.T) {
+func TestReplicaReadAccessPathByCase2(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
-	// Test for non-leader read.
-	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-	s.Nil(err)
-	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
-	req.EnableStaleWithMixedReplicaRead()
-	selector, err := newReplicaSelector(s.cache, loc.Region, req)
-	s.Nil(err)
-	for i := 0; i < 3; i++ {
-		_, err = selector.next(s.bo)
-		s.Nil(err)
-		selector.canFastRetry()
-		s.True(selector.canFastRetry())
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+	// Following cases are found by other test, careful.
+	ca := replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, DiskFullErr, FlashbackNotPreparedErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "region 0 is not prepared for the flashback",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvDiskFull+1"},
+			regionIsValid:   true,
+		},
 	}
+	s.True(s.runCaseAndCompare(ca))
 
-	// Test for leader read.
-	req = tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
-	req.ReplicaReadType = kv.ReplicaReadLeader
-	selector, err = newReplicaSelector(s.cache, loc.Region, req)
-	s.Nil(err)
-	for i := 0; i < 12; i++ {
-		_, err = selector.next(s.bo)
-		s.Nil(err)
-		ok := selector.canFastRetry()
-		if i <= 8 {
-			s.False(ok) // can't skip since leader is available.
-		} else {
-			s.True(ok)
+	// Don't invalid region in tryFollowers, since leader meets deadlineExceededErr.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     nil,
+		accessErr: []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader3Err, DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"regionScheduling+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// Don't invalid region in accessFollower, since leader meets deadlineExceededErr.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     nil,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   0,
+		label:     &metapb.StoreLabel{Key: "id", Value: "3"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store3, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"regionScheduling+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{FlashbackInProgressErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Microsecond * 100,
+		label:     &metapb.StoreLabel{Key: "id", Value: "1"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				// don't retry leader(store1), since leader won't return DataIsNotReadyErr, so retry it with leader-read may got NotLeaderErr.
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdPrewrite,
+		readType:  kv.ReplicaReadLeader,
+		staleRead: false,
+		timeout:   0,
+		label:     nil,
+		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderErr, NotLeaderWithNewLeader2Err, ServerIsBusyErr, DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      4,
+			backoffDetail:   []string{"regionScheduling+1", "tikvRPC+2", "tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   0,
+		label:     nil,
+		accessErr: []RegionErrorType{DeadLineExceededErr, RegionNotInitializedErr, DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      3,
+			backoffDetail:   []string{"regionNotInitialized+1", "tikvRPC+2"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderWithNewLeader2Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	s.changeRegionLeader(2)
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "3"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+	s.changeRegionLeader(1)
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		staleRead: false,
+		timeout:   time.Second,
+		accessErr: []RegionErrorType{NotLeaderErr, DeadLineExceededErr, NotLeaderWithNewLeader2Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"regionScheduling+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
+
+func TestReplicaReadAccessPathByBasicCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	retryableErrors := []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, StaleCommandErr, MaxTimestampNotSyncedErr, ProposalInMergingModeErr, ReadIndexNotReadyErr, RegionNotInitializedErr, DiskFullErr}
+	noRetryErrors := []RegionErrorType{RegionNotFoundErr, KeyNotInRegionErr, EpochNotMatchErr, StoreNotMatchErr, RaftEntryTooLargeErr, RecoveryInProgressErr, FlashbackNotPreparedErr, IsWitnessErr, MismatchPeerIdErr, BucketVersionNotMatchErr}
+	for _, reqType := range []tikvrpc.CmdType{tikvrpc.CmdGet, tikvrpc.CmdPrewrite} {
+		for _, readType := range []kv.ReplicaReadType{kv.ReplicaReadLeader, kv.ReplicaReadFollower, kv.ReplicaReadMixed, kv.ReplicaReadPreferLeader} {
+			if reqType == tikvrpc.CmdPrewrite && readType != kv.ReplicaReadLeader {
+				// write req only support leader read.
+				continue
+			}
+			for _, staleRead := range []bool{false, true} {
+				if staleRead && readType != kv.ReplicaReadMixed {
+					// stale read only support mixed read.
+					continue
+				}
+				for _, tp := range retryableErrors {
+					backoff := []string{}
+					switch tp {
+					case ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr:
+						if readType == kv.ReplicaReadLeader {
+							backoff = []string{"tikvServerBusy+1"}
+						}
+					case DiskFullErr:
+						backoff = []string{"tikvDiskFull+1"}
+					case RegionNotInitializedErr:
+						backoff = []string{"regionNotInitialized+1"}
+					case ReadIndexNotReadyErr, ProposalInMergingModeErr:
+						backoff = []string{"regionScheduling+1"}
+					case MaxTimestampNotSyncedErr:
+						backoff = []string{"maxTsNotSynced+1"}
+					}
+					accessPath := []string{
+						"{addr: store1, replica-read: true, stale-read: false}",
+						"{addr: store2, replica-read: true, stale-read: false}",
+					}
+					switch readType {
+					case kv.ReplicaReadLeader:
+						accessPath = []string{
+							"{addr: store1, replica-read: false, stale-read: false}",
+							"{addr: store1, replica-read: false, stale-read: false}",
+						}
+					case kv.ReplicaReadFollower:
+						if tp == ServerIsBusyErr {
+							backoff = []string{}
+						}
+						accessPath = []string{
+							"{addr: store2, replica-read: true, stale-read: false}",
+							"{addr: store3, replica-read: true, stale-read: false}",
+						}
+					case kv.ReplicaReadMixed:
+						if tp == ServerIsBusyErr {
+							backoff = []string{}
+						}
+						if staleRead {
+							accessPath = []string{
+								"{addr: store1, replica-read: false, stale-read: true}",
+								"{addr: store2, replica-read: true, stale-read: false}",
+							}
+						}
+					default:
+						if tp == ServerIsBusyErr {
+							backoff = []string{}
+						}
+					}
+					ca := replicaSelectorAccessPathCase{
+						reqType:   reqType,
+						readType:  readType,
+						staleRead: staleRead,
+						accessErr: []RegionErrorType{tp},
+						expect: &accessPathResult{
+							accessPath:      accessPath,
+							respErr:         "",
+							respRegionError: nil,
+							backoffCnt:      len(backoff),
+							backoffDetail:   backoff,
+							regionIsValid:   true,
+						},
+					}
+					s.True(s.runCaseAndCompare(ca))
+				}
+
+				for _, tp := range noRetryErrors {
+					backoff := []string{}
+					regionIsValid := false
+					respErr := ""
+					respRegionError := tp.GenRegionError()
+					accessPath := []string{"{addr: store1, replica-read: true, stale-read: false}"}
+					switch tp {
+					case RecoveryInProgressErr:
+						backoff = []string{"regionRecoveryInProgress+1"}
+					case IsWitnessErr:
+						backoff = []string{"isWitness+1"}
+					case BucketVersionNotMatchErr:
+						regionIsValid = true
+					case RaftEntryTooLargeErr:
+						respErr = RaftEntryTooLargeErr.GenRegionError().String()
+						respRegionError = nil
+						regionIsValid = true
+					case FlashbackNotPreparedErr:
+						respErr = "region 0 is not prepared for the flashback"
+						respRegionError = nil
+						regionIsValid = true
+					}
+					switch readType {
+					case kv.ReplicaReadLeader:
+						accessPath = []string{"{addr: store1, replica-read: false, stale-read: false}"}
+					case kv.ReplicaReadFollower:
+						accessPath = []string{"{addr: store2, replica-read: true, stale-read: false}"}
+					case kv.ReplicaReadMixed:
+						if staleRead {
+							accessPath = []string{"{addr: store1, replica-read: false, stale-read: true}"}
+						}
+					}
+					ca := replicaSelectorAccessPathCase{
+						reqType:   reqType,
+						readType:  readType,
+						staleRead: staleRead,
+						accessErr: []RegionErrorType{tp},
+						expect: &accessPathResult{
+							accessPath:      accessPath,
+							respErr:         respErr,
+							respRegionError: respRegionError,
+							backoffCnt:      len(backoff),
+							backoffDetail:   backoff,
+							regionIsValid:   regionIsValid,
+						},
+					}
+					s.True(s.runCaseAndCompare(ca))
+				}
+			}
 		}
 	}
 }
 
-func TestPendingBackoff(t *testing.T) {
+func TestReplicaReadAccessPathByLeaderCase(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
 	defer s.TearDownTest()
 
-	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-	s.Nil(err)
-	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
-	req.EnableStaleWithMixedReplicaRead()
-	selector, err := newReplicaSelector(s.cache, loc.Region, req)
-	s.Nil(err)
-	bo := retry.NewNoopBackoff(context.Background())
-	err = selector.backoffOnRetry(nil, bo)
-	s.Nil(err)
-	err = selector.backoffOnRetry(&Store{storeID: 1}, bo)
-	s.Nil(err)
-	err = selector.backoffOnNoCandidate(bo)
-	s.Nil(err)
-	selector.addPendingBackoff(nil, retry.BoRegionScheduling, errors.New("err-0"))
-	s.Equal(1, len(selector.pendingBackoffs))
-	selector.addPendingBackoff(&Store{storeID: 1}, retry.BoTiKVRPC, errors.New("err-1"))
-	s.Equal(2, len(selector.pendingBackoffs))
-	selector.addPendingBackoff(&Store{storeID: 2}, retry.BoTiKVDiskFull, errors.New("err-2"))
-	s.Equal(3, len(selector.pendingBackoffs))
-	selector.addPendingBackoff(&Store{storeID: 1}, retry.BoTiKVServerBusy, errors.New("err-3"))
-	s.Equal(3, len(selector.pendingBackoffs))
-	_, ok := selector.pendingBackoffs[0]
-	s.True(ok)
-	err = selector.backoffOnRetry(nil, bo)
-	s.NotNil(err)
-	s.Equal("err-0", err.Error())
-	_, ok = selector.pendingBackoffs[0]
-	s.False(ok)
-	s.Equal(2, len(selector.pendingBackoffs))
-	err = selector.backoffOnRetry(&Store{storeID: 10}, bo)
-	s.Nil(err)
-	s.Equal(2, len(selector.pendingBackoffs))
-	err = selector.backoffOnNoCandidate(bo)
-	s.NotNil(err)
-	s.Equal("err-3", err.Error())
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}} // fake region error, cause by no replica is available.
+	ca := replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: nil,
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:  tikvrpc.CmdGet,
+		readType: kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr,
+			ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      9,
+			backoffDetail:   []string{"tikvServerBusy+9"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"regionScheduling+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NotLeaderErr, NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"regionScheduling+2"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NotLeaderErr, NotLeaderErr, NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      3,
+			backoffDetail:   []string{"regionScheduling+3"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NotLeaderWithNewLeader3Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0, // no backoff, fast retry.
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NotLeaderWithNewLeader3Err, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvRPC+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader1Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}", // Suppose there is network partition between TiDB and store1
+				"{addr: store2, replica-read: false, stale-read: false}", // TODO(crazycs520): is this expected, should retry with replica-read?
+				"{addr: store3, replica-read: false, stale-read: false}", // ditto.
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvRPC+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvRPC+1", "tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:         tikvrpc.CmdGet,
+		readType:        kv.ReplicaReadLeader,
+		busyThresholdMs: 10,
+		accessErr:       []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader3Err, ServerIsBusyWithEstimatedWaitMsErr, NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      3,
+			backoffDetail:   []string{"regionScheduling+2", "tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:         tikvrpc.CmdGet,
+		readType:        kv.ReplicaReadLeader,
+		busyThresholdMs: 10,
+		accessErr:       []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader3Err, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}"},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      3,
+			backoffDetail:   []string{"regionScheduling+1", "tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// Test for switch leader.
+	cas := []replicaSelectorAccessPathCase{
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{NotLeaderErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: false, stale-read: false}",
+					"{addr: store2, replica-read: false, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      1,
+				backoffDetail:   []string{"regionScheduling+1"},
+				regionIsValid:   true,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{NotLeaderWithNewLeader3Err},
+			beforeRun: func() { /* don't resetStoreState */ },
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store2, replica-read: false, stale-read: false}", // try new leader directly.
+					"{addr: store3, replica-read: false, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      0,
+				backoffDetail:   []string{},
+				regionIsValid:   true,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{ServerIsBusyErr},
+			beforeRun: func() { /* don't resetStoreState */ },
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store3, replica-read: false, stale-read: false}", // try new leader directly.
+					"{addr: store3, replica-read: false, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      1,
+				backoffDetail:   []string{"tikvServerBusy+1"},
+				regionIsValid:   true,
+			},
+		},
+	}
+	s.True(s.runMultiCaseAndCompare(cas))
+}
+
+func TestReplicaReadAccessPathByFollowerCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+	ca := replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadFollower,
+		accessErr: nil,
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadFollower,
+		accessErr: []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadFollower,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadFollower,
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvRPC+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadFollower,
+		timeout:   time.Second,
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
+
+func TestReplicaReadAccessPathByMixedAndPreferLeaderCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+	var ca replicaSelectorAccessPathCase
+	// since leader in store1, so ReplicaReadMixed and ReplicaReadPreferLeader will have the same access path.
+	for _, readType := range []kv.ReplicaReadType{kv.ReplicaReadMixed, kv.ReplicaReadPreferLeader} {
+		ca = replicaSelectorAccessPathCase{
+			reqType:   tikvrpc.CmdGet,
+			readType:  readType,
+			accessErr: nil,
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      0,
+				backoffDetail:   []string{},
+				regionIsValid:   true,
+			},
+		}
+		s.True(s.runCaseAndCompare(ca))
+
+		ca = replicaSelectorAccessPathCase{
+			reqType:   tikvrpc.CmdGet,
+			readType:  readType,
+			accessErr: []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, StaleCommandErr, ServerIsBusyErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: true, stale-read: false}",
+					"{addr: store2, replica-read: true, stale-read: false}",
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: fakeEpochNotMatch,
+				backoffCnt:      1,
+				backoffDetail:   []string{"tikvServerBusy+1"},
+				regionIsValid:   false,
+			},
+		}
+		s.True(s.runCaseAndCompare(ca))
+
+		ca = replicaSelectorAccessPathCase{
+			reqType:   tikvrpc.CmdGet,
+			readType:  readType,
+			accessErr: []RegionErrorType{ServerIsBusyErr, RegionNotFoundErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: true, stale-read: false}",
+					"{addr: store2, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: RegionNotFoundErr.GenRegionError(),
+				backoffCnt:      0,
+				backoffDetail:   []string{},
+				regionIsValid:   false,
+			},
+		}
+		s.True(s.runCaseAndCompare(ca))
+
+		ca = replicaSelectorAccessPathCase{
+			reqType:   tikvrpc.CmdGet,
+			readType:  readType,
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: true, stale-read: false}",
+					"{addr: store2, replica-read: true, stale-read: false}",
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      1,
+				backoffDetail:   []string{"tikvRPC+1"},
+				regionIsValid:   true,
+			},
+		}
+		s.True(s.runCaseAndCompare(ca))
+
+		ca = replicaSelectorAccessPathCase{
+			reqType:   tikvrpc.CmdGet,
+			readType:  readType,
+			timeout:   time.Second,
+			accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: true, stale-read: false}",
+					"{addr: store2, replica-read: true, stale-read: false}",
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      0,
+				backoffDetail:   []string{},
+				regionIsValid:   true,
+			},
+		}
+		s.True(s.runCaseAndCompare(ca))
+	}
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}", // try match label first.
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvRPC+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	s.changeRegionLeader(3)
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadPreferLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store3, replica-read: true, stale-read: false}", // try leader first.
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvRPC+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadPreferLeader,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: true, stale-read: false}", // try match label first, since match label has higher priority.
+				"{addr: store3, replica-read: true, stale-read: false}", // try leader.
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvRPC+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+	s.changeRegionLeader(1)
+}
+
+func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+	ca := replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		accessErr: nil,
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		accessErr: []RegionErrorType{DataIsNotReadyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// test stale read with label.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader3Err},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
+				"{addr: store3, replica-read: false, stale-read: false}", // try new leader.
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	s.changeRegionLeader(2)
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		accessErr: []RegionErrorType{DataIsNotReadyErr, ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: false, stale-read: false}", // try leader with leader read.
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      1,
+			backoffDetail:   []string{"tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+	s.changeRegionLeader(1)
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
+				"{addr: store2, replica-read: true, stale-read: false}",  // retry store2 with replica-read.
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      2,
+			backoffDetail:   []string{"regionScheduling+1", "tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderWithNewLeader3Err, ServerIsBusyErr, NotLeaderWithNewLeader2Err, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, NotLeaderErr, ServerIsBusyErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      2,
+			backoffDetail:   []string{"regionScheduling+1", "tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DataIsNotReadyErr, RegionNotFoundErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: RegionNotFoundErr.GenRegionError(),
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Second,
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: true}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: true,
+		timeout:   time.Second,
+		label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+		accessErr: []RegionErrorType{DeadLineExceededErr, DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	cas := []replicaSelectorAccessPathCase{
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadMixed,
+			staleRead: true,
+			timeout:   0,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{DeadLineExceededErr, DeadLineExceededErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store2, replica-read: false, stale-read: true}",
+					"{addr: store1, replica-read: false, stale-read: false}",
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      2,
+				backoffDetail:   []string{"tikvRPC+2"},
+				regionIsValid:   true,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadMixed,
+			staleRead: true,
+			label:     &metapb.StoreLabel{Key: "id", Value: "2"},
+			accessErr: []RegionErrorType{ServerIsBusyErr},
+			beforeRun: func() { /* don't resetStoreState */ },
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: fakeEpochNotMatch,
+				backoffCnt:      1,
+				backoffDetail:   []string{"tikvServerBusy+1"},
+				regionIsValid:   false,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+	}
+	s.True(s.runMultiCaseAndCompare(cas))
 }
 
 func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
@@ -549,7 +2020,7 @@ func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
 		reqType:         tikvrpc.CmdPrewrite,
 		readType:        kv.ReplicaReadLeader,
 		busyThresholdMs: 10,
-		accessErr:       []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyWithEstimatedWaitMsErr},
+		accessErr:       []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
@@ -560,6 +2031,26 @@ func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
 			respRegionError: nil,
 			backoffCnt:      2,
 			backoffDetail:   []string{"tikvServerBusy+2"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:         tikvrpc.CmdGet,
+		readType:        kv.ReplicaReadLeader,
+		busyThresholdMs: 10,
+		accessErr:       []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyWithEstimatedWaitMsErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
 			regionIsValid:   true,
 		},
 	}
@@ -628,6 +2119,400 @@ func TestReplicaReadAccessPathByTryIdleReplicaCase(t *testing.T) {
 	s.True(s.runCaseAndCompare(ca))
 }
 
+func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	var ca replicaSelectorAccessPathCase
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     nil,
+		accessErr: []RegionErrorType{FlashbackInProgressErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+			},
+			respErr:         "region 0 is in flashback progress, FlashbackStartTS is 0",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     nil,
+		accessErr: []RegionErrorType{DeadLineExceededErr, FlashbackInProgressErr, FlashbackInProgressErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// not compatible case.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   0,
+		label:     nil,
+		accessErr: []RegionErrorType{FlashbackInProgressErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCase(ca, false))
+	ca.expect = &accessPathResult{
+		accessPath: []string{
+			"{addr: store1, replica-read: true, stale-read: false}",
+		},
+		respErr:         "region 0 is in flashback progress, FlashbackStartTS is 0",
+		respRegionError: nil,
+		backoffCnt:      0,
+		backoffDetail:   []string{},
+		regionIsValid:   true,
+	}
+	s.True(s.runCase(ca, true))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		timeout:   time.Second,
+		label:     nil,
+		accessErr: []RegionErrorType{DeadLineExceededErr, FlashbackInProgressErr, FlashbackInProgressErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "region 0 is in flashback progress, FlashbackStartTS is 0",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCase(ca, false))
+	ca.expect = &accessPathResult{
+		accessPath: []string{
+			"{addr: store1, replica-read: true, stale-read: false}",
+			"{addr: store2, replica-read: true, stale-read: false}",
+			"{addr: store3, replica-read: true, stale-read: false}",
+		},
+		respErr:         "",
+		respRegionError: fakeEpochNotMatch,
+		backoffCnt:      0,
+		backoffDetail:   []string{},
+		regionIsValid:   true,
+	}
+	s.True(s.runCase(ca, true))
+}
+
+func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	// Enable forwarding.
+	s.cache.enableForwarding = true
+	fakeEpochNotMatch := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+	var ca replicaSelectorAccessPathCase
+	cas := []replicaSelectorAccessPathCase{
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{DeadLineExceededErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: false, stale-read: false}",
+					"{addr: store2, replica-read: false, stale-read: false, forward_addr: store1}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      1,
+				backoffDetail:   []string{"tikvRPC+1"},
+				regionIsValid:   true,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadLeader,
+			accessErr: []RegionErrorType{},
+			beforeRun: func() { /* don't resetStoreState */ },
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store2, replica-read: false, stale-read: false, forward_addr: store1}", // access to known proxy direct.
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      0,
+				backoffDetail:   []string{},
+				regionIsValid:   true,
+			},
+		},
+	}
+	s.True(s.runMultiCaseAndCompare(cas))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr, DeadLineExceededErr, DeadLineExceededErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false, forward_addr: store1}",
+				"{addr: store3, replica-read: false, stale-read: false, forward_addr: store1}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      3,
+			backoffDetail:   []string{"tikvRPC+3"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderWithNewLeader2Err, DeadLineExceededErr, ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false, forward_addr: store1}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false, forward_addr: store2}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      3,
+			backoffDetail:   []string{"tikvRPC+2", "tikvServerBusy+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr, ServerIsBusyWithEstimatedWaitMsErr, ServerIsBusyWithEstimatedWaitMsErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false, forward_addr: store1}",
+				"{addr: store3, replica-read: false, stale-read: false, forward_addr: store1}",
+			},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      3,
+			backoffDetail:   []string{"tikvRPC+1", "tikvServerBusy+2"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdPrewrite,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      1,
+			backoffDetail:   []string{"regionScheduling+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// TODO: maybe we can optimize the proxy strategy in future.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdPrewrite,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{DeadLineExceededErr, NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false, forward_addr: store1}",
+				"{addr: store3, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      2,
+			backoffDetail:   []string{"regionScheduling+1", "tikvRPC+1"},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdPrewrite,
+		readType:  kv.ReplicaReadLeader,
+		accessErr: []RegionErrorType{NotLeaderWithNewLeader2Err, DeadLineExceededErr, NotLeaderErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store1, replica-read: false, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: false, forward_addr: store2}"},
+			respErr:         "",
+			respRegionError: fakeEpochNotMatch,
+			backoffCnt:      2,
+			backoffDetail:   []string{"regionScheduling+1", "tikvRPC+1"},
+			regionIsValid:   false,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
+
+func TestReplicaReadAccessPathByLearnerCase(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	// Add a TiKV learner peer to the region.
+	rc := s.getRegion()
+	storeID := uint64(4)
+	s.cluster.AddStore(storeID, fmt.Sprintf("store%d", storeID))
+	s.cluster.AddLearner(rc.meta.Id, storeID, s.cluster.AllocID())
+	rc.invalidate(Other) // invalid region cache to reload region.
+
+	ca := replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadLearner,
+		accessErr: []RegionErrorType{ServerIsBusyErr},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store4, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+}
+
+func TestReplicaReadAccessPathByGenError(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	maxAccessErrCnt := 6
+	if israce.RaceEnabled {
+		// When run this test with race, it will take a long time, so we reduce the maxAccessErrCnt to 3 to speed up test to avoid timeout.
+		maxAccessErrCnt = 3
+	}
+	totalValidCaseCount := 0
+	totalCaseCount := 0
+	lastLogCnt := 0
+	testCase := func(req tikvrpc.CmdType, readType kv.ReplicaReadType, staleRead bool, timeout time.Duration, busyThresholdMs uint32, label *metapb.StoreLabel) {
+		isRead := isReadReq(req)
+		accessErrGen := newAccessErrGenerator(isRead, staleRead, maxAccessErrCnt)
+		for {
+			accessErr, done := accessErrGen.genAccessErr(staleRead)
+			if done {
+				break
+			}
+			ca := replicaSelectorAccessPathCase{
+				reqType:         req,
+				readType:        readType,
+				staleRead:       staleRead,
+				timeout:         timeout,
+				busyThresholdMs: busyThresholdMs,
+				label:           label,
+				accessErr:       accessErr,
+			}
+			valid := s.runCaseAndCompare(ca)
+			if valid {
+				totalValidCaseCount++
+			}
+			totalCaseCount++
+			if totalCaseCount-lastLogCnt > 100000 {
+				lastLogCnt = totalCaseCount
+				logutil.BgLogger().Info("TestReplicaReadAccessPathByGenError is running",
+					zap.Int("total-case", totalCaseCount),
+					zap.Int("valid-case", totalValidCaseCount),
+					zap.Int("invalid-case", totalCaseCount-totalValidCaseCount),
+					zap.String("req", req.String()),
+					zap.String("read-type", readType.String()),
+					zap.Bool("stale-read", staleRead),
+					zap.Duration("timeout", timeout),
+					zap.Any("label", label),
+				)
+			}
+		}
+	}
+
+	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, 0, nil)
+	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, 10, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, 10, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadFollower, false, 0, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadPreferLeader, false, 0, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, 0, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, time.Second, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, 0, &metapb.StoreLabel{Key: "id", Value: "1"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, false, time.Second, 0, &metapb.StoreLabel{Key: "id", Value: "3"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, 0, &metapb.StoreLabel{Key: "id", Value: "1"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, 0, 0, &metapb.StoreLabel{Key: "id", Value: "3"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, 0, &metapb.StoreLabel{Key: "id", Value: "1"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, 0, &metapb.StoreLabel{Key: "id", Value: "2"})
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadMixed, true, time.Second, 0, &metapb.StoreLabel{Key: "id", Value: "3"})
+
+	// Test for forwarding proxy.
+	s.cache.enableForwarding = true
+	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, 0, nil)
+	testCase(tikvrpc.CmdPrewrite, kv.ReplicaReadLeader, false, 0, 10, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, 0, nil)
+	testCase(tikvrpc.CmdGet, kv.ReplicaReadLeader, false, 0, 10, nil)
+
+	logutil.BgLogger().Info("TestReplicaReadAccessPathByGenError Finished",
+		zap.Int("total-case", totalCaseCount),
+		zap.Int("valid-case", totalValidCaseCount),
+		zap.Int("invalid-case", totalCaseCount-totalValidCaseCount))
+}
+
 func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
 	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
 	s.Nil(err)
@@ -641,41 +2526,98 @@ func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
 	s.cache.InvalidateCachedRegion(loc.Region)
 }
 
-func (s *testReplicaSelectorSuite) runCaseAndCompare(ca2 replicaSelectorAccessPathCase) bool {
-	ca2.run(s)
-	if ca2.accessErrInValid {
-		// the case has been marked as invalid, just ignore it.
-		return false
+func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPathCase) bool {
+	ca2 := ca1
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = false
+	})
+	sender := ca1.run(s)
+	ca1.checkResult(s, "v1", sender)
+
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = true
+	})
+	sender = ca2.run(s)
+	if ca2.expect == nil {
+		// compare with ca1 result.
+		ca2.expect = &ca1.result
 	}
-	if ca2.expect != nil {
-		msg := fmt.Sprintf("%v\n\n", ca2.Format())
-		expect := ca2.expect
-		result := ca2.accessPathResult
-		s.Equal(expect.accessPath, result.accessPath, msg)
-		s.Equal(expect.respErr, result.respErr, msg)
-		s.Equal(expect.respRegionError, result.respRegionError, msg)
-		s.Equal(expect.regionIsValid, result.regionIsValid, msg)
-		s.Equal(expect.backoffCnt, result.backoffCnt, msg)
-		s.Equal(expect.backoffDetail, result.backoffDetail, msg)
-	}
-	return true
+	ca2.checkResult(s, "v2", sender)
+	return !ca1.accessErrInValid
 }
 
-func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
-	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
-	msg := ca.Format()
+func (s *testReplicaSelectorSuite) runCase(ca replicaSelectorAccessPathCase, v2 bool) bool {
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = v2
+	})
+	sender := ca.run(s)
+	version := "v1"
+	if v2 {
+		version = "v2"
+	}
+	ca.checkResult(s, version, sender)
+	return !ca.accessErrInValid
+}
+
+func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorAccessPathCase) bool {
+	expects := make([]accessPathResult, 0, len(cas))
+	valid := true
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = false
+	})
+	for _, ca1 := range cas {
+		sender := ca1.run(s)
+		ca1.checkResult(s, "v1", sender)
+		expects = append(expects, ca1.result)
+		valid = valid && !ca1.accessErrInValid
+	}
+
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = true
+	})
+	for i, ca2 := range cas {
+		sender := ca2.run(s)
+		if ca2.expect == nil {
+			// compare with ca1 result.
+			ca2.expect = &expects[i]
+		}
+		ca2.checkResult(s, "v2", sender)
+		valid = valid && !ca2.accessErrInValid
+	}
+	return valid
+}
+
+func (ca *replicaSelectorAccessPathCase) checkResult(s *testReplicaSelectorSuite, version string, sender *RegionRequestSender) {
+	if ca.expect == nil {
+		return
+	}
+	msg := fmt.Sprintf("enable_forwarding: %v\nversion: %v\n%v\nsender: %v\n", s.cache.enableForwarding, version, ca.Format(), sender.String())
+	expect := ca.expect
+	result := ca.result
+	s.Equal(expect.accessPath, result.accessPath, msg)
+	s.Equal(expect.respErr, result.respErr, msg)
+	s.Equal(expect.respRegionError, result.respRegionError, msg)
+	s.Equal(expect.regionIsValid, result.regionIsValid, msg)
+	s.Equal(expect.backoffCnt, result.backoffCnt, msg)
+	s.Equal(expect.backoffDetail, result.backoffDetail, msg)
+}
+
+func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) *RegionRequestSender {
 	access := []string{}
 	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 		idx := len(access)
-		access = append(access, fmt.Sprintf("{addr: %v, replica-read: %v, stale-read: %v}", addr, req.ReplicaRead, req.StaleRead))
+		if req.ForwardedHost == "" {
+			access = append(access, fmt.Sprintf("{addr: %v, replica-read: %v, stale-read: %v}", addr, req.ReplicaRead, req.StaleRead))
+		} else {
+			access = append(access, fmt.Sprintf("{addr: %v, replica-read: %v, stale-read: %v, forward_addr: %v}", addr, req.ReplicaRead, req.StaleRead, req.ForwardedHost))
+			addr = req.ForwardedHost
+		}
 		if idx < len(ca.accessErr) {
 			if !ca.accessErr[idx].Valid(addr, req) {
 				// mark this case is invalid. just ignore this case.
 				ca.accessErrInValid = true
 			} else {
-				loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-				s.Nil(err)
-				rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+				rc := s.getRegion()
 				s.NotNil(rc)
 				regionErr, err := ca.genAccessErr(s.cache, rc, ca.accessErr[idx])
 				if regionErr != nil {
@@ -693,6 +2635,34 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 		}}, nil
 	}}
 	sender := NewRegionRequestSender(s.cache, fnClient)
+	req, opts, timeout := ca.buildRequest(s)
+	beforeRun(s, ca)
+	rc := s.getRegion()
+	s.NotNil(rc)
+	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
+	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
+	ca.recordResult(s, bo, sender.replicaSelector.getBaseReplicaSelector().region, access, resp, err)
+	afterRun(ca, sender)
+	return sender
+}
+
+func beforeRun(s *testReplicaSelectorSuite, ca *replicaSelectorAccessPathCase) {
+	if ca.beforeRun != nil {
+		ca.beforeRun()
+	} else {
+		s.resetStoreState()
+	}
+}
+
+func afterRun(ca *replicaSelectorAccessPathCase, sender *RegionRequestSender) {
+	if ca.afterRun != nil {
+		ca.afterRun()
+	} else {
+		sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
+	}
+}
+
+func (ca *replicaSelectorAccessPathCase) buildRequest(s *testReplicaSelectorSuite) (*tikvrpc.Request, []StoreSelectorOption, time.Duration) {
 	var req *tikvrpc.Request
 	switch ca.reqType {
 	case tikvrpc.CmdGet:
@@ -719,42 +2689,32 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) {
 	if ca.label != nil {
 		opts = append(opts, WithMatchLabels([]*metapb.StoreLabel{ca.label}))
 	}
-	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
-	loc, err := s.cache.LocateKey(s.bo, []byte("key"))
-	s.Nil(err)
-	rc := s.cache.GetCachedRegionWithRLock(loc.Region)
-	s.NotNil(rc)
-	for _, store := range rc.getStore().stores {
-		store.loadStats.Store(nil)
-		store.healthStatus.clientSideSlowScore.resetSlowScore()
-		atomic.StoreUint32(&store.livenessState, uint32(reachable))
-		store.setResolveState(resolved)
-	}
-
-	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
 	timeout := ca.timeout
 	if timeout == 0 {
 		timeout = client.ReadTimeoutShort
 	}
-	resp, _, _, err := sender.SendReqCtx(bo, req, loc.Region, timeout, tikvrpc.TiKV, opts...)
+	return req, opts, timeout
+}
+
+func (ca *replicaSelectorAccessPathCase) recordResult(s *testReplicaSelectorSuite, bo *retry.Backoffer, region *Region, access []string, resp *tikvrpc.Response, err error) {
+	ca.result.accessPath = access
+	ca.result.regionIsValid = region.isValid()
+	msg := ca.Format()
 	if err == nil {
 		s.NotNil(resp, msg)
 		regionErr, err := resp.GetRegionError()
 		s.Nil(err, msg)
-		ca.respRegionError = regionErr
+		ca.result.respRegionError = regionErr
 	} else {
-		ca.respErr = err.Error()
+		ca.result.respErr = err.Error()
 	}
-	ca.accessPath = access
-	ca.backoffCnt = bo.GetTotalBackoffTimes()
+	ca.result.backoffCnt = bo.GetTotalBackoffTimes()
 	detail := make([]string, 0, len(bo.GetBackoffTimes()))
 	for tp, cnt := range bo.GetBackoffTimes() {
 		detail = append(detail, fmt.Sprintf("%v+%v", tp, cnt))
 	}
 	sort.Strings(detail)
-	ca.backoffDetail = detail
-	ca.regionIsValid = sender.replicaSelector.region.isValid()
-	sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
+	ca.result.backoffDetail = detail
 }
 
 func (ca *replicaSelectorAccessPathCase) genAccessErr(regionCache *RegionCache, r *Region, accessErr RegionErrorType) (regionErr *errorpb.Error, err error) {
@@ -796,8 +2756,8 @@ func (c *replicaSelectorAccessPathCase) Format() string {
 		label = fmt.Sprintf("%v->%v", c.label.Key, c.label.Value)
 	}
 	respRegionError := ""
-	if c.respRegionError != nil {
-		respRegionError = c.respRegionError.String()
+	if c.result.respRegionError != nil {
+		respRegionError = c.result.respRegionError.String()
 	}
 	accessErr := make([]string, len(c.accessErr))
 	for i := range c.accessErr {
@@ -817,8 +2777,32 @@ func (c *replicaSelectorAccessPathCase) Format() string {
 		"\tbackoff_cnt: %v\n"+
 		"\tbackoff_detail: %v\n"+
 		"\tregion_is_valid: %v\n}",
-		c.reqType, c.readType, c.staleRead, c.timeout, c.busyThresholdMs, label, strings.Join(accessErr, ", "), strings.Join(c.accessPath, ", "),
-		c.respErr, respRegionError, c.backoffCnt, strings.Join(c.backoffDetail, ", "), c.regionIsValid)
+		c.reqType, c.readType, c.staleRead, c.timeout, c.busyThresholdMs, label, strings.Join(accessErr, ", "), strings.Join(c.result.accessPath, ", "),
+		c.result.respErr, respRegionError, c.result.backoffCnt, strings.Join(c.result.backoffDetail, ", "), c.result.regionIsValid)
+}
+
+func (s *testReplicaSelectorSuite) resetStoreState() {
+	// reset slow score, since serverIsBusyErr will mark the store is slow, and affect remaining test cases.
+	reachable.injectConstantLiveness(s.cache) // inject reachable liveness.
+	rc := s.getRegion()
+	s.NotNil(rc)
+	for _, store := range rc.getStore().stores {
+		store.loadStats.Store(nil)
+		store.healthStatus.clientSideSlowScore.resetSlowScore()
+		store.healthStatus.updateTiKVServerSideSlowScore(0, time.Now())
+		store.healthStatus.updateSlowFlag()
+		atomic.StoreUint32(&store.livenessState, uint32(reachable))
+		store.setResolveState(resolved)
+	}
+	regionStore := rc.getStore()
+	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
+		epoch := regionStore.storeEpochs[storeIdx]
+		storeEpoch := regionStore.stores[storeIdx].epoch
+		if epoch != storeEpoch {
+			rc.invalidate(EpochNotMatch)
+			break
+		}
+	}
 }
 
 type RegionErrorType int
@@ -1013,5 +2997,192 @@ func (tp RegionErrorType) String() string {
 		return "DeadLineExceededErr"
 	default:
 		return "unknown_" + strconv.Itoa(int(tp))
+	}
+}
+
+type accessErrGenerator struct {
+	maxAccessErrCnt int
+	mode            int
+	idx             int
+	baseIdx         int
+	allErrs         []RegionErrorType
+	retryErrs       []RegionErrorType
+}
+
+func newAccessErrGenerator(isRead, staleRead bool, maxAccessErrCnt int) *accessErrGenerator {
+	filter := func(tp RegionErrorType) bool {
+		// read request won't meet RaftEntryTooLargeErr.
+		if isRead && tp == RaftEntryTooLargeErr {
+			return false
+		}
+		if staleRead == false && tp == DataIsNotReadyErr {
+			return false
+		}
+		// TODO: since v2 has come compatibility issue with v1, so skip FlashbackInProgressErr.
+		if tp == FlashbackInProgressErr {
+			return false
+		}
+		return true
+	}
+	allErrs := getAllRegionErrors(filter)
+	retryableErr := getAllRegionErrors(func(tp RegionErrorType) bool {
+		return filter(tp) && isRegionErrorRetryable(tp)
+	})
+	return &accessErrGenerator{
+		maxAccessErrCnt: maxAccessErrCnt,
+		mode:            0,
+		idx:             0,
+		allErrs:         allErrs,
+		retryErrs:       retryableErr,
+	}
+}
+
+func getAllRegionErrors(filter func(errorType RegionErrorType) bool) []RegionErrorType {
+	errs := make([]RegionErrorType, 0, int(RegionErrorTypeMax))
+	for tp := NotLeaderErr; tp < RegionErrorTypeMax; tp++ {
+		if filter != nil && filter(tp) == false {
+			continue
+		}
+		errs = append(errs, tp)
+	}
+	return errs
+}
+
+func isRegionErrorRetryable(tp RegionErrorType) bool {
+	switch tp {
+	case NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr,
+		StaleCommandErr, MaxTimestampNotSyncedErr, ReadIndexNotReadyErr, ProposalInMergingModeErr, DataIsNotReadyErr,
+		RegionNotInitializedErr, FlashbackInProgressErr, DiskFullErr, DeadLineExceededErr:
+		return true
+	}
+	return false
+}
+
+func (a *accessErrGenerator) genAccessErr(staleRead bool) ([]RegionErrorType, bool) {
+	if a.mode == 0 {
+		a.idx = 0
+		a.mode = 1
+		return nil, false
+	}
+	if a.mode == 1 {
+		idx := a.idx
+		a.idx++
+		if a.idx >= len(a.allErrs) {
+			a.idx = 0
+			a.baseIdx = 0
+			a.mode = 2
+		}
+		return []RegionErrorType{a.allErrs[idx]}, false
+	}
+	for a.mode <= a.maxAccessErrCnt {
+		errs := a.genAccessErrs(a.allErrs, a.retryErrs)
+		if len(errs) > 0 {
+			return errs, false
+		}
+		a.baseIdx = 0
+		a.idx = 0
+		a.mode++
+		// if mode >= 4 , reduce the error type to avoid generating too many combinations.
+		if a.mode > 4 {
+			if a.mode > 8 {
+				a.allErrs = []RegionErrorType{ServerIsBusyErr, ServerIsBusyWithEstimatedWaitMsErr}
+			} else if a.mode > 7 {
+				a.allErrs = []RegionErrorType{ServerIsBusyWithEstimatedWaitMsErr, DeadLineExceededErr}
+			} else if a.mode > 6 {
+				a.allErrs = []RegionErrorType{NotLeaderWithNewLeader2Err, ServerIsBusyWithEstimatedWaitMsErr, DeadLineExceededErr}
+			} else if a.mode > 5 {
+				a.allErrs = []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader2Err, ServerIsBusyWithEstimatedWaitMsErr, DeadLineExceededErr}
+			} else {
+				a.allErrs = []RegionErrorType{NotLeaderErr, NotLeaderWithNewLeader1Err, NotLeaderWithNewLeader2Err, NotLeaderWithNewLeader3Err, ServerIsBusyWithEstimatedWaitMsErr, RegionNotInitializedErr, DeadLineExceededErr}
+			}
+			if staleRead {
+				a.allErrs = append(a.allErrs, DataIsNotReadyErr)
+			}
+			a.retryErrs = a.allErrs
+		}
+	}
+	return nil, true
+}
+
+func (a *accessErrGenerator) genAccessErrs(allErrs, retryErrs []RegionErrorType) []RegionErrorType {
+	defer func() {
+		a.baseIdx++
+		if a.baseIdx >= len(allErrs) {
+			a.baseIdx = 0
+			a.idx++
+		}
+	}()
+	mode := a.mode
+	errs := make([]RegionErrorType, mode)
+	errs[mode-1] = allErrs[a.baseIdx%len(allErrs)]
+	value := a.idx
+	for i := mode - 2; i >= 0; i-- {
+		if i == 0 && value > len(retryErrs) {
+			return nil
+		}
+		errs[i] = retryErrs[value%len(retryErrs)]
+		value = value / len(retryErrs)
+	}
+	return errs
+}
+
+func (s *testReplicaSelectorSuite) getRegion() *Region {
+	for i := 0; i < 100; i++ {
+		loc, err := s.cache.LocateKey(s.bo, []byte("key"))
+		s.Nil(err)
+		rc := s.cache.GetCachedRegionWithRLock(loc.Region)
+		if rc == nil {
+			time.Sleep(time.Millisecond * 10)
+			continue
+		}
+		return rc
+	}
+	return nil
+}
+
+func BenchmarkReplicaSelector(b *testing.B) {
+	mvccStore := mocktikv.MustNewMVCCStore()
+	cluster := mocktikv.NewCluster(mvccStore)
+	mocktikv.BootstrapWithMultiStores(cluster, 3)
+	pdCli := &CodecPDClient{mocktikv.NewPDClient(cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	cache := NewRegionCache(pdCli)
+	defer func() {
+		cache.Close()
+		mvccStore.Close()
+	}()
+
+	config.UpdateGlobal(func(conf *config.Config) {
+		conf.EnableReplicaSelectorV2 = true
+	})
+	cnt := 0
+	allErrs := getAllRegionErrors(nil)
+	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		pberr, err := allErrs[cnt%len(allErrs)].GenError()
+		cnt++
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			RegionError: pberr,
+			Value:       []byte("value"),
+		}}, err
+	}}
+	f, _ := os.Create("cpu.profile")
+	pprof.StartCPUProfile(f)
+	defer func() {
+		pprof.StopCPUProfile()
+		f.Close()
+	}()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
+		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+			Key: []byte("key"),
+		})
+		req.ReplicaReadType = kv.ReplicaReadMixed
+		loc, err := cache.LocateKey(bo, []byte("key"))
+		if err != nil {
+			b.Fail()
+		}
+		sender := NewRegionRequestSender(cache, fnClient)
+		sender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 	}
 }

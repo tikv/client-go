@@ -82,23 +82,26 @@ type Config struct {
 	RegionsRefreshInterval uint64
 	// EnablePreload indicates whether to preload region info when initializing the client.
 	EnablePreload bool
+	// EnableReplicaSelectorV2 indicates whether to enable ReplicaSelectorV2.
+	EnableReplicaSelectorV2 bool
 }
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		CommitterConcurrency:  128,
-		MaxTxnTTL:             60 * 60 * 1000, // 1hour
-		TiKVClient:            DefaultTiKVClient(),
-		PDClient:              DefaultPDClient(),
-		TxnLocalLatches:       DefaultTxnLocalLatches(),
-		StoresRefreshInterval: DefStoresRefreshInterval,
-		OpenTracingEnable:     false,
-		Path:                  "",
-		EnableForwarding:      false,
-		TxnScope:              "",
-		EnableAsyncCommit:     false,
-		Enable1PC:             false,
+		CommitterConcurrency:    128,
+		MaxTxnTTL:               60 * 60 * 1000, // 1hour
+		TiKVClient:              DefaultTiKVClient(),
+		PDClient:                DefaultPDClient(),
+		TxnLocalLatches:         DefaultTxnLocalLatches(),
+		StoresRefreshInterval:   DefStoresRefreshInterval,
+		OpenTracingEnable:       false,
+		Path:                    "",
+		EnableForwarding:        false,
+		TxnScope:                "",
+		EnableAsyncCommit:       false,
+		Enable1PC:               false,
+		EnableReplicaSelectorV2: true,
 	}
 }
 
