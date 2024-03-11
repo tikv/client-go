@@ -1183,6 +1183,7 @@ func (s *baseReplicaSelector) buildRPCContext(bo *retry.Backoffer, targetReplica
 	}
 
 	rpcCtx := &RPCContext{
+		ClusterID:  s.regionCache.clusterID,
 		Region:     s.region.VerID(),
 		Meta:       s.region.meta,
 		Peer:       targetReplica.peer,
@@ -1588,6 +1589,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
+		req.Context.ClusterId = rpcCtx.ClusterID
 		rpcCtx.contextPatcher.applyTo(&req.Context)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			patchRequestSource(req, s.replicaSelector.replicaType(rpcCtx))
