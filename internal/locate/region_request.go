@@ -1879,6 +1879,13 @@ func (s *RegionRequestSender) sendReqToRegion(
 				resp = nil
 			}
 		}
+
+		if _, e := util.EvalFailpoint("onRPCFinishedHook"); e == nil {
+			if hook := bo.GetCtx().Value("onRPCFinishedHook"); hook != nil {
+				h := hook.(func(*tikvrpc.Request, *tikvrpc.Response, error) (*tikvrpc.Response, error))
+				resp, err = h(req, resp, err)
+			}
+		}
 	}
 
 	if rpcCtx.ProxyStore != nil {
