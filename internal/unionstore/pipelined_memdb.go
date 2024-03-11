@@ -239,6 +239,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	}
 	if p.flushingMemDB != nil {
 		if err := <-p.errCh; err != nil {
+			p.flushingMemDB = nil
 			return false, err
 		}
 	}
