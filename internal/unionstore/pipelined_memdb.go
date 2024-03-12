@@ -98,7 +98,7 @@ type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]by
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := newMemDB()
 	memdb.setSkipMutex(true)
-	flushOptoin := newFlushOption()
+	flushOption := newFlushOption()
 	return &PipelinedMemDB{
 		memDB:             memdb,
 		errCh:             make(chan error, 1),
@@ -108,7 +108,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		// keep entryLimit and bufferLimit same with the memdb's default values.
 		entryLimit:  memdb.entrySizeLimit,
 		bufferLimit: memdb.bufferSizeLimit,
-		flushOption: flushOptoin,
+		flushOption: flushOption,
 	}
 }
 
@@ -192,6 +192,34 @@ func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 		return 0, err
 	}
 	return f, nil
+}
+
+// Prefetch
+func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	m := make(map[string][]byte, len(keys))
+	shrinkKeys := make([][]byte, 0, len(keys))
+	ctx = WithPipelinedMemDBSkipRemoteBuffer(ctx)
+	for _, k := range keys {
+		v, err := p.Get(ctx, k)
+		if err != nil {
+			if tikverr.IsErrNotFound(err) {
+				shrinkKeys = append(shrinkKeys, k)
+				continue
+			}
+			return nil, err
+		}
+		if len(v) > 0 {
+			m[string(k)] = v
+		}
+	}
+	storageValues, err := p.bufferBatchGetter(ctx, shrinkKeys)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range storageValues {
+		m[k] = v
+	}
+	return m, nil
 }
 
 func (p *PipelinedMemDB) UpdateFlags(k []byte, ops ...kv.FlagsOp) {

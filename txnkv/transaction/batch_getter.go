@@ -36,15 +36,12 @@ package transaction
 
 import (
 	"context"
-
-	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/internal/unionstore"
 )
 
 // BatchBufferGetter is the interface for BatchGet.
 type BatchBufferGetter interface {
 	Len() int
-	unionstore.Getter
+	BatchGetter
 }
 
 // BatchGetter is the interface for BatchGet.
@@ -69,28 +66,17 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 	if b.buffer.Len() == 0 {
 		return b.snapshot.BatchGet(ctx, keys)
 	}
-	bufferValues := make([][]byte, len(keys))
 	shrinkKeys := make([][]byte, 0, len(keys))
-	for i, key := range keys {
-		val, err := b.buffer.Get(ctx, key)
-		if err == nil {
-			bufferValues[i] = val
-			continue
-		}
-		if !tikverr.IsErrNotFound(err) {
-			return nil, err
-		}
-		shrinkKeys = append(shrinkKeys, key)
-	}
-	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys)
+	m, err := b.buffer.BatchGet(ctx, keys) // m, buffer_kv_map
 	if err != nil {
 		return nil, err
 	}
-	for i, key := range keys {
-		if len(bufferValues[i]) == 0 {
-			continue
-		}
-		storageValues[string(key)] = bufferValues[i]
+	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys) // storageValues, snapshot_kv_map
+	if err != nil {
+		return nil, err
 	}
-	return storageValues, nil
+	for k, v := range storageValues {
+		m[k] = v
+	}
+	return m, nil
 }
