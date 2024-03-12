@@ -1656,7 +1656,7 @@ func TestReplicaReadAccessPathByMixedAndPreferLeaderCase(t *testing.T) {
 			accessErr: []RegionErrorType{ServerIsBusyErr},
 			expect: &accessPathResult{
 				accessPath: []string{
-					"{addr: store1, replica-read: true, stale-read: false}", // store1 will be marked as slow.
+					"{addr: store1, replica-read: true, stale-read: false}", // store1 will be marked already slow.
 					"{addr: store2, replica-read: true, stale-read: false}",
 				},
 				respErr:         "",
