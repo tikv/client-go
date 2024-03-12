@@ -320,7 +320,11 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	}
 	if isLeader {
 		if s.preferLeader {
-			score |= flagPreferLeader
+			if !r.store.healthStatus.IsSlow() {
+				score |= flagPreferLeader
+			} else {
+				score |= flagNormalPeer
+			}
 		} else if s.tryLeader {
 			if len(s.labels) > 0 {
 				// When the leader has matching labels, prefer leader than other mismatching peers.
