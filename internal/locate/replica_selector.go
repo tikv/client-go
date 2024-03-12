@@ -321,7 +321,7 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	if isLeader {
 		if s.preferLeader {
 			// Following logic is used to compatible with old replica selector.
-			// When use prefer-leader strategy, and the leader's store is slow, then not prefer leader.
+			// When use prefer-leader strategy, only prefer leader when the leader's store is not slow.
 			if !r.store.healthStatus.IsSlow() {
 				score |= flagPreferLeader
 			} else {
