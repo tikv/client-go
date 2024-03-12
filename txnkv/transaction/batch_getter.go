@@ -36,12 +36,14 @@ package transaction
 
 import (
 	"context"
+	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore"
 )
 
 // BatchBufferGetter is the interface for BatchGet.
 type BatchBufferGetter interface {
 	Len() int
-	BatchGetter
+	unionstore.Getter
 }
 
 // BatchGetter is the interface for BatchGet.
@@ -66,12 +68,60 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 	if b.buffer.Len() == 0 {
 		return b.snapshot.BatchGet(ctx, keys)
 	}
+	bufferValues := make([][]byte, len(keys))
 	shrinkKeys := make([][]byte, 0, len(keys))
-	m, err := b.buffer.BatchGet(ctx, keys) // m, buffer_kv_map
+	for i, key := range keys {
+		val, err := b.buffer.Get(ctx, key)
+		if err == nil {
+			bufferValues[i] = val
+			continue
+		}
+		if !tikverr.IsErrNotFound(err) {
+			return nil, err
+		}
+		shrinkKeys = append(shrinkKeys, key)
+	}
+	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys)
 	if err != nil {
 		return nil, err
 	}
-	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys) // storageValues, snapshot_kv_map
+	for i, key := range keys {
+		if len(bufferValues[i]) == 0 {
+			continue
+		}
+		storageValues[string(key)] = bufferValues[i]
+	}
+	return storageValues, nil
+}
+
+type BatchPrefetcher struct {
+	buffer   Prefetcher
+	snapshot BatchGetter
+}
+
+// Prefetcher is the interface for Prefetch.
+type Prefetcher interface {
+	Prefetch(context.Context, [][]byte) (map[string][]byte, error)
+}
+
+// NewPrefetcher creates a new Prefetcher.
+func NewPrefetcher(buffer Prefetcher, snapshot BatchGetter) *BatchPrefetcher {
+	return &BatchPrefetcher{buffer: buffer, snapshot: snapshot}
+}
+
+// Prefetch gets a batch of values.
+func (b *BatchPrefetcher) Prefetch(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	m, err := b.buffer.Prefetch(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	shrinkKeys := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		if _, ok := m[string(key)]; !ok {
+			shrinkKeys = append(shrinkKeys, key)
+		}
+	}
+	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys)
 	if err != nil {
 		return nil, err
 	}

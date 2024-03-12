@@ -45,6 +45,7 @@ type PipelinedMemDB struct {
 	generation              uint64
 	entryLimit, bufferLimit uint64
 	flushOption             flushOption
+	prefetchCache           map[string]util.Option[[]byte]
 }
 
 const (
@@ -122,9 +123,7 @@ func (p *PipelinedMemDB) GetMemDB() *MemDB {
 	panic("GetMemDB should not be invoked for PipelinedMemDB")
 }
 
-// Get the value by given key, it returns tikverr.ErrNotExist if not exist.
-// The priority of the value is MemBuffer > flushingMemDB > flushed memdbs.
-func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
+func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer bool) ([]byte, error) {
 	v, err := p.memDB.Get(k)
 	if err == nil {
 		return v, nil
@@ -141,7 +140,7 @@ func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if ctx.Value(pipelinedMemDBSkipRemoteBufferKey) != nil {
+	if skipRemoteBuffer {
 		return nil, tikverr.ErrNotExist
 	}
 	// read remote buffer
@@ -160,27 +159,17 @@ func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
 	return v, nil
 }
 
+// Get the value by given key, it returns tikverr.ErrNotExist if not exist.
+// The priority of the value is MemBuffer > flushingMemDB > flushed memdbs.
+func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
+	return p.get(ctx, k, false)
+}
+
 // GetLocal implements the MemBuffer interface.
 // It only checks the mutable memdb and the immutable memdb.
 // It does not check mutations that have been flushed to TiKV.
-func (p *PipelinedMemDB) GetLocal(_ context.Context, key []byte) ([]byte, error) {
-	v, err := p.memDB.Get(key)
-	if err == nil {
-		return v, nil
-	}
-	if !tikverr.IsErrKeyExist(err) {
-		return nil, err
-	}
-	if p.flushingMemDB != nil {
-		_, err = p.flushingMemDB.Get(key)
-		if err == nil {
-			return v, nil
-		}
-		if !tikverr.IsErrKeyExist(err) {
-			return nil, err
-		}
-	}
-	return nil, tikverr.ErrNotExist
+func (p *PipelinedMemDB) GetLocal(ctx context.Context, key []byte) ([]byte, error) {
+	return p.get(ctx, key, true)
 }
 
 func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
@@ -194,13 +183,13 @@ func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 	return f, nil
 }
 
-// Prefetch
-func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+func (p *PipelinedMemDB) Prefetch(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 	m := make(map[string][]byte, len(keys))
+	prefetchCache := make(map[string]util.Option[[]byte], len(keys))
 	shrinkKeys := make([][]byte, 0, len(keys))
 	ctx = WithPipelinedMemDBSkipRemoteBuffer(ctx)
 	for _, k := range keys {
-		v, err := p.Get(ctx, k)
+		v, err := p.get(ctx, k, true)
 		if err != nil {
 			if tikverr.IsErrNotFound(err) {
 				shrinkKeys = append(shrinkKeys, k)
@@ -210,16 +199,44 @@ func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[strin
 		}
 		if len(v) > 0 {
 			m[string(k)] = v
+			prefetchCache[string(k)] = util.Some(v)
+		} else {
+			prefetchCache[string(k)] = util.None[[]byte]()
 		}
 	}
 	storageValues, err := p.bufferBatchGetter(ctx, shrinkKeys)
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range storageValues {
-		m[k] = v
+	for _, k := range shrinkKeys {
+		v, ok := storageValues[string(k)]
+		if ok {
+			m[string(k)] = v
+			prefetchCache[string(k)] = util.Some(v)
+		} else {
+			prefetchCache[string(k)] = util.None[[]byte]()
+		}
 	}
+	p.prefetchCache = prefetchCache
 	return m, nil
+}
+
+func (p *PipelinedMemDB) GetPrefetchCache(_ context.Context, keys [][]byte) map[string][]byte {
+	if p.prefetchCache == nil {
+		panic("prefetchCache not exist, GetPrefetchCache should be called after Prefetch and before Flush")
+	}
+	m := make(map[string][]byte, len(keys))
+	for _, k := range keys {
+		v, ok := p.prefetchCache[string(k)]
+		if !ok {
+			panic("key not found in prefetchCache")
+		}
+		inner := v.Inner()
+		if inner != nil {
+			m[string(k)] = *inner
+		}
+	}
+	return m
 }
 
 func (p *PipelinedMemDB) UpdateFlags(k []byte, ops ...kv.FlagsOp) {
@@ -262,6 +279,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	if p.flushFunc == nil {
 		return false, errors.New("flushFunc is not provided")
 	}
+	// invalidate the prefetch cache whether the flush is really triggered.
+	p.prefetchCache = nil
 	if !force && !p.needFlush() {
 		return false, nil
 	}

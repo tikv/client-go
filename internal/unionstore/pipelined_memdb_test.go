@@ -16,7 +16,9 @@ package unionstore
 
 import (
 	"context"
+	"github.com/stretchr/testify/assert"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -339,4 +341,111 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushKeys"))
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushSize"))
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBForceFlushSizeThreshold"))
+}
+
+func TestMemBufferPrefetch(t *testing.T) {
+	var remoteMutex sync.RWMutex
+	remoteBuffer := make(map[string][]byte, 16)
+	pipelinedMemdb := NewPipelinedMemDB(func(_ context.Context, keys [][]byte) (map[string][]byte, error) {
+		remoteMutex.RLock()
+		defer remoteMutex.RUnlock()
+		m := make(map[string][]byte, len(keys))
+		for _, k := range keys {
+			if val, ok := remoteBuffer[string(k)]; ok && len(val) > 0 {
+				m[string(k)] = val
+			}
+		}
+		return m, nil
+	}, func(_ uint64, db *MemDB) error {
+		remoteMutex.Lock()
+		defer remoteMutex.Unlock()
+		for it, _ := db.Iter(nil, nil); it.Valid(); it.Next() {
+			if len(it.Value()) == 0 {
+				delete(remoteBuffer, string(it.Key()))
+			} else {
+				remoteBuffer[string(it.Key())] = it.Value()
+			}
+		}
+		return nil
+	})
+
+	mustGetLocal := func(key []byte) []byte {
+		v, err := pipelinedMemdb.GetLocal(context.Background(), key)
+		assert.Nil(t, err)
+		return v
+	}
+	_ = mustGetLocal
+	mustFlush := func() {
+		flushed, err := pipelinedMemdb.Flush(true)
+		assert.Nil(t, err)
+		assert.True(t, flushed)
+		assert.Nil(t, pipelinedMemdb.FlushWait())
+	}
+	mustPanic := func(fn func()) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("should panic")
+			}
+		}()
+		fn()
+	}
+
+	err := pipelinedMemdb.Set([]byte("k1"), []byte("v11"))
+	assert.Nil(t, err)
+	err = pipelinedMemdb.Set([]byte("k2"), []byte("v21"))
+	assert.Nil(t, err)
+	err = pipelinedMemdb.Set([]byte("k3"), []byte("v31"))
+	assert.Nil(t, err)
+	// there is no prefetch cache
+	mustPanic(func() {
+		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
+	})
+	expects := map[string][]byte{
+		"k1": []byte("v11"),
+		"k2": []byte("v21"),
+		"k3": []byte("v31"),
+	}
+	m, err := pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
+	assert.Nil(t, err)
+	assert.Equal(t, m, expects)
+	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
+	assert.Equal(t, m, expects)
+
+	mustFlush()
+	// prefetch cache is cleaned after flush
+	mustPanic(func() {
+		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
+	})
+	// prefetch cache contains the previous mutation
+	pipelinedMemdb.Delete([]byte("k1"))
+	pipelinedMemdb.Set([]byte("k3"), []byte("v32"))
+	pipelinedMemdb.Set([]byte("k4"), []byte("v41"))
+	expects = map[string][]byte{
+		"k2": []byte("v21"),
+		"k3": []byte("v32"),
+		"k4": []byte("v41"),
+	}
+	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	assert.Nil(t, err)
+	assert.Equal(t, m, expects)
+	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	assert.Equal(t, m, expects)
+
+	// prefetch cache doesn't contain the following mutation
+	mustFlush()
+	expects = map[string][]byte{
+		"k2": []byte("v21"),
+		"k3": []byte("v32"),
+		"k4": []byte("v41"),
+	}
+	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	assert.Nil(t, err)
+	assert.Equal(t, m, expects)
+	pipelinedMemdb.Delete([]byte("k2"))
+	pipelinedMemdb.Set([]byte("k3"), []byte("v33"))
+	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	assert.Equal(t, m, expects)
+	// GetLocal should return the latest value
+	assert.Equal(t, mustGetLocal([]byte("k2")), []byte{})
+	assert.Equal(t, mustGetLocal([]byte("k3")), []byte("v33"))
 }

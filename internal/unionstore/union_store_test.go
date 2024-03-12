@@ -36,7 +36,6 @@ package unionstore
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,80 +166,4 @@ func checkIterator(t *testing.T, iter Iterator, keys [][]byte, values [][]byte) 
 		assert.Nil(iter.Next())
 	}
 	assert.False(iter.Valid())
-}
-
-func TestMemBufferBatchGet(t *testing.T) {
-	testMemBuffer := func(memBuffer MemBuffer) {
-		mustFlush := func() {
-			_, isPipelined := memBuffer.(*PipelinedMemDB)
-			flushed, err := memBuffer.Flush(true)
-			assert.Nil(t, err)
-			assert.Equal(t, flushed, isPipelined)
-			assert.Nil(t, memBuffer.FlushWait())
-		}
-
-		err := memBuffer.Set([]byte("k1"), []byte("v11"))
-		assert.Nil(t, err)
-		err = memBuffer.Set([]byte("k2"), []byte("v21"))
-		assert.Nil(t, err)
-		err = memBuffer.Set([]byte("k3"), []byte("v31"))
-		assert.Nil(t, err)
-		m, err := memBuffer.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
-		assert.Nil(t, err)
-		assert.Equal(t, m, map[string][]byte{
-			"k1": []byte("v11"),
-			"k2": []byte("v21"),
-			"k3": []byte("v31"),
-		})
-
-		mustFlush()
-		memBuffer.Delete([]byte("k2"))
-		memBuffer.Set([]byte("k3"), []byte("v32"))
-		memBuffer.Set([]byte("k4"), []byte("v41"))
-		m, err = memBuffer.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-		assert.Nil(t, err)
-		assert.Equal(t, m, map[string][]byte{
-			"k1": []byte("v11"),
-			"k3": []byte("v32"),
-			"k4": []byte("v41"),
-		})
-
-		mustFlush()
-		memBuffer.Set([]byte("k3"), []byte("v33"))
-		m, err = memBuffer.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-		assert.Nil(t, err)
-		assert.Equal(t, m, map[string][]byte{
-			"k1": []byte("v11"),
-			"k3": []byte("v33"),
-			"k4": []byte("v41"),
-		})
-	}
-
-	testMemBuffer(NewMemDBWithContext())
-
-	var remoteMutex sync.RWMutex
-	remoteBuffer := make(map[string][]byte, 16)
-	pipelinedMemdb := NewPipelinedMemDB(func(_ context.Context, keys [][]byte) (map[string][]byte, error) {
-		remoteMutex.RLock()
-		defer remoteMutex.RUnlock()
-		m := make(map[string][]byte, len(keys))
-		for _, k := range keys {
-			if val, ok := remoteBuffer[string(k)]; ok && len(val) > 0 {
-				m[string(k)] = val
-			}
-		}
-		return m, nil
-	}, func(_ uint64, db *MemDB) error {
-		remoteMutex.Lock()
-		defer remoteMutex.Unlock()
-		for it, _ := db.Iter(nil, nil); it.Valid(); it.Next() {
-			if len(it.Value()) == 0 {
-				delete(remoteBuffer, string(it.Key()))
-			} else {
-				remoteBuffer[string(it.Key())] = it.Value()
-			}
-		}
-		return nil
-	})
-	testMemBuffer(pipelinedMemdb)
 }

@@ -261,3 +261,36 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 		s.Equal(key, val)
 	}
 }
+
+func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
+	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	s.Nil(err)
+	prefetchKeys := make([][]byte, 0, 100)
+	prefetchResult := make(map[string][]byte, 100)
+	nonPrefetchKeys := make([][]byte, 0, 100)
+	for i := 0; i < 100; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := key
+		txn.Set(key, value)
+		if i%2 == 0 {
+			prefetchKeys = append(prefetchKeys, key)
+			prefetchResult[string(key)] = value
+		} else {
+			nonPrefetchKeys = append(nonPrefetchKeys, key)
+		}
+	}
+	m, err := txn.Prefetch(context.Background(), prefetchKeys)
+	s.Nil(err)
+	s.Equal(m, prefetchResult)
+	m = txn.GetMemBuffer().GetPrefetchCache(context.Background(), prefetchKeys)
+	s.Equal(m, prefetchResult)
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				s.Fail("should panic")
+			}
+		}()
+		txn.GetMemBuffer().GetPrefetchCache(context.Background(), nonPrefetchKeys)
+	}()
+}
