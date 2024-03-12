@@ -795,9 +795,12 @@ const (
 )
 
 type StoreHealthStatus struct {
-	isSlow atomic.Bool
-
 	// A statistic for counting the request latency to this store
+	// Only used in PreferLeader mechanism.
+	// In PreferLeader context, do not use `IsSlow()` of `StoreHealthStatus` to determine store's status, but use
+	// `clientSideSlowScore.isSlow()` instead. That's because we decide to keep PreferLeader and other new health-based
+	// replica selection independent for the time being. How they can work together will be left to be discussed in the
+	// future.
 	clientSideSlowScore SlowScoreStat
 
 	tikvSideSlowScore struct {
@@ -822,8 +825,10 @@ func newStoreHealthStatus() *StoreHealthStatus {
 }
 
 // IsSlow returns whether current Store is slow.
+// Note that this function do not take `clientSideSlowScore` into consideration. Do not use this in PreferLeader
+// context.
 func (s *StoreHealthStatus) IsSlow() bool {
-	return s.isSlow.Load()
+	return s.tikvSideSlowScore.score.Load() >= tikvSlowScoreSlowThreshold
 }
 
 // GetHealthStatusDetail gets the current detailed information about the store's health status.
@@ -839,19 +844,16 @@ func (s *StoreHealthStatus) GetHealthStatusDetail() HealthStatusDetail {
 func (s *StoreHealthStatus) tick(now time.Time) {
 	s.clientSideSlowScore.updateSlowScore()
 	s.updateTiKVServerSideSlowScoreOnTick(now)
-	s.updateSlowFlag()
 }
 
 // recordClientSideSlowScoreStat records timecost of each request to update the client side slow score.
 func (s *StoreHealthStatus) recordClientSideSlowScoreStat(timecost time.Duration) {
 	s.clientSideSlowScore.recordSlowScoreStat(timecost)
-	s.updateSlowFlag()
 }
 
 // markAlreadySlow marks the related store already slow.
 func (s *StoreHealthStatus) markAlreadySlow() {
 	s.clientSideSlowScore.markAlreadySlow()
-	s.updateSlowFlag()
 }
 
 // updateTiKVServerSideSlowScoreOnTick updates the slow score actively, which is expected to be a periodic job.
@@ -900,8 +902,6 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {
 // updateTiKVServerSideSlowScore updates the tikv side slow score with the given value.
 // Ignores if the last update time didn't elapse long enough, or it's being updated concurrently.
 func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime time.Time) {
-	defer s.updateSlowFlag()
-
 	lastScore := s.tikvSideSlowScore.score.Load()
 
 	if lastScore == score {
@@ -934,11 +934,6 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 
 	s.tikvSideSlowScore.score.Store(newScore)
 	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
-}
-
-func (s *StoreHealthStatus) updateSlowFlag() {
-	isSlow := s.clientSideSlowScore.isSlow() || s.tikvSideSlowScore.score.Load() >= tikvSlowScoreSlowThreshold
-	s.isSlow.Store(isSlow)
 }
 
 // setTiKVSlowScoreLastUpdateTimeForTest force sets last update time of TiKV server side slow score to specified value.
