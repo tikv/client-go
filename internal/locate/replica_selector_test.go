@@ -2790,7 +2790,6 @@ func (s *testReplicaSelectorSuite) resetStoreState() {
 		store.loadStats.Store(nil)
 		store.healthStatus.clientSideSlowScore.resetSlowScore()
 		store.healthStatus.updateTiKVServerSideSlowScore(0, time.Now())
-		store.healthStatus.updateSlowFlag()
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)
 	}
