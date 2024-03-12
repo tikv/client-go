@@ -1689,6 +1689,50 @@ func TestReplicaReadAccessPathByMixedAndPreferLeaderCase(t *testing.T) {
 		},
 	}
 	s.True(s.runMultiCaseAndCompare(cas))
+
+	cas = []replicaSelectorAccessPathCase{
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadPreferLeader,
+			staleRead: false,
+			timeout:   0,
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store1, replica-read: true, stale-read: false}", // store1 will be marked already slow.
+					"{addr: store2, replica-read: true, stale-read: false}", // store2 will be marked already slow.
+					"{addr: store3, replica-read: true, stale-read: false}",
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      0,
+				backoffDetail:   []string{},
+				regionIsValid:   true,
+			},
+			afterRun: func() { /* don't invalid region */ },
+		},
+		{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadPreferLeader,
+			staleRead: false,
+			timeout:   0,
+			accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr, ServerIsBusyErr},
+			beforeRun: func() { /* don't resetStoreState */ },
+			expect: &accessPathResult{
+				accessPath: []string{
+					"{addr: store3, replica-read: true, stale-read: false}", // won't try leader in store1, since it is slow, ditto for store2.
+					"{addr: store1, replica-read: true, stale-read: false}",
+					// won't retry store2, since it is slow, and it is not leader replica.
+				},
+				respErr:         "",
+				respRegionError: fakeEpochNotMatch,
+				backoffCnt:      1,
+				backoffDetail:   []string{"tikvServerBusy+1"},
+				regionIsValid:   false,
+			},
+		},
+	}
+	s.True(s.runMultiCaseAndCompare(cas))
 }
 
 func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {

@@ -298,6 +298,11 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	if s.busyThreshold > 0 && (r.store.EstimatedWaitTime() > s.busyThreshold || r.serverIsBusy || isLeader) {
 		return false
 	}
+	if s.preferLeader && r.store.healthStatus.IsSlow() && !isLeader {
+		// This logic is used to compatible with old replica selector.
+		// When use prefer-leader strategy, if the replica is slow, and it's not leader, then it is not candidate, skip it.
+		return false
+	}
 	return true
 }
 
