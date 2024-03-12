@@ -219,7 +219,9 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	}
 	if p.flushingMemDB != nil {
 		if err := <-p.errCh; err != nil {
-			err = p.handleAlreadyExistErr(err)
+			if err != nil {
+				err = p.handleAlreadyExistErr(err)
+			}
 			p.flushingMemDB = nil
 			return false, err
 		}
@@ -266,7 +268,9 @@ func (p *PipelinedMemDB) needFlush() bool {
 func (p *PipelinedMemDB) FlushWait() error {
 	if p.flushingMemDB != nil {
 		err := <-p.errCh
-		err = p.handleAlreadyExistErr(err)
+		if err != nil {
+			err = p.handleAlreadyExistErr(err)
+		}
 		// cleanup the flushingMemDB so the next call of FlushWait will not wait for the error channel.
 		p.flushingMemDB = nil
 		return err
