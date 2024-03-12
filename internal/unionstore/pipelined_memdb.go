@@ -185,9 +185,10 @@ func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 
 func (p *PipelinedMemDB) Prefetch(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 	m := make(map[string][]byte, len(keys))
-	prefetchCache := make(map[string]util.Option[[]byte], len(keys))
+	if p.prefetchCache == nil {
+		p.prefetchCache = make(map[string]util.Option[[]byte], len(keys))
+	}
 	shrinkKeys := make([][]byte, 0, len(keys))
-	ctx = WithPipelinedMemDBSkipRemoteBuffer(ctx)
 	for _, k := range keys {
 		v, err := p.get(ctx, k, true)
 		if err != nil {
@@ -199,9 +200,9 @@ func (p *PipelinedMemDB) Prefetch(ctx context.Context, keys [][]byte) (map[strin
 		}
 		if len(v) > 0 {
 			m[string(k)] = v
-			prefetchCache[string(k)] = util.Some(v)
+			p.prefetchCache[string(k)] = util.Some(v)
 		} else {
-			prefetchCache[string(k)] = util.None[[]byte]()
+			p.prefetchCache[string(k)] = util.None[[]byte]()
 		}
 	}
 	storageValues, err := p.bufferBatchGetter(ctx, shrinkKeys)
@@ -212,12 +213,11 @@ func (p *PipelinedMemDB) Prefetch(ctx context.Context, keys [][]byte) (map[strin
 		v, ok := storageValues[string(k)]
 		if ok {
 			m[string(k)] = v
-			prefetchCache[string(k)] = util.Some(v)
+			p.prefetchCache[string(k)] = util.Some(v)
 		} else {
-			prefetchCache[string(k)] = util.None[[]byte]()
+			p.prefetchCache[string(k)] = util.None[[]byte]()
 		}
 	}
-	p.prefetchCache = prefetchCache
 	return m, nil
 }
 
