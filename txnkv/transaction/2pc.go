@@ -80,7 +80,7 @@ type twoPhaseCommitAction interface {
 
 // Global variable set by config file.
 var (
-	ManagedLockTTL uint64 = 20000 // 20s
+	ManagedLockTTL     uint64 = 20000               // 20s
 	MaxPipelinedTxnTTL uint64 = 24 * 60 * 60 * 1000 // 24h
 )
 
