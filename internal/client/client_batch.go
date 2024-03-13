@@ -391,6 +391,7 @@ func (a *batchConn) getClientAndSend() {
 			time.Sleep(time.Duration(timeout * int(time.Millisecond)))
 		}
 	}
+
 	// Choose a connection by round-robbin.
 	var (
 		cli    *batchCommandsClient

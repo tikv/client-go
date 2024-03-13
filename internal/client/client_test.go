@@ -59,6 +59,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/israce"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -881,6 +882,10 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 }
 
 func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
+	if israce.RaceEnabled {
+		// The test will failed when run with race. see https://github.com/tikv/client-go/issues/1222
+		t.Skip()
+	}
 	store1, port1 := mockserver.StartMockTikvService()
 	require.True(t, port1 > 0)
 	require.True(t, store1.IsRunning())
@@ -901,7 +906,7 @@ func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	done := int64(0)
-	concurrency := 200
+	concurrency := 500
 	go func() {
 		defer wg.Done()
 		for {
@@ -922,7 +927,7 @@ func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
 				atomic.AddInt64(&done, 1)
 				wg.Done()
 			}()
-			for i := 0; i < 2000; i++ {
+			for i := 0; i < 5000; i++ {
 				req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 				forwardedHost := ""
 				if i%2 != 0 {
@@ -947,6 +952,6 @@ func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
 		require.Equal(t, int64(9223372036854775807), cli.maxConcurrencyRequestLimit.Load())
 		require.True(t, cli.available() > 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
 		// TODO(crazycs520): fix following assertion. cli.sent may be less than 0 in some cases when enable-forwarding is true.
-		//require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
+		require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
 	}
 }
