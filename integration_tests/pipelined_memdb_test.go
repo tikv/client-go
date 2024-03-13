@@ -25,10 +25,12 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv/transaction"
 )
 
 const (
@@ -214,4 +216,48 @@ func (s *testPipelinedMemDBSuite) TestResolveLockRace() {
 		s.store.SendReq(bo, req, loc.Region, 100*time.Millisecond)
 	}
 	time.Sleep(time.Second)
+}
+
+func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
+	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	s.Nil(err)
+	for i := 0; i < 100; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := key
+		txn.Set(key, value)
+	}
+
+	s.Nil(failpoint.Enable("tikvclient/pipelinedSkipResolveLock", `return`))
+	defer func() {
+		failpoint.Disable("tikvclient/pipelinedSkipResolveLock")
+	}()
+	s.Nil(txn.Commit(context.Background()))
+	mockTableID := int64(999)
+	_, err = s.store.SplitRegions(context.Background(), [][]byte{[]byte("50")}, false, &mockTableID)
+	// manually commit
+	done := make(chan struct{})
+	go func() {
+		committer := transaction.TxnProbe{KVTxn: txn}.GetCommitter()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+		defer cancel()
+		bo := retry.NewNoopBackoff(ctx)
+		committer.ResolveFlushedLocks(bo, []byte("1"), []byte("99"))
+		close(done)
+	}()
+	// should be done within 10 seconds.
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		s.Fail("resolve lock timeout")
+	}
+
+	// check the result
+	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
+	s.Nil(err)
+	for i := 0; i < 100; i++ {
+		key := []byte(strconv.Itoa(i))
+		val, err := txn.Get(context.Background(), key)
+		s.Nil(err)
+		s.Equal(key, val)
+	}
 }

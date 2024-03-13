@@ -384,6 +384,7 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 			if loc.EndKey == nil || bytes.Compare(loc.EndKey, r.EndKey) >= 0 {
 				return res, nil
 			}
+			start = loc.EndKey
 		}
 	}, nil
 }

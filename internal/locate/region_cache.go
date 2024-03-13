@@ -652,6 +652,7 @@ type RegionCache struct {
 		// requestLiveness always returns unreachable.
 		mockRequestLiveness atomic.Pointer[livenessFunc]
 	}
+	clusterID uint64
 }
 
 // NewRegionCache creates a RegionCache.
@@ -671,6 +672,12 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.bg = newBackgroundRunner(context.Background())
 	c.enableForwarding = config.GetGlobalConfig().EnableForwarding
+	if c.pdClient != nil {
+		c.clusterID = c.pdClient.GetClusterID(context.Background())
+	}
+	if c.clusterID == 0 {
+		logutil.BgLogger().Error("cluster id is not set properly")
+	}
 
 	if config.GetGlobalConfig().EnablePreload {
 		logutil.BgLogger().Info("preload region index start")
@@ -774,6 +781,7 @@ func (c *RegionCache) SetPDClient(client pd.Client) {
 
 // RPCContext contains data that is needed to send RPC to a region.
 type RPCContext struct {
+	ClusterID     uint64
 	Region        RegionVerID
 	Meta          *metapb.Region
 	Peer          *metapb.Peer
@@ -939,6 +947,7 @@ func (c *RegionCache) GetTiKVRPCContext(bo *retry.Backoffer, id RegionVerID, rep
 	}
 
 	return &RPCContext{
+		ClusterID:  c.clusterID,
 		Region:     id,
 		Meta:       cachedRegion.meta,
 		Peer:       peer,
@@ -1046,6 +1055,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			continue
 		}
 		return &RPCContext{
+			ClusterID:  c.clusterID,
 			Region:     id,
 			Meta:       cachedRegion.meta,
 			Peer:       peer,

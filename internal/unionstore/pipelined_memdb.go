@@ -16,15 +16,18 @@ package unionstore
 
 import (
 	"context"
+	stderrors "errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/util"
+	"go.uber.org/zap"
 )
 
 // PipelinedMemDB is a Store which contains
@@ -216,6 +219,10 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	}
 	if p.flushingMemDB != nil {
 		if err := <-p.errCh; err != nil {
+			if err != nil {
+				err = p.handleAlreadyExistErr(err)
+			}
+			p.flushingMemDB = nil
 			return false, err
 		}
 	}
@@ -261,11 +268,33 @@ func (p *PipelinedMemDB) needFlush() bool {
 func (p *PipelinedMemDB) FlushWait() error {
 	if p.flushingMemDB != nil {
 		err := <-p.errCh
+		if err != nil {
+			err = p.handleAlreadyExistErr(err)
+		}
 		// cleanup the flushingMemDB so the next call of FlushWait will not wait for the error channel.
 		p.flushingMemDB = nil
 		return err
 	}
 	return nil
+}
+
+func (p *PipelinedMemDB) handleAlreadyExistErr(err error) error {
+	var existErr *tikverr.ErrKeyExist
+	if stderrors.As(err, &existErr) {
+		v, err2 := p.flushingMemDB.Get(existErr.GetKey())
+		if err2 != nil {
+			// TODO: log more info like start_ts, also for other logs
+			logutil.BgLogger().Warn(
+				"[pipelined-dml] Getting value from flushingMemDB when"+
+					" AlreadyExist error occurs failed", zap.Error(err2),
+				zap.Uint64("generation", p.generation),
+			)
+		} else {
+			existErr.Value = v
+		}
+		return existErr
+	}
+	return err
 }
 
 // Iter implements the Retriever interface.

@@ -165,7 +165,8 @@ type KVTxn struct {
 
 	forUpdateTSChecks map[string]uint64
 
-	isPipelined bool
+	isPipelined     bool
+	pipelinedCancel context.CancelFunc
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -433,6 +434,8 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 		ResolveLock: util.ResolveLockDetail{},
 	}
 	txn.committer.setDetail(commitDetail)
+	flushCtx, flushCancel := context.WithCancel(context.Background())
+	txn.pipelinedCancel = flushCancel
 	// generation is increased when the memdb is flushed to kv store.
 	// note the first generation is 1, which can mark pipelined dml's lock.
 	flushedKeys, flushedSize := 0, 0
@@ -451,7 +454,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			zap.Int("flushed keys", flushedKeys), zap.String("flushed size", units.HumanSize(float64(flushedSize))))
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
-		bo := retry.NewBackofferWithVars(context.Background(), 20000, nil)
+		bo := retry.NewBackofferWithVars(flushCtx, 20000, nil)
 		mutations := newMemBufferMutations(memdb.Len(), memdb)
 		if memdb.Len() == 0 {
 			return nil
@@ -742,6 +745,9 @@ func (txn *KVTxn) Rollback() error {
 		}
 	}
 	if txn.IsPipelined() && txn.committer != nil {
+		// wait all flush to finish, this avoids data race.
+		txn.pipelinedCancel()
+		txn.GetMemBuffer().FlushWait()
 		txn.committer.ttlManager.close()
 	}
 	txn.close()

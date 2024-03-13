@@ -1549,6 +1549,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if err = c.txn.GetMemBuffer().FlushWait(); err != nil {
 			return err
 		}
+		c.txn.pipelinedCancel()
 		if len(c.pipelinedCommitInfo.pipelinedStart) == 0 || len(c.pipelinedCommitInfo.pipelinedEnd) == 0 {
 			return errors.Errorf("unexpected empty pipelinedStart(%s) or pipelinedEnd(%s)",
 				c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
