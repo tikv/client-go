@@ -37,6 +37,7 @@ package locate
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"net"
 	"sync"
@@ -99,6 +100,7 @@ func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
 type fnClient struct {
 	fn         func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 	closedAddr string
+	closedVer  uint64
 }
 
 func (f *fnClient) Close() error {
@@ -106,7 +108,12 @@ func (f *fnClient) Close() error {
 }
 
 func (f *fnClient) CloseAddr(addr string) error {
+	return f.CloseAddrVer(addr, math.MaxUint64)
+}
+
+func (f *fnClient) CloseAddrVer(addr string, ver uint64) error {
 	f.closedAddr = addr
+	f.closedVer = ver
 	return nil
 }
 
@@ -664,6 +671,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestCloseConnectionOnStoreNotMatch
 	regionErr, _ := resp.GetRegionError()
 	s.NotNil(regionErr)
 	s.Equal(target, client.closedAddr)
+	var expected uint64 = math.MaxUint64
+	s.Equal(expected, client.closedVer)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestStaleReadRetry() {
@@ -823,4 +832,21 @@ func (s *testRegionRequestToSingleStoreSuite) TestCountReplicaNumber() {
 		peers = append(peers, &metapb.Peer{StoreId: 5, Role: metapb.PeerRole_Learner})
 		s.Equal(4, s.regionRequestSender.countReplicaNumber(peers)) // Only count 1 tiflash replica for tiflash write-nodes.
 	}
+}
+
+type emptyClient struct {
+	client.Client
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestClientExt() {
+	var cli client.Client = client.NewRPCClient()
+	sender := NewRegionRequestSender(s.cache, cli)
+	s.NotNil(sender.client)
+	s.NotNil(sender.getClientExt())
+	cli.Close()
+
+	cli = &emptyClient{}
+	sender = NewRegionRequestSender(s.cache, cli)
+	s.NotNil(sender.client)
+	s.Nil(sender.getClientExt())
 }

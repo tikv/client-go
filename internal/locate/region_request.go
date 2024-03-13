@@ -215,6 +215,14 @@ func (s *RegionRequestSender) GetClient() client.Client {
 	return s.client
 }
 
+// getClientExt returns the client with ClientExt interface.
+// Return nil if the client does not implement ClientExt.
+// Don't use in critical path.
+func (s *RegionRequestSender) getClientExt() client.ClientExt {
+	ext, _ := s.client.(client.ClientExt)
+	return ext
+}
+
 // SetStoreAddr specifies the dest store address.
 func (s *RegionRequestSender) SetStoreAddr(addr string) {
 	s.storeAddr = addr
@@ -1832,10 +1840,19 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		case <-bo.GetCtx().Done():
 			return errors.WithStack(err)
 		default:
-			// If we don't cancel, but the error code is Canceled, it must be from grpc remote.
-			// This may happen when tikv is killed and exiting.
-			// Backoff and retry in this case.
-			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal from remote", zap.Error(err))
+			// If we don't cancel, but the error code is Canceled, it may be canceled by keepalive or gRPC remote.
+			// For the case of canceled by keepalive, we need to re-establish the connection, otherwise following requests will always fail.
+			// Canceled by gRPC remote may happen when tikv is killed and exiting.
+			// Close the connection, backoff, and retry.
+			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal", zap.Error(err))
+			var errConn *client.ErrConn
+			if errors.As(err, &errConn) {
+				if ext := s.getClientExt(); ext != nil {
+					ext.CloseAddrVer(errConn.Addr, errConn.Ver)
+				} else {
+					s.client.CloseAddr(errConn.Addr)
+				}
+			}
 		}
 	}
 

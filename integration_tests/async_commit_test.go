@@ -44,7 +44,7 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
+	"github.com/pingcap/tidb/store/mockstore/unistore"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -86,7 +86,7 @@ func (s *testAsyncCommitCommon) setUpTest() {
 		return
 	}
 
-	client, pdClient, cluster, err := unistore.New("")
+	client, pdClient, cluster, err := unistore.New("", nil)
 	s.Require().Nil(err)
 
 	unistore.BootstrapWithSingleStore(cluster)
@@ -504,7 +504,7 @@ func (s *testAsyncCommitSuite) TestResolveTxnFallbackFromAsyncCommit() {
 		if fallback {
 			req.Req.(*kvrpcpb.PrewriteRequest).MaxCommitTs = 1
 		}
-		resp, err := s.store.SendReq(bo, req, loc.Region, 5000)
+		resp, err := s.store.SendReq(bo, req, loc.Region, 5*time.Second)
 		s.Nil(err)
 		s.NotNil(resp.Resp)
 	}
