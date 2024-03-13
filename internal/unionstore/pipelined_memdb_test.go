@@ -16,7 +16,6 @@ package unionstore
 
 import (
 	"context"
-	"github.com/stretchr/testify/assert"
 	"strconv"
 	"sync"
 	"testing"
@@ -371,25 +370,25 @@ func TestMemBufferPrefetch(t *testing.T) {
 
 	mustGetLocal := func(key []byte) []byte {
 		v, err := pipelinedMemdb.GetLocal(context.Background(), key)
-		assert.Nil(t, err)
+		require.Nil(t, err)
 		return v
 	}
 	_ = mustGetLocal
 	mustFlush := func() {
 		flushed, err := pipelinedMemdb.Flush(true)
-		assert.Nil(t, err)
-		assert.True(t, flushed)
-		assert.Nil(t, pipelinedMemdb.FlushWait())
+		require.Nil(t, err)
+		require.True(t, flushed)
+		require.Nil(t, pipelinedMemdb.FlushWait())
 	}
 
 	err := pipelinedMemdb.Set([]byte("k1"), []byte("v11"))
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	err = pipelinedMemdb.Set([]byte("k2"), []byte("v21"))
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	err = pipelinedMemdb.Set([]byte("k3"), []byte("v31"))
-	assert.Nil(t, err)
+	require.Nil(t, err)
 	// there is no prefetch cache
-	assert.Panics(t, func() {
+	require.Panics(t, func() {
 		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
 	})
 	expects := map[string][]byte{
@@ -398,14 +397,14 @@ func TestMemBufferPrefetch(t *testing.T) {
 		"k3": []byte("v31"),
 	}
 	m, err := pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
-	assert.Nil(t, err)
-	assert.Equal(t, m, expects)
+	require.Nil(t, err)
+	require.Equal(t, m, expects)
 	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
-	assert.Equal(t, m, expects)
+	require.Equal(t, m, expects)
 
 	mustFlush()
 	// prefetch cache is cleaned after flush
-	assert.Panics(t, func() {
+	require.Panics(t, func() {
 		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
 	})
 	// prefetch cache contains the previous mutation
@@ -418,10 +417,10 @@ func TestMemBufferPrefetch(t *testing.T) {
 		"k4": []byte("v41"),
 	}
 	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	assert.Nil(t, err)
-	assert.Equal(t, m, expects)
+	require.Nil(t, err)
+	require.Equal(t, m, expects)
 	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	assert.Equal(t, m, expects)
+	require.Equal(t, m, expects)
 
 	// prefetch cache doesn't contain the following mutation
 	mustFlush()
@@ -431,37 +430,37 @@ func TestMemBufferPrefetch(t *testing.T) {
 		"k4": []byte("v41"),
 	}
 	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	assert.Nil(t, err)
-	assert.Equal(t, m, expects)
+	require.Nil(t, err)
+	require.Equal(t, m, expects)
 	pipelinedMemdb.Delete([]byte("k2"))
 	pipelinedMemdb.Set([]byte("k3"), []byte("v33"))
 	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	assert.Equal(t, m, expects)
+	require.Equal(t, m, expects)
 	// GetLocal should return the latest value
-	assert.Equal(t, mustGetLocal([]byte("k2")), []byte{})
-	assert.Equal(t, mustGetLocal([]byte("k3")), []byte("v33"))
+	require.Equal(t, mustGetLocal([]byte("k2")), []byte{})
+	require.Equal(t, mustGetLocal([]byte("k3")), []byte("v33"))
 
 	// prefetch cache is aggregated before flush
 	mustFlush()
-	assert.Panics(t, func() {
+	require.Panics(t, func() {
 		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
 	})
 	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1")})
-	assert.Nil(t, err)
-	assert.Equal(t, m, map[string][]byte{})
+	require.Nil(t, err)
+	require.Equal(t, m, map[string][]byte{})
 	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k2")})
-	assert.Nil(t, err)
-	assert.Equal(t, m, map[string][]byte{})
+	require.Nil(t, err)
+	require.Equal(t, m, map[string][]byte{})
 	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k3")})
-	assert.Nil(t, err)
-	assert.Equal(t, m, map[string][]byte{"k3": []byte("v33")})
+	require.Nil(t, err)
+	require.Equal(t, m, map[string][]byte{"k3": []byte("v33")})
 	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k4")})
-	assert.Nil(t, err)
-	assert.Equal(t, m, map[string][]byte{"k4": []byte("v41")})
+	require.Nil(t, err)
+	require.Equal(t, m, map[string][]byte{"k4": []byte("v41")})
 	expects = map[string][]byte{
 		"k3": []byte("v33"),
 		"k4": []byte("v41"),
 	}
 	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	assert.Equal(t, m, expects)
+	require.Equal(t, m, expects)
 }
