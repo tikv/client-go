@@ -586,7 +586,6 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 			zap.String("forwardedHost", forwardedHost),
 			zap.Error(err),
 		)
-		c.failPendingRequests(err, forwardedHost)
 		return
 	}
 
@@ -602,7 +601,6 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 			zap.Uint64s("requestIDs", req.RequestIds),
 			zap.Error(err),
 		)
-		c.failPendingRequests(err, client.forwardedHost)
 	}
 }
 

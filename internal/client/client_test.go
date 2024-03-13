@@ -906,12 +906,18 @@ func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for {
-			// randomly intermittent stop and start store1.
-			time.Sleep(time.Millisecond * time.Duration(rand.Intn(50)))
-			store1.Stop()
-			require.False(t, store1.IsRunning())
-			time.Sleep(time.Millisecond * time.Duration(rand.Intn(50)))
-			store1.Start(addr1)
+			// randomly intermittent stop and start store1 or store2.
+			var store *mockserver.MockServer
+			if rand.Intn(10) < 9 {
+				store = store1
+			} else {
+				store = store2
+			}
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
+			store.Stop()
+			require.False(t, store.IsRunning())
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
+			store.Start(addr1)
 			if atomic.LoadInt64(&done) >= int64(concurrency) {
 				return
 			}
