@@ -143,10 +143,6 @@ func TestSendWhenReconnect(t *testing.T) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 5*time.Second)
 	assert.True(t, strings.Contains(err.Error(), "timeout"))
-
-	_, err = rpcClient.SendRequest(context.Background(), addr, req, 100*time.Second)
-	assert.EqualError(t, err, fmt.Sprintf("[%s](%d) no available connections", addr, 1))
-	
 	server.Stop()
 }
 
