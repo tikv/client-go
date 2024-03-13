@@ -880,7 +880,7 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 	}
 }
 
-func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
+func TestRandomRestartStoreAndForwarding(t *testing.T) {
 	store1, port1 := mockserver.StartMockTikvService()
 	require.True(t, port1 > 0)
 	require.True(t, store1.IsRunning())
@@ -891,10 +891,10 @@ func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
 	require.True(t, store2.IsRunning())
 	addr2 := store2.Addr()
 	defer func() {
-		err := client1.Close()
-		require.NoError(t, err)
 		store1.Stop()
 		store2.Stop()
+		err := client1.Close()
+		require.NoError(t, err)
 	}()
 
 	conn, err := client1.getConnArray(addr1, true)

@@ -420,7 +420,6 @@ func (a *batchConn) getClientAndSend() {
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
 		return
 	}
-
 	defer cli.unlockForSend()
 	available := cli.available()
 	batch := 0
@@ -570,10 +569,11 @@ func (c *batchCommandsClient) isStopped() bool {
 func (c *batchCommandsClient) available() int64 {
 	limit := c.maxConcurrencyRequestLimit.Load()
 	sent := c.sent.Load()
+	// just in case, sent may less than 0, see https://github.com/tikv/client-go/pull/1219,
+	// then maxInt64 - (-1) will overflow, which is unexpected.
 	if sent > 0 {
 		return limit - sent
 	}
-	// TODO(crazycs520): fixme， the `sent` may be less than 0 in some cases when enable-forwarding is true.
 	return limit
 }
 
@@ -611,7 +611,7 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 //   - some requests are sent to store1 with forwarding, such as forwardedHost is store2, those requests will success.
 //   - some requests are sent to store1 without forwarding, and maybe failed then call failPendingRequests,
 //     if we don't check `forwardedHost` and fail all pending requests, the requests with forwarding will be failed too. this may cause some issue:
-//     1. data race. see https://github.com/tikv/client-go/issues/1222
+//     1. data race. see https://github.com/tikv/client-go/issues/1222 and TestRandomRestartStoreAndForwarding.
 //     2. panic which cause by `send on closed channel`, since failPendingRequests will close the entry.res channel,
 //     but in another batchRecvLoop goroutine,  it may receive the response from forwardedHost store2 and try to send the response to entry.res channel,
 //     then panic by send on closed channel.
