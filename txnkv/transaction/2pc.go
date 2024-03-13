@@ -1053,7 +1053,27 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 }
 
 // doActionOnBatches does action to batches in parallel.
-func (c *twoPhaseCommitter) doActionOnBatches(bo *retry.Backoffer, action twoPhaseCommitAction, batches []batchMutations) error {
+func (c *twoPhaseCommitter) doActionOnBatches(
+	bo *retry.Backoffer, action twoPhaseCommitAction,
+	batches []batchMutations,
+) error {
+	// killSignal should never be nil for TiDB
+	if c.txn != nil && c.txn.vars != nil && c.txn.vars.Killed != nil {
+		// Do not reset the killed flag here. Let the upper layer reset the flag.
+		// Before it resets, any request is considered valid to be killed.
+		status := atomic.LoadUint32(c.txn.vars.Killed)
+		if status != 0 {
+			logutil.BgLogger().Info(
+				"query is killed", zap.Uint32(
+					"signal",
+					status,
+				),
+			)
+			// TODO: There might be various signals besides a query interruption,
+			// but we are unable to differentiate them, because the definition is in TiDB.
+			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: status})
+		}
+	}
 	if len(batches) == 0 {
 		return nil
 	}

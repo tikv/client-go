@@ -1118,12 +1118,6 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			lockCtx.Stats.Mu.BackoffTypes = append(lockCtx.Stats.Mu.BackoffTypes, bo.GetTypes()...)
 			lockCtx.Stats.Mu.Unlock()
 		}
-		if lockCtx.Killed != nil {
-			// If the kill signal is received during waiting for pessimisticLock,
-			// pessimisticLockKeys would handle the error but it doesn't reset the flag.
-			// We need to reset the killed flag here.
-			atomic.CompareAndSwapUint32(lockCtx.Killed, 1, 0)
-		}
 		if txn.IsInAggressiveLockingMode() {
 			if txn.aggressiveLockingContext.maxLockedWithConflictTS < lockCtx.MaxLockedWithConflictTS {
 				txn.aggressiveLockingContext.maxLockedWithConflictTS = lockCtx.MaxLockedWithConflictTS
