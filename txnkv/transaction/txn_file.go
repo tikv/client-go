@@ -5,6 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
+	"io"
+	"net/http"
+	"strconv"
+
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
@@ -19,10 +24,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
-	"hash/crc32"
-	"io"
-	"net/http"
-	"strconv"
 )
 
 var (
@@ -62,7 +63,6 @@ func (cs *txnChunkSlice) appendSlice(other *txnChunkSlice) {
 			break
 		}
 	}
-	return
 }
 
 func (cs *txnChunkSlice) append(chunkID uint64, chunkRange txnChunkRange) {
@@ -74,12 +74,12 @@ func (cs *txnChunkSlice) len() int {
 	return len(cs.chunkIDs)
 }
 
-func (cs *txnChunkSlice) slice(i, j int) txnChunkSlice {
-	return txnChunkSlice{
-		chunkIDs:    cs.chunkIDs[i:j],
-		chunkRanges: cs.chunkRanges[i:j],
-	}
-}
+// func (cs *txnChunkSlice) slice(i, j int) txnChunkSlice {
+// 	return txnChunkSlice{
+// 		chunkIDs:    cs.chunkIDs[i:j],
+// 		chunkRanges: cs.chunkRanges[i:j],
+// 	}
+// }
 
 func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
 	var batches []chunkBatch
@@ -494,7 +494,6 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 			}
 			ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(i-1))
 			c.txnFileCtx.slice.append(chunkID, ran)
-			chunkID++
 			chunkSmallest = key
 			buf = buf[:0]
 		}
@@ -522,10 +521,16 @@ func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writerAddr string,
 	buf = binary.LittleEndian.AppendUint32(buf, crc)
 	logutil.BgLogger().Info("build txn file size", zap.Int("size", len(buf)))
 	url := fmt.Sprintf("http://%s/txn_chunk", writerAddr)
-	resp, err := http.Post(url, "application/octet-stream", bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", url, bytes.NewReader(buf))
 	if err != nil {
-		return 0, err
+		return 0, errors.WithStack(err)
 	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("http status %s", resp.Status)
 	}
