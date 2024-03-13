@@ -298,6 +298,11 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	if s.busyThreshold > 0 && (r.store.EstimatedWaitTime() > s.busyThreshold || r.serverIsBusy || isLeader) {
 		return false
 	}
+	if s.preferLeader && r.store.healthStatus.IsSlow() && !isLeader {
+		// This logic is used to compatible with old replica selector.
+		// When use prefer-leader strategy, if the replica is slow, and it's not leader, then it is not candidate, skip it.
+		return false
+	}
 	return true
 }
 
@@ -320,7 +325,13 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 	}
 	if isLeader {
 		if s.preferLeader {
-			score |= flagPreferLeader
+			// Following logic is used to compatible with old replica selector.
+			// When use prefer-leader strategy, only prefer leader when the leader's store is not slow.
+			if !r.store.healthStatus.IsSlow() {
+				score |= flagPreferLeader
+			} else {
+				score |= flagNormalPeer
+			}
 		} else if s.tryLeader {
 			if len(s.labels) > 0 {
 				// When the leader has matching labels, prefer leader than other mismatching peers.
