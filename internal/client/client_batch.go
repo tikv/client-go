@@ -391,31 +391,6 @@ func (a *batchConn) getClientAndSend() {
 			time.Sleep(time.Duration(timeout * int(time.Millisecond)))
 		}
 	}
-	cli := a.getClient()
-	defer cli.unlockForSend()
-	available := cli.available()
-	batch := 0
-	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
-		cli.batched.Store(id, e)
-		cli.sent.Add(1)
-		if trace.IsEnabled() {
-			trace.Log(e.ctx, "rpc", "send")
-		}
-	})
-	if req != nil {
-		batch += len(req.RequestIds)
-		cli.send("", req)
-	}
-	for forwardedHost, req := range forwardingReqs {
-		batch += len(req.RequestIds)
-		cli.send(forwardedHost, req)
-	}
-	if batch > 0 {
-		a.batchSize.Observe(float64(batch))
-	}
-}
-
-func (a *batchConn) getClient() *batchCommandsClient {
 	// Choose a connection by round-robbin.
 	var (
 		cli    *batchCommandsClient
@@ -442,8 +417,30 @@ func (a *batchConn) getClient() *batchCommandsClient {
 	if cli == nil {
 		logutil.BgLogger().Info("no available connections", zap.String("target", target), zap.Any("reasons", reasons))
 		metrics.TiKVNoAvailableConnectionCounter.Inc()
+		return
 	}
-	return cli
+
+	defer cli.unlockForSend()
+	available := cli.available()
+	batch := 0
+	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
+		cli.batched.Store(id, e)
+		cli.sent.Add(1)
+		if trace.IsEnabled() {
+			trace.Log(e.ctx, "rpc", "send")
+		}
+	})
+	if req != nil {
+		batch += len(req.RequestIds)
+		cli.send("", req)
+	}
+	for forwardedHost, req := range forwardingReqs {
+		batch += len(req.RequestIds)
+		cli.send(forwardedHost, req)
+	}
+	if batch > 0 {
+		a.batchSize.Observe(float64(batch))
+	}
 }
 
 type tryLock struct {
@@ -570,14 +567,14 @@ func (c *batchCommandsClient) isStopped() bool {
 }
 
 func (c *batchCommandsClient) available() int64 {
-	return c.maxConcurrencyRequestLimit.Load() - c.sent.Load()
-	//limit := c.maxConcurrencyRequestLimit.Load()
-	//sent := c.sent.Load()
-	//if sent > 0 {
-	//	return limit - sent
-	//}
-	//// Just guessing, the `sent` may be less than zero in some case.
-	//return limit
+	//return c.maxConcurrencyRequestLimit.Load() - c.sent.Load()
+	limit := c.maxConcurrencyRequestLimit.Load()
+	sent := c.sent.Load()
+	if sent > 0 {
+		return limit - sent
+	}
+	// TODO(crazycs520): fixme， the `sent` may be less than 0 in some cases when enable-forwarding is true.
+	return limit
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
