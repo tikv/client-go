@@ -59,7 +59,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util/israce"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -882,10 +881,6 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 }
 
 func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
-	if israce.RaceEnabled {
-		// The test will failed when run with race. see https://github.com/tikv/client-go/issues/1222
-		t.Skip()
-	}
 	store1, port1 := mockserver.StartMockTikvService()
 	require.True(t, port1 > 0)
 	require.True(t, store1.IsRunning())
@@ -901,20 +896,22 @@ func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
 		store1.Stop()
 		store2.Stop()
 	}()
+
 	conn, err := client1.getConnArray(addr1, true)
 	assert.Nil(t, err)
 	wg := sync.WaitGroup{}
-	wg.Add(1)
 	done := int64(0)
 	concurrency := 500
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for {
+			// randomly intermittent stop and start store1.
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(50)))
 			store1.Stop()
 			require.False(t, store1.IsRunning())
-			time.Sleep(time.Millisecond * time.Duration(rand.Intn(1000)))
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(50)))
 			store1.Start(addr1)
-			time.Sleep(time.Millisecond * time.Duration(rand.Intn(1000)))
 			if atomic.LoadInt64(&done) >= int64(concurrency) {
 				return
 			}
@@ -951,7 +948,6 @@ func TestConcurrencyRequestLimitWithEnableForwarding(t *testing.T) {
 	for _, cli := range conn.batchConn.batchCommandsClients {
 		require.Equal(t, int64(9223372036854775807), cli.maxConcurrencyRequestLimit.Load())
 		require.True(t, cli.available() > 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
-		// TODO(crazycs520): fix following assertion. cli.sent may be less than 0 in some cases when enable-forwarding is true.
 		require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
 	}
 }
