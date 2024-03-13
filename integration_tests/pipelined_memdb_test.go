@@ -265,6 +265,13 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
 	s.Nil(err)
+
+	mustFlush := func(txn *transaction.KVTxn) {
+		flushed, err := txn.GetMemBuffer().Flush(true)
+		s.Nil(err)
+		s.True(flushed)
+	}
+
 	prefetchKeys := make([][]byte, 0, 100)
 	prefetchResult := make(map[string][]byte, 100)
 	nonPrefetchKeys := make([][]byte, 0, 100)
@@ -279,18 +286,56 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 			nonPrefetchKeys = append(nonPrefetchKeys, key)
 		}
 	}
-	m, err := txn.Prefetch(context.Background(), prefetchKeys)
+	for _, key := range prefetchKeys {
+		m, err := txn.Prefetch(context.Background(), [][]byte{key})
+		s.Nil(err)
+		result := map[string][]byte{string(key): prefetchResult[string(key)]}
+		s.Equal(m, result)
+	}
+	// can read prefetched keys from prefetch cache
+	m := txn.GetMemBuffer().GetPrefetchCache(context.Background(), prefetchKeys)
+	s.Equal(m, prefetchResult)
+	// panics when reading non-prefetched keys from prefetch cache
+	for _, key := range nonPrefetchKeys {
+		s.Panics(func() {
+			txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{key})
+		})
+	}
+	mustFlush(txn)
+	// prefetch cache is cleared after flush
+	for _, key := range prefetchKeys {
+		s.Panics(func() {
+			txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{key})
+		})
+	}
+
+	s.Nil(txn.Commit(context.Background()))
+
+	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
 	s.Nil(err)
-	s.Equal(m, prefetchResult)
-	m = txn.GetMemBuffer().GetPrefetchCache(context.Background(), prefetchKeys)
-	s.Equal(m, prefetchResult)
-	func() {
-		defer func() {
-			r := recover()
-			if r == nil {
-				s.Fail("should panic")
-			}
-		}()
-		txn.GetMemBuffer().GetPrefetchCache(context.Background(), nonPrefetchKeys)
-	}()
+	txn.Set([]byte("100"), []byte("100")) // snapshot: [0, 1, ..., 99], membuffer: [100]
+	m, err = txn.Prefetch(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")})
+	s.Nil(err)
+	s.Equal(m, map[string][]byte{"99": []byte("99"), "100": []byte("100")})
+	// 100 in prefetch cache
+	s.Equal(
+		txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")}),
+		map[string][]byte{"100": []byte("100")},
+	)
+	// 99 and 101 in snapshot cache
+	s.Equal(txn.GetSnapshot().SnapCache(), map[string][]byte{"99": []byte("99"), "101": nil})
+	txn.Set([]byte("101"), []byte("101")) // snapshot: [0, 1, ..., 99], membuffer: [100, 101]
+	// 101 not in prefetch cache
+	s.Equal(
+		txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")}),
+		map[string][]byte{"100": []byte("100")},
+	)
+	// 101 can be read by GetLocal before flush, as well as common Get
+	v, err := txn.GetMemBuffer().GetLocal(context.Background(), []byte("101"))
+	s.Nil(err)
+	s.Equal(v, []byte("101"))
+	v, err = txn.GetMemBuffer().Get(context.Background(), []byte("101"))
+	s.Nil(err)
+	s.Equal(v, []byte("101"))
+	txn.Rollback()
 }

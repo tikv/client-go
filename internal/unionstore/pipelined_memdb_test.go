@@ -381,14 +381,6 @@ func TestMemBufferPrefetch(t *testing.T) {
 		assert.True(t, flushed)
 		assert.Nil(t, pipelinedMemdb.FlushWait())
 	}
-	mustPanic := func(fn func()) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatal("should panic")
-			}
-		}()
-		fn()
-	}
 
 	err := pipelinedMemdb.Set([]byte("k1"), []byte("v11"))
 	assert.Nil(t, err)
@@ -397,7 +389,7 @@ func TestMemBufferPrefetch(t *testing.T) {
 	err = pipelinedMemdb.Set([]byte("k3"), []byte("v31"))
 	assert.Nil(t, err)
 	// there is no prefetch cache
-	mustPanic(func() {
+	assert.Panics(t, func() {
 		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
 	})
 	expects := map[string][]byte{
@@ -413,7 +405,7 @@ func TestMemBufferPrefetch(t *testing.T) {
 
 	mustFlush()
 	// prefetch cache is cleaned after flush
-	mustPanic(func() {
+	assert.Panics(t, func() {
 		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
 	})
 	// prefetch cache contains the previous mutation
@@ -448,4 +440,28 @@ func TestMemBufferPrefetch(t *testing.T) {
 	// GetLocal should return the latest value
 	assert.Equal(t, mustGetLocal([]byte("k2")), []byte{})
 	assert.Equal(t, mustGetLocal([]byte("k3")), []byte("v33"))
+
+	// prefetch cache is aggregated before flush
+	mustFlush()
+	assert.Panics(t, func() {
+		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	})
+	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1")})
+	assert.Nil(t, err)
+	assert.Equal(t, m, map[string][]byte{})
+	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k2")})
+	assert.Nil(t, err)
+	assert.Equal(t, m, map[string][]byte{})
+	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k3")})
+	assert.Nil(t, err)
+	assert.Equal(t, m, map[string][]byte{"k3": []byte("v33")})
+	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k4")})
+	assert.Nil(t, err)
+	assert.Equal(t, m, map[string][]byte{"k4": []byte("v41")})
+	expects = map[string][]byte{
+		"k3": []byte("v33"),
+		"k4": []byte("v41"),
+	}
+	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	assert.Equal(t, m, expects)
 }

@@ -1013,6 +1013,17 @@ func (s *KVSnapshot) SnapCacheSize() int {
 	return len(s.mu.cached)
 }
 
+// SnapCache gets the copy of snapshot cache. Only for test.
+func (s *KVSnapshot) SnapCache() map[string][]byte {
+	s.mu.RLock()
+	defer s.mu.RLock()
+	cp := make(map[string][]byte, len(s.mu.cached))
+	for k, v := range s.mu.cached {
+		cp[k] = v
+	}
+	return cp
+}
+
 // SetVars sets variables to the transaction.
 func (s *KVSnapshot) SetVars(vars *kv.Variables) {
 	s.vars = vars

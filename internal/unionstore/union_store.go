@@ -180,6 +180,7 @@ type MemBuffer interface {
 	// Prefetch gets the values for given keys from the MemBuffer and cache the result.
 	Prefetch(context.Context, [][]byte) (map[string][]byte, error)
 	// GetPrefetchCache gets the values for given keys from the prefetched cache, panic when there is no such key.
+	// If the key is not in the returned map, it means the key is exactly not exist in MemBuffer.
 	GetPrefetchCache(context.Context, [][]byte) map[string][]byte
 	// GetFlags gets the flags for key k from the MemBuffer.
 	GetFlags([]byte) (kv.KeyFlags, error)

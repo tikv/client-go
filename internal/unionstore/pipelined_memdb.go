@@ -83,16 +83,6 @@ func newFlushOption() flushOption {
 	return opt
 }
 
-type pipelinedMemDBSkipRemoteBuffer struct{}
-
-// TODO: skip remote buffer by context is too obscure, add a new method to read local buffer.
-var pipelinedMemDBSkipRemoteBufferKey = pipelinedMemDBSkipRemoteBuffer{}
-
-// WithPipelinedMemDBSkipRemoteBuffer is used to skip reading remote buffer for saving RPC.
-func WithPipelinedMemDBSkipRemoteBuffer(ctx context.Context) context.Context {
-	return context.WithValue(ctx, pipelinedMemDBSkipRemoteBufferKey, struct{}{})
-}
-
 type FlushFunc func(uint64, *MemDB) error
 type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]byte, error)
 
