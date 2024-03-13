@@ -62,4 +62,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/pingcap/kvproto => github.com/tidbcloud/kvproto v0.0.0-20240117032603-369bbbf7b45e
+replace github.com/pingcap/kvproto => github.com/pingyu/tidbcloud-kvproto v0.0.0-20240313025436-f80d60ee3af7
