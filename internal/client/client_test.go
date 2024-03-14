@@ -80,12 +80,18 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
-	assert.Nil(t, client.CloseAddr(addr))
+	ver := conn2.ver
+	assert.Nil(t, client.CloseAddrVer(addr, ver-1))
 	_, ok := client.conns[addr]
+	assert.True(t, ok)
+	assert.Nil(t, client.CloseAddrVer(addr, ver))
+	_, ok = client.conns[addr]
 	assert.False(t, ok)
+
 	conn3, err := client.getConnArray(addr, true)
 	assert.Nil(t, err)
 	assert.NotNil(t, conn3)
+	assert.Equal(t, ver+1, conn3.ver)
 
 	client.Close()
 	conn4, err := client.getConnArray(addr, true)
@@ -878,4 +884,35 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 	default:
 		assert.Fail(t, "health feedback not received")
 	}
+}
+
+func TestErrConn(t *testing.T) {
+	e := errors.New("conn error")
+	err1 := &ErrConn{Err: e, Addr: "127.0.0.1", Ver: 10}
+	err2 := &ErrConn{Err: e, Addr: "127.0.0.1", Ver: 10}
+
+	e3 := errors.New("conn error 3")
+	err3 := &ErrConn{Err: e3}
+
+	err4 := errors.New("not ErrConn")
+
+	assert.True(t, errors.Is(err1, err1))
+	assert.True(t, errors.Is(fmt.Errorf("%w", err1), err1))
+	assert.False(t, errors.Is(fmt.Errorf("%w", err2), err1)) // err2 != err1
+	assert.False(t, errors.Is(fmt.Errorf("%w", err4), err1))
+
+	var errConn *ErrConn
+	assert.True(t, errors.As(err1, &errConn))
+	assert.Equal(t, "127.0.0.1", errConn.Addr)
+	assert.EqualValues(t, 10, errConn.Ver)
+	assert.EqualError(t, errConn.Err, "conn error")
+
+	assert.True(t, errors.As(err3, &errConn))
+	assert.EqualError(t, e3, "conn error 3")
+
+	assert.False(t, errors.As(err4, &errConn))
+
+	errMsg := errors.New("unknown")
+	assert.True(t, errors.As(err1, &errMsg))
+	assert.EqualError(t, err1, errMsg.Error())
 }
