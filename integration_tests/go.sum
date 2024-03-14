@@ -132,6 +132,10 @@ github.com/dolthub/swiss v0.2.1/go.mod h1:8AhKZZ1HK7g18j7v7k6c5cYIGEZJcPn0ARsai8
 github.com/dustin/go-humanize v1.0.0/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
+github.com/ekexium/tidb v1.1.0-beta.0.20240314050256-444418ecf47b h1:o19UOUiPY0xpX+YTM9zlpps50994eaZxIkYmphvTM1o=
+github.com/ekexium/tidb v1.1.0-beta.0.20240314050256-444418ecf47b/go.mod h1:7Gfn8N2wA499HqM6Q6pOHtwN0G2ktYL9BeO+ik+iSo8=
+github.com/ekexium/tidb/pkg/parser v0.0.0-20240314050256-444418ecf47b h1:J9U3bBzGPEkgrJypNzf5wCaZdCogvKxPB9FhqH+Naho=
+github.com/ekexium/tidb/pkg/parser v0.0.0-20240314050256-444418ecf47b/go.mod h1:c/4la2yfv1vBYvtIG8WCDyDinLMDIUC5+zLRHiafY+Y=
 github.com/eknkc/amber v0.0.0-20171010120322-cdade1c07385/go.mod h1:0vRUJqYpeSZifjYj7uP3BG/gKcuzL9xWVV/Y+cK33KM=
 github.com/emirpasic/gods v1.18.1 h1:FXtiHYKDGKCW2KzwZKx0iC0PQmdlorYgdFG9jPXJ1Bc=
 github.com/emirpasic/gods v1.18.1/go.mod h1:8tpGGwCnJ5H4r6BWwaV6OrWmMoPhUl5jm/FMNAnJvWQ=
