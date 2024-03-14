@@ -75,9 +75,13 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 	}
 	shrinkKeys := make([][]byte, 0, len(keys)-len(bufferValues))
 	for _, key := range keys {
-		_, ok := bufferValues[string(key)]
+		val, ok := bufferValues[string(key)]
 		if !ok {
 			shrinkKeys = append(shrinkKeys, key)
+		}
+		// the deleted key should be removed from the result, and also no need to snapshot read it again.
+		if len(val) == 0 {
+			delete(bufferValues, string(key))
 		}
 	}
 	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys)
