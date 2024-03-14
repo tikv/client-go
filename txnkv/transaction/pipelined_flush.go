@@ -105,6 +105,9 @@ func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations, gen
 			},
 		},
 	)
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(r)
+	}
 	return r
 }
 
