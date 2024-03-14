@@ -313,7 +313,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		if batch.isPrimary {
 			// After locking the primary key, we should protect the primary lock from expiring
 			// now in case locking the remaining keys take a long time.
-			c.run(c, action.LockCtx)
+			c.run(c, action.LockCtx, false)
 		}
 
 		// Handle the case that the TiKV's version is too old and doesn't support `CheckExistence`.
@@ -412,7 +412,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 		len(lockResp.Results) > 0 &&
 		lockResp.Results[0].Type != kvrpcpb.PessimisticLockKeyResultType_LockResultFailed {
 		// After locking the primary key, we should protect the primary lock from expiring.
-		c.run(c, action.LockCtx)
+		c.run(c, action.LockCtx, false)
 	}
 
 	if len(lockResp.Results) > 0 {

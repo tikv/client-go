@@ -80,7 +80,8 @@ type twoPhaseCommitAction interface {
 
 // Global variable set by config file.
 var (
-	ManagedLockTTL uint64 = 20000 // 20s
+	ManagedLockTTL     uint64 = 20000               // 20s
+	MaxPipelinedTxnTTL uint64 = 24 * 60 * 60 * 1000 // 24h
 )
 
 var (
@@ -1145,7 +1146,7 @@ type ttlManager struct {
 	lockCtx *kv.LockCtx
 }
 
-func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx) {
+func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx, isPipelinedTxn bool) {
 	if _, err := util.EvalFailpoint("doNotKeepAlive"); err == nil {
 		return
 	}
@@ -1157,7 +1158,7 @@ func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx) {
 	tm.ch = make(chan struct{})
 	tm.lockCtx = lockCtx
 
-	go keepAlive(c, tm.ch, c.primary(), lockCtx)
+	go keepAlive(c, tm.ch, c.primary(), lockCtx, isPipelinedTxn)
 }
 
 func (tm *ttlManager) close() {
@@ -1178,7 +1179,10 @@ const keepAliveMaxBackoff = 20000
 const pessimisticLockMaxBackoff = 20000
 const maxConsecutiveFailure = 10
 
-func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, lockCtx *kv.LockCtx) {
+func keepAlive(
+	c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte,
+	lockCtx *kv.LockCtx, isPipelinedTxn bool,
+) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
@@ -1205,7 +1209,11 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 			}
 
 			uptime := uint64(oracle.ExtractPhysical(now) - oracle.ExtractPhysical(c.startTS))
-			if uptime > config.GetGlobalConfig().MaxTxnTTL {
+			maxTtl := config.GetGlobalConfig().MaxTxnTTL
+			if isPipelinedTxn {
+				maxTtl = max(maxTtl, MaxPipelinedTxnTTL)
+			}
+			if uptime > maxTtl {
 				// Checks maximum lifetime for the ttlManager, so when something goes wrong
 				// the key will not be locked forever.
 				logutil.Logger(bo.GetCtx()).Info("ttlManager live up to its lifetime",
