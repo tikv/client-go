@@ -2604,13 +2604,13 @@ func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
 func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPathCase) bool {
 	ca2 := ca1
 	config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableReplicaSelectorV2 = false
+		conf.TiKVClient.EnableReplicaSelectorV2 = false
 	})
 	sender := ca1.run(s)
 	ca1.checkResult(s, "v1", sender)
 
 	config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableReplicaSelectorV2 = true
+		conf.TiKVClient.EnableReplicaSelectorV2 = true
 	})
 	sender = ca2.run(s)
 	if ca2.expect == nil {
@@ -2623,7 +2623,7 @@ func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPa
 
 func (s *testReplicaSelectorSuite) runCase(ca replicaSelectorAccessPathCase, v2 bool) bool {
 	config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableReplicaSelectorV2 = v2
+		conf.TiKVClient.EnableReplicaSelectorV2 = v2
 	})
 	sender := ca.run(s)
 	version := "v1"
@@ -2638,7 +2638,7 @@ func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorA
 	expects := make([]accessPathResult, 0, len(cas))
 	valid := true
 	config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableReplicaSelectorV2 = false
+		conf.TiKVClient.EnableReplicaSelectorV2 = false
 	})
 	for _, ca1 := range cas {
 		sender := ca1.run(s)
@@ -2648,7 +2648,7 @@ func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorA
 	}
 
 	config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableReplicaSelectorV2 = true
+		conf.TiKVClient.EnableReplicaSelectorV2 = true
 	})
 	for i, ca2 := range cas {
 		sender := ca2.run(s)
@@ -3227,7 +3227,7 @@ func BenchmarkReplicaSelector(b *testing.B) {
 	}()
 
 	config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableReplicaSelectorV2 = true
+		conf.TiKVClient.EnableReplicaSelectorV2 = true
 	})
 	cnt := 0
 	allErrs := getAllRegionErrors(nil)

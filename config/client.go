@@ -93,6 +93,8 @@ type TiKVClient struct {
 	// MaxConcurrencyRequestLimit is the max concurrency number of request to be sent the tikv
 	// 0 means auto adjust by feedback.
 	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
+	// EnableReplicaSelectorV2 indicate whether to use the new replica-selector-v2.
+	EnableReplicaSelectorV2 bool `toml:"enable-replica-selector-v2" json:"enable-replica-selector-v2"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -164,6 +166,7 @@ func DefaultTiKVClient() TiKVClient {
 
 		ResolveLockLiteThreshold:   16,
 		MaxConcurrencyRequestLimit: math.MaxInt64,
+		EnableReplicaSelectorV2:    true,
 	}
 }
 
