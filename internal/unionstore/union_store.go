@@ -271,6 +271,9 @@ func (db *MemDBWithContext) GetMemDB() *MemDB {
 
 // BatchGet returns the values for given keys from the MemBuffer.
 func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	if db.Len() == 0 {
+		return map[string][]byte{}, nil
+	}
 	m := make(map[string][]byte, len(keys))
 	for _, k := range keys {
 		v, err := db.Get(ctx, k)

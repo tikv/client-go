@@ -66,12 +66,12 @@ func NewBufferBatchGetter(buffer BatchBufferGetter, snapshot BatchGetter) *Buffe
 
 // BatchGet gets a batch of values.
 func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	if b.buffer.Len() == 0 {
-		return b.snapshot.BatchGet(ctx, keys)
-	}
 	bufferValues, err := b.buffer.BatchGet(ctx, keys)
 	if err != nil {
 		return nil, err
+	}
+	if len(bufferValues) == 0 {
+		return b.snapshot.BatchGet(ctx, keys)
 	}
 	shrinkKeys := make([][]byte, 0, len(keys)-len(bufferValues))
 	for _, key := range keys {

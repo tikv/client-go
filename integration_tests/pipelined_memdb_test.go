@@ -358,4 +358,15 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	s.Nil(err)
 	s.Equal(v, []byte{})
 	txn.Rollback()
+
+	// empty memdb should also cache the not exist result.
+	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
+	// batch get cache: [99 -> not exist]
+	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
+	s.Nil(err)
+	s.Equal(m, map[string][]byte{"99": []byte("99")})
+	_, err = panicWhenReadingRemoteBuffer([]byte("99"))
+	s.Error(err)
+	s.True(tikverr.IsErrNotFound(err))
+	txn.Rollback()
 }
