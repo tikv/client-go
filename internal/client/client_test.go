@@ -918,10 +918,11 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 				store = store2
 			}
 			time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
+			addr := store.Addr()
 			store.Stop()
 			require.False(t, store.IsRunning())
 			time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
-			store.Start(addr1)
+			store.Start(addr)
 			if atomic.LoadInt64(&done) >= int64(concurrency) {
 				return
 			}
