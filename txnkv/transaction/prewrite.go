@@ -370,7 +370,7 @@ func (action actionPrewrite) handleSingleBatch(
 				// In this case 1PC is not expected to be used, but still check it for safety.
 				if int64(c.txnSize) > config.GetGlobalConfig().TiKVClient.TTLRefreshedTxnSize &&
 					prewriteResp.OnePcCommitTs == 0 {
-					c.run(c, nil)
+					c.run(c, nil, false)
 				}
 			}
 
