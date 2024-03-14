@@ -255,7 +255,8 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
 	err := s.batchGetKeysByRegions(bo, keys, readTier, func(k, v []byte) {
-		if len(v) == 0 {
+		// when read buffer tier, empty value means a delete record, should also collect it.
+		if len(v) == 0 && readTier != BatchGetBufferTier {
 			return
 		}
 

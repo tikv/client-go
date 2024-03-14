@@ -177,11 +177,8 @@ type MemBuffer interface {
 	// GetLocal gets the value from the buffer in local memory.
 	// It makes nonsense for MemDB, but makes a difference for pipelined DML.
 	GetLocal(context.Context, []byte) ([]byte, error)
-	// Prefetch gets the values for given keys from the MemBuffer and cache the result.
-	Prefetch(context.Context, [][]byte) (map[string][]byte, error)
-	// GetPrefetchCache gets the values for given keys from the prefetched cache, panic when there is no such key.
-	// If the key is not in the returned map, it means the key is exactly not exist in MemBuffer.
-	GetPrefetchCache(context.Context, [][]byte) map[string][]byte
+	// BatchGet gets the values for given keys from the MemBuffer and cache the result if there are remote buffer.
+	BatchGet(context.Context, [][]byte) (map[string][]byte, error)
 	// GetFlags gets the flags for key k from the MemBuffer.
 	GetFlags([]byte) (kv.KeyFlags, error)
 	// Set sets the value for key k in the MemBuffer.
@@ -272,10 +269,18 @@ func (db *MemDBWithContext) GetMemDB() *MemDB {
 	return db.MemDB
 }
 
-func (db *MemDBWithContext) Prefetch(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	panic("unreachable")
-}
-
-func (db *MemDBWithContext) GetPrefetchCache(ctx context.Context, keys [][]byte) map[string][]byte {
-	panic("unreachable")
+// BatchGet returns the values for given keys from the MemBuffer.
+func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	m := make(map[string][]byte, len(keys))
+	for _, k := range keys {
+		v, err := db.Get(ctx, k)
+		if err != nil {
+			if tikverr.IsErrNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		m[string(k)] = v
+	}
+	return m, nil
 }

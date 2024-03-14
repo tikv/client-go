@@ -4,14 +4,14 @@ go 1.21
 
 require (
 	github.com/ninedraft/israce v0.0.3
-	github.com/pingcap/errors v0.11.5-0.20240311024730-e056997136bb
+	github.com/pingcap/errors v0.11.5-0.20240311081613-f97970b88865
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
 	github.com/pingcap/kvproto v0.0.0-20240227073058-929ab83f9754
 	github.com/pingcap/tidb v1.1.0-beta.0.20240312154839-cd6dbc2af910
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20240308052415-af4f9a9b6e41
+	github.com/tikv/client-go/v2 v2.0.8-0.20240313022320-d59fea5757db
 	github.com/tikv/pd/client v0.0.0-20240229065730-92a31c12238e
 	go.uber.org/goleak v1.3.0
 )

@@ -234,11 +234,6 @@ func (txn *KVTxn) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byt
 	return NewBufferBatchGetter(txn.GetMemBuffer(), txn.GetSnapshot()).BatchGet(ctx, keys)
 }
 
-// Prefetch reads the keys from the snapshot and fill the cache.
-func (txn *KVTxn) Prefetch(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	return NewPrefetcher(txn.GetMemBuffer(), txn.GetSnapshot()).Prefetch(ctx, keys)
-}
-
 // Set sets the value for key k as v into kv store.
 // v must NOT be nil or empty, otherwise it returns ErrCannotSetNilValue.
 func (txn *KVTxn) Set(k []byte, v []byte) error {
@@ -671,7 +666,8 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}()
 	// latches disabled
 	// pessimistic transaction should also bypass latch.
-	if txn.store.TxnLatches() == nil || txn.IsPessimistic() {
+	// transaction with pipelined memdb should also bypass latch.
+	if txn.store.TxnLatches() == nil || txn.IsPessimistic() || txn.IsPipelined() {
 		err = committer.execute(ctx)
 		if val == nil || sessionID > 0 {
 			txn.onCommitted(err)

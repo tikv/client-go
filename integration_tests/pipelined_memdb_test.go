@@ -263,6 +263,8 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
+	failpoint.Enable("tikvclient/beforeSendReqToRegion", "return")
+	defer failpoint.Disable("tikvclient/beforeSendReqToRegion")
 	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
 	s.Nil(err)
 
@@ -270,6 +272,15 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 		flushed, err := txn.GetMemBuffer().Flush(true)
 		s.Nil(err)
 		s.True(flushed)
+	}
+
+	panicWhenReadingRemoteBuffer := func(key []byte) ([]byte, error) {
+		ctx := context.WithValue(context.Background(), "sendReqToRegionHook", func(req *tikvrpc.Request) {
+			if req.Type == tikvrpc.CmdBufferBatchGet {
+				panic("should not read remote buffer")
+			}
+		})
+		return txn.GetMemBuffer().Get(ctx, key)
 	}
 
 	prefetchKeys := make([][]byte, 0, 100)
@@ -286,26 +297,31 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 			nonPrefetchKeys = append(nonPrefetchKeys, key)
 		}
 	}
+	mustFlush(txn)
+	s.Nil(txn.GetMemBuffer().FlushWait())
 	for _, key := range prefetchKeys {
-		m, err := txn.Prefetch(context.Background(), [][]byte{key})
+		m, err := txn.BatchGet(context.Background(), [][]byte{key})
 		s.Nil(err)
 		result := map[string][]byte{string(key): prefetchResult[string(key)]}
 		s.Equal(m, result)
 	}
 	// can read prefetched keys from prefetch cache
-	m := txn.GetMemBuffer().GetPrefetchCache(context.Background(), prefetchKeys)
-	s.Equal(m, prefetchResult)
+	for _, key := range prefetchKeys {
+		v, err := txn.GetMemBuffer().Get(context.Background(), key)
+		s.Nil(err)
+		s.Equal(v, prefetchResult[string(key)])
+	}
 	// panics when reading non-prefetched keys from prefetch cache
 	for _, key := range nonPrefetchKeys {
 		s.Panics(func() {
-			txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{key})
+			panicWhenReadingRemoteBuffer(key)
 		})
 	}
 	mustFlush(txn)
 	// prefetch cache is cleared after flush
 	for _, key := range prefetchKeys {
 		s.Panics(func() {
-			txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{key})
+			panicWhenReadingRemoteBuffer(key)
 		})
 	}
 
@@ -314,28 +330,32 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
 	s.Nil(err)
 	txn.Set([]byte("100"), []byte("100")) // snapshot: [0, 1, ..., 99], membuffer: [100]
-	m, err = txn.Prefetch(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")})
+	m, err := txn.BatchGet(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")})
 	s.Nil(err)
 	s.Equal(m, map[string][]byte{"99": []byte("99"), "100": []byte("100")})
-	// 100 in prefetch cache
-	s.Equal(
-		txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")}),
-		map[string][]byte{"100": []byte("100")},
-	)
-	// 99 and 101 in snapshot cache
-	s.Equal(txn.GetSnapshot().SnapCache(), map[string][]byte{"99": []byte("99"), "101": nil})
-	txn.Set([]byte("101"), []byte("101")) // snapshot: [0, 1, ..., 99], membuffer: [100, 101]
-	// 101 not in prefetch cache
-	s.Equal(
-		txn.GetMemBuffer().GetPrefetchCache(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")}),
-		map[string][]byte{"100": []byte("100")},
-	)
-	// 101 can be read by GetLocal before flush, as well as common Get
-	v, err := txn.GetMemBuffer().GetLocal(context.Background(), []byte("101"))
+	cache := txn.GetSnapshot().SnapCache()
+	// batch get cache: [99 -> not exist, 100 -> 100, 101 -> not exist]
+	// snapshot cache: [99 -> 99, 101 -> not exist]
+	_, err = panicWhenReadingRemoteBuffer([]byte("99"))
+	s.Error(err)
+	s.True(tikverr.IsErrNotFound(err))
+	s.Equal(cache["99"], []byte("99"))
+	v, err := panicWhenReadingRemoteBuffer([]byte("100"))
 	s.Nil(err)
-	s.Equal(v, []byte("101"))
-	v, err = txn.GetMemBuffer().Get(context.Background(), []byte("101"))
+	s.Equal(v, []byte("100"))
+	_, err = panicWhenReadingRemoteBuffer([]byte("101"))
+	s.Error(err)
+	s.True(tikverr.IsErrNotFound(err))
+	s.Equal(cache["101"], []byte(nil))
+
+	txn.Delete([]byte("99"))
+	mustFlush(txn)
+	s.Nil(txn.GetMemBuffer().FlushWait())
+	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
 	s.Nil(err)
-	s.Equal(v, []byte("101"))
+	s.Equal(m, map[string][]byte{"99": {}})
+	v, err = panicWhenReadingRemoteBuffer([]byte("99"))
+	s.Nil(err)
+	s.Equal(v, []byte{})
 	txn.Rollback()
 }

@@ -48,7 +48,12 @@ type PipelinedMemDB struct {
 	generation              uint64
 	entryLimit, bufferLimit uint64
 	flushOption             flushOption
-	prefetchCache           map[string]util.Option[[]byte]
+	// prefetchCache is used to cache the result of BatchGet, it's invalidated when Flush.
+	// the values are wrapped by util.Option.
+	//   None -> not found
+	//   Some([...]) -> put
+	//   Some([]) -> delete
+	batchGetCache map[string]util.Option[[]byte]
 }
 
 const (
@@ -92,7 +97,7 @@ type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]by
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := newMemDB()
 	memdb.setSkipMutex(true)
-	flushOption := newFlushOption()
+	flushOpt := newFlushOption()
 	return &PipelinedMemDB{
 		memDB:             memdb,
 		errCh:             make(chan error, 1),
@@ -102,7 +107,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		// keep entryLimit and bufferLimit same with the memdb's default values.
 		entryLimit:  memdb.entrySizeLimit,
 		bufferLimit: memdb.bufferSizeLimit,
-		flushOption: flushOption,
+		flushOption: flushOpt,
 	}
 }
 
@@ -135,6 +140,16 @@ func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer boo
 	}
 	if skipRemoteBuffer {
 		return nil, tikverr.ErrNotExist
+	}
+	if p.batchGetCache != nil {
+		v, ok := p.batchGetCache[string(k)]
+		if ok {
+			inner := v.Inner()
+			if inner == nil {
+				return nil, tikverr.ErrNotExist
+			}
+			return *inner, nil
+		}
 	}
 	// read remote buffer
 	var (
@@ -176,10 +191,10 @@ func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 	return f, nil
 }
 
-func (p *PipelinedMemDB) Prefetch(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 	m := make(map[string][]byte, len(keys))
-	if p.prefetchCache == nil {
-		p.prefetchCache = make(map[string]util.Option[[]byte], len(keys))
+	if p.batchGetCache == nil {
+		p.batchGetCache = make(map[string]util.Option[[]byte], len(keys))
 	}
 	shrinkKeys := make([][]byte, 0, len(keys))
 	for _, k := range keys {
@@ -191,12 +206,8 @@ func (p *PipelinedMemDB) Prefetch(ctx context.Context, keys [][]byte) (map[strin
 			}
 			return nil, err
 		}
-		if len(v) > 0 {
-			m[string(k)] = v
-			p.prefetchCache[string(k)] = util.Some(v)
-		} else {
-			p.prefetchCache[string(k)] = util.None[[]byte]()
-		}
+		m[string(k)] = v
+		p.batchGetCache[string(k)] = util.Some(v)
 	}
 	storageValues, err := p.bufferBatchGetter(ctx, shrinkKeys)
 	if err != nil {
@@ -206,30 +217,12 @@ func (p *PipelinedMemDB) Prefetch(ctx context.Context, keys [][]byte) (map[strin
 		v, ok := storageValues[string(k)]
 		if ok {
 			m[string(k)] = v
-			p.prefetchCache[string(k)] = util.Some(v)
+			p.batchGetCache[string(k)] = util.Some(v)
 		} else {
-			p.prefetchCache[string(k)] = util.None[[]byte]()
+			p.batchGetCache[string(k)] = util.None[[]byte]()
 		}
 	}
 	return m, nil
-}
-
-func (p *PipelinedMemDB) GetPrefetchCache(_ context.Context, keys [][]byte) map[string][]byte {
-	if p.prefetchCache == nil {
-		panic("prefetchCache not exist, GetPrefetchCache should be called after Prefetch and before Flush")
-	}
-	m := make(map[string][]byte, len(keys))
-	for _, k := range keys {
-		v, ok := p.prefetchCache[string(k)]
-		if !ok {
-			panic("key not found in prefetchCache")
-		}
-		inner := v.Inner()
-		if inner != nil {
-			m[string(k)] = *inner
-		}
-	}
-	return m
 }
 
 func (p *PipelinedMemDB) UpdateFlags(k []byte, ops ...kv.FlagsOp) {
@@ -272,8 +265,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	if p.flushFunc == nil {
 		return false, errors.New("flushFunc is not provided")
 	}
-	// invalidate the prefetch cache whether the flush is really triggered.
-	p.prefetchCache = nil
+	// invalidate the batch get cache whether the flush is really triggered.
+	p.batchGetCache = nil
 	if !force && !p.needFlush() {
 		return false, nil
 	}

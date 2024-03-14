@@ -342,7 +342,9 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBForceFlushSizeThreshold"))
 }
 
-func TestMemBufferPrefetch(t *testing.T) {
+func TestMemBufferBatchGetCache(t *testing.T) {
+	util.EnableFailpoints()
+	flushDone := make(chan struct{})
 	var remoteMutex sync.RWMutex
 	remoteBuffer := make(map[string][]byte, 16)
 	pipelinedMemdb := NewPipelinedMemDB(func(_ context.Context, keys [][]byte) (map[string][]byte, error) {
@@ -350,7 +352,7 @@ func TestMemBufferPrefetch(t *testing.T) {
 		defer remoteMutex.RUnlock()
 		m := make(map[string][]byte, len(keys))
 		for _, k := range keys {
-			if val, ok := remoteBuffer[string(k)]; ok && len(val) > 0 {
+			if val, ok := remoteBuffer[string(k)]; ok {
 				m[string(k)] = val
 			}
 		}
@@ -359,108 +361,87 @@ func TestMemBufferPrefetch(t *testing.T) {
 		remoteMutex.Lock()
 		defer remoteMutex.Unlock()
 		for it, _ := db.Iter(nil, nil); it.Valid(); it.Next() {
-			if len(it.Value()) == 0 {
-				delete(remoteBuffer, string(it.Key()))
-			} else {
-				remoteBuffer[string(it.Key())] = it.Value()
-			}
+			remoteBuffer[string(it.Key())] = it.Value()
 		}
+		flushDone <- struct{}{}
 		return nil
 	})
 
-	mustGetLocal := func(key []byte) []byte {
-		v, err := pipelinedMemdb.GetLocal(context.Background(), key)
-		require.Nil(t, err)
-		return v
+	mustGetFromCache := func(key []byte) ([]byte, error) {
+		require.NotNil(t, pipelinedMemdb.batchGetCache)
+		v, ok := pipelinedMemdb.batchGetCache[string(key)]
+		require.True(t, ok)
+		inner := v.Inner()
+		if inner == nil {
+			return nil, tikverr.ErrNotExist
+		}
+		return *inner, nil
 	}
-	_ = mustGetLocal
+	mustNotExistInCache := func(key []byte) {
+		require.NotNil(t, pipelinedMemdb.batchGetCache)
+		_, ok := pipelinedMemdb.batchGetCache[string(key)]
+		require.False(t, ok)
+	}
 	mustFlush := func() {
 		flushed, err := pipelinedMemdb.Flush(true)
 		require.Nil(t, err)
 		require.True(t, flushed)
-		require.Nil(t, pipelinedMemdb.FlushWait())
+		<-flushDone
 	}
 
 	err := pipelinedMemdb.Set([]byte("k1"), []byte("v11"))
 	require.Nil(t, err)
+	mustFlush()
 	err = pipelinedMemdb.Set([]byte("k2"), []byte("v21"))
 	require.Nil(t, err)
-	err = pipelinedMemdb.Set([]byte("k3"), []byte("v31"))
-	require.Nil(t, err)
-	// there is no prefetch cache
-	require.Panics(t, func() {
-		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
-	})
-	expects := map[string][]byte{
-		"k1": []byte("v11"),
-		"k2": []byte("v21"),
-		"k3": []byte("v31"),
-	}
-	m, err := pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
-	require.Nil(t, err)
-	require.Equal(t, m, expects)
-	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
-	require.Equal(t, m, expects)
-
 	mustFlush()
-	// prefetch cache is cleaned after flush
-	require.Panics(t, func() {
-		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")})
-	})
-	// prefetch cache contains the previous mutation
+	// memdb: [], flushing memdb: [k2 -> v21], remoteBuffer: [k1 -> v11, k2 -> v21]
+	_, err = pipelinedMemdb.GetLocal(context.Background(), []byte("k1"))
+	require.Error(t, err)
+	require.True(t, tikverr.IsErrNotFound(err))
+	v, err := pipelinedMemdb.GetLocal(context.Background(), []byte("k2"))
+	require.Nil(t, err)
+	require.Equal(t, v, []byte("v21"))
+	// batch get caches the result
+	// cache: [k1 -> v11, k2 -> v21]
+	m, err := pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2")})
+	require.Nil(t, err)
+	require.Equal(t, m, map[string][]byte{"k1": []byte("v11"), "k2": []byte("v21")})
+	v, err = mustGetFromCache([]byte("k1"))
+	require.Nil(t, err)
+	require.Equal(t, v, []byte("v11"))
+	v, err = mustGetFromCache([]byte("k2"))
+	require.Nil(t, err)
+	require.Equal(t, v, []byte("v21"))
+	mustNotExistInCache([]byte("k3"))
+	// cache: [k1 -> v11, k2 -> v21, k3 -> not exist]
+	m, err = pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k3")})
+	require.Nil(t, err)
+	require.Len(t, m, 0)
+	_, err = mustGetFromCache([]byte("k3"))
+	require.Error(t, err)
+	require.True(t, tikverr.IsErrNotFound(err))
+
+	// memdb: [], flushing memdb: [k1 -> [], k3 -> []], remoteBuffer: [k1 -> [], k2 -> v21, k3 -> []]
 	pipelinedMemdb.Delete([]byte("k1"))
-	pipelinedMemdb.Set([]byte("k3"), []byte("v32"))
-	pipelinedMemdb.Set([]byte("k4"), []byte("v41"))
-	expects = map[string][]byte{
-		"k2": []byte("v21"),
-		"k3": []byte("v32"),
-		"k4": []byte("v41"),
-	}
-	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	require.Nil(t, err)
-	require.Equal(t, m, expects)
-	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	require.Equal(t, m, expects)
-
-	// prefetch cache doesn't contain the following mutation
+	pipelinedMemdb.Set([]byte("k2"), []byte("v22"))
+	pipelinedMemdb.Delete([]byte("k3"))
 	mustFlush()
-	expects = map[string][]byte{
-		"k2": []byte("v21"),
-		"k3": []byte("v32"),
-		"k4": []byte("v41"),
-	}
-	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	require.Nil(t, pipelinedMemdb.batchGetCache)
+	// cache: [k1 -> [], k2 -> v22, k3 -> [], k4 -> not exist]
+	m, err = pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
 	require.Nil(t, err)
-	require.Equal(t, m, expects)
-	pipelinedMemdb.Delete([]byte("k2"))
-	pipelinedMemdb.Set([]byte("k3"), []byte("v33"))
-	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	require.Equal(t, m, expects)
-	// GetLocal should return the latest value
-	require.Equal(t, mustGetLocal([]byte("k2")), []byte{})
-	require.Equal(t, mustGetLocal([]byte("k3")), []byte("v33"))
-
-	// prefetch cache is aggregated before flush
-	mustFlush()
-	require.Panics(t, func() {
-		pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	})
-	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k1")})
+	require.Equal(t, m, map[string][]byte{"k1": {}, "k2": []byte("v22"), "k3": {}})
+	v, err = mustGetFromCache([]byte("k1"))
 	require.Nil(t, err)
-	require.Equal(t, m, map[string][]byte{})
-	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k2")})
+	require.Len(t, v, 0)
+	v, err = mustGetFromCache([]byte("k2"))
 	require.Nil(t, err)
-	require.Equal(t, m, map[string][]byte{})
-	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k3")})
+	require.Equal(t, v, []byte("v22"))
+	v, err = mustGetFromCache([]byte("k3"))
 	require.Nil(t, err)
-	require.Equal(t, m, map[string][]byte{"k3": []byte("v33")})
-	m, err = pipelinedMemdb.Prefetch(context.Background(), [][]byte{[]byte("k4")})
-	require.Nil(t, err)
-	require.Equal(t, m, map[string][]byte{"k4": []byte("v41")})
-	expects = map[string][]byte{
-		"k3": []byte("v33"),
-		"k4": []byte("v41"),
-	}
-	m = pipelinedMemdb.GetPrefetchCache(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
-	require.Equal(t, m, expects)
+	require.Len(t, v, 0)
+	_, err = mustGetFromCache([]byte("k4"))
+	require.Error(t, err)
+	require.True(t, tikverr.IsErrNotFound(err))
 }
