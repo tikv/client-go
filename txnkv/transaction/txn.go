@@ -545,6 +545,11 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 		}
 		return txn.committer.pipelinedFlushMutations(bo, mutations, generation)
 	})
+	txn.committer.priority = txn.priority.ToPB()
+	txn.committer.syncLog = txn.syncLog
+	txn.committer.resourceGroupTag = txn.resourceGroupTag
+	txn.committer.resourceGroupTagger = txn.resourceGroupTagger
+	txn.committer.resourceGroupName = txn.resourceGroupName
 	txn.us = unionstore.NewUnionStore(pipelinedMemDB, txn.snapshot)
 	return nil
 }
