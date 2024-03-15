@@ -50,7 +50,7 @@ type ReplicaSelector interface {
 func NewReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (ReplicaSelector, error) {
-	if config.GetGlobalConfig().EnableReplicaSelectorV2 {
+	if config.GetGlobalConfig().TiKVClient.EnableReplicaSelectorV2 {
 		return newReplicaSelectorV2(regionCache, regionID, req, opts...)
 	}
 	return newReplicaSelector(regionCache, regionID, req, opts...)
