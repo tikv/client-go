@@ -946,7 +946,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 				if i%2 != 0 {
 					forwardedHost = store2.Addr()
 				}
-				_, err = sendBatchRequest(context.Background(), store1.Addr(), forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
+				_, err := sendBatchRequest(context.Background(), store1.Addr(), forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
 				if err == nil ||
 					err.Error() == "EOF" ||
 					err.Error() == "rpc error: code = Unavailable desc = error reading from server: EOF" ||
