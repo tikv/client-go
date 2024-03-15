@@ -301,6 +301,9 @@ func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
 	txn.resourceGroupTag = tag
 	txn.GetSnapshot().SetResourceGroupTag(tag)
+	if txn.committer != nil && txn.IsPipelined() {
+		txn.committer.resourceGroupTag = tag
+	}
 }
 
 // SetResourceGroupTagger sets the resource tagger for both write and read.
@@ -309,12 +312,18 @@ func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
 func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.resourceGroupTagger = tagger
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
+	if txn.committer != nil && txn.IsPipelined() {
+		txn.committer.resourceGroupTagger = tagger
+	}
 }
 
 // SetResourceGroupName set resource group name for both read and write.
 func (txn *KVTxn) SetResourceGroupName(name string) {
 	txn.resourceGroupName = name
 	txn.GetSnapshot().SetResourceGroupName(name)
+	if txn.committer != nil && txn.IsPipelined() {
+		txn.committer.resourceGroupName = name
+	}
 }
 
 // SetRPCInterceptor sets interceptor.RPCInterceptor for the transaction and its related snapshot.
