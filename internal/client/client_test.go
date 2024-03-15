@@ -894,12 +894,10 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 	store1, port1 := mockserver.StartMockTikvService()
 	require.True(t, port1 > 0)
 	require.True(t, store1.IsRunning())
-	addr1 := store1.Addr()
 	client1 := NewRPCClient()
 	store2, port2 := mockserver.StartMockTikvService()
 	require.True(t, port2 > 0)
 	require.True(t, store2.IsRunning())
-	addr2 := store2.Addr()
 	defer func() {
 		store1.Stop()
 		store2.Stop()
@@ -907,8 +905,6 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	conn, err := client1.getConnArray(addr1, true)
-	assert.Nil(t, err)
 	wg := sync.WaitGroup{}
 	done := int64(0)
 	concurrency := 500
@@ -934,6 +930,9 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 			}
 		}
 	}()
+
+	conn, err := client1.getConnArray(store1.Addr(), true)
+	assert.Nil(t, err)
 	for j := 0; j < concurrency; j++ {
 		wg.Add(1)
 		go func() {
@@ -945,9 +944,9 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 				req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 				forwardedHost := ""
 				if i%2 != 0 {
-					forwardedHost = addr2
+					forwardedHost = store2.Addr()
 				}
-				_, err := sendBatchRequest(context.Background(), addr1, forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
+				_, err = sendBatchRequest(context.Background(), store1.Addr(), forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
 				if err == nil ||
 					err.Error() == "EOF" ||
 					err.Error() == "rpc error: code = Unavailable desc = error reading from server: EOF" ||
