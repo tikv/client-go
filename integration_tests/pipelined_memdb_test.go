@@ -353,7 +353,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	s.Nil(txn.GetMemBuffer().FlushWait())
 	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
 	s.Nil(err)
-	s.Equal(m, map[string][]byte{"99": {}})
+	s.Equal(m, map[string][]byte{})
 	v, err = panicWhenReadingRemoteBuffer([]byte("99"))
 	s.Nil(err)
 	s.Equal(v, []byte{})

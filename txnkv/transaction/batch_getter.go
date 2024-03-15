@@ -78,6 +78,7 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 		val, ok := bufferValues[string(key)]
 		if !ok {
 			shrinkKeys = append(shrinkKeys, key)
+			continue
 		}
 		// the deleted key should be removed from the result, and also no need to snapshot read it again.
 		if len(val) == 0 {
@@ -92,41 +93,4 @@ func (b *BufferBatchGetter) BatchGet(ctx context.Context, keys [][]byte) (map[st
 		bufferValues[key] = val
 	}
 	return bufferValues, nil
-}
-
-type BatchPrefetcher struct {
-	buffer   Prefetcher
-	snapshot BatchGetter
-}
-
-// Prefetcher is the interface for Prefetch.
-type Prefetcher interface {
-	Prefetch(context.Context, [][]byte) (map[string][]byte, error)
-}
-
-// NewPrefetcher creates a new Prefetcher.
-func NewPrefetcher(buffer Prefetcher, snapshot BatchGetter) *BatchPrefetcher {
-	return &BatchPrefetcher{buffer: buffer, snapshot: snapshot}
-}
-
-// Prefetch gets a batch of values.
-func (b *BatchPrefetcher) Prefetch(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	m, err := b.buffer.Prefetch(ctx, keys)
-	if err != nil {
-		return nil, err
-	}
-	shrinkKeys := make([][]byte, 0, len(keys))
-	for _, key := range keys {
-		if _, ok := m[string(key)]; !ok {
-			shrinkKeys = append(shrinkKeys, key)
-		}
-	}
-	storageValues, err := b.snapshot.BatchGet(ctx, shrinkKeys)
-	if err != nil {
-		return nil, err
-	}
-	for k, v := range storageValues {
-		m[k] = v
-	}
-	return m, nil
 }
