@@ -198,7 +198,7 @@ func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[strin
 	}
 	shrinkKeys := make([][]byte, 0, len(keys))
 	for _, k := range keys {
-		v, err := p.get(ctx, k, true)
+		v, err := p.GetLocal(ctx, k)
 		if err != nil {
 			if tikverr.IsErrNotFound(err) {
 				shrinkKeys = append(shrinkKeys, k)
