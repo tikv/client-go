@@ -214,6 +214,11 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	if p.flushFunc == nil {
 		return false, errors.New("flushFunc is not provided")
 	}
+
+	if len(p.memDB.stages) > 0 {
+		return false, errors.New("there are stages unreleased when Flush is called")
+	}
+
 	if !force && !p.needFlush() {
 		return false, nil
 	}
@@ -375,17 +380,17 @@ func (p *PipelinedMemDB) SnapshotGetter() Getter {
 
 // Staging is not supported for PipelinedMemDB, it returns 0 handle.
 func (p *PipelinedMemDB) Staging() int {
-	panic("Staging is not supported for PipelinedMemDB")
+	return p.memDB.Staging()
 }
 
 // Cleanup implements MemBuffer interface.
-func (p *PipelinedMemDB) Cleanup(int) {
-	panic("Cleanup is not supported for PipelinedMemDB")
+func (p *PipelinedMemDB) Cleanup(h int) {
+	p.memDB.Cleanup(h)
 }
 
 // Release implements MemBuffer interface.
-func (p *PipelinedMemDB) Release(int) {
-	panic("Release is not supported for PipelinedMemDB")
+func (p *PipelinedMemDB) Release(h int) {
+	p.memDB.Release(h)
 }
 
 // Checkpoint implements MemBuffer interface.
