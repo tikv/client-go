@@ -378,7 +378,15 @@ func (p *PipelinedMemDB) SnapshotGetter() Getter {
 	panic("SnapshotGetter is not supported for PipelinedMemDB")
 }
 
-// Staging is not supported for PipelinedMemDB, it returns 0 handle.
+// NOTE about the Staging()/Cleanup()/Release() methods:
+// Its correctness is guaranteed by that no stage can exist when a Flush() is called.
+// We guarantee in TiDB side that every stage lives inside a flush batch,
+// which means the modifications all goes to the mutable memdb.
+// Then the staging of the whole PipelinedMemDB can be directly implemented by its mutable memdb.
+//
+// Checkpoint()/RevertToCheckpoint() is not supported for PipelinedMemDB.
+
+// Staging implements MemBuffer interface.
 func (p *PipelinedMemDB) Staging() int {
 	return p.memDB.Staging()
 }
