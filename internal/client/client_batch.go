@@ -569,8 +569,7 @@ func (c *batchCommandsClient) isStopped() bool {
 func (c *batchCommandsClient) available() int64 {
 	limit := c.maxConcurrencyRequestLimit.Load()
 	sent := c.sent.Load()
-	// just in case, `sent` may less than 0, see https://github.com/tikv/client-go/issues/1225
-	// then maxInt64 - (-1) will overflow, which is unexpected.
+	//  The `sent` could be less than 0, see https://github.com/tikv/client-go/issues/1225 for details.
 	if sent > 0 {
 		return limit - sent
 	}
