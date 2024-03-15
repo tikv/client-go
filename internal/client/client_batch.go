@@ -571,7 +571,10 @@ func (c *batchCommandsClient) available() int64 {
 	sent := c.sent.Load()
 	//  The `sent` could be less than 0, see https://github.com/tikv/client-go/issues/1225 for details.
 	if sent > 0 {
-		return limit - sent
+		if limit > sent {
+			return limit - sent
+		}
+		return 0
 	}
 	return limit
 }
