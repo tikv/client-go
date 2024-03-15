@@ -1010,14 +1010,14 @@ func (s *KVSnapshot) SnapCacheHitCount() int {
 // SnapCacheSize gets the snapshot cache size. Only for test.
 func (s *KVSnapshot) SnapCacheSize() int {
 	s.mu.RLock()
-	defer s.mu.RLock()
+	defer s.mu.RUnlock()
 	return len(s.mu.cached)
 }
 
 // SnapCache gets the copy of snapshot cache. Only for test.
 func (s *KVSnapshot) SnapCache() map[string][]byte {
 	s.mu.RLock()
-	defer s.mu.RLock()
+	defer s.mu.RUnlock()
 	cp := make(map[string][]byte, len(s.mu.cached))
 	for k, v := range s.mu.cached {
 		cp[k] = v
