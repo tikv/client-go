@@ -3256,15 +3256,26 @@ func TestTiKVClientReadTimeout(t *testing.T) {
 	regionErr, _ := resp.GetRegionError()
 	s.True(IsFakeRegionError(regionErr))
 	s.Equal(0, bo.GetTotalBackoffTimes())
-	// clear max execution duration for retry.
-	req.MaxExecutionDurationMs = 0
-	sender = NewRegionRequestSender(s.cache, fnClient)
-	resp, _, err = sender.SendReq(bo, req, rc.VerID(), time.Second) // use a longer timeout.
 	s.Equal([]string{
 		"store1", "{addr: store1, replica-read: false, stale-read: false, timeout: 1}",
 		"store2", "{addr: store2, replica-read: true, stale-read: false, timeout: 1}",
 		"store3", "{addr: store3, replica-read: true, stale-read: false, timeout: 1}",
-		"store1", "{addr: store1, replica-read: true, stale-read: false, timeout: 1000}"}, accessPath)
+	}, accessPath)
+	// clear max execution duration for retry.
+	req.MaxExecutionDurationMs = 0
+	sender = NewRegionRequestSender(s.cache, fnClient)
+	resp, _, err = sender.SendReq(bo, req, rc.VerID(), time.Second) // use a longer timeout.
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, _ = resp.GetRegionError()
+	s.Nil(regionErr)
+	s.Equal(0, bo.GetTotalBackoffTimes())
+	s.Equal([]string{
+		"store1", "{addr: store1, replica-read: false, stale-read: false, timeout: 1}",
+		"store2", "{addr: store2, replica-read: true, stale-read: false, timeout: 1}",
+		"store3", "{addr: store3, replica-read: true, stale-read: false, timeout: 1}",
+		"store1", "{addr: store1, replica-read: true, stale-read: false, timeout: 1000}",
+	}, accessPath)
 }
 
 func BenchmarkReplicaSelector(b *testing.B) {
