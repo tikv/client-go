@@ -201,7 +201,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 
 			if batch.isPrimary {
 				// start keepalive after primary key is written.
-				c.run(c, nil)
+				c.run(c, nil, true)
 			}
 			return nil
 		}
