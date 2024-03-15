@@ -802,6 +802,7 @@ type TxnInfo struct {
 	AsyncCommitFallback bool   `json:"async_commit_fallback"`
 	OnePCFallback       bool   `json:"one_pc_fallback"`
 	ErrMsg              string `json:"error,omitempty"`
+	Pipelined           bool   `json:"pipelined"`
 }
 
 func (txn *KVTxn) onCommitted(err error) {
@@ -823,6 +824,7 @@ func (txn *KVTxn) onCommitted(err error) {
 			TxnCommitMode:       commitMode,
 			AsyncCommitFallback: txn.committer.hasTriedAsyncCommit && !isAsyncCommit,
 			OnePCFallback:       txn.committer.hasTriedOnePC && !isOnePC,
+			Pipelined:           txn.IsPipelined(),
 		}
 		if err != nil {
 			info.ErrMsg = err.Error()
