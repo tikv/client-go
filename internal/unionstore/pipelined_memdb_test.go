@@ -95,6 +95,7 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 	// the flushingMemDB length and size should be added to the total length and size.
 	require.Equal(t, memdb.Len(), MinFlushKeys)
 	require.Equal(t, memdb.Size(), memdb.flushingMemDB.Size())
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushSkip(t *testing.T) {
@@ -132,6 +133,7 @@ func TestPipelinedFlushSkip(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, memdb.memDB.Len(), 0)
 	require.Equal(t, memdb.len, 2*MinFlushKeys)
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushBlock(t *testing.T) {
@@ -177,6 +179,7 @@ func TestPipelinedFlushBlock(t *testing.T) {
 	blockCh <- struct{}{} // first flush done
 	<-flushReturned       // second flush start
 	require.True(t, memdb.OnFlushing())
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushGet(t *testing.T) {
@@ -223,6 +226,7 @@ func TestPipelinedFlushGet(t *testing.T) {
 	// now the key is guaranteed to be flushed into stores, though PipelinedMemDB.Get does not see it, snapshot get should get it.
 	_, err = memdb.Get(context.Background(), []byte("key"))
 	require.True(t, tikverr.IsErrNotFound(err))
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushSize(t *testing.T) {
@@ -266,6 +270,7 @@ func TestPipelinedFlushSize(t *testing.T) {
 	require.True(t, flushed)
 	require.Equal(t, memdb.Len(), keys)
 	require.Equal(t, memdb.Size(), size)
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushGeneration(t *testing.T) {
@@ -280,6 +285,7 @@ func TestPipelinedFlushGeneration(t *testing.T) {
 		// generation start from 1
 		require.Equal(t, <-generationCh, uint64(i+1))
 	}
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestErrorIterator(t *testing.T) {
@@ -340,6 +346,7 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushKeys"))
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushSize"))
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBForceFlushSizeThreshold"))
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestMemBufferBatchGetCache(t *testing.T) {
@@ -444,4 +451,5 @@ func TestMemBufferBatchGetCache(t *testing.T) {
 	_, err = mustGetFromCache([]byte("k4"))
 	require.Error(t, err)
 	require.True(t, tikverr.IsErrNotFound(err))
+	require.Nil(t, pipelinedMemdb.FlushWait())
 }
