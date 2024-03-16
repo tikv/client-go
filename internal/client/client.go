@@ -138,6 +138,10 @@ func (e *ErrConn) Error() string {
 	return fmt.Sprintf("[%s](%d) %s", e.Addr, e.Ver, e.Err.Error())
 }
 
+func (e *ErrConn) Cause() error {
+	return e.Err
+}
+
 func (e *ErrConn) Unwrap() error {
 	return e.Err
 }
