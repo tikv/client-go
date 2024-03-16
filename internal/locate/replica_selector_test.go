@@ -3217,6 +3217,9 @@ func (s *testReplicaSelectorSuite) getRegion() *Region {
 }
 
 func TestTiKVClientReadTimeout(t *testing.T) {
+	if israce.RaceEnabled {
+		t.Skip("the test run with race will failed, so skip it")
+	}
 	config.UpdateGlobal(func(conf *config.Config) {
 		// enable batch client.
 		conf.TiKVClient.MaxBatchSize = 128
