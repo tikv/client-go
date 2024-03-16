@@ -2029,9 +2029,6 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 }
 
 func isCauseByDeadlineExceeded(err error) bool {
-	if errConn, ok := err.(*client.ErrConn); ok {
-		err = errConn.Unwrap()
-	}
 	causeErr := errors.Cause(err)
 	return causeErr == context.DeadlineExceeded || // batch-client will return this error.
 		status.Code(causeErr) == codes.DeadlineExceeded // when batch-client is disabled, grpc will return this error.
