@@ -48,6 +48,12 @@ type PipelinedMemDB struct {
 	generation              uint64
 	entryLimit, bufferLimit uint64
 	flushOption             flushOption
+	// prefetchCache is used to cache the result of BatchGet, it's invalidated when Flush.
+	// the values are wrapped by util.Option.
+	//   None -> not found
+	//   Some([...]) -> put
+	//   Some([]) -> delete
+	batchGetCache map[string]util.Option[[]byte]
 }
 
 const (
@@ -85,23 +91,13 @@ func newFlushOption() flushOption {
 	return opt
 }
 
-type pipelinedMemDBSkipRemoteBuffer struct{}
-
-// TODO: skip remote buffer by context is too obscure, add a new method to read local buffer.
-var pipelinedMemDBSkipRemoteBufferKey = pipelinedMemDBSkipRemoteBuffer{}
-
-// WithPipelinedMemDBSkipRemoteBuffer is used to skip reading remote buffer for saving RPC.
-func WithPipelinedMemDBSkipRemoteBuffer(ctx context.Context) context.Context {
-	return context.WithValue(ctx, pipelinedMemDBSkipRemoteBufferKey, struct{}{})
-}
-
 type FlushFunc func(uint64, *MemDB) error
 type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]byte, error)
 
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := newMemDB()
 	memdb.setSkipMutex(true)
-	flushOptoin := newFlushOption()
+	flushOpt := newFlushOption()
 	return &PipelinedMemDB{
 		memDB:             memdb,
 		errCh:             make(chan error, 1),
@@ -111,7 +107,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		// keep entryLimit and bufferLimit same with the memdb's default values.
 		entryLimit:  memdb.entrySizeLimit,
 		bufferLimit: memdb.bufferSizeLimit,
-		flushOption: flushOptoin,
+		flushOption: flushOpt,
 	}
 }
 
@@ -125,9 +121,7 @@ func (p *PipelinedMemDB) GetMemDB() *MemDB {
 	panic("GetMemDB should not be invoked for PipelinedMemDB")
 }
 
-// Get the value by given key, it returns tikverr.ErrNotExist if not exist.
-// The priority of the value is MemBuffer > flushingMemDB > flushed memdbs.
-func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
+func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer bool) ([]byte, error) {
 	v, err := p.memDB.Get(k)
 	if err == nil {
 		return v, nil
@@ -144,8 +138,18 @@ func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if ctx.Value(pipelinedMemDBSkipRemoteBufferKey) != nil {
+	if skipRemoteBuffer {
 		return nil, tikverr.ErrNotExist
+	}
+	if p.batchGetCache != nil {
+		v, ok := p.batchGetCache[string(k)]
+		if ok {
+			inner := v.Inner()
+			if inner == nil {
+				return nil, tikverr.ErrNotExist
+			}
+			return *inner, nil
+		}
 	}
 	// read remote buffer
 	var (
@@ -163,6 +167,19 @@ func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
 	return v, nil
 }
 
+// Get the value by given key, it returns tikverr.ErrNotExist if not exist.
+// The priority of the value is MemBuffer > flushingMemDB > flushed memdbs.
+func (p *PipelinedMemDB) Get(ctx context.Context, k []byte) ([]byte, error) {
+	return p.get(ctx, k, false)
+}
+
+// GetLocal implements the MemBuffer interface.
+// It only checks the mutable memdb and the immutable memdb.
+// It does not check mutations that have been flushed to TiKV.
+func (p *PipelinedMemDB) GetLocal(ctx context.Context, key []byte) ([]byte, error) {
+	return p.get(ctx, key, true)
+}
+
 func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 	f, err := p.memDB.GetFlags(k)
 	if p.flushingMemDB != nil && tikverr.IsErrNotFound(err) {
@@ -172,6 +189,44 @@ func (p *PipelinedMemDB) GetFlags(k []byte) (kv.KeyFlags, error) {
 		return 0, err
 	}
 	return f, nil
+}
+
+func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	m := make(map[string][]byte, len(keys))
+	if p.batchGetCache == nil {
+		p.batchGetCache = make(map[string]util.Option[[]byte], len(keys))
+	}
+	shrinkKeys := make([][]byte, 0, len(keys))
+	for _, k := range keys {
+		v, err := p.GetLocal(ctx, k)
+		if err != nil {
+			if tikverr.IsErrNotFound(err) {
+				shrinkKeys = append(shrinkKeys, k)
+				continue
+			}
+			return nil, err
+		}
+		m[string(k)] = v
+		p.batchGetCache[string(k)] = util.Some(v)
+	}
+	storageValues, err := p.bufferBatchGetter(ctx, shrinkKeys)
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range shrinkKeys {
+		v, ok := storageValues[string(k)]
+		if ok {
+			// the protobuf cast empty byte slice to nil, we need to cast it back when receiving values from storage.
+			if v == nil {
+				v = []byte{}
+			}
+			m[string(k)] = v
+			p.batchGetCache[string(k)] = util.Some(v)
+		} else {
+			p.batchGetCache[string(k)] = util.None[[]byte]()
+		}
+	}
+	return m, nil
 }
 
 func (p *PipelinedMemDB) UpdateFlags(k []byte, ops ...kv.FlagsOp) {
@@ -214,6 +269,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	if p.flushFunc == nil {
 		return false, errors.New("flushFunc is not provided")
 	}
+	// invalidate the batch get cache whether the flush is really triggered.
+	p.batchGetCache = nil
 	if !force && !p.needFlush() {
 		return false, nil
 	}
