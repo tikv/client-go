@@ -210,3 +210,19 @@ func HexRegionKey(key []byte) []byte {
 func HexRegionKeyStr(key []byte) string {
 	return String(HexRegionKey(key))
 }
+
+type Option[T interface{}] struct {
+	inner *T
+}
+
+func Some[T interface{}](inner T) Option[T] {
+	return Option[T]{inner: &inner}
+}
+
+func None[T interface{}]() Option[T] {
+	return Option[T]{inner: nil}
+}
+
+func (o Option[T]) Inner() *T {
+	return o.inner
+}

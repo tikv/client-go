@@ -301,6 +301,9 @@ func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
 func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
 	txn.resourceGroupTag = tag
 	txn.GetSnapshot().SetResourceGroupTag(tag)
+	if txn.committer != nil && txn.IsPipelined() {
+		txn.committer.resourceGroupTag = tag
+	}
 }
 
 // SetResourceGroupTagger sets the resource tagger for both write and read.
@@ -309,12 +312,18 @@ func (txn *KVTxn) SetResourceGroupTag(tag []byte) {
 func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.resourceGroupTagger = tagger
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
+	if txn.committer != nil && txn.IsPipelined() {
+		txn.committer.resourceGroupTagger = tagger
+	}
 }
 
 // SetResourceGroupName set resource group name for both read and write.
 func (txn *KVTxn) SetResourceGroupName(name string) {
 	txn.resourceGroupName = name
 	txn.GetSnapshot().SetResourceGroupName(name)
+	if txn.committer != nil && txn.IsPipelined() {
+		txn.committer.resourceGroupName = name
+	}
 }
 
 // SetRPCInterceptor sets interceptor.RPCInterceptor for the transaction and its related snapshot.
@@ -545,6 +554,11 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 		}
 		return txn.committer.pipelinedFlushMutations(bo, mutations, generation)
 	})
+	txn.committer.priority = txn.priority.ToPB()
+	txn.committer.syncLog = txn.syncLog
+	txn.committer.resourceGroupTag = txn.resourceGroupTag
+	txn.committer.resourceGroupTagger = txn.resourceGroupTagger
+	txn.committer.resourceGroupName = txn.resourceGroupName
 	txn.us = unionstore.NewUnionStore(pipelinedMemDB, txn.snapshot)
 	return nil
 }
@@ -666,7 +680,8 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}()
 	// latches disabled
 	// pessimistic transaction should also bypass latch.
-	if txn.store.TxnLatches() == nil || txn.IsPessimistic() {
+	// transaction with pipelined memdb should also bypass latch.
+	if txn.store.TxnLatches() == nil || txn.IsPessimistic() || txn.IsPipelined() {
 		err = committer.execute(ctx)
 		if val == nil || sessionID > 0 {
 			txn.onCommitted(err)
