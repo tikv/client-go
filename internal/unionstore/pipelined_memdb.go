@@ -216,6 +216,10 @@ func (p *PipelinedMemDB) BatchGet(ctx context.Context, keys [][]byte) (map[strin
 	for _, k := range shrinkKeys {
 		v, ok := storageValues[string(k)]
 		if ok {
+			// the protobuf cast empty byte slice to nil, we need to cast it back when receiving values from storage.
+			if v == nil {
+				v = []byte{}
+			}
 			m[string(k)] = v
 			p.batchGetCache[string(k)] = util.Some(v)
 		} else {
