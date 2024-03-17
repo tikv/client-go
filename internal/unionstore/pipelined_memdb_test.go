@@ -17,6 +17,7 @@ package unionstore
 import (
 	"context"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,7 +36,6 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 
 	// block the flush goroutine for checking the flushingMemDB status.
 	blockCh := make(chan struct{})
-	defer close(blockCh)
 	// Will not flush when keys number >= MinFlushKeys and size < MinFlushSize
 	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
@@ -94,6 +94,8 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 	// the flushingMemDB length and size should be added to the total length and size.
 	require.Equal(t, memdb.Len(), MinFlushKeys)
 	require.Equal(t, memdb.Size(), memdb.flushingMemDB.Size())
+	close(blockCh)
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushSkip(t *testing.T) {
@@ -131,11 +133,11 @@ func TestPipelinedFlushSkip(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, memdb.memDB.Len(), 0)
 	require.Equal(t, memdb.len, 2*MinFlushKeys)
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushBlock(t *testing.T) {
 	blockCh := make(chan struct{})
-	defer close(blockCh)
 	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
@@ -176,11 +178,12 @@ func TestPipelinedFlushBlock(t *testing.T) {
 	blockCh <- struct{}{} // first flush done
 	<-flushReturned       // second flush start
 	require.True(t, memdb.OnFlushing())
+	close(blockCh)
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushGet(t *testing.T) {
 	blockCh := make(chan struct{})
-	defer close(blockCh)
 	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
@@ -222,6 +225,8 @@ func TestPipelinedFlushGet(t *testing.T) {
 	// now the key is guaranteed to be flushed into stores, though PipelinedMemDB.Get does not see it, snapshot get should get it.
 	_, err = memdb.Get(context.Background(), []byte("key"))
 	require.True(t, tikverr.IsErrNotFound(err))
+	close(blockCh)
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushSize(t *testing.T) {
@@ -265,6 +270,7 @@ func TestPipelinedFlushSize(t *testing.T) {
 	require.True(t, flushed)
 	require.Equal(t, memdb.Len(), keys)
 	require.Equal(t, memdb.Size(), size)
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestPipelinedFlushGeneration(t *testing.T) {
@@ -279,6 +285,7 @@ func TestPipelinedFlushGeneration(t *testing.T) {
 		// generation start from 1
 		require.Equal(t, <-generationCh, uint64(i+1))
 	}
+	require.Nil(t, memdb.FlushWait())
 }
 
 func TestErrorIterator(t *testing.T) {
@@ -339,4 +346,110 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushKeys"))
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBMinFlushSize"))
 	require.Nil(t, failpoint.Disable("tikvclient/pipelinedMemDBForceFlushSizeThreshold"))
+	require.Nil(t, memdb.FlushWait())
+}
+
+func TestMemBufferBatchGetCache(t *testing.T) {
+	util.EnableFailpoints()
+	flushDone := make(chan struct{})
+	var remoteMutex sync.RWMutex
+	remoteBuffer := make(map[string][]byte, 16)
+	pipelinedMemdb := NewPipelinedMemDB(func(_ context.Context, keys [][]byte) (map[string][]byte, error) {
+		remoteMutex.RLock()
+		defer remoteMutex.RUnlock()
+		m := make(map[string][]byte, len(keys))
+		for _, k := range keys {
+			if val, ok := remoteBuffer[string(k)]; ok {
+				m[string(k)] = val
+			}
+		}
+		return m, nil
+	}, func(_ uint64, db *MemDB) error {
+		remoteMutex.Lock()
+		defer remoteMutex.Unlock()
+		for it, _ := db.Iter(nil, nil); it.Valid(); it.Next() {
+			remoteBuffer[string(it.Key())] = it.Value()
+		}
+		flushDone <- struct{}{}
+		return nil
+	})
+
+	mustGetFromCache := func(key []byte) ([]byte, error) {
+		require.NotNil(t, pipelinedMemdb.batchGetCache)
+		v, ok := pipelinedMemdb.batchGetCache[string(key)]
+		require.True(t, ok)
+		inner := v.Inner()
+		if inner == nil {
+			return nil, tikverr.ErrNotExist
+		}
+		return *inner, nil
+	}
+	mustNotExistInCache := func(key []byte) {
+		require.NotNil(t, pipelinedMemdb.batchGetCache)
+		_, ok := pipelinedMemdb.batchGetCache[string(key)]
+		require.False(t, ok)
+	}
+	mustFlush := func() {
+		flushed, err := pipelinedMemdb.Flush(true)
+		require.Nil(t, err)
+		require.True(t, flushed)
+		<-flushDone
+	}
+
+	err := pipelinedMemdb.Set([]byte("k1"), []byte("v11"))
+	require.Nil(t, err)
+	mustFlush()
+	err = pipelinedMemdb.Set([]byte("k2"), []byte("v21"))
+	require.Nil(t, err)
+	mustFlush()
+	// memdb: [], flushing memdb: [k2 -> v21], remoteBuffer: [k1 -> v11, k2 -> v21]
+	_, err = pipelinedMemdb.GetLocal(context.Background(), []byte("k1"))
+	require.Error(t, err)
+	require.True(t, tikverr.IsErrNotFound(err))
+	v, err := pipelinedMemdb.GetLocal(context.Background(), []byte("k2"))
+	require.Nil(t, err)
+	require.Equal(t, v, []byte("v21"))
+	// batch get caches the result
+	// cache: [k1 -> v11, k2 -> v21]
+	m, err := pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2")})
+	require.Nil(t, err)
+	require.Equal(t, m, map[string][]byte{"k1": []byte("v11"), "k2": []byte("v21")})
+	v, err = mustGetFromCache([]byte("k1"))
+	require.Nil(t, err)
+	require.Equal(t, v, []byte("v11"))
+	v, err = mustGetFromCache([]byte("k2"))
+	require.Nil(t, err)
+	require.Equal(t, v, []byte("v21"))
+	mustNotExistInCache([]byte("k3"))
+	// cache: [k1 -> v11, k2 -> v21, k3 -> not exist]
+	m, err = pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k3")})
+	require.Nil(t, err)
+	require.Len(t, m, 0)
+	_, err = mustGetFromCache([]byte("k3"))
+	require.Error(t, err)
+	require.True(t, tikverr.IsErrNotFound(err))
+
+	// memdb: [], flushing memdb: [k1 -> [], k3 -> []], remoteBuffer: [k1 -> [], k2 -> v21, k3 -> []]
+	pipelinedMemdb.Delete([]byte("k1"))
+	pipelinedMemdb.Set([]byte("k2"), []byte("v22"))
+	pipelinedMemdb.Delete([]byte("k3"))
+	mustFlush()
+	require.Nil(t, pipelinedMemdb.batchGetCache)
+	// cache: [k1 -> [], k2 -> v22, k3 -> [], k4 -> not exist]
+	m, err = pipelinedMemdb.BatchGet(context.Background(), [][]byte{[]byte("k1"), []byte("k2"), []byte("k3"), []byte("k4")})
+	require.Nil(t, err)
+	require.Equal(t, m, map[string][]byte{"k1": {}, "k2": []byte("v22"), "k3": {}})
+	v, err = mustGetFromCache([]byte("k1"))
+	require.Nil(t, err)
+	require.Len(t, v, 0)
+	v, err = mustGetFromCache([]byte("k2"))
+	require.Nil(t, err)
+	require.Equal(t, v, []byte("v22"))
+	v, err = mustGetFromCache([]byte("k3"))
+	require.Nil(t, err)
+	require.Len(t, v, 0)
+	_, err = mustGetFromCache([]byte("k4"))
+	require.Error(t, err)
+	require.True(t, tikverr.IsErrNotFound(err))
+	require.Nil(t, pipelinedMemdb.FlushWait())
 }

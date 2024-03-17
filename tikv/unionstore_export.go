@@ -57,5 +57,3 @@ type MemBuffer = unionstore.MemBuffer
 
 // MemDBCheckpoint is the checkpoint of memory DB.
 type MemDBCheckpoint = unionstore.MemDBCheckpoint
-
-var WithPipelinedMemDBSkipRemoteBuffer = unionstore.WithPipelinedMemDBSkipRemoteBuffer
