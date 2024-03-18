@@ -413,7 +413,6 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 // resolveFlushedLocks resolves all locks in the given range [start, end) with the given status.
 // The resolve process is running in another goroutine so this function won't block.
 func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end []byte, commit bool) {
-	// TODO: implement cleanup.
 	const RESOLVE_CONCURRENCY = 8
 	var resolved atomic.Uint64
 	handler, err := c.buildPipelinedResolveHandler(commit, &resolved)
