@@ -411,7 +411,14 @@ func (p *PipelinedMemDB) onMemChange() {
 
 // Mem returns the memory usage of MemBuffer.
 func (p *PipelinedMemDB) Mem() uint64 {
-	return p.memDB.Mem() + p.flushingMemDB.Mem()
+	var mem uint64
+	if p.memDB != nil {
+		mem += p.memDB.Mem()
+	}
+	if p.flushingMemDB != nil {
+		mem += p.flushingMemDB.Mem()
+	}
+	return mem
 }
 
 type errIterator struct {
