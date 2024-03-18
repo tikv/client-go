@@ -54,6 +54,7 @@ type PipelinedMemDB struct {
 	//   Some([...]) -> put
 	//   Some([]) -> delete
 	batchGetCache map[string]util.Option[[]byte]
+	memChangeHook func(uint64)
 }
 
 const (
@@ -237,28 +238,36 @@ func (p *PipelinedMemDB) UpdateFlags(k []byte, ops ...kv.FlagsOp) {
 func (p *PipelinedMemDB) Set(key, value []byte) error {
 	p.Lock()
 	defer p.Unlock()
-	return p.memDB.Set(key, value)
+	err := p.memDB.Set(key, value)
+	p.onMemChange()
+	return err
 }
 
 // SetWithFlags sets the value for key k in the MemBuffer with flags.
 func (p *PipelinedMemDB) SetWithFlags(key, value []byte, ops ...kv.FlagsOp) error {
 	p.Lock()
 	defer p.Unlock()
-	return p.memDB.SetWithFlags(key, value, ops...)
+	err := p.memDB.SetWithFlags(key, value, ops...)
+	p.onMemChange()
+	return err
 }
 
 // Delete deletes the key k in the MemBuffer.
 func (p *PipelinedMemDB) Delete(key []byte) error {
 	p.Lock()
 	defer p.Unlock()
-	return p.memDB.Delete(key)
+	err := p.memDB.Delete(key)
+	p.onMemChange()
+	return err
 }
 
 // DeleteWithFlags deletes the key k in the MemBuffer with flags.
 func (p *PipelinedMemDB) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
 	p.Lock()
 	defer p.Unlock()
-	return p.memDB.DeleteWithFlags(key, ops...)
+	err := p.memDB.DeleteWithFlags(key, ops...)
+	p.onMemChange()
+	return err
 }
 
 // Flush is called during execution of a transaction, it does flush when there are enough keys and the ongoing flushingMemDB is done.
@@ -269,8 +278,14 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	if p.flushFunc == nil {
 		return false, errors.New("flushFunc is not provided")
 	}
+
 	// invalidate the batch get cache whether the flush is really triggered.
 	p.batchGetCache = nil
+
+	if len(p.memDB.stages) > 0 {
+		return false, errors.New("there are stages unreleased when Flush is called")
+	}
+
 	if !force && !p.needFlush() {
 		return false, nil
 	}
@@ -303,6 +318,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 		// this guarantees the onFlushing.Store(true) in another goroutine's Flush happens after onFlushing.Store(false) in this function.
 		p.errCh <- err
 	}(p.generation)
+	p.onMemChange()
 	return true, nil
 }
 
@@ -383,13 +399,26 @@ func (p *PipelinedMemDB) OnFlushing() bool {
 }
 
 // SetMemoryFootprintChangeHook sets the hook for memory footprint change.
-// TODO: implement this.
-func (p *PipelinedMemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {}
+func (p *PipelinedMemDB) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	p.memChangeHook = hook
+}
+
+func (p *PipelinedMemDB) onMemChange() {
+	if p.memChangeHook != nil {
+		p.memChangeHook(p.Mem())
+	}
+}
 
 // Mem returns the memory usage of MemBuffer.
-// TODO: implement this.
 func (p *PipelinedMemDB) Mem() uint64 {
-	return 0
+	var mem uint64
+	if p.memDB != nil {
+		mem += p.memDB.Mem()
+	}
+	if p.flushingMemDB != nil {
+		mem += p.flushingMemDB.Mem()
+	}
+	return mem
 }
 
 type errIterator struct {
@@ -430,19 +459,27 @@ func (p *PipelinedMemDB) SnapshotGetter() Getter {
 	panic("SnapshotGetter is not supported for PipelinedMemDB")
 }
 
-// Staging is not supported for PipelinedMemDB, it returns 0 handle.
+// NOTE about the Staging()/Cleanup()/Release() methods:
+// Its correctness is guaranteed by that no stage can exist when a Flush() is called.
+// We guarantee in TiDB side that every stage lives inside a flush batch,
+// which means the modifications all goes to the mutable memdb.
+// Then the staging of the whole PipelinedMemDB can be directly implemented by its mutable memdb.
+//
+// Checkpoint()/RevertToCheckpoint() is not supported for PipelinedMemDB.
+
+// Staging implements MemBuffer interface.
 func (p *PipelinedMemDB) Staging() int {
-	panic("Staging is not supported for PipelinedMemDB")
+	return p.memDB.Staging()
 }
 
 // Cleanup implements MemBuffer interface.
-func (p *PipelinedMemDB) Cleanup(int) {
-	panic("Cleanup is not supported for PipelinedMemDB")
+func (p *PipelinedMemDB) Cleanup(h int) {
+	p.memDB.Cleanup(h)
 }
 
 // Release implements MemBuffer interface.
-func (p *PipelinedMemDB) Release(int) {
-	panic("Release is not supported for PipelinedMemDB")
+func (p *PipelinedMemDB) Release(h int) {
+	p.memDB.Release(h)
 }
 
 // Checkpoint implements MemBuffer interface.
