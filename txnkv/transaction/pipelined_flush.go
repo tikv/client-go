@@ -314,7 +314,7 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 
 	// async resolve the rest locks.
 	commitBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
-	go c.resolveFlushedLocks(commitBo, c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
+	c.resolveFlushedLocks(commitBo, c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd, true)
 	return nil
 }
 
@@ -334,16 +334,34 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 		maxBackOff = CommitSecondaryMaxBackoff
 	}
 	regionCache := c.store.GetRegionCache()
+	// the handler function runs in a different goroutine, should copy the required values before it to avoid race.
+	var (
+		startTS           = c.startTS
+		priority          = c.priority
+		syncLog           = c.syncLog
+		resourceGroupTag  = c.resourceGroupTag
+		diskFullOpt       = c.txn.diskFullOpt
+		txnSource         = c.txn.txnSource
+		resourceGroupName = c.resourceGroupName
+	)
 	return func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		start := r.StartKey
 		res := rangetask.TaskStat{}
 		for {
 			lreq := &kvrpcpb.ResolveLockRequest{
-				StartVersion:  c.startTS,
+				StartVersion:  startTS,
 				CommitVersion: commitVersion,
 			}
 			req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
-				RequestSource: PipelinedRequestSource,
+				Priority:         priority,
+				SyncLog:          syncLog,
+				ResourceGroupTag: resourceGroupTag,
+				DiskFullOpt:      diskFullOpt,
+				TxnSource:        txnSource,
+				RequestSource:    PipelinedRequestSource,
+				ResourceControlContext: &kvrpcpb.ResourceControlContext{
+					ResourceGroupName: resourceGroupName,
+				},
 			})
 			bo := retry.NewBackoffer(ctx, maxBackOff)
 			loc, err := regionCache.LocateKey(bo, start)
@@ -392,22 +410,26 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 	}, nil
 }
 
-func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end []byte) {
+// resolveFlushedLocks resolves all locks in the given range [start, end) with the given status.
+// The resolve process is running in another goroutine so this function won't block.
+func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end []byte, commit bool) {
 	// TODO: implement cleanup.
 	const RESOLVE_CONCURRENCY = 8
 	var resolved atomic.Uint64
-	handler, err := c.buildPipelinedResolveHandler(true, &resolved)
+	handler, err := c.buildPipelinedResolveHandler(commit, &resolved)
 	if err != nil {
 		logutil.Logger(bo.GetCtx()).Error("[pipelined dml] build buildPipelinedResolveHandler error", zap.Error(err))
 		return
 	}
 	runner := rangetask.NewRangeTaskRunner("pipelined-dml-commit", c.store, RESOLVE_CONCURRENCY, handler)
-	if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
-		logutil.Logger(bo.GetCtx()).Error("[pipelined dml] commit transaction secondaries failed",
-			zap.Uint64("resolved regions", resolved.Load()),
-			zap.Error(err))
-	} else {
-		logutil.BgLogger().Info("[pipelined dml] commit transaction secondaries done",
-			zap.Uint64("resolved regions", resolved.Load()))
-	}
+	go func() {
+		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
+			logutil.Logger(bo.GetCtx()).Error("[pipelined dml] commit transaction secondaries failed",
+				zap.Uint64("resolved regions", resolved.Load()),
+				zap.Error(err))
+		} else {
+			logutil.BgLogger().Info("[pipelined dml] commit transaction secondaries done",
+				zap.Uint64("resolved regions", resolved.Load()))
+		}
+	}()
 }

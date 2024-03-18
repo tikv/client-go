@@ -31,6 +31,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
 const (
@@ -241,7 +242,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 		defer cancel()
 		bo := retry.NewNoopBackoff(ctx)
-		committer.ResolveFlushedLocks(bo, []byte("1"), []byte("99"))
+		committer.ResolveFlushedLocks(bo, []byte("1"), []byte("99"), true)
 		close(done)
 	}()
 	// should be done within 10 seconds.
@@ -260,6 +261,30 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 		s.Nil(err)
 		s.Equal(key, val)
 	}
+}
+
+func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
+	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	startTS := txn.StartTS()
+	s.Nil(err)
+	keys := make([][]byte, 0, 100)
+	for i := 0; i < 100; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := key
+		txn.Set(key, value)
+		keys = append(keys, key)
+	}
+	txn.GetMemBuffer().Flush(true)
+	s.Nil(txn.GetMemBuffer().FlushWait())
+	s.Nil(txn.Rollback())
+	s.Eventuallyf(func() bool {
+		txn, err := s.store.Begin(tikv.WithStartTS(startTS), tikv.WithPipelinedMemDB())
+		s.Nil(err)
+		defer func() { s.Nil(txn.Rollback()) }()
+		storageBufferedValues, err := txn.GetSnapshot().BatchGetWithTier(context.Background(), keys, txnsnapshot.BatchGetBufferTier)
+		s.Nil(err)
+		return len(storageBufferedValues) == 0
+	}, 10*time.Second, 10*time.Millisecond, "rollback should cleanup locks in time")
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
