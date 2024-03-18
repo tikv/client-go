@@ -285,6 +285,12 @@ func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
 		s.Nil(err)
 		return len(storageBufferedValues) == 0
 	}, 10*time.Second, 10*time.Millisecond, "rollback should cleanup locks in time")
+	txn, err = s.store.Begin()
+	s.Nil(err)
+	defer func() { s.Nil(txn.Rollback()) }()
+	storageValues, err := txn.GetSnapshot().BatchGet(context.Background(), keys)
+	s.Nil(err)
+	s.Len(storageValues, 0)
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
