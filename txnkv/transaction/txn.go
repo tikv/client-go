@@ -551,6 +551,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	if !txn.valid {
 		return tikverr.ErrInvalidTxn
 	}
+	txn.commitActionContext.setRunning()
 	defer txn.close()
 
 	ctx = context.WithValue(ctx, util.RequestSourceKey, *txn.RequestSource)
@@ -686,6 +687,7 @@ func (txn *KVTxn) Rollback() error {
 	if !txn.valid {
 		return tikverr.ErrInvalidTxn
 	}
+	txn.commitActionContext.setRunning()
 
 	if txn.IsInAggressiveLockingMode() {
 		if len(txn.aggressiveLockingContext.currentLockedKeys) != 0 {
@@ -1660,6 +1662,7 @@ func (ctx *commitActionContext) applyToCommitter(committer *twoPhaseCommitter) {
 	committer.txnSource = ctx.txnSource
 }
 
+// setRunning marks the context as running, it should be read only after calling setRunning.
 func (ctx *commitActionContext) setRunning() {
 	ctx.running.Store(true)
 }
