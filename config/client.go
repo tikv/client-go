@@ -45,8 +45,8 @@ import (
 const (
 	// DefStoreLivenessTimeout is the default value for store liveness timeout.
 	DefStoreLivenessTimeout      = "1s"
-	DefGrpcInitialWindowSize     = 1 << 30
-	DefGrpcInitialConnWindowSize = 1 << 30
+	DefGrpcInitialWindowSize     = 1 << 27 // 128MiB
+	DefGrpcInitialConnWindowSize = 1 << 27 // 128MiB
 )
 
 // TiKVClient is the config for tikv client.
