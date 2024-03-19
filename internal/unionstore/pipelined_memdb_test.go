@@ -323,6 +323,7 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	flushed, err = memdb.Flush(false)
 	require.Nil(t, err)
 	require.True(t, flushed)
+	require.Nil(t, memdb.FlushWait())
 
 	// need 2 keys to flush
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(2)`))
@@ -332,6 +333,7 @@ func TestPipelinedAdjustFlushCondition(t *testing.T) {
 	flushed, err = memdb.Flush(false)
 	require.Nil(t, err)
 	require.False(t, flushed)
+	require.Nil(t, memdb.FlushWait())
 
 	// need 2 keys to flush, but force threshold reached
 	require.Nil(t, failpoint.Enable("tikvclient/pipelinedMemDBMinFlushKeys", `return(2)`))
