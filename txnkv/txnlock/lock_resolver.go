@@ -1135,6 +1135,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		lreq := &kvrpcpb.ResolveLockRequest{
 			StartVersion: l.TxnID,
+			IsTxnFile: l.IsTxnFile,
 		}
 		if status.IsCommitted() {
 			lreq.CommitVersion = status.CommitTS()
