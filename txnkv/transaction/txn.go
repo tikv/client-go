@@ -502,6 +502,13 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 			}
 		}
 	}()
+	if committer.useTxnFile() {
+		err = committer.executeTxnFile(ctx)
+		if val == nil || sessionID > 0 {
+			txn.onCommitted(err)
+		}
+		return err
+	}
 	// latches disabled
 	// pessimistic transaction should also bypass latch.
 	if txn.store.TxnLatches() == nil || txn.IsPessimistic() {
