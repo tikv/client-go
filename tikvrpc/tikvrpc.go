@@ -234,7 +234,11 @@ func (t CmdType) String() string {
 // Request wraps all kv/coprocessor requests.
 type Request struct {
 	Type CmdType
-	Req  interface{}
+	// Req is one of the request type defined in kvrpcpb.
+	//
+	// WARN: It may be read concurrently in batch-send-loop, so you should ONLY modify it via `AttachContext`,
+	// otherwise there could be a risk of data race.
+	Req interface{}
 	kvrpcpb.Context
 	ReadReplicaScope string
 	// remove txnScope after tidb removed txnScope
