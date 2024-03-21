@@ -40,6 +40,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/docker/go-units"
 	"math"
 	"math/rand"
 	"runtime/trace"
@@ -47,10 +48,10 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/dgryski/go-farm"
-	"github.com/docker/go-units"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -67,7 +68,6 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
-	"github.com/tikv/client-go/v2/util/intest"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -1668,7 +1668,7 @@ func (ctx *commitActionContext) setRunning() {
 }
 
 func (ctx *commitActionContext) assertIdle() {
-	if !intest.InTest {
+	if !testing.Testing() {
 		return
 	}
 	if ctx.running.Load() {
