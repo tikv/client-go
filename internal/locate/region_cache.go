@@ -57,7 +57,6 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
-	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
@@ -3093,8 +3092,8 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 		ctx,
 		addr,
 		opt,
-		grpc.WithInitialWindowSize(client.GrpcInitialWindowSize),
-		grpc.WithInitialConnWindowSize(client.GrpcInitialConnWindowSize),
+		grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
+		grpc.WithInitialConnWindowSize(cfg.TiKVClient.GrpcInitialConnWindowSize),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
 				BaseDelay:  100 * time.Millisecond, // Default was 1s.
