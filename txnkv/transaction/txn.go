@@ -40,7 +40,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/docker/go-units"
 	"math"
 	"math/rand"
 	"runtime/trace"
@@ -52,6 +51,7 @@ import (
 	"time"
 
 	"github.com/dgryski/go-farm"
+	"github.com/docker/go-units"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
