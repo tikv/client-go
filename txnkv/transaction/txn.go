@@ -47,7 +47,6 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 
 	"github.com/dgryski/go-farm"
@@ -377,6 +376,11 @@ func (txn *KVTxn) ClearDiskFullOpt() {
 // SetAssertionLevel sets how strict the assertions in the transaction should be.
 func (txn *KVTxn) SetAssertionLevel(assertionLevel kvrpcpb.AssertionLevel) {
 	txn.commitActionContext.setAssertionLevel(assertionLevel)
+}
+
+// SetInTest sets whether the transaction is in test, since there may be some test builders don't compatible with testing.Testing.
+func (txn *KVTxn) SetInTest(intest bool) {
+	txn.commitActionContext.setInTest(intest)
 }
 
 // IsPessimistic returns true if it is pessimistic.
@@ -1617,6 +1621,7 @@ func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 type commitActionContext struct {
 	running atomic.Bool
 	txn     *KVTxn
+	intest  bool
 
 	// schemaVer is the infoSchema fetched at startTS.
 	schemaVer               SchemaVer
@@ -1662,13 +1667,17 @@ func (ctx *commitActionContext) applyToCommitter(committer *twoPhaseCommitter) {
 	committer.txnSource = ctx.txnSource
 }
 
+func (ctx *commitActionContext) setInTest(intest bool) {
+	ctx.intest = intest
+}
+
 // setRunning marks the context as running, it should be read only after calling setRunning.
 func (ctx *commitActionContext) setRunning() {
 	ctx.running.Store(true)
 }
 
 func (ctx *commitActionContext) assertIdle() {
-	if !testing.Testing() {
+	if ctx.intest {
 		return
 	}
 	if ctx.running.Load() {
