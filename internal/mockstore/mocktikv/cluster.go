@@ -427,7 +427,15 @@ func (c *Cluster) AddPeer(regionID, storeID, peerID uint64) {
 	c.Lock()
 	defer c.Unlock()
 
-	c.regions[regionID].addPeer(peerID, storeID)
+	c.regions[regionID].addPeer(peerID, storeID, metapb.PeerRole_Voter)
+}
+
+// AddLearner adds a new learner for the Region on the Store.
+func (c *Cluster) AddLearner(regionID, storeID, peerID uint64) {
+	c.Lock()
+	defer c.Unlock()
+
+	c.regions[regionID].addPeer(peerID, storeID, metapb.PeerRole_Learner)
 }
 
 // RemovePeer removes the Peer from the Region. Note that if the Peer is leader,
@@ -666,8 +674,10 @@ func newRegion(regionID uint64, storeIDs, peerIDs []uint64, leaderPeerID uint64,
 	}
 }
 
-func (r *Region) addPeer(peerID, storeID uint64) {
-	r.Meta.Peers = append(r.Meta.Peers, newPeerMeta(peerID, storeID))
+func (r *Region) addPeer(peerID, storeID uint64, role metapb.PeerRole) {
+	peer := newPeerMeta(peerID, storeID)
+	peer.Role = role
+	r.Meta.Peers = append(r.Meta.Peers, peer)
 	r.incConfVer()
 }
 

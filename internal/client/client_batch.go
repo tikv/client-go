@@ -567,7 +567,16 @@ func (c *batchCommandsClient) isStopped() bool {
 }
 
 func (c *batchCommandsClient) available() int64 {
-	return c.maxConcurrencyRequestLimit.Load() - c.sent.Load()
+	limit := c.maxConcurrencyRequestLimit.Load()
+	sent := c.sent.Load()
+	//  The `sent` could be less than 0, see https://github.com/tikv/client-go/issues/1225 for details.
+	if sent > 0 {
+		if limit > sent {
+			return limit - sent
+		}
+		return 0
+	}
+	return limit
 }
 
 func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchCommandsRequest) {
@@ -876,6 +885,9 @@ func sendBatchRequest(
 		logutil.Logger(ctx).Debug("send request is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
+	case <-batchConn.closed:
+		logutil.Logger(ctx).Debug("send request is cancelled (batchConn closed)", zap.String("to", addr))
+		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
@@ -893,6 +905,10 @@ func sendBatchRequest(
 		logutil.Logger(ctx).Debug("wait response is cancelled",
 			zap.String("to", addr), zap.String("cause", ctx.Err().Error()))
 		return nil, errors.WithStack(ctx.Err())
+	case <-batchConn.closed:
+		atomic.StoreInt32(&entry.canceled, 1)
+		logutil.Logger(ctx).Debug("wait response is cancelled (batchConn closed)", zap.String("to", addr))
+		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
 		reason := fmt.Sprintf("wait recvLoop timeout,timeout:%s, wait_duration:%s:", timeout, waitDuration)
@@ -904,16 +920,18 @@ func (c *RPCClient) recycleIdleConnArray() {
 	start := time.Now()
 
 	var addrs []string
+	var vers []uint64
 	c.RLock()
 	for _, conn := range c.conns {
 		if conn.batchConn != nil && conn.isIdle() {
 			addrs = append(addrs, conn.target)
+			vers = append(vers, conn.ver)
 		}
 	}
 	c.RUnlock()
 
-	for _, addr := range addrs {
-		c.CloseAddr(addr)
+	for i, addr := range addrs {
+		c.CloseAddrVer(addr, vers[i])
 	}
 
 	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())

@@ -80,7 +80,8 @@ type twoPhaseCommitAction interface {
 
 // Global variable set by config file.
 var (
-	ManagedLockTTL uint64 = 20000 // 20s
+	ManagedLockTTL     uint64 = 20000               // 20s
+	MaxPipelinedTxnTTL uint64 = 24 * 60 * 60 * 1000 // 24h
 )
 
 var (
@@ -866,7 +867,8 @@ func (c *twoPhaseCommitter) groupMutations(bo *retry.Backoffer, mutations Commit
 		if uint32(group.mutations.Len()) >= preSplitDetectThresholdVal {
 			logutil.BgLogger().Info("2PC detect large amount of mutations on a single region",
 				zap.Uint64("region", group.region.GetID()),
-				zap.Int("mutations count", group.mutations.Len()))
+				zap.Int("mutations count", group.mutations.Len()),
+				zap.Uint64("startTS", c.startTS))
 			if c.preSplitRegion(bo.GetCtx(), group) {
 				didPreSplit = true
 			}
@@ -905,14 +907,15 @@ func (c *twoPhaseCommitter) preSplitRegion(ctx context.Context, group groupedMut
 	regionIDs, err := c.store.SplitRegions(ctx, splitKeys, true, nil)
 	if err != nil {
 		logutil.BgLogger().Warn("2PC split regions failed", zap.Uint64("regionID", group.region.GetID()),
-			zap.Int("keys count", keysLength), zap.Error(err))
+			zap.Int("keys count", keysLength), zap.Error(err), zap.Uint64("startTS", c.startTS))
 		return false
 	}
 
 	for _, regionID := range regionIDs {
 		err := c.store.WaitScatterRegionFinish(ctx, regionID, 0)
 		if err != nil {
-			logutil.BgLogger().Warn("2PC wait scatter region failed", zap.Uint64("regionID", regionID), zap.Error(err))
+			logutil.BgLogger().Warn("2PC wait scatter region failed", zap.Uint64("regionID", regionID), zap.Error(err),
+				zap.Uint64("startTS", c.startTS))
 		}
 	}
 	// Invalidate the old region cache information.
@@ -1143,7 +1146,7 @@ type ttlManager struct {
 	lockCtx *kv.LockCtx
 }
 
-func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx) {
+func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx, isPipelinedTxn bool) {
 	if _, err := util.EvalFailpoint("doNotKeepAlive"); err == nil {
 		return
 	}
@@ -1155,7 +1158,7 @@ func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx) {
 	tm.ch = make(chan struct{})
 	tm.lockCtx = lockCtx
 
-	go keepAlive(c, tm.ch, c.primary(), lockCtx)
+	go keepAlive(c, tm.ch, c.primary(), lockCtx, isPipelinedTxn)
 }
 
 func (tm *ttlManager) close() {
@@ -1176,7 +1179,10 @@ const keepAliveMaxBackoff = 20000
 const pessimisticLockMaxBackoff = 20000
 const maxConsecutiveFailure = 10
 
-func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, lockCtx *kv.LockCtx) {
+func keepAlive(
+	c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte,
+	lockCtx *kv.LockCtx, isPipelinedTxn bool,
+) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
 	ticker := time.NewTicker(time.Duration(atomic.LoadUint64(&ManagedLockTTL)) * time.Millisecond / 2)
 	defer ticker.Stop()
@@ -1203,7 +1209,11 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 			}
 
 			uptime := uint64(oracle.ExtractPhysical(now) - oracle.ExtractPhysical(c.startTS))
-			if uptime > config.GetGlobalConfig().MaxTxnTTL {
+			maxTtl := config.GetGlobalConfig().MaxTxnTTL
+			if isPipelinedTxn {
+				maxTtl = max(maxTtl, MaxPipelinedTxnTTL)
+			}
+			if uptime > maxTtl {
 				// Checks maximum lifetime for the ttlManager, so when something goes wrong
 				// the key will not be locked forever.
 				logutil.Logger(bo.GetCtx()).Info("ttlManager live up to its lifetime",
@@ -1547,6 +1557,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		if err = c.txn.GetMemBuffer().FlushWait(); err != nil {
 			return err
 		}
+		c.txn.pipelinedCancel()
 		if len(c.pipelinedCommitInfo.pipelinedStart) == 0 || len(c.pipelinedCommitInfo.pipelinedEnd) == 0 {
 			return errors.Errorf("unexpected empty pipelinedStart(%s) or pipelinedEnd(%s)",
 				c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
