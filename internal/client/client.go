@@ -89,12 +89,6 @@ const (
 	MaxWriteExecutionTime = ReadTimeoutShort - 10*time.Second
 )
 
-// Grpc window size
-const (
-	GrpcInitialWindowSize     = 1 << 30
-	GrpcInitialConnWindowSize = 1 << 30
-)
-
 // forwardMetadataKey is the key of gRPC metadata which represents a forwarded request.
 const forwardMetadataKey = "tikv-forwarded-host"
 
@@ -267,8 +261,8 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 
 		opts = append([]grpc.DialOption{
 			opt,
-			grpc.WithInitialWindowSize(GrpcInitialWindowSize),
-			grpc.WithInitialConnWindowSize(GrpcInitialConnWindowSize),
+			grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
+			grpc.WithInitialConnWindowSize(cfg.TiKVClient.GrpcInitialConnWindowSize),
 			grpc.WithUnaryInterceptor(unaryInterceptor),
 			grpc.WithStreamInterceptor(streamInterceptor),
 			grpc.WithDefaultCallOptions(callOptions...),
