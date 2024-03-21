@@ -661,7 +661,7 @@ func (c *Client) CompareAndSwapTTL(ctx context.Context, key, previousValue, newV
 		Key:   key,
 		Value: newValue,
 		Cf:    c.getColumnFamily(opts),
-		Ttl:  ttl,
+		Ttl:   ttl,
 	}
 	if previousValue == nil {
 		reqArgs.PreviousNotExist = true
