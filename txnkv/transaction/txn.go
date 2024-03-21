@@ -1677,7 +1677,7 @@ func (ctx *commitActionContext) setRunning() {
 }
 
 func (ctx *commitActionContext) assertIdle() {
-	if ctx.intest {
+	if !ctx.intest {
 		return
 	}
 	if ctx.running.Load() {
