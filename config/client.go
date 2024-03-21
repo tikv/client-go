@@ -43,7 +43,9 @@ import (
 
 const (
 	// DefStoreLivenessTimeout is the default value for store liveness timeout.
-	DefStoreLivenessTimeout = "1s"
+	DefStoreLivenessTimeout      = "1s"
+	DefGrpcInitialWindowSize     = 1 << 27 // 128MiB
+	DefGrpcInitialConnWindowSize = 1 << 27 // 128MiB
 )
 
 // TiKVClient is the config for tikv client.
@@ -59,6 +61,10 @@ type TiKVClient struct {
 	GrpcKeepAliveTimeout uint `toml:"grpc-keepalive-timeout" json:"grpc-keepalive-timeout"`
 	// GrpcCompressionType is the compression type for gRPC channel: none or gzip.
 	GrpcCompressionType string `toml:"grpc-compression-type" json:"grpc-compression-type"`
+	// GrpcInitialWindowSize is the value for initial window size on a stream.
+	GrpcInitialWindowSize int32 `toml:"grpc-initial-window-size" json:"grpc-initial-window-size"`
+	// GrpcInitialConnWindowSize is the value for initial window size on a connection.
+	GrpcInitialConnWindowSize int32 `toml:"grpc-initial-conn-window-size" json:"grpc-initial-conn-window-size"`
 	// CommitTimeout is the max time which command 'commit' will wait.
 	CommitTimeout string      `toml:"commit-timeout" json:"commit-timeout"`
 	AsyncCommit   AsyncCommit `toml:"async-commit" json:"async-commit"`
@@ -118,11 +124,13 @@ type CoprocessorCache struct {
 // DefaultTiKVClient returns default config for TiKVClient.
 func DefaultTiKVClient() TiKVClient {
 	return TiKVClient{
-		GrpcConnectionCount:  4,
-		GrpcKeepAliveTime:    10,
-		GrpcKeepAliveTimeout: 3,
-		GrpcCompressionType:  "none",
-		CommitTimeout:        "41s",
+		GrpcConnectionCount:       4,
+		GrpcKeepAliveTime:         10,
+		GrpcKeepAliveTimeout:      3,
+		GrpcCompressionType:       "none",
+		GrpcInitialWindowSize:     DefGrpcInitialWindowSize,
+		GrpcInitialConnWindowSize: DefGrpcInitialConnWindowSize,
+		CommitTimeout:             "41s",
 		AsyncCommit: AsyncCommit{
 			// FIXME: Find an appropriate default limit.
 			KeysLimit:         256,
