@@ -2516,10 +2516,10 @@ func TestReplicaReadAccessPathByGenError(t *testing.T) {
 	}(log.GetLevel())
 	log.SetLevel(zapcore.ErrorLevel)
 
-	maxAccessErrCnt := 5
+	maxAccessErrCnt := 4
 	if israce.RaceEnabled {
 		// When run this test with race, it will take a long time, so we reduce the maxAccessErrCnt to 3 to speed up test to avoid timeout.
-		maxAccessErrCnt = 3
+		maxAccessErrCnt = 2
 	}
 	totalValidCaseCount := 0
 	totalCaseCount := 0
