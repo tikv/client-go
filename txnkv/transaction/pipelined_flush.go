@@ -39,6 +39,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// PipelinedRequestSource is the source of the Flush & ResolveLock requests in a txn with pipelined memdb.
+// txn.GetRequestSource may cause data race because the upper layer may edit the source while the flush requests are built in background.
+// So we use the fixed source from the upper layer to avoid the data race.
+// This also distinguishes the resource usage between p-DML(pipelined DML) and other small DMLs.
+const PipelinedRequestSource = "external_pdml"
+
 type actionPipelinedFlush struct {
 	generation uint64
 }
@@ -93,12 +99,15 @@ func (c *twoPhaseCommitter) buildPipelinedFlushRequest(batch batchMutations, gen
 			DiskFullOpt:            c.txn.diskFullOpt,
 			TxnSource:              c.txn.txnSource,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
-			RequestSource:          c.txn.GetRequestSource(),
+			RequestSource:          PipelinedRequestSource,
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
 				ResourceGroupName: c.resourceGroupName,
 			},
 		},
 	)
+	if c.resourceGroupTag == nil && c.resourceGroupTagger != nil {
+		c.resourceGroupTagger(r)
+	}
 	return r
 }
 
@@ -192,7 +201,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 
 			if batch.isPrimary {
 				// start keepalive after primary key is written.
-				c.run(c, nil)
+				c.run(c, nil, true)
 			}
 			return nil
 		}
@@ -334,7 +343,7 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 				CommitVersion: commitVersion,
 			}
 			req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
-				RequestSource: c.txn.GetRequestSource(),
+				RequestSource: PipelinedRequestSource,
 			})
 			bo := retry.NewBackoffer(ctx, maxBackOff)
 			loc, err := regionCache.LocateKey(bo, start)
@@ -378,6 +387,7 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 			if loc.EndKey == nil || bytes.Compare(loc.EndKey, r.EndKey) >= 0 {
 				return res, nil
 			}
+			start = loc.EndKey
 		}
 	}, nil
 }

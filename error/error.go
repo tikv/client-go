@@ -141,6 +141,11 @@ func (d *PDError) Error() string {
 // ErrKeyExist wraps *pdpb.AlreadyExist to implement the error interface.
 type ErrKeyExist struct {
 	*kvrpcpb.AlreadyExist
+	// Value stores the value that is being written when the conflict is detected.
+	// It was supposed to be an Insert mutation so the value should exist.
+	// The value is not in the kv protocol,
+	// it is introduced for error message handling in pipeliend-DML.
+	Value []byte
 }
 
 func (k *ErrKeyExist) Error() string {

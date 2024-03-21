@@ -204,8 +204,13 @@ func (s *KVSnapshot) BatchGet(ctx context.Context, keys [][]byte) (map[string][]
 	return s.BatchGetWithTier(ctx, keys, BatchGetSnapshotTier)
 }
 
+// BatchGet tiers indicate the read tier of the batch get request.
+// BatchGet read keys in regions. The keys location and region error retry mechanism are shared.
 const (
+	// BatchGetSnapshotTier indicates the batch get reads from a snapshot.
 	BatchGetSnapshotTier = 1 << iota
+	// BatchGetBufferTier indicates the batch get reads from the pipelined flushed buffer, only read locks in the current txn.
+	// this only works when the txn is created with a pipelined memdb, unless an error will be returned.
 	BatchGetBufferTier
 )
 
@@ -250,7 +255,8 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
 	err := s.batchGetKeysByRegions(bo, keys, readTier, func(k, v []byte) {
-		if len(v) == 0 {
+		// when read buffer tier, empty value means a delete record, should also collect it.
+		if len(v) == 0 && readTier != BatchGetBufferTier {
 			return
 		}
 
@@ -1004,8 +1010,19 @@ func (s *KVSnapshot) SnapCacheHitCount() int {
 // SnapCacheSize gets the snapshot cache size. Only for test.
 func (s *KVSnapshot) SnapCacheSize() int {
 	s.mu.RLock()
-	defer s.mu.RLock()
+	defer s.mu.RUnlock()
 	return len(s.mu.cached)
+}
+
+// SnapCache gets the copy of snapshot cache. Only for test.
+func (s *KVSnapshot) SnapCache() map[string][]byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cp := make(map[string][]byte, len(s.mu.cached))
+	for k, v := range s.mu.cached {
+		cp[k] = v
+	}
+	return cp
 }
 
 // SetVars sets variables to the transaction.
