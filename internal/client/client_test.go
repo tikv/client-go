@@ -59,6 +59,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/israce"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -80,12 +81,18 @@ func TestConn(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
-	assert.Nil(t, client.CloseAddr(addr))
+	ver := conn2.ver
+	assert.Nil(t, client.CloseAddrVer(addr, ver-1))
 	_, ok := client.conns[addr]
+	assert.True(t, ok)
+	assert.Nil(t, client.CloseAddrVer(addr, ver))
+	_, ok = client.conns[addr]
 	assert.False(t, ok)
+
 	conn3, err := client.getConnArray(addr, true)
 	assert.Nil(t, err)
 	assert.NotNil(t, conn3)
+	assert.Equal(t, ver+1, conn3.ver)
 
 	client.Close()
 	conn4, err := client.getConnArray(addr, true)
@@ -878,4 +885,117 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 	default:
 		assert.Fail(t, "health feedback not received")
 	}
+}
+
+func TestRandomRestartStoreAndForwarding(t *testing.T) {
+	if israce.RaceEnabled {
+		t.Skip("skip since race bug in issue #1222")
+	}
+	store1, port1 := mockserver.StartMockTikvService()
+	require.True(t, port1 > 0)
+	require.True(t, store1.IsRunning())
+	client1 := NewRPCClient()
+	store2, port2 := mockserver.StartMockTikvService()
+	require.True(t, port2 > 0)
+	require.True(t, store2.IsRunning())
+	defer func() {
+		store1.Stop()
+		store2.Stop()
+		err := client1.Close()
+		require.NoError(t, err)
+	}()
+
+	wg := sync.WaitGroup{}
+	done := int64(0)
+	concurrency := 500
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			// intermittent stop and start store1 or store2.
+			var store *mockserver.MockServer
+			if rand.Intn(10) < 9 {
+				store = store1
+			} else {
+				store = store2
+			}
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
+			addr := store.Addr()
+			store.Stop()
+			require.False(t, store.IsRunning())
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
+			store.Start(addr)
+			if atomic.LoadInt64(&done) >= int64(concurrency) {
+				return
+			}
+		}
+	}()
+
+	conn, err := client1.getConnArray(store1.Addr(), true)
+	assert.Nil(t, err)
+	for j := 0; j < concurrency; j++ {
+		wg.Add(1)
+		go func() {
+			defer func() {
+				atomic.AddInt64(&done, 1)
+				wg.Done()
+			}()
+			for i := 0; i < 5000; i++ {
+				req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
+				forwardedHost := ""
+				if i%2 != 0 {
+					forwardedHost = store2.Addr()
+				}
+				_, err := sendBatchRequest(context.Background(), store1.Addr(), forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
+				if err == nil ||
+					err.Error() == "EOF" ||
+					err.Error() == "rpc error: code = Unavailable desc = error reading from server: EOF" ||
+					strings.Contains(err.Error(), "context deadline exceeded") ||
+					strings.Contains(err.Error(), "connect: connection refused") ||
+					strings.Contains(err.Error(), "rpc error: code = Unavailable desc = error reading from server") {
+					continue
+				}
+				require.Fail(t, err.Error(), "unexpected error")
+			}
+		}()
+	}
+	wg.Wait()
+
+	for _, cli := range conn.batchConn.batchCommandsClients {
+		require.Equal(t, int64(9223372036854775807), cli.maxConcurrencyRequestLimit.Load())
+		require.True(t, cli.available() > 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
+		// TODO(crazycs520): fix me, see https://github.com/tikv/client-go/pull/1219
+		//require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
+	}
+}
+
+func TestErrConn(t *testing.T) {
+	e := errors.New("conn error")
+	err1 := &ErrConn{Err: e, Addr: "127.0.0.1", Ver: 10}
+	err2 := &ErrConn{Err: e, Addr: "127.0.0.1", Ver: 10}
+
+	e3 := errors.New("conn error 3")
+	err3 := &ErrConn{Err: e3}
+
+	err4 := errors.New("not ErrConn")
+
+	assert.True(t, errors.Is(err1, err1))
+	assert.True(t, errors.Is(fmt.Errorf("%w", err1), err1))
+	assert.False(t, errors.Is(fmt.Errorf("%w", err2), err1)) // err2 != err1
+	assert.False(t, errors.Is(fmt.Errorf("%w", err4), err1))
+
+	var errConn *ErrConn
+	assert.True(t, errors.As(err1, &errConn))
+	assert.Equal(t, "127.0.0.1", errConn.Addr)
+	assert.EqualValues(t, 10, errConn.Ver)
+	assert.EqualError(t, errConn.Err, "conn error")
+
+	assert.True(t, errors.As(err3, &errConn))
+	assert.EqualError(t, e3, "conn error 3")
+
+	assert.False(t, errors.As(err4, &errConn))
+
+	errMsg := errors.New("unknown")
+	assert.True(t, errors.As(err1, &errMsg))
+	assert.EqualError(t, err1, errMsg.Error())
 }

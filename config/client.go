@@ -44,7 +44,9 @@ import (
 
 const (
 	// DefStoreLivenessTimeout is the default value for store liveness timeout.
-	DefStoreLivenessTimeout = "1s"
+	DefStoreLivenessTimeout      = "1s"
+	DefGrpcInitialWindowSize     = 1 << 27 // 128MiB
+	DefGrpcInitialConnWindowSize = 1 << 27 // 128MiB
 )
 
 // TiKVClient is the config for tikv client.
@@ -62,6 +64,10 @@ type TiKVClient struct {
 	GrpcCompressionType string `toml:"grpc-compression-type" json:"grpc-compression-type"`
 	// GrpcSharedBufferPool is the flag to control whether to share the buffer pool in the TiKV gRPC clients.
 	GrpcSharedBufferPool bool `toml:"grpc-shared-buffer-pool" json:"grpc-shared-buffer-pool"`
+	// GrpcInitialWindowSize is the value for initial window size on a stream.
+	GrpcInitialWindowSize int32 `toml:"grpc-initial-window-size" json:"grpc-initial-window-size"`
+	// GrpcInitialConnWindowSize is the value for initial window size on a connection.
+	GrpcInitialConnWindowSize int32 `toml:"grpc-initial-conn-window-size" json:"grpc-initial-conn-window-size"`
 	// CommitTimeout is the max time which command 'commit' will wait.
 	CommitTimeout string      `toml:"commit-timeout" json:"commit-timeout"`
 	AsyncCommit   AsyncCommit `toml:"async-commit" json:"async-commit"`
@@ -93,6 +99,9 @@ type TiKVClient struct {
 	// MaxConcurrencyRequestLimit is the max concurrency number of request to be sent the tikv
 	// 0 means auto adjust by feedback.
 	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
+	// EnableReplicaSelectorV2 indicate whether to use the new replica-selector-v2.
+	// TODO(crazycs520): remove this config after the new replica-selector-v2 is stable.
+	EnableReplicaSelectorV2 bool `toml:"enable-replica-selector-v2" json:"enable-replica-selector-v2"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -127,12 +136,14 @@ type CoprocessorCache struct {
 // DefaultTiKVClient returns default config for TiKVClient.
 func DefaultTiKVClient() TiKVClient {
 	return TiKVClient{
-		GrpcConnectionCount:  4,
-		GrpcKeepAliveTime:    10,
-		GrpcKeepAliveTimeout: 3,
-		GrpcCompressionType:  "none",
-		GrpcSharedBufferPool: false,
-		CommitTimeout:        "41s",
+		GrpcConnectionCount:       4,
+		GrpcKeepAliveTime:         10,
+		GrpcKeepAliveTimeout:      3,
+		GrpcCompressionType:       "none",
+		GrpcSharedBufferPool:      false,
+		GrpcInitialWindowSize:     DefGrpcInitialWindowSize,
+		GrpcInitialConnWindowSize: DefGrpcInitialConnWindowSize,
+		CommitTimeout:             "41s",
 		AsyncCommit: AsyncCommit{
 			// FIXME: Find an appropriate default limit.
 			KeysLimit:         256,
@@ -164,6 +175,7 @@ func DefaultTiKVClient() TiKVClient {
 
 		ResolveLockLiteThreshold:   16,
 		MaxConcurrencyRequestLimit: math.MaxInt64,
+		EnableReplicaSelectorV2:    true,
 	}
 }
 
