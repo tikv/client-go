@@ -85,7 +85,7 @@ const (
 	CmdRawBatchDelete
 	CmdRawDeleteRange
 	CmdRawScan
-	CmdGetKeyTTL
+	CmdRawGetKeyTTL
 	CmdRawCompareAndSwap
 	CmdRawChecksum
 
@@ -116,6 +116,11 @@ const (
 	CmdGetTiFlashSystemTable            // TODO: These non TiKV RPCs should be moved out of TiKV client
 
 	CmdEmpty CmdType = 3072 + iota
+)
+
+// CmdType aliases.
+const (
+	CmdGetKeyTTL = CmdRawGetKeyTTL
 )
 
 func (t CmdType) String() string {
@@ -164,6 +169,10 @@ func (t CmdType) String() string {
 		return "RawScan"
 	case CmdRawChecksum:
 		return "RawChecksum"
+	case CmdRawGetKeyTTL:
+		return "RawGetKeyTTL"
+	case CmdRawCompareAndSwap:
+		return "RawCompareAndSwap"
 	case CmdUnsafeDestroyRange:
 		return "UnsafeDestroyRange"
 	case CmdRegisterLockObserver:
@@ -225,7 +234,11 @@ func (t CmdType) String() string {
 // Request wraps all kv/coprocessor requests.
 type Request struct {
 	Type CmdType
-	Req  interface{}
+	// Req is one of the request type defined in kvrpcpb.
+	//
+	// WARN: It may be read concurrently in batch-send-loop, so you should ONLY modify it via `AttachContext`,
+	// otherwise there could be a risk of data race.
+	Req interface{}
 	kvrpcpb.Context
 	ReadReplicaScope string
 	// remove txnScope after tidb removed txnScope
@@ -244,6 +257,9 @@ type Request struct {
 	ReadType string
 	// InputRequestSource is the input source of the request, if it's not empty, the final RequestSource sent to store will be attached with the retry info.
 	InputRequestSource string
+
+	// rev represents the revision of the request, it's increased when `Req.Context` gets patched.
+	rev uint32
 }
 
 // NewRequest returns new kv rpc request.
@@ -731,104 +747,31 @@ type MPPStreamResponse struct {
 	Lease
 }
 
+//go:generate bash gen.sh
+
 // AttachContext sets the request context to the request,
 // return false if encounter unknown request type.
 // Parameter `rpcCtx` use `kvrpcpb.Context` instead of `*kvrpcpb.Context` to avoid concurrent modification by shallow copy.
 func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 	ctx := &rpcCtx
+	cmd := req.Type
+	// CmdCopStream and CmdCop share the same request type.
+	if cmd == CmdCopStream {
+		cmd = CmdCop
+	}
+	if patchCmdCtx(req, cmd, ctx) {
+		return true
+	}
 	switch req.Type {
-	case CmdGet:
-		req.Get().Context = ctx
-	case CmdScan:
-		req.Scan().Context = ctx
-	case CmdPrewrite:
-		req.Prewrite().Context = ctx
-	case CmdPessimisticLock:
-		req.PessimisticLock().Context = ctx
-	case CmdPessimisticRollback:
-		req.PessimisticRollback().Context = ctx
-	case CmdCommit:
-		req.Commit().Context = ctx
-	case CmdCleanup:
-		req.Cleanup().Context = ctx
-	case CmdBatchGet:
-		req.BatchGet().Context = ctx
-	case CmdBatchRollback:
-		req.BatchRollback().Context = ctx
-	case CmdScanLock:
-		req.ScanLock().Context = ctx
-	case CmdResolveLock:
-		req.ResolveLock().Context = ctx
-	case CmdGC:
-		req.GC().Context = ctx
-	case CmdDeleteRange:
-		req.DeleteRange().Context = ctx
-	case CmdRawGet:
-		req.RawGet().Context = ctx
-	case CmdRawBatchGet:
-		req.RawBatchGet().Context = ctx
-	case CmdRawPut:
-		req.RawPut().Context = ctx
-	case CmdRawBatchPut:
-		req.RawBatchPut().Context = ctx
-	case CmdRawDelete:
-		req.RawDelete().Context = ctx
-	case CmdRawBatchDelete:
-		req.RawBatchDelete().Context = ctx
-	case CmdRawDeleteRange:
-		req.RawDeleteRange().Context = ctx
-	case CmdRawScan:
-		req.RawScan().Context = ctx
-	case CmdGetKeyTTL:
-		req.RawGetKeyTTL().Context = ctx
-	case CmdRawCompareAndSwap:
-		req.RawCompareAndSwap().Context = ctx
-	case CmdRawChecksum:
-		req.RawChecksum().Context = ctx
-	case CmdUnsafeDestroyRange:
-		req.UnsafeDestroyRange().Context = ctx
-	case CmdRegisterLockObserver:
-		req.RegisterLockObserver().Context = ctx
-	case CmdCheckLockObserver:
-		req.CheckLockObserver().Context = ctx
-	case CmdRemoveLockObserver:
-		req.RemoveLockObserver().Context = ctx
-	case CmdPhysicalScanLock:
-		req.PhysicalScanLock().Context = ctx
-	case CmdCop:
-		req.Cop().Context = ctx
-	case CmdCopStream:
-		req.Cop().Context = ctx
-	case CmdBatchCop:
-		req.BatchCop().Context = ctx
 	// Dispatching MPP tasks don't need a region context, because it's a request for store but not region.
 	case CmdMPPTask:
 	case CmdMPPConn:
 	case CmdMPPCancel:
 	case CmdMPPAlive:
 
-	case CmdMvccGetByKey:
-		req.MvccGetByKey().Context = ctx
-	case CmdMvccGetByStartTs:
-		req.MvccGetByStartTs().Context = ctx
-	case CmdSplitRegion:
-		req.SplitRegion().Context = ctx
+	// Empty command doesn't need a region context.
 	case CmdEmpty:
-		req.SplitRegion().Context = ctx
-	case CmdTxnHeartBeat:
-		req.TxnHeartBeat().Context = ctx
-	case CmdCheckTxnStatus:
-		req.CheckTxnStatus().Context = ctx
-	case CmdCheckSecondaryLocks:
-		req.CheckSecondaryLocks().Context = ctx
-	case CmdFlashbackToVersion:
-		req.FlashbackToVersion().Context = ctx
-	case CmdPrepareFlashbackToVersion:
-		req.PrepareFlashbackToVersion().Context = ctx
-	case CmdFlush:
-		req.Flush().Context = ctx
-	case CmdBufferBatchGet:
-		req.BufferBatchGet().Context = ctx
+
 	default:
 		return false
 	}
