@@ -2518,7 +2518,7 @@ func TestReplicaReadAccessPathByGenError(t *testing.T) {
 
 	maxAccessErrCnt := 4
 	if israce.RaceEnabled {
-		// When run this test with race, it will take a long time, so we reduce the maxAccessErrCnt to 3 to speed up test to avoid timeout.
+		// When run this test with race, it will take a long time, so we reduce the maxAccessErrCnt to 2 to speed up test to avoid timeout.
 		maxAccessErrCnt = 2
 	}
 	totalValidCaseCount := 0
