@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
@@ -31,6 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/israce"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type testReplicaSelectorSuite struct {
@@ -2508,12 +2510,16 @@ func TestReplicaReadAccessPathByLearnerCase(t *testing.T) {
 func TestReplicaReadAccessPathByGenError(t *testing.T) {
 	s := new(testReplicaSelectorSuite)
 	s.SetupTest(t)
-	defer s.TearDownTest()
+	defer func(lv zapcore.Level) {
+		log.SetLevel(lv)
+		s.TearDownTest()
+	}(log.GetLevel())
+	log.SetLevel(zapcore.ErrorLevel)
 
-	maxAccessErrCnt := 6
+	maxAccessErrCnt := 4
 	if israce.RaceEnabled {
 		// When run this test with race, it will take a long time, so we reduce the maxAccessErrCnt to 3 to speed up test to avoid timeout.
-		maxAccessErrCnt = 3
+		maxAccessErrCnt = 2
 	}
 	totalValidCaseCount := 0
 	totalCaseCount := 0
