@@ -1075,6 +1075,8 @@ func (txn *KVTxn) LockKeysFunc(ctx context.Context, lockCtx *tikv.LockCtx, fn fu
 }
 
 func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func(), keysInput ...[]byte) error {
+	txn.commitActionContext.setRunning()
+	defer txn.commitActionContext.setIdle()
 	if txn.interceptor != nil {
 		// User has called txn.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
@@ -1674,6 +1676,11 @@ func (ctx *commitActionContext) setInTest(intest bool) {
 // setRunning marks the context as running, it should be read only after calling setRunning.
 func (ctx *commitActionContext) setRunning() {
 	ctx.running.Store(true)
+}
+
+// setIdle marks the context as idle, can set option to it after calling setIdle.
+func (ctx *commitActionContext) setIdle() {
+	ctx.running.Store(false)
 }
 
 func (ctx *commitActionContext) assertIdle() {
