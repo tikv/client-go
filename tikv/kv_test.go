@@ -17,6 +17,7 @@ package tikv
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	pdhttp "github.com/tikv/pd/client/http"
 )
 
 func TestKV(t *testing.T) {
@@ -38,18 +40,27 @@ func TestKV(t *testing.T) {
 
 type testKVSuite struct {
 	suite.Suite
-	store              *KVStore
-	cluster            *mocktikv.Cluster
-	tikvStoreID        uint64
-	tiflashStoreID     uint64
-	tiflashPeerStoreID uint64
+	store          *KVStore
+	cluster        *mocktikv.Cluster
+	tikvStoreID    uint64
+	tiflashStoreID uint64
+
+	mockGetMinResolvedTSByStoresIDs atomic.Pointer[func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error)]
 }
 
 func (s *testKVSuite) SetupTest() {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
 	testutils.BootstrapWithSingleStore(cluster)
-	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0)
+	s.setGetMinResolvedTSByStoresIDs(func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error) {
+		return 0, nil, nil
+	})
+	store, err := NewTestTiKVStore(client, pdClient, nil, nil, 0, Option(func(store *KVStore) {
+		store.pdHttpClient = &mockPDHTTPClient{
+			Client:                          pdhttp.NewClientWithServiceDiscovery("test", nil),
+			mockGetMinResolvedTSByStoresIDs: &s.mockGetMinResolvedTSByStoresIDs,
+		}
+	}))
 	s.Require().Nil(err)
 
 	s.store = store
@@ -58,14 +69,18 @@ func (s *testKVSuite) SetupTest() {
 	storeIDs, _, _, _ := mocktikv.BootstrapWithMultiStores(s.cluster, 2)
 	s.tikvStoreID = storeIDs[0]
 	s.tiflashStoreID = storeIDs[1]
-	tiflashPeerAddrID := cluster.AllocIDs(1)
-	s.tiflashPeerStoreID = tiflashPeerAddrID[0]
 
-	s.cluster.UpdateStorePeerAddr(s.tiflashStoreID, s.storeAddr(s.tiflashPeerStoreID), &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
-	s.store.regionCache.SetRegionCacheStore(s.tikvStoreID, s.storeAddr(s.tikvStoreID), s.storeAddr(s.tikvStoreID), tikvrpc.TiKV, 1, nil)
 	var labels []*metapb.StoreLabel
-	labels = append(labels, &metapb.StoreLabel{Key: "engine", Value: "tiflash"})
-	s.store.regionCache.SetRegionCacheStore(s.tiflashStoreID, s.storeAddr(s.tiflashStoreID), s.storeAddr(s.tiflashPeerStoreID), tikvrpc.TiFlash, 1, labels)
+	labels = append(cluster.GetStore(s.tikvStoreID).Labels,
+		&metapb.StoreLabel{Key: DCLabelKey, Value: "z1"})
+	s.cluster.UpdateStorePeerAddr(s.tikvStoreID, s.storeAddr(s.tikvStoreID), labels...)
+	s.store.regionCache.SetRegionCacheStore(s.tikvStoreID, s.storeAddr(s.tikvStoreID), s.storeAddr(s.tikvStoreID), tikvrpc.TiKV, 1, labels)
+
+	labels = append(cluster.GetStore(s.tiflashStoreID).Labels,
+		&metapb.StoreLabel{Key: DCLabelKey, Value: "z2"},
+		&metapb.StoreLabel{Key: "engine", Value: "tiflash"})
+	s.cluster.UpdateStorePeerAddr(s.tiflashStoreID, s.storeAddr(s.tiflashStoreID), labels...)
+	s.store.regionCache.SetRegionCacheStore(s.tiflashStoreID, s.storeAddr(s.tiflashStoreID), s.storeAddr(s.tiflashStoreID), tikvrpc.TiFlash, 1, labels)
 
 }
 
@@ -75,6 +90,10 @@ func (s *testKVSuite) TearDownTest() {
 
 func (s *testKVSuite) storeAddr(id uint64) string {
 	return fmt.Sprintf("store%d", id)
+}
+
+func (s *testKVSuite) setGetMinResolvedTSByStoresIDs(f func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error)) {
+	s.mockGetMinResolvedTSByStoresIDs.Store(&f)
 }
 
 type storeSafeTsMockClient struct {
@@ -89,7 +108,7 @@ func (c *storeSafeTsMockClient) SendRequest(ctx context.Context, addr string, re
 	}
 	atomic.AddInt32(&c.requestCount, 1)
 	resp := &tikvrpc.Response{}
-	if addr == c.testSuite.storeAddr(c.testSuite.tiflashPeerStoreID) {
+	if addr == c.testSuite.storeAddr(c.testSuite.tiflashStoreID) {
 		resp.Resp = &kvrpcpb.StoreSafeTSResponse{SafeTs: 80}
 	} else {
 		resp.Resp = &kvrpcpb.StoreSafeTSResponse{SafeTs: 100}
@@ -105,22 +124,127 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 	return c.Client.CloseAddr(addr)
 }
 
-func (s *testKVSuite) TestMinSafeTs() {
+type mockPDHTTPClient struct {
+	pdhttp.Client
+	mockGetMinResolvedTSByStoresIDs *atomic.Pointer[func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error)]
+}
+
+func (c *mockPDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, storeIDs []uint64) (uint64, map[uint64]uint64, error) {
+	if f := c.mockGetMinResolvedTSByStoresIDs.Load(); f != nil {
+		return (*f)(ctx, storeIDs)
+	}
+	return c.Client.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
+}
+
+func until(limit int, interval time.Duration, predicate func() bool) bool {
+	for i := 0; i < limit; i++ {
+		time.Sleep(interval)
+		if predicate() {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *testKVSuite) TestMinSafeTsFromStores() {
 	mockClient := storeSafeTsMockClient{
 		Client:    s.store.GetTiKVClient(),
 		testSuite: s,
 	}
 	s.store.SetTiKVClient(&mockClient)
 
-	// wait for updateMinSafeTS
-	var retryCount int
-	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) != 80 {
-		time.Sleep(2 * time.Second)
-		if retryCount > 5 {
-			break
-		}
-		retryCount++
-	}
+	until(10, time.Second, func() bool {
+		ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+		s.Require().False(math.MaxUint64 == ts)
+		return ts == 80
+	})
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(2))
 	s.Require().Equal(uint64(80), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	ok, ts := s.store.getSafeTS(s.tikvStoreID)
+	s.Require().True(ok)
+	s.Require().Equal(uint64(100), ts)
+}
+
+func (s *testKVSuite) TestMinSafeTsFromPD() {
+	mockClient := storeSafeTsMockClient{Client: s.store.GetTiKVClient(), testSuite: s}
+	s.store.SetTiKVClient(&mockClient)
+	s.setGetMinResolvedTSByStoresIDs(func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error) {
+		return 90, nil, nil
+	})
+	until(10, time.Second, func() bool {
+		ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+		s.Require().False(math.MaxUint64 == ts)
+		return ts == 90
+	})
+	s.Require().Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
+	s.Require().Equal(uint64(90), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+}
+
+func (s *testKVSuite) TestMinSafeTsFromPDByStores() {
+	mockClient := storeSafeTsMockClient{Client: s.store.GetTiKVClient(), testSuite: s}
+	s.store.SetTiKVClient(&mockClient)
+	s.setGetMinResolvedTSByStoresIDs(func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error) {
+		m := make(map[uint64]uint64)
+		for _, id := range ids {
+			m[id] = uint64(100) + id
+		}
+		return math.MaxUint64, m, nil
+	})
+	until(10, time.Second, func() bool {
+		ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
+		s.Require().False(math.MaxUint64 == ts)
+		return ts == uint64(100)+s.tikvStoreID
+	})
+	s.Require().Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
+	s.Require().Equal(uint64(uint64(100)+s.tikvStoreID), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+}
+
+func (s *testKVSuite) TestMinSafeTsFromMixed1() {
+	mockClient := storeSafeTsMockClient{Client: s.store.GetTiKVClient(), testSuite: s}
+	s.store.SetTiKVClient(&mockClient)
+	s.setGetMinResolvedTSByStoresIDs(func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error) {
+		m := make(map[uint64]uint64)
+		for _, id := range ids {
+			if id == s.tiflashStoreID {
+				m[id] = 0
+			} else {
+				m[id] = uint64(10)
+			}
+		}
+		return math.MaxUint64, m, nil
+	})
+	until(10, time.Second, func() bool {
+		ts := s.store.GetMinSafeTS("z1")
+		s.Require().False(math.MaxUint64 == ts)
+		return ts == uint64(10)
+	})
+	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
+	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	s.Require().Equal(uint64(10), s.store.GetMinSafeTS("z1"))
+	s.Require().Equal(uint64(80), s.store.GetMinSafeTS("z2"))
+}
+
+func (s *testKVSuite) TestMinSafeTsFromMixed2() {
+	mockClient := storeSafeTsMockClient{Client: s.store.GetTiKVClient(), testSuite: s}
+	s.store.SetTiKVClient(&mockClient)
+	s.setGetMinResolvedTSByStoresIDs(func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error) {
+		m := make(map[uint64]uint64)
+		for _, id := range ids {
+			if id == s.tiflashStoreID {
+				m[id] = uint64(10)
+			} else {
+				m[id] = math.MaxUint64
+			}
+		}
+		return math.MaxUint64, m, nil
+	})
+	until(10, time.Second, func() bool {
+		ts := s.store.GetMinSafeTS("z1")
+		s.Require().False(math.MaxUint64 == ts)
+		return ts == uint64(10)
+	})
+	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
+	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	s.Require().Equal(uint64(100), s.store.GetMinSafeTS("z1"))
+	s.Require().Equal(uint64(10), s.store.GetMinSafeTS("z2"))
 }
