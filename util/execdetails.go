@@ -670,6 +670,7 @@ func (td *TimeDetail) String() string {
 	return buf.String()
 }
 
+// Merge merges the time detail into itself.
 func (td *TimeDetail) Merge(detail *TimeDetail) {
 	if detail != nil {
 		td.ProcessTime += detail.ProcessTime
