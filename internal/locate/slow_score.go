@@ -159,7 +159,11 @@ func (ss *SlowScoreStat) resetSlowScore() {
 }
 
 func (ss *SlowScoreStat) isSlow() bool {
-	return ss.getSlowScore() >= slowScoreThreshold
+       return clientSideSlowScoreIsSlow(ss.getSlowScore())
+}
+
+func clientSideSlowScoreIsSlow(value uint64) bool {
+       return value >= slowScoreThreshold
 }
 
 // replicaFlowsType indicates the type of the destination replica of flows.
