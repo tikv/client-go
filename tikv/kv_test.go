@@ -196,7 +196,7 @@ func (s *testKVSuite) TestMinSafeTsFromPDByStores() {
 		return ts == uint64(100)+s.tikvStoreID
 	})
 	s.Require().Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
-	s.Require().Equal(uint64(uint64(100)+s.tikvStoreID), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	s.Require().Equal(uint64(100)+s.tikvStoreID, s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
 
 func (s *testKVSuite) TestMinSafeTsFromMixed1() {
