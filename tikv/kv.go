@@ -803,7 +803,7 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 		} else if isValidSafeTS(clusterMinSafeTS) {
 			// Update ts and metrics.
 			preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
-			// preClusterMinSafeTS is garanteed to be less than math.MaxUint64 (by this method and setMinSafeTS)
+			// preClusterMinSafeTS is guaranteed to be less than math.MaxUint64 (by this method and setMinSafeTS)
 			// related to https://github.com/tikv/client-go/issues/991
 			if preClusterMinSafeTS > clusterMinSafeTS {
 				skipSafeTSUpdateCounter.Inc()
