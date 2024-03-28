@@ -764,6 +764,12 @@ func (txn *KVTxn) Rollback() error {
 		txn.pipelinedCancel()
 		txn.GetMemBuffer().FlushWait()
 		txn.committer.ttlManager.close()
+		// no need to clean up locks when no flush triggered.
+		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
+		if len(pipelinedStart) != 0 && len(pipelinedEnd) != 0 {
+			rollbackBo := retry.NewBackofferWithVars(txn.store.Ctx(), CommitSecondaryMaxBackoff, txn.vars)
+			txn.committer.resolveFlushedLocks(rollbackBo, pipelinedStart, pipelinedEnd, false)
+		}
 	}
 	txn.close()
 	logutil.BgLogger().Debug("[kv] rollback txn", zap.Uint64("txnStartTS", txn.StartTS()))
