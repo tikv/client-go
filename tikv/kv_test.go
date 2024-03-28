@@ -136,16 +136,6 @@ func (c *mockPDHTTPClient) GetMinResolvedTSByStoresIDs(ctx context.Context, stor
 	return c.Client.GetMinResolvedTSByStoresIDs(ctx, storeIDs)
 }
 
-func until(limit int, interval time.Duration, predicate func() bool) bool {
-	for i := 0; i < limit; i++ {
-		time.Sleep(interval)
-		if predicate() {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *testKVSuite) TestMinSafeTsFromStores() {
 	mockClient := storeSafeTsMockClient{
 		Client:    s.store.GetTiKVClient(),
@@ -153,11 +143,11 @@ func (s *testKVSuite) TestMinSafeTsFromStores() {
 	}
 	s.store.SetTiKVClient(&mockClient)
 
-	until(10, time.Second, func() bool {
+	s.Eventually(func() bool {
 		ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
 		s.Require().False(math.MaxUint64 == ts)
 		return ts == 80
-	})
+	}, 15*time.Second, time.Second)
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(2))
 	s.Require().Equal(uint64(80), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	ok, ts := s.store.getSafeTS(s.tikvStoreID)
@@ -171,11 +161,11 @@ func (s *testKVSuite) TestMinSafeTsFromPD() {
 	s.setGetMinResolvedTSByStoresIDs(func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error) {
 		return 90, nil, nil
 	})
-	until(10, time.Second, func() bool {
+	s.Eventually(func() bool {
 		ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
 		s.Require().False(math.MaxUint64 == ts)
 		return ts == 90
-	})
+	}, 15*time.Second, time.Second)
 	s.Require().Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
 	s.Require().Equal(uint64(90), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
@@ -190,11 +180,11 @@ func (s *testKVSuite) TestMinSafeTsFromPDByStores() {
 		}
 		return math.MaxUint64, m, nil
 	})
-	until(10, time.Second, func() bool {
+	s.Eventually(func() bool {
 		ts := s.store.GetMinSafeTS(oracle.GlobalTxnScope)
 		s.Require().False(math.MaxUint64 == ts)
 		return ts == uint64(100)+s.tikvStoreID
-	})
+	}, 15*time.Second, time.Second)
 	s.Require().Equal(atomic.LoadInt32(&mockClient.requestCount), int32(0))
 	s.Require().Equal(uint64(100)+s.tikvStoreID, s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
@@ -213,11 +203,11 @@ func (s *testKVSuite) TestMinSafeTsFromMixed1() {
 		}
 		return math.MaxUint64, m, nil
 	})
-	until(10, time.Second, func() bool {
+	s.Eventually(func() bool {
 		ts := s.store.GetMinSafeTS("z1")
 		s.Require().False(math.MaxUint64 == ts)
 		return ts == uint64(10)
-	})
+	}, 15*time.Second, time.Second)
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS("z1"))
@@ -238,11 +228,11 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 		}
 		return math.MaxUint64, m, nil
 	})
-	until(10, time.Second, func() bool {
-		ts := s.store.GetMinSafeTS("z1")
+	s.Eventually(func() bool {
+		ts := s.store.GetMinSafeTS("z2")
 		s.Require().False(math.MaxUint64 == ts)
 		return ts == uint64(10)
-	})
+	}, 15*time.Second, time.Second)
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	s.Require().Equal(uint64(100), s.store.GetMinSafeTS("z1"))
