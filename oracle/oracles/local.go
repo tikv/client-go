@@ -86,7 +86,7 @@ func (l *localOracle) GetTimestamp(ctx context.Context, _ *oracle.Option) (uint6
 	return ts, nil
 }
 
-func (l *localOracle) GetMinTimestamp(ctx context.Context) (uint64, error) {
+func (l *localOracle) GetMinTimestampInAllTSOGroup(ctx context.Context) (uint64, error) {
 	l.Lock()
 	defer l.Unlock()
 	now := time.Now()
