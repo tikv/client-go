@@ -477,7 +477,7 @@ func (s *KVStore) getMinTimestampWithRetry(bo *Backoffer) (uint64, error) {
 	}
 
 	for {
-		minTS, err := s.oracle.GetMinTimestamp(bo.GetCtx())
+		minTS, err := s.oracle.GetMinTimestampInAllTSOGroup(bo.GetCtx())
 		if err == nil {
 			return minTS, nil
 		}
