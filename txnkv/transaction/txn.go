@@ -459,8 +459,14 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			flushedSize += memdb.Size()
 		}()
 		logutil.BgLogger().Info("[pipelined dml] flush memdb to kv store",
-			zap.Int("keys", memdb.Len()), zap.String("size", units.HumanSize(float64(memdb.Size()))),
-			zap.Int("flushed keys", flushedKeys), zap.String("flushed size", units.HumanSize(float64(flushedSize))))
+			zap.Uint64("startTS", txn.startTS),
+			zap.Uint64("generation", generation),
+			zap.Uint64("session", txn.committer.sessionID),
+			zap.Int("keys", memdb.Len()),
+			zap.String("size", units.HumanSize(float64(memdb.Size()))),
+			zap.Int("flushed keys", flushedKeys),
+			zap.String("flushed size", units.HumanSize(float64(flushedSize))),
+		)
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
 		bo := retry.NewBackofferWithVars(flushCtx, 20000, nil)
