@@ -17,7 +17,6 @@ package tikv_test
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -183,8 +182,8 @@ func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
 	// Try to get the minimum resolved timestamp of the cluster from TiKV.
 	require.NoError(failpoint.Enable("tikvclient/InjectPDMinResolvedTS", `return(0)`))
 	// Make sure the store's min resolved ts is not initialized.
-	s.waitForMinSafeTS(oracle.GlobalTxnScope, math.MaxUint64)
-	require.Equal(uint64(math.MaxUint64), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	s.waitForMinSafeTS(oracle.GlobalTxnScope, 0)
+	require.Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	require.NoError(failpoint.Disable("tikvclient/InjectPDMinResolvedTS"))
 
 	// Try to get the minimum resolved timestamp of the cluster from PD.
