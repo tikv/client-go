@@ -468,16 +468,14 @@ func (c *PlainMutations) AppendMutation(mutation PlainMutation) {
 // newTwoPhaseCommitter creates a twoPhaseCommitter.
 func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, error) {
 	committer := &twoPhaseCommitter{
-		store:             txn.store,
-		txn:               txn,
-		startTS:           txn.StartTS(),
-		sessionID:         sessionID,
-		regionTxnSize:     map[uint64]int{},
-		isPessimistic:     txn.IsPessimistic(),
-		binlog:            txn.binlog,
-		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		resourceGroupName: txn.resourceGroupName,
+		store:         txn.store,
+		txn:           txn,
+		startTS:       txn.StartTS(),
+		sessionID:     sessionID,
+		regionTxnSize: map[uint64]int{},
+		isPessimistic: txn.IsPessimistic(),
 	}
+	txn.commitActionContext.applyToCommitter(committer)
 	return committer, nil
 }
 
