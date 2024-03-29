@@ -493,7 +493,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	if capacity > MaxTxnChunkSize {
 		capacity = MaxTxnChunkSize
 	}
-	writerAddr := config.GetGlobalConfig().TiKVClient.TxnChunkWriterAddr
+	writerAddr := config.GetGlobalConfig().TiKVClient.FileBasedTxnChunkWriterAddr
 	buf := make([]byte, 0, capacity)
 	chunkSmallest := mutations.GetKey(0)
 	for i := 0; i < mutations.Len(); i++ {
@@ -556,11 +556,11 @@ func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writerAddr string,
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
-	if c.txn.isPessimistic || c.txn.GetMemBuffer().Size() < 16*1024*1024 {
+	conf := config.GetGlobalConfig()
+	if c.txn.isPessimistic || uint64(c.txn.GetMemBuffer().Size()) < config.TiKVClient.FileBasedTxnMinSize {
 		return false
 	}
-	conf := config.GetGlobalConfig()
-	return len(conf.TiKVClient.TxnChunkWriterAddr) > 0
+	return len(conf.TiKVClient.FileBasedTxnChunkWriterAddr) > 0
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
