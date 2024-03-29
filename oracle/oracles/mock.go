@@ -93,7 +93,7 @@ func (o *MockOracle) GetTimestamp(ctx context.Context, _ *oracle.Option) (uint64
 	return ts, nil
 }
 
-// GetMinTimestampInAllTSOGroup implements oracle.Oracle interface.
+// GetAllTSOKeyspaceGroupMinTS implements oracle.Oracle interface.
 func (o *MockOracle) GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, error) {
 	o.RLock()
 	defer o.RUnlock()

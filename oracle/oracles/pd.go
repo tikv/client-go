@@ -115,7 +115,7 @@ func (o *pdOracle) GetTimestamp(ctx context.Context, opt *oracle.Option) (uint64
 	return ts, nil
 }
 
-// GetMinTimestampInAllTSOGroup gets a minimum timestamp for all TSO keyspace groups.
+// GetAllTSOKeyspaceGroupMinTS gets a minimum timestamp from all TSO keyspace groups.
 func (o *pdOracle) GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, error) {
 	return o.getMinTimestampInAllTSOGroup(ctx)
 }
