@@ -425,7 +425,7 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	return startTS, nil
 }
 
-// CurrentAllTSOKeyspaceMinTsGroup returns current timestamp across all TSO keyspace groups.
+// CurrentAllTSOKeyspaceMinTsGroup returns a minimum timestamp from all TSO keyspace groups.
 func (s *KVStore) CurrentAllTSOKeyspaceMinTsGroup() (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
 	startTS, err := s.getAllTSOKeyspaceGroupMinTSWithRetry(bo)
