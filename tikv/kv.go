@@ -425,10 +425,10 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	return startTS, nil
 }
 
-// CurrentMinTsInAllTSOKeyspaceGroup returns current timestamp across all TSO keyspace groups.
-func (s *KVStore) CurrentMinTsInAllTSOKeyspaceGroup() (uint64, error) {
+// CurrentAllTSOKeyspaceMinTsGroup returns current timestamp across all TSO keyspace groups.
+func (s *KVStore) CurrentAllTSOKeyspaceMinTsGroup() (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-	startTS, err := s.getMinTsInAllTSOKeyspaceGroupWithRetry(bo)
+	startTS, err := s.getAllTSOKeyspaceGroupMinTSWithRetry(bo)
 	if err != nil {
 		return 0, err
 	}
@@ -469,9 +469,9 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 	}
 }
 
-func (s *KVStore) getMinTsInAllTSOKeyspaceGroupWithRetry(bo *Backoffer) (uint64, error) {
+func (s *KVStore) getAllTSOKeyspaceGroupMinTSWithRetry(bo *Backoffer) (uint64, error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("TiKVStore.getMinTsInAllTSOKeyspaceGroupWithRetry", opentracing.ChildOf(span.Context()))
+		span1 := span.Tracer().StartSpan("TiKVStore.getAllTSOKeyspaceGroupMinTSWithRetry", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
