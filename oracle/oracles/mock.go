@@ -94,7 +94,7 @@ func (o *MockOracle) GetTimestamp(ctx context.Context, _ *oracle.Option) (uint64
 }
 
 // GetMinTimestampInAllTSOGroup implements oracle.Oracle interface.
-func (o *MockOracle) GetMinTimestampInAllTSOGroup(ctx context.Context) (uint64, error) {
+func (o *MockOracle) GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, error) {
 	o.RLock()
 	defer o.RUnlock()
 
