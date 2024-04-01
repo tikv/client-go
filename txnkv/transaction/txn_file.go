@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
@@ -501,10 +501,10 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		op := mutations.GetOp(i)
 		val := mutations.GetValue(i)
 		entrySize := 2 + len(key) + 1 + 4 + len(val)
-		if len(buf)+entrySize+4 > cap(buf) {
+		if len(buf) > 0 && len(buf)+entrySize+4 > cap(buf) {
 			chunkID, err := c.buildTxnFile(bo, writerAddr, buf)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "build txn file failed")
 			}
 			ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(i-1))
 			c.txnFileCtx.slice.append(chunkID, ran)
@@ -520,7 +520,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	if len(buf) > 0 {
 		chunkID, err := c.buildTxnFile(bo, writerAddr, buf)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "build txn file failed")
 		}
 		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
 		c.txnFileCtx.slice.append(chunkID, ran)
@@ -533,8 +533,8 @@ func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writerAddr string,
 	hash.Write(buf)
 	crc := hash.Sum32()
 	buf = binary.LittleEndian.AppendUint32(buf, crc)
-	logutil.BgLogger().Info("build txn file size", zap.Int("size", len(buf)))
-	url := fmt.Sprintf("http://%s/txn_chunk", writerAddr)
+	logutil.Logger(bo.GetCtx()).Info("build txn file size", zap.Int("size", len(buf)))
+	url := fmt.Sprintf("http://%s/txn_chunk", writerAddr) // TODO: support https
 	req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", url, bytes.NewReader(buf))
 	if err != nil {
 		return 0, errors.WithStack(err)
@@ -546,18 +546,24 @@ func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writerAddr string,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("http status %s", resp.Status)
+		return 0, errors.Errorf("http status %s", resp.Status)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, err
+		return 0, errors.WithStack(err)
 	}
-	return strconv.ParseUint(string(data), 10, 64)
+	v := struct {
+		ChunkId uint64 `json:"chunk_id"`
+	}{}
+	if err = json.Unmarshal(data, &v); err != nil {
+		return 0, errors.Wrapf(err, "unmarshal response %s", string(data))
+	}
+	return v.ChunkId, nil
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
 	conf := config.GetGlobalConfig()
-	if c.txn.isPessimistic || uint64(c.txn.GetMemBuffer().Size()) < config.TiKVClient.FileBasedTxnMinSize {
+	if c.txn.isPessimistic || uint64(c.txn.GetMemBuffer().Size()) <= conf.TiKVClient.FileBasedTxnMinSize {
 		return false
 	}
 	return len(conf.TiKVClient.FileBasedTxnChunkWriterAddr) > 0
