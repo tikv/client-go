@@ -588,7 +588,7 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 			zap.String("forwardedHost", forwardedHost),
 			zap.Error(err),
 		)
-		c.failPendingRequests(err)
+		c.failRequestsByIDs(err, req.RequestIds) // fast fail requests.
 		return
 	}
 
@@ -604,21 +604,48 @@ func (c *batchCommandsClient) send(forwardedHost string, req *tikvpb.BatchComman
 			zap.Uint64s("requestIDs", req.RequestIds),
 			zap.Error(err),
 		)
-		c.failPendingRequests(err)
+		c.failRequestsByIDs(err, req.RequestIds) // fast fail requests.
 	}
 }
 
 // `failPendingRequests` must be called in locked contexts in order to avoid double closing channels.
-func (c *batchCommandsClient) failPendingRequests(err error) {
+// when enable-forwarding is true, the `forwardedHost` maybe not empty.
+// failPendingRequests fails all pending requests which req.forwardedHost equals to forwardedHost parameter.
+// Why need check `forwardedHost`? Here is an example, when enable-forwarding is true, and this client has network issue with store1:
+//   - some requests are sent to store1 with forwarding, such as forwardedHost is store2, those requests will succeed.
+//   - some requests are sent to store1 without forwarding, and may fail then `failPendingRequests` would be called,
+//     if we don't check `forwardedHost` and fail all pending requests, the requests with forwarding will be failed too. this may cause some issue:
+//     1. data race. see https://github.com/tikv/client-go/issues/1222 and TestRandomRestartStoreAndForwarding.
+//     2. panic which cause by `send on closed channel`, since failPendingRequests will close the entry.res channel,
+//     but in another batchRecvLoop goroutine,  it may receive the response from forwardedHost store2 and try to send the response to entry.res channel,
+//     then panic by send on closed channel.
+func (c *batchCommandsClient) failPendingRequests(err error, forwardedHost string) {
 	util.EvalFailpoint("panicInFailPendingRequests")
 	c.batched.Range(func(key, value interface{}) bool {
 		id, _ := key.(uint64)
 		entry, _ := value.(*batchCommandsEntry)
-		c.batched.Delete(id)
-		c.sent.Add(-1)
-		entry.error(err)
+		if entry.forwardedHost == forwardedHost {
+			c.failRequest(err, id, entry)
+		}
 		return true
 	})
+}
+
+// failRequestsByIDs fails requests by requestID.
+func (c *batchCommandsClient) failRequestsByIDs(err error, requestIDs []uint64) {
+	for _, requestID := range requestIDs {
+		value, ok := c.batched.Load(requestID)
+		if !ok {
+			continue
+		}
+		c.failRequest(err, requestID, value.(*batchCommandsEntry))
+	}
+}
+
+func (c *batchCommandsClient) failRequest(err error, requestID uint64, entry *batchCommandsEntry) {
+	c.batched.Delete(requestID)
+	c.sent.Add(-1)
+	entry.error(err)
 }
 
 func (c *batchCommandsClient) waitConnReady() (err error) {
@@ -793,7 +820,7 @@ func (c *batchCommandsClient) recreateStreamingClient(err error, streamClient *b
 	}
 	*epoch++
 
-	c.failPendingRequests(err) // fail all pending requests.
+	c.failPendingRequests(err, streamClient.forwardedHost) // fail all pending requests.
 	b := retry.NewBackofferWithVars(context.Background(), math.MaxInt32, nil)
 	for { // try to re-create the streaming in the loop.
 		if c.isStopped() {
