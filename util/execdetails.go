@@ -635,7 +635,6 @@ func (td *TimeDetail) String() string {
 		return ""
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 16))
-	buf.WriteString("time_detail: {")
 	if td.ProcessTime > 0 {
 		buf.WriteString("total_process_time: ")
 		buf.WriteString(FormatDuration(td.ProcessTime))

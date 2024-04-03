@@ -88,3 +88,8 @@ func TestCompatibleParseGCTime(t *testing.T) {
 		assert.NotNil(err)
 	}
 }
+
+func TestTimeDetail(t *testing.T) {
+	detail := &TimeDetail{KvReadWallTime: time.Millisecond * 2, TotalRPCWallTime: time.Millisecond * 3}
+	assert.Equal(t, "time_detail: {total_kv_read_wall_time: 2ms, tikv_wall_time: 3ms}", detail.String())
+}
