@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
@@ -50,10 +49,7 @@ type ReplicaSelector interface {
 func NewReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (ReplicaSelector, error) {
-	if config.GetGlobalConfig().TiKVClient.EnableReplicaSelectorV2 {
-		return newReplicaSelectorV2(regionCache, regionID, req, opts...)
-	}
-	return newReplicaSelector(regionCache, regionID, req, opts...)
+	return newReplicaSelectorV2(regionCache, regionID, req, opts...)
 }
 
 type replicaSelectorV2 struct {

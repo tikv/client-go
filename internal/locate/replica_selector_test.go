@@ -2609,34 +2609,14 @@ func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
 }
 
 func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPathCase) bool {
-	ca2 := ca1
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.EnableReplicaSelectorV2 = false
-	})
 	sender := ca1.run(s)
-	ca1.checkResult(s, "v1", sender)
-
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.EnableReplicaSelectorV2 = true
-	})
-	sender = ca2.run(s)
-	if ca2.expect == nil {
-		// compare with ca1 result.
-		ca2.expect = &ca1.result
-	}
-	ca2.checkResult(s, "v2", sender)
+	ca1.checkResult(s, "v2", sender)
 	return !ca1.accessErrInValid
 }
 
 func (s *testReplicaSelectorSuite) runCase(ca replicaSelectorAccessPathCase, v2 bool) bool {
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.EnableReplicaSelectorV2 = v2
-	})
 	sender := ca.run(s)
-	version := "v1"
-	if v2 {
-		version = "v2"
-	}
+	version := "v2"
 	ca.checkResult(s, version, sender)
 	return !ca.accessErrInValid
 }
@@ -2644,27 +2624,11 @@ func (s *testReplicaSelectorSuite) runCase(ca replicaSelectorAccessPathCase, v2 
 func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorAccessPathCase) bool {
 	expects := make([]accessPathResult, 0, len(cas))
 	valid := true
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.EnableReplicaSelectorV2 = false
-	})
 	for _, ca1 := range cas {
 		sender := ca1.run(s)
-		ca1.checkResult(s, "v1", sender)
+		ca1.checkResult(s, "v2", sender)
 		expects = append(expects, ca1.result)
 		valid = valid && !ca1.accessErrInValid
-	}
-
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.EnableReplicaSelectorV2 = true
-	})
-	for i, ca2 := range cas {
-		sender := ca2.run(s)
-		if ca2.expect == nil {
-			// compare with ca1 result.
-			ca2.expect = &expects[i]
-		}
-		ca2.checkResult(s, "v2", sender)
-		valid = valid && !ca2.accessErrInValid
 	}
 	return valid
 }
@@ -3298,9 +3262,6 @@ func BenchmarkReplicaSelector(b *testing.B) {
 		mvccStore.Close()
 	}()
 
-	config.UpdateGlobal(func(conf *config.Config) {
-		conf.TiKVClient.EnableReplicaSelectorV2 = true
-	})
 	cnt := 0
 	allErrs := getAllRegionErrors(nil)
 	fnClient := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
