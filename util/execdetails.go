@@ -668,8 +668,10 @@ func (td *TimeDetail) String() string {
 		buf.WriteString("tikv_wall_time: ")
 		buf.WriteString(FormatDuration(td.TotalRPCWallTime))
 	}
-	buf.WriteString("}")
-	return buf.String()
+	if buf.Len() == 0 {
+		return ""
+	}
+	return "time_detail: {" + buf.String() + "}"
 }
 
 // Merge merges the time detail into itself.
