@@ -117,7 +117,10 @@ type RegionRequestSender struct {
 }
 
 func (s *RegionRequestSender) String() string {
-	return fmt.Sprintf("{rpcError:%v,replicaSelector: %v}", s.rpcError, s.replicaSelector.String())
+	if s.replicaSelector == nil {
+		return fmt.Sprintf("{rpcError:%v, replicaSelector: %v}", s.rpcError, s.replicaSelector)
+	}
+	return fmt.Sprintf("{rpcError:%v, replicaSelector: %v}", s.rpcError, s.replicaSelector.String())
 }
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
