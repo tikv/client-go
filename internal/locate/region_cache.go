@@ -2194,7 +2194,7 @@ func (c *RegionCache) PDClient() pd.Client {
 // GetTiFlashStores returns the information of all tiflash nodes.
 func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	return c.filterStores(nil, func(s *Store) bool {
-		return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels)
+		return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels) && s.getResolveState() == resolved
 	})
 }
 
