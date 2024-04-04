@@ -451,16 +451,26 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
+		startTime := time.Now()
 		defer func() {
 			if err != nil {
 				txn.committer.ttlManager.close()
 			}
 			flushedKeys += memdb.Len()
 			flushedSize += memdb.Size()
+			logutil.BgLogger().Info(
+				"[pipelined dml] flushed memdb to kv store",
+				zap.Uint64("startTS", txn.startTS),
+				zap.Uint64("generation", generation),
+				zap.Uint64("session", txn.committer.sessionID),
+				zap.Int("keys", memdb.Len()),
+				zap.String("size", units.HumanSize(float64(memdb.Size()))),
+				zap.Int("flushed keys", flushedKeys),
+				zap.String("flushed size", units.HumanSize(float64(flushedSize))),
+				zap.Duration("take time", time.Since(startTime)),
+			)
 		}()
-		logutil.BgLogger().Info("[pipelined dml] flush memdb to kv store",
-			zap.Int("keys", memdb.Len()), zap.String("size", units.HumanSize(float64(memdb.Size()))),
-			zap.Int("flushed keys", flushedKeys), zap.String("flushed size", units.HumanSize(float64(flushedSize))))
+
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
 		bo := retry.NewBackofferWithVars(flushCtx, 20000, nil)

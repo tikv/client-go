@@ -17,6 +17,7 @@ package transaction
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -116,6 +117,12 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
 ) (err error) {
 	if len(c.primaryKey) == 0 {
+		logutil.Logger(bo.GetCtx()).Error(
+			"[pipelined dml] primary key should be set before pipelined flush",
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("generation", action.generation),
+			zap.Uint64("session", c.sessionID),
+		)
 		return errors.New("[pipelined dml] primary key should be set before pipelined flush")
 	}
 
@@ -133,6 +140,8 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			logutil.BgLogger().Warn(
 				"[pipelined dml] slow pipelined flush request",
 				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("generation", action.generation),
+				zap.Uint64("session", c.sessionID),
 				zap.Stringer("region", &batch.region),
 				zap.Int("attempts", attempts),
 			)
@@ -224,6 +233,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 				"[pipelined dml] encounters lock",
 				zap.Uint64("session", c.sessionID),
 				zap.Uint64("txnID", c.startTS),
+				zap.Uint64("generation", action.generation),
 				zap.Stringer("lock", lock),
 			)
 			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
@@ -266,6 +276,13 @@ func (action actionPipelinedFlush) handleSingleBatch(
 				errors.Errorf("[pipelined dml] flush lockedKeys: %d", len(locks)),
 			)
 			if err != nil {
+				logutil.Logger(bo.GetCtx()).Warn(
+					"[pipelined dml] backoff failed during flush",
+					zap.Error(err),
+					zap.Uint64("startTS", c.startTS),
+					zap.Uint64("generation", action.generation),
+					zap.Uint64("session", c.sessionID),
+				)
 				return err
 			}
 		}
@@ -285,12 +302,17 @@ func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutatio
 func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 	logutil.BgLogger().Info("[pipelined dml] start to commit transaction",
 		zap.Int("keys", c.txn.GetMemBuffer().Len()),
-		zap.String("size", units.HumanSize(float64(c.txn.GetMemBuffer().Size()))))
+		zap.String("size", units.HumanSize(float64(c.txn.GetMemBuffer().Size()))),
+		zap.Uint64("startTS", c.startTS),
+		zap.Uint64("session", c.sessionID),
+	)
 	commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
 	if err != nil {
 		logutil.Logger(bo.GetCtx()).Warn("[pipelined dml] commit transaction get commitTS failed",
 			zap.Error(err),
-			zap.Uint64("txnStartTS", c.startTS))
+			zap.Uint64("txnStartTS", c.startTS),
+			zap.Uint64("session", c.sessionID),
+		)
 		return err
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
@@ -307,7 +329,12 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 	c.mu.RLock()
 	c.mu.committed = true
 	c.mu.RUnlock()
-	logutil.BgLogger().Info("[pipelined dml] transaction is committed")
+	logutil.BgLogger().Info(
+		"[pipelined dml] transaction is committed",
+		zap.Uint64("startTS", c.startTS),
+		zap.Uint64("commitTS", commitTS),
+		zap.Uint64("session", c.sessionID),
+	)
 
 	if _, err := util.EvalFailpoint("pipelinedSkipResolveLock"); err == nil {
 		return nil
@@ -410,14 +437,45 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 	var resolved atomic.Uint64
 	handler, err := c.buildPipelinedResolveHandler(commit, &resolved)
 	if err != nil {
-		logutil.Logger(bo.GetCtx()).Error("[pipelined dml] build buildPipelinedResolveHandler error", zap.Error(err))
+		logutil.Logger(bo.GetCtx()).Error(
+			"[pipelined dml] build buildPipelinedResolveHandler error",
+			zap.Error(err),
+			zap.Uint64("resolved regions", resolved.Load()),
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+			zap.Uint64("session", c.sessionID),
+		)
 		return
 	}
+
 	status := "rollback"
 	if commit {
 		status = "commit"
 	}
-	runner := rangetask.NewRangeTaskRunner("pipelined-dml-"+status, c.store, RESOLVE_CONCURRENCY, handler)
+
+	runner := rangetask.NewRangeTaskRunner(
+		fmt.Sprintf("pipelined-dml-%s-%d", status, c.startTS),
+		c.store,
+		RESOLVE_CONCURRENCY,
+		handler,
+	)
+	if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
+		logutil.Logger(bo.GetCtx()).Error("[pipelined dml] commit transaction secondaries failed",
+			zap.Uint64("resolved regions", resolved.Load()),
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+			zap.Uint64("session", c.sessionID),
+			zap.Error(err),
+		)
+	} else {
+		logutil.BgLogger().Info("[pipelined dml] commit transaction secondaries done",
+			zap.Uint64("resolved regions", resolved.Load()),
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+			zap.Uint64("session", c.sessionID),
+		)
+	}
+
 	go func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
 			logutil.Logger(bo.GetCtx()).Error("[pipelined dml] resolve flushed locks failed",

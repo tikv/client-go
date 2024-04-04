@@ -818,3 +818,13 @@ func (s *testRegionRequestToSingleStoreSuite) TestClientExt() {
 	s.NotNil(sender.client)
 	s.Nil(sender.getClientExt())
 }
+
+func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestSenderString() {
+	sender := NewRegionRequestSender(s.cache, &fnClient{})
+	loc, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	// invalid region cache before sending request.
+	s.cache.InvalidateCachedRegion(loc.Region)
+	sender.SendReqCtx(s.bo, tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}), loc.Region, time.Second, tikvrpc.TiKV)
+	s.Equal("{rpcError:cached region invalid, replicaSelector: <nil>}", sender.String())
+}

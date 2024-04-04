@@ -59,7 +59,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util/israce"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
@@ -888,9 +887,6 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 }
 
 func TestRandomRestartStoreAndForwarding(t *testing.T) {
-	if israce.RaceEnabled {
-		t.Skip("skip since race bug in issue #1222")
-	}
 	store1, port1 := mockserver.StartMockTikvService()
 	require.True(t, port1 > 0)
 	require.True(t, store1.IsRunning())
@@ -908,6 +904,8 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 	wg := sync.WaitGroup{}
 	done := int64(0)
 	concurrency := 500
+	addr1 := store1.Addr()
+	addr2 := store2.Addr()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -931,7 +929,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 		}
 	}()
 
-	conn, err := client1.getConnArray(store1.Addr(), true)
+	conn, err := client1.getConnArray(addr1, true)
 	assert.Nil(t, err)
 	for j := 0; j < concurrency; j++ {
 		wg.Add(1)
@@ -944,9 +942,9 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 				req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
 				forwardedHost := ""
 				if i%2 != 0 {
-					forwardedHost = store2.Addr()
+					forwardedHost = addr2
 				}
-				_, err := sendBatchRequest(context.Background(), store1.Addr(), forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
+				_, err := sendBatchRequest(context.Background(), addr1, forwardedHost, conn.batchConn, req, time.Millisecond*50, 0)
 				if err == nil ||
 					err.Error() == "EOF" ||
 					err.Error() == "rpc error: code = Unavailable desc = error reading from server: EOF" ||
@@ -964,9 +962,22 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 	for _, cli := range conn.batchConn.batchCommandsClients {
 		require.Equal(t, int64(9223372036854775807), cli.maxConcurrencyRequestLimit.Load())
 		require.True(t, cli.available() > 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
-		// TODO(crazycs520): fix me, see https://github.com/tikv/client-go/pull/1219
-		//require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
+		require.True(t, cli.sent.Load() >= 0, fmt.Sprintf("sent: %d", cli.sent.Load()))
 	}
+}
+
+func TestFastFailRequest(t *testing.T) {
+	client := NewRPCClient()
+	defer func() {
+		err := client.Close()
+		require.NoError(t, err)
+	}()
+	start := time.Now()
+	unknownAddr := "127.0.0.1:52027"
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("key")})
+	_, err := client.sendRequest(context.Background(), unknownAddr, req, time.Second*20)
+	require.Equal(t, "context deadline exceeded", errors.Cause(err).Error())
+	require.True(t, time.Since(start) < time.Second*6) // fast fail when dial target failed.
 }
 
 func TestErrConn(t *testing.T) {
