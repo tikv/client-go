@@ -23,6 +23,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
@@ -58,9 +59,21 @@ type chunkBatch struct {
 	isPrimary bool
 }
 
+func (b chunkBatch) String() string {
+	return fmt.Sprintf("chunkBatch{region: %s, isPrimary: %t, txnChunkSlice: %s}", b.region.GetMeta(), b.isPrimary, b.txnChunkSlice.String())
+}
+
 type txnChunkSlice struct {
 	chunkIDs    []uint64
 	chunkRanges []txnChunkRange
+}
+
+func (s txnChunkSlice) String() string {
+	slice := make([]string, len(s.chunkRanges))
+	for i, ran := range s.chunkRanges {
+		slice[i] = fmt.Sprintf("{id: %v, smallest: %s, biggest: %s}", s.chunkIDs[i], kv.StrKey(ran.smallest), kv.StrKey(ran.biggest))
+	}
+	return fmt.Sprintf("[%s]", strings.Join(slice, ", "))
 }
 
 func (cs *txnChunkSlice) appendSlice(other *txnChunkSlice) {
@@ -98,10 +111,27 @@ func (cs *txnChunkSlice) len() int {
 func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
 	var batches []chunkBatch
 	endKey := kv.NextKey(cs.chunkRanges[cs.len()-1].biggest)
-	regions, err := c.LoadRegionsInKeyRange(bo, cs.chunkRanges[0].smallest, endKey)
+	startKey := cs.chunkRanges[0].smallest
+	regions, err := c.LoadRegionsInKeyRange(bo, startKey, endKey)
 	if err != nil {
 		return nil, err
 	}
+
+	// logutil.Logger(bo.GetCtx()).Info("txn file group to batches",
+	// 	zap.String("startKey", kv.StrKey(startKey)),
+	// 	zap.String("endKey", kv.StrKey(endKey)),
+	// 	zap.Int("regions.len", len(regions)),
+	// 	zap.Any("regions", regions),
+	// )
+
+	// for _, r := range regions {
+	// 	logutil.Logger(bo.GetCtx()).Info("txn file group to batches",
+	// 		zap.String("r", r.GetMeta().String()),
+	// 	)
+	// }
+
+	// TODO: verify region boundaries
+
 	for _, region := range regions {
 		batch := chunkBatch{
 			region: region,
@@ -113,6 +143,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		}
 		if batch.len() > 0 {
 			batches = append(batches, batch)
+			logutil.Logger(bo.GetCtx()).Info("txn file group to batches", zap.Any("batch", batch))
 		}
 	}
 	return batches, nil
@@ -131,7 +162,7 @@ func newTxnChunkRange(smallest []byte, biggest []byte) txnChunkRange {
 }
 
 func (r *txnChunkRange) overlapRegion(region *locate.Region) bool {
-	return bytes.Compare(r.smallest, region.EndKey()) < 0 && bytes.Compare(r.biggest, region.StartKey()) >= 0
+	return (len(region.EndKey()) == 0 || bytes.Compare(r.smallest, region.EndKey()) < 0) && bytes.Compare(r.biggest, region.StartKey()) >= 0
 }
 
 type txnFileAction interface {
@@ -261,7 +292,12 @@ type txnFileCommitAction struct {
 }
 
 func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
+	keys := make([][]byte, 0, batch.len())
+	for _, chunkRange := range batch.chunkRanges {
+		keys = append(keys, chunkRange.smallest)
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
+		Keys:          keys, // set keys to help detect duplicated request.
 		StartVersion:  c.startTS,
 		CommitVersion: a.commitTS,
 		IsTxnFile:     true,
@@ -340,7 +376,12 @@ func (a txnFileCommitAction) extractKeyError(resp *tikvrpc.Response) *kvrpcpb.Ke
 type txnFileRollbackAction struct{}
 
 func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
+	keys := make([][]byte, 0, batch.len())
+	for _, chunkRange := range batch.chunkRanges {
+		keys = append(keys, chunkRange.smallest)
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
+		Keys:         keys,
 		StartVersion: c.startTS,
 		IsTxnFile:    true,
 	}, kvrpcpb.Context{
@@ -379,19 +420,26 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		undetermined := c.mu.undeterminedErr != nil
 		c.mu.RUnlock()
 		if !committed && !undetermined {
-			err1 := c.executeTxnFileActionWithRetry(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
-			if err1 != nil {
-				logutil.BgLogger().Error("executeTxnFileActionWithRetry failed", zap.Error(err1))
+			if c.txnFileCtx.slice.len() > 0 {
+				err1 := c.executeTxnFileActionWithRetry(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
+				if err1 != nil {
+					logutil.BgLogger().Error("executeTxnFile: rollback on error failed", zap.Error(err1))
+				}
 			}
 			metrics.TwoPCTxnCounterError.Inc()
 		} else {
 			metrics.TwoPCTxnCounterOk.Inc()
 		}
 		c.txn.commitTS = c.commitTS
+
+		logutil.Logger(ctx).Info("execute txn file finished", zap.Uint64("commitTS", c.commitTS), zap.Error(err))
 	}()
+
+	logutil.Logger(ctx).Info("execute txn file")
 
 	bo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
 	if err = c.buildTxnFiles(bo, c.mutations); err != nil {
+		logutil.Logger(ctx).Error("build txn files failed", zap.Error(err))
 		return
 	}
 	if err = c.preSplitTxnFileRegions(bo); err != nil {
@@ -481,7 +529,7 @@ func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, c
 			return nil
 		}
 		currentChunks = regionErrChunks
-		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txnFile region miss"))
+		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file region miss"))
 		if err != nil {
 			return err
 		}
@@ -489,6 +537,7 @@ func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, c
 }
 
 func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations CommitterMutations) error {
+	logutil.Logger(bo.GetCtx()).Info("build txn files", zap.Int("mutations.len()", mutations.Len()))
 	capacity := c.txn.Size() + c.txn.Len()*7 + 4
 	if capacity > MaxTxnChunkSize {
 		capacity = MaxTxnChunkSize
@@ -504,6 +553,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		if len(buf) > 0 && len(buf)+entrySize+4 > cap(buf) {
 			chunkID, err := c.buildTxnFile(bo, writerAddr, buf)
 			if err != nil {
+				logutil.Logger(bo.GetCtx()).Error("build txn file failed", zap.Error(err))
 				return errors.Wrap(err, "build txn file failed")
 			}
 			ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(i-1))
@@ -520,21 +570,23 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	if len(buf) > 0 {
 		chunkID, err := c.buildTxnFile(bo, writerAddr, buf)
 		if err != nil {
+			logutil.Logger(bo.GetCtx()).Error("build txn file failed", zap.Error(err))
 			return errors.Wrap(err, "build txn file failed")
 		}
 		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
 		c.txnFileCtx.slice.append(chunkID, ran)
 	}
+	logutil.Logger(bo.GetCtx()).Info("build txn files", zap.Any("txnFileCtx.slice", c.txnFileCtx.slice))
 	return nil
 }
 
+// TODO: support https, retry, timeout
 func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writerAddr string, buf []byte) (uint64, error) {
 	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
 	hash.Write(buf)
 	crc := hash.Sum32()
 	buf = binary.LittleEndian.AppendUint32(buf, crc)
-	logutil.Logger(bo.GetCtx()).Info("build txn file size", zap.Int("size", len(buf)))
-	url := fmt.Sprintf("http://%s/txn_chunk", writerAddr) // TODO: support https
+	url := fmt.Sprintf("http://%s/txn_chunk", writerAddr)
 	req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", url, bytes.NewReader(buf))
 	if err != nil {
 		return 0, errors.WithStack(err)
@@ -558,12 +610,13 @@ func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writerAddr string,
 	if err = json.Unmarshal(data, &v); err != nil {
 		return 0, errors.Wrapf(err, "unmarshal response %s", string(data))
 	}
+	logutil.Logger(bo.GetCtx()).Info("build txn file", zap.Int("size", len(buf)), zap.Uint64("chunkId", v.ChunkId))
 	return v.ChunkId, nil
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
 	conf := config.GetGlobalConfig()
-	if c.txn.isPessimistic || uint64(c.txn.GetMemBuffer().Size()) <= conf.TiKVClient.FileBasedTxnMinSize {
+	if c.txn == nil || c.txn.isPessimistic || c.txn.isInternal() || uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.FileBasedTxnMinSize {
 		return false
 	}
 	return len(conf.TiKVClient.FileBasedTxnChunkWriterAddr) > 0
@@ -592,7 +645,7 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 		}
 		_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
 		if err != nil {
-			logutil.BgLogger().Warn("txn file pre-split region failed")
+			logutil.Logger(bo.GetCtx()).Warn("txn file pre-split region failed", zap.Error(err))
 		}
 		err = bo.Backoff(retry.BoRegionMiss, err)
 		if err != nil {
