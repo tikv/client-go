@@ -232,7 +232,7 @@ type ReplicaSelectMixedStrategy struct {
 func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2, region *Region) *replica {
 	replicas := selector.replicas
 	maxScoreIdxes := make([]int, 0, len(replicas))
-	maxScore := -1
+	var maxScore storeSelectionScore = -1
 	reloadRegion := false
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
@@ -285,7 +285,7 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	if r.dataIsNotReady && !isLeader {
 		// If the replica is failed by data not ready with stale read, we can retry it with replica-read.
 		// 	after https://github.com/tikv/tikv/pull/15726, the leader will not return DataIsNotReady error,
-		//	then no need to retry leader again, if you try it again, you may got a NotLeader error.
+		//	then no need to retry leader again. If you try it again, you may get a NotLeader error.
 		maxAttempt = 2
 	}
 	if r.isExhausted(maxAttempt, 0) {
@@ -306,20 +306,51 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	return true
 }
 
+type storeSelectionScore int64
+
 const (
 	// The definition of the score is:
-	// MSB                                                                               LSB
-	// [unused bits][1 bit: LabelMatches][1 bit: PreferLeader][2 bits: NormalPeer + NotSlow]
-	flagLabelMatches = 1 << 4
-	flagPreferLeader = 1 << 3
-	flagNormalPeer   = 1 << 2
-	flagNotSlow      = 1 << 1
-	flagNotAttempt   = 1
+	// MSB                                                                                                         LSB
+	// [unused bits][1 bit: NotSlow][1 bit: LabelMatches][1 bit: PreferLeader][1 bit: NormalPeer][1 bit: NotAttempted]
+	flagNotAttempted storeSelectionScore = 1 << iota
+	flagNormalPeer
+	flagPreferLeader
+	flagLabelMatches
+	flagNotSlow
 )
 
+func (s storeSelectionScore) String() string {
+	if s == 0 {
+		return "0"
+	}
+	res := ""
+	appendFactor := func(name string) {
+		if len(res) != 0 {
+			res += "|"
+		}
+		res += name
+	}
+	if (s & flagNotSlow) != 0 {
+		appendFactor("NotSlow")
+	}
+	if (s & flagLabelMatches) != 0 {
+		appendFactor("LableMatches")
+	}
+	if (s & flagPreferLeader) != 0 {
+		appendFactor("PreferLeader")
+	}
+	if (s & flagNormalPeer) != 0 {
+		appendFactor("NormalPeer")
+	}
+	if (s & flagNotAttempted) != 0 {
+		appendFactor("NotAttempted")
+	}
+	return res
+}
+
 // calculateScore calculates the score of the replica.
-func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) int {
-	score := 0
+func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) storeSelectionScore {
+	var score storeSelectionScore = 0
 	if r.store.IsStoreMatch(s.stores) && r.store.IsLabelsMatch(s.labels) {
 		score |= flagLabelMatches
 	}
@@ -353,7 +384,7 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 		score |= flagNotSlow
 	}
 	if r.attempts == 0 {
-		score |= flagNotAttempt
+		score |= flagNotAttempted
 	}
 	return score
 }

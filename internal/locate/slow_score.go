@@ -124,7 +124,7 @@ func (ss *SlowScoreStat) updateSlowScore() {
 	}
 	atomic.CompareAndSwapUint64(&ss.avgTimecost, avgTimecost, ss.tsCntSlidingWindow.Avg())
 
-	// Resets the counter of inteval timecost
+	// Resets the counter of interval timecost
 	atomic.StoreUint64(&ss.intervalTimecost, 0)
 	atomic.StoreUint64(&ss.intervalUpdCount, 0)
 }
@@ -155,15 +155,17 @@ func (ss *SlowScoreStat) markAlreadySlow() {
 
 // resetSlowScore resets the slow score to 0. It's used for test.
 func (ss *SlowScoreStat) resetSlowScore() {
-	atomic.StoreUint64(&ss.avgScore, 0)
+	*ss = SlowScoreStat{
+		avgScore: 1,
+	}
 }
 
 func (ss *SlowScoreStat) isSlow() bool {
-       return clientSideSlowScoreIsSlow(ss.getSlowScore())
+	return clientSideSlowScoreIsSlow(ss.getSlowScore())
 }
 
 func clientSideSlowScoreIsSlow(value uint64) bool {
-       return value >= slowScoreThreshold
+	return value >= slowScoreThreshold
 }
 
 // replicaFlowsType indicates the type of the destination replica of flows.
@@ -174,7 +176,7 @@ const (
 	toLeader replicaFlowsType = iota
 	// toFollower indicates that flows are sent to followers' replica
 	toFollower
-	// numflowsDestType reserved to keep max replicaFlowsType value.
+	// numReplicaFlowsType is reserved to keep max replicaFlowsType value.
 	numReplicaFlowsType
 )
 
