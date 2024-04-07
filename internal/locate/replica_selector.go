@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
+	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -388,10 +389,13 @@ func (s *replicaSelector) onNotLeader(
 	if s.target != nil {
 		s.target.notLeader = true
 	}
-	leaderIdx, err := s.baseReplicaSelector.onNotLeader(bo, ctx, notLeader)
-	if err != nil {
-		return false, err
+	leader := notLeader.GetLeader()
+	if leader == nil {
+		// The region may be during transferring leader.
+		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx))
+		return err == nil, err
 	}
+	leaderIdx := s.updateLeader(leader)
 	if leaderIdx >= 0 {
 		if isLeaderCandidate(s.replicas[leaderIdx]) {
 			s.replicaReadType = kv.ReplicaReadLeader
@@ -400,7 +404,7 @@ func (s *replicaSelector) onNotLeader(
 	return true, nil
 }
 
-func (s *replicaSelector) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
+func (s *replicaSelector) onFlashbackInProgress(req *tikvrpc.Request) bool {
 	// if the failure is caused by replica read, we can retry it with leader safely.
 	if req.ReplicaRead && s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() {
 		req.BusyThresholdMs = 0
@@ -472,6 +476,25 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 		return true
 	}
 	return false
+}
+
+func isReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+	if req.MaxExecutionDurationMs >= uint64(client.ReadTimeoutShort.Milliseconds()) {
+		// Configurable timeout should less than `ReadTimeoutShort`.
+		return false
+	}
+	// Only work for read requests, return false for non-read requests.
+	return isReadReq(req.Type)
+}
+
+func isReadReq(tp tikvrpc.CmdType) bool {
+	switch tp {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {

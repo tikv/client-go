@@ -437,25 +437,6 @@ func (s *baseReplicaSelector) buildRPCContext(bo *retry.Backoffer, targetReplica
 	return rpcCtx, nil
 }
 
-func isReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
-	if req.MaxExecutionDurationMs >= uint64(client.ReadTimeoutShort.Milliseconds()) {
-		// Configurable timeout should less than `ReadTimeoutShort`.
-		return false
-	}
-	// Only work for read requests, return false for non-read requests.
-	return isReadReq(req.Type)
-}
-
-func isReadReq(tp tikvrpc.CmdType) bool {
-	switch tp {
-	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
-		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
-		return true
-	default:
-		return false
-	}
-}
-
 func (s *baseReplicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
 	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache)
 }
@@ -474,18 +455,6 @@ func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause err
 		s.regionCache.markStoreNeedCheck(store)
 		store.healthStatus.markAlreadySlow()
 	}
-}
-
-func (s *baseReplicaSelector) onNotLeader(
-	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
-) (leaderIdx int, err error) {
-	leader := notLeader.GetLeader()
-	if leader == nil {
-		// The region may be during transferring leader.
-		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx))
-		return -1, err
-	}
-	return s.updateLeader(leader), nil
 }
 
 // updateLeader updates the leader of the cached region.
@@ -1334,7 +1303,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("req", req),
 			zap.Stringer("ctx", ctx),
 		)
-		if req != nil && s.replicaSelector != nil && s.replicaSelector.onFlashbackInProgress(ctx, req) {
+		if req != nil && s.replicaSelector != nil && s.replicaSelector.onFlashbackInProgress(req) {
 			return true, nil
 		}
 		return false, errors.Errorf(
