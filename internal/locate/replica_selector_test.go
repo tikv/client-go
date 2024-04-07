@@ -1756,6 +1756,7 @@ func TestMultiReplicaInOneAZ(t *testing.T) {
 	rc.invalidate(Other)
 
 	s.changeRegionLeader(2)
+	// For stale read mode, always retry leader in the second attempt.
 	ca := replicaSelectorAccessPathCase{
 		reqType:   tikvrpc.CmdGet,
 		readType:  kv.ReplicaReadMixed,
@@ -1766,6 +1767,27 @@ func TestMultiReplicaInOneAZ(t *testing.T) {
 			accessPath: []string{
 				"{addr: store3, replica-read: false, stale-read: true}",
 				"{addr: store2, replica-read: false, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
+
+	// For non-stale-read, retrying leader is not that high priority.
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		accessErr: []RegionErrorType{ServerIsBusyErr},
+		label:     &metapb.StoreLabel{Key: "id", Value: "3"},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store6, replica-read: true, stale-read: false}",
 			},
 			respErr:         "",
 			respRegionError: nil,
