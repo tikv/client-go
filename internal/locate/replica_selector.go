@@ -365,7 +365,8 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) s
 			}
 		} else if s.tryLeader {
 			if len(s.labels) > 0 {
-				// When the leader has matching labels, prefer leader than other mismatching peers.
+				// When label matching is enabled, prefer selecting the leader for replicas that has same label-matching
+				// results.
 				score |= flagPreferLeader
 			} else {
 				score |= flagNormalPeer

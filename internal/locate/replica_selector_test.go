@@ -1797,6 +1797,50 @@ func TestMultiReplicaInOneAZ(t *testing.T) {
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
+
+	s.changeRegionLeader(4)
+	// Prefer choosing leader for replicas with same label matching results.
+	for _, staleRead := range []bool{false, true} {
+		ca = replicaSelectorAccessPathCase{
+			reqType:   tikvrpc.CmdGet,
+			readType:  kv.ReplicaReadMixed,
+			staleRead: staleRead,
+			accessErr: []RegionErrorType{},
+			label:     &metapb.StoreLabel{Key: "id", Value: "1"},
+			expect: &accessPathResult{
+				accessPath: []string{
+					fmt.Sprintf("{addr: store4, replica-read: %v, stale-read: %v}", !staleRead, staleRead),
+				},
+				respErr:         "",
+				respRegionError: nil,
+				backoffCnt:      0,
+				backoffDetail:   []string{},
+				regionIsValid:   true,
+			},
+		}
+		s.True(s.runCaseAndCompare(ca))
+	}
+
+	ca = replicaSelectorAccessPathCase{
+		reqType:   tikvrpc.CmdGet,
+		readType:  kv.ReplicaReadMixed,
+		staleRead: false,
+		accessErr: []RegionErrorType{ServerIsBusyErr, ServerIsBusyErr},
+		label:     &metapb.StoreLabel{Key: "id", Value: "3"},
+		expect: &accessPathResult{
+			accessPath: []string{
+				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store6, replica-read: true, stale-read: false}",
+				"{addr: store4, replica-read: true, stale-read: false}",
+			},
+			respErr:         "",
+			respRegionError: nil,
+			backoffCnt:      0,
+			backoffDetail:   []string{},
+			regionIsValid:   true,
+		},
+	}
+	s.True(s.runCaseAndCompare(ca))
 }
 
 func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
