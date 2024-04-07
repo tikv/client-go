@@ -411,7 +411,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 	if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 		// store has be removed in PD, we should invalidate all regions using those store.
 		logutil.BgLogger().Info("invalidate regions in removed store",
-			zap.Uint64("store", s.storeID), zap.String("add", s.addr))
+			zap.Uint64("store", s.storeID), zap.String("addr", s.addr))
 		atomic.AddUint32(&s.epoch, 1)
 		s.setResolveState(tombstone)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
