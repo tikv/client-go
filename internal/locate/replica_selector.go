@@ -27,31 +27,6 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
-type ReplicaSelector interface {
-	next(bo *retry.Backoffer, req *tikvrpc.Request) (*RPCContext, error)
-	targetReplica() *replica
-	proxyReplica() *replica
-	replicaType(rpcCtx *RPCContext) string
-	String() string
-	getBaseReplicaSelector() *baseReplicaSelector
-	getLabels() []*metapb.StoreLabel
-	onSendSuccess(req *tikvrpc.Request)
-	onSendFailure(bo *retry.Backoffer, err error)
-	invalidateRegion()
-	// Following methods are used to handle region errors.
-	onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error)
-	onDataIsNotReady()
-	onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error)
-	onReadReqConfigurableTimeout(req *tikvrpc.Request) bool
-}
-
-// NewReplicaSelector returns a new ReplicaSelector.
-func NewReplicaSelector(
-	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
-) (ReplicaSelector, error) {
-	return newReplicaSelectorV2(regionCache, regionID, req, opts...)
-}
-
 type replicaSelectorV2 struct {
 	baseReplicaSelector
 	replicaReadType kv.ReplicaReadType
@@ -210,6 +185,24 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 		return leader
 	}
 	return nil
+}
+
+// check leader is candidate or not.
+func isLeaderCandidate(leader *replica) bool {
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	// If leader.deadlineErrUsingConfTimeout is true, it means the leader is already tried and received deadline exceeded error, then don't retry it.
+	// If leader.notLeader is true, it means the leader is already tried and received not leader error, then don't retry it.
+	if leader.store.getLivenessState() != reachable ||
+		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
+		leader.deadlineErrUsingConfTimeout ||
+		leader.notLeader ||
+		leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+		return false
+	}
+	return true
 }
 
 // ReplicaSelectMixedStrategy is used to select a replica by calculating a score for each replica, and then choose the one with the highest score.
