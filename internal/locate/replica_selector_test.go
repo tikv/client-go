@@ -124,9 +124,9 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	s.Nil(err)
 	s.NotNil(selector)
 	for _, reqSource := range []string{"leader", "follower", "follower", "unknown"} {
-		ctx, err := selector.next(s.bo, req)
+		_, err := selector.next(s.bo, req)
 		s.Nil(err)
-		s.Equal(reqSource, selector.replicaType(ctx))
+		s.Equal(reqSource, selector.replicaType())
 	}
 
 	rc = s.getRegion()
@@ -153,7 +153,7 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 	s.NotNil(region)
 	selector, err := newReplicaSelector(s.cache, region.Region, req)
 	s.Nil(err)
-	for i, r := range selector.getBaseReplicaSelector().replicas {
+	for i, r := range selector.replicas {
 		rc := s.cache.GetCachedRegionWithRLock(region.Region)
 		s.NotNil(rc)
 		isLeader := r.peer.Id == rc.GetLeaderPeerID()
@@ -2561,7 +2561,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) *Regio
 	s.NotNil(rc)
 	bo := retry.NewBackofferWithVars(context.Background(), 40000, nil)
 	resp, _, _, err := sender.SendReqCtx(bo, req, rc.VerID(), timeout, tikvrpc.TiKV, opts...)
-	ca.recordResult(s, bo, sender.replicaSelector.getBaseReplicaSelector().region, access, resp, err)
+	ca.recordResult(s, bo, sender.replicaSelector.region, access, resp, err)
 	afterRun(ca, sender)
 	return sender
 }

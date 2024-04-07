@@ -456,10 +456,6 @@ func isReadReq(tp tikvrpc.CmdType) bool {
 	}
 }
 
-func (s *baseReplicaSelector) getBaseReplicaSelector() *baseReplicaSelector {
-	return s
-}
-
 func (s *baseReplicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
 	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache)
 }
@@ -693,7 +689,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
 			s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, totalErrors)
 			if s.replicaSelector != nil {
-				if err := s.replicaSelector.getBaseReplicaSelector().backoffOnNoCandidate(bo); err != nil {
+				if err := s.replicaSelector.backoffOnNoCandidate(bo); err != nil {
 					return nil, nil, retryTimes, err
 				}
 			}
@@ -703,8 +699,8 @@ func (s *RegionRequestSender) SendReqCtx(
 
 		var isLocalTraffic bool
 		if staleReadCollector != nil && s.replicaSelector != nil {
-			if target := s.replicaSelector.targetReplica(); target != nil {
-				isLocalTraffic = target.store.IsLabelsMatch(s.replicaSelector.getLabels())
+			if s.replicaSelector.target != nil {
+				isLocalTraffic = s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels)
 				staleReadCollector.onReq(req, isLocalTraffic)
 			}
 		}
@@ -722,13 +718,13 @@ func (s *RegionRequestSender) SendReqCtx(
 		req.Context.ClusterId = rpcCtx.ClusterID
 		rpcCtx.contextPatcher.applyTo(&req.Context)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
-			patchRequestSource(req, s.replicaSelector.replicaType(rpcCtx))
+			patchRequestSource(req, s.replicaSelector.replicaType())
 		}
 		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 			return nil, nil, retryTimes, err
 		}
 		if s.replicaSelector != nil {
-			if err := s.replicaSelector.getBaseReplicaSelector().backoffOnRetry(rpcCtx.Store, bo); err != nil {
+			if err := s.replicaSelector.backoffOnRetry(rpcCtx.Store, bo); err != nil {
 				return nil, nil, retryTimes, err
 			}
 		}
@@ -1648,11 +1644,11 @@ func patchRequestSource(req *tikvrpc.Request, replicaType string) {
 }
 
 func recordAttemptedTime(s *replicaSelector, duration time.Duration) {
-	if targetReplica := s.targetReplica(); targetReplica != nil {
-		targetReplica.attemptedTime += duration
+	if s.target != nil {
+		s.target.attemptedTime += duration
 	}
-	if proxyReplica := s.proxyReplica(); proxyReplica != nil {
-		proxyReplica.attemptedTime += duration
+	if s.proxy != nil {
+		s.proxy.attemptedTime += duration
 	}
 }
 

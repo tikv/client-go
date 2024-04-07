@@ -506,19 +506,7 @@ func (s *replicaSelector) onSendSuccess(req *tikvrpc.Request) {
 	}
 }
 
-func (s *replicaSelector) targetReplica() *replica {
-	return s.target
-}
-
-func (s *replicaSelector) proxyReplica() *replica {
-	return s.proxy
-}
-
-func (s *replicaSelector) getLabels() []*metapb.StoreLabel {
-	return s.option.labels
-}
-
-func (s *replicaSelector) replicaType(_ *RPCContext) string {
+func (s *replicaSelector) replicaType() string {
 	if s.target != nil {
 		if s.target.peer.Id == s.region.GetLeaderPeerID() {
 			return "leader"
