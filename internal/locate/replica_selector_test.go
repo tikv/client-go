@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -3008,6 +3009,28 @@ func TestTiKVClientReadTimeout(t *testing.T) {
 		"store3", "{addr: store3, replica-read: true, stale-read: false, timeout: 1}",
 		"store1", "{addr: store1, replica-read: true, stale-read: false, timeout: 1000}",
 	}, accessPath)
+}
+
+func TestReplicaFlag(t *testing.T) {
+	r := &replica{}
+	allFlags := []uint8{deadlineErrUsingConfTimeoutFlag, dataIsNotReadyFlag, notLeaderFlag, serverIsBusyFlag}
+	for i, flag := range allFlags {
+		if i > 0 {
+			require.True(t, flag > allFlags[i-1])
+		}
+		for j := i; j < len(allFlags); j++ {
+			require.Equal(t, false, r.hasFlag(allFlags[j]))
+		}
+		r.addFlag(flag)
+		require.Equal(t, true, r.hasFlag(flag))
+	}
+	for i, flag := range allFlags {
+		for j := i; j < len(allFlags); j++ {
+			require.Equal(t, true, r.hasFlag(allFlags[j]))
+		}
+		r.deleteFlag(flag)
+		require.Equal(t, false, r.hasFlag(flag))
+	}
 }
 
 func BenchmarkReplicaSelector(b *testing.B) {

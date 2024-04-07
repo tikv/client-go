@@ -262,11 +262,7 @@ type replica struct {
 	epoch         uint32
 	attempts      int
 	attemptedTime time.Duration
-	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
-	deadlineErrUsingConfTimeout bool
-	dataIsNotReady              bool
-	notLeader                   bool
-	serverIsBusy                bool
+	flag          uint8
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -288,7 +284,30 @@ func (r *replica) onUpdateLeader() {
 		r.attempts = maxReplicaAttempt - 1
 		r.attemptedTime = 0
 	}
-	r.notLeader = false
+	r.deleteFlag(notLeaderFlag)
+}
+
+const (
+	// deadlineErrUsingConfTimeoutFlag indicates the replica is already tried, but the received deadline exceeded error.
+	deadlineErrUsingConfTimeoutFlag uint8 = 1 << 0
+	// dataIsNotReadyFlag indicates the replica is already tried, but the received data is not ready error.
+	dataIsNotReadyFlag uint8 = 1 << 1
+	// notLeaderFlag indicates the replica is already tried, but the received not leader error.
+	notLeaderFlag uint8 = 1 << 2
+	// notLeaderFlag indicates the replica is already tried, but the received server is busy error.
+	serverIsBusyFlag uint8 = 1 << 3
+)
+
+func (r *replica) addFlag(flag uint8) {
+	r.flag |= flag
+}
+
+func (r *replica) deleteFlag(flag uint8) {
+	r.flag &= ^flag
+}
+
+func (r *replica) hasFlag(flag uint8) bool {
+	return (r.flag & flag) > 0
 }
 
 type baseReplicaSelector struct {
@@ -347,7 +366,7 @@ func (s *baseReplicaSelector) String() string {
 
 func hasDeadlineExceededError(replicas []*replica) bool {
 	for _, replica := range replicas {
-		if replica.deadlineErrUsingConfTimeout {
+		if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) {
 			// when meet deadline exceeded error, do fast retry without invalidate region cache.
 			return true
 		}
