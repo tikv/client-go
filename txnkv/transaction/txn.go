@@ -395,6 +395,16 @@ func (txn *KVTxn) SetTxnSource(txnSource uint64) {
 	txn.txnSource = txnSource
 }
 
+// SetSessionID sets the session ID of the transaction.
+// If the committer is not initialized yet, the function won't take effect.
+// It is especially useful for pipelined transactions, as its committer is initialized immediately
+// when the transaction is created.
+func (txn *KVTxn) SetSessionID(sessionID uint64) {
+	if txn.committer != nil {
+		txn.committer.sessionID = sessionID
+	}
+}
+
 // GetDiskFullOpt gets the options of current operation in each TiKV disk usage level.
 func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
 	return txn.diskFullOpt
