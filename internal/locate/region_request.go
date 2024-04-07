@@ -289,14 +289,10 @@ func (r *replica) onUpdateLeader() {
 }
 
 const (
-	// deadlineErrUsingConfTimeoutFlag indicates the replica is already tried, but the received deadline exceeded error.
-	deadlineErrUsingConfTimeoutFlag uint8 = 1 << 0
-	// dataIsNotReadyFlag indicates the replica is already tried, but the received data is not ready error.
-	dataIsNotReadyFlag uint8 = 1 << 1
-	// notLeaderFlag indicates the replica is already tried, but the received not leader error.
-	notLeaderFlag uint8 = 1 << 2
-	// notLeaderFlag indicates the replica is already tried, but the received server is busy error.
-	serverIsBusyFlag uint8 = 1 << 3
+	deadlineErrUsingConfTimeoutFlag uint8 = 1 << 0 // deadlineErrUsingConfTimeoutFlag indicates the replica is already tried, but the received deadline exceeded error.
+	dataIsNotReadyFlag              uint8 = 1 << 1 // dataIsNotReadyFlag indicates the replica is already tried, but the received data is not ready error.
+	notLeaderFlag                   uint8 = 1 << 2 // notLeaderFlag indicates the replica is already tried, but the received not leader error.
+	serverIsBusyFlag                uint8 = 1 << 3 // notLeaderFlag indicates the replica is already tried, but the received server is busy error.
 )
 
 func (r *replica) addFlag(flag uint8) {
