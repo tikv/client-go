@@ -2492,18 +2492,18 @@ func (s *testReplicaSelectorSuite) changeRegionLeader(storeId uint64) {
 	s.cache.InvalidateCachedRegion(loc.Region)
 }
 
-func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPathCase) bool {
-	sender := ca1.run(s)
-	ca1.checkResult(s, sender)
-	return !ca1.accessErrInValid
+func (s *testReplicaSelectorSuite) runCaseAndCompare(ca replicaSelectorAccessPathCase) bool {
+	sender := ca.run(s)
+	ca.checkResult(s, sender)
+	return !ca.accessErrInValid
 }
 
 func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorAccessPathCase) bool {
 	valid := true
-	for _, ca1 := range cas {
-		sender := ca1.run(s)
-		ca1.checkResult(s, sender)
-		valid = valid && !ca1.accessErrInValid
+	for _, ca := range cas {
+		sender := ca.run(s)
+		ca.checkResult(s, sender)
+		valid = valid && !ca.accessErrInValid
 	}
 	return valid
 }

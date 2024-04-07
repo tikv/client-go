@@ -26,6 +26,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
 type replicaSelector struct {
@@ -65,6 +66,32 @@ func newReplicaSelector(
 		target:          nil,
 		attempts:        0,
 	}, nil
+}
+
+func buildTiKVReplicas(region *Region) []*replica {
+	regionStore := region.getStore()
+	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
+	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
+		replicas = append(
+			replicas, &replica{
+				store:    regionStore.stores[storeIdx],
+				peer:     region.meta.Peers[storeIdx],
+				epoch:    regionStore.storeEpochs[storeIdx],
+				attempts: 0,
+			},
+		)
+	}
+
+	if val, err := util.EvalFailpoint("newReplicaSelectorInitialAttemptedTime"); err == nil {
+		attemptedTime, err := time.ParseDuration(val.(string))
+		if err != nil {
+			panic(err)
+		}
+		for _, r := range replicas {
+			r.attemptedTime = attemptedTime
+		}
+	}
+	return replicas
 }
 
 func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
@@ -264,6 +291,16 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	}
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 	return nil
+}
+
+func hasDeadlineExceededError(replicas []*replica) bool {
+	for _, replica := range replicas {
+		if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) {
+			// when meet deadline exceeded error, do fast retry without invalidate region cache.
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epochStale bool, liveness livenessState) bool {

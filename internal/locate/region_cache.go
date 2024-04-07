@@ -39,7 +39,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
 	"slices"
 	"sort"
@@ -53,7 +52,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
@@ -793,8 +791,6 @@ type RPCContext struct {
 	ProxyAddr     string // valid when ProxyStore is not nil
 	TiKVNum       int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
 	BucketVersion uint64
-
-	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
 
 func (c *RPCContext) String() string {
@@ -808,29 +804,6 @@ func (c *RPCContext) String() string {
 		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.addr)
 	}
 	return res
-}
-
-type contextPatcher struct {
-	replicaRead   *bool
-	busyThreshold *time.Duration
-	staleRead     *bool
-}
-
-func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
-	if patcher.replicaRead != nil {
-		pbCtx.ReplicaRead = *patcher.replicaRead
-	}
-	if patcher.staleRead != nil {
-		pbCtx.StaleRead = *patcher.staleRead
-	}
-	if patcher.busyThreshold != nil {
-		millis := patcher.busyThreshold.Milliseconds()
-		if millis > 0 && millis <= math.MaxUint32 {
-			pbCtx.BusyThresholdMs = uint32(millis)
-		} else {
-			pbCtx.BusyThresholdMs = 0
-		}
-	}
 }
 
 type storeSelectorOp struct {

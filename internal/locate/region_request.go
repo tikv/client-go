@@ -45,6 +45,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -60,9 +64,6 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pderr "github.com/tikv/pd/client/errs"
-	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // shuttingDown is a flag to indicate tidb-server is exiting (Ctrl+C signal
@@ -364,42 +365,6 @@ func (s *baseReplicaSelector) String() string {
 	return fmt.Sprintf("cacheRegionIsValid: %v, replicaStatus: %v", cacheRegionIsValid, replicaStatus)
 }
 
-func hasDeadlineExceededError(replicas []*replica) bool {
-	for _, replica := range replicas {
-		if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) {
-			// when meet deadline exceeded error, do fast retry without invalidate region cache.
-			return true
-		}
-	}
-	return false
-}
-
-func buildTiKVReplicas(region *Region) []*replica {
-	regionStore := region.getStore()
-	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
-	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
-		replicas = append(
-			replicas, &replica{
-				store:    regionStore.stores[storeIdx],
-				peer:     region.meta.Peers[storeIdx],
-				epoch:    regionStore.storeEpochs[storeIdx],
-				attempts: 0,
-			},
-		)
-	}
-
-	if val, err := util.EvalFailpoint("newReplicaSelectorInitialAttemptedTime"); err == nil {
-		attemptedTime, err := time.ParseDuration(val.(string))
-		if err != nil {
-			panic(err)
-		}
-		for _, r := range replicas {
-			r.attemptedTime = attemptedTime
-		}
-	}
-	return replicas
-}
-
 const (
 	maxReplicaAttempt = 10
 	// The maximum time to allow retrying sending requests after RPC failure. In case an RPC request fails after
@@ -686,11 +651,9 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		var isLocalTraffic bool
-		if staleReadCollector != nil && s.replicaSelector != nil {
-			if s.replicaSelector.target != nil {
-				isLocalTraffic = s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels)
-				staleReadCollector.onReq(req, isLocalTraffic)
-			}
+		if staleReadCollector != nil && s.replicaSelector != nil && s.replicaSelector.target != nil {
+			isLocalTraffic = s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels)
+			staleReadCollector.onReq(req, isLocalTraffic)
 		}
 
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
@@ -704,7 +667,6 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		req.Context.ClusterId = rpcCtx.ClusterID
-		rpcCtx.contextPatcher.applyTo(&req.Context)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			patchRequestSource(req, s.replicaSelector.replicaType())
 		}

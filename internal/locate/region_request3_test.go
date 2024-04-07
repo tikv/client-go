@@ -459,7 +459,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Should only contain TiKV stores.
 	s.Equal(len(replicaSelector.replicas), regionStore.accessStoreNum(tiKVOnly))
 	s.Equal(len(replicaSelector.replicas), len(regionStore.stores)-1)
-	//s.IsType(&accessKnownLeader{}, replicaSelector.state)
 
 	// Verify that the store matches the peer and epoch.
 	for _, replica := range replicaSelector.replicas {
@@ -567,33 +566,24 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	s.Equal(replicaSelector.proxy.attempts, 1)
 
 	// When the current proxy node fails, it should try another one.
-	//lastProxy := replicaSelector.proxy
 	replicaSelector.onSendFailure(s.bo, nil)
 	rpcCtx, err = replicaSelector.next(s.bo, req)
 	s.NotNil(rpcCtx)
 	s.Nil(err)
-	//state, ok = replicaSelector.state.(*tryNewProxy)
-	//s.True(ok)
-	//s.Equal(regionStore.workTiKVIdx, state.leaderIdx)
-	//s.Equal(AccessIndex(2), replicaSelector.targetIdx)
-	//s.NotEqual(lastProxy, replicaSelector.proxyIdx)
 	s.Equal(replicaSelector.target.attempts, 2)
 	s.Equal(replicaSelector.proxy.attempts, 1)
 
 	// Test proxy store is saves when proxy is enabled
 	replicaSelector.onSendSuccess(req)
 	regionStore = region.getStore()
-	//s.Equal(replicaSelector.proxyIdx, regionStore.proxyTiKVIdx)
+	s.Equal(replicaSelector.proxy.peer.Id, replicaSelector.replicas[regionStore.proxyTiKVIdx].peer.Id)
 
-	// Test initial state is accessByKnownProxy when proxyTiKVIdx is valid
+	// Test when proxyTiKVIdx is valid
 	refreshEpochs(regionStore)
 	cache.enableForwarding = true
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
-	//state2, ok := replicaSelector.state.(*accessByKnownProxy)
-	//s.True(ok)
-	//s.Equal(regionStore.workTiKVIdx, state2.leaderIdx)
 	_, err = replicaSelector.next(s.bo, req)
 	s.Nil(err)
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.target, replicaSelector.proxy)
@@ -780,19 +770,13 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.Equal(bo.GetTotalBackoffTimes(), 3)
-	getReplicaSelectorRegion := func() *Region {
-		return sender.replicaSelector.region
-	}
-	s.False(getReplicaSelectorRegion().isValid())
+	s.False(sender.replicaSelector.region.isValid())
 	s.cluster.ChangeLeader(s.regionID, s.peerIDs[0])
 
 	// The leader store is alive but can't provide service.
-	getReplicaSelectorRegionStores := func() []*Store {
-		return sender.replicaSelector.region.getStore().stores
-	}
 	reachable.injectConstantLiveness(s.cache)
 	s.Eventually(func() bool {
-		stores := getReplicaSelectorRegionStores()
+		stores := sender.replicaSelector.region.getStore().stores
 		return stores[0].getLivenessState() == reachable &&
 			stores[1].getLivenessState() == reachable &&
 			stores[2].getLivenessState() == reachable
@@ -804,7 +788,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	resp, _, err = sender.SendReq(bo, req, region.Region, time.Second)
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
-	s.False(getReplicaSelectorRegion().isValid())
+	s.False(sender.replicaSelector.region.isValid())
 	s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
 	s.cluster.StartStore(s.storeIDs[0])
 
@@ -838,7 +822,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 			resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 			s.Nil(err)
 			s.True(hasFakeRegionError(resp))
-			s.False(getReplicaSelectorRegion().isValid())
+			s.False(sender.replicaSelector.region.isValid())
 			s.Equal(bo.GetTotalBackoffTimes(), maxReplicaAttempt+2)
 		}()
 	}
@@ -858,7 +842,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.True(hasFakeRegionError(resp))
-		s.False(getReplicaSelectorRegion().isValid())
+		s.False(sender.replicaSelector.region.isValid())
 		s.Equal(bo.GetTotalBackoffTimes(), 0)
 	}()
 
@@ -877,7 +861,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		resp, _, err := sender.SendReq(bo, req, region.Region, time.Second)
 		s.Nil(err)
 		s.True(hasFakeRegionError(resp))
-		s.False(getReplicaSelectorRegion().isValid())
+		s.False(sender.replicaSelector.region.isValid())
 		s.Equal(bo.GetTotalBackoffTimes(), 0)
 	}()
 
@@ -910,7 +894,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 				regionErr, _ := resp.GetRegionError()
 				s.NotNil(regionErr)
 			}
-			s.False(getReplicaSelectorRegion().isValid())
+			s.False(sender.replicaSelector.region.isValid())
 			s.Equal(bo.GetTotalBackoffTimes(), 0)
 		}()
 	}
@@ -926,7 +910,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	s.Nil(err)
 	s.True(hasFakeRegionError(resp))
 	s.True(bo.GetTotalBackoffTimes() == 3)
-	s.False(getReplicaSelectorRegion().isValid())
+	s.False(sender.replicaSelector.region.isValid())
 	for _, store := range s.storeIDs {
 		s.cluster.StartStore(store)
 	}
@@ -963,7 +947,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	rpcCtx, err = replicaSelector.next(bo, req)
 	s.Nil(err)
 	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
-	rpcCtx.contextPatcher.applyTo(&req.Context)
 	s.True(req.ReplicaRead)
 	s.Equal(req.BusyThresholdMs, uint32(50))
 	lastPeerID := rpcCtx.Peer.Id
@@ -977,7 +960,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	// Should choose a peer different from before
 	s.NotEqual(rpcCtx.Peer.Id, s.leaderPeer)
 	s.NotEqual(rpcCtx.Peer.Id, lastPeerID)
-	rpcCtx.contextPatcher.applyTo(&req.Context)
 	s.True(req.ReplicaRead)
 	s.Equal(req.BusyThresholdMs, uint32(50))
 
@@ -991,7 +973,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	rpcCtx, err = replicaSelector.next(bo, req)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, s.leaderPeer)
-	rpcCtx.contextPatcher.applyTo(&req.Context)
 	s.False(req.ReplicaRead)
 	s.Equal(req.BusyThresholdMs, uint32(0))
 	s.True(replicaSelector.region.isValid()) // don't invalidate region when can't find an idle replica.
@@ -1006,7 +987,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 	rpcCtx, err = replicaSelector.next(bo, req)
 	s.Nil(err)
 	s.Equal(rpcCtx.Peer.Id, lessBusyPeer)
-	rpcCtx.contextPatcher.applyTo(&req.Context)
 	s.True(req.ReplicaRead)
 }
 
