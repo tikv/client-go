@@ -397,8 +397,14 @@ func (txn *KVTxn) SetTxnSource(txnSource uint64) {
 
 // SetSessionID sets the session ID of the transaction.
 // If the committer is not initialized yet, the function won't take effect.
+// It is supposed to be set before performing any writes in the transaction to avoid data race.
+// It is designed to be called in ActivateTxn(), though subject to change.
 // It is especially useful for pipelined transactions, as its committer is initialized immediately
 // when the transaction is created.
+//
+// Note that commiter may also obtain a sessionID from context directly via sessionIDCtxKey.
+// TODO: consider unifying them.
+
 func (txn *KVTxn) SetSessionID(sessionID uint64) {
 	if txn.committer != nil {
 		txn.committer.sessionID = sessionID
