@@ -113,14 +113,14 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	rc := s.getRegion()
 	s.NotNil(rc)
 	rc.invalidate(Other)
-	selector, err := newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	selector, err := newReplicaSelector(s.cache, rc.VerID(), req)
 	s.NotNil(err)
 	s.Equal("cached region invalid", err.Error())
 	s.Nil(selector)
 	s.Equal("", selector.String())
 
 	rc = s.getRegion()
-	selector, err = newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	selector, err = newReplicaSelector(s.cache, rc.VerID(), req)
 	s.Nil(err)
 	s.NotNil(selector)
 	for _, reqSource := range []string{"leader", "follower", "follower", "unknown"} {
@@ -130,7 +130,7 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	}
 
 	rc = s.getRegion()
-	selector, err = newReplicaSelectorV2(s.cache, rc.VerID(), req)
+	selector, err = newReplicaSelector(s.cache, rc.VerID(), req)
 	s.Nil(err)
 	s.NotNil(selector)
 	ctx, err := selector.next(s.bo, req)
@@ -151,7 +151,7 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 	region, err := s.cache.LocateKey(s.bo, []byte("a"))
 	s.Nil(err)
 	s.NotNil(region)
-	selector, err := newReplicaSelectorV2(s.cache, region.Region, req)
+	selector, err := newReplicaSelector(s.cache, region.Region, req)
 	s.Nil(err)
 	for i, r := range selector.getBaseReplicaSelector().replicas {
 		rc := s.cache.GetCachedRegionWithRLock(region.Region)
@@ -2498,12 +2498,10 @@ func (s *testReplicaSelectorSuite) runCaseAndCompare(ca1 replicaSelectorAccessPa
 }
 
 func (s *testReplicaSelectorSuite) runMultiCaseAndCompare(cas []replicaSelectorAccessPathCase) bool {
-	expects := make([]accessPathResult, 0, len(cas))
 	valid := true
 	for _, ca1 := range cas {
 		sender := ca1.run(s)
 		ca1.checkResult(s, sender)
-		expects = append(expects, ca1.result)
 		valid = valid && !ca1.accessErrInValid
 	}
 	return valid

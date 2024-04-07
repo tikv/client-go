@@ -402,7 +402,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 	refreshRegionTTL(region)
 	refreshEpochs(regionStore)
 	req.ReplicaReadType = kv.ReplicaReadLearner
-	replicaSelector, err := newReplicaSelectorV2(cache, regionLoc.Region, req)
+	replicaSelector, err := newReplicaSelector(cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
 
@@ -417,7 +417,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestLearnerReplicaSelector() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
-	return
 	regionLoc, err := s.cache.LocateRegionByID(s.bo, s.regionID)
 	s.Nil(err)
 	s.NotNil(regionLoc)
@@ -617,20 +616,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	_, err = replicaSelector.next(s.bo, req)
 	s.Nil(err)
 	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.targetReplica(), replicaSelector.proxyReplica())
-
-	// Switch to tryNewProxy if the current proxy is not available
-	replicaSelector.onSendFailure(s.bo, nil)
-	//s.IsType(&tryNewProxy{}, replicaSelector.state)
-	rpcCtx, err = replicaSelector.next(s.bo, req)
-	s.Nil(err)
-	AssertRPCCtxEqual(s, rpcCtx, replicaSelector.targetReplica(), replicaSelector.proxyReplica())
-	//s.Equal(regionStore.workTiKVIdx, state2.leaderIdx)
-	//s.Equal(AccessIndex(2), replicaSelector.targetIdx)
-	//s.NotEqual(regionStore.proxyTiKVIdx, replicaSelector.proxyIdx)
-	s.Equal(replicaSelector.targetReplica().attempts, 2)
-	s.Equal(replicaSelector.proxyReplica().attempts, 1)
-	// FIXME: the chosen proxy-replica's store should be reachable.
-	//s.Equal(replicaSelector.proxyReplica().store.getLivenessState(), reachable)
 
 	// Test accessFollower state with kv.ReplicaReadFollower request type.
 	req = tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}, kv.ReplicaReadFollower, nil)
@@ -991,7 +976,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 		BusyThresholdMs: 50,
 	})
 
-	replicaSelector, err := newReplicaSelectorV2(s.cache, regionLoc.Region, req)
+	replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
 	s.Equal(replicaSelector.getBaseReplicaSelector().region, region)
@@ -1050,7 +1035,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestLoadBasedReplicaRead() {
 
 	// When there comes a new request, it should skip busy leader and choose a less busy store
 	req.BusyThresholdMs = 50
-	replicaSelector, err = newReplicaSelectorV2(s.cache, regionLoc.Region, req)
+	replicaSelector, err = newReplicaSelector(s.cache, regionLoc.Region, req)
 	s.NotNil(replicaSelector)
 	s.Nil(err)
 	rpcCtx, err = replicaSelector.next(bo, req)
@@ -1369,7 +1354,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 		}
 	}
 
-	setTargetReplica := func(selector *replicaSelectorV2, readType string) {
+	setTargetReplica := func(selector *replicaSelector, readType string) {
 		var leader bool
 		switch readType {
 		case "leader", "stale_leader":
@@ -1399,7 +1384,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			bo := retry.NewBackoffer(context.Background(), -1)
 			req.IsRetryRequest = false
 			setReadType(req, firstReplica)
-			replicaSelector, err := newReplicaSelectorV2(s.cache, regionLoc.Region, req)
+			replicaSelector, err := newReplicaSelector(s.cache, regionLoc.Region, req)
 			s.Nil(err)
 			setTargetReplica(replicaSelector, firstReplica)
 			rpcCtx, err := replicaSelector.getBaseReplicaSelector().buildRPCContext(bo, replicaSelector.targetReplica(), replicaSelector.proxyReplica())
@@ -1409,7 +1394,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 
 			// retry
 			setReadType(req, retryReplica)
-			replicaSelector, err = newReplicaSelectorV2(s.cache, regionLoc.Region, req)
+			replicaSelector, err = newReplicaSelector(s.cache, regionLoc.Region, req)
 			s.Nil(err)
 			setTargetReplica(replicaSelector, retryReplica)
 			rpcCtx, err = replicaSelector.getBaseReplicaSelector().buildRPCContext(bo, replicaSelector.targetReplica(), replicaSelector.proxyReplica())

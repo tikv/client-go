@@ -38,7 +38,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -61,6 +60,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pderr "github.com/tikv/pd/client/errs"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -107,7 +107,7 @@ type RegionRequestSender struct {
 	client            client.Client
 	storeAddr         string
 	rpcError          error
-	replicaSelector   *replicaSelectorV2
+	replicaSelector   *replicaSelector
 	failStoreIDs      map[uint64]struct{}
 	failProxyStoreIDs map[uint64]struct{}
 	RegionRequestRuntimeStats
@@ -355,12 +355,6 @@ func hasDeadlineExceededError(replicas []*replica) bool {
 	return false
 }
 
-func newReplicaSelector(
-	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
-) (*replicaSelectorV2, error) {
-	return newReplicaSelectorV2(regionCache, regionID, req, opts...)
-}
-
 func buildTiKVReplicas(region *Region) []*replica {
 	regionStore := region.getStore()
 	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
@@ -548,7 +542,7 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
-			selector, err := newReplicaSelectorV2(s.regionCache, regionID, req, opts...)
+			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if err != nil {
 				s.rpcError = err
 				return nil, nil
@@ -1579,10 +1573,6 @@ func (s *RegionRequestSender) onRegionError(
 	return false, nil
 }
 
-func (s *RegionRequestSender) onFlashbackInProgressRegionError(ctx *RPCContext, req *tikvrpc.Request) bool {
-	return s.replicaSelector.onFlashbackInProgress(ctx, req)
-}
-
 type staleReadMetricsCollector struct {
 }
 
@@ -1657,7 +1647,7 @@ func patchRequestSource(req *tikvrpc.Request, replicaType string) {
 	sb.WriteString(req.ReadType)
 }
 
-func recordAttemptedTime(s *replicaSelectorV2, duration time.Duration) {
+func recordAttemptedTime(s *replicaSelector, duration time.Duration) {
 	if targetReplica := s.targetReplica(); targetReplica != nil {
 		targetReplica.attemptedTime += duration
 	}
