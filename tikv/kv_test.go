@@ -234,7 +234,7 @@ func (s *testKVSuite) TestMinSafeTsFromMixed1() {
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS("z1"))
-	s.Require().Equal(uint64(mockClient.tiflashSafeTs), s.store.GetMinSafeTS("z2"))
+	s.Require().Equal(mockClient.tiflashSafeTs, s.store.GetMinSafeTS("z2"))
 }
 
 func (s *testKVSuite) TestMinSafeTsFromMixed2() {
@@ -258,6 +258,6 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 	}, 15*time.Second, time.Second)
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
-	s.Require().Equal(uint64(mockClient.tikvSafeTs), s.store.GetMinSafeTS("z1"))
+	s.Require().Equal(mockClient.tikvSafeTs, s.store.GetMinSafeTS("z1"))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS("z2"))
 }
