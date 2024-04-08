@@ -202,7 +202,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSliceIdentical() {
 	b := a
 	s.True(sliceIdentical(a, b))
 	b = make([]int, 0)
-	s.False(sliceIdentical(a, b))
+	s.True(sliceIdentical(a, b))
 
 	a = append(a, 1, 2, 3)
 	b = a

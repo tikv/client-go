@@ -1140,7 +1140,25 @@ func (s *replicaSelector) getLabels() []*metapb.StoreLabel {
 // sliceIdentical checks whether two slices are referencing the same block of memory. Two `nil`s are also considered
 // the same.
 func sliceIdentical[T any](a, b []T) bool {
-	return len(a) == len(b) && unsafe.SliceData(a) == unsafe.SliceData(b)
+	if a == nil && b == nil {
+		return true
+	}
+
+	if a == nil || b == nil {
+		return false
+	}
+
+	if len(a) != len(b) {
+		return false
+	}
+
+	if cap(a) == 0 && cap(b) == 0 {
+		// If cap is 0, SliceData returns a non-nil pointer to an unspecified memory address
+		// So we can't compare them.
+		return true
+	}
+
+	return unsafe.SliceData(a) == unsafe.SliceData(b)
 }
 
 func (s *replicaSelector) refreshRegionStore() {
