@@ -154,7 +154,7 @@ type KVTxn struct {
 	interceptor    interceptor.RPCInterceptor
 	assertionLevel kvrpcpb.AssertionLevel
 	*util.RequestSource
-	// resourceGroupName is the name of tenant resource slice.
+	// resourceGroupName is the name of tenant resource group.
 	resourceGroupName string
 
 	aggressiveLockingContext *aggressiveLockingContext
@@ -296,7 +296,7 @@ func (txn *KVTxn) SetResourceGroupTagger(tagger tikvrpc.ResourceGroupTagger) {
 	txn.GetSnapshot().SetResourceGroupTagger(tagger)
 }
 
-// SetResourceGroupName set resource slice name for both read and write.
+// SetResourceGroupName set resource group name for both read and write.
 func (txn *KVTxn) SetResourceGroupName(name string) {
 	txn.resourceGroupName = name
 	txn.GetSnapshot().SetResourceGroupName(name)
@@ -1117,12 +1117,6 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			lockCtx.Stats.Mu.Lock()
 			lockCtx.Stats.Mu.BackoffTypes = append(lockCtx.Stats.Mu.BackoffTypes, bo.GetTypes()...)
 			lockCtx.Stats.Mu.Unlock()
-		}
-		if lockCtx.Killed != nil {
-			// If the kill signal is received during waiting for pessimisticLock,
-			// pessimisticLockKeys would handle the error but it doesn't reset the flag.
-			// We need to reset the killed flag here.
-			atomic.CompareAndSwapUint32(lockCtx.Killed, 1, 0)
 		}
 		if txn.IsInAggressiveLockingMode() {
 			if txn.aggressiveLockingContext.maxLockedWithConflictTS < lockCtx.MaxLockedWithConflictTS {

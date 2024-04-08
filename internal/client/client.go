@@ -109,9 +109,49 @@ type Client interface {
 	SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error)
 }
 
+// ClientExt is a client has extended interfaces.
+type ClientExt interface {
+	// CloseAddrVer closes gRPC connections to the address with additional `ver` parameter.
+	// Each new connection will have an incremented `ver` value, and attempts to close a previous `ver` will be ignored.
+	// Passing `math.MaxUint64` as the `ver` parameter will forcefully close all connections to the address.
+	CloseAddrVer(addr string, ver uint64) error
+}
+
+// ErrConn wraps error with target address and version of the connection.
+type ErrConn struct {
+	Err  error
+	Addr string
+	Ver  uint64
+}
+
+func (e *ErrConn) Error() string {
+	return fmt.Sprintf("[%s](%d) %s", e.Addr, e.Ver, e.Err.Error())
+}
+
+func (e *ErrConn) Cause() error {
+	return e.Err
+}
+
+func (e *ErrConn) Unwrap() error {
+	return e.Err
+}
+
+func WrapErrConn(err error, conn *connArray) error {
+	if err == nil {
+		return nil
+	}
+	return &ErrConn{
+		Err:  err,
+		Addr: conn.target,
+		Ver:  conn.ver,
+	}
+}
+
 type connArray struct {
 	// The target host.
 	target string
+	// version of the connection array, increase by 1 when reconnect.
+	ver uint64
 
 	index uint32
 	v     []*monitoredConn
@@ -125,9 +165,10 @@ type connArray struct {
 	monitor *connMonitor
 }
 
-func newConnArray(maxSize uint, addr string, security config.Security,
+func newConnArray(maxSize uint, addr string, ver uint64, security config.Security,
 	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, opts []grpc.DialOption) (*connArray, error) {
 	a := &connArray{
+		ver:           ver,
 		index:         0,
 		v:             make([]*monitoredConn, maxSize),
 		streamTimeout: make(chan *tikvrpc.Lease, 1024),
@@ -222,7 +263,9 @@ func (a *connArray) monitoredDial(ctx context.Context, connName, target string, 
 
 func (c *monitoredConn) Close() error {
 	if c.ClientConn != nil {
-		return c.ClientConn.Close()
+		err := c.ClientConn.Close()
+		logutil.BgLogger().Debug("close gRPC connection", zap.String("target", c.Name), zap.Error(err))
+		return err
 	}
 	return nil
 }
@@ -388,6 +431,7 @@ type RPCClient struct {
 	sync.RWMutex
 
 	conns  map[string]*connArray
+	vers   map[string]uint64
 	option *option
 
 	idleNotify uint32
@@ -403,6 +447,7 @@ type RPCClient struct {
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
 		conns: make(map[string]*connArray),
+		vers:  make(map[string]uint64),
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
@@ -450,9 +495,11 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 		for _, opt := range opts {
 			opt(&client)
 		}
+		ver := c.vers[addr] + 1
 		array, err = newConnArray(
 			client.GrpcConnectionCount,
 			addr,
+			ver,
 			c.option.security,
 			&c.idleNotify,
 			enableBatch,
@@ -464,6 +511,7 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 			return nil, err
 		}
 		c.conns[addr] = array
+		c.vers[addr] = ver
 	}
 	return array, nil
 }
@@ -601,6 +649,10 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		return nil, err
 	}
 
+	wrapErrConn := func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+		return resp, WrapErrConn(err, connArray)
+	}
+
 	start := time.Now()
 	staleRead := req.GetStaleRead()
 	defer func() {
@@ -623,7 +675,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if config.GetGlobalConfig().TiKVClient.MaxBatchSize > 0 && enableBatch {
 		if batchReq := req.ToBatchCommandsRequest(); batchReq != nil {
 			defer trace.StartRegion(ctx, req.Type.String()).End()
-			return sendBatchRequest(ctx, addr, req.ForwardedHost, connArray.batchConn, batchReq, timeout)
+			return wrapErrConn(sendBatchRequest(ctx, addr, req.ForwardedHost, connArray.batchConn, batchReq, timeout))
 		}
 	}
 
@@ -637,7 +689,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		client := debugpb.NewDebugClient(clientConn)
 		ctx1, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		return tikvrpc.CallDebugRPC(ctx1, client, req)
+		return wrapErrConn(tikvrpc.CallDebugRPC(ctx1, client, req))
 	}
 
 	client := tikvpb.NewTikvClient(clientConn)
@@ -648,16 +700,16 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 	switch req.Type {
 	case tikvrpc.CmdBatchCop:
-		return c.getBatchCopStreamResponse(ctx, client, req, timeout, connArray)
+		return wrapErrConn(c.getBatchCopStreamResponse(ctx, client, req, timeout, connArray))
 	case tikvrpc.CmdCopStream:
-		return c.getCopStreamResponse(ctx, client, req, timeout, connArray)
+		return wrapErrConn(c.getCopStreamResponse(ctx, client, req, timeout, connArray))
 	case tikvrpc.CmdMPPConn:
-		return c.getMPPStreamResponse(ctx, client, req, timeout, connArray)
+		return wrapErrConn(c.getMPPStreamResponse(ctx, client, req, timeout, connArray))
 	}
 	// Or else it's a unary call.
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return tikvrpc.CallRPC(ctx1, client, req)
+	return wrapErrConn(tikvrpc.CallRPC(ctx1, client, req))
 }
 
 // SendRequest sends a Request to server and receives Response.
@@ -791,11 +843,20 @@ func (c *RPCClient) Close() error {
 
 // CloseAddr closes gRPC connections to the address.
 func (c *RPCClient) CloseAddr(addr string) error {
+	return c.CloseAddrVer(addr, math.MaxUint64)
+}
+
+func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
 	c.Lock()
 	conn, ok := c.conns[addr]
 	if ok {
-		delete(c.conns, addr)
-		logutil.BgLogger().Debug("close connection", zap.String("target", addr))
+		if conn.ver <= ver {
+			delete(c.conns, addr)
+			logutil.BgLogger().Debug("close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("conn.ver", conn.ver))
+		} else {
+			logutil.BgLogger().Debug("ignore close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("conn.ver", conn.ver))
+			conn = nil
+		}
 	}
 	c.Unlock()
 
