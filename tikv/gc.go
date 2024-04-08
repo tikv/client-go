@@ -17,6 +17,7 @@ package tikv
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -89,7 +90,13 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 		return ResolveLocksForRange(ctx, lockResolver, safePoint, r.StartKey, r.EndKey, NewGcResolveLockMaxBackoffer, GCScanLockLimit)
 	}
 
-	runner := rangetask.NewRangeTaskRunner("resolve-locks-runner", s, concurrency, handler)
+	runner := rangetask.NewRangeTaskRunner(
+		"resolve-locks-runner",
+		fmt.Sprintf("resolve-locks-runner-%d", safePoint),
+		s,
+		concurrency,
+		handler,
+	)
 	// Run resolve lock on the whole TiKV cluster. Empty keys means the range is unbounded.
 	err := runner.RunOnRange(ctx, []byte(""), []byte(""))
 	if err != nil {
