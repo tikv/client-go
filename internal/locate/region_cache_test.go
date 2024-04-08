@@ -2088,7 +2088,7 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 }
 
 func (s *testRegionCacheSuite) TestTiKVSideSlowScore() {
-	stats := newStoreHealthStatus()
+	stats := newStoreHealthStatus(1)
 	s.LessOrEqual(stats.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
 	now := time.Now()
 	stats.tick(now)
@@ -2124,7 +2124,7 @@ func (s *testRegionCacheSuite) TestTiKVSideSlowScore() {
 }
 
 func (s *testRegionCacheSuite) TestStoreHealthStatus() {
-	stats := newStoreHealthStatus()
+	stats := newStoreHealthStatus(1)
 	now := time.Now()
 	s.False(stats.IsSlow())
 
