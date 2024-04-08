@@ -103,7 +103,7 @@ func (t *DeleteRangeTask) getRunnerName() string {
 func (t *DeleteRangeTask) Execute(ctx context.Context) error {
 	runnerName := t.getRunnerName()
 
-	runner := NewRangeTaskRunner(runnerName, runnerName, t.store, t.concurrency, t.sendReqOnRange)
+	runner := NewRangeTaskRunner(runnerName, t.store, t.concurrency, t.sendReqOnRange)
 	err := runner.RunOnRange(ctx, t.startKey, t.endKey)
 	t.completedRegions = runner.CompletedRegions()
 

@@ -198,7 +198,6 @@ func (s *testRangeTaskSuite) testRangeTaskImpl(concurrency int) {
 
 	runner := rangetask.NewRangeTaskRunner(
 		"test-runner",
-		"test-runner",
 		s.store,
 		concurrency,
 		handler,
@@ -244,7 +243,6 @@ func (s *testRangeTaskSuite) testRangeTaskErrorImpl(concurrency int) {
 			}
 
 			runner := rangetask.NewRangeTaskRunner(
-				"test-error-runner",
 				"test-error-runner",
 				s.store,
 				concurrency,

@@ -93,6 +93,16 @@ type TaskHandler = func(ctx context.Context, r kv.KeyRange) (TaskStat, error)
 // will be canceled.
 func NewRangeTaskRunner(
 	name string,
+	store storage,
+	concurrency int,
+	handler TaskHandler,
+) *Runner {
+	return NewRangeTaskRunnerWithID(name, "", store, concurrency, handler)
+}
+
+// NewRangeTaskRunnerWithID creates a RangeTaskRunner with a specified identifier
+func NewRangeTaskRunnerWithID(
+	name string,
 	identifier string,
 	store storage,
 	concurrency int,

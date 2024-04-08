@@ -90,7 +90,7 @@ func (s *KVStore) resolveLocks(ctx context.Context, safePoint uint64, concurrenc
 		return ResolveLocksForRange(ctx, lockResolver, safePoint, r.StartKey, r.EndKey, NewGcResolveLockMaxBackoffer, GCScanLockLimit)
 	}
 
-	runner := rangetask.NewRangeTaskRunner(
+	runner := rangetask.NewRangeTaskRunnerWithID(
 		"resolve-locks-runner",
 		fmt.Sprintf("resolve-locks-runner-%d", safePoint),
 		s,

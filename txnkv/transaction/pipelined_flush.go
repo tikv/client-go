@@ -435,7 +435,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		)
 		return
 	}
-	runner := rangetask.NewRangeTaskRunner(
+	runner := rangetask.NewRangeTaskRunnerWithID(
 		"pipelined-dml-commit",
 		fmt.Sprintf("pipelined-dml-commit-%d", c.startTS),
 		c.store,
