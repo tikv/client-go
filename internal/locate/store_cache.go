@@ -214,7 +214,7 @@ func newStore(
 		peerAddr:  peerAddr,
 		saddr:     statusAddr,
 		// Make sure healthStatus field is never null.
-		healthStatus: newStoreHealthStatus(),
+		healthStatus: newStoreHealthStatus(id),
 	}
 }
 
@@ -223,7 +223,7 @@ func newUninitializedStore(id uint64) *Store {
 	return &Store{
 		storeID: id,
 		// Make sure healthStatus field is never null.
-		healthStatus: newStoreHealthStatus(),
+		healthStatus: newStoreHealthStatus(id),
 	}
 }
 
@@ -794,6 +794,9 @@ const (
 )
 
 type StoreHealthStatus struct {
+	// Used for logging.
+	storeID uint64
+
 	isSlow atomic.Bool
 
 	// A statistic for counting the request latency to this store
@@ -816,8 +819,18 @@ type HealthStatusDetail struct {
 	TiKVSideSlowScore   int64
 }
 
-func newStoreHealthStatus() *StoreHealthStatus {
-	return &StoreHealthStatus{}
+func (d HealthStatusDetail) IsSlow() bool {
+	return clientSideSlowScoreIsSlow(uint64(d.ClientSideSlowScore)) || d.TiKVSideSlowScore >= tikvSlowScoreSlowThreshold
+}
+
+func (d HealthStatusDetail) String() string {
+	return fmt.Sprintf("{ ClientSideSlowScore: %d, TiKVSideSlowScore: %d }", d.ClientSideSlowScore, d.TiKVSideSlowScore)
+}
+
+func newStoreHealthStatus(storeID uint64) *StoreHealthStatus {
+	return &StoreHealthStatus{
+		storeID: storeID,
+	}
 }
 
 // IsSlow returns whether current Store is slow.
@@ -935,9 +948,18 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
 }
 
+func (s *StoreHealthStatus) resetTiKVServerSideSlowScoreForTest() {
+	s.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Hour * 2))
+	s.updateTiKVServerSideSlowScore(1, time.Now().Add(-time.Hour))
+}
+
 func (s *StoreHealthStatus) updateSlowFlag() {
-	isSlow := s.clientSideSlowScore.isSlow() || s.tikvSideSlowScore.score.Load() >= tikvSlowScoreSlowThreshold
-	s.isSlow.Store(isSlow)
+	healthDetail := s.GetHealthStatusDetail()
+	isSlow := healthDetail.IsSlow()
+	old := s.isSlow.Swap(isSlow)
+	if old != isSlow {
+		logutil.BgLogger().Info("store health status changed", zap.Uint64("storeID", s.storeID), zap.Bool("isSlow", isSlow), zap.Stringer("healthDetail", healthDetail))
+	}
 }
 
 // setTiKVSlowScoreLastUpdateTimeForTest force sets last update time of TiKV server side slow score to specified value.
