@@ -321,25 +321,15 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	}
 	snapshot.MergeExecDetail(detail)
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
-		"total_process_time: 100ms, total_wait_time: 100ms, " +
-		"scan_detail: {total_process_keys: 10, " +
-		"total_process_keys_size: 10, " +
-		"total_keys: 15, " +
-		"get_snapshot_time: 500ns, " +
-		"rocksdb: {delete_skipped_count: 5, " +
-		"key_skipped_count: 1, " +
-		"block: {cache_hit_count: 10, read_count: 20, read_byte: 15 Bytes}}}"
+		"time_detail: {total_process_time: 100ms, total_wait_time: 100ms}, " +
+		"scan_detail: {total_process_keys: 10, total_process_keys_size: 10, total_keys: 15, get_snapshot_time: 500ns, " +
+		"rocksdb: {delete_skipped_count: 5, key_skipped_count: 1, block: {cache_hit_count: 10, read_count: 20, read_byte: 15 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
 	snapshot.MergeExecDetail(detail)
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
-		"total_process_time: 200ms, total_wait_time: 200ms, " +
-		"scan_detail: {total_process_keys: 20, " +
-		"total_process_keys_size: 20, " +
-		"total_keys: 30, " +
-		"get_snapshot_time: 1µs, " +
-		"rocksdb: {delete_skipped_count: 10, " +
-		"key_skipped_count: 2, " +
-		"block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
+		"time_detail: {total_process_time: 200ms, total_wait_time: 200ms}, " +
+		"scan_detail: {total_process_keys: 20, total_process_keys_size: 20, total_keys: 30, get_snapshot_time: 1µs, " +
+		"rocksdb: {delete_skipped_count: 10, key_skipped_count: 2, block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
 }
 

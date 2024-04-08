@@ -2208,10 +2208,11 @@ func (c *RegionCache) PDClient() pd.Client {
 	return c.pdClient
 }
 
-// GetTiFlashStores returns the information of all tiflash nodes.
+// GetTiFlashStores returns the information of all tiflash nodes. Like `GetAllStores`, the method only returns resolved
+// stores so that users won't be bothered by tombstones. (related issue: https://github.com/pingcap/tidb/issues/46602)
 func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	return c.filterStores(nil, func(s *Store) bool {
-		return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels)
+		return s.storeType == tikvrpc.TiFlash && labelFilter(s.labels) && s.getResolveState() == resolved
 	})
 }
 

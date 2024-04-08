@@ -653,6 +653,13 @@ func (td *TimeDetail) String() string {
 		buf.WriteString("total_wait_time: ")
 		buf.WriteString(FormatDuration(td.WaitTime))
 	}
+	if td.KvReadWallTime > 0 {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString("total_kv_read_wall_time: ")
+		buf.WriteString(FormatDuration(td.KvReadWallTime))
+	}
 	if td.TotalRPCWallTime > 0 {
 		if buf.Len() > 0 {
 			buf.WriteString(", ")
@@ -660,7 +667,22 @@ func (td *TimeDetail) String() string {
 		buf.WriteString("tikv_wall_time: ")
 		buf.WriteString(FormatDuration(td.TotalRPCWallTime))
 	}
-	return buf.String()
+	if buf.Len() == 0 {
+		return ""
+	}
+	return "time_detail: {" + buf.String() + "}"
+}
+
+// Merge merges the time detail into itself.
+// Note this function could be called concurrently.
+func (td *TimeDetail) Merge(detail *TimeDetail) {
+	if detail != nil {
+		atomic.AddInt64((*int64)(&td.ProcessTime), int64(detail.ProcessTime))
+		atomic.AddInt64((*int64)(&td.SuspendTime), int64(detail.SuspendTime))
+		atomic.AddInt64((*int64)(&td.WaitTime), int64(detail.WaitTime))
+		atomic.AddInt64((*int64)(&td.KvReadWallTime), int64(detail.KvReadWallTime))
+		atomic.AddInt64((*int64)(&td.TotalRPCWallTime), int64(detail.TotalRPCWallTime))
+	}
 }
 
 // MergeFromTimeDetail merges time detail from pb into itself.

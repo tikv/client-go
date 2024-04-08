@@ -425,10 +425,10 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	return startTS, nil
 }
 
-// CurrentMinTimestamp returns current timestamp across all keyspace groups.
-func (s *KVStore) CurrentMinTimestamp() (uint64, error) {
+// CurrentAllTSOKeyspaceGroupMinTs returns a minimum timestamp from all TSO keyspace groups.
+func (s *KVStore) CurrentAllTSOKeyspaceGroupMinTs() (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-	startTS, err := s.getMinTimestampWithRetry(bo)
+	startTS, err := s.getAllTSOKeyspaceGroupMinTSWithRetry(bo)
 	if err != nil {
 		return 0, err
 	}
@@ -469,15 +469,15 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 	}
 }
 
-func (s *KVStore) getMinTimestampWithRetry(bo *Backoffer) (uint64, error) {
+func (s *KVStore) getAllTSOKeyspaceGroupMinTSWithRetry(bo *Backoffer) (uint64, error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("TiKVStore.getMinTimestampWithRetry", opentracing.ChildOf(span.Context()))
+		span1 := span.Tracer().StartSpan("TiKVStore.getAllTSOKeyspaceGroupMinTSWithRetry", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
 	for {
-		minTS, err := s.oracle.GetMinTimestamp(bo.GetCtx())
+		minTS, err := s.oracle.GetAllTSOKeyspaceGroupMinTS(bo.GetCtx())
 		if err == nil {
 			return minTS, nil
 		}
@@ -572,6 +572,15 @@ func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
 	return 0
 }
 
+func (s *KVStore) setMinSafeTS(txnScope string, safeTS uint64) {
+	// ensure safeTS is not set to max uint64
+	if safeTS == math.MaxUint64 {
+		logutil.BgLogger().Warn("skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
+		return
+	}
+	s.minSafeTS.Store(txnScope, safeTS)
+}
+
 // Ctx returns ctx.
 func (s *KVStore) Ctx() context.Context {
 	return s.ctx
@@ -607,6 +616,11 @@ func (s *KVStore) getSafeTS(storeID uint64) (bool, uint64) {
 
 // setSafeTS sets safeTs for store storeID, export for testing
 func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
+	// ensure safeTS is not set to max uint64
+	if safeTS == math.MaxUint64 {
+		logutil.BgLogger().Warn("skip setting safe-ts to max uint64", zap.Uint64("storeID", storeID), zap.Stack("stack"))
+		return
+	}
 	s.safeTSMap.Store(storeID, safeTS)
 }
 
@@ -614,11 +628,12 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 	minSafeTS := uint64(math.MaxUint64)
 	// when there is no store, return 0 in order to let minStartTS become startTS directly
 	if len(storeIDs) < 1 {
-		s.minSafeTS.Store(txnScope, 0)
+		s.setMinSafeTS(txnScope, 0)
 	}
 	for _, store := range storeIDs {
 		ok, safeTS := s.getSafeTS(store)
 		if ok {
+			// safeTS is guaranteed to be less than math.MaxUint64 (by setSafeTS and its callers)
 			if safeTS != 0 && safeTS < minSafeTS {
 				minSafeTS = safeTS
 			}
@@ -626,7 +641,7 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 			minSafeTS = 0
 		}
 	}
-	s.minSafeTS.Store(txnScope, minSafeTS)
+	s.setMinSafeTS(txnScope, minSafeTS)
 }
 
 func (s *KVStore) safeTSUpdater() {
@@ -690,8 +705,8 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 				safeTS     uint64
 				storeIDStr = strconv.FormatUint(storeID, 10)
 			)
-			// If getting the minimum resolved timestamp from PD failed or returned 0, try to get it from TiKV.
-			if storeMinResolvedTSs == nil || storeMinResolvedTSs[storeID] == 0 || err != nil {
+			// If getting the minimum resolved timestamp from PD failed or returned 0/MaxUint64, try to get it from TiKV.
+			if storeMinResolvedTSs == nil || !isValidSafeTS(storeMinResolvedTSs[storeID]) || err != nil {
 				resp, err := tikvClient.SendRequest(
 					ctx, storeAddr, tikvrpc.NewRequest(
 						tikvrpc.CmdStoreSafeTS, &kvrpcpb.StoreSafeTSRequest{
@@ -785,17 +800,17 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 		clusterMinSafeTS, _, err := s.getMinResolvedTSByStoresIDs(ctx, nil)
 		if err != nil {
 			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err))
-		} else if clusterMinSafeTS != 0 {
+		} else if isValidSafeTS(clusterMinSafeTS) {
 			// Update ts and metrics.
 			preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
-			// If preClusterMinSafeTS is maxUint64, it means that the min safe ts has not been initialized.
+			// preClusterMinSafeTS is guaranteed to be less than math.MaxUint64 (by this method and setMinSafeTS)
 			// related to https://github.com/tikv/client-go/issues/991
-			if preClusterMinSafeTS != math.MaxUint64 && preClusterMinSafeTS > clusterMinSafeTS {
+			if preClusterMinSafeTS > clusterMinSafeTS {
 				skipSafeTSUpdateCounter.Inc()
 				preSafeTSTime := oracle.GetTimeFromTS(preClusterMinSafeTS)
 				clusterMinSafeTSGap.Set(time.Since(preSafeTSTime).Seconds())
 			} else {
-				s.minSafeTS.Store(oracle.GlobalTxnScope, clusterMinSafeTS)
+				s.setMinSafeTS(oracle.GlobalTxnScope, clusterMinSafeTS)
 				successSafeTSUpdateCounter.Inc()
 				safeTSTime := oracle.GetTimeFromTS(clusterMinSafeTS)
 				clusterMinSafeTSGap.Set(time.Since(safeTSTime).Seconds())
@@ -805,6 +820,10 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 	}
 
 	return false
+}
+
+func isValidSafeTS(ts uint64) bool {
+	return ts != 0 && ts != math.MaxUint64
 }
 
 // EnableResourceControl enables the resource control.
