@@ -459,33 +459,24 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		RESOLVE_CONCURRENCY,
 		handler,
 	)
-	if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
-		logutil.Logger(bo.GetCtx()).Error("[pipelined dml] commit transaction secondaries failed",
-			zap.Uint64("resolved regions", resolved.Load()),
-			zap.Uint64("startTS", c.startTS),
-			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
-			zap.Uint64("session", c.sessionID),
-			zap.Error(err),
-		)
-	} else {
-		logutil.BgLogger().Info("[pipelined dml] commit transaction secondaries done",
-			zap.Uint64("resolved regions", resolved.Load()),
-			zap.Uint64("startTS", c.startTS),
-			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
-			zap.Uint64("session", c.sessionID),
-		)
-	}
-
 	go func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
 			logutil.Logger(bo.GetCtx()).Error("[pipelined dml] resolve flushed locks failed",
 				zap.String("txn-status", status),
 				zap.Uint64("resolved regions", resolved.Load()),
-				zap.Error(err))
+				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+				zap.Uint64("session", c.sessionID),
+				zap.Error(err),
+			)
 		} else {
 			logutil.BgLogger().Info("[pipelined dml] resolve flushed locks done",
 				zap.String("txn-status", status),
-				zap.Uint64("resolved regions", resolved.Load()))
+				zap.Uint64("resolved regions", resolved.Load()),
+				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+				zap.Uint64("session", c.sessionID),
+			)
 		}
 	}()
 }
