@@ -95,8 +95,8 @@ type replicaSelectorAccessPathCase struct {
 	accessErrInValid bool
 	expect           *accessPathResult
 	result           accessPathResult
-	beforeRun        func() // beforeRun will be called before the test case execute, if it is nil, resetStoreState will be called.
-	afterRun         func() // afterRun will be called after the test case execute, if it is nil, invalidateRegion will be called.
+	beforeRun        func()                // beforeRun will be called before the test case execute, if it is nil, resetStoreState will be called.
+	afterRun         func(ReplicaSelector) // afterRun will be called after the test case execute, if it is nil, invalidateRegion will be called.
 }
 
 type accessPathResult struct {
@@ -1408,7 +1408,7 @@ func TestReplicaReadAccessPathByLeaderCase(t *testing.T) {
 				backoffDetail:   []string{"regionScheduling+1"},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -1426,7 +1426,7 @@ func TestReplicaReadAccessPathByLeaderCase(t *testing.T) {
 				backoffDetail:   []string{},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -1732,7 +1732,7 @@ func TestReplicaReadAccessPathByMixedAndPreferLeaderCase(t *testing.T) {
 				backoffDetail:   []string{},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -1776,7 +1776,7 @@ func TestReplicaReadAccessPathByMixedAndPreferLeaderCase(t *testing.T) {
 				backoffDetail:   []string{},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -2125,7 +2125,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 				backoffDetail:   []string{"tikvRPC+2"},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -2144,7 +2144,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 				backoffDetail:   []string{"tikvServerBusy+1"},
 				regionIsValid:   false,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 	}
 	s.True(s.runMultiCaseAndCompare(cas))
@@ -2404,7 +2404,7 @@ func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
 				backoffDetail:   []string{"tikvRPC+1"},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -2479,6 +2479,13 @@ func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
 			backoffCnt:      3,
 			backoffDetail:   []string{"tikvRPC+1", "tikvServerBusy+2"},
 			regionIsValid:   false,
+		},
+		afterRun: func(selector ReplicaSelector) {
+			base := selector.getBaseReplicaSelector()
+			s.NotNil(base)
+			s.True(base.replicas[0].isEpochStale())
+			s.True(base.replicas[0].epoch < atomic.LoadUint32(&base.replicas[0].store.epoch))
+			s.False(base.region.isValid())
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
@@ -2955,7 +2962,7 @@ func beforeRun(s *testReplicaSelectorSuite, ca *replicaSelectorAccessPathCase) {
 
 func afterRun(ca *replicaSelectorAccessPathCase, sender *RegionRequestSender) {
 	if ca.afterRun != nil {
-		ca.afterRun()
+		ca.afterRun(sender.replicaSelector)
 	} else {
 		sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
 	}
