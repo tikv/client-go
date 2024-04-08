@@ -79,6 +79,9 @@ func newReplicaSelectorV2(
 	for _, op := range opts {
 		op(&option)
 	}
+	if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
+		WithPerferLeader()(&option)
+	}
 	return &replicaSelectorV2{
 		baseReplicaSelector: baseReplicaSelector{
 			regionCache:   regionCache,
@@ -169,17 +172,10 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 			return
 		}
 	}
-	preferLeader := req.ReplicaReadType == kv.ReplicaReadPreferLeader
-	if s.attempts > 1 {
-		if req.ReplicaReadType == kv.ReplicaReadMixed {
-			// For mixed read retry, prefer retry leader first.
-			preferLeader = true
-		}
-	}
 	strategy := ReplicaSelectMixedStrategy{
 		leaderIdx:    leaderIdx,
 		tryLeader:    req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader,
-		preferLeader: preferLeader,
+		preferLeader: s.option.preferLeader,
 		leaderOnly:   s.option.leaderOnly,
 		learnerOnly:  req.ReplicaReadType == kv.ReplicaReadLearner,
 		labels:       s.option.labels,
@@ -203,6 +199,14 @@ func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
 			// always use replica.
 			req.StaleRead = false
 			req.ReplicaRead = s.isReadOnlyReq
+		}
+		// Monitor the flows destination if selector is under `ReplicaReadPreferLeader` mode.
+		if s.option.preferLeader {
+			if s.target.peer.Id != s.region.GetLeaderPeerID() {
+				s.target.store.recordReplicaFlowsStats(toFollower)
+			} else {
+				s.target.store.recordReplicaFlowsStats(toLeader)
+			}
 		}
 	}
 }
