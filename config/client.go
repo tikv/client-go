@@ -91,10 +91,12 @@ type TiKVClient struct {
 	// RemoteCoprocessorAddr is the address of the remote coprocessor.
 	RemoteCoprocessorAddr string `toml:"remote-coprocessor-addr" json:"remote-coprocessor-addr"`
 
-	// FileBasedTxnChunkWriterAddr is the address of the file-based txn chunk writer.
+	// FileBasedTxnChunkWriterAddr is the address of the file-based txn chunk writer, without scheme.
 	FileBasedTxnChunkWriterAddr string `toml:"file-based-txn-chunk-writer-addr" json:"file-based-txn-chunk-writer-addr"`
-	// FileBasedTxnMinSize is the minimum size of transaction to use file-based txn.
-	FileBasedTxnMinSize uint64 `toml:"file-based-txn-min-size" json:"file-based-txn-min-size"`
+	// FileBasedTxnMinMutationSize is the minimum size of mutations to use file-based txn.
+	FileBasedTxnMinMutationSize uint64 `toml:"file-based-txn-min-mutation-size" json:"file-based-txn-min-mutation-size"`
+	// FileBasedTxnMaxChunkSize is the maximum size of a txn chunk in file-based txn.
+	FileBasedTxnMaxChunkSize uint64 `toml:"file-based-txn-max-chunk-size" json:"file-based-txn-max-chunk-size"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -165,7 +167,8 @@ func DefaultTiKVClient() TiKVClient {
 
 		ResolveLockLiteThreshold: 16,
 
-		FileBasedTxnMinSize: 16 * 1024 * 1024,
+		FileBasedTxnMinMutationSize: 16 * 1024 * 1024,
+		FileBasedTxnMaxChunkSize:    128 * 1024 * 1024,
 	}
 }
 
