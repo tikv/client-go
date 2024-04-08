@@ -2747,6 +2747,19 @@ func TestReplicaReadAvoidSlowStore(t *testing.T) {
 			s.True(s.runCase(ca, true))
 
 			s.T().Logf("test case: stale read: %v, with label: %v, slow: false, encoutner err: true", staleRead, withLabel)
+			var expectedSecondPath string
+			if staleRead {
+				// Retry leader, and fallback to leader-read mode.
+				expectedSecondPath = "{addr: store3, replica-read: false, stale-read: false}"
+			} else {
+				if withLabel {
+					// Prefer retrying leader.
+					expectedSecondPath = "{addr: store3, replica-read: true, stale-read: false}"
+				} else {
+					// Retry any another replica.
+					expectedSecondPath = "{addr: store2, replica-read: true, stale-read: false}"
+				}
+			}
 			ca = replicaSelectorAccessPathCase{
 				reqType:         tikvrpc.CmdGet,
 				readType:        kv.ReplicaReadMixed,
@@ -2760,7 +2773,7 @@ func TestReplicaReadAvoidSlowStore(t *testing.T) {
 						fmt.Sprintf("{addr: store1, replica-read: %v, stale-read: %v}", !staleRead, staleRead),
 						// Retry leader.
 						// For stale read, it fallbacks to leader read. However, replica-read doesn't do so.
-						fmt.Sprintf("{addr: store3, replica-read: %v, stale-read: false}", !staleRead),
+						expectedSecondPath,
 					},
 					respErr:         "",
 					respRegionError: nil,
@@ -2769,15 +2782,9 @@ func TestReplicaReadAvoidSlowStore(t *testing.T) {
 					regionIsValid:   true,
 				},
 			}
-			if !staleRead && !withLabel {
-				// v1 and v2 are inconsistent in this case. Skip running on v1.
-				s.True(s.runCase(ca, true))
-			} else {
-				s.True(s.runCaseAndCompare(ca))
-			}
+			s.True(s.runCaseAndCompare(ca))
 
 			s.T().Logf("test case: stale read: %v, with label: %v, slow: true, encoutner err: true", staleRead, withLabel)
-			var expectedSecondPath string
 			if expectedFirstStore == 3 {
 				// Retry on store 2 which is a follower.
 				// Stale-read mode falls back to replica-read mode.
