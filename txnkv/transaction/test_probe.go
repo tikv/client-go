@@ -370,8 +370,8 @@ func (c CommitterProbe) CleanupMutations(ctx context.Context) error {
 }
 
 // ResolveFlushedLocks exports resolveFlushedLocks
-func (c CommitterProbe) ResolveFlushedLocks(bo *retry.Backoffer, start, end []byte) {
-	c.resolveFlushedLocks(bo, start, end)
+func (c CommitterProbe) ResolveFlushedLocks(bo *retry.Backoffer, start, end []byte, commit bool) {
+	c.resolveFlushedLocks(bo, start, end, commit)
 }
 
 // SendTxnHeartBeat renews a txn's ttl.

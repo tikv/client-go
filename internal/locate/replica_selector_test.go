@@ -52,7 +52,8 @@ func (s *testReplicaSelectorSuite) SetupTest(t *testing.T) {
 	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.storeIDs, s.peerIDs, s.regionID, s.leaderPeer = mocktikv.BootstrapWithMultiStores(s.cluster, 3)
 	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
-	s.cache = NewRegionCache(pdCli)
+	// Disable the tick on health status.
+	s.cache = NewRegionCache(pdCli, RegionCacheNoHealthTick)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	s.SetT(t)
 	s.SetS(s)
@@ -94,8 +95,8 @@ type replicaSelectorAccessPathCase struct {
 	accessErrInValid bool
 	expect           *accessPathResult
 	result           accessPathResult
-	beforeRun        func() // beforeRun will be called before the test case execute, if it is nil, resetStoreState will be called.
-	afterRun         func() // afterRun will be called after the test case execute, if it is nil, invalidateRegion will be called.
+	beforeRun        func()                // beforeRun will be called before the test case execute, if it is nil, resetStoreState will be called.
+	afterRun         func(ReplicaSelector) // afterRun will be called after the test case execute, if it is nil, invalidateRegion will be called.
 }
 
 type accessPathResult struct {
@@ -166,29 +167,29 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		score := strategy.calculateScore(r, isLeader)
 		s.Equal(r.store.healthStatus.IsSlow(), false)
 		if isLeader {
-			s.Equal(score, flagLabelMatches+flagNotSlow+flagNotAttempt)
+			s.Equal(score, flagLabelMatches+flagNotSlow+flagNotAttempted)
 		} else {
-			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotSlow+flagNotAttempt)
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotSlow+flagNotAttempted)
 		}
 		r.store.healthStatus.markAlreadySlow()
 		s.Equal(r.store.healthStatus.IsSlow(), true)
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, flagLabelMatches+flagNotAttempt)
+			s.Equal(score, flagLabelMatches+flagNotAttempted)
 		} else {
-			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+			s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempted)
 		}
 		strategy.tryLeader = true
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempted)
 		strategy.preferLeader = true
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempted)
 		strategy.learnerOnly = true
 		strategy.tryLeader = false
 		strategy.preferLeader = false
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagLabelMatches+flagNotAttempt)
+		s.Equal(score, flagLabelMatches+flagNotAttempted)
 		labels := []*metapb.StoreLabel{
 			{
 				Key:   "zone",
@@ -197,7 +198,7 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		strategy.labels = labels
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagNotAttempt)
+		s.Equal(score, flagNotAttempted)
 
 		strategy = ReplicaSelectMixedStrategy{
 			leaderIdx: rc.getStore().workTiKVIdx,
@@ -206,9 +207,9 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 		}
 		score = strategy.calculateScore(r, isLeader)
 		if isLeader {
-			s.Equal(score, flagPreferLeader+flagNotAttempt)
+			s.Equal(score, flagPreferLeader+flagNotAttempted)
 		} else {
-			s.Equal(score, flagNormalPeer+flagNotAttempt)
+			s.Equal(score, flagNormalPeer+flagNotAttempted)
 		}
 
 		strategy = ReplicaSelectMixedStrategy{
@@ -217,10 +218,10 @@ func TestReplicaSelectorCalculateScore(t *testing.T) {
 			labels:       labels,
 		}
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagNormalPeer+flagNotAttempt)
+		s.Equal(score, flagNormalPeer+flagNotAttempted)
 		r.store.labels = labels
 		score = strategy.calculateScore(r, isLeader)
-		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempt)
+		s.Equal(score, flagLabelMatches+flagNormalPeer+flagNotAttempted)
 		r.store.labels = nil
 	}
 }
@@ -1407,7 +1408,7 @@ func TestReplicaReadAccessPathByLeaderCase(t *testing.T) {
 				backoffDetail:   []string{"regionScheduling+1"},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -1425,7 +1426,7 @@ func TestReplicaReadAccessPathByLeaderCase(t *testing.T) {
 				backoffDetail:   []string{},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -1731,7 +1732,7 @@ func TestReplicaReadAccessPathByMixedAndPreferLeaderCase(t *testing.T) {
 				backoffDetail:   []string{},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -1775,7 +1776,7 @@ func TestReplicaReadAccessPathByMixedAndPreferLeaderCase(t *testing.T) {
 				backoffDetail:   []string{},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -2124,7 +2125,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 				backoffDetail:   []string{"tikvRPC+2"},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -2143,7 +2144,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 				backoffDetail:   []string{"tikvServerBusy+1"},
 				regionIsValid:   false,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 	}
 	s.True(s.runMultiCaseAndCompare(cas))
@@ -2403,7 +2404,7 @@ func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
 				backoffDetail:   []string{"tikvRPC+1"},
 				regionIsValid:   true,
 			},
-			afterRun: func() { /* don't invalid region */ },
+			afterRun: func(_ ReplicaSelector) { /* don't invalid region */ },
 		},
 		{
 			reqType:   tikvrpc.CmdGet,
@@ -2478,6 +2479,13 @@ func TestReplicaReadAccessPathByProxyCase(t *testing.T) {
 			backoffCnt:      3,
 			backoffDetail:   []string{"tikvRPC+1", "tikvServerBusy+2"},
 			regionIsValid:   false,
+		},
+		afterRun: func(selector ReplicaSelector) {
+			base := selector.getBaseReplicaSelector()
+			s.NotNil(base)
+			s.True(base.replicas[0].isEpochStale())
+			s.True(base.replicas[0].epoch < atomic.LoadUint32(&base.replicas[0].store.epoch))
+			s.False(base.region.isValid())
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
@@ -2568,6 +2576,159 @@ func TestReplicaReadAccessPathByLearnerCase(t *testing.T) {
 		},
 	}
 	s.True(s.runCaseAndCompare(ca))
+}
+
+func TestReplicaReadAvoidSlowStore(t *testing.T) {
+	s := new(testReplicaSelectorSuite)
+	s.SetupTest(t)
+	defer s.TearDownTest()
+
+	s.changeRegionLeader(3)
+	store, exists := s.cache.getStore(1)
+	s.True(exists)
+
+	for _, staleRead := range []bool{false, true} {
+		for _, withLabel := range []bool{false, true} {
+			var label *metapb.StoreLabel
+			if withLabel {
+				label = &metapb.StoreLabel{Key: "id", Value: "1"}
+			}
+
+			s.T().Logf("test case: stale read: %v, with label: %v, slow: false", staleRead, withLabel)
+
+			ca := replicaSelectorAccessPathCase{
+				reqType:         tikvrpc.CmdGet,
+				readType:        kv.ReplicaReadMixed,
+				staleRead:       staleRead,
+				timeout:         0,
+				busyThresholdMs: 0,
+				label:           label,
+				accessErr:       []RegionErrorType{},
+				expect: &accessPathResult{
+					accessPath: []string{
+						fmt.Sprintf("{addr: store1, replica-read: %v, stale-read: %v}", !staleRead, staleRead),
+					},
+					respErr:         "",
+					respRegionError: nil,
+					backoffCnt:      0,
+					backoffDetail:   []string{},
+					regionIsValid:   true,
+				},
+			}
+			s.True(s.runCaseAndCompare(ca))
+
+			s.T().Logf("test case: stale read: %v, with label: %v, slow: true", staleRead, withLabel)
+			expectedFirstStore := 2
+			if withLabel {
+				// Leader is preferred in this case
+				expectedFirstStore = 3
+			}
+			ca = replicaSelectorAccessPathCase{
+				reqType:         tikvrpc.CmdGet,
+				readType:        kv.ReplicaReadMixed,
+				staleRead:       staleRead,
+				timeout:         0,
+				busyThresholdMs: 0,
+				label:           label,
+				accessErr:       []RegionErrorType{},
+				expect: &accessPathResult{
+					accessPath: []string{
+						fmt.Sprintf("{addr: store%v, replica-read: %v, stale-read: %v}", expectedFirstStore, !staleRead, staleRead),
+					},
+					respErr:         "",
+					respRegionError: nil,
+					backoffCnt:      0,
+					backoffDetail:   []string{},
+					regionIsValid:   true,
+				},
+				beforeRun: func() {
+					s.resetStoreState()
+					store.healthStatus.updateTiKVServerSideSlowScore(100, time.Now())
+				},
+			}
+			// v1 doesn't support avoiding slow stores. We only test this on v2.
+			s.True(s.runCase(ca, true))
+
+			s.T().Logf("test case: stale read: %v, with label: %v, slow: false, encoutner err: true", staleRead, withLabel)
+			var expectedSecondPath string
+			if staleRead {
+				// Retry leader, and fallback to leader-read mode.
+				expectedSecondPath = "{addr: store3, replica-read: false, stale-read: false}"
+			} else {
+				if withLabel {
+					// Prefer retrying leader.
+					expectedSecondPath = "{addr: store3, replica-read: true, stale-read: false}"
+				} else {
+					// Retry any another replica.
+					expectedSecondPath = "{addr: store2, replica-read: true, stale-read: false}"
+				}
+			}
+			ca = replicaSelectorAccessPathCase{
+				reqType:         tikvrpc.CmdGet,
+				readType:        kv.ReplicaReadMixed,
+				staleRead:       staleRead,
+				timeout:         0,
+				busyThresholdMs: 0,
+				label:           label,
+				accessErr:       []RegionErrorType{ServerIsBusyErr},
+				expect: &accessPathResult{
+					accessPath: []string{
+						fmt.Sprintf("{addr: store1, replica-read: %v, stale-read: %v}", !staleRead, staleRead),
+						// Retry leader.
+						// For stale read, it fallbacks to leader read. However, replica-read doesn't do so.
+						expectedSecondPath,
+					},
+					respErr:         "",
+					respRegionError: nil,
+					backoffCnt:      0,
+					backoffDetail:   []string{},
+					regionIsValid:   true,
+				},
+			}
+			s.True(s.runCaseAndCompare(ca))
+
+			s.T().Logf("test case: stale read: %v, with label: %v, slow: true, encoutner err: true", staleRead, withLabel)
+			if expectedFirstStore == 3 {
+				// Retry on store 2 which is a follower.
+				// Stale-read mode falls back to replica-read mode.
+				expectedSecondPath = "{addr: store2, replica-read: true, stale-read: false}"
+			} else {
+				if staleRead {
+					// Retry in leader read mode
+					expectedSecondPath = "{addr: store3, replica-read: false, stale-read: false}"
+				} else {
+					// Retry with the same mode, which is replica-read mode.
+					expectedSecondPath = "{addr: store3, replica-read: true, stale-read: false}"
+				}
+			}
+
+			ca = replicaSelectorAccessPathCase{
+				reqType:         tikvrpc.CmdGet,
+				readType:        kv.ReplicaReadMixed,
+				staleRead:       staleRead,
+				timeout:         0,
+				busyThresholdMs: 0,
+				label:           label,
+				accessErr:       []RegionErrorType{ServerIsBusyErr},
+				expect: &accessPathResult{
+					accessPath: []string{
+						fmt.Sprintf("{addr: store%v, replica-read: %v, stale-read: %v}", expectedFirstStore, !staleRead, staleRead),
+						expectedSecondPath,
+					},
+					respErr:         "",
+					respRegionError: nil,
+					backoffCnt:      0,
+					backoffDetail:   []string{},
+					regionIsValid:   true,
+				},
+				beforeRun: func() {
+					s.resetStoreState()
+					store.healthStatus.updateTiKVServerSideSlowScore(100, time.Now())
+				},
+			}
+			s.True(s.runCase(ca, true))
+		}
+	}
 }
 
 func TestReplicaReadAccessPathByGenError(t *testing.T) {
@@ -2801,7 +2962,7 @@ func beforeRun(s *testReplicaSelectorSuite, ca *replicaSelectorAccessPathCase) {
 
 func afterRun(ca *replicaSelectorAccessPathCase, sender *RegionRequestSender) {
 	if ca.afterRun != nil {
-		ca.afterRun()
+		ca.afterRun(sender.replicaSelector)
 	} else {
 		sender.replicaSelector.invalidateRegion() // invalidate region to reload for next test case.
 	}
@@ -2934,7 +3095,7 @@ func (s *testReplicaSelectorSuite) resetStoreState() {
 	for _, store := range rc.getStore().stores {
 		store.loadStats.Store(nil)
 		store.healthStatus.clientSideSlowScore.resetSlowScore()
-		store.healthStatus.updateTiKVServerSideSlowScore(0, time.Now())
+		store.healthStatus.resetTiKVServerSideSlowScoreForTest()
 		store.healthStatus.updateSlowFlag()
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)

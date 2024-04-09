@@ -655,8 +655,23 @@ type RegionCache struct {
 	clusterID uint64
 }
 
+type regionCacheOptions struct {
+	noHealthTick bool
+}
+
+type RegionCacheOpt func(*regionCacheOptions)
+
+func RegionCacheNoHealthTick(o *regionCacheOptions) {
+	o.noHealthTick = true
+}
+
 // NewRegionCache creates a RegionCache.
-func NewRegionCache(pdClient pd.Client) *RegionCache {
+func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
+	var options regionCacheOptions
+	for _, o := range opt {
+		o(&options)
+	}
+
 	c := &RegionCache{
 		pdClient: pdClient,
 	}
@@ -705,7 +720,9 @@ func NewRegionCache(pdClient pd.Client) *RegionCache {
 		needCheckStores = c.checkAndResolve(needCheckStores[:0], func(s *Store) bool { return filter(s.getResolveState()) })
 		return false
 	}, time.Duration(refreshStoreInterval/4)*time.Second, c.getCheckStoreEvents())
-	c.bg.schedule(repeat(c.checkAndUpdateStoreHealthStatus), time.Duration(refreshStoreInterval/4)*time.Second)
+	if !options.noHealthTick {
+		c.bg.schedule(repeat(c.checkAndUpdateStoreHealthStatus), time.Duration(refreshStoreInterval/4)*time.Second)
+	}
 	c.bg.schedule(repeat(c.reportStoreReplicaFlows), time.Duration(refreshStoreInterval/2)*time.Second)
 	if refreshCacheInterval := config.GetGlobalConfig().RegionsRefreshInterval; refreshCacheInterval > 0 {
 		c.bg.schedule(func(ctx context.Context, _ time.Time) bool {
