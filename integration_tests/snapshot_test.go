@@ -145,8 +145,6 @@ func (s *testSnapshotSuite) TestBatchGet() {
 	}
 }
 
-type contextKey string
-
 func (s *testSnapshotSuite) TestSnapshotCache() {
 	txn := s.beginTxn()
 	s.Nil(txn.Set([]byte("x"), []byte("x")))
@@ -159,7 +157,7 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	s.Nil(err)
 
 	s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
-	ctx := context.WithValue(context.Background(), contextKey("TestSnapshotCache"), true)
+	ctx := context.WithValue(context.Background(), "TestSnapshotCache", true)
 	_, err = snapshot.Get(ctx, []byte("x"))
 	s.Nil(err)
 
