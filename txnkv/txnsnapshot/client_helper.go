@@ -81,7 +81,7 @@ func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, committedLocks *u
 func (ch *ClientHelper) ResolveLocksWithOpts(bo *retry.Backoffer, opts txnlock.ResolveLocksOptions) (txnlock.ResolveLockResult, error) {
 	if ch.Stats != nil {
 		defer func(start time.Time) {
-			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
+			ch.RegionRequestRuntimeStats.RecordRPCRuntimeStats(tikvrpc.CmdResolveLock, time.Since(start))
 		}(time.Now())
 	}
 	opts.ForRead = true
@@ -103,7 +103,7 @@ func (ch *ClientHelper) ResolveLocksWithOpts(bo *retry.Backoffer, opts txnlock.R
 func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*txnlock.Lock) (int64, error) {
 	if ch.Stats != nil {
 		defer func(start time.Time) {
-			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
+			ch.RegionRequestRuntimeStats.RecordRPCRuntimeStats(tikvrpc.CmdResolveLock, time.Since(start))
 		}(time.Now())
 	}
 	msBeforeTxnExpired, resolvedLocks, committedLocks, err := ch.lockResolver.ResolveLocksForRead(bo, callerStartTS, locks, ch.resolveLite)

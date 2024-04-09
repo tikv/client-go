@@ -287,8 +287,8 @@ func (s *testSnapshotSuite) TestSnapshotThreadSafe() {
 
 func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	reqStats := tikv.NewRegionRequestRuntimeStats()
-	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Second)
-	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Millisecond)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Second)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Millisecond)
 	snapshot := s.store.GetSnapshot(0)
 	runtimeStats := &txnkv.SnapshotRuntimeStats{}
 	snapshot.SetRuntimeStats(runtimeStats)
