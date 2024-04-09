@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	"github.com/golang/protobuf/proto" //nolint:staticcheck
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -335,7 +336,7 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 
 	// async resolve the rest locks.
 	commitBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
-	go c.resolveFlushedLocks(commitBo, c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
+	c.resolveFlushedLocks(commitBo, c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd, true)
 	return nil
 }
 
@@ -355,6 +356,18 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 		maxBackOff = CommitSecondaryMaxBackoff
 	}
 	regionCache := c.store.GetRegionCache()
+	// the handler function runs in a different goroutine, should copy the required values before it to avoid race.
+	kvContext := &kvrpcpb.Context{
+		Priority:         c.priority,
+		SyncLog:          c.syncLog,
+		ResourceGroupTag: c.resourceGroupTag,
+		DiskFullOpt:      c.txn.diskFullOpt,
+		TxnSource:        c.txn.txnSource,
+		RequestSource:    PipelinedRequestSource,
+		ResourceControlContext: &kvrpcpb.ResourceControlContext{
+			ResourceGroupName: c.resourceGroupName,
+		},
+	}
 	return func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		start := r.StartKey
 		res := rangetask.TaskStat{}
@@ -363,9 +376,7 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 				StartVersion:  c.startTS,
 				CommitVersion: commitVersion,
 			}
-			req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, kvrpcpb.Context{
-				RequestSource: PipelinedRequestSource,
-			})
+			req := tikvrpc.NewRequest(tikvrpc.CmdResolveLock, lreq, *proto.Clone(kvContext).(*kvrpcpb.Context))
 			bo := retry.NewBackoffer(ctx, maxBackOff)
 			loc, err := regionCache.LocateKey(bo, start)
 			if err != nil {
@@ -413,11 +424,12 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 	}, nil
 }
 
-func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end []byte) {
-	// TODO: implement cleanup.
+// resolveFlushedLocks resolves all locks in the given range [start, end) with the given status.
+// The resolve process is running in another goroutine so this function won't block.
+func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end []byte, commit bool) {
 	const RESOLVE_CONCURRENCY = 8
 	var resolved atomic.Uint64
-	handler, err := c.buildPipelinedResolveHandler(true, &resolved)
+	handler, err := c.buildPipelinedResolveHandler(commit, &resolved)
 	if err != nil {
 		logutil.Logger(bo.GetCtx()).Error(
 			"[pipelined dml] build buildPipelinedResolveHandler error",
@@ -428,26 +440,38 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		)
 		return
 	}
+
+	status := "rollback"
+	if commit {
+		status = "commit"
+	}
+
 	runner := rangetask.NewRangeTaskRunnerWithID(
-		"pipelined-dml-commit",
-		fmt.Sprintf("pipelined-dml-commit-%d", c.startTS),
+		fmt.Sprintf("pipelined-dml-%s", status),
+		fmt.Sprintf("pipelined-dml-%s-%d", status, c.startTS),
 		c.store,
 		RESOLVE_CONCURRENCY,
 		handler,
 	)
-	if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
-		logutil.Logger(bo.GetCtx()).Error("[pipelined dml] commit transaction secondaries failed",
-			zap.Uint64("resolved regions", resolved.Load()),
-			zap.Uint64("startTS", c.startTS),
-			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
-			zap.Error(err),
-		)
-	} else {
-		logutil.Logger(bo.GetCtx()).Info(
-			"[pipelined dml] commit transaction secondaries done",
-			zap.Uint64("resolved regions", resolved.Load()),
-			zap.Uint64("startTS", c.startTS),
-			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
-		)
-	}
+
+	go func() {
+		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
+			logutil.Logger(bo.GetCtx()).Error("[pipelined dml] resolve flushed locks failed",
+				zap.String("txn-status", status),
+				zap.Uint64("resolved regions", resolved.Load()),
+				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+				zap.Uint64("session", c.sessionID),
+				zap.Error(err),
+			)
+		} else {
+			logutil.Logger(bo.GetCtx()).Info("[pipelined dml] resolve flushed locks done",
+				zap.String("txn-status", status),
+				zap.Uint64("resolved regions", resolved.Load()),
+				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+				zap.Uint64("session", c.sessionID),
+			)
+		}
+	}()
 }
