@@ -110,7 +110,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStoreTokenLimit() {
 	s.NotNil(region)
 	oldStoreLimit := kv.StoreLimit.Load()
 	kv.StoreLimit.Store(500)
-	s.cache.getStoreOrInsertDefault(s.storeIDs[0]).tokenCount.Store(500)
+	s.cache.stores.getOrInsertDefault(s.storeIDs[0]).tokenCount.Store(500)
 	// cause there is only one region in this cluster, regionID maps this leader.
 	resp, _, err := s.regionRequestSender.SendReq(s.bo, req, region.Region, time.Second)
 	s.NotNil(err)
@@ -256,7 +256,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
 		return innerClient.SendRequest(ctx, addr, req, timeout)
 	}}
 	var storeState = uint32(unreachable)
-	sender.regionCache.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
+	sender.regionCache.stores.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
 		if s.addr == leaderAddr {
 			return livenessState(atomic.LoadUint32(&storeState))
 		}
@@ -536,7 +536,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
-	unreachable.injectConstantLiveness(cache)
+	unreachable.injectConstantLiveness(cache.stores)
 	s.IsType(&accessKnownLeader{}, replicaSelector.state)
 	_, err = replicaSelector.next(s.bo, req)
 	s.Nil(err)
@@ -572,7 +572,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Do not try to use proxy if livenessState is unknown instead of unreachable.
 	refreshEpochs(regionStore)
 	cache.enableForwarding = true
-	unknown.injectConstantLiveness(cache)
+	unknown.injectConstantLiveness(cache.stores)
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
@@ -594,7 +594,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	replicaSelector, err = newReplicaSelector(cache, regionLoc.Region, req)
 	s.Nil(err)
 	s.NotNil(replicaSelector)
-	unreachable.injectConstantLiveness(cache)
+	unreachable.injectConstantLiveness(cache.stores)
 	s.Eventually(func() bool {
 		return regionStore.stores[regionStore.workTiKVIdx].getLivenessState() == unreachable
 	}, 3*time.Second, 200*time.Millisecond)
@@ -878,7 +878,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		}
 		return nil
 	}
-	reachable.injectConstantLiveness(s.cache)
+	reachable.injectConstantLiveness(s.cache.stores)
 	s.Eventually(func() bool {
 		stores := getReplicaSelectorRegionStores()
 		return stores[0].getLivenessState() == reachable &&
@@ -1004,7 +1004,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 	}
 
 	// Runs out of all replicas and then returns a send error.
-	unreachable.injectConstantLiveness(s.cache)
+	unreachable.injectConstantLiveness(s.cache.stores)
 	reloadRegion()
 	for _, store := range s.storeIDs {
 		s.cluster.StopStore(store)
@@ -1292,7 +1292,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 	}
 
 	// Test for write request.
-	reachable.injectConstantLiveness(s.cache)
+	reachable.injectConstantLiveness(s.cache.stores)
 	resetStats()
 	req := tikvrpc.NewRequest(tikvrpc.CmdPrewrite, &kvrpcpb.PrewriteRequest{}, kvrpcpb.Context{})
 	req.ReplicaReadType = kv.ReplicaReadLeader

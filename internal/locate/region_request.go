@@ -1274,7 +1274,7 @@ func (s *baseReplicaSelector) getBaseReplicaSelector() *baseReplicaSelector {
 }
 
 func (s *baseReplicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
-	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache)
+	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache.bg, s.regionCache.stores)
 }
 
 func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause error) {
@@ -1288,7 +1288,7 @@ func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause err
 		)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
-		s.regionCache.markStoreNeedCheck(store)
+		s.regionCache.stores.markStoreNeedCheck(store)
 		store.healthStatus.markAlreadySlow()
 	}
 }
@@ -2331,7 +2331,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("storeNotMatch", storeNotMatch),
 			zap.Stringer("ctx", ctx),
 		)
-		s.regionCache.markStoreNeedCheck(ctx.Store)
+		s.regionCache.stores.markStoreNeedCheck(ctx.Store)
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		// It's possible the address of store is not changed but the DNS resolves to a different address in k8s environment,
 		// so we always reconnect in this case.

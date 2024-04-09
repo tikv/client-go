@@ -85,7 +85,7 @@ func (s *testRegionCacheStaleReadSuite) SetupTest() {
 }
 
 func (s *testRegionCacheStaleReadSuite) TearDownTest() {
-	s.cache.setMockRequestLiveness(nil)
+	s.cache.stores.setMockRequestLiveness(nil)
 	s.cache.Close()
 	s.mvccStore.Close()
 }
@@ -223,7 +223,7 @@ func (s *testRegionCacheStaleReadSuite) setClient() {
 		return
 	}}
 
-	s.cache.setMockRequestLiveness(func(ctx context.Context, store *Store) livenessState {
+	s.cache.stores.setMockRequestLiveness(func(ctx context.Context, store *Store) livenessState {
 		_, ok := s.injection.unavailableStoreIDs[store.storeID]
 		if ok {
 			return unreachable
