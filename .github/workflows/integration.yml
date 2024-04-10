@@ -2,9 +2,9 @@ name: Integration Test
 
 on:
   push:
-    branches: [ master, tidb-cse-7.5 ]
+    branches: [ master, tidb-cse-7.5, txn-file ]
   pull_request:
-    branches: [ master, tidb-cse-7.5 ]
+    branches: [ master, tidb-cse-7.5, txn-file ]
 
 jobs:
 
