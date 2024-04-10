@@ -631,6 +631,8 @@ type RegionCache struct {
 	codec            apicodec.Codec
 	enableForwarding bool
 
+	requestHealthFeedbackCallback func(ctx context.Context, addr string) error
+
 	mu regionIndexMu
 
 	storeMu struct {
@@ -656,13 +658,20 @@ type RegionCache struct {
 }
 
 type regionCacheOptions struct {
-	noHealthTick bool
+	noHealthTick          bool
+	requestHealthFeedback func(ctx context.Context, addr string) error
 }
 
 type RegionCacheOpt func(*regionCacheOptions)
 
 func RegionCacheNoHealthTick(o *regionCacheOptions) {
 	o.noHealthTick = true
+}
+
+func WithRequestHealthFeedback(callback func(ctx context.Context, addr string) error) RegionCacheOpt {
+	return func(options *regionCacheOptions) {
+		options.requestHealthFeedback = callback
+	}
 }
 
 // NewRegionCache creates a RegionCache.
@@ -673,7 +682,8 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	}
 
 	c := &RegionCache{
-		pdClient: pdClient,
+		pdClient:                      pdClient,
+		requestHealthFeedbackCallback: options.requestHealthFeedback,
 	}
 
 	c.codec = apicodec.NewCodecV1(apicodec.ModeRaw)
@@ -721,7 +731,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 		return false
 	}, time.Duration(refreshStoreInterval/4)*time.Second, c.getCheckStoreEvents())
 	if !options.noHealthTick {
-		c.bg.schedule(repeat(c.checkAndUpdateStoreHealthStatus), time.Duration(refreshStoreInterval/4)*time.Second)
+		c.bg.schedule(c.checkAndUpdateStoreHealthStatus, time.Duration(refreshStoreInterval/4)*time.Second)
 	}
 	c.bg.schedule(repeat(c.reportStoreReplicaFlows), time.Duration(refreshStoreInterval/2)*time.Second)
 	if refreshCacheInterval := config.GetGlobalConfig().RegionsRefreshInterval; refreshCacheInterval > 0 {
@@ -2645,7 +2655,7 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 }
 
 // checkAndUpdateStoreHealthStatus checks and updates health stats on each store.
-func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
+func (c *RegionCache) checkAndUpdateStoreHealthStatus(ctx context.Context, now time.Time) bool {
 	defer func() {
 		r := recover()
 		if r != nil {
@@ -2657,16 +2667,18 @@ func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
 			}
 		}
 	}()
-	healthDetails := make(map[uint64]HealthStatusDetail)
-	now := time.Now()
+	var stores []*Store
 	c.forEachStore(func(store *Store) {
-		store.healthStatus.tick(now)
-		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
+		stores = append(stores, store)
 	})
-	for store, details := range healthDetails {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.ClientSideSlowScore))
-		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.TiKVSideSlowScore))
+	for _, store := range stores {
+		store.healthStatus.tick(ctx, now, store, c.requestHealthFeedbackCallback)
+		healthDetails := store.healthStatus.GetHealthStatusDetail()
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(healthDetails.ClientSideSlowScore))
+		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(healthDetails.TiKVSideSlowScore))
 	}
+
+	return false
 }
 
 // reportStoreReplicaFlows reports the statistics on the related replicaFlowsType.

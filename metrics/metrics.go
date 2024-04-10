@@ -102,6 +102,7 @@ var (
 	TiKVAggressiveLockedKeysCounter          *prometheus.CounterVec
 	TiKVStoreSlowScoreGauge                  *prometheus.GaugeVec
 	TiKVFeedbackSlowScoreGauge               *prometheus.GaugeVec
+	TiKVHealthFeedbackOpsCounter             *prometheus.CounterVec
 	TiKVPreferLeaderFlowsGauge               *prometheus.GaugeVec
 	TiKVStaleReadCounter                     *prometheus.CounterVec
 	TiKVStaleReadReqCounter                  *prometheus.CounterVec
@@ -716,6 +717,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblStore})
 
+	TiKVHealthFeedbackOpsCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "health_feedback_ops_counter",
+			Help:        "Counter of operations about TiKV health feedback",
+			ConstLabels: constLabels,
+		}, []string{LblScope, LblType})
+
 	TiKVPreferLeaderFlowsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace:   namespace,
@@ -857,6 +867,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVAggressiveLockedKeysCounter)
 	prometheus.MustRegister(TiKVStoreSlowScoreGauge)
 	prometheus.MustRegister(TiKVFeedbackSlowScoreGauge)
+	prometheus.MustRegister(TiKVHealthFeedbackOpsCounter)
 	prometheus.MustRegister(TiKVPreferLeaderFlowsGauge)
 	prometheus.MustRegister(TiKVStaleReadCounter)
 	prometheus.MustRegister(TiKVStaleReadReqCounter)

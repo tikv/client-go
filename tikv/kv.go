@@ -236,6 +236,23 @@ func loadOption(store *KVStore, opt ...Option) {
 	}
 }
 
+const requestHealthFeedbackTimeout = time.Second * 2
+
+func requestHealthFeedbackFromKVClient(ctx context.Context, addr string, tikvClient Client) error {
+	resp, err := tikvClient.SendRequest(ctx, addr, tikvrpc.NewRequest(tikvrpc.CmdRequestHealthFeedback, &kvrpcpb.RequestHealthFeedbackRequest{}), requestHealthFeedbackTimeout)
+	if err != nil {
+		return err
+	}
+	regionErr, err := resp.GetRegionError()
+	if err != nil {
+		return err
+	}
+	if regionErr != nil {
+		return errors.Errorf("requested health feedback from store but received region error: %s", regionErr.String())
+	}
+	return nil
+}
+
 // NewKVStore creates a new TiKV store instance.
 func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
 	o, err := oracles.NewPdOracle(pdClient, defaultOracleUpdateInterval)
@@ -243,7 +260,9 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	regionCache := locate.NewRegionCache(pdClient)
+	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedback(func(ctx context.Context, addr string) error {
+		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
+	}))
 	store := &KVStore{
 		clusterID:       pdClient.GetClusterID(context.TODO()),
 		uuid:            uuid,
