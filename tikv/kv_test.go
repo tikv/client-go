@@ -164,7 +164,7 @@ func (s *testKVSuite) TestMinSafeTsFromStores() {
 	s.Require().Equal(mockClient.tikvSafeTs, ts)
 }
 
-func (s *testKVSuite) TestMinSafeTsFromStoresWithZeroSafeTs() {
+func (s *testKVSuite) TestMinSafeTsFromStoresWithAllZeros() {
 	// ref https://github.com/tikv/client-go/issues/1276
 	mockClient := newStoreSafeTsMockClient(s)
 	mockClient.tikvSafeTs = 0
@@ -176,6 +176,19 @@ func (s *testKVSuite) TestMinSafeTsFromStoresWithZeroSafeTs() {
 	}, 15*time.Second, time.Second)
 
 	s.Require().Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+}
+
+func (s *testKVSuite) TestMinSafeTsFromStoresWithSomeZeros() {
+	// ref https://github.com/tikv/tikv/issues/13675 & https://github.com/tikv/client-go/pull/615
+	mockClient := newStoreSafeTsMockClient(s)
+	mockClient.tiflashSafeTs = 0
+	s.store.SetTiKVClient(mockClient)
+
+	s.Eventually(func() bool {
+		return atomic.LoadInt32(&mockClient.requestCount) >= 4
+	}, 15*time.Second, time.Second)
+
+	s.Require().Equal(mockClient.tikvSafeTs, s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
 
 func (s *testKVSuite) TestMinSafeTsFromPD() {

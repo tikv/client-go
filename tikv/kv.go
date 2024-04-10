@@ -44,7 +44,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
@@ -576,11 +575,7 @@ func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
 func (s *KVStore) setMinSafeTS(txnScope string, safeTS uint64) {
 	// ensure safeTS is not set to max uint64
 	if safeTS == math.MaxUint64 {
-		if testing.Testing() {
-			panic(fmt.Errorf("unreachable"))
-		} else {
-			logutil.BgLogger().Warn("skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
-		}
+		logutil.AssertWarn(logutil.BgLogger(), "skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
 		return
 	}
 	s.minSafeTS.Store(txnScope, safeTS)
@@ -623,11 +618,7 @@ func (s *KVStore) getSafeTS(storeID uint64) (bool, uint64) {
 func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
 	// ensure safeTS is not set to max uint64
 	if safeTS == math.MaxUint64 {
-		if testing.Testing() {
-			panic(fmt.Errorf("unreachable"))
-		} else {
-			logutil.BgLogger().Warn("skip setting safe-ts to max uint64", zap.Uint64("storeID", storeID), zap.Stack("stack"))
-		}
+		logutil.AssertWarn(logutil.BgLogger(), "skip setting safe-ts to max uint64", zap.Uint64("storeID", storeID), zap.Stack("stack"))
 		return
 	}
 	s.safeTSMap.Store(storeID, safeTS)
@@ -646,12 +637,16 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 		ok, safeTS := s.getSafeTS(store)
 		if ok {
 			// safeTS is guaranteed to be less than math.MaxUint64 (by setSafeTS and its callers)
-			if safeTS < minSafeTS {
+			if safeTS != 0 && safeTS < minSafeTS {
 				minSafeTS = safeTS
 			}
 		} else {
 			minSafeTS = 0
 		}
+	}
+	// if minSafeTS is still math.MaxUint64, that means all store safe ts are 0, then we set minSafeTS to 0.
+	if minSafeTS == math.MaxUint64 {
+		minSafeTS = 0
 	}
 	s.setMinSafeTS(txnScope, minSafeTS)
 }
