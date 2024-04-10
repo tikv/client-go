@@ -46,7 +46,6 @@ var (
 	BuildTxnFileMaxBackoff = atomicutil.NewUint64(60000)
 )
 
-const MaxTxnChunkSize = 128 * 1024 * 1024
 const PreSplitRegionChunks = 4
 
 type txnFileCtx struct {
@@ -483,9 +482,10 @@ func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, c
 }
 
 func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations CommitterMutations) error {
+	maxTxnChunkSize := int(config.GetGlobalConfig().TiKVClient.TxnChunkMaxSize)
 	capacity := c.txn.Size() + c.txn.Len()*7 + 4
-	if capacity > MaxTxnChunkSize {
-		capacity = MaxTxnChunkSize
+	if capacity > maxTxnChunkSize {
+		capacity = maxTxnChunkSize
 	}
 
 	writer, err := newChunkWriterClient()
