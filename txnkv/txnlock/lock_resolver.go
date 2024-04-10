@@ -745,6 +745,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 
 	var status TxnStatus
 	resolvingPessimisticLock := lockInfo != nil && lockInfo.LockType == kvrpcpb.Op_PessimisticLock
+	isTxnFile := lockInfo != nil && lockInfo.IsTxnFile
 	req := tikvrpc.NewRequest(tikvrpc.CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{
 		PrimaryKey:               primary,
 		LockTs:                   txnID,
@@ -754,7 +755,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		ForceSyncCommit:          forceSyncCommit,
 		ResolvingPessimisticLock: resolvingPessimisticLock,
 		VerifyIsPrimary:          true,
-		IsTxnFile:                lockInfo.IsTxnFile,
+		IsTxnFile:                isTxnFile,
 	}, kvrpcpb.Context{
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
@@ -1134,6 +1135,7 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		}
 		lreq := &kvrpcpb.ResolveLockRequest{
 			StartVersion: l.TxnID,
+			IsTxnFile:    l.IsTxnFile,
 		}
 		if status.IsCommitted() {
 			lreq.CommitVersion = status.CommitTS()
