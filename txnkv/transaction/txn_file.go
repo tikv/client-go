@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -487,13 +487,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	if capacity > MaxTxnChunkSize {
 		capacity = MaxTxnChunkSize
 	}
-
-	writer, err := newChunkWriterClient()
-	if err != nil {
-		return errors.Wrap(err, "new chunk writer client failed")
-	}
-
-	totalSize := 0
+	writerAddr := config.GetGlobalConfig().TiKVClient.TxnChunkWriterAddr
 	buf := make([]byte, 0, capacity)
 	chunkSmallest := mutations.GetKey(0)
 	for i := 0; i < mutations.Len(); i++ {
@@ -501,9 +495,8 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		op := mutations.GetOp(i)
 		val := mutations.GetValue(i)
 		entrySize := 2 + len(key) + 1 + 4 + len(val)
-		if len(buf) > 0 && len(buf)+entrySize+4 > cap(buf) {
-			totalSize += len(buf)
-			chunkID, err := c.buildTxnFile(bo, writer, buf)
+		if len(buf)+entrySize+4 > cap(buf) {
+			chunkID, err := c.buildTxnFile(bo, writerAddr, buf)
 			if err != nil {
 				return err
 			}
@@ -519,70 +512,45 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		buf = append(buf, val...)
 	}
 	if len(buf) > 0 {
-		totalSize += len(buf)
-		chunkID, err := c.buildTxnFile(bo, writer, buf)
+		chunkID, err := c.buildTxnFile(bo, writerAddr, buf)
 		if err != nil {
 			return err
 		}
 		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
 		c.txnFileCtx.slice.append(chunkID, ran)
 	}
-	logutil.Logger(bo.GetCtx()).Info("build txn files",
-		zap.Uint64("startTS", c.startTS),
-		zap.Int("mutationsLen", mutations.Len()),
-		zap.Int("totalChunksSize", totalSize),
-		zap.Any("chunkIDs", c.txnFileCtx.slice.chunkIDs))
 	return nil
 }
 
-func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writer *chunkWriterClient, buf []byte) (uint64, error) {
+func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writerAddr string, buf []byte) (uint64, error) {
 	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
 	hash.Write(buf)
 	crc := hash.Sum32()
 	buf = binary.LittleEndian.AppendUint32(buf, crc)
+	logutil.BgLogger().Info("build txn file size", zap.Int("size", len(buf)))
+	url := fmt.Sprintf("http://%s/txn_chunk", writerAddr)
 
-	for {
-		req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", writer.serviceAddr, bytes.NewReader(buf))
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		req.Header.Set("Content-Type", "application/octet-stream")
-
-		resp, err := writer.cli.Do(req)
-		if err != nil {
-			logutil.Logger(bo.GetCtx()).Warn("build txn file request failed", zap.Error(err), zap.String("addr", writer.serviceAddr))
-			err = bo.Backoff(retry.BoTiKVRPC, errors.WithMessage(err, "build txn file request failed"))
-			if err != nil {
-				return 0, errors.WithStack(err)
-			}
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			var bodyStr string
-			if data, err := io.ReadAll(resp.Body); err == nil {
-				bodyStr = string(data)
-			}
-			logutil.Logger(bo.GetCtx()).Warn("build txn file service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
-			err = bo.Backoff(retry.BoTiKVServerBusy, errors.WithMessagef(err, "build txn file service error, http status %s", resp.Status))
-			if err != nil {
-				return 0, errors.WithStack(err)
-			}
-			continue
-		}
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		v := struct {
-			ChunkId uint64 `json:"chunk_id"`
-		}{}
-		if err = json.Unmarshal(data, &v); err != nil {
-			return 0, errors.Wrapf(err, "unmarshal response %s", string(data))
-		}
-		logutil.Logger(bo.GetCtx()).Debug("build txn file", zap.Int("size", len(buf)), zap.Uint64("chunkId", v.ChunkId))
-		return v.ChunkId, nil
+	req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", url, bytes.NewReader(buf))
+	if err != nil {
+		return 0, errors.WithStack(err)
 	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	// TODO: retry on error, support TLS.
+	cli := http.Client{Timeout: time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("http status %s", resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(string(data), 10, 64)
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
@@ -623,32 +591,4 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 			return err
 		}
 	}
-}
-
-type chunkWriterClient struct {
-	cli         *http.Client
-	serviceAddr string
-}
-
-func newChunkWriterClient() (*chunkWriterClient, error) {
-	var (
-		cfg     = config.GetGlobalConfig()
-		scheme  = "http://"
-		timeout = time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond
-		client  = &http.Client{Timeout: timeout}
-	)
-	if len(cfg.Security.ClusterSSLCA) != 0 {
-		tlsConfig, err := cfg.Security.ToTLSConfig()
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		scheme = "https://"
-		client.Transport = &http.Transport{
-			TLSClientConfig:   tlsConfig,
-			ForceAttemptHTTP2: true,
-		}
-	}
-	serviceAddr := fmt.Sprintf("%s%s/txn_chunk", scheme, cfg.TiKVClient.TxnChunkWriterAddr)
-	return &chunkWriterClient{client, serviceAddr}, nil
 }
