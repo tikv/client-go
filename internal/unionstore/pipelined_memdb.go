@@ -69,9 +69,9 @@ const (
 )
 
 type flushOption struct {
-	MinFlushKeys            int
-	MinFlushSize            int
-	ForceFlushSizeThreshold int
+	MinFlushKeys            uint64
+	MinFlushSize            uint64
+	ForceFlushSizeThreshold uint64
 }
 
 func newFlushOption() flushOption {
@@ -81,13 +81,13 @@ func newFlushOption() flushOption {
 		ForceFlushSizeThreshold: ForceFlushSizeThreshold,
 	}
 	if val, err := util.EvalFailpoint("pipelinedMemDBMinFlushKeys"); err == nil && val != nil {
-		opt.MinFlushKeys = val.(int)
+		opt.MinFlushKeys = uint64(val.(int))
 	}
 	if val, err := util.EvalFailpoint("pipelinedMemDBMinFlushSize"); err == nil && val != nil {
-		opt.MinFlushSize = val.(int)
+		opt.MinFlushSize = uint64(val.(int))
 	}
 	if val, err := util.EvalFailpoint("pipelinedMemDBForceFlushSizeThreshold"); err == nil && val != nil {
-		opt.ForceFlushSizeThreshold = val.(int)
+		opt.ForceFlushSizeThreshold = uint64(val.(int))
 	}
 	return opt
 }
@@ -323,12 +323,14 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 }
 
 func (p *PipelinedMemDB) needFlush() bool {
-	size := p.memDB.Size()
+	size := p.memDB.Mem()
 	// size < MinFlushSize, do not flush.
 	// MinFlushSize <= size < ForceFlushSizeThreshold && keys < MinFlushKeys, do not flush.
 	// MinFlushSize <= size < ForceFlushSizeThreshold && keys >= MinFlushKeys, flush.
 	// size >= ForceFlushSizeThreshold, flush.
-	if size < p.flushOption.MinFlushSize || (p.memDB.Len() < p.flushOption.MinFlushKeys && size < p.flushOption.ForceFlushSizeThreshold) {
+	if size < p.flushOption.MinFlushSize ||
+		(uint64(p.memDB.Len()) < p.flushOption.MinFlushKeys &&
+			size < p.flushOption.ForceFlushSizeThreshold) {
 		return false
 	}
 	if p.onFlushing.Load() && size < p.flushOption.ForceFlushSizeThreshold {
@@ -391,7 +393,11 @@ func (p *PipelinedMemDB) Len() int {
 }
 
 func (p *PipelinedMemDB) Size() int {
-	return p.memDB.Size() + p.size
+	size := p.size
+	if p.memDB != nil {
+		size += p.memDB.Size()
+	}
+	return size
 }
 
 func (p *PipelinedMemDB) OnFlushing() bool {
