@@ -63,20 +63,6 @@ func (b chunkBatch) String() string {
 	return fmt.Sprintf("chunkBatch{region: %s, isPrimary: %t, txnChunkSlice: %s}", b.region.String(), b.isPrimary, b.txnChunkSlice.String())
 }
 
-func (b *chunkBatch) Smallest() []byte {
-	if len(b.chunkRanges) == 0 {
-		return nil
-	}
-	return b.chunkRanges[0].smallest
-}
-
-func (b *chunkBatch) Biggest() []byte {
-	if len(b.chunkRanges) == 0 {
-		return nil
-	}
-	return b.chunkRanges[len(b.chunkRanges)-1].biggest
-}
-
 type txnChunkSlice struct {
 	chunkIDs    []uint64
 	chunkRanges []txnChunkRange
@@ -85,9 +71,23 @@ type txnChunkSlice struct {
 func (s txnChunkSlice) String() string {
 	slice := make([]string, len(s.chunkRanges))
 	for i, ran := range s.chunkRanges {
-		slice[i] = fmt.Sprintf("{id: %v, smallest: %s, biggest: %s}", s.chunkIDs[i], kv.StrKey(ran.smallest), kv.StrKey(ran.biggest))
+		slice[i] = fmt.Sprintf("txnChunkSlice{%v: [%s, %s]}", s.chunkIDs[i], kv.StrKey(ran.smallest), kv.StrKey(ran.biggest))
 	}
 	return fmt.Sprintf("[%s]", strings.Join(slice, ", "))
+}
+
+func (s *txnChunkSlice) Smallest() []byte {
+	if len(s.chunkRanges) == 0 {
+		return nil
+	}
+	return s.chunkRanges[0].smallest
+}
+
+func (s *txnChunkSlice) Biggest() []byte {
+	if len(s.chunkRanges) == 0 {
+		return nil
+	}
+	return s.chunkRanges[len(s.chunkRanges)-1].biggest
 }
 
 func (cs *txnChunkSlice) appendSlice(other *txnChunkSlice) {
@@ -117,7 +117,7 @@ func (cs *txnChunkSlice) len() int {
 
 func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
 	batch_map := make(map[locate.RegionVerID]*chunkBatch)
-	smallest := cs.chunkRanges[0].smallest
+	smallest := cs.Smallest()
 
 	for i, chunkRange := range cs.chunkRanges {
 		regions, err := chunkRange.getOverlapRegions(c, bo)
@@ -136,13 +136,13 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 	}
 
 	batches := make([]chunkBatch, 0, len(batch_map))
-	sorted := false
+	picked := false // Pick the batch with primary and put it at the first.
 	for _, batch := range batch_map {
-		if !sorted && bytes.Equal(batch.Smallest(), smallest) {
+		if !picked && bytes.Equal(batch.Smallest(), smallest) {
 			if len(batches) > 0 {
 				batches[0], *batch = *batch, batches[0]
 			}
-			sorted = true
+			picked = true
 		}
 
 		batches = append(batches, *batch)
@@ -647,15 +647,18 @@ func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, c
 }
 
 func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations CommitterMutations) error {
-	logutil.Logger(bo.GetCtx()).Debug("build txn files", zap.Uint64("startTs", c.startTS), zap.Int("mutations.len()", mutations.Len()))
-
-	maxTxnChunkSize := config.GetGlobalConfig().TiKVClient.FileBasedTxnMaxChunkSize
-	totalSize := 0
-
+	maxTxnChunkSize := int(config.GetGlobalConfig().TiKVClient.TxnChunkMaxSize)
 	capacity := c.txn.Size() + c.txn.Len()*7 + 4
-	if capacity > int(maxTxnChunkSize) {
-		capacity = int(maxTxnChunkSize)
+	if capacity > maxTxnChunkSize {
+		capacity = maxTxnChunkSize
 	}
+
+	writer, err := newChunkWriterClient()
+	if err != nil {
+		return errors.Wrap(err, "new chunk writer client failed")
+	}
+
+	totalSize := 0
 	buf := make([]byte, 0, capacity)
 	chunkSmallest := mutations.GetKey(0)
 	for i := 0; i < mutations.Len(); i++ {
@@ -665,7 +668,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		entrySize := 2 + len(key) + 1 + 4 + len(val)
 		if len(buf) > 0 && len(buf)+entrySize+4 > cap(buf) {
 			totalSize += len(buf)
-			chunkID, err := c.buildTxnFile(bo, buf)
+			chunkID, err := c.buildTxnFile(bo, writer, buf)
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Error("build txn file failed", zap.Error(err))
 				return errors.Wrap(err, "build txn file failed")
@@ -683,7 +686,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	}
 	if len(buf) > 0 {
 		totalSize += len(buf)
-		chunkID, err := c.buildTxnFile(bo, buf)
+		chunkID, err := c.buildTxnFile(bo, writer, buf)
 		if err != nil {
 			logutil.Logger(bo.GetCtx()).Error("build txn file failed", zap.Error(err))
 			return errors.Wrap(err, "build txn file failed")
@@ -691,34 +694,31 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
 		c.txnFileCtx.slice.append(chunkID, ran)
 	}
-	logutil.Logger(bo.GetCtx()).Info("build txn files", zap.Uint64("startTs", c.startTS), zap.Int("mutationsLen", mutations.Len()),
-		zap.Int("totalChunksSize", totalSize), zap.Any("txnFileCtx.slice", c.txnFileCtx.slice))
+	logutil.Logger(bo.GetCtx()).Info("build txn files",
+		zap.Uint64("startTS", c.startTS),
+		zap.Int("mutationsLen", mutations.Len()),
+		zap.Int("totalChunksSize", totalSize),
+		zap.Any("chunkIDs", c.txnFileCtx.slice.chunkIDs))
 	return nil
 }
 
-// TODO: support https, retry, timeout
-func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, buf []byte) (uint64, error) {
+func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writer *chunkWriterClient, buf []byte) (uint64, error) {
 	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
 	hash.Write(buf)
 	crc := hash.Sum32()
 	buf = binary.LittleEndian.AppendUint32(buf, crc)
 
-	cli, url, err := newChunkBuilderClient()
-	if err != nil {
-		return 0, errors.WithStack(err)
-	}
-
 	for {
-		req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", url, bytes.NewReader(buf))
+		req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", writer.serviceAddr, bytes.NewReader(buf))
 		if err != nil {
 			return 0, errors.WithStack(err)
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 
-		resp, err := cli.Do(req)
+		resp, err := writer.cli.Do(req)
 		if err != nil {
-			logutil.Logger(bo.GetCtx()).Warn("build txn file failed", zap.Error(err))
-			err = bo.Backoff(retry.BoTiKVRPC, err)
+			logutil.Logger(bo.GetCtx()).Warn("build txn file request failed", zap.Error(err), zap.String("addr", writer.serviceAddr))
+			err = bo.Backoff(retry.BoTiKVRPC, errors.WithMessage(err, "build txn file request failed"))
 			if err != nil {
 				return 0, errors.WithStack(err)
 			}
@@ -726,11 +726,14 @@ func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, buf []byte) (uint6
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			data, _ := io.ReadAll(resp.Body)
-			logutil.Logger(bo.GetCtx()).Warn("build txn file failed", zap.String("http status", resp.Status), zap.String("body", string(data)))
-			err = bo.Backoff(retry.BoTiKVServerBusy, err)
+			var bodyStr string
+			if data, err := io.ReadAll(resp.Body); err == nil {
+				bodyStr = string(data)
+			}
+			logutil.Logger(bo.GetCtx()).Warn("build txn file service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
+			err = bo.Backoff(retry.BoTiKVServerBusy, errors.WithMessagef(err, "build txn file service error, http status %s", resp.Status))
 			if err != nil {
-				return 0, errors.Errorf("http status %s", resp.Status)
+				return 0, errors.WithStack(err)
 			}
 			continue
 		}
@@ -749,35 +752,12 @@ func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, buf []byte) (uint6
 	}
 }
 
-func newChunkBuilderClient() (*http.Client, string, error) {
-	var (
-		cfg     = config.GetGlobalConfig()
-		scheme  = "http://"
-		timeout = time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond
-		client  = &http.Client{Timeout: timeout}
-	)
-	if len(cfg.Security.ClusterSSLCA) != 0 {
-		tlsConfig, err := cfg.Security.ToTLSConfig()
-		if err != nil {
-			return nil, "", errors.WithStack(err)
-		}
-
-		scheme = "https://"
-		client.Transport = &http.Transport{
-			TLSClientConfig:   tlsConfig,
-			ForceAttemptHTTP2: true,
-		}
-	}
-	serviceAddr := fmt.Sprintf("%s%s/txn_chunk", scheme, cfg.TiKVClient.FileBasedTxnChunkWriterAddr)
-	return client, serviceAddr, nil
-}
-
 func (c *twoPhaseCommitter) useTxnFile() bool {
 	conf := config.GetGlobalConfig()
-	if c.txn == nil || c.txn.isPessimistic || c.txn.isInternal() || uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.FileBasedTxnMinMutationSize {
+	if c.txn == nil || c.txn.isPessimistic || c.txn.isInternal() || uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.TxnFileMinMutationSize {
 		return false
 	}
-	return len(conf.TiKVClient.FileBasedTxnChunkWriterAddr) > 0
+	return len(conf.TiKVClient.TxnChunkWriterAddr) > 0
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
@@ -815,4 +795,32 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 			return err
 		}
 	}
+}
+
+type chunkWriterClient struct {
+	cli         *http.Client
+	serviceAddr string
+}
+
+func newChunkWriterClient() (*chunkWriterClient, error) {
+	var (
+		cfg     = config.GetGlobalConfig()
+		scheme  = "http://"
+		timeout = time.Duration(BuildTxnFileMaxBackoff.Load()) * time.Millisecond
+		client  = &http.Client{Timeout: timeout}
+	)
+	if len(cfg.Security.ClusterSSLCA) != 0 {
+		tlsConfig, err := cfg.Security.ToTLSConfig()
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		scheme = "https://"
+		client.Transport = &http.Transport{
+			TLSClientConfig:   tlsConfig,
+			ForceAttemptHTTP2: true,
+		}
+	}
+	serviceAddr := fmt.Sprintf("%s%s/txn_chunk", scheme, cfg.TiKVClient.TxnChunkWriterAddr)
+	return &chunkWriterClient{client, serviceAddr}, nil
 }
