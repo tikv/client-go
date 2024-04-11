@@ -23,6 +23,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -54,13 +55,39 @@ type txnFileCtx struct {
 
 type chunkBatch struct {
 	txnChunkSlice
-	region    *locate.Region
+	region    *locate.KeyLocation
 	isPrimary bool
+}
+
+func (b chunkBatch) String() string {
+	return fmt.Sprintf("chunkBatch{region: %s, isPrimary: %t, txnChunkSlice: %s}", b.region.String(), b.isPrimary, b.txnChunkSlice.String())
 }
 
 type txnChunkSlice struct {
 	chunkIDs    []uint64
 	chunkRanges []txnChunkRange
+}
+
+func (s txnChunkSlice) String() string {
+	slice := make([]string, len(s.chunkRanges))
+	for i, ran := range s.chunkRanges {
+		slice[i] = fmt.Sprintf("{%v: [%s, %s]}", s.chunkIDs[i], kv.StrKey(ran.smallest), kv.StrKey(ran.biggest))
+	}
+	return fmt.Sprintf("[%s]", strings.Join(slice, ", "))
+}
+
+func (s *txnChunkSlice) Smallest() []byte {
+	if len(s.chunkRanges) == 0 {
+		return nil
+	}
+	return s.chunkRanges[0].smallest
+}
+
+func (s *txnChunkSlice) Biggest() []byte {
+	if len(s.chunkRanges) == 0 {
+		return nil
+	}
+	return s.chunkRanges[len(s.chunkRanges)-1].biggest
 }
 
 func (cs *txnChunkSlice) appendSlice(other *txnChunkSlice) {
@@ -89,25 +116,38 @@ func (cs *txnChunkSlice) len() int {
 }
 
 func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
-	var batches []chunkBatch
-	endKey := kv.NextKey(cs.chunkRanges[cs.len()-1].biggest)
-	regions, err := c.LoadRegionsInKeyRange(bo, cs.chunkRanges[0].smallest, endKey)
-	if err != nil {
-		return nil, err
-	}
-	for _, region := range regions {
-		batch := chunkBatch{
-			region: region,
+	batch_map := make(map[locate.RegionVerID]*chunkBatch)
+	smallest := cs.Smallest()
+
+	for i, chunkRange := range cs.chunkRanges {
+		regions, err := chunkRange.getOverlapRegions(c, bo)
+		if err != nil {
+			return nil, errors.WithStack(err)
 		}
-		for i, chunkRange := range cs.chunkRanges {
-			if chunkRange.overlapRegion(region) {
-				batch.append(cs.chunkIDs[i], chunkRange)
+
+		for _, r := range regions {
+			if batch_map[r.Region] == nil {
+				batch_map[r.Region] = &chunkBatch{
+					region: r,
+				}
 			}
-		}
-		if batch.len() > 0 {
-			batches = append(batches, batch)
+			batch_map[r.Region].append(cs.chunkIDs[i], chunkRange)
 		}
 	}
+
+	batches := make([]chunkBatch, 0, len(batch_map))
+	picked := false // Pick the batch with primary and put it at the first.
+	for _, batch := range batch_map {
+		if !picked && bytes.Equal(batch.Smallest(), smallest) {
+			if len(batches) > 0 {
+				batches[0], *batch = *batch, batches[0]
+			}
+			picked = true
+		}
+
+		batches = append(batches, *batch)
+	}
+	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
 
@@ -123,8 +163,21 @@ func newTxnChunkRange(smallest []byte, biggest []byte) txnChunkRange {
 	}
 }
 
-func (r *txnChunkRange) overlapRegion(region *locate.Region) bool {
-	return bytes.Compare(r.smallest, region.EndKey()) < 0 && bytes.Compare(r.biggest, region.StartKey()) >= 0
+func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer) ([]*locate.KeyLocation, error) {
+	regions := make([]*locate.KeyLocation, 0)
+	startKey := r.smallest
+	for bytes.Compare(startKey, r.biggest) <= 0 {
+		loc, err := c.LocateKey(bo, startKey)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		regions = append(regions, loc)
+		if len(loc.EndKey) == 0 {
+			break
+		}
+		startKey = loc.EndKey
+	}
+	return regions, nil
 }
 
 type txnFileAction interface {
@@ -159,7 +212,7 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 	var resolvingRecordToken *int
 	for {
-		resp, _, err := sender.SendReq(bo, req, batch.region.VerID(), client.ReadTimeoutMedium)
+		resp, _, err := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutMedium)
 		if err != nil {
 			return nil, err
 		}
@@ -272,7 +325,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 	})
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
 	for {
-		resp, _, err := sender.SendReq(bo, req, batch.region.VerID(), client.ReadTimeoutMedium)
+		resp, _, err := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutMedium)
 		if batch.isPrimary && sender.GetRPCError() != nil {
 			c.setUndeterminedErr(errors.WithStack(sender.GetRPCError()))
 		}
@@ -349,7 +402,7 @@ func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 		},
 	})
 	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
-	resp, _, err1 := sender.SendReq(bo, req, batch.region.VerID(), client.ReadTimeoutShort)
+	resp, _, err1 := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutShort)
 	if err1 != nil {
 		return nil, err1
 	}
