@@ -71,7 +71,7 @@ type txnChunkSlice struct {
 func (s txnChunkSlice) String() string {
 	slice := make([]string, len(s.chunkRanges))
 	for i, ran := range s.chunkRanges {
-		slice[i] = fmt.Sprintf("{%v: [%s, %s]}", s.chunkIDs[i], kv.StrKey(ran.smallest), kv.StrKey(ran.biggest))
+		slice[i] = fmt.Sprintf("txnChunkSlice{%v: [%s, %s]}", s.chunkIDs[i], kv.StrKey(ran.smallest), kv.StrKey(ran.biggest))
 	}
 	return fmt.Sprintf("[%s]", strings.Join(slice, ", "))
 }
