@@ -184,9 +184,13 @@ type txnFileAction interface {
 	executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error)
 	onPrimarySuccess(c *twoPhaseCommitter)
 	extractKeyError(resp *tikvrpc.Response) *kvrpcpb.KeyError
+	asyncExecuteSecondaries() bool
+	String() string
 }
 
 type txnFilePrewriteAction struct{}
+
+var _ txnFileAction = (*txnFilePrewriteAction)(nil)
 
 func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
 	primaryLock := c.txnFileCtx.slice.chunkRanges[0].smallest
@@ -302,12 +306,27 @@ func (a txnFilePrewriteAction) extractKeyError(resp *tikvrpc.Response) *kvrpcpb.
 	return nil
 }
 
+func (a txnFilePrewriteAction) asyncExecuteSecondaries() bool {
+	return false
+}
+
+func (a txnFilePrewriteAction) String() string {
+	return "txnFilePrewrite"
+}
+
 type txnFileCommitAction struct {
 	commitTS uint64
 }
 
+var _ txnFileAction = (*txnFileCommitAction)(nil)
+
 func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
+	keys := make([][]byte, 0, batch.len())
+	for _, chunkRange := range batch.chunkRanges {
+		keys = append(keys, chunkRange.smallest)
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
+		Keys:          keys, // set keys to help detect duplicated request.
 		StartVersion:  c.startTS,
 		CommitVersion: a.commitTS,
 		IsTxnFile:     true,
@@ -383,10 +402,25 @@ func (a txnFileCommitAction) extractKeyError(resp *tikvrpc.Response) *kvrpcpb.Ke
 	return commitResp.GetError()
 }
 
+func (a txnFileCommitAction) asyncExecuteSecondaries() bool {
+	return true
+}
+
+func (a txnFileCommitAction) String() string {
+	return "txnFileCommit"
+}
+
 type txnFileRollbackAction struct{}
 
+var _ txnFileAction = (*txnFileRollbackAction)(nil)
+
 func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
+	keys := make([][]byte, 0, batch.len())
+	for _, chunkRange := range batch.chunkRanges {
+		keys = append(keys, chunkRange.smallest)
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
+		Keys:         keys, // set keys to help detect duplicated request.
 		StartVersion: c.startTS,
 		IsTxnFile:    true,
 	}, kvrpcpb.Context{
@@ -417,6 +451,14 @@ func (a txnFileRollbackAction) extractKeyError(resp *tikvrpc.Response) *kvrpcpb.
 	return rollbackResp.GetError()
 }
 
+func (a txnFileRollbackAction) asyncExecuteSecondaries() bool {
+	return true
+}
+
+func (a txnFileRollbackAction) String() string {
+	return "txnFileRollback"
+}
+
 func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	defer func() {
 		// Always clean up all written keys if the txn does not commit.
@@ -425,7 +467,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		undetermined := c.mu.undeterminedErr != nil
 		c.mu.RUnlock()
 		if !committed && !undetermined {
-			err1 := c.executeTxnFileActionWithRetry(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
+			err1 := c.executeTxnFileActionWithRetry(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{}, nil)
 			if err1 != nil {
 				logutil.BgLogger().Error("executeTxnFileActionWithRetry failed", zap.Error(err1))
 			}
@@ -443,7 +485,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err = c.preSplitTxnFileRegions(bo); err != nil {
 		return
 	}
-	err = c.executeTxnFileActionWithRetry(bo, c.txnFileCtx.slice, txnFilePrewriteAction{})
+	err = c.executeTxnFileActionWithRetry(bo, c.txnFileCtx.slice, txnFilePrewriteAction{}, nil)
 	if err != nil {
 		return
 	}
@@ -451,20 +493,31 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	err = c.executeTxnFileActionWithRetry(bo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
+	err = c.executeTxnFileActionWithRetry(bo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS}, nil)
 	return
 }
 
-func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) (txnChunkSlice, error) {
+func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction, primaryRegion *locate.KeyLocation) (txnChunkSlice, error) {
+	isBatchExecuted := func(batch *chunkBatch) bool {
+		return primaryRegion != nil &&
+			bytes.Compare(primaryRegion.StartKey, batch.Smallest()) <= 0 &&
+			(len(primaryRegion.EndKey) == 0 || bytes.Compare(batch.Biggest(), primaryRegion.EndKey) < 0)
+	}
+
 	var regionErrChunks txnChunkSlice
 	batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
 	if err != nil {
 		return regionErrChunks, err
 	}
 	firstBatch := batches[0]
-	if firstBatch.region.Contains(c.primary()) {
+	// When primaryRegion != nil, the primary must have executed.
+	if primaryRegion == nil && firstBatch.region.Contains(c.primary()) {
 		firstBatch.isPrimary = true
 		resp, err := action.executeBatch(c, bo, firstBatch)
+		logutil.Logger(bo.GetCtx()).Debug("txn file execute primary batch finished", zap.Uint64("startTs", c.startTS),
+			zap.Any("batch", firstBatch), zap.String("primary", kv.StrKey(c.primary())),
+			zap.Stringer("action", action), zap.Error(err),
+		)
 		if err != nil {
 			return regionErrChunks, err
 		}
@@ -478,8 +531,43 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 		action.onPrimarySuccess(c)
 		batches = batches[1:]
 	}
+
+	if len(batches) == 0 {
+		return regionErrChunks, nil
+	}
+
+	// When primaryRegion != nil, the primary must have executed.
+	if action.asyncExecuteSecondaries() && primaryRegion == nil {
+		c.store.WaitGroup().Add(1)
+		err1 := c.store.Go(func() {
+			defer c.store.WaitGroup().Done()
+			err1 := c.executeTxnFileActionWithRetry(bo, chunkSlice, action, firstBatch.region)
+			logutil.Logger(bo.GetCtx()).Debug("txn file async execute secondaries finished", zap.Uint64("startTs", c.startTS),
+				zap.Stringer("action", action), zap.Error(err1),
+			)
+			if err1 != nil {
+				logutil.Logger(bo.GetCtx()).Warn("fail to async execute action",
+					zap.Uint64("startTs", c.startTS), zap.Stringer("actionType", action), zap.Error(err1))
+			}
+		})
+		if err1 != nil {
+			c.store.WaitGroup().Done()
+			logutil.Logger(bo.GetCtx()).Warn("fail to create goroutine",
+				zap.Uint64("startTs", c.startTS), zap.Stringer("actionType", action), zap.Error(err1))
+		}
+		return regionErrChunks, nil
+	}
+
 	for _, batch := range batches {
+		if isBatchExecuted(&batch) {
+			continue
+		}
+
 		resp, err1 := action.executeBatch(c, bo, batch)
+		logutil.Logger(bo.GetCtx()).Debug("txn file execute secondary batch finished", zap.Uint64("startTs", c.startTS),
+			zap.Any("batch", batch),
+			zap.Stringer("action", action), zap.Error(err1),
+		)
 		if err1 != nil {
 			return regionErrChunks, err1
 		}
@@ -515,21 +603,21 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 	return regionErrChunks, nil
 }
 
-func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) error {
+func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction, primaryRegion *locate.KeyLocation) error {
 	currentChunks := chunkSlice
 	for {
 		var regionErrChunks txnChunkSlice
-		regionErrChunks, err := c.executeTxnFileAction(bo, currentChunks, action)
+		regionErrChunks, err := c.executeTxnFileAction(bo, currentChunks, action, primaryRegion)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		if regionErrChunks.len() == 0 {
 			return nil
 		}
 		currentChunks = regionErrChunks
-		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txnFile region miss"))
+		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file region miss"))
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 }
