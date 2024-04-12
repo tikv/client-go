@@ -1007,8 +1007,8 @@ func (s *KVSnapshot) SnapCache() map[string][]byte {
 
 // UpdateSnapshotCache sets the values of cache, for further fast read with same keys.
 func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
-	// Update the cache.
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.mu.cached == nil {
 		s.mu.cached = make(map[string][]byte, min(len(keys), 8))
 	}
@@ -1031,7 +1031,6 @@ func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
 			}
 		}
 	}
-	s.mu.Unlock()
 }
 
 // CleanCache cleans the cache for given keys. Only for test.
