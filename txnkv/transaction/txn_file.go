@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
@@ -115,10 +116,8 @@ func (cs *txnChunkSlice) len() int {
 	return len(cs.chunkIDs)
 }
 
-func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
-	batch_map := make(map[locate.RegionVerID]*chunkBatch)
-	smallest := cs.Smallest()
-
+func (cs *txnChunkSlice) groupToBatches(primary []byte, c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
+	batchMap := make(map[locate.RegionVerID]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
 		regions, err := chunkRange.getOverlapRegions(c, bo)
 		if err != nil {
@@ -126,19 +125,19 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		}
 
 		for _, r := range regions {
-			if batch_map[r.Region] == nil {
-				batch_map[r.Region] = &chunkBatch{
+			if batchMap[r.Region] == nil {
+				batchMap[r.Region] = &chunkBatch{
 					region: r,
 				}
 			}
-			batch_map[r.Region].append(cs.chunkIDs[i], chunkRange)
+			batchMap[r.Region].append(cs.chunkIDs[i], chunkRange)
 		}
 	}
 
-	batches := make([]chunkBatch, 0, len(batch_map))
+	batches := make([]chunkBatch, 0, len(batchMap))
 	picked := false // Pick the batch with primary and put it at the first.
-	for _, batch := range batch_map {
-		if !picked && bytes.Equal(batch.Smallest(), smallest) {
+	for _, batch := range batchMap {
+		if primary != nil && !picked && batch.region.Contains(primary) {
 			if len(batches) > 0 {
 				batches[0], *batch = *batch, batches[0]
 			}
@@ -147,6 +146,16 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 
 		batches = append(batches, *batch)
 	}
+
+	if primary != nil && !picked {
+		logutil.Logger(bo.GetCtx()).Error("txn file primary not in any batch",
+			zap.String("primary", kv.StrKey(primary)),
+			zap.Stringer("txnChunkSlice", cs),
+			zap.Stringers("batches", batches),
+		)
+		return nil, fmt.Errorf("txn file primary not in any batch")
+	}
+
 	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
@@ -169,7 +178,8 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
+			return nil, errors.Wrap(err, "locate key failed")
 		}
 		regions = append(regions, loc)
 		if len(loc.EndKey) == 0 {
@@ -468,7 +478,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		c.mu.RUnlock()
 		if !committed && !undetermined {
 			if c.txnFileCtx.slice.len() > 0 {
-				err1 := c.executeTxnFileActionWithRetry(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{}, nil)
+				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
 				if err1 != nil {
 					logutil.BgLogger().Error("executeTxnFile: rollback on error failed", zap.Error(err1))
 				}
@@ -479,10 +489,10 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		}
 		c.txn.commitTS = c.commitTS
 
-		logutil.Logger(ctx).Info("execute txn file finished", zap.Uint64("startTs", c.startTS), zap.Uint64("commitTS", c.commitTS), zap.Error(err))
+		logutil.Logger(ctx).Info("execute txn file finished", zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS), zap.Error(err))
 	}()
 
-	logutil.Logger(ctx).Info("execute txn file", zap.Uint64("startTs", c.startTS))
+	logutil.Logger(ctx).Info("execute txn file", zap.Uint64("startTS", c.startTS))
 
 	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
 	if err = c.buildTxnFiles(buildBo, c.mutations); err != nil {
@@ -494,9 +504,9 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	}
 
 	prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
-	logutil.Logger(ctx).Info("execute txn file prewrite", zap.Uint64("startTs", c.startTS))
-	err = c.executeTxnFileActionWithRetry(prewriteBo, c.txnFileCtx.slice, txnFilePrewriteAction{}, nil)
-	logutil.Logger(ctx).Info("execute txn file prewrite finished", zap.Uint64("startTs", c.startTS), zap.Error(err))
+	logutil.Logger(ctx).Info("execute txn file prewrite", zap.Uint64("startTS", c.startTS))
+	err = c.executeTxnFileAction(prewriteBo, c.txnFileCtx.slice, txnFilePrewriteAction{})
+	logutil.Logger(ctx).Info("execute txn file prewrite finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
 	if err != nil {
 		return
 	}
@@ -506,77 +516,27 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	logutil.Logger(ctx).Info("execute txn file commit", zap.Uint64("startTs", c.startTS))
-	err = c.executeTxnFileActionWithRetry(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS}, nil)
-	logutil.Logger(ctx).Info("execute txn file commit finished", zap.Uint64("startTs", c.startTS), zap.Error(err))
+	logutil.Logger(ctx).Info("execute txn file commit", zap.Uint64("startTS", c.startTS))
+	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
+	logutil.Logger(ctx).Info("execute txn file commit finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
 	return
 }
 
-func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction, primaryRegion *locate.KeyLocation) (txnChunkSlice, error) {
+func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, primaryRegion *locate.KeyLocation) (txnChunkSlice, error) {
 	isBatchExecuted := func(batch *chunkBatch) bool {
 		return primaryRegion != nil &&
 			bytes.Compare(primaryRegion.StartKey, batch.Smallest()) <= 0 &&
 			(len(primaryRegion.EndKey) == 0 || bytes.Compare(batch.Biggest(), primaryRegion.EndKey) < 0)
 	}
 
+	var err error
 	var regionErrChunks txnChunkSlice
-	batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
-	if err != nil {
-		return regionErrChunks, err
-	}
-	firstBatch := batches[0]
-	// When primaryRegion != nil, the primary must have executed.
-	if primaryRegion == nil && firstBatch.region.Contains(c.primary()) {
-		firstBatch.isPrimary = true
-		logutil.Logger(bo.GetCtx()).Info("txn file execute primary batch", zap.Uint64("startTs", c.startTS),
-			zap.Any("batch", firstBatch), zap.String("primary", kv.StrKey(c.primary())),
-			zap.Stringer("action", action),
-		)
-		resp, err := action.executeBatch(c, bo, firstBatch)
-		logutil.Logger(bo.GetCtx()).Info("txn file execute primary batch finished", zap.Uint64("startTs", c.startTS),
-			zap.Any("batch", firstBatch), zap.String("primary", kv.StrKey(c.primary())),
-			zap.Stringer("action", action), zap.Error(err),
-		)
-		if err != nil {
-			return regionErrChunks, err
-		}
-		regionErr, err := resp.GetRegionError()
-		if err != nil {
-			return regionErrChunks, err
-		}
-		if regionErr != nil {
-			return chunkSlice, nil
-		}
-		action.onPrimarySuccess(c)
-		batches = batches[1:]
-	}
 
-	if len(batches) == 0 {
-		return regionErrChunks, nil
-	}
-
-	if action.asyncExecuteSecondaries() && primaryRegion == nil {
-		c.store.WaitGroup().Add(1)
-		err1 := c.store.Go(func() {
-			defer c.store.WaitGroup().Done()
-			logutil.Logger(bo.GetCtx()).Info("txn file async execute secondaries", zap.Uint64("startTs", c.startTS),
-				zap.Stringer("action", action),
-			)
-			err1 := c.executeTxnFileActionWithRetry(bo, chunkSlice, action, firstBatch.region)
-			logutil.Logger(bo.GetCtx()).Info("txn file async execute secondaries finished", zap.Uint64("startTs", c.startTS),
-				zap.Stringer("action", action), zap.Error(err1),
-			)
-			if err1 != nil {
-				logutil.Logger(bo.GetCtx()).Warn("fail to async execute action",
-					zap.Uint64("startTs", c.startTS), zap.Stringer("actionType", action), zap.Error(err1))
-			}
-		})
-		if err1 != nil {
-			c.store.WaitGroup().Done()
-			logutil.Logger(bo.GetCtx()).Warn("fail to create goroutine",
-				zap.Uint64("startTs", c.startTS), zap.Stringer("actionType", action), zap.Error(err1))
+	if batches == nil {
+		batches, err = chunkSlice.groupToBatches(nil, c.store.GetRegionCache(), bo)
+		if err != nil {
+			return regionErrChunks, errors.Wrap(err, "group to batches failed")
 		}
-		return regionErrChunks, nil
 	}
 
 	for _, batch := range batches {
@@ -584,12 +544,12 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 			continue
 		}
 
-		logutil.Logger(bo.GetCtx()).Info("txn file execute secondary batch", zap.Uint64("startTs", c.startTS),
+		logutil.Logger(bo.GetCtx()).Info("txn file execute secondary batch", zap.Uint64("startTS", c.startTS),
 			zap.Any("batch", batch),
 			zap.Stringer("action", action),
 		)
 		resp, err1 := action.executeBatch(c, bo, batch)
-		logutil.Logger(bo.GetCtx()).Info("txn file execute secondary batch finished", zap.Uint64("startTs", c.startTS),
+		logutil.Logger(bo.GetCtx()).Info("txn file execute secondary batch finished", zap.Uint64("startTS", c.startTS),
 			zap.Any("batch", batch),
 			zap.Stringer("action", action), zap.Error(err1),
 		)
@@ -627,11 +587,12 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 	return regionErrChunks, nil
 }
 
-func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction, primaryRegion *locate.KeyLocation) error {
+func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, primaryRegion *locate.KeyLocation) error {
 	currentChunks := chunkSlice
+	currentBatches := batches
 	for {
 		var regionErrChunks txnChunkSlice
-		regionErrChunks, err := c.executeTxnFileAction(bo, currentChunks, action, primaryRegion)
+		regionErrChunks, err := c.executeTxnFileSlice(bo, currentChunks, currentBatches, action, primaryRegion)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -639,10 +600,99 @@ func (c *twoPhaseCommitter) executeTxnFileActionWithRetry(bo *retry.Backoffer, c
 			return nil
 		}
 		currentChunks = regionErrChunks
+		currentBatches = nil
 		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file region miss"))
 		if err != nil {
 			return errors.WithStack(err)
 		}
+	}
+}
+
+func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firstBatch chunkBatch, action txnFileAction) (regionErr *errorpb.Error, err error) {
+	if !firstBatch.region.Contains(c.primary()) {
+		logutil.Logger(bo.GetCtx()).Error("primary out of first batch",
+			zap.Uint64("startTS", c.startTS),
+			zap.String("primary", kv.StrKey(c.primary())),
+			zap.Stringer("action", action),
+			zap.Stringer("first batch", firstBatch),
+		)
+		return nil, fmt.Errorf("primary out of first batch, primary: %s, first batch: %v", kv.StrKey(c.primary()), firstBatch)
+	}
+
+	firstBatch.isPrimary = true
+	logutil.Logger(bo.GetCtx()).Info("txn file execute primary batch", zap.Uint64("startTS", c.startTS),
+		zap.Any("batch", firstBatch), zap.String("primary", kv.StrKey(c.primary())),
+		zap.Stringer("action", action),
+	)
+	resp, err := action.executeBatch(c, bo, firstBatch)
+	logutil.Logger(bo.GetCtx()).Info("txn file execute primary batch finished", zap.Uint64("startTS", c.startTS),
+		zap.Any("batch", firstBatch), zap.String("primary", kv.StrKey(c.primary())),
+		zap.Stringer("action", action), zap.Error(err),
+	)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	regionErr, err = resp.GetRegionError()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if regionErr != nil {
+		return regionErr, nil
+	}
+	action.onPrimarySuccess(c)
+	return nil, nil
+}
+
+func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) error {
+	for {
+		batches, err := chunkSlice.groupToBatches(c.primary(), c.store.GetRegionCache(), bo)
+		if err != nil {
+			return errors.Wrap(err, "group to batches failed")
+		}
+
+		regionErr, err := c.executeTxnFilePrimaryBatch(bo, batches[0], action)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if regionErr != nil {
+			errBo := bo.Backoff(retry.BoRegionMiss, errors.Wrap(errors.New(regionErr.String()), "txn file execute primary batch failed"))
+			if errBo != nil {
+				return errors.WithStack(errBo)
+			}
+			continue
+		}
+
+		primaryRegion := batches[0].region
+		secondaries := batches[1:]
+		if len(secondaries) == 0 {
+			return nil
+		}
+		var emptySlice txnChunkSlice
+		if !action.asyncExecuteSecondaries() {
+			return c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, primaryRegion)
+		}
+
+		c.store.WaitGroup().Add(1)
+		errGo := c.store.Go(func() {
+			defer c.store.WaitGroup().Done()
+			logutil.Logger(bo.GetCtx()).Info("txn file async execute secondaries", zap.Uint64("startTS", c.startTS),
+				zap.Stringer("action", action),
+			)
+			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, primaryRegion)
+			logutil.Logger(bo.GetCtx()).Info("txn file async execute secondaries finished", zap.Uint64("startTS", c.startTS),
+				zap.Stringer("action", action), zap.Error(err),
+			)
+			if err != nil {
+				logutil.Logger(bo.GetCtx()).Warn("txn file async execute secondaries failed",
+					zap.Uint64("startTS", c.startTS), zap.Stringer("action", action), zap.Error(err))
+			}
+		})
+		if errGo != nil {
+			c.store.WaitGroup().Done()
+			logutil.Logger(bo.GetCtx()).Warn("fail to create goroutine",
+				zap.Uint64("startTS", c.startTS), zap.Stringer("action", action), zap.Error(errGo))
+		}
+		return nil
 	}
 }
 
@@ -761,40 +811,23 @@ func (c *twoPhaseCommitter) useTxnFile() bool {
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
-	for {
-		batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
-		if err != nil {
-			err = bo.Backoff(retry.BoRegionMiss, err)
-			if err != nil {
-				return err
+	batches, err := c.txnFileCtx.slice.groupToBatches(nil, c.store.GetRegionCache(), bo)
+	if err != nil {
+		return errors.Wrap(err, "group to batches failed")
+	}
+	var splitKeys [][]byte
+	for _, batch := range batches {
+		if batch.len() > PreSplitRegionChunks {
+			for i := PreSplitRegionChunks; i < batch.len(); i += PreSplitRegionChunks {
+				splitKeys = append(splitKeys, batch.chunkRanges[i].smallest)
 			}
-			continue
-		}
-		var splitKeys [][]byte
-		for _, batch := range batches {
-			if batch.len() > PreSplitRegionChunks {
-				for i := PreSplitRegionChunks; i < batch.len(); i += PreSplitRegionChunks {
-					splitKeys = append(splitKeys, batch.chunkRanges[i].smallest)
-				}
-			}
-		}
-		if len(splitKeys) == 0 {
-			return nil
-		}
-		_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
-		if err != nil {
-			logutil.Logger(bo.GetCtx()).Warn("txn file pre-split region failed", zap.Error(err))
-			err = bo.Backoff(retry.BoRegionMiss, err)
-			if err != nil {
-				return err
-			}
-		}
-
-		err = bo.Backoff(retry.BoRegionMiss, errors.New("txn file pre-split region"))
-		if err != nil {
-			return err
 		}
 	}
+	if len(splitKeys) == 0 {
+		return nil
+	}
+	_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
+	return errors.Wrap(err, "pre split regions failed")
 }
 
 type chunkWriterClient struct {
