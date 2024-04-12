@@ -43,10 +43,8 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	// BuildTxnFileMaxBackoff is max sleep time to build TxnFile.
-	BuildTxnFileMaxBackoff = atomicutil.NewUint64(60000)
-)
+// BuildTxnFileMaxBackoff is max sleep time to build TxnFile.
+var BuildTxnFileMaxBackoff = atomicutil.NewUint64(60000)
 
 const PreSplitRegionChunks = 4
 
