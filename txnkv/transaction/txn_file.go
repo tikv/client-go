@@ -440,8 +440,8 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err = c.buildTxnFiles(bo, c.mutations); err != nil {
 		return
 	}
-	if err = c.preSplitTxnFileRegions(bo); err != nil {
-		return
+	if errSplit := c.preSplitTxnFileRegions(bo); errSplit != nil {
+		logutil.Logger(ctx).Warn("txn file pre split regions failed", zap.Error(errSplit))
 	}
 	err = c.executeTxnFileActionWithRetry(bo, c.txnFileCtx.slice, txnFilePrewriteAction{})
 	if err != nil {
@@ -647,35 +647,23 @@ func (c *twoPhaseCommitter) useTxnFile() bool {
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
-	for {
-		batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
-		if err != nil {
-			err = bo.Backoff(retry.BoRegionMiss, err)
-			if err != nil {
-				return err
+	batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
+	if err != nil {
+		return errors.Wrap(err, "group to batches failed")
+	}
+	var splitKeys [][]byte
+	for _, batch := range batches {
+		if batch.len() > PreSplitRegionChunks {
+			for i := PreSplitRegionChunks; i < batch.len(); i += PreSplitRegionChunks {
+				splitKeys = append(splitKeys, batch.chunkRanges[i].smallest)
 			}
-			continue
-		}
-		var splitKeys [][]byte
-		for _, batch := range batches {
-			if batch.len() > PreSplitRegionChunks {
-				for i := PreSplitRegionChunks; i < batch.len(); i += PreSplitRegionChunks {
-					splitKeys = append(splitKeys, batch.chunkRanges[i].smallest)
-				}
-			}
-		}
-		if len(splitKeys) == 0 {
-			return nil
-		}
-		_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
-		if err != nil {
-			logutil.BgLogger().Warn("txn file pre-split region failed")
-		}
-		err = bo.Backoff(retry.BoRegionMiss, err)
-		if err != nil {
-			return err
 		}
 	}
+	if len(splitKeys) == 0 {
+		return nil
+	}
+	_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
+	return errors.Wrap(err, "pre split regions failed")
 }
 
 type chunkWriterClient struct {
