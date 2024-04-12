@@ -115,10 +115,8 @@ func (cs *txnChunkSlice) len() int {
 	return len(cs.chunkIDs)
 }
 
-func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
-	batch_map := make(map[locate.RegionVerID]*chunkBatch)
-	smallest := cs.Smallest()
-
+func (cs *txnChunkSlice) groupToBatches(primary []byte, c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
+	batchMap := make(map[locate.RegionVerID]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
 		regions, err := chunkRange.getOverlapRegions(c, bo)
 		if err != nil {
@@ -126,19 +124,19 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		}
 
 		for _, r := range regions {
-			if batch_map[r.Region] == nil {
-				batch_map[r.Region] = &chunkBatch{
+			if batchMap[r.Region] == nil {
+				batchMap[r.Region] = &chunkBatch{
 					region: r,
 				}
 			}
-			batch_map[r.Region].append(cs.chunkIDs[i], chunkRange)
+			batchMap[r.Region].append(cs.chunkIDs[i], chunkRange)
 		}
 	}
 
-	batches := make([]chunkBatch, 0, len(batch_map))
+	batches := make([]chunkBatch, 0, len(batchMap))
 	picked := false // Pick the batch with primary and put it at the first.
-	for _, batch := range batch_map {
-		if !picked && bytes.Equal(batch.Smallest(), smallest) {
+	for _, batch := range batchMap {
+		if primary != nil && !picked && batch.region.Contains(primary) {
 			if len(batches) > 0 {
 				batches[0], *batch = *batch, batches[0]
 			}
@@ -147,6 +145,16 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 
 		batches = append(batches, *batch)
 	}
+
+	if primary != nil && !picked {
+		logutil.Logger(bo.GetCtx()).Error("txn file primary not in any batch",
+			zap.String("primary", kv.StrKey(primary)),
+			zap.Stringer("txnChunkSlice", cs),
+			zap.Stringers("batches", batches),
+		)
+		return nil, fmt.Errorf("txn file primary not in any batch")
+	}
+
 	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
@@ -457,7 +465,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 
 func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) (txnChunkSlice, error) {
 	var regionErrChunks txnChunkSlice
-	batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
+	batches, err := chunkSlice.groupToBatches(c.primary(), c.store.GetRegionCache(), bo)
 	if err != nil {
 		return regionErrChunks, err
 	}
@@ -648,7 +656,7 @@ func (c *twoPhaseCommitter) useTxnFile() bool {
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 	for {
-		batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
+		batches, err := c.txnFileCtx.slice.groupToBatches(nil, c.store.GetRegionCache(), bo)
 		if err != nil {
 			err = bo.Backoff(retry.BoRegionMiss, err)
 			if err != nil {
