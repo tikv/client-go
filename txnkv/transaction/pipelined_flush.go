@@ -453,6 +453,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		RESOLVE_CONCURRENCY,
 		handler,
 	)
+	runner.SetStatLogInterval(30 * time.Second)
 
 	go func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
