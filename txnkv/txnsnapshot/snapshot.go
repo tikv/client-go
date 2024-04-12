@@ -1015,6 +1015,7 @@ func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
 	for _, key := range keys {
 		val := m[string(key)]
 		s.mu.cachedSize += len(key) + len(val)
+		s.mu.cachedSize -= len(s.mu.cached[string(key)])
 		s.mu.cached[string(key)] = val
 	}
 
@@ -1038,6 +1039,8 @@ func (s *KVSnapshot) CleanCache(keys [][]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, key := range keys {
+		s.mu.cachedSize -= len(key)
+		s.mu.cachedSize -= len(s.mu.cached[string(key)])
 		delete(s.mu.cached, string(key))
 	}
 }
