@@ -169,7 +169,8 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
+			return nil, errors.Wrap(err, "locate key failed")
 		}
 		regions = append(regions, loc)
 		if len(loc.EndKey) == 0 {
