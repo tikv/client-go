@@ -120,10 +120,10 @@ type KVSnapshot struct {
 	scanBatchSize   int
 	readTimeout     time.Duration
 
-	// Cache the result of BatchGet.
-	// The invariance is that calling BatchGet multiple times using the same start ts,
+	// Cache the result of Get and BatchGet.
+	// The invariance is that calling Get or BatchGet multiple times using the same start ts,
 	// the result should not change.
-	// NOTE: This representation here is different from the BatchGet API.
+	// NOTE: This representation here is different from the Get and BatchGet API.
 	// cached use len(value)=0 to represent a key-value entry doesn't exist (a reliable truth from TiKV).
 	// In the BatchGet API, it use no key-value entry to represent non-exist.
 	// It's OK as long as there are no zero-byte values in the protocol.
@@ -279,30 +279,7 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	}
 
 	// Update the cache.
-	s.mu.Lock()
-	if s.mu.cached == nil {
-		s.mu.cached = make(map[string][]byte, len(m))
-	}
-	for _, key := range keys {
-		val := m[string(key)]
-		s.mu.cachedSize += len(key) + len(val)
-		s.mu.cached[string(key)] = val
-	}
-
-	const cachedSizeLimit = 10 << 30
-	if s.mu.cachedSize >= cachedSizeLimit {
-		for k, v := range s.mu.cached {
-			if _, needed := m[k]; needed {
-				continue
-			}
-			delete(s.mu.cached, k)
-			s.mu.cachedSize -= len(k) + len(v)
-			if s.mu.cachedSize < cachedSizeLimit {
-				break
-			}
-		}
-	}
-	s.mu.Unlock()
+	s.UpdateSnapshotCache(keys, m)
 
 	return m, nil
 }
@@ -623,12 +600,29 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 		}
 	}(time.Now())
 
+	s.mu.RLock()
+	// Check the cached values first.
+	if s.mu.cached != nil {
+		if value, ok := s.mu.cached[string(k)]; ok {
+			atomic.AddInt64(&s.mu.hitCnt, 1)
+			s.mu.RUnlock()
+			if len(value) == 0 {
+				return nil, tikverr.ErrNotExist
+			}
+			return value, nil
+		}
+	}
+	if _, err := util.EvalFailpoint("snapshot-get-cache-fail"); err == nil {
+		if ctx.Value("TestSnapshotCache") != nil {
+			s.mu.RUnlock()
+			panic("cache miss")
+		}
+	}
 	ctx = context.WithValue(ctx, retry.TxnStartKey, s.version)
 	if ctx.Value(util.RequestSourceKey) == nil {
 		ctx = context.WithValue(ctx, util.RequestSourceKey, *s.RequestSource)
 	}
 	bo := retry.NewBackofferWithVars(ctx, getMaxBackoff, s.vars)
-	s.mu.RLock()
 	if s.mu.interceptor != nil {
 		// User has called snapshot.SetRPCInterceptor() to explicitly set an interceptor, we
 		// need to bind it to ctx so that the internal client can perceive and execute
@@ -645,7 +639,8 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	// Update the cache.
+	s.UpdateSnapshotCache([][]byte{k}, map[string][]byte{string(k): val})
 	if len(val) == 0 {
 		return nil, tikverr.ErrNotExist
 	}
@@ -653,29 +648,14 @@ func (s *KVSnapshot) Get(ctx context.Context, k []byte) ([]byte, error) {
 }
 
 func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]byte, error) {
-	// Check the cached values first.
-	s.mu.RLock()
-	if s.mu.cached != nil {
-		if value, ok := s.mu.cached[string(k)]; ok {
-			atomic.AddInt64(&s.mu.hitCnt, 1)
-			s.mu.RUnlock()
-			return value, nil
-		}
-	}
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("tikvSnapshot.get", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		opentracing.ContextWithSpan(ctx, span1)
 	}
-	if _, err := util.EvalFailpoint("snapshot-get-cache-fail"); err == nil {
-		if bo.GetCtx().Value("TestSnapshotCache") != nil {
-			s.mu.RUnlock()
-			panic("cache miss")
-		}
-	}
 
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, true)
-
+	s.mu.RLock()
 	if s.mu.stats != nil {
 		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
 		defer func() {
@@ -1023,6 +1003,46 @@ func (s *KVSnapshot) SnapCache() map[string][]byte {
 		cp[k] = v
 	}
 	return cp
+}
+
+// UpdateSnapshotCache sets the values of cache, for further fast read with same keys.
+func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.cached == nil {
+		s.mu.cached = make(map[string][]byte, min(len(keys), 8))
+	}
+	for _, key := range keys {
+		val := m[string(key)]
+		s.mu.cachedSize += len(key) + len(val)
+		s.mu.cachedSize -= len(s.mu.cached[string(key)])
+		s.mu.cached[string(key)] = val
+	}
+
+	const cachedSizeLimit = 10 << 30
+	if s.mu.cachedSize >= cachedSizeLimit {
+		for k, v := range s.mu.cached {
+			if _, needed := m[k]; needed {
+				continue
+			}
+			delete(s.mu.cached, k)
+			s.mu.cachedSize -= len(k) + len(v)
+			if s.mu.cachedSize < cachedSizeLimit {
+				break
+			}
+		}
+	}
+}
+
+// CleanCache cleans the cache for given keys. Only for test.
+func (s *KVSnapshot) CleanCache(keys [][]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, key := range keys {
+		s.mu.cachedSize -= len(key)
+		s.mu.cachedSize -= len(s.mu.cached[string(key)])
+		delete(s.mu.cached, string(key))
+	}
 }
 
 // SetVars sets variables to the transaction.
