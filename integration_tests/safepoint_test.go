@@ -112,6 +112,8 @@ func (s *testSafePointSuite) TestSafePoint() {
 
 	s.waitUntilErrorPlugIn(txn2.StartTS())
 
+	// clean cache for sending request to store.
+	txn2.GetSnapshot().CleanCache([][]byte{encodeKey(s.prefix, s08d("key", 0))})
 	_, geterr2 := txn2.Get(context.TODO(), encodeKey(s.prefix, s08d("key", 0)))
 	s.NotNil(geterr2)
 
