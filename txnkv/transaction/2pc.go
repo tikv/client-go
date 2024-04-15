@@ -1837,7 +1837,9 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 	}
 	if c.txn.schemaLeaseChecker == nil {
 		if c.sessionID > 0 {
-			logutil.Logger(ctx).Warn("schemaLeaseChecker is not set for this transaction",
+			// Schema check is not mandatory since MDL is introduced.
+			logutil.Logger(ctx).Debug(
+				"schemaLeaseChecker is not set for this transaction",
 				zap.Uint64("sessionID", c.sessionID),
 				zap.Uint64("startTS", c.startTS),
 				zap.Uint64("checkTS", checkTS))
