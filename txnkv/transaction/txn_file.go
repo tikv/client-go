@@ -23,6 +23,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -115,7 +116,7 @@ func (cs *txnChunkSlice) len() int {
 	return len(cs.chunkIDs)
 }
 
-func (cs *txnChunkSlice) groupToBatches(primary []byte, c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
+func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
 	batchMap := make(map[locate.RegionVerID]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
 		regions, err := chunkRange.getOverlapRegions(c, bo)
@@ -134,26 +135,12 @@ func (cs *txnChunkSlice) groupToBatches(primary []byte, c *locate.RegionCache, b
 	}
 
 	batches := make([]chunkBatch, 0, len(batchMap))
-	picked := false // Pick the batch with primary and put it at the first.
 	for _, batch := range batchMap {
-		if primary != nil && !picked && batch.region.Contains(primary) {
-			if len(batches) > 0 {
-				batches[0], *batch = *batch, batches[0]
-			}
-			picked = true
-		}
-
 		batches = append(batches, *batch)
 	}
-
-	if primary != nil && !picked {
-		logutil.Logger(bo.GetCtx()).Error("txn file primary not in any batch",
-			zap.String("primary", kv.StrKey(primary)),
-			zap.Stringer("txnChunkSlice", cs),
-			zap.Stringers("batches", batches),
-		)
-		return nil, fmt.Errorf("txn file primary not in any batch")
-	}
+	sort.Slice(batches, func(i, j int) bool {
+		return bytes.Compare(batches[i].region.StartKey, batches[j].region.StartKey) < 0
+	})
 
 	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
@@ -465,7 +452,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 
 func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) (txnChunkSlice, error) {
 	var regionErrChunks txnChunkSlice
-	batches, err := chunkSlice.groupToBatches(c.primary(), c.store.GetRegionCache(), bo)
+	batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
 	if err != nil {
 		return regionErrChunks, err
 	}
@@ -656,7 +643,7 @@ func (c *twoPhaseCommitter) useTxnFile() bool {
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 	for {
-		batches, err := c.txnFileCtx.slice.groupToBatches(nil, c.store.GetRegionCache(), bo)
+		batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
 		if err != nil {
 			err = bo.Backoff(retry.BoRegionMiss, err)
 			if err != nil {
