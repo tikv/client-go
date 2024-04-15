@@ -505,7 +505,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	if batches == nil {
 		batches, err = chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
 		if err != nil {
-			return regionErrChunks, errors.Wrap(err, "group to batches failed")
+			return regionErrChunks, errors.Wrap(err, "txn file: group to batches failed")
 		}
 	}
 
@@ -515,7 +515,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 		}
 
 		resp, err1 := action.executeBatch(c, bo, batch)
-		logutil.Logger(bo.GetCtx()).Debug("txn file execute batch finished",
+		logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
 			zap.Uint64("startTS", c.startTS),
 			zap.Any("batch", batch),
 			zap.Stringer("action", action),
@@ -541,12 +541,13 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 					kvrpcpb.WriteConflict_Optimistic,
 				)
 			}
+
 		}
 		regionErr, err1 := resp.GetRegionError()
 		if err1 != nil {
 			return regionErrChunks, err1
 		}
-		if regionErr != nil {
+		if regionErr.GetEpochNotMatch() != nil {
 			regionErrChunks.appendSlice(&batch.txnChunkSlice)
 			continue
 		}
@@ -561,33 +562,33 @@ func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, ch
 		var regionErrChunks txnChunkSlice
 		regionErrChunks, err := c.executeTxnFileSlice(bo, currentChunks, currentBatches, action, primaryRegion)
 		if err != nil {
-			return errors.WithStack(err)
+			return err
 		}
 		if regionErrChunks.len() == 0 {
 			return nil
 		}
 		currentChunks = regionErrChunks
 		currentBatches = nil
-		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file region miss"))
+		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file: execute failed, region miss"))
 		if err != nil {
-			return errors.WithStack(err)
+			return err
 		}
 	}
 }
 
 func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firstBatch chunkBatch, action txnFileAction) (regionErr *errorpb.Error, err error) {
 	if !firstBatch.region.Contains(c.primary()) {
-		logutil.Logger(bo.GetCtx()).Error("primary out of first batch",
+		logutil.Logger(bo.GetCtx()).Error("txn file: primary out of first batch",
 			zap.Uint64("startTS", c.startTS),
 			zap.String("primary", kv.StrKey(c.primary())),
 			zap.Stringer("action", action),
 			zap.Stringer("first batch", firstBatch))
-		return nil, fmt.Errorf("primary out of first batch")
+		return nil, fmt.Errorf("txn file: primary out of first batch")
 	}
 
 	firstBatch.isPrimary = true
 	resp, err := action.executeBatch(c, bo, firstBatch)
-	logutil.Logger(bo.GetCtx()).Debug("txn file execute primary batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute primary batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.String("primary", kv.StrKey(c.primary())),
 		zap.Stringer("action", action),
@@ -611,7 +612,7 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 	for {
 		batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
 		if err != nil {
-			return errors.Wrap(err, "group to batches failed")
+			return errors.Wrap(err, "txn file: group to batches failed")
 		}
 
 		regionErr, err := c.executeTxnFilePrimaryBatch(bo, batches[0], action)
@@ -619,7 +620,7 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 			return errors.WithStack(err)
 		}
 		if regionErr != nil {
-			errBo := bo.Backoff(retry.BoRegionMiss, errors.Wrap(errors.New(regionErr.String()), "txn file execute primary batch failed"))
+			errBo := bo.Backoff(retry.BoRegionMiss, errors.Wrap(errors.New(regionErr.String()), "txn file: execute primary batch failed"))
 			if errBo != nil {
 				return errors.WithStack(errBo)
 			}
@@ -640,18 +641,18 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 		errGo := c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
 			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, primaryRegion)
-			logutil.Logger(bo.GetCtx()).Debug("txn file async execute secondaries finished",
+			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
 				zap.Error(err))
 			if err != nil {
-				logutil.Logger(bo.GetCtx()).Warn("txn file async execute secondaries failed",
+				logutil.Logger(bo.GetCtx()).Warn("txn file: async execute secondaries failed",
 					zap.Uint64("startTS", c.startTS), zap.Stringer("action", action), zap.Error(err))
 			}
 		})
 		if errGo != nil {
 			c.store.WaitGroup().Done()
-			logutil.Logger(bo.GetCtx()).Warn("fail to create goroutine",
+			logutil.Logger(bo.GetCtx()).Warn("txn file: create goroutine failed",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
 				zap.Error(errGo))
