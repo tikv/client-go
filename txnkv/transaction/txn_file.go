@@ -23,6 +23,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,9 +117,7 @@ func (cs *txnChunkSlice) len() int {
 }
 
 func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
-	batch_map := make(map[locate.RegionVerID]*chunkBatch)
-	smallest := cs.Smallest()
-
+	batchMap := make(map[locate.RegionVerID]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
 		regions, err := chunkRange.getOverlapRegions(c, bo)
 		if err != nil {
@@ -126,27 +125,23 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		}
 
 		for _, r := range regions {
-			if batch_map[r.Region] == nil {
-				batch_map[r.Region] = &chunkBatch{
+			if batchMap[r.Region] == nil {
+				batchMap[r.Region] = &chunkBatch{
 					region: r,
 				}
 			}
-			batch_map[r.Region].append(cs.chunkIDs[i], chunkRange)
+			batchMap[r.Region].append(cs.chunkIDs[i], chunkRange)
 		}
 	}
 
-	batches := make([]chunkBatch, 0, len(batch_map))
-	picked := false // Pick the batch with primary and put it at the first.
-	for _, batch := range batch_map {
-		if !picked && bytes.Equal(batch.Smallest(), smallest) {
-			if len(batches) > 0 {
-				batches[0], *batch = *batch, batches[0]
-			}
-			picked = true
-		}
-
+	batches := make([]chunkBatch, 0, len(batchMap))
+	for _, batch := range batchMap {
 		batches = append(batches, *batch)
 	}
+	sort.Slice(batches, func(i, j int) bool {
+		return bytes.Compare(batches[i].region.StartKey, batches[j].region.StartKey) < 0
+	})
+
 	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
