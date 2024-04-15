@@ -441,8 +441,8 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err = c.buildTxnFiles(bo, c.mutations); err != nil {
 		return
 	}
-	if errSplit := c.preSplitTxnFileRegions(bo); errSplit != nil {
-		logutil.Logger(ctx).Warn("txn file pre split regions failed", zap.Error(errSplit))
+	if err = c.preSplitTxnFileRegions(bo); err != nil {
+		return
 	}
 	err = c.executeTxnFileActionWithRetry(bo, c.txnFileCtx.slice, txnFilePrewriteAction{})
 	if err != nil {
