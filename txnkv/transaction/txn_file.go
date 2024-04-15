@@ -164,7 +164,8 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
-			return nil, errors.WithStack(err)
+			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
+			return nil, errors.Wrap(err, "locate key failed")
 		}
 		regions = append(regions, loc)
 		if len(loc.EndKey) == 0 {
@@ -642,35 +643,23 @@ func (c *twoPhaseCommitter) useTxnFile() bool {
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
-	for {
-		batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
-		if err != nil {
-			err = bo.Backoff(retry.BoRegionMiss, err)
-			if err != nil {
-				return err
+	batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
+	if err != nil {
+		return errors.Wrap(err, "group to batches failed")
+	}
+	var splitKeys [][]byte
+	for _, batch := range batches {
+		if batch.len() > PreSplitRegionChunks {
+			for i := PreSplitRegionChunks; i < batch.len(); i += PreSplitRegionChunks {
+				splitKeys = append(splitKeys, batch.chunkRanges[i].smallest)
 			}
-			continue
-		}
-		var splitKeys [][]byte
-		for _, batch := range batches {
-			if batch.len() > PreSplitRegionChunks {
-				for i := PreSplitRegionChunks; i < batch.len(); i += PreSplitRegionChunks {
-					splitKeys = append(splitKeys, batch.chunkRanges[i].smallest)
-				}
-			}
-		}
-		if len(splitKeys) == 0 {
-			return nil
-		}
-		_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
-		if err != nil {
-			logutil.BgLogger().Warn("txn file pre-split region failed")
-		}
-		err = bo.Backoff(retry.BoRegionMiss, err)
-		if err != nil {
-			return err
 		}
 	}
+	if len(splitKeys) == 0 {
+		return nil
+	}
+	_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
+	return errors.Wrap(err, "pre split regions failed")
 }
 
 type chunkWriterClient struct {
