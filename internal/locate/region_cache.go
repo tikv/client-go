@@ -2023,7 +2023,9 @@ func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	var stores []*Store
 	for _, s := range c.storeMu.stores {
 		if s.storeType == tikvrpc.TiFlash {
-			if !labelFilter(s.labels) {
+			// it should only returns resolved stores so that users won't be bothered by tombstones.
+			// ref: https://github.com/pingcap/tidb/issues/46602
+			if !labelFilter(s.labels) || s.getResolveState() != resolved {
 				continue
 			}
 			stores = append(stores, s)
