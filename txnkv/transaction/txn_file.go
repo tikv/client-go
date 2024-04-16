@@ -533,7 +533,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	}
 
 	for _, batch := range batches {
-		if succussRanges.Covered(batch.region.StartKey, batch.region.EndKey) {
+		if successRanges.Covered(batch.region.StartKey, batch.region.EndKey) {
 			continue
 		}
 
@@ -574,7 +574,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 			continue
 		}
 
-		succussRanges.Insert(batch.region.StartKey, batch.region.EndKey)
+		successRanges.Insert(batch.region.StartKey, batch.region.EndKey)
 	}
 	return regionErrChunks, nil
 }
