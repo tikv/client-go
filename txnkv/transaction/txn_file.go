@@ -506,7 +506,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	return
 }
 
-func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, mergeRanges *util.MergeRanges) (txnChunkSlice, error) {
+func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, succussRanges *util.MergeRanges) (txnChunkSlice, error) {
 	var err error
 	var regionErrChunks txnChunkSlice
 
@@ -518,7 +518,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	}
 
 	for _, batch := range batches {
-		if mergeRanges.Covered(batch.region.StartKey, batch.region.EndKey) {
+		if succussRanges.Covered(batch.region.StartKey, batch.region.EndKey) {
 			continue
 		}
 
@@ -560,17 +560,17 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 			continue
 		}
 
-		mergeRanges.Insert(batch.region.StartKey, batch.region.EndKey)
+		succussRanges.Insert(batch.region.StartKey, batch.region.EndKey)
 	}
 	return regionErrChunks, nil
 }
 
-func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, mergeRanges *util.MergeRanges) error {
+func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, successRanges *util.MergeRanges) error {
 	currentChunks := chunkSlice
 	currentBatches := batches
 	for {
 		var regionErrChunks txnChunkSlice
-		regionErrChunks, err := c.executeTxnFileSlice(bo, currentChunks, currentBatches, action, mergeRanges)
+		regionErrChunks, err := c.executeTxnFileSlice(bo, currentChunks, currentBatches, action, successRanges)
 		if err != nil {
 			return err
 		}
@@ -642,17 +642,17 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 			return nil
 		}
 		primaryRegion := batches[0].region
-		mergeRanges := util.NewMergeRanges()
-		mergeRanges.Insert(primaryRegion.StartKey, primaryRegion.EndKey)
+		successRanges := util.NewMergeRanges()
+		successRanges.Insert(primaryRegion.StartKey, primaryRegion.EndKey)
 		var emptySlice txnChunkSlice
 		if !action.asyncExecuteSecondaries() {
-			return c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, mergeRanges)
+			return c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, successRanges)
 		}
 
 		c.store.WaitGroup().Add(1)
 		errGo := c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
-			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, mergeRanges)
+			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, successRanges)
 			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
