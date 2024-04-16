@@ -2049,16 +2049,18 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 		return err
 	}
 
-	// For prewrite, stop sending other requests after receiving first error.
+	// For prewrite and flush, stop sending other requests after receiving first error.
 	// However, AssertionFailed error is less prior to other kinds of errors. If we meet an AssertionFailed error,
 	// we hold it to see if there's other error, and return it if there are no other kinds of errors.
 	// This is because when there are transaction conflicts in pessimistic transaction, it's possible that the
 	// non-pessimistic-locked keys may report false-positive assertion failure.
 	// See also: https://github.com/tikv/tikv/issues/12113
 	var cancel context.CancelFunc
-	if _, ok := batchExe.action.(actionPrewrite); ok {
+	switch batchExe.action.(type) {
+	case actionPrewrite, actionPipelinedFlush:
 		batchExe.backoffer, cancel = batchExe.backoffer.Fork()
 		defer cancel()
+	default:
 	}
 	var assertionFailedErr error = nil
 	// concurrently do the work for each batch.
