@@ -40,6 +40,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -63,6 +64,25 @@ func (b chunkBatch) String() string {
 	return fmt.Sprintf("chunkBatch{region: %s, isPrimary: %t, txnChunkSlice: %s}", b.region.String(), b.isPrimary, b.txnChunkSlice.String())
 }
 
+// chunkBatch.txnChunkSlice should be sorted by smallest.
+func (b *chunkBatch) getSampleKeys() [][]byte {
+	keys := make([][]byte, 0)
+	start := sort.Search(b.txnChunkSlice.len(), func(i int) bool {
+		return bytes.Compare(b.region.StartKey, b.txnChunkSlice.chunkRanges[i].smallest) <= 0
+	})
+	end := b.txnChunkSlice.len()
+	if len(b.region.EndKey) > 0 {
+		end = sort.Search(b.txnChunkSlice.len(), func(i int) bool {
+			return bytes.Compare(b.txnChunkSlice.chunkRanges[i].smallest, b.region.EndKey) >= 0
+		})
+	}
+	for i := start; i < end; i++ {
+		keys = append(keys, b.txnChunkSlice.chunkRanges[i].smallest)
+	}
+	return keys
+}
+
+// txnChunkSlice should be sorted by txnChunkRange.smallest and no overlapping.
 type txnChunkSlice struct {
 	chunkIDs    []uint64
 	chunkRanges []txnChunkRange
@@ -115,6 +135,8 @@ func (cs *txnChunkSlice) len() int {
 	return len(cs.chunkIDs)
 }
 
+// []chunkBatch is sorted by region.StartKey.
+// Note: regions may be overlapping.
 func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
 	batchMap := make(map[locate.RegionVerID]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
@@ -316,12 +338,8 @@ type txnFileCommitAction struct {
 var _ txnFileAction = (*txnFileCommitAction)(nil)
 
 func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
-	keys := make([][]byte, 0, batch.len())
-	for _, chunkRange := range batch.chunkRanges {
-		keys = append(keys, chunkRange.smallest)
-	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-		Keys:          keys, // set keys to help detect duplicated request.
+		Keys:          batch.getSampleKeys(), // To help detect duplicated request.
 		StartVersion:  c.startTS,
 		CommitVersion: a.commitTS,
 		IsTxnFile:     true,
@@ -410,12 +428,8 @@ type txnFileRollbackAction struct{}
 var _ txnFileAction = (*txnFileRollbackAction)(nil)
 
 func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch chunkBatch) (*tikvrpc.Response, error) {
-	keys := make([][]byte, 0, batch.len())
-	for _, chunkRange := range batch.chunkRanges {
-		keys = append(keys, chunkRange.smallest)
-	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
-		Keys:         keys, // set keys to help detect duplicated request.
+		Keys:         batch.getSampleKeys(), // To help detect duplicated request.
 		StartVersion: c.startTS,
 		IsTxnFile:    true,
 	}, kvrpcpb.Context{
@@ -492,13 +506,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	return
 }
 
-func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, primaryRegion *locate.KeyLocation) (txnChunkSlice, error) {
-	isBatchExecuted := func(batch *chunkBatch) bool {
-		return primaryRegion != nil &&
-			bytes.Compare(primaryRegion.StartKey, batch.Smallest()) <= 0 &&
-			(len(primaryRegion.EndKey) == 0 || bytes.Compare(batch.Biggest(), primaryRegion.EndKey) < 0)
-	}
-
+func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, mergeRanges *util.MergeRanges) (txnChunkSlice, error) {
 	var err error
 	var regionErrChunks txnChunkSlice
 
@@ -510,7 +518,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	}
 
 	for _, batch := range batches {
-		if isBatchExecuted(&batch) {
+		if mergeRanges.Covered(batch.region.StartKey, batch.region.EndKey) {
 			continue
 		}
 
@@ -551,16 +559,18 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 			regionErrChunks.appendSlice(&batch.txnChunkSlice)
 			continue
 		}
+
+		mergeRanges.Insert(batch.region.StartKey, batch.region.EndKey)
 	}
 	return regionErrChunks, nil
 }
 
-func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, primaryRegion *locate.KeyLocation) error {
+func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction, mergeRanges *util.MergeRanges) error {
 	currentChunks := chunkSlice
 	currentBatches := batches
 	for {
 		var regionErrChunks txnChunkSlice
-		regionErrChunks, err := c.executeTxnFileSlice(bo, currentChunks, currentBatches, action, primaryRegion)
+		regionErrChunks, err := c.executeTxnFileSlice(bo, currentChunks, currentBatches, action, mergeRanges)
 		if err != nil {
 			return err
 		}
@@ -627,20 +637,22 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 			continue
 		}
 
-		primaryRegion := batches[0].region
 		secondaries := batches[1:]
 		if len(secondaries) == 0 {
 			return nil
 		}
+		primaryRegion := batches[0].region
+		mergeRanges := util.NewMergeRanges()
+		mergeRanges.Insert(primaryRegion.StartKey, primaryRegion.EndKey)
 		var emptySlice txnChunkSlice
 		if !action.asyncExecuteSecondaries() {
-			return c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, primaryRegion)
+			return c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, mergeRanges)
 		}
 
 		c.store.WaitGroup().Add(1)
 		errGo := c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
-			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, primaryRegion)
+			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, mergeRanges)
 			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
