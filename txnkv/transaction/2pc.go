@@ -1219,7 +1219,9 @@ func keepAlive(
 				logutil.Logger(bo.GetCtx()).Info("ttlManager live up to its lifetime",
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Uint64("uptime", uptime),
-					zap.Uint64("maxTxnTTL", config.GetGlobalConfig().MaxTxnTTL))
+					zap.Uint64("maxTxnTTL", config.GetGlobalConfig().MaxTxnTTL),
+					zap.Bool("isPipelinedTxn", isPipelinedTxn),
+				)
 				metrics.TiKVTTLLifeTimeReachCounter.Inc()
 				// the pessimistic locks may expire if the ttl manager has timed out, set `LockExpired` flag
 				// so that this transaction could only commit or rollback with no more statement executions
@@ -1231,7 +1233,10 @@ func keepAlive(
 
 			newTTL := uptime + atomic.LoadUint64(&ManagedLockTTL)
 			logutil.Logger(bo.GetCtx()).Info("send TxnHeartBeat",
-				zap.Uint64("startTS", c.startTS), zap.Uint64("newTTL", newTTL))
+				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("newTTL", newTTL),
+				zap.Bool("isPipelinedTxn", isPipelinedTxn),
+			)
 			startTime := time.Now()
 			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL)
 			if err != nil {
@@ -1239,12 +1244,16 @@ func keepAlive(
 				metrics.TxnHeartBeatHistogramError.Observe(time.Since(startTime).Seconds())
 				logutil.Logger(bo.GetCtx()).Debug("send TxnHeartBeat failed",
 					zap.Error(err),
-					zap.Uint64("txnStartTS", c.startTS))
+					zap.Uint64("txnStartTS", c.startTS),
+					zap.Bool("isPipelinedTxn", isPipelinedTxn),
+				)
 				if stopHeartBeat || keepFail > maxConsecutiveFailure {
 					logutil.Logger(bo.GetCtx()).Warn("stop TxnHeartBeat",
 						zap.Error(err),
 						zap.Int("consecutiveFailure", keepFail),
-						zap.Uint64("txnStartTS", c.startTS))
+						zap.Uint64("txnStartTS", c.startTS),
+						zap.Bool("isPipelinedTxn", isPipelinedTxn),
+					)
 					return
 				}
 				continue
