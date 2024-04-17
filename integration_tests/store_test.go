@@ -158,6 +158,8 @@ func (s *testStoreSuite) TestRequestPriority() {
 	s.Nil(err)
 
 	// A counter example.
+	// clean cache for sending request to store.
+	txn.GetSnapshot().CleanCache([][]byte{[]byte("key")})
 	client.priority = kvrpcpb.CommandPri_Low
 	txn.SetPriority(txnkv.PriorityNormal)
 	_, err = txn.Get(context.TODO(), []byte("key"))

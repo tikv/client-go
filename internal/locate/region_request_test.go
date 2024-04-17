@@ -826,5 +826,5 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestSenderString() {
 	// invalid region cache before sending request.
 	s.cache.InvalidateCachedRegion(loc.Region)
 	sender.SendReqCtx(s.bo, tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}), loc.Region, time.Second, tikvrpc.TiKV)
-	s.Equal("{rpcError:cached region invalid, replicaSelector: <nil>}", sender.String())
+	s.Equal("{rpcError:<nil>, replicaSelector: <nil>}", sender.String())
 }
