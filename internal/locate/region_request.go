@@ -1015,14 +1015,9 @@ func newReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
-	if cachedRegion == nil {
-		return nil, errors.New("cached region not found")
-	} else if cachedRegion.checkSyncFlags(needReloadOnAccess) {
-		return nil, errors.New("cached region need reload")
-	} else if !cachedRegion.checkRegionCacheTTL(time.Now().Unix()) {
-		return nil, errors.New("cached region ttl expired")
+	if cachedRegion == nil || !cachedRegion.isValid() {
+		return nil, nil
 	}
-
 	replicas := buildTiKVReplicas(cachedRegion)
 	regionStore := cachedRegion.getStore()
 	option := storeSelectorOp{}
@@ -1064,6 +1059,10 @@ func newReplicaSelector(
 		targetIdx:   -1,
 		proxyIdx:    -1,
 	}, nil
+}
+
+func (s *replicaSelector) isValid() bool {
+	return s != nil
 }
 
 func buildTiKVReplicas(region *Region) []*replica {
@@ -1423,10 +1422,9 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
-			selector, err := NewReplicaSelector(s.regionCache, regionID, req, opts...)
-			if err != nil {
-				s.rpcError = err
-				return nil, nil
+			selector, err := NewReplicaSelector(s.regionCache, regionID, req, opts...) //nolint:staticcheck // ignore SA4023, never returns a nil interface value
+			if selector == nil || !selector.isValid() || err != nil {                  //nolint:staticcheck // ignore SA4023, never returns a nil interface value
+				return nil, err
 			}
 			s.replicaSelector = selector
 		}

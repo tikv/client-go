@@ -32,18 +32,20 @@ func emptyBufferBatchGetter(ctx context.Context, keys [][]byte) (map[string][]by
 }
 
 func TestPipelinedFlushTrigger(t *testing.T) {
-	avgKeySize := MinFlushSize / MinFlushKeys
+	// because memdb's memory usage is hard to control, we use a cargo-culted value here.
+	avgKeySize := int(MinFlushMemSize/MinFlushKeys) / 3
 
 	// block the flush goroutine for checking the flushingMemDB status.
 	blockCh := make(chan struct{})
-	// Will not flush when keys number >= MinFlushKeys and size < MinFlushSize
+	// Will not flush when keys number >= MinFlushKeys and size < MinFlushMemSize
 	memdb := NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
 	})
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, avgKeySize-len(key)-1) // (key + value) * MinFLushKeys < MinFlushKeys
+		value := make([]byte, avgKeySize-len(key)-1)
+		// (key + value) * MinFlushKeys < MinFlushMemSize
 		memdb.Set(key, value)
 		flushed, err := memdb.Flush(false)
 		require.False(t, flushed)
@@ -51,16 +53,18 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 		require.False(t, memdb.OnFlushing())
 	}
 	require.Equal(t, memdb.memDB.Len(), MinFlushKeys)
-	require.Less(t, memdb.memDB.Size(), MinFlushSize)
+	require.Less(t, memdb.memDB.Mem(), MinFlushMemSize)
 
-	// Will not flush when keys number < MinFlushKeys and size >= MinFlushSize
+	// Will not flush when keys number < MinFlushKeys and size >= MinFlushMemSize
+	avgKeySize = int(MinFlushMemSize/MinFlushKeys) / 2
 	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
 	})
 	for i := 0; i < MinFlushKeys-1; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, avgKeySize-len(key)+1) // (key + value) * (MinFLushKeys - 1) > MinFlushKeys
+		value := make([]byte, avgKeySize-len(key)+1)
+		// (key + value) * (MinFLushKeys - 1) > MinFlushMemSize
 		memdb.Set(key, value)
 		flushed, err := memdb.Flush(false)
 		require.False(t, flushed)
@@ -68,9 +72,10 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 		require.False(t, memdb.OnFlushing())
 	}
 	require.Less(t, memdb.memDB.Len(), MinFlushKeys)
-	require.Greater(t, memdb.memDB.Size(), MinFlushSize)
+	require.Greater(t, memdb.memDB.Mem(), MinFlushMemSize)
+	require.Less(t, memdb.memDB.Mem(), ForceFlushMemSizeThreshold)
 
-	// Flush when keys number >= MinFlushKeys and size >= MinFlushSize
+	// Flush when keys number >= MinFlushKeys and mem size >= MinFlushMemSize
 	memdb = NewPipelinedMemDB(emptyBufferBatchGetter, func(_ uint64, db *MemDB) error {
 		<-blockCh
 		return nil
@@ -106,7 +111,7 @@ func TestPipelinedFlushSkip(t *testing.T) {
 	})
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		value := make([]byte, int(MinFlushMemSize/MinFlushKeys)-len(key)+1)
 		memdb.Set(key, value)
 	}
 	flushed, err := memdb.Flush(false)
@@ -117,7 +122,7 @@ func TestPipelinedFlushSkip(t *testing.T) {
 	require.Equal(t, memdb.memDB.Size(), 0)
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(MinFlushKeys + i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		value := make([]byte, int(MinFlushMemSize/MinFlushKeys)-len(key)+1)
 		memdb.Set(key, value)
 	}
 	flushed, err = memdb.Flush(false)
@@ -144,7 +149,7 @@ func TestPipelinedFlushBlock(t *testing.T) {
 	})
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		value := make([]byte, int(MinFlushMemSize/MinFlushKeys)-len(key)+1)
 		memdb.Set(key, value)
 	}
 	flushed, err := memdb.Flush(false)
@@ -154,13 +159,13 @@ func TestPipelinedFlushBlock(t *testing.T) {
 	require.Equal(t, memdb.memDB.Len(), 0)
 	require.Equal(t, memdb.memDB.Size(), 0)
 
-	// When size of memdb is greater than ForceFlushSizeThreshold, Flush will be blocked.
+	// When size of memdb is greater than ForceFlushMemSizeThreshold, Flush will be blocked.
 	for i := 0; i < MinFlushKeys-1; i++ {
 		key := []byte(strconv.Itoa(MinFlushKeys + i))
-		value := make([]byte, ForceFlushSizeThreshold/(MinFlushKeys-1)-len(key)+1)
+		value := make([]byte, int(ForceFlushMemSizeThreshold/(MinFlushKeys-1))-len(key)+1)
 		memdb.Set(key, value)
 	}
-	require.Greater(t, memdb.memDB.Size(), ForceFlushSizeThreshold)
+	require.Greater(t, memdb.memDB.Mem(), ForceFlushMemSizeThreshold)
 	flushReturned := make(chan struct{})
 	oneSec := time.After(time.Second)
 	go func() {
@@ -191,7 +196,7 @@ func TestPipelinedFlushGet(t *testing.T) {
 	memdb.Set([]byte("key"), []byte("value"))
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		value := make([]byte, int(MinFlushMemSize/MinFlushKeys)-len(key)+1)
 		memdb.Set(key, value)
 	}
 	value, err := memdb.Get(context.Background(), []byte("key"))
@@ -214,7 +219,7 @@ func TestPipelinedFlushGet(t *testing.T) {
 	blockCh <- struct{}{}
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		value := make([]byte, int(MinFlushMemSize/MinFlushKeys)-len(key)+1)
 		memdb.Set(key, value)
 	}
 	flushed, err = memdb.Flush(false)
@@ -237,7 +242,7 @@ func TestPipelinedFlushSize(t *testing.T) {
 	keys := 0
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		value := make([]byte, int(MinFlushMemSize/MinFlushKeys)-len(key)+1)
 		keys++
 		size += len(key) + len(value)
 		memdb.Set(key, value)
@@ -255,7 +260,7 @@ func TestPipelinedFlushSize(t *testing.T) {
 
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(MinFlushKeys + i))
-		value := make([]byte, MinFlushSize/MinFlushKeys-len(key)+1)
+		value := make([]byte, int(MinFlushMemSize/MinFlushKeys)-len(key)+1)
 		keys++
 		size += len(key) + len(value)
 		memdb.Set(key, value)

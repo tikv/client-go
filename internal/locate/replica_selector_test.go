@@ -119,10 +119,15 @@ func TestReplicaSelectorBasic(t *testing.T) {
 	s.NotNil(rc)
 	rc.invalidate(Other)
 	selector, err := newReplicaSelectorV2(s.cache, rc.VerID(), req)
-	s.NotNil(err)
-	s.Equal("cached region invalid", err.Error())
+	s.Nil(err)
 	s.Nil(selector)
 	s.Equal("", selector.String())
+	selector2, err := NewReplicaSelector(s.cache, rc.VerID(), req)
+	s.Nil(err)
+	s.Nil(selector2)
+	s.False(selector2 == nil) // since never returns a nil interface value
+	s.False(selector2.isValid())
+	s.Equal("", selector2.String())
 
 	rc = s.getRegion()
 	selector, err = newReplicaSelectorV2(s.cache, rc.VerID(), req)
