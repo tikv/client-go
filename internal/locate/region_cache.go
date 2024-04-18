@@ -1318,12 +1318,10 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		}
 	} else if flags := r.resetSyncFlags(needReloadOnAccess | needDelayedReloadReady); flags > 0 {
 		// load region when it be marked as need reload.
-		var (
-			lr  *Region
-			err error
-		)
 		observeLoadRegion(tag, r, expired, flags)
-		lr, err = c.loadRegion(bo, key, isEndKey)
+		// NOTE: we can NOT use c.loadRegionByID(bo, r.GetID()) here because the new region (loaded by id) is not
+		// guaranteed to contain the key. (ref: https://github.com/tikv/client-go/pull/1299)
+		lr, err := c.loadRegion(bo, key, isEndKey)
 		if err != nil {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
