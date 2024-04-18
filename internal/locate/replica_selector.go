@@ -44,9 +44,12 @@ type ReplicaSelector interface {
 	onDataIsNotReady()
 	onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error)
 	onReadReqConfigurableTimeout(req *tikvrpc.Request) bool
+	isValid() bool
 }
 
 // NewReplicaSelector returns a new ReplicaSelector.
+//
+//nolint:staticcheck // ignore SA4023, never returns a nil interface value
 func NewReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (ReplicaSelector, error) {
@@ -72,7 +75,7 @@ func newReplicaSelectorV2(
 ) (*replicaSelectorV2, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion == nil || !cachedRegion.isValid() {
-		return nil, errors.New("cached region invalid")
+		return nil, nil
 	}
 	replicas := buildTiKVReplicas(cachedRegion)
 	option := storeSelectorOp{}
@@ -96,6 +99,10 @@ func newReplicaSelectorV2(
 		target:          nil,
 		attempts:        0,
 	}, nil
+}
+
+func (s *replicaSelectorV2) isValid() bool {
+	return s != nil
 }
 
 func (s *replicaSelectorV2) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
