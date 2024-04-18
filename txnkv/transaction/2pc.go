@@ -1219,7 +1219,9 @@ func keepAlive(
 				logutil.Logger(bo.GetCtx()).Info("ttlManager live up to its lifetime",
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Uint64("uptime", uptime),
-					zap.Uint64("maxTxnTTL", config.GetGlobalConfig().MaxTxnTTL))
+					zap.Uint64("maxTxnTTL", config.GetGlobalConfig().MaxTxnTTL),
+					zap.Bool("isPipelinedTxn", isPipelinedTxn),
+				)
 				metrics.TiKVTTLLifeTimeReachCounter.Inc()
 				// the pessimistic locks may expire if the ttl manager has timed out, set `LockExpired` flag
 				// so that this transaction could only commit or rollback with no more statement executions
@@ -1231,7 +1233,10 @@ func keepAlive(
 
 			newTTL := uptime + atomic.LoadUint64(&ManagedLockTTL)
 			logutil.Logger(bo.GetCtx()).Info("send TxnHeartBeat",
-				zap.Uint64("startTS", c.startTS), zap.Uint64("newTTL", newTTL))
+				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("newTTL", newTTL),
+				zap.Bool("isPipelinedTxn", isPipelinedTxn),
+			)
 			startTime := time.Now()
 			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL)
 			if err != nil {
@@ -1239,12 +1244,16 @@ func keepAlive(
 				metrics.TxnHeartBeatHistogramError.Observe(time.Since(startTime).Seconds())
 				logutil.Logger(bo.GetCtx()).Debug("send TxnHeartBeat failed",
 					zap.Error(err),
-					zap.Uint64("txnStartTS", c.startTS))
+					zap.Uint64("txnStartTS", c.startTS),
+					zap.Bool("isPipelinedTxn", isPipelinedTxn),
+				)
 				if stopHeartBeat || keepFail > maxConsecutiveFailure {
 					logutil.Logger(bo.GetCtx()).Warn("stop TxnHeartBeat",
 						zap.Error(err),
 						zap.Int("consecutiveFailure", keepFail),
-						zap.Uint64("txnStartTS", c.startTS))
+						zap.Uint64("txnStartTS", c.startTS),
+						zap.Bool("isPipelinedTxn", isPipelinedTxn),
+					)
 					return
 				}
 				continue
@@ -2049,16 +2058,18 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 		return err
 	}
 
-	// For prewrite, stop sending other requests after receiving first error.
+	// For prewrite and flush, stop sending other requests after receiving first error.
 	// However, AssertionFailed error is less prior to other kinds of errors. If we meet an AssertionFailed error,
 	// we hold it to see if there's other error, and return it if there are no other kinds of errors.
 	// This is because when there are transaction conflicts in pessimistic transaction, it's possible that the
 	// non-pessimistic-locked keys may report false-positive assertion failure.
 	// See also: https://github.com/tikv/tikv/issues/12113
 	var cancel context.CancelFunc
-	if _, ok := batchExe.action.(actionPrewrite); ok {
+	switch batchExe.action.(type) {
+	case actionPrewrite, actionPipelinedFlush:
 		batchExe.backoffer, cancel = batchExe.backoffer.Fork()
 		defer cancel()
+	default:
 	}
 	var assertionFailedErr error = nil
 	// concurrently do the work for each batch.
