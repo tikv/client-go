@@ -97,7 +97,13 @@ func NewRangeTaskRunner(
 	concurrency int,
 	handler TaskHandler,
 ) *Runner {
-	return NewRangeTaskRunnerWithID(name, "", store, concurrency, handler)
+	return NewRangeTaskRunnerWithID(
+		name,
+		"",
+		store,
+		concurrency,
+		handler,
+	)
 }
 
 // NewRangeTaskRunnerWithID creates a RangeTaskRunner with a specified identifier
@@ -121,6 +127,11 @@ func NewRangeTaskRunnerWithID(
 		statLogInterval: rangeTaskDefaultStatLogInterval,
 		regionsPerTask:  defaultRegionsPerTask,
 	}
+}
+
+// SetStatLogInterval sets the statsLogInterval
+func (s *Runner) SetStatLogInterval(interval time.Duration) {
+	s.statLogInterval = interval
 }
 
 // SetRegionsPerTask sets how many regions is in a divided task. Since regions may split and merge, it's possible that
