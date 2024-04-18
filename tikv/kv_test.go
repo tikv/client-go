@@ -164,7 +164,7 @@ func (s *testKVSuite) TestMinSafeTsFromStores() {
 	s.Require().Equal(mockClient.tikvSafeTs, ts)
 }
 
-func (s *testKVSuite) TestMinSafeTsFromStoresWithZeroSafeTs() {
+func (s *testKVSuite) TestMinSafeTsFromStoresWithAllZeros() {
 	// ref https://github.com/tikv/client-go/issues/1276
 	mockClient := newStoreSafeTsMockClient(s)
 	mockClient.tikvSafeTs = 0
@@ -176,6 +176,19 @@ func (s *testKVSuite) TestMinSafeTsFromStoresWithZeroSafeTs() {
 	}, 15*time.Second, time.Second)
 
 	s.Require().Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+}
+
+func (s *testKVSuite) TestMinSafeTsFromStoresWithSomeZeros() {
+	// ref https://github.com/tikv/tikv/issues/13675 & https://github.com/tikv/client-go/pull/615
+	mockClient := newStoreSafeTsMockClient(s)
+	mockClient.tiflashSafeTs = 0
+	s.store.SetTiKVClient(mockClient)
+
+	s.Eventually(func() bool {
+		return atomic.LoadInt32(&mockClient.requestCount) >= 4
+	}, 15*time.Second, time.Second)
+
+	s.Require().Equal(mockClient.tikvSafeTs, s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 }
 
 func (s *testKVSuite) TestMinSafeTsFromPD() {
@@ -229,7 +242,7 @@ func (s *testKVSuite) TestMinSafeTsFromMixed1() {
 	s.Eventually(func() bool {
 		ts := s.store.GetMinSafeTS("z1")
 		s.Require().False(math.MaxUint64 == ts)
-		return ts == uint64(10)
+		return ts == uint64(10) && s.store.GetMinSafeTS(oracle.GlobalTxnScope) == uint64(10)
 	}, 15*time.Second, time.Second)
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
@@ -254,7 +267,7 @@ func (s *testKVSuite) TestMinSafeTsFromMixed2() {
 	s.Eventually(func() bool {
 		ts := s.store.GetMinSafeTS("z2")
 		s.Require().False(math.MaxUint64 == ts)
-		return ts == uint64(10)
+		return ts == uint64(10) && s.store.GetMinSafeTS(oracle.GlobalTxnScope) == uint64(10)
 	}, 15*time.Second, time.Second)
 	s.Require().GreaterOrEqual(atomic.LoadInt32(&mockClient.requestCount), int32(1))
 	s.Require().Equal(uint64(10), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
