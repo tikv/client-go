@@ -2204,6 +2204,39 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.False(store2.healthStatus.IsSlow())
 }
 
+func (s *testRegionCacheSuite) TestSplitThenLocateInvalidRegion() {
+	s.testSplitThenLocateKey(func(r *Region) { r.invalidate(Other) })
+}
+
+func (s *testRegionCacheSuite) TestSplitThenLocateRegionNeedReloadOnAccess() {
+	s.testSplitThenLocateKey(func(r *Region) { r.setSyncFlags(needReloadOnAccess) })
+}
+
+func (s *testRegionCacheSuite) TestSplitThenLocateRegionNeedDelayedReload() {
+	s.testSplitThenLocateKey(func(r *Region) { r.setSyncFlags(needDelayedReloadReady) })
+}
+
+func (s *testRegionCacheSuite) testSplitThenLocateKey(markRegion func(r *Region)) {
+	k := []byte("k")
+
+	// load region to cache
+	_, err := s.cache.LocateRegionByID(s.bo, s.region1)
+	s.NoError(err)
+	r1, expired := s.cache.searchCachedRegionByKey(k, false)
+	s.NotNil(r1)
+	s.False(expired)
+
+	// split region and mark it need sync
+	r2ids := s.cluster.AllocIDs(3)
+	s.cluster.Split(s.region1, r2ids[0], k, r2ids[1:], r2ids[1])
+	markRegion(r1)
+
+	// locate key
+	loc, err := s.cache.LocateKey(s.bo, k)
+	s.NoError(err)
+	s.True(loc.Contains(k))
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	_ = s.cache.refreshRegionIndex(s.bo)
 	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
