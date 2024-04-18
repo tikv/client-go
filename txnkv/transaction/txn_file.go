@@ -172,6 +172,10 @@ type txnChunkRange struct {
 	biggest  []byte
 }
 
+func (r txnChunkRange) String() string {
+	return fmt.Sprintf("txnChunkRange[%s,%s]", kv.StrKey(r.smallest), kv.StrKey(r.biggest))
+}
+
 func newTxnChunkRange(smallest []byte, biggest []byte) txnChunkRange {
 	return txnChunkRange{
 		smallest: smallest,
@@ -715,20 +719,26 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 }
 
 func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations CommitterMutations) error {
-	maxTxnChunkSize := int(config.GetGlobalConfig().TiKVClient.TxnChunkMaxSize)
+	bo, cancel := bo.Fork()
+	defer cancel()
+
+	cfg := config.GetGlobalConfig()
+	maxTxnChunkSize := int(cfg.TiKVClient.TxnChunkMaxSize)
 	capacity := c.txn.Size() + c.txn.Len()*7 + 4
 	if capacity > maxTxnChunkSize {
 		capacity = maxTxnChunkSize
 	}
 
-	writer, err := newChunkWriterClient()
-	if err != nil {
-		return errors.Wrap(err, "new chunk writer client failed")
-	}
+	workerPool := getChunkWorkerPool()
 
 	totalSize := 0
+	chunksCount := 0
+	respCh := make(chan buildChunkResp, cfg.TiKVClient.TxnChunkWriterConcurrency)
+	results := make([]buildChunkResp, 0)
+
 	buf := make([]byte, 0, capacity)
 	chunkSmallest := mutations.GetKey(0)
+	var err error
 	for i := 0; i < mutations.Len(); i++ {
 		key := mutations.GetKey(i)
 		op := mutations.GetOp(i)
@@ -736,13 +746,13 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		entrySize := 2 + len(key) + 1 + 4 + len(val)
 		if len(buf) > 0 && len(buf)+entrySize+4 > cap(buf) {
 			totalSize += len(buf)
-			chunkID, err := c.buildTxnFile(bo, writer, buf)
+			chunksCount++
+			ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(i-1))
+			results, err = workerPool.BuildChunk(buf, ran, bo, respCh, results)
 			if err != nil {
 				logutil.Logger(bo.GetCtx()).Error("build txn file failed", zap.Error(err))
 				return errors.Wrap(err, "build txn file failed")
 			}
-			ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(i-1))
-			c.txnFileCtx.slice.append(chunkID, ran)
 			chunkSmallest = key
 			buf = buf[:0]
 		}
@@ -754,70 +764,33 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	}
 	if len(buf) > 0 {
 		totalSize += len(buf)
-		chunkID, err := c.buildTxnFile(bo, writer, buf)
+		chunksCount++
+		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
+		results, err = workerPool.BuildChunk(buf, ran, bo, respCh, results)
 		if err != nil {
 			logutil.Logger(bo.GetCtx()).Error("build txn file failed", zap.Error(err))
 			return errors.Wrap(err, "build txn file failed")
 		}
-		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
-		c.txnFileCtx.slice.append(chunkID, ran)
 	}
+
+	for i := len(results); i < chunksCount; i++ {
+		r := <-respCh
+		if r.err != nil {
+			logutil.Logger(bo.GetCtx()).Error("build txn file failed", zap.Error(r.err))
+			return errors.Wrap(r.err, "build txn file failed")
+		}
+		results = append(results, r)
+	}
+	for _, r := range results {
+		c.txnFileCtx.slice.append(r.chunkId, r.chunkRange)
+	}
+
 	logutil.Logger(bo.GetCtx()).Info("build txn files",
 		zap.Uint64("startTS", c.startTS),
 		zap.Int("mutationsLen", mutations.Len()),
 		zap.Int("totalChunksSize", totalSize),
 		zap.Any("chunkIDs", c.txnFileCtx.slice.chunkIDs))
 	return nil
-}
-
-func (c *twoPhaseCommitter) buildTxnFile(bo *retry.Backoffer, writer *chunkWriterClient, buf []byte) (uint64, error) {
-	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	hash.Write(buf)
-	crc := hash.Sum32()
-	buf = binary.LittleEndian.AppendUint32(buf, crc)
-
-	for {
-		req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", writer.serviceAddr, bytes.NewReader(buf))
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		req.Header.Set("Content-Type", "application/octet-stream")
-
-		resp, err := writer.cli.Do(req)
-		if err != nil {
-			logutil.Logger(bo.GetCtx()).Warn("build txn file request failed", zap.Error(err), zap.String("addr", writer.serviceAddr))
-			err = bo.Backoff(retry.BoTiKVRPC, errors.WithMessage(err, "build txn file request failed"))
-			if err != nil {
-				return 0, errors.WithStack(err)
-			}
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			var bodyStr string
-			if data, err := io.ReadAll(resp.Body); err == nil {
-				bodyStr = string(data)
-			}
-			logutil.Logger(bo.GetCtx()).Warn("build txn file service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
-			err = bo.Backoff(retry.BoTiKVServerBusy, errors.WithMessagef(err, "build txn file service error, http status %s", resp.Status))
-			if err != nil {
-				return 0, errors.WithStack(err)
-			}
-			continue
-		}
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		v := struct {
-			ChunkId uint64 `json:"chunk_id"`
-		}{}
-		if err = json.Unmarshal(data, &v); err != nil {
-			return 0, errors.Wrapf(err, "unmarshal response %s", string(data))
-		}
-		logutil.Logger(bo.GetCtx()).Debug("build txn file", zap.Int("size", len(buf)), zap.Uint64("chunkId", v.ChunkId))
-		return v.ChunkId, nil
-	}
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
@@ -874,4 +847,54 @@ func newChunkWriterClient() (*chunkWriterClient, error) {
 	}
 	serviceAddr := fmt.Sprintf("%s%s/txn_chunk", scheme, cfg.TiKVClient.TxnChunkWriterAddr)
 	return &chunkWriterClient{client, serviceAddr}, nil
+}
+
+func (w *chunkWriterClient) buildTxnFile(bo *retry.Backoffer, buf []byte) (uint64, error) {
+	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	hash.Write(buf)
+	crc := hash.Sum32()
+	buf = binary.LittleEndian.AppendUint32(buf, crc)
+
+	for {
+		req, err := http.NewRequestWithContext(bo.GetCtx(), "POST", w.serviceAddr, bytes.NewReader(buf))
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+
+		resp, err := w.cli.Do(req)
+		if err != nil {
+			logutil.Logger(bo.GetCtx()).Warn("build txn file request failed", zap.Error(err), zap.String("addr", w.serviceAddr))
+			err = bo.Backoff(retry.BoTiKVRPC, errors.WithMessage(err, "build txn file request failed"))
+			if err != nil {
+				return 0, errors.WithStack(err)
+			}
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			var bodyStr string
+			if data, err := io.ReadAll(resp.Body); err == nil {
+				bodyStr = string(data)
+			}
+			logutil.Logger(bo.GetCtx()).Warn("build txn file service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
+			err = bo.Backoff(retry.BoTiKVServerBusy, errors.WithMessagef(err, "build txn file service error, http status %s", resp.Status))
+			if err != nil {
+				return 0, errors.WithStack(err)
+			}
+			continue
+		}
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		v := struct {
+			ChunkId uint64 `json:"chunk_id"`
+		}{}
+		if err = json.Unmarshal(data, &v); err != nil {
+			return 0, errors.Wrapf(err, "unmarshal response %s", string(data))
+		}
+		logutil.Logger(bo.GetCtx()).Debug("build txn file", zap.Int("size", len(buf)), zap.Uint64("chunkId", v.ChunkId))
+		return v.ChunkId, nil
+	}
 }

@@ -93,6 +93,8 @@ type TiKVClient struct {
 
 	// TxnChunkWriterAddr is the address of the txn chunk writer for file-based txn.
 	TxnChunkWriterAddr string `toml:"txn-chunk-writer-addr" json:"txn-chunk-writer-addr"`
+	// TxnChunkWriterConcurrency is the concurrency to request the txn chunk writer for file-based txn.
+	TxnChunkWriterConcurrency uint `toml:"txn-chunk-writer-concurrency" json:"txn-chunk-writer-concurrency"`
 	// TxnChunkMaxSize is the maximum size of a txn chunk of file-based txn.
 	TxnChunkMaxSize uint64 `toml:"txn-chunk-max-size" json:"txn-chunk-max-size"`
 	// TxnFileMinMutationSize is the minimum size of mutations to use file-based txn.
@@ -167,8 +169,9 @@ func DefaultTiKVClient() TiKVClient {
 
 		ResolveLockLiteThreshold: 16,
 
-		TxnChunkMaxSize:        128 * 1024 * 1024,
-		TxnFileMinMutationSize: 16 * 1024 * 1024,
+		TxnChunkWriterConcurrency: 4,
+		TxnChunkMaxSize:           128 * 1024 * 1024,
+		TxnFileMinMutationSize:    16 * 1024 * 1024,
 	}
 }
 
