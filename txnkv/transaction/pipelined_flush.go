@@ -215,6 +215,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 		}
 		locks := make([]*txnlock.Lock, 0, len(keyErrs))
 
+		logged := make(map[uint64]struct{}, 1)
 		for _, keyErr := range keyErrs {
 			// Check already exists error
 			if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
@@ -227,12 +228,16 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			if err1 != nil {
 				return err1
 			}
-			logutil.Logger(bo.GetCtx()).Info(
-				"[pipelined dml] encounters lock",
-				zap.Uint64("txnID", c.startTS),
-				zap.Uint64("generation", action.generation),
-				zap.Stringer("lock", lock),
-			)
+			if _, ok := logged[lock.TxnID]; !ok {
+				logutil.Logger(bo.GetCtx()).Info(
+					"[pipelined dml] flush encounters lock. "+
+						"More locks belonging to the same transaction may be omitted",
+					zap.Uint64("txnID", c.startTS),
+					zap.Uint64("generation", action.generation),
+					zap.Stringer("lock", lock),
+				)
+				logged[lock.TxnID] = struct{}{}
+			}
 			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
 			// fail due to a WriteConflict error. So we can construct and return an error here early.
 			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
