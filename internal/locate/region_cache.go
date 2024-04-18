@@ -1318,18 +1318,12 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		}
 	} else if flags := r.resetSyncFlags(needReloadOnAccess | needDelayedReloadReady); flags > 0 {
 		// load region when it be marked as need reload.
-		reloadOnAccess := flags&needReloadOnAccess > 0
 		var (
 			lr  *Region
 			err error
 		)
-		if reloadOnAccess {
-			observeLoadRegion(tag, r, expired, flags)
-			lr, err = c.loadRegion(bo, key, isEndKey)
-		} else {
-			observeLoadRegion("ByID", r, expired, flags)
-			lr, err = c.loadRegionByID(bo, r.GetID())
-		}
+		observeLoadRegion(tag, r, expired, flags)
+		lr, err = c.loadRegion(bo, key, isEndKey)
 		if err != nil {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
@@ -1337,6 +1331,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 				zap.String("encode-key", util.HexRegionKeyStr(c.codec.EncodeRegionKey(key))))
 		} else {
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
+			reloadOnAccess := flags&needReloadOnAccess > 0
 			r = lr
 			c.mu.Lock()
 			c.insertRegionToCache(r, reloadOnAccess, reloadOnAccess)
