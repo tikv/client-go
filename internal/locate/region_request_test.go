@@ -765,7 +765,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 				}()
 				req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{Data: []byte("a"), StartTs: 1})
 				regionRequestSender := NewRegionRequestSender(s.cache, fnClient)
-				reachable.injectConstantLiveness(regionRequestSender.regionCache)
+				reachable.injectConstantLiveness(regionRequestSender.regionCache.stores)
 				regionRequestSender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 			}
 		}()
