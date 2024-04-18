@@ -468,7 +468,25 @@ func (a txnFileRollbackAction) String() string {
 	return "txnFileRollback"
 }
 
+type step struct {
+	Name string
+	Dur  time.Duration
+}
+
+func (s step) String() string {
+	return fmt.Sprintf("%s:%s", s.Name, s.Dur.String())
+}
+
 func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
+	start := time.Now()
+	steps := make([]step, 0)
+	stepDone := func(name string) {
+		now := time.Now()
+		s := step{Name: name, Dur: now.Sub(start)}
+		steps = append(steps, s)
+		start = now
+	}
+
 	defer func() {
 		// Always clean up all written keys if the txn does not commit.
 		c.mu.RLock()
@@ -479,7 +497,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 			if c.txnFileCtx.slice.len() > 0 {
 				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
 				if err1 != nil {
-					logutil.BgLogger().Error("executeTxnFile: rollback on error failed", zap.Error(err1))
+					logutil.Logger(ctx).Error("executeTxnFile: rollback on error failed", zap.Error(err1))
 				}
 			}
 			metrics.TwoPCTxnCounterError.Inc()
@@ -488,24 +506,33 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		}
 		c.txn.commitTS = c.commitTS
 
-		logutil.Logger(ctx).Info("execute txn file finished", zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS), zap.Error(err))
+		logutil.Logger(ctx).Info("execute txn file finished",
+			zap.Uint64("startTS", c.startTS),
+			zap.Uint64("commitTS", c.commitTS),
+			zap.Error(err),
+			zap.Stringers("steps", steps))
 	}()
 
 	logutil.Logger(ctx).Info("execute txn file", zap.Uint64("startTS", c.startTS))
 
 	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
-	if err = c.buildTxnFiles(buildBo, c.mutations); err != nil {
+	err = c.buildTxnFiles(buildBo, c.mutations)
+	stepDone("build")
+	if err != nil {
 		logutil.Logger(ctx).Error("build txn files failed", zap.Error(err))
 		return
 	}
-	if err = c.preSplitTxnFileRegions(buildBo); err != nil {
+
+	err = c.preSplitTxnFileRegions(buildBo)
+	stepDone("pre-split")
+	if err != nil {
 		return
 	}
 
 	prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
-	logutil.Logger(ctx).Info("execute txn file prewrite", zap.Uint64("startTS", c.startTS))
 	err = c.executeTxnFileAction(prewriteBo, c.txnFileCtx.slice, txnFilePrewriteAction{})
-	logutil.Logger(ctx).Info("execute txn file prewrite finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
+	stepDone("prewrite")
+	logutil.Logger(ctx).Debug("execute txn file prewrite finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
 	if err != nil {
 		return
 	}
@@ -515,9 +542,9 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	logutil.Logger(ctx).Info("execute txn file commit", zap.Uint64("startTS", c.startTS))
 	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
-	logutil.Logger(ctx).Info("execute txn file commit finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
+	stepDone("commit")
+	logutil.Logger(ctx).Debug("execute txn file commit finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
 	return
 }
 
@@ -538,7 +565,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 		}
 
 		resp, err1 := action.executeBatch(c, bo, batch)
-		logutil.Logger(bo.GetCtx()).Info("txn file: execute batch finished",
+		logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
 			zap.Uint64("startTS", c.startTS),
 			zap.Any("batch", batch),
 			zap.Stringer("action", action),
@@ -612,7 +639,7 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 
 	firstBatch.isPrimary = true
 	resp, err := action.executeBatch(c, bo, firstBatch)
-	logutil.Logger(bo.GetCtx()).Info("txn file: execute primary batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute primary batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.String("primary", kv.StrKey(c.primary())),
 		zap.Stringer("action", action),
@@ -667,7 +694,7 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 		errGo := c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
 			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action, successRanges)
-			logutil.Logger(bo.GetCtx()).Info("txn file: async execute secondaries finished",
+			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
 				zap.Error(err))
