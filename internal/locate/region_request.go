@@ -2396,7 +2396,7 @@ func (s *RegionRequestSender) onRegionError(
 	// This error is specific to stale read and the target replica is randomly selected. If the request is sent
 	// to the leader, the data must be ready, so we don't backoff here.
 	if regionErr.GetDataIsNotReady() != nil {
-		logutil.Logger(bo.GetCtx()).Warn(
+		logutil.Logger(bo.GetCtx()).Debug(
 			"tikv reports `DataIsNotReady` retry later",
 			zap.Uint64("store-id", ctx.Store.storeID),
 			zap.Uint64("peer-id", regionErr.GetDataIsNotReady().GetPeerId()),
