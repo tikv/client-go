@@ -187,6 +187,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedFlushBlock() {
 	s.Nil(failpoint.Disable("tikvclient/beforePipelinedFlush"))
 	<-flushReturned
 	s.Nil(txn.GetMemBuffer().FlushWait())
+	s.Nil(txn.Rollback())
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedSkipFlushedLock() {
@@ -455,7 +456,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
 
 	s.Eventuallyf(func() bool {
 		return !txnProbe.GetCommitter().IsTTLRunning()
-	}, 5*time.Second, 100*time.Millisecond, "ttl manager should stop after primary lock resolved")
+	}, 5*time.Second, 100*time.Millisecond, "ttl manager should stop after primary lock is resolved")
 
 	txn.Set([]byte("key2"), []byte("value2"))
 	flushed, err = txn.GetMemBuffer().Flush(true)
