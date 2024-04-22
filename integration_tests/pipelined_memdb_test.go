@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,10 +28,13 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
@@ -68,6 +72,26 @@ func (s *testPipelinedMemDBSuite) SetupTest() {
 
 func (s *testPipelinedMemDBSuite) TearDownTest() {
 	s.store.Close()
+}
+
+func (s *testPipelinedMemDBSuite) mustGetLock(key []byte) *txnkv.Lock {
+	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	s.Nil(err)
+	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+		Key:     key,
+		Version: ver,
+	})
+	loc, err := s.store.GetRegionCache().LocateKey(bo, key)
+	s.Nil(err)
+	resp, err := s.store.SendReq(bo, req, loc.Region, tikv.ReadTimeoutShort)
+	s.Nil(err)
+	s.NotNil(resp.Resp)
+	keyErr := resp.Resp.(*kvrpcpb.GetResponse).GetError()
+	s.NotNil(keyErr)
+	lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
+	s.Nil(err)
+	return lock
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
@@ -400,4 +424,42 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	s.Error(err)
 	s.True(tikverr.IsErrNotFound(err))
 	txn.Rollback()
+}
+
+func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
+	originManageTTLVal := atomic.LoadUint64(&transaction.ManagedLockTTL)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 100) // set to 100ms
+	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManageTTLVal)
+
+	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	s.Nil(err)
+	txn.Set([]byte("key1"), []byte("value1"))
+	txnProbe := transaction.TxnProbe{KVTxn: txn}
+	flushed, err := txnProbe.GetMemBuffer().Flush(true)
+	s.Nil(err)
+	s.True(flushed)
+	s.Nil(txn.GetMemBuffer().FlushWait())
+	s.Equal(txnProbe.GetCommitter().GetPrimaryKey(), []byte("key1"))
+
+	s.True(txnProbe.GetCommitter().IsTTLRunning())
+
+	// resolve the primary lock
+	locks := []*txnlock.Lock{s.mustGetLock([]byte("key1"))}
+	lr := s.store.GetLockResolver()
+	bo := tikv.NewGcResolveLockMaxBackoffer(context.Background())
+	loc, err := s.store.GetRegionCache().LocateKey(bo, locks[0].Primary)
+	s.Nil(err)
+	success, err := lr.BatchResolveLocks(bo, locks, loc.Region)
+	s.True(success)
+	s.Nil(err)
+
+	s.Eventuallyf(func() bool {
+		return !txnProbe.GetCommitter().IsTTLRunning()
+	}, 5*time.Second, 100*time.Millisecond, "ttl manager should stop after primary lock resolved")
+
+	txn.Set([]byte("key2"), []byte("value2"))
+	flushed, err = txn.GetMemBuffer().Flush(true)
+	s.Nil(err)
+	s.True(flushed)
+	s.NotNil(txn.GetMemBuffer().FlushWait())
 }
