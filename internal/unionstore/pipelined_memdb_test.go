@@ -63,7 +63,7 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 	})
 	for i := 0; i < MinFlushKeys-1; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, avgKeySize-len(key)+1)
+		value := make([]byte, avgKeySize*2-len(key)+1)
 		// (key + value) * (MinFLushKeys - 1) > MinFlushMemSize
 		memdb.Set(key, value)
 		flushed, err := memdb.Flush(false)
@@ -82,7 +82,7 @@ func TestPipelinedFlushTrigger(t *testing.T) {
 	})
 	for i := 0; i < MinFlushKeys; i++ {
 		key := []byte(strconv.Itoa(i))
-		value := make([]byte, avgKeySize-len(key)+1) // (key + value) * MinFLushKeys > MinFlushKeys
+		value := make([]byte, avgKeySize*2-len(key)+1) // (key + value) * MinFLushKeys > MinFlushKeys
 		memdb.Set(key, value)
 		flushed, err := memdb.Flush(false)
 		require.Nil(t, err)
