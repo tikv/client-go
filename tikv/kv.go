@@ -425,10 +425,10 @@ func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
 	return startTS, nil
 }
 
-// CurrentMinTimestamp returns current timestamp across all keyspace groups.
-func (s *KVStore) CurrentMinTimestamp() (uint64, error) {
+// CurrentAllTSOKeyspaceGroupMinTs returns a minimum timestamp from all TSO keyspace groups.
+func (s *KVStore) CurrentAllTSOKeyspaceGroupMinTs() (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-	startTS, err := s.getMinTimestampWithRetry(bo)
+	startTS, err := s.getAllTSOKeyspaceGroupMinTSWithRetry(bo)
 	if err != nil {
 		return 0, err
 	}
@@ -469,15 +469,15 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 	}
 }
 
-func (s *KVStore) getMinTimestampWithRetry(bo *Backoffer) (uint64, error) {
+func (s *KVStore) getAllTSOKeyspaceGroupMinTSWithRetry(bo *Backoffer) (uint64, error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
-		span1 := span.Tracer().StartSpan("TiKVStore.getMinTimestampWithRetry", opentracing.ChildOf(span.Context()))
+		span1 := span.Tracer().StartSpan("TiKVStore.getAllTSOKeyspaceGroupMinTSWithRetry", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
 	for {
-		minTS, err := s.oracle.GetMinTimestamp(bo.GetCtx())
+		minTS, err := s.oracle.GetAllTSOKeyspaceGroupMinTS(bo.GetCtx())
 		if err == nil {
 			return minTS, nil
 		}
@@ -575,7 +575,7 @@ func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
 func (s *KVStore) setMinSafeTS(txnScope string, safeTS uint64) {
 	// ensure safeTS is not set to max uint64
 	if safeTS == math.MaxUint64 {
-		logutil.BgLogger().Warn("skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
+		logutil.AssertWarn(logutil.BgLogger(), "skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
 		return
 	}
 	s.minSafeTS.Store(txnScope, safeTS)
@@ -618,7 +618,7 @@ func (s *KVStore) getSafeTS(storeID uint64) (bool, uint64) {
 func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
 	// ensure safeTS is not set to max uint64
 	if safeTS == math.MaxUint64 {
-		logutil.BgLogger().Warn("skip setting safe-ts to max uint64", zap.Uint64("storeID", storeID), zap.Stack("stack"))
+		logutil.AssertWarn(logutil.BgLogger(), "skip setting safe-ts to max uint64", zap.Uint64("storeID", storeID), zap.Stack("stack"))
 		return
 	}
 	s.safeTSMap.Store(storeID, safeTS)
@@ -627,8 +627,11 @@ func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
 func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 	minSafeTS := uint64(math.MaxUint64)
 	// when there is no store, return 0 in order to let minStartTS become startTS directly
+	// actually storeIDs won't be empty since updateMinSafeTS is only called by updateSafeTS and updateSafeTS builds
+	// txnScopeMap with non-empty values. here we check it to make the logic more robust.
 	if len(storeIDs) < 1 {
 		s.setMinSafeTS(txnScope, 0)
+		return
 	}
 	for _, store := range storeIDs {
 		ok, safeTS := s.getSafeTS(store)
@@ -640,6 +643,10 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 		} else {
 			minSafeTS = 0
 		}
+	}
+	// if minSafeTS is still math.MaxUint64, that means all store safe ts are 0, then we set minSafeTS to 0.
+	if minSafeTS == math.MaxUint64 {
+		minSafeTS = 0
 	}
 	s.setMinSafeTS(txnScope, minSafeTS)
 }

@@ -117,7 +117,10 @@ type RegionRequestSender struct {
 }
 
 func (s *RegionRequestSender) String() string {
-	return fmt.Sprintf("{rpcError:%v,replicaSelector: %v}", s.rpcError, s.replicaSelector.String())
+	if s.replicaSelector == nil {
+		return fmt.Sprintf("{rpcError:%v, replicaSelector: %v}", s.rpcError, s.replicaSelector)
+	}
+	return fmt.Sprintf("{rpcError:%v, replicaSelector: %v}", s.rpcError, s.replicaSelector.String())
 }
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
@@ -1012,14 +1015,9 @@ func newReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
 ) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
-	if cachedRegion == nil {
-		return nil, errors.New("cached region not found")
-	} else if cachedRegion.checkSyncFlags(needReloadOnAccess) {
-		return nil, errors.New("cached region need reload")
-	} else if !cachedRegion.checkRegionCacheTTL(time.Now().Unix()) {
-		return nil, errors.New("cached region ttl expired")
+	if cachedRegion == nil || !cachedRegion.isValid() {
+		return nil, nil
 	}
-
 	replicas := buildTiKVReplicas(cachedRegion)
 	regionStore := cachedRegion.getStore()
 	option := storeSelectorOp{}
@@ -1061,6 +1059,10 @@ func newReplicaSelector(
 		targetIdx:   -1,
 		proxyIdx:    -1,
 	}, nil
+}
+
+func (s *replicaSelector) isValid() bool {
+	return s != nil
 }
 
 func buildTiKVReplicas(region *Region) []*replica {
@@ -1271,7 +1273,7 @@ func (s *baseReplicaSelector) getBaseReplicaSelector() *baseReplicaSelector {
 }
 
 func (s *baseReplicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
-	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache)
+	return accessReplica.store.requestLivenessAndStartHealthCheckLoopIfNeeded(bo, s.regionCache.bg, s.regionCache.stores)
 }
 
 func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause error) {
@@ -1285,7 +1287,7 @@ func (s *baseReplicaSelector) invalidateReplicaStore(replica *replica, cause err
 		)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
 		// schedule a store addr resolve.
-		s.regionCache.markStoreNeedCheck(store)
+		s.regionCache.stores.markStoreNeedCheck(store)
 		store.healthStatus.markAlreadySlow()
 	}
 }
@@ -1420,10 +1422,9 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
-			selector, err := NewReplicaSelector(s.regionCache, regionID, req, opts...)
-			if err != nil {
-				s.rpcError = err
-				return nil, nil
+			selector, err := NewReplicaSelector(s.regionCache, regionID, req, opts...) //nolint:staticcheck // ignore SA4023, never returns a nil interface value
+			if selector == nil || !selector.isValid() || err != nil {                  //nolint:staticcheck // ignore SA4023, never returns a nil interface value
+				return nil, err
 			}
 			s.replicaSelector = selector
 		}
@@ -2328,7 +2329,7 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Stringer("storeNotMatch", storeNotMatch),
 			zap.Stringer("ctx", ctx),
 		)
-		s.regionCache.markStoreNeedCheck(ctx.Store)
+		s.regionCache.stores.markStoreNeedCheck(ctx.Store)
 		s.regionCache.InvalidateCachedRegion(ctx.Region)
 		// It's possible the address of store is not changed but the DNS resolves to a different address in k8s environment,
 		// so we always reconnect in this case.
@@ -2395,7 +2396,7 @@ func (s *RegionRequestSender) onRegionError(
 	// This error is specific to stale read and the target replica is randomly selected. If the request is sent
 	// to the leader, the data must be ready, so we don't backoff here.
 	if regionErr.GetDataIsNotReady() != nil {
-		logutil.Logger(bo.GetCtx()).Warn(
+		logutil.Logger(bo.GetCtx()).Debug(
 			"tikv reports `DataIsNotReady` retry later",
 			zap.Uint64("store-id", ctx.Store.storeID),
 			zap.Uint64("peer-id", regionErr.GetDataIsNotReady().GetPeerId()),

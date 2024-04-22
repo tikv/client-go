@@ -395,6 +395,22 @@ func (txn *KVTxn) SetTxnSource(txnSource uint64) {
 	txn.txnSource = txnSource
 }
 
+// SetSessionID sets the session ID of the transaction.
+// If the committer is not initialized yet, the function won't take effect.
+// It is supposed to be set before performing any writes in the transaction to avoid data race.
+// It is designed to be called in ActivateTxn(), though subject to change.
+// It is especially useful for pipelined transactions, as its committer is initialized immediately
+// when the transaction is created.
+//
+// Note that commiter may also obtain a sessionID from context directly via sessionIDCtxKey.
+// TODO: consider unifying them.
+
+func (txn *KVTxn) SetSessionID(sessionID uint64) {
+	if txn.committer != nil {
+		txn.committer.sessionID = sessionID
+	}
+}
+
 // GetDiskFullOpt gets the options of current operation in each TiKV disk usage level.
 func (txn *KVTxn) GetDiskFullOpt() kvrpcpb.DiskFullOpt {
 	return txn.diskFullOpt
@@ -451,16 +467,26 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
+		startTime := time.Now()
 		defer func() {
 			if err != nil {
 				txn.committer.ttlManager.close()
 			}
 			flushedKeys += memdb.Len()
 			flushedSize += memdb.Size()
+			logutil.BgLogger().Info(
+				"[pipelined dml] flushed memdb to kv store",
+				zap.Uint64("startTS", txn.startTS),
+				zap.Uint64("generation", generation),
+				zap.Uint64("session", txn.committer.sessionID),
+				zap.Int("keys", memdb.Len()),
+				zap.String("size", units.HumanSize(float64(memdb.Size()))),
+				zap.Int("flushed keys", flushedKeys),
+				zap.String("flushed size", units.HumanSize(float64(flushedSize))),
+				zap.Duration("take time", time.Since(startTime)),
+			)
 		}()
-		logutil.BgLogger().Info("[pipelined dml] flush memdb to kv store",
-			zap.Int("keys", memdb.Len()), zap.String("size", units.HumanSize(float64(memdb.Size()))),
-			zap.Int("flushed keys", flushedKeys), zap.String("flushed size", units.HumanSize(float64(flushedSize))))
+
 		// The flush function will not be called concurrently.
 		// TODO: set backoffer from upper context.
 		bo := retry.NewBackofferWithVars(flushCtx, 20000, nil)
@@ -764,6 +790,12 @@ func (txn *KVTxn) Rollback() error {
 		txn.pipelinedCancel()
 		txn.GetMemBuffer().FlushWait()
 		txn.committer.ttlManager.close()
+		// no need to clean up locks when no flush triggered.
+		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
+		if len(pipelinedStart) != 0 && len(pipelinedEnd) != 0 {
+			rollbackBo := retry.NewBackofferWithVars(txn.store.Ctx(), CommitSecondaryMaxBackoff, txn.vars)
+			txn.committer.resolveFlushedLocks(rollbackBo, pipelinedStart, pipelinedEnd, false)
+		}
 	}
 	txn.close()
 	logutil.BgLogger().Debug("[kv] rollback txn", zap.Uint64("txnStartTS", txn.StartTS()))

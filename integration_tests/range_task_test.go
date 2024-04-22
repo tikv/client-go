@@ -196,7 +196,12 @@ func (s *testRangeTaskSuite) testRangeTaskImpl(concurrency int) {
 		return stat, nil
 	}
 
-	runner := rangetask.NewRangeTaskRunner("test-runner", s.store, concurrency, handler)
+	runner := rangetask.NewRangeTaskRunner(
+		"test-runner",
+		s.store,
+		concurrency,
+		handler,
+	)
 
 	for regionsPerTask := 1; regionsPerTask <= 5; regionsPerTask++ {
 		for i, r := range s.testRanges {
@@ -237,7 +242,12 @@ func (s *testRangeTaskSuite) testRangeTaskErrorImpl(concurrency int) {
 				return stat, nil
 			}
 
-			runner := rangetask.NewRangeTaskRunner("test-error-runner", s.store, concurrency, handler)
+			runner := rangetask.NewRangeTaskRunner(
+				"test-error-runner",
+				s.store,
+				concurrency,
+				handler,
+			)
 			runner.SetRegionsPerTask(1)
 			err := runner.RunOnRange(context.Background(), r.StartKey, r.EndKey)
 			// RunOnRange returns no error only when all sub tasks are done successfully.

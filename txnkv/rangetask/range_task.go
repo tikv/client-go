@@ -61,7 +61,10 @@ const (
 // regions in the range. Because of merging and splitting, it's possible that multiple requests for disjoint ranges are
 // sent to the same region.
 type Runner struct {
-	name            string
+	// name is consistent across all runners of the same type, which is used for metrics
+	name string
+	// identifier can be a unique identifier for each runner, which is used for logging
+	identifier      string
 	store           storage
 	concurrency     int
 	handler         TaskHandler
@@ -94,14 +97,41 @@ func NewRangeTaskRunner(
 	concurrency int,
 	handler TaskHandler,
 ) *Runner {
+	return NewRangeTaskRunnerWithID(
+		name,
+		"",
+		store,
+		concurrency,
+		handler,
+	)
+}
+
+// NewRangeTaskRunnerWithID creates a RangeTaskRunner with a specified identifier
+func NewRangeTaskRunnerWithID(
+	name string,
+	identifier string,
+	store storage,
+	concurrency int,
+	handler TaskHandler,
+) *Runner {
+	id := identifier
+	if len(id) == 0 {
+		id = name
+	}
 	return &Runner{
 		name:            name,
+		identifier:      id,
 		store:           store,
 		concurrency:     concurrency,
 		handler:         handler,
 		statLogInterval: rangeTaskDefaultStatLogInterval,
 		regionsPerTask:  defaultRegionsPerTask,
 	}
+}
+
+// SetStatLogInterval sets the statsLogInterval
+func (s *Runner) SetStatLogInterval(interval time.Duration) {
+	s.statLogInterval = interval
 }
 
 // SetRegionsPerTask sets how many regions is in a divided task. Since regions may split and merge, it's possible that
@@ -128,14 +158,14 @@ func (s *Runner) RunOnRange(ctx context.Context, startKey, endKey []byte) error 
 
 	if len(endKey) != 0 && bytes.Compare(startKey, endKey) >= 0 {
 		logutil.Logger(ctx).Info("empty range task executed. ignored",
-			zap.String("name", s.name),
+			zap.String("name", s.identifier),
 			zap.String("startKey", kv.StrKey(startKey)),
 			zap.String("endKey", kv.StrKey(endKey)))
 		return nil
 	}
 
 	logutil.Logger(ctx).Info("range task started",
-		zap.String("name", s.name),
+		zap.String("name", s.identifier),
 		zap.String("startKey", kv.StrKey(startKey)),
 		zap.String("endKey", kv.StrKey(endKey)),
 		zap.Int("concurrency", s.concurrency))
@@ -177,7 +207,7 @@ Loop:
 		select {
 		case <-statLogTicker.C:
 			logutil.Logger(ctx).Info("range task in progress",
-				zap.String("name", s.name),
+				zap.String("name", s.identifier),
 				zap.String("startKey", kv.StrKey(startKey)),
 				zap.String("endKey", kv.StrKey(endKey)),
 				zap.Int("concurrency", s.concurrency),
@@ -191,7 +221,7 @@ Loop:
 		rangeEndKey, err := s.store.GetRegionCache().BatchLoadRegionsFromKey(bo, key, s.regionsPerTask)
 		if err != nil {
 			logutil.Logger(ctx).Info("range task try to get range end key failure",
-				zap.String("name", s.name),
+				zap.String("name", s.identifier),
 				zap.String("startKey", kv.StrKey(startKey)),
 				zap.String("endKey", kv.StrKey(endKey)),
 				zap.String("loadRegionKey", kv.StrKey(key)),
@@ -232,7 +262,7 @@ Loop:
 	for _, w := range workers {
 		if w.err != nil {
 			logutil.Logger(ctx).Info("range task failed",
-				zap.String("name", s.name),
+				zap.String("name", s.identifier),
 				zap.String("startKey", kv.StrKey(startKey)),
 				zap.String("endKey", kv.StrKey(endKey)),
 				zap.Duration("cost time", time.Since(startTime)),
@@ -244,7 +274,7 @@ Loop:
 	}
 
 	logutil.Logger(ctx).Info("range task finished",
-		zap.String("name", s.name),
+		zap.String("name", s.identifier),
 		zap.String("startKey", kv.StrKey(startKey)),
 		zap.String("endKey", kv.StrKey(endKey)),
 		zap.Duration("cost time", time.Since(startTime)),
@@ -256,11 +286,12 @@ Loop:
 // createWorker creates a worker that can process tasks from the given channel.
 func (s *Runner) createWorker(taskCh chan *kv.KeyRange, wg *sync.WaitGroup) *rangeTaskWorker {
 	return &rangeTaskWorker{
-		name:    s.name,
-		store:   s.store,
-		handler: s.handler,
-		taskCh:  taskCh,
-		wg:      wg,
+		name:       s.name,
+		identifier: s.identifier,
+		store:      s.store,
+		handler:    s.handler,
+		taskCh:     taskCh,
+		wg:         wg,
 
 		completedRegions: &s.completedRegions,
 		failedRegions:    &s.failedRegions,
@@ -279,11 +310,14 @@ func (s *Runner) FailedRegions() int {
 
 // rangeTaskWorker is used by RangeTaskRunner to process tasks concurrently.
 type rangeTaskWorker struct {
-	name    string
-	store   storage
-	handler TaskHandler
-	taskCh  chan *kv.KeyRange
-	wg      *sync.WaitGroup
+	// name is consistent across all runners of the same type, which is used for metrics
+	name string
+	// identifier can be a unique identifier for each runner, which is used for logging
+	identifier string
+	store      storage
+	handler    TaskHandler
+	taskCh     chan *kv.KeyRange
+	wg         *sync.WaitGroup
 
 	err error
 
@@ -311,7 +345,7 @@ func (w *rangeTaskWorker) run(ctx context.Context, cancel context.CancelFunc) {
 
 		if err != nil {
 			logutil.Logger(ctx).Info("canceling range task because of error",
-				zap.String("name", w.name),
+				zap.String("name", w.identifier),
 				zap.String("startKey", kv.StrKey(r.StartKey)),
 				zap.String("endKey", kv.StrKey(r.EndKey)),
 				zap.Error(err))

@@ -667,17 +667,21 @@ func (td *TimeDetail) String() string {
 		buf.WriteString("tikv_wall_time: ")
 		buf.WriteString(FormatDuration(td.TotalRPCWallTime))
 	}
-	return buf.String()
+	if buf.Len() == 0 {
+		return ""
+	}
+	return "time_detail: {" + buf.String() + "}"
 }
 
 // Merge merges the time detail into itself.
+// Note this function could be called concurrently.
 func (td *TimeDetail) Merge(detail *TimeDetail) {
 	if detail != nil {
-		td.ProcessTime += detail.ProcessTime
-		td.SuspendTime += detail.SuspendTime
-		td.WaitTime += detail.WaitTime
-		td.KvReadWallTime += detail.KvReadWallTime
-		td.TotalRPCWallTime += detail.TotalRPCWallTime
+		atomic.AddInt64((*int64)(&td.ProcessTime), int64(detail.ProcessTime))
+		atomic.AddInt64((*int64)(&td.SuspendTime), int64(detail.SuspendTime))
+		atomic.AddInt64((*int64)(&td.WaitTime), int64(detail.WaitTime))
+		atomic.AddInt64((*int64)(&td.KvReadWallTime), int64(detail.KvReadWallTime))
+		atomic.AddInt64((*int64)(&td.TotalRPCWallTime), int64(detail.TotalRPCWallTime))
 	}
 }
 

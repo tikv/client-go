@@ -145,25 +145,40 @@ func (s *testSnapshotSuite) TestBatchGet() {
 	}
 }
 
-type contextKey string
-
 func (s *testSnapshotSuite) TestSnapshotCache() {
 	txn := s.beginTxn()
 	s.Nil(txn.Set([]byte("x"), []byte("x")))
-	s.Nil(txn.Delete([]byte("y"))) // store data is affected by othe)
+	s.Nil(txn.Delete([]byte("y"))) // delete should also be cached
+	s.Nil(txn.Set([]byte("a"), []byte("a")))
+	s.Nil(txn.Delete([]byte("b")))
 	s.Nil(txn.Commit(context.Background()))
 
 	txn = s.beginTxn()
 	snapshot := txn.GetSnapshot()
+	// generate cache by BatchGet
 	_, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("x"), []byte("y")})
 	s.Nil(err)
+	// generate cache by Get
+	_, err = snapshot.Get(context.Background(), []byte("a"))
+	s.Nil(err)
+	_, err = snapshot.Get(context.Background(), []byte("b"))
+	s.True(error.IsErrNotFound(err))
 
 	s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
-	ctx := context.WithValue(context.Background(), contextKey("TestSnapshotCache"), true)
-	_, err = snapshot.Get(ctx, []byte("x"))
-	s.Nil(err)
+	ctx := context.WithValue(context.Background(), "TestSnapshotCache", true)
 
+	// check cache from BatchGet
+	value, err := snapshot.Get(ctx, []byte("x"))
+	s.Nil(err)
+	s.Equal([]byte("x"), value)
 	_, err = snapshot.Get(ctx, []byte("y"))
+	s.True(error.IsErrNotFound(err))
+
+	// check cache from Get
+	value, err = snapshot.Get(ctx, []byte("a"))
+	s.Nil(err)
+	s.Equal([]byte("a"), value)
+	_, err = snapshot.Get(ctx, []byte("b"))
 	s.True(error.IsErrNotFound(err))
 
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
@@ -321,25 +336,15 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	}
 	snapshot.MergeExecDetail(detail)
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
-		"total_process_time: 100ms, total_wait_time: 100ms, " +
-		"scan_detail: {total_process_keys: 10, " +
-		"total_process_keys_size: 10, " +
-		"total_keys: 15, " +
-		"get_snapshot_time: 500ns, " +
-		"rocksdb: {delete_skipped_count: 5, " +
-		"key_skipped_count: 1, " +
-		"block: {cache_hit_count: 10, read_count: 20, read_byte: 15 Bytes}}}"
+		"time_detail: {total_process_time: 100ms, total_wait_time: 100ms}, " +
+		"scan_detail: {total_process_keys: 10, total_process_keys_size: 10, total_keys: 15, get_snapshot_time: 500ns, " +
+		"rocksdb: {delete_skipped_count: 5, key_skipped_count: 1, block: {cache_hit_count: 10, read_count: 20, read_byte: 15 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
 	snapshot.MergeExecDetail(detail)
 	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
-		"total_process_time: 200ms, total_wait_time: 200ms, " +
-		"scan_detail: {total_process_keys: 20, " +
-		"total_process_keys_size: 20, " +
-		"total_keys: 30, " +
-		"get_snapshot_time: 1µs, " +
-		"rocksdb: {delete_skipped_count: 10, " +
-		"key_skipped_count: 2, " +
-		"block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
+		"time_detail: {total_process_time: 200ms, total_wait_time: 200ms}, " +
+		"scan_detail: {total_process_keys: 20, total_process_keys_size: 20, total_keys: 30, get_snapshot_time: 1µs, " +
+		"rocksdb: {delete_skipped_count: 10, key_skipped_count: 2, block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
 }
 
