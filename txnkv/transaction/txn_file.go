@@ -45,8 +45,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// BuildTxnFileMaxBackoff is max sleep time to build TxnFile.
-var BuildTxnFileMaxBackoff = atomicutil.NewUint64(60000)
+var (
+	// BuildTxnFileMaxBackoff is max sleep time to build TxnFile.
+	BuildTxnFileMaxBackoff = atomicutil.NewUint64(60000)
+
+	buildChunkErrMsg string = "txn file: build chunk failed"
+)
 
 const PreSplitRegionChunks = 4
 
@@ -740,8 +744,8 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 			ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(i-1))
 			results, err = workerPool.BuildChunk(buf, ran, bo, respCh, results)
 			if err != nil {
-				logutil.Logger(bo.GetCtx()).Error("txn file: build chunk failed", zap.Error(err))
-				return errors.Wrap(err, "txn file: build chunk failed")
+				logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(err))
+				return errors.Wrap(err, buildChunkErrMsg)
 			}
 			chunkSmallest = key
 			buf = make([]byte, 0, capacity)
@@ -758,16 +762,16 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
 		results, err = workerPool.BuildChunk(buf, ran, bo, respCh, results)
 		if err != nil {
-			logutil.Logger(bo.GetCtx()).Error("txn file: build chunk failed", zap.Error(err))
-			return errors.Wrap(err, "txn file: build chunk failed")
+			logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(err))
+			return errors.Wrap(err, buildChunkErrMsg)
 		}
 	}
 
 	for i := len(results); i < chunksCount; i++ {
 		r := <-respCh
 		if r.err != nil {
-			logutil.Logger(bo.GetCtx()).Error("txn file: build chunk failed", zap.Error(r.err))
-			return errors.Wrap(r.err, "txn file: build chunk failed")
+			logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(r.err))
+			return errors.Wrap(r.err, buildChunkErrMsg)
 		}
 		results = append(results, r)
 	}

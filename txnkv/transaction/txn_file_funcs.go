@@ -21,7 +21,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
-	zap "go.uber.org/zap"
+	"go.uber.org/zap"
 )
 
 type buildChunkResp struct {
