@@ -462,5 +462,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
 	flushed, err = txn.GetMemBuffer().Flush(true)
 	s.Nil(err)
 	s.True(flushed)
-	s.NotNil(txn.GetMemBuffer().FlushWait())
+	err = txn.GetMemBuffer().FlushWait()
+	s.NotNil(err)
+	s.ErrorContains(err, "ttl manager is closed")
 }
