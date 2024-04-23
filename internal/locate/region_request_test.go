@@ -851,13 +851,13 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	s.Contains(expecteds, reqStats.String())
 	s.Contains(expecteds, reqStats2.String())
 
-	access := &AccessStats{}
-	access.recordRPCAccessInfo(true, false, 1, 2, "data_not_ready")
-	access.recordRPCAccessInfo(false, false, 3, 4, "not_leader")
-	access.recordRPCAccessInfo(false, true, 5, 6, "server_is_Busy")
+	access := &ReplicaAccessStats{}
+	access.recordReplicaAccessInfo(true, false, 1, 2, "data_not_ready")
+	access.recordReplicaAccessInfo(false, false, 3, 4, "not_leader")
+	access.recordReplicaAccessInfo(false, true, 5, 6, "server_is_Busy")
 	s.Equal("{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}", access.String())
 	for i := 0; i < 20; i++ {
-		access.recordRPCAccessInfo(false, false, 5, 6, "data_not_ready")
+		access.recordReplicaAccessInfo(false, false, 5, 6, "data_not_ready")
 	}
 	s.Equal("{stale_read, peer:1, store:2, err:data_not_ready}, "+
 		"{peer:3, store:4, err:not_leader}, "+

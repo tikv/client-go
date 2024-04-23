@@ -113,7 +113,7 @@ type RegionRequestSender struct {
 	failStoreIDs      map[uint64]struct{}
 	failProxyStoreIDs map[uint64]struct{}
 	Stats             *RegionRequestRuntimeStats
-	AccessStats       *AccessStats
+	AccessStats       *ReplicaAccessStats
 }
 
 func (s *RegionRequestSender) String() string {
@@ -245,14 +245,14 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 	}
 }
 
-// AccessStats records the first 20 access info, after more than 20 records, count them by `OverflowCount` field.
-type AccessStats struct {
-	AccessInfos   []AccessInfo
+// ReplicaAccessStats records the first 20 access info, after more than 20 records, count them by `OverflowCount` field.
+type ReplicaAccessStats struct {
+	AccessInfos   []ReplicaAccessInfo
 	OverflowCount int
 }
 
-// AccessInfo indicates the access path info of a request.
-type AccessInfo struct {
+// ReplicaAccessInfo indicates the access path info of a request.
+type ReplicaAccessInfo struct {
 	StaleRead   bool
 	ReplicaRead bool
 	Peer        uint64
@@ -260,9 +260,9 @@ type AccessInfo struct {
 	Err         string
 }
 
-func (s *AccessStats) recordRPCAccessInfo(staleRead, replicaRead bool, peerID, storeID uint64, err string) {
+func (s *ReplicaAccessStats) recordReplicaAccessInfo(staleRead, replicaRead bool, peerID, storeID uint64, err string) {
 	if len(s.AccessInfos) < 20 {
-		s.AccessInfos = append(s.AccessInfos, AccessInfo{
+		s.AccessInfos = append(s.AccessInfos, ReplicaAccessInfo{
 			StaleRead:   staleRead,
 			ReplicaRead: replicaRead,
 			Peer:        peerID,
@@ -275,7 +275,7 @@ func (s *AccessStats) recordRPCAccessInfo(staleRead, replicaRead bool, peerID, s
 }
 
 // String implements fmt.Stringer interface.
-func (s *AccessStats) String() string {
+func (s *ReplicaAccessStats) String() string {
 	if s == nil || len(s.AccessInfos) == 0 {
 		return ""
 	}
@@ -368,9 +368,9 @@ func (s *RegionRequestSender) recordRPCAccessInfo(req *tikvrpc.Request, rpcCtx *
 		return
 	}
 	if s.AccessStats == nil {
-		s.AccessStats = &AccessStats{}
+		s.AccessStats = &ReplicaAccessStats{}
 	}
-	s.AccessStats.recordRPCAccessInfo(req.StaleRead, req.ReplicaRead, rpcCtx.Peer.GetId(), rpcCtx.Store.storeID, err)
+	s.AccessStats.recordReplicaAccessInfo(req.StaleRead, req.ReplicaRead, rpcCtx.Peer.GetId(), rpcCtx.Store.storeID, err)
 }
 
 type replica struct {
