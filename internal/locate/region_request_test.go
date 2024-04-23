@@ -828,3 +828,56 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestSenderString() {
 	sender.SendReqCtx(s.bo, tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{}), loc.Region, time.Second, tikvrpc.TiKV)
 	s.Equal("{rpcError:<nil>, replicaSelector: <nil>}", sender.String())
 }
+
+func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
+	reqStats := NewRegionRequestRuntimeStats()
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Second)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Millisecond)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdCop, time.Second*2)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdCop, time.Millisecond*200)
+	reqStats.RecordRPCErrorStats("context canceled")
+	reqStats.RecordRPCErrorStats("context canceled")
+	reqStats.RecordRPCErrorStats("region_not_found")
+	reqStats.Merge(NewRegionRequestRuntimeStats())
+	reqStats2 := NewRegionRequestRuntimeStats()
+	reqStats2.Merge(reqStats)
+	expecteds := []string{
+		// Since map iteration order is random, we need to check all possible orders.
+		"Get:{num_rpc:2, total_time:1s},Cop:{num_rpc:2, total_time:2.2s}, rpc_errors:{region_not_found:1, context canceled:2}",
+		"Get:{num_rpc:2, total_time:1s},Cop:{num_rpc:2, total_time:2.2s}, rpc_errors:{context canceled:2, region_not_found:1}",
+		"Cop:{num_rpc:2, total_time:2.2s},Get:{num_rpc:2, total_time:1s}, rpc_errors:{context canceled:2, region_not_found:1}",
+		"Cop:{num_rpc:2, total_time:2.2s},Get:{num_rpc:2, total_time:1s}, rpc_errors:{region_not_found:1, context canceled:2}",
+	}
+	s.Contains(expecteds, reqStats.String())
+	s.Contains(expecteds, reqStats2.String())
+
+	access := &AccessStats{}
+	access.recordRPCAccessInfo(true, false, 1, 2, "data_not_ready")
+	access.recordRPCAccessInfo(false, false, 3, 4, "not_leader")
+	access.recordRPCAccessInfo(false, true, 5, 6, "server_is_Busy")
+	s.Equal("{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}", access.String())
+	for i := 0; i < 20; i++ {
+		access.recordRPCAccessInfo(false, false, 5, 6, "data_not_ready")
+	}
+	s.Equal("{stale_read, peer:1, store:2, err:data_not_ready}, "+
+		"{peer:3, store:4, err:not_leader}, "+
+		"{replica_read, peer:5, store:6, err:server_is_Busy}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"{peer:5, store:6, err:data_not_ready}, "+
+		"overflow_count:3", access.String())
+}

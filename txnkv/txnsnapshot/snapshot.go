@@ -408,7 +408,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
 	if s.mu.stats != nil {
-		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
+		cli.Stats = locate.NewRegionRequestRuntimeStats()
 		defer func() {
 			s.mergeRegionRequestStats(cli.Stats)
 		}()
@@ -657,7 +657,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, true)
 	s.mu.RLock()
 	if s.mu.stats != nil {
-		cli.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats)
+		cli.Stats = locate.NewRegionRequestRuntimeStats()
 		defer func() {
 			s.mergeRegionRequestStats(cli.Stats)
 		}()
@@ -1075,25 +1075,17 @@ func (s *KVSnapshot) recordBackoffInfo(bo *retry.Backoffer) {
 	}
 }
 
-func (s *KVSnapshot) mergeRegionRequestStats(stats map[tikvrpc.CmdType]*locate.RPCRuntimeStats) {
+func (s *KVSnapshot) mergeRegionRequestStats(rpcStats *locate.RegionRequestRuntimeStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.stats == nil {
 		return
 	}
-	if s.mu.stats.rpcStats.Stats == nil {
-		s.mu.stats.rpcStats.Stats = stats
+	if s.mu.stats.rpcStats == nil {
+		s.mu.stats.rpcStats = rpcStats
 		return
 	}
-	for k, v := range stats {
-		stat, ok := s.mu.stats.rpcStats.Stats[k]
-		if !ok {
-			s.mu.stats.rpcStats.Stats[k] = v
-			continue
-		}
-		stat.Count += v.Count
-		stat.Consume += v.Consume
-	}
+	s.mu.stats.rpcStats.Merge(rpcStats)
 }
 
 // SetKVReadTimeout sets timeout for individual KV read operations under this snapshot
@@ -1128,7 +1120,7 @@ func (s *KVSnapshot) SetPipelined(ts uint64) {
 
 // SnapshotRuntimeStats records the runtime stats of snapshot.
 type SnapshotRuntimeStats struct {
-	rpcStats          locate.RegionRequestRuntimeStats
+	rpcStats          *locate.RegionRequestRuntimeStats
 	backoffSleepMS    map[string]int
 	backoffTimes      map[string]int
 	scanDetail        *util.ScanDetail
@@ -1138,11 +1130,9 @@ type SnapshotRuntimeStats struct {
 
 // Clone implements the RuntimeStats interface.
 func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
-	newRs := SnapshotRuntimeStats{rpcStats: locate.NewRegionRequestRuntimeStats()}
-	if rs.rpcStats.Stats != nil {
-		for k, v := range rs.rpcStats.Stats {
-			newRs.rpcStats.Stats[k] = v
-		}
+	newRs := SnapshotRuntimeStats{}
+	if rs.rpcStats != nil {
+		newRs.rpcStats = rs.rpcStats.Clone()
 	}
 	if len(rs.backoffSleepMS) > 0 {
 		newRs.backoffSleepMS = make(map[string]int)
@@ -1172,9 +1162,9 @@ func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
 
 // Merge implements the RuntimeStats interface.
 func (rs *SnapshotRuntimeStats) Merge(other *SnapshotRuntimeStats) {
-	if other.rpcStats.Stats != nil {
-		if rs.rpcStats.Stats == nil {
-			rs.rpcStats.Stats = make(map[tikvrpc.CmdType]*locate.RPCRuntimeStats, len(other.rpcStats.Stats))
+	if other.rpcStats != nil {
+		if rs.rpcStats == nil {
+			rs.rpcStats = locate.NewRegionRequestRuntimeStats()
 		}
 		rs.rpcStats.Merge(other.rpcStats)
 	}
@@ -1197,7 +1187,9 @@ func (rs *SnapshotRuntimeStats) Merge(other *SnapshotRuntimeStats) {
 // String implements fmt.Stringer interface.
 func (rs *SnapshotRuntimeStats) String() string {
 	var buf bytes.Buffer
-	buf.WriteString(rs.rpcStats.String())
+	if rs.rpcStats != nil {
+		buf.WriteString(rs.rpcStats.String())
+	}
 	for k, v := range rs.backoffTimes {
 		if buf.Len() > 0 {
 			buf.WriteByte(',')
@@ -1221,11 +1213,11 @@ func (rs *SnapshotRuntimeStats) String() string {
 
 // GetCmdRPCCount returns the count of the corresponding kind of rpc requests
 func (rs *SnapshotRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) int64 {
-	if rs.rpcStats.Stats == nil {
+	if rs.rpcStats == nil || len(rs.rpcStats.RPCStats) == 0 {
 		return 0
 	}
 
-	stats, ok := rs.rpcStats.Stats[cmd]
+	stats, ok := rs.rpcStats.RPCStats[cmd]
 	if !ok {
 		return 0
 	}
