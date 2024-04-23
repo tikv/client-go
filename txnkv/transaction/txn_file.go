@@ -744,7 +744,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 				return errors.Wrap(err, "txn file: build chunk failed")
 			}
 			chunkSmallest = key
-			buf = buf[:0]
+			buf = make([]byte, 0, capacity)
 		}
 		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(key)))
 		buf = append(buf, key...)

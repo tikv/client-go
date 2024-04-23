@@ -167,7 +167,7 @@ func DefaultTiKVClient() TiKVClient {
 
 		ResolveLockLiteThreshold: 16,
 
-		TxnChunkWriterConcurrency: 32,
+		TxnChunkWriterConcurrency: 4,
 		TxnChunkMaxSize:           128 * 1024 * 1024,
 	}
 }
