@@ -754,7 +754,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 				return errors.Wrap(err, "build txn file failed")
 			}
 			chunkSmallest = key
-			buf = buf[:0]
+			buf = make([]byte, 0, capacity)
 		}
 		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(key)))
 		buf = append(buf, key...)
@@ -789,7 +789,9 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		zap.Uint64("startTS", c.startTS),
 		zap.Int("mutationsLen", mutations.Len()),
 		zap.Int("totalChunksSize", totalSize),
-		zap.Any("chunkIDs", c.txnFileCtx.slice.chunkIDs))
+		zap.Any("chunkIDs", c.txnFileCtx.slice.chunkIDs),
+		zap.Stringers("chunkRanges", c.txnFileCtx.slice.chunkRanges),
+		zap.String("primaryKey", kv.StrKey(c.txnFileCtx.slice.chunkRanges[0].smallest)))
 	return nil
 }
 
