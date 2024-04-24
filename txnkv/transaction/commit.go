@@ -35,6 +35,7 @@
 package transaction
 
 import (
+	"bytes"
 	"encoding/hex"
 	"time"
 
@@ -158,7 +159,17 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			if rejected := keyErr.GetCommitTsExpired(); rejected != nil {
 				logutil.Logger(bo.GetCtx()).Info("2PC commitTS rejected by TiKV, retry with a newer commitTS",
 					zap.Uint64("txnStartTS", c.startTS),
-					zap.Stringer("info", logutil.Hex(rejected)))
+					zap.Stringer("info", logutil.Hex(rejected)),
+				)
+
+				if !batch.isPrimary || !bytes.Equal(rejected.Key, c.primary()) {
+					logutil.Logger(bo.GetCtx()).Error("2PC commitTS rejected by TiKV, but the key is not the primary key",
+						zap.Uint64("txnStartTS", c.startTS),
+						zap.String("key", hex.EncodeToString(rejected.Key)),
+						zap.String("primary", hex.EncodeToString(c.primary())),
+						zap.Bool("batchIsPrimary", batch.isPrimary))
+					return errors.New("2PC commitTS rejected by TiKV, but the key is not the primary key")
+				}
 
 				// Do not retry for a txn which has a too large MinCommitTs
 				// 3600000 << 18 = 943718400000
