@@ -1774,7 +1774,9 @@ func (s *RegionRequestSender) SendReqCtx(
 				retryTimes++
 				continue
 			}
-			s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, time.Since(startTime))
+			if time.Since(startTime) > slowLogSendReqTime {
+				s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, time.Since(startTime))
+			}
 		} else {
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess(req)
