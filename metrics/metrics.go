@@ -229,7 +229,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Namespace:   namespace,
 			Subsystem:   subsystem,
 			Name:        "rpc_err_total",
-			Help:        "Counter of region errors.",
+			Help:        "Counter of rpc errors.",
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore})
 
