@@ -1158,7 +1158,7 @@ func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx, isPipelined
 	tm.ch = make(chan struct{})
 	tm.lockCtx = lockCtx
 
-	go keepAlive(c, tm.ch, c.primary(), lockCtx, isPipelinedTxn)
+	go keepAlive(c, tm.ch, tm, c.primary(), lockCtx, isPipelinedTxn)
 }
 
 func (tm *ttlManager) close() {
@@ -1180,7 +1180,7 @@ const pessimisticLockMaxBackoff = 20000
 const maxConsecutiveFailure = 10
 
 func keepAlive(
-	c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte,
+	c *twoPhaseCommitter, closeCh chan struct{}, tm *ttlManager, primaryKey []byte,
 	lockCtx *kv.LockCtx, isPipelinedTxn bool,
 ) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
@@ -1193,6 +1193,7 @@ func keepAlive(
 	keepFail := 0
 	for {
 		select {
+		// because ttlManager can be reset, closeCh may not be equal to tm.ch.
 		case <-closeCh:
 			return
 		case <-ticker.C:
@@ -1254,6 +1255,12 @@ func keepAlive(
 						zap.Uint64("txnStartTS", c.startTS),
 						zap.Bool("isPipelinedTxn", isPipelinedTxn),
 					)
+					if isPipelinedTxn {
+						// pipelined DML cannot run without the ttlManager.
+						// Once the ttl manager fails, the transaction should be rolled back to avoid writing useless locks.
+						// close the ttlManager and the further flush will stop.
+						tm.close()
+					}
 					return
 				}
 				continue
