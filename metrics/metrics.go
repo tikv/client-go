@@ -50,6 +50,7 @@ var (
 	TiKVCoprocessorHistogram                 *prometheus.HistogramVec
 	TiKVLockResolverCounter                  *prometheus.CounterVec
 	TiKVRegionErrorCounter                   *prometheus.CounterVec
+	TiKVRPCErrorCounter                      *prometheus.CounterVec
 	TiKVTxnWriteKVCountHistogram             *prometheus.HistogramVec
 	TiKVTxnWriteSizeHistogram                *prometheus.HistogramVec
 	TiKVRawkvCmdHistogram                    *prometheus.HistogramVec
@@ -221,7 +222,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "region_err_total",
 			Help:        "Counter of region errors.",
 			ConstLabels: constLabels,
-		}, []string{LblType, LblScope})
+		}, []string{LblType, LblStore})
+
+	TiKVRPCErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "rpc_err_total",
+			Help:        "Counter of region errors.",
+			ConstLabels: constLabels,
+		}, []string{LblType, LblStore})
 
 	TiKVTxnWriteKVCountHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -805,6 +815,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVRegionErrorCounter)
+	prometheus.MustRegister(TiKVRPCErrorCounter)
 	prometheus.MustRegister(TiKVTxnWriteKVCountHistogram)
 	prometheus.MustRegister(TiKVTxnWriteSizeHistogram)
 	prometheus.MustRegister(TiKVRawkvCmdHistogram)

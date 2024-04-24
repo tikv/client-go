@@ -2030,13 +2030,15 @@ func (s *RegionRequestSender) sendReqToRegion(
 	if err != nil {
 		s.rpcError = err
 		if s.Stats != nil {
-			s.Stats.RecordRPCErrorStats(errors.Cause(err).Error())
-			s.recordRPCAccessInfo(req, rpcCtx, errors.Cause(err).Error())
+			errStr := errors.Cause(err).Error()
+			s.Stats.RecordRPCErrorStats(errStr)
+			s.recordRPCAccessInfo(req, rpcCtx, errStr)
 		}
 		// Because in rpc logic, context.Cancel() will be transferred to rpcContext.Cancel error. For rpcContext cancel,
 		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
 		// we shouldn't retry the request, it will go to backoff and hang in retry logic.
 		if ctx.Err() != nil && errors.Cause(ctx.Err()) == context.Canceled {
+			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(rpcCtx)).Inc()
 			return nil, false, errors.WithStack(ctx.Err())
 		}
 
@@ -2051,6 +2053,13 @@ func (s *RegionRequestSender) sendReqToRegion(
 		return nil, true, nil
 	}
 	return
+}
+
+func storeIDLabel(rpcCtx *RPCContext) string {
+	if rpcCtx != nil && rpcCtx.Store != nil {
+		return strconv.FormatUint(rpcCtx.Store.storeID, 10)
+	}
+	return "nil"
 }
 
 func (s *RegionRequestSender) getStoreToken(st *Store, limit int64) error {
@@ -2081,19 +2090,25 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
+	storeLabel := storeIDLabel(ctx)
 	// If it failed because the context is cancelled by ourself, don't retry.
 	if errors.Cause(err) == context.Canceled {
+		metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeLabel).Inc()
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
+		metrics.TiKVRPCErrorCounter.WithLabelValues("shutting-down", storeLabel).Inc()
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
 	} else if isCauseByDeadlineExceeded(err) {
 		if s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
+			errLabel := "read-timeout-" + strconv.FormatUint(req.MaxExecutionDurationMs, 10) + "ms"
+			metrics.TiKVRPCErrorCounter.WithLabelValues(errLabel, storeLabel).Inc()
 			return nil
 		}
 	}
 	if status.Code(errors.Cause(err)) == codes.Canceled {
 		select {
 		case <-bo.GetCtx().Done():
+			metrics.TiKVRPCErrorCounter.WithLabelValues("grpc-canceled", storeLabel).Inc()
 			return errors.WithStack(err)
 		default:
 			// If we don't cancel, but the error code is Canceled, it may be canceled by keepalive or gRPC remote.
@@ -2111,6 +2126,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 			}
 		}
 	}
+	metrics.TiKVRPCErrorCounter.WithLabelValues(errors.Cause(err).Error(), storeLabel).Inc()
 
 	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
 		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
@@ -2264,15 +2280,11 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	regionErrLabel := regionErrorToLabel(regionErr)
+	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrLabel, storeIDLabel(ctx)).Inc()
 	if s.Stats != nil {
 		s.Stats.RecordRPCErrorStats(regionErrLabel)
 		s.recordRPCAccessInfo(req, ctx, regionErrorToLogging(regionErr, regionErrLabel))
 	}
-	isInternal := false
-	if req != nil {
-		isInternal = util.IsInternalRequest(req.GetRequestSource())
-	}
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrLabel, strconv.FormatBool(isInternal)).Inc()
 
 	// NOTE: Please add the region error handler in the same order of errorpb.Error.
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
