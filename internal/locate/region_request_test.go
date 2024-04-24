@@ -840,7 +840,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	reqStats.RecordRPCErrorStats("region_not_found")
 	reqStats.Merge(NewRegionRequestRuntimeStats())
 	reqStats2 := NewRegionRequestRuntimeStats()
-	reqStats2.Merge(reqStats)
+	reqStats2.Merge(reqStats.Clone())
 	expecteds := []string{
 		// Since map iteration order is random, we need to check all possible orders.
 		"Get:{num_rpc:2, total_time:1s},Cop:{num_rpc:2, total_time:2.2s}, rpc_errors:{region_not_found:1, context canceled:2}",
