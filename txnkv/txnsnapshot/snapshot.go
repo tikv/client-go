@@ -1007,6 +1007,11 @@ func (s *KVSnapshot) SnapCache() map[string][]byte {
 
 // UpdateSnapshotCache sets the values of cache, for further fast read with same keys.
 func (s *KVSnapshot) UpdateSnapshotCache(keys [][]byte, m map[string][]byte) {
+	// s.version == math.MaxUint64 is used in special transaction, which always read the latest data.
+	// do not cache it to avoid anomaly.
+	if s.version == math.MaxUint64 {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.cached == nil {
