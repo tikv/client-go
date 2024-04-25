@@ -496,12 +496,12 @@ func (s *baseReplicaSelector) String() string {
 		}
 		for _, replica := range s.replicas {
 			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, "+
-				"attempts: %v, attempts_time: %vms, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
+				"attempts: %v, attempts_time: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
 				replica.peer.GetId(),
 				replica.store.storeID,
 				replica.isEpochStale(),
 				replica.attempts,
-				replica.attemptedTime.Milliseconds(),
+				util.FormatDuration(replica.attemptedTime),
 				replica.getEpoch(),
 				atomic.LoadUint32(&replica.store.epoch),
 				replica.store.getResolveState(),
