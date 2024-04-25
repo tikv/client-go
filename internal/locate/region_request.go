@@ -127,6 +127,8 @@ func (s *RegionRequestSender) String() string {
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
 	RPCStats map[tikvrpc.CmdType]*RPCRuntimeStats
+	// ErrStats record the region error and rpc error, and their count.
+	// Attention: avoid too many error types, ErrStats only record the first 32 different errors.
 	ErrStats map[string]int
 }
 
@@ -158,13 +160,16 @@ func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d
 	stat.Consume += int64(d)
 }
 
-// RecordRPCErrorStats uses to record the rpc error info and count.
-func (r *RegionRequestRuntimeStats) RecordRPCErrorStats(err string) {
+// RecordRPCErrorStats uses to record the request error(region error label and rpc error) info and count.
+func (r *RegionRequestRuntimeStats) RecordRPCErrorStats(errLabel string) {
 	if r.ErrStats == nil {
 		// lazy init to avoid unnecessary allocation.
 		r.ErrStats = make(map[string]int)
 	}
-	r.ErrStats[err]++
+	if len(r.ErrStats) < 32 {
+		// Avoid too many error.
+		r.ErrStats[errLabel]++
+	}
 }
 
 // String implements fmt.Stringer interface.
