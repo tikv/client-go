@@ -60,8 +60,8 @@ func (s StoreProbe) NewLockResolver() LockResolverProbe {
 }
 
 // Begin starts a transaction.
-func (s StoreProbe) Begin() (transaction.TxnProbe, error) {
-	txn, err := s.KVStore.Begin()
+func (s StoreProbe) Begin(opts ...TxnOption) (transaction.TxnProbe, error) {
+	txn, err := s.KVStore.Begin(opts...)
 	return transaction.TxnProbe{KVTxn: txn}, err
 }
 
