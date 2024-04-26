@@ -40,6 +40,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -850,6 +851,11 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	}
 	s.Contains(expecteds, reqStats.String())
 	s.Contains(expecteds, reqStats2.String())
+	for i := 0; i < 50; i++ {
+		reqStats.RecordRPCErrorStats("err_" + strconv.Itoa(i))
+	}
+	s.Regexp("{err_.*:1.*, other_error:36}", reqStats.RequestErrorStats.String())
+	s.Regexp(".*num_rpc.*total_time.*, rpc_errors:{err.*, other_error:36}", reqStats.String())
 
 	access := &ReplicaAccessStats{}
 	access.recordReplicaAccessInfo(true, false, 1, 2, "data_not_ready")
@@ -857,27 +863,12 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	access.recordReplicaAccessInfo(false, true, 5, 6, "server_is_Busy")
 	s.Equal("{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}", access.String())
 	for i := 0; i < 20; i++ {
-		access.recordReplicaAccessInfo(false, false, 5, 6, "data_not_ready")
+		access.recordReplicaAccessInfo(false, false, 5+uint64(i)%2, 6, "server_is_Busy")
 	}
-	s.Equal("{stale_read, peer:1, store:2, err:data_not_ready}, "+
-		"{peer:3, store:4, err:not_leader}, "+
-		"{replica_read, peer:5, store:6, err:server_is_Busy}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"{peer:5, store:6, err:data_not_ready}, "+
-		"overflow_count:3", access.String())
+	expecteds = []string{
+		// Since map iteration order is random, we need to check all possible orders.
+		"{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}, {peer:5, store:6, err:server_is_Busy}, {peer:6, store:6, err:server_is_Busy}, overflow_count:{{peer:5, error_stats:{server_is_Busy:9}}, {peer:6, error_stats:{server_is_Busy:9}}}",
+		"{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}, {peer:5, store:6, err:server_is_Busy}, {peer:6, store:6, err:server_is_Busy}, overflow_count:{{peer:6, error_stats:{server_is_Busy:9}}, {peer:5, error_stats:{server_is_Busy:9}}}",
+	}
+	s.Contains(expecteds, access.String())
 }
