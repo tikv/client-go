@@ -130,9 +130,10 @@ type RegionRequestRuntimeStats struct {
 	RequestErrorStats
 }
 
+// RequestErrorStats records the request error(region error and rpc error) count.
 type RequestErrorStats struct {
 	// ErrStats record the region error and rpc error, and their count.
-	// Attention: avoid too many error types, ErrStats only record the first 32 different errors.
+	// Attention: avoid too many error types, ErrStats only record the first 16 different errors.
 	ErrStats    map[string]int
 	OtherErrCnt int
 }
@@ -268,8 +269,9 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 
 // ReplicaAccessStats records the replica access info.
 type ReplicaAccessStats struct {
-	// AccessInfos records the first 12 access info, after more than 12 records, count them by `OverflowAccessStat` field.
-	AccessInfos        []ReplicaAccessInfo
+	// AccessInfos records the access info
+	AccessInfos []ReplicaAccessInfo
+	// avoid to consume too much memory, after more than 5 records, count them by peerID in `OverflowAccessStat` map.
 	OverflowAccessStat map[uint64]*RequestErrorStats
 }
 
@@ -284,11 +286,8 @@ type ReplicaAccessInfo struct {
 type ReqReadType byte
 
 const (
-	// ReplicaReadLeader stands for 'read from leader'.
 	ReqLeader ReqReadType = iota
-	// ReplicaReadFollower stands for 'read from follower'.
 	ReqReplicaRead
-	// ReplicaReadMixed stands for 'read from leader and follower and learner'.
 	ReqStaleRead
 )
 
