@@ -50,7 +50,6 @@ func BuildKeyspaceName(name string) string {
 
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
-	keyspaceID   KeyspaceID
 	prefix       []byte
 	endKey       []byte
 	memCodec     memCodec
@@ -69,7 +68,6 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 		return nil, err
 	}
 	codec := &codecV2{
-		keyspaceID: KeyspaceID(keyspaceID),
 		// Region keys in CodecV2 are always encoded in memory comparable form.
 		memCodec:     &memComparableCodec{},
 		keyspaceMeta: keyspaceMeta,
@@ -110,7 +108,7 @@ func (c *codecV2) GetKeyspace() []byte {
 }
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
-	return c.keyspaceID
+	return KeyspaceID(c.keyspaceMeta.Id)
 }
 
 func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
