@@ -42,7 +42,7 @@ func (suite *testCodecV2Suite) SetupSuite() {
 	testKeyspaceMeta := keyspacepb.KeyspaceMeta{
 		Id: testKeyspaceID,
 	}
-	codec, err := NewCodecV2(ModeRaw, testKeyspaceMeta)
+	codec, err := NewCodecV2(ModeRaw, &testKeyspaceMeta)
 	suite.NoError(err)
 	suite.Equal(keyspacePrefix, codec.GetKeyspace())
 	suite.codec = codec.(*codecV2)
@@ -164,11 +164,11 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 			Id: testCase.keyspaceID,
 		}
 		if testCase.shouldErr {
-			_, err := NewCodecV2(testCase.mode, testKeyspaceMeta)
+			_, err := NewCodecV2(testCase.mode, &testKeyspaceMeta)
 			re.Error(err)
 			continue
 		}
-		codec, err := NewCodecV2(testCase.mode, testKeyspaceMeta)
+		codec, err := NewCodecV2(testCase.mode, &testKeyspaceMeta)
 		re.NoError(err)
 
 		v2Codec, ok := codec.(*codecV2)
