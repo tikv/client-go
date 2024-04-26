@@ -781,6 +781,10 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		}
 		results = append(results, r)
 	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return bytes.Compare(results[i].chunkRange.smallest, results[j].chunkRange.smallest) < 0
+	})
 	for _, r := range results {
 		c.txnFileCtx.slice.append(r.chunkId, r.chunkRange)
 	}

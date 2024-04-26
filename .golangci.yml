@@ -19,3 +19,9 @@ linters:
     - typecheck
     - unconvert
     - unused
+
+linters-settings:
+  depguard:
+    rules:
+      main:
+        list-mode: lax
