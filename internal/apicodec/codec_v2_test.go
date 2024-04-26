@@ -114,7 +114,7 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 	re := suite.Require()
 	testCases := []struct {
 		mode           Mode
-		keyspaceID     uint32
+		keyspaceMeta   keyspacepb.KeyspaceMeta
 		shouldErr      bool
 		expectedPrefix []byte
 		expectedEnd    []byte
@@ -122,57 +122,55 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 		{
 			mode: ModeRaw,
 			// A too large keyspaceID should result in error.
-			keyspaceID: math.MaxUint32,
-			shouldErr:  true,
+			keyspaceMeta: keyspacepb.KeyspaceMeta{Id: math.MaxUint32},
+			shouldErr:    true,
 		},
 		{
 			// Bad mode should result in error.
-			mode:       Mode(99),
-			keyspaceID: DefaultKeyspaceID,
-			shouldErr:  true,
+			mode:         Mode(99),
+			keyspaceMeta: keyspacepb.KeyspaceMeta{Id: DefaultKeyspaceID},
+			shouldErr:    true,
 		},
 		{
 			mode:           ModeRaw,
-			keyspaceID:     1<<24 - 2,
+			keyspaceMeta:   keyspacepb.KeyspaceMeta{Id: 1<<24 - 2},
 			expectedPrefix: []byte{'r', 255, 255, 254},
 			expectedEnd:    []byte{'r', 255, 255, 255},
 		},
 		{
 			// EndKey should be able to carry over increment from lower byte.
 			mode:           ModeTxn,
-			keyspaceID:     1<<8 - 1,
+			keyspaceMeta:   keyspacepb.KeyspaceMeta{Id: 1<<8 - 1},
 			expectedPrefix: []byte{'x', 0, 0, 255},
 			expectedEnd:    []byte{'x', 0, 1, 0},
 		},
 		{
 			// EndKey should be able to carry over increment from lower byte.
 			mode:           ModeTxn,
-			keyspaceID:     1<<16 - 1,
+			keyspaceMeta:   keyspacepb.KeyspaceMeta{Id: 1<<16 - 1},
 			expectedPrefix: []byte{'x', 0, 255, 255},
 			expectedEnd:    []byte{'x', 1, 0, 0},
 		},
 		{
 			// If prefix is the last keyspace, then end should change the mode byte.
 			mode:           ModeRaw,
-			keyspaceID:     1<<24 - 1,
+			keyspaceMeta:   keyspacepb.KeyspaceMeta{Id: 1<<24 - 1},
 			expectedPrefix: []byte{'r', 255, 255, 255},
 			expectedEnd:    []byte{'s', 0, 0, 0},
 		},
 	}
 	for _, testCase := range testCases {
-		testKeyspaceMeta := keyspacepb.KeyspaceMeta{
-			Id: testCase.keyspaceID,
-		}
 		if testCase.shouldErr {
-			_, err := NewCodecV2(testCase.mode, &testKeyspaceMeta)
+			_, err := NewCodecV2(testCase.mode, &testCase.keyspaceMeta)
 			re.Error(err)
 			continue
 		}
-		codec, err := NewCodecV2(testCase.mode, &testKeyspaceMeta)
+		codec, err := NewCodecV2(testCase.mode, &testCase.keyspaceMeta)
 		re.NoError(err)
 
 		v2Codec, ok := codec.(*codecV2)
 		re.True(ok)
+		re.Equal(&testCase.keyspaceMeta, v2Codec.keyspaceMeta)
 		re.Equal(testCase.expectedPrefix, v2Codec.prefix)
 		re.Equal(testCase.expectedEnd, v2Codec.endKey)
 	}
