@@ -6,6 +6,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/mpp"
@@ -38,7 +39,10 @@ func TestCodecV2(t *testing.T) {
 }
 
 func (suite *testCodecV2Suite) SetupSuite() {
-	codec, err := NewCodecV2(ModeRaw, testKeyspaceID)
+	testKeyspaceMeta := keyspacepb.KeyspaceMeta{
+		Id: testKeyspaceID,
+	}
+	codec, err := NewCodecV2(ModeRaw, testKeyspaceMeta)
 	suite.NoError(err)
 	suite.Equal(keyspacePrefix, codec.GetKeyspace())
 	suite.codec = codec.(*codecV2)
@@ -110,7 +114,7 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 	re := suite.Require()
 	testCases := []struct {
 		mode           Mode
-		spaceID        uint32
+		keyspaceID     uint32
 		shouldErr      bool
 		expectedPrefix []byte
 		expectedEnd    []byte
@@ -118,50 +122,53 @@ func (suite *testCodecV2Suite) TestNewCodecV2() {
 		{
 			mode: ModeRaw,
 			// A too large keyspaceID should result in error.
-			spaceID:   math.MaxUint32,
-			shouldErr: true,
+			keyspaceID: math.MaxUint32,
+			shouldErr:  true,
 		},
 		{
 			// Bad mode should result in error.
-			mode:      Mode(99),
-			spaceID:   DefaultKeyspaceID,
-			shouldErr: true,
+			mode:       Mode(99),
+			keyspaceID: DefaultKeyspaceID,
+			shouldErr:  true,
 		},
 		{
 			mode:           ModeRaw,
-			spaceID:        1<<24 - 2,
+			keyspaceID:     1<<24 - 2,
 			expectedPrefix: []byte{'r', 255, 255, 254},
 			expectedEnd:    []byte{'r', 255, 255, 255},
 		},
 		{
 			// EndKey should be able to carry over increment from lower byte.
 			mode:           ModeTxn,
-			spaceID:        1<<8 - 1,
+			keyspaceID:     1<<8 - 1,
 			expectedPrefix: []byte{'x', 0, 0, 255},
 			expectedEnd:    []byte{'x', 0, 1, 0},
 		},
 		{
 			// EndKey should be able to carry over increment from lower byte.
 			mode:           ModeTxn,
-			spaceID:        1<<16 - 1,
+			keyspaceID:     1<<16 - 1,
 			expectedPrefix: []byte{'x', 0, 255, 255},
 			expectedEnd:    []byte{'x', 1, 0, 0},
 		},
 		{
 			// If prefix is the last keyspace, then end should change the mode byte.
 			mode:           ModeRaw,
-			spaceID:        1<<24 - 1,
+			keyspaceID:     1<<24 - 1,
 			expectedPrefix: []byte{'r', 255, 255, 255},
 			expectedEnd:    []byte{'s', 0, 0, 0},
 		},
 	}
 	for _, testCase := range testCases {
+		testKeyspaceMeta := keyspacepb.KeyspaceMeta{
+			Id: testCase.keyspaceID,
+		}
 		if testCase.shouldErr {
-			_, err := NewCodecV2(testCase.mode, testCase.spaceID)
+			_, err := NewCodecV2(testCase.mode, testKeyspaceMeta)
 			re.Error(err)
 			continue
 		}
-		codec, err := NewCodecV2(testCase.mode, testCase.spaceID)
+		codec, err := NewCodecV2(testCase.mode, testKeyspaceMeta)
 		re.NoError(err)
 
 		v2Codec, ok := codec.(*codecV2)

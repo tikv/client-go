@@ -7,6 +7,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
@@ -49,16 +50,18 @@ func BuildKeyspaceName(name string) string {
 
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
-	keyspaceID KeyspaceID
-	prefix     []byte
-	endKey     []byte
-	memCodec   memCodec
+	keyspaceID   KeyspaceID
+	prefix       []byte
+	endKey       []byte
+	memCodec     memCodec
+	keyspaceMeta *keyspacepb.KeyspaceMeta
 }
 
 // NewCodecV2 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv2 format.
-func NewCodecV2(mode Mode, keyspaceID uint32) (Codec, error) {
-	if keyspaceID > maxKeyspaceID {
+func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error) {
+	keyspaceID := keyspaceMeta.Id
+	if keyspaceMeta.Id > maxKeyspaceID {
 		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
 	}
 	prefix, err := getIDByte(keyspaceID)
@@ -68,7 +71,8 @@ func NewCodecV2(mode Mode, keyspaceID uint32) (Codec, error) {
 	codec := &codecV2{
 		keyspaceID: KeyspaceID(keyspaceID),
 		// Region keys in CodecV2 are always encoded in memory comparable form.
-		memCodec: &memComparableCodec{},
+		memCodec:     &memComparableCodec{},
+		keyspaceMeta: keyspaceMeta,
 	}
 	codec.prefix = make([]byte, 4)
 	codec.endKey = make([]byte, 4)
@@ -107,6 +111,10 @@ func (c *codecV2) GetKeyspace() []byte {
 
 func (c *codecV2) GetKeyspaceID() KeyspaceID {
 	return c.keyspaceID
+}
+
+func (c *codecV2) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
+	return c.keyspaceMeta
 }
 
 func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
