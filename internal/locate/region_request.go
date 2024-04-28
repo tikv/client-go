@@ -1753,7 +1753,7 @@ func (s *RegionRequestSender) SendReqCtx(
 					return nil, nil, retryTimes, err
 				}
 				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
-					s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff)
+					s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 				}
 			}
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
@@ -1798,7 +1798,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		if err != nil {
 			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
 				msg := fmt.Sprintf("send request failed, err: %v", err.Error())
-				s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff)
+				s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 			}
 			return nil, nil, retryTimes, err
 		}
@@ -1834,7 +1834,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			if err != nil {
 				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
 					msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
-					s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff)
+					s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 				}
 				return nil, nil, retryTimes, err
 			}
@@ -1843,7 +1843,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				continue
 			}
 			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
-				s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff)
+				s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 			}
 		} else {
 			if s.replicaSelector != nil {
@@ -1857,7 +1857,7 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 }
 
-func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, cost time.Duration, currentBackoffMs int) {
+func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, cost time.Duration, currentBackoffMs int, timeout time.Duration) {
 	var builder strings.Builder
 	// build the total round stats string.
 	builder.WriteString("{total-backoff: ")
@@ -1885,6 +1885,10 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		builder.WriteString(s.AccessStats.String())
 		builder.WriteString("}")
 	}
+	builder.WriteString(", timeout: ")
+	builder.WriteString(util.FormatDuration(timeout))
+	builder.WriteString(", max-exec-timeout-ms: ")
+	builder.WriteString(util.FormatDuration(time.Duration(int64(req.Context.MaxExecutionDurationMs) * int64(time.Millisecond))))
 	builder.WriteString("}")
 	currentRoundStats := builder.String()
 	logutil.Logger(bo.GetCtx()).Info(msg,
@@ -1894,7 +1898,6 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		zap.String("replica-read-type", req.ReplicaReadType.String()),
 		zap.Bool("stale-read", req.StaleRead),
 		zap.Stringer("request-sender", s),
-		zap.Uint64("max-exec-timeout-ms", req.Context.MaxExecutionDurationMs),
 		zap.String("total-round-stats", totalRoundStats),
 		zap.String("current-round-stats", currentRoundStats))
 }
