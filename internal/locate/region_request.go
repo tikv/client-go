@@ -1887,7 +1887,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 	}
 	builder.WriteString(", timeout: ")
 	builder.WriteString(util.FormatDuration(timeout))
-	builder.WriteString(", max-exec-timeout-ms: ")
+	builder.WriteString(", req-max-exec-timeout: ")
 	builder.WriteString(util.FormatDuration(time.Duration(int64(req.Context.MaxExecutionDurationMs) * int64(time.Millisecond))))
 	builder.WriteString("}")
 	currentRoundStats := builder.String()
