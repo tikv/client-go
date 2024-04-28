@@ -60,7 +60,7 @@ type codecV2 struct {
 // keys and requests to and from APIv2 format.
 func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error) {
 	keyspaceID := keyspaceMeta.Id
-	if keyspaceMeta.Id > maxKeyspaceID {
+	if keyspaceID > maxKeyspaceID {
 		return nil, errors.Errorf("keyspaceID %d is out of range, maximum is %d", keyspaceID, maxKeyspaceID)
 	}
 	prefix, err := getIDByte(keyspaceID)
