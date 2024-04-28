@@ -1833,3 +1833,46 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
 
 	cancel()
 }
+
+func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
+	// init region cache
+	s.cache.LocateKey(s.bo, []byte("a"))
+
+	store1 := s.cache.getStoreByStoreID(s.store1)
+	s.Require().NotNil(store1)
+	s.Require().Equal(resolved, store1.getResolveState())
+
+	// setup mock liveness func
+	store1Liveness := uint32(unreachable)
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+		if s.storeID == store1.storeID {
+			return livenessState(atomic.LoadUint32(&store1Liveness))
+		}
+		return reachable
+	}
+	s.cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+
+	// start health check loop
+	atomic.StoreUint32(&store1.livenessState, store1Liveness)
+	go store1.checkUntilHealth(s.cache, livenessState(store1Liveness), time.Second)
+
+	// update store meta
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr+"'", store1.labels...)
+
+	// assert that the old store should be deleted and it's not reachable
+	s.Eventually(func() bool {
+		return store1.getResolveState() == deleted && store1.getLivenessState() != reachable
+	}, 3*time.Second, time.Second)
+
+	// assert that the new store should be added and it's also not reachable
+	newStore1 := s.cache.getStoreByStoreID(s.store1)
+	s.Require().NotEqual(reachable, newStore1.getLivenessState())
+
+	// recover store1
+	atomic.StoreUint32(&store1Liveness, uint32(reachable))
+
+	// assert that the new store should be reachable
+	s.Eventually(func() bool {
+		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+	}, 3*time.Second, time.Second)
+}
