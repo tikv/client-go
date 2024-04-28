@@ -854,8 +854,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 	for i := 0; i < 50; i++ {
 		reqStats.RecordRPCErrorStats("err_" + strconv.Itoa(i))
 	}
-	s.Regexp("{err_.*:1.*, other_error:36}", reqStats.RequestErrorStats.String())
-	s.Regexp(".*num_rpc.*total_time.*, rpc_errors:{err.*, other_error:36}", reqStats.String())
+	s.Regexp("{.*err_.*:1.*, other_error:36}", reqStats.RequestErrorStats.String())
+	s.Regexp(".*num_rpc.*total_time.*, rpc_errors:{.*err.*, other_error:36}", reqStats.String())
 
 	access := &ReplicaAccessStats{}
 	access.recordReplicaAccessInfo(true, false, 1, 2, "data_not_ready")
