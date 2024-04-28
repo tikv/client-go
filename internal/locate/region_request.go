@@ -1878,6 +1878,10 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 	builder.WriteString(util.FormatDuration(cost))
 	builder.WriteString(", backoff: ")
 	builder.WriteString(util.FormatDuration(time.Duration(currentBackoffMs * int(time.Millisecond))))
+	builder.WriteString(", timeout: ")
+	builder.WriteString(util.FormatDuration(timeout))
+	builder.WriteString(", req-max-exec-timeout: ")
+	builder.WriteString(util.FormatDuration(time.Duration(int64(req.Context.MaxExecutionDurationMs) * int64(time.Millisecond))))
 	builder.WriteString(", retry-times: ")
 	builder.WriteString(strconv.Itoa(retryTimes))
 	if s.AccessStats != nil {
@@ -1885,10 +1889,6 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		builder.WriteString(s.AccessStats.String())
 		builder.WriteString("}")
 	}
-	builder.WriteString(", timeout: ")
-	builder.WriteString(util.FormatDuration(timeout))
-	builder.WriteString(", req-max-exec-timeout: ")
-	builder.WriteString(util.FormatDuration(time.Duration(int64(req.Context.MaxExecutionDurationMs) * int64(time.Millisecond))))
 	builder.WriteString("}")
 	currentRoundStats := builder.String()
 	logutil.Logger(bo.GetCtx()).Info(msg,
