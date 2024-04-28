@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -44,8 +43,6 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -722,8 +719,13 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	cfg := config.GetGlobalConfig()
 	maxTxnChunkSize := int(cfg.TiKVClient.TxnChunkMaxSize)
 	capacity := c.txn.Size() + c.txn.Len()*7 + 4
+	totalChunks := (capacity + maxTxnChunkSize - 1) / maxTxnChunkSize
 	if capacity > maxTxnChunkSize {
 		capacity = maxTxnChunkSize
+	}
+	concurrency := int(cfg.TiKVClient.TxnChunkWriterConcurrency)
+	if concurrency > totalChunks {
+		concurrency = totalChunks
 	}
 
 	writer, err := newChunkWriterClient()
@@ -731,46 +733,11 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		return errors.Wrap(err, "new chunk writer client failed")
 	}
 
-	type buildChunkResult struct {
-		chunkId    uint64
-		chunkRange txnChunkRange
-	}
-	results := make([]buildChunkResult, 0, 1)
-	mu := sync.Mutex{}
-	eg, ctx := errgroup.WithContext(bo.GetCtx())
-	sem := semaphore.NewWeighted(int64(cfg.TiKVClient.TxnChunkWriterConcurrency))
-
-	buildChunk := func(bo *retry.Backoffer, buf []byte, chunkRange txnChunkRange) error {
-		chunkId, err := writer.buildTxnFile(ctx, bo, buf)
-		if err != nil {
-			logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(err))
-			return errors.WithStack(err)
-		}
-		mu.Lock()
-		results = append(results, buildChunkResult{chunkId, chunkRange})
-		mu.Unlock()
-		return nil
-	}
-
-	asyncBuildChunk := func(buf []byte, chunkRange txnChunkRange) error {
-		if ctx.Err() != nil {
-			return errors.WithStack(ctx.Err())
-		}
-
-		eg.Go(func() error {
-			err := sem.Acquire(ctx, 1)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer sem.Release(1)
-
-			err = buildChunk(bo.Clone(), buf, chunkRange)
-			return errors.WithStack(err)
-		})
-		return nil
-	}
+	results := make([]buildChunkResult, 0, totalChunks)
+	resultCh := make(chan buildChunkResult, concurrency)
 
 	totalSize := 0
+	inflightChunks := 0
 	buf := make([]byte, 0, capacity)
 	chunkSmallest := mutations.GetKey(0)
 	for i := 0; i < mutations.Len(); i++ {
@@ -780,13 +747,21 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		entrySize := 2 + len(key) + 1 + 4 + len(val)
 		if len(buf) > 0 && len(buf)+entrySize+4 > cap(buf) {
 			totalSize += len(buf)
+			inflightChunks += 1
 			ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(i-1))
-			err = asyncBuildChunk(buf, ran)
-			if err != nil {
-				return errors.Wrap(err, buildChunkErrMsg)
-			}
+			writer.asyncBuildChunk(bo, buf, ran, resultCh)
 			chunkSmallest = key
 			buf = make([]byte, 0, capacity)
+
+			if inflightChunks >= concurrency {
+				r := <-resultCh
+				if r.err != nil {
+					logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(err))
+					return errors.Wrap(r.err, buildChunkErrMsg)
+				}
+				results = append(results, r)
+				inflightChunks -= 1
+			}
 		}
 		buf = binary.LittleEndian.AppendUint16(buf, uint16(len(key)))
 		buf = append(buf, key...)
@@ -796,16 +771,18 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	}
 	if len(buf) > 0 {
 		totalSize += len(buf)
+		inflightChunks += 1
 		ran := newTxnChunkRange(chunkSmallest, mutations.GetKey(mutations.Len()-1))
-		err = buildChunk(bo, buf, ran)
-		if err != nil {
-			return errors.Wrap(err, buildChunkErrMsg)
-		}
+		writer.asyncBuildChunk(bo, buf, ran, resultCh)
 	}
 
-	err = eg.Wait()
-	if err != nil {
-		return errors.Wrap(err, buildChunkErrMsg)
+	for i := 0; i < inflightChunks; i++ {
+		r := <-resultCh
+		if r.err != nil {
+			logutil.Logger(bo.GetCtx()).Error(buildChunkErrMsg, zap.Error(err))
+			return errors.Wrap(r.err, buildChunkErrMsg)
+		}
+		results = append(results, r)
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return bytes.Compare(results[i].chunkRange.smallest, results[j].chunkRange.smallest) < 0
@@ -878,8 +855,9 @@ func newChunkWriterClient() (*chunkWriterClient, error) {
 	return &chunkWriterClient{client, serviceAddr}, nil
 }
 
-func (w *chunkWriterClient) buildTxnFile(ctx context.Context, bo *retry.Backoffer, buf []byte) (uint64, error) {
-	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+func (w *chunkWriterClient) buildChunk(bo *retry.Backoffer, buf []byte) (uint64, error) {
+	ctx := bo.GetCtx()
+	hash := crc32.New(crc32.MakeTable(crc32.IEEE))
 	hash.Write(buf)
 	crc := hash.Sum32()
 	buf = binary.LittleEndian.AppendUint32(buf, crc)
@@ -930,4 +908,17 @@ func (w *chunkWriterClient) buildTxnFile(ctx context.Context, bo *retry.Backoffe
 		logutil.Logger(bo.GetCtx()).Debug("build txn file", zap.Int("size", len(buf)), zap.Uint64("chunkId", v.ChunkId))
 		return v.ChunkId, nil
 	}
+}
+
+type buildChunkResult struct {
+	chunkId    uint64
+	chunkRange txnChunkRange
+	err        error
+}
+
+func (w *chunkWriterClient) asyncBuildChunk(bo *retry.Backoffer, buf []byte, chunkRange txnChunkRange, resultCh chan<- buildChunkResult) {
+	go func() {
+		chunkId, err := w.buildChunk(bo.Clone(), buf)
+		resultCh <- buildChunkResult{chunkId, chunkRange, err}
+	}()
 }
