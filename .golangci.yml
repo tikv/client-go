@@ -25,3 +25,5 @@ linters-settings:
     rules:
       main:
         list-mode: lax
+        allow:
+          - $gostd
