@@ -49,6 +49,12 @@ type Variables struct {
 	// When its value is 0, it's not killed
 	// When its value is not 0, it's killed, the value indicates concrete reason.
 	Killed *uint32
+
+	// TxnFileMinMutationSize specifies the minimum size of mutations to use file-based txn.
+	// <0: disabled.
+	// 0: use defalut value specified by config item TiKVClient.TxnFileMinMutationSize.
+	// >0: use the specified value.
+	TxnFileMinMutationSize int64
 }
 
 // NewVariables create a new Variables instance with default values.
