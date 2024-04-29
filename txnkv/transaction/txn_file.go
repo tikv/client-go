@@ -503,9 +503,9 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		c.mu.RUnlock()
 		if !committed && !undetermined {
 			if c.txnFileCtx.slice.len() > 0 {
-				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
+				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
 				if err1 != nil {
-					logutil.Logger(ctx).Error("executeTxnFile: rollback on error failed", zap.Error(err1))
+					logutil.Logger(ctx).Error("txn file: rollback on error failed", zap.Error(err1))
 				}
 			}
 			metrics.TwoPCTxnCounterError.Inc()
@@ -521,7 +521,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 			zap.Stringers("steps", steps))
 	}()
 
-	logutil.Logger(ctx).Info("execute txn file", zap.Uint64("startTS", c.startTS))
+	logutil.Logger(ctx).Debug("execute txn file", zap.Uint64("startTS", c.startTS))
 
 	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
 	err = c.buildTxnFiles(buildBo, c.mutations)
@@ -802,18 +802,24 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		zap.Uint64("startTS", c.startTS),
 		zap.Int("mutationsLen", mutations.Len()),
 		zap.Int("totalChunksSize", totalSize),
-		zap.Any("chunkIDs", c.txnFileCtx.slice.chunkIDs),
-		zap.Stringers("chunkRanges", c.txnFileCtx.slice.chunkRanges),
-		zap.String("primaryKey", kv.StrKey(c.txnFileCtx.slice.chunkRanges[0].smallest)))
+		zap.Any("chunkIDs", c.txnFileCtx.slice.chunkIDs))
 	return nil
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
 	conf := config.GetGlobalConfig()
-	if c.txn == nil || c.txn.isPessimistic || c.txn.isInternal() || uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.TxnFileMinMutationSize {
+
+	if c.txn == nil || c.txn.isPessimistic || c.txn.isInternal() ||
+		c.txn.vars.TxnFileMinMutationSize < 0 ||
+		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 {
 		return false
 	}
-	return len(conf.TiKVClient.TxnChunkWriterAddr) > 0
+
+	minMutationSize := uint64(c.txn.vars.TxnFileMinMutationSize)
+	if minMutationSize == 0 {
+		minMutationSize = conf.TiKVClient.TxnFileMinMutationSize
+	}
+	return uint64(c.txn.GetMemBuffer().Size()) >= minMutationSize
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {

@@ -171,7 +171,7 @@ func DefaultTiKVClient() TiKVClient {
 
 		TxnChunkWriterConcurrency: 4,
 		TxnChunkMaxSize:           128 * 1024 * 1024,
-		TxnFileMinMutationSize:    16 * 1024 * 1024,
+		TxnFileMinMutationSize:    8 * 1024 * 1024,
 	}
 }
 

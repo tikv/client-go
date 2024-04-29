@@ -504,7 +504,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	}()
 	if committer.useTxnFile() {
 		err = committer.executeTxnFile(ctx)
-		// TODO: fall back to normal 2PC when it's not a txn error.
+		// TODO: fall back to normal 2PC when tikv-worker is unavailable.
 		if val == nil || sessionID > 0 {
 			txn.onCommitted(err)
 		}
