@@ -807,19 +807,17 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
-	conf := config.GetGlobalConfig()
-
 	if c.txn == nil || c.txn.isPessimistic || c.txn.isInternal() ||
-		c.txn.vars.TxnFileMinMutationSize < 0 ||
-		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 {
+		c.txn.vars.TxnFileMinMutationSize < 0 {
 		return false
 	}
-
+	conf := config.GetGlobalConfig()
 	minMutationSize := uint64(c.txn.vars.TxnFileMinMutationSize)
 	if minMutationSize == 0 {
 		minMutationSize = conf.TiKVClient.TxnFileMinMutationSize
 	}
-	return uint64(c.txn.GetMemBuffer().Size()) >= minMutationSize
+	return len(conf.TiKVClient.TxnChunkWriterAddr) > 0 &&
+		uint64(c.txn.GetMemBuffer().Size()) >= minMutationSize
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
