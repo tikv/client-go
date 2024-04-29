@@ -18,7 +18,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/locate"
-	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
 // SnapshotProbe exposes some snapshot utilities for testing purpose.
@@ -27,8 +26,8 @@ type SnapshotProbe struct {
 }
 
 // MergeRegionRequestStats merges RPC runtime stats into snapshot's stats.
-func (s SnapshotProbe) MergeRegionRequestStats(stats map[tikvrpc.CmdType]*locate.RPCRuntimeStats) {
-	s.mergeRegionRequestStats(stats)
+func (s SnapshotProbe) MergeRegionRequestStats(rpcStats *locate.RegionRequestRuntimeStats) {
+	s.mergeRegionRequestStats(rpcStats)
 }
 
 // RecordBackoffInfo records backoff stats into snapshot's stats.
