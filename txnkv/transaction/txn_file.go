@@ -477,12 +477,12 @@ func (a txnFileRollbackAction) String() string {
 }
 
 type step struct {
-	Name string
-	Dur  time.Duration
+	name string
+	dur  time.Duration
 }
 
 func (s step) String() string {
-	return fmt.Sprintf("%s:%s", s.Name, s.Dur.String())
+	return fmt.Sprintf("%s:%s", s.name, s.dur.String())
 }
 
 func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
@@ -490,7 +490,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	steps := make([]step, 0)
 	stepDone := func(name string) {
 		now := time.Now()
-		s := step{Name: name, Dur: now.Sub(start)}
+		s := step{name: name, dur: now.Sub(start)}
 		steps = append(steps, s)
 		start = now
 	}
@@ -527,7 +527,6 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	err = c.buildTxnFiles(buildBo, c.mutations)
 	stepDone("build")
 	if err != nil {
-		logutil.Logger(ctx).Error("build txn files failed", zap.Error(err))
 		return
 	}
 
@@ -540,7 +539,6 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
 	err = c.executeTxnFileAction(prewriteBo, c.txnFileCtx.slice, txnFilePrewriteAction{})
 	stepDone("prewrite")
-	logutil.Logger(ctx).Debug("execute txn file prewrite finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
 	if err != nil {
 		return
 	}
@@ -552,7 +550,6 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	}
 	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
 	stepDone("commit")
-	logutil.Logger(ctx).Debug("execute txn file commit finished", zap.Uint64("startTS", c.startTS), zap.Error(err))
 	return
 }
 
