@@ -1229,6 +1229,11 @@ func keepAlive(
 				if c.isPessimistic && lockCtx != nil && lockCtx.LockExpired != nil {
 					atomic.StoreUint32(lockCtx.LockExpired, 1)
 				}
+				if isPipelinedTxn {
+					// the pipelined txn can last a long time after max ttl exceeded.
+					// if we don't stop it, it may fail when committing the primary key with high probability.
+					tm.close()
+				}
 				return
 			}
 
