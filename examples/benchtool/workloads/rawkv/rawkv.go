@@ -60,6 +60,9 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 
 	cmd := &cobra.Command{
 		Use: WorkloadImplName,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, rawKVConfig)
+		},
 	}
 	cmd.PersistentFlags().IntVar(&rawKVConfig.keySize, "key-size", 1, "Size of key in bytes")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
@@ -121,11 +124,24 @@ type WorkloadImpl struct {
 	stats *statistics.PerfProfile
 }
 
-func NewRawKVWorkload(cfg *RawKVConfig) *WorkloadImpl {
-	return &WorkloadImpl{
+func NewRawKVWorkload(cfg *RawKVConfig) (*WorkloadImpl, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	w := &WorkloadImpl{
 		cfg:   cfg,
 		stats: statistics.NewPerfProfile(),
 	}
+
+	w.clients = make([]*rawkv.Client, 0, w.cfg.global.Threads)
+	for i := 0; i < w.cfg.global.Threads; i++ {
+		client, err := rawkv.NewClient(workloads.GlobalContext, w.cfg.global.Targets, w.cfg.global.Security)
+		if err != nil {
+			return nil, err
+		}
+		w.clients = append(w.clients, client)
+	}
+	return w, nil
 }
 
 func (w *WorkloadImpl) Name() string {
@@ -142,18 +158,7 @@ func (w *WorkloadImpl) isValidThread(threadID int) bool {
 
 // InitThread implements WorkloadInterface
 func (w *WorkloadImpl) InitThread(ctx context.Context, threadID int) error {
-	// new RawKVClient
-	if len(w.clients) == 0 && threadID == 0 {
-		w.clients = make([]*rawkv.Client, 0, w.cfg.global.Threads)
-		client, err := rawkv.NewClient(workloads.GlobalContext, w.cfg.global.Targets, w.cfg.global.Security)
-		if err != nil {
-			return err
-		}
-		w.clients = append(w.clients, client)
-
-		w.wait.Done()
-		w.wait.Wait()
-	}
+	// Nothing to do
 	return nil
 }
 
@@ -296,6 +301,12 @@ func execRawKV(cmd string) {
 		return
 	}
 	rawKVConfig := getRawKvConfig(workloads.GlobalContext)
-	workload := NewRawKVWorkload(rawKVConfig)
+
+	var workload *WorkloadImpl
+	var err error
+	if workload, err = NewRawKVWorkload(rawKVConfig); err != nil {
+		fmt.Printf("create RawKV workload failed: %v\n", err)
+		return
+	}
 	workload.Execute(cmd)
 }
