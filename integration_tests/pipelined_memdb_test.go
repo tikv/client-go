@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
@@ -457,6 +458,45 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
 	s.Eventuallyf(func() bool {
 		return !txnProbe.GetCommitter().IsTTLRunning()
 	}, 5*time.Second, 100*time.Millisecond, "ttl manager should stop after primary lock is resolved")
+
+	txn.Set([]byte("key2"), []byte("value2"))
+	flushed, err = txn.GetMemBuffer().Flush(true)
+	s.Nil(err)
+	s.True(flushed)
+	err = txn.GetMemBuffer().FlushWait()
+	s.NotNil(err)
+	s.ErrorContains(err, "ttl manager is closed")
+}
+
+func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKMaxTTLExceeded() {
+	originManagedTTLVal := atomic.LoadUint64(&transaction.ManagedLockTTL)
+	originMaxPipelinedTxnTTL := atomic.LoadUint64(&transaction.MaxPipelinedTxnTTL)
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 100)     // set to 100ms
+	atomic.StoreUint64(&transaction.MaxPipelinedTxnTTL, 200) // set to 200ms
+	updateGlobalConfig(func(conf *config.Config) {
+		conf.MaxTxnTTL = 200 // set to 200ms
+	})
+	defer func() {
+		atomic.StoreUint64(&transaction.ManagedLockTTL, originManagedTTLVal)
+		atomic.StoreUint64(&transaction.MaxPipelinedTxnTTL, originMaxPipelinedTxnTTL)
+		restoreGlobalConfFunc()
+	}()
+
+	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	s.Nil(err)
+	txn.Set([]byte("key1"), []byte("value1"))
+	txnProbe := transaction.TxnProbe{KVTxn: txn}
+	flushed, err := txnProbe.GetMemBuffer().Flush(true)
+	s.Nil(err)
+	s.True(flushed)
+	s.Nil(txn.GetMemBuffer().FlushWait())
+	s.Equal(txnProbe.GetCommitter().GetPrimaryKey(), []byte("key1"))
+
+	s.True(txnProbe.GetCommitter().IsTTLRunning())
+
+	s.Eventuallyf(func() bool {
+		return !txnProbe.GetCommitter().IsTTLRunning()
+	}, 5*time.Second, 100*time.Millisecond, "ttl manager should stop after max ttl")
 
 	txn.Set([]byte("key2"), []byte("value2"))
 	flushed, err = txn.GetMemBuffer().Flush(true)
