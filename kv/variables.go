@@ -49,6 +49,9 @@ type Variables struct {
 	// When its value is 0, it's not killed
 	// When its value is not 0, it's killed, the value indicates concrete reason.
 	Killed *uint32
+
+	// EnableTxnFile specifies whether file-based txn is enabled.
+	EnableTxnFile bool
 }
 
 // NewVariables create a new Variables instance with default values.
@@ -57,6 +60,7 @@ func NewVariables(killed *uint32) *Variables {
 		BackoffLockFast: DefBackoffLockFast,
 		BackOffWeight:   DefBackOffWeight,
 		Killed:          killed,
+		EnableTxnFile:   true,
 	}
 }
 

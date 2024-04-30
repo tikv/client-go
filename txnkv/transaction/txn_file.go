@@ -266,7 +266,7 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			if err1 != nil {
 				return nil, err1
 			}
-			logutil.BgLogger().Info(
+			logutil.Logger(bo.GetCtx()).Info(
 				"prewrite txn file encounters lock",
 				zap.Uint64("session", c.sessionID),
 				zap.Uint64("txnID", c.startTS),
@@ -502,9 +502,11 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		undetermined := c.mu.undeterminedErr != nil
 		c.mu.RUnlock()
 		if !committed && !undetermined {
-			err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
-			if err1 != nil {
-				logutil.BgLogger().Error("executeTxnFileActionWithRetry failed", zap.Error(err1))
+			if c.txnFileCtx.slice.len() > 0 {
+				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
+				if err1 != nil {
+					logutil.Logger(ctx).Error("txn file: rollback on error failed", zap.Error(err1))
+				}
 			}
 			metrics.TwoPCTxnCounterError.Inc()
 		} else {
@@ -519,28 +521,34 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 			zap.Stringers("steps", steps))
 	}()
 
-	bo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
-	err = c.buildTxnFiles(bo, c.mutations)
+	logutil.Logger(ctx).Debug("execute txn file", zap.Uint64("startTS", c.startTS))
+
+	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
+	err = c.buildTxnFiles(buildBo, c.mutations)
 	stepDone("build")
 	if err != nil {
 		return
 	}
 
-	err = c.preSplitTxnFileRegions(bo)
+	err = c.preSplitTxnFileRegions(buildBo)
 	stepDone("pre-split")
 	if err != nil {
 		return
 	}
-	err = c.executeTxnFileAction(bo, c.txnFileCtx.slice, txnFilePrewriteAction{})
+
+	prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
+	err = c.executeTxnFileAction(prewriteBo, c.txnFileCtx.slice, txnFilePrewriteAction{})
 	stepDone("prewrite")
 	if err != nil {
 		return
 	}
-	c.commitTS, err = c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
+
+	commitBo := retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars)
+	c.commitTS, err = c.store.GetTimestampWithRetry(commitBo, c.txn.GetScope())
 	if err != nil {
 		return
 	}
-	err = c.executeTxnFileAction(bo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
+	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
 	stepDone("commit")
 	return
 }
@@ -588,13 +596,12 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 					kvrpcpb.WriteConflict_Optimistic,
 				)
 			}
-
 		}
 		regionErr, err1 := resp.GetRegionError()
 		if err1 != nil {
 			return regionErrChunks, err1
 		}
-		if regionErr.GetEpochNotMatch() != nil {
+		if regionErr != nil {
 			regionErrChunks.appendSlice(&batch.txnChunkSlice)
 			continue
 		}
@@ -611,7 +618,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, ch
 		var regionErrChunks txnChunkSlice
 		regionErrChunks, err := c.executeTxnFileSlice(bo, currentChunks, currentBatches, action, successRanges)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		if regionErrChunks.len() == 0 {
 			return nil
@@ -620,7 +627,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, ch
 		currentBatches = nil
 		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file: execute failed, region miss"))
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 }
@@ -800,11 +807,16 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 }
 
 func (c *twoPhaseCommitter) useTxnFile() bool {
-	if c.txn.isPessimistic || c.txn.GetMemBuffer().Size() < 16*1024*1024 {
+	if c.txn == nil || !c.txn.vars.EnableTxnFile {
 		return false
 	}
 	conf := config.GetGlobalConfig()
-	return len(conf.TiKVClient.TxnChunkWriterAddr) > 0
+	// Don't use txn file for internal request to avoid affect system tables or metadata before it is stable enough.
+	// TODO: use txn file for internal TTL & DDL tasks.
+	return !c.txn.isPessimistic &&
+		!c.txn.isInternal() &&
+		len(conf.TiKVClient.TxnChunkWriterAddr) > 0 &&
+		uint64(c.txn.GetMemBuffer().Size()) >= conf.TiKVClient.TxnFileMinMutationSize
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
