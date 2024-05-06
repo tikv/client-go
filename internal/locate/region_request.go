@@ -463,10 +463,10 @@ func (r *replica) onUpdateLeader() {
 }
 
 const (
-	deadlineErrUsingConfTimeoutFlag uint8 = 1 << 0 // deadlineErrUsingConfTimeoutFlag indicates the replica is already tried, but the received deadline exceeded error.
-	dataIsNotReadyFlag              uint8 = 1 << 1 // dataIsNotReadyFlag indicates the replica is already tried, but the received data is not ready error.
-	notLeaderFlag                   uint8 = 1 << 2 // notLeaderFlag indicates the replica is already tried, but the received not leader error.
-	serverIsBusyFlag                uint8 = 1 << 3 // notLeaderFlag indicates the replica is already tried, but the received server is busy error.
+	deadlineErrUsingConfTimeoutFlag uint8 = 1 << iota // deadlineErrUsingConfTimeoutFlag indicates the replica is already tried, but the received deadline exceeded error.
+	dataIsNotReadyFlag                                // dataIsNotReadyFlag indicates the replica is already tried, but the received data is not ready error.
+	notLeaderFlag                                     // notLeaderFlag indicates the replica is already tried, but the received not leader error.
+	serverIsBusyFlag                                  // serverIsBusyFlag indicates the replica is already tried, but the received server is busy error.
 )
 
 func (r *replica) addFlag(flag uint8) {
@@ -662,18 +662,9 @@ func (s *RegionRequestSender) getRPCContext(
 	switch et {
 	case tikvrpc.TiKV:
 		if s.replicaSelector == nil {
-			//<<<<<<< HEAD
-			//			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
-			//			if err != nil {
-			//				s.rpcError = err
-			//				return nil, nil
-			//=======
-			//			selector, err := NewReplicaSelector(s.regionCache, regionID, req, opts...) //nolint:staticcheck // ignore SA4023, never returns a nil interface value
-			//if selector == nil || !selector.isValid() || err != nil { //nolint:staticcheck // ignore SA4023, never returns a nil interface value
 			selector, err := newReplicaSelector(s.regionCache, regionID, req, opts...)
 			if err != nil || selector == nil {
 				return nil, err
-				//>>>>>>> 6cb0704fce51e215c3012d94fff27bd440e7137e
 			}
 			s.replicaSelector = selector
 		}
