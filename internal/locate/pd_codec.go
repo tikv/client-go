@@ -60,11 +60,11 @@ func NewCodecPDClient(mode apicodec.Mode, client pd.Client) *CodecPDClient {
 
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
 func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace string) (*CodecPDClient, error) {
-	id, err := GetKeyspaceID(client, keyspace)
+	keyspaceMeta, err := GetKeyspaceMeta(client, keyspace)
 	if err != nil {
 		return nil, err
 	}
-	codec, err := apicodec.NewCodecV2(mode, id)
+	codec, err := apicodec.NewCodecV2(mode, keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +83,15 @@ func GetKeyspaceID(client pd.Client, name string) (uint32, error) {
 		return 0, errors.Errorf("keyspace %s not enabled", name)
 	}
 	return meta.Id, nil
+}
+
+// GetKeyspaceMeta attempts to retrieve keyspace meta corresponding to the given keyspace name from PD.
+func GetKeyspaceMeta(client pd.Client, name string) (*keyspacepb.KeyspaceMeta, error) {
+	meta, err := client.LoadKeyspace(context.Background(), apicodec.BuildKeyspaceName(name))
+	if err != nil {
+		return nil, err
+	}
+	return meta, nil
 }
 
 // GetCodec returns CodecPDClient's codec.

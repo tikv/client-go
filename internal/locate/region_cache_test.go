@@ -332,8 +332,8 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 	}
 	for _, testcase := range testcases {
 		s.T().Log(testcase.storeID)
-		store := s.cache.getStoreOrInsertDefault(testcase.storeID)
-		_, err := store.initResolve(s.bo, s.cache)
+		store := s.cache.stores.getOrInsertDefault(testcase.storeID)
+		_, err := store.initResolve(s.bo, s.cache.stores)
 		s.Nil(err)
 		labels := []*metapb.StoreLabel{
 			{
@@ -341,7 +341,7 @@ func (s *testRegionCacheSuite) TestStoreLabels() {
 				Value: fmt.Sprintf("%v", testcase.storeID),
 			},
 		}
-		stores := s.cache.filterStores(nil, func(s *Store) bool { return s.IsLabelsMatch(labels) })
+		stores := s.cache.stores.filter(nil, func(s *Store) bool { return s.IsLabelsMatch(labels) })
 		s.Equal(len(stores), 1)
 		s.Equal(stores[0].labels, labels)
 	}
@@ -373,9 +373,9 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 
 	// Check resolving normal stores. The resolve state should be resolved.
 	for _, storeMeta := range s.cluster.GetAllStores() {
-		store := cache.getStoreOrInsertDefault(storeMeta.GetId())
+		store := cache.stores.getOrInsertDefault(storeMeta.GetId())
 		s.Equal(store.getResolveState(), unresolved)
-		addr, err := store.initResolve(bo, cache)
+		addr, err := store.initResolve(bo, cache.stores)
 		s.Nil(err)
 		s.Equal(addr, storeMeta.GetAddress())
 		s.Equal(store.getResolveState(), resolved)
@@ -391,26 +391,26 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	}
 
 	// Mark the store needCheck. The resolve state should be resolved soon.
-	store := cache.getStoreOrInsertDefault(s.store1)
-	cache.markStoreNeedCheck(store)
+	store := cache.stores.getOrInsertDefault(s.store1)
+	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), resolved)
 
 	// Mark the store needCheck and it becomes a tombstone. The resolve state should be tombstone.
 	s.cluster.MarkTombstone(s.store1)
-	cache.markStoreNeedCheck(store)
+	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), tombstone)
 	s.cluster.StartStore(s.store1)
 
 	// Mark the store needCheck and it's deleted from PD. The resolve state should be tombstone.
 	cache.clear()
-	store = cache.getStoreOrInsertDefault(s.store1)
-	store.initResolve(bo, cache)
+	store = cache.stores.getOrInsertDefault(s.store1)
+	store.initResolve(bo, cache.stores)
 	s.Equal(store.getResolveState(), resolved)
 	storeMeta := s.cluster.GetStore(s.store1)
 	s.cluster.RemoveStore(s.store1)
-	cache.markStoreNeedCheck(store)
+	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), tombstone)
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
@@ -418,14 +418,14 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	// Mark the store needCheck and its address and labels are changed.
 	// The resolve state should be deleted and a new store is added to the cache.
 	cache.clear()
-	store = cache.getStoreOrInsertDefault(s.store1)
-	store.initResolve(bo, cache)
+	store = cache.stores.getOrInsertDefault(s.store1)
+	store.initResolve(bo, cache.stores)
 	s.Equal(store.getResolveState(), resolved)
 	s.cluster.UpdateStoreAddr(s.store1, store.addr+"0", &metapb.StoreLabel{Key: "k", Value: "v"})
-	cache.markStoreNeedCheck(store)
+	cache.stores.markStoreNeedCheck(store)
 	waitResolve(store)
 	s.Equal(store.getResolveState(), deleted)
-	newStore := cache.getStoreOrInsertDefault(s.store1)
+	newStore := cache.stores.getOrInsertDefault(s.store1)
 	s.Equal(newStore.getResolveState(), resolved)
 	s.Equal(newStore.addr, store.addr+"0")
 	s.Equal(newStore.labels, []*metapb.StoreLabel{{Key: "k", Value: "v"}})
@@ -433,9 +433,9 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	// Check initResolve()ing a tombstone store. The resolve state should be tombstone.
 	cache.clear()
 	s.cluster.MarkTombstone(s.store1)
-	store = cache.getStoreOrInsertDefault(s.store1)
+	store = cache.stores.getOrInsertDefault(s.store1)
 	for i := 0; i < 2; i++ {
-		addr, err := store.initResolve(bo, cache)
+		addr, err := store.initResolve(bo, cache.stores)
 		s.Nil(err)
 		s.Equal(addr, "")
 		s.Equal(store.getResolveState(), tombstone)
@@ -447,9 +447,9 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 	cache.clear()
 	storeMeta = s.cluster.GetStore(s.store1)
 	s.cluster.RemoveStore(s.store1)
-	store = cache.getStoreOrInsertDefault(s.store1)
+	store = cache.stores.getOrInsertDefault(s.store1)
 	for i := 0; i < 2; i++ {
-		addr, err := store.initResolve(bo, cache)
+		addr, err := store.initResolve(bo, cache.stores)
 		s.Nil(err)
 		s.Equal(addr, "")
 		s.Equal(store.getResolveState(), tombstone)
@@ -486,7 +486,7 @@ func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 	s.Run("WithStaleStores", func() {
 		cntGetRegion = 0
 		s.cache.clear()
-		store2 := s.cache.getStoreOrInsertDefault(s.store2)
+		store2 := s.cache.stores.getOrInsertDefault(s.store2)
 
 		for i := 0; i < 50; i++ {
 			atomic.StoreUint32(&store2.epoch, uint32(i))
@@ -500,7 +500,7 @@ func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 	s.Run("WithUnreachableStores", func() {
 		cntGetRegion = 0
 		s.cache.clear()
-		store2 := s.cache.getStoreOrInsertDefault(s.store2)
+		store2 := s.cache.stores.getOrInsertDefault(s.store2)
 		atomic.StoreUint32(&store2.livenessState, uint32(unreachable))
 		defer atomic.StoreUint32(&store2.livenessState, uint32(reachable))
 
@@ -1775,7 +1775,7 @@ func (s *testRegionCacheSuite) TestBuckets() {
 	newMeta := proto.Clone(cachedRegion.meta).(*metapb.Region)
 	newMeta.RegionEpoch.Version++
 	newMeta.RegionEpoch.ConfVer++
-	_, err = s.cache.OnRegionEpochNotMatch(s.bo, &RPCContext{Region: cachedRegion.VerID(), Store: s.cache.getStoreOrInsertDefault(s.store1)}, []*metapb.Region{newMeta})
+	_, err = s.cache.OnRegionEpochNotMatch(s.bo, &RPCContext{Region: cachedRegion.VerID(), Store: s.cache.stores.getOrInsertDefault(s.store1)}, []*metapb.Region{newMeta})
 	s.Nil(err)
 	cachedRegion = s.getRegion([]byte("a"))
 	s.Equal(newBuckets, cachedRegion.getStore().buckets)
@@ -2050,13 +2050,13 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	// init region cache
 	s.cache.LocateKey(s.bo, []byte("a"))
 
-	store1, _ := s.cache.getStore(s.store1)
+	store1, _ := s.cache.stores.get(s.store1)
 	s.Require().NotNil(store1)
 	s.Require().Equal(resolved, store1.getResolveState())
 
 	// setup mock liveness func
 	store1Liveness := uint32(unreachable)
-	s.cache.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
+	s.cache.stores.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
 		if s.storeID == store1.storeID {
 			return livenessState(atomic.LoadUint32(&store1Liveness))
 		}
@@ -2065,7 +2065,7 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 
 	// start health check loop
 	atomic.StoreUint32(&store1.livenessState, store1Liveness)
-	startHealthCheckLoop(s.cache, store1, livenessState(store1Liveness), time.Second)
+	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, livenessState(store1Liveness), time.Second)
 
 	// update store meta
 	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr+"'", store1.labels...)
@@ -2076,7 +2076,7 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	}, 3*time.Second, time.Second)
 
 	// assert that the new store should be added and it's also not reachable
-	newStore1, _ := s.cache.getStore(store1.storeID)
+	newStore1, _ := s.cache.stores.get(store1.storeID)
 	s.Require().NotEqual(reachable, newStore1.getLivenessState())
 
 	// recover store1
@@ -2165,7 +2165,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	_, err := s.cache.LocateKey(s.bo, []byte("k"))
 	s.Nil(err)
 
-	store1, exists := s.cache.getStore(s.store1)
+	store1, exists := s.cache.stores.get(s.store1)
 	s.True(exists)
 	s.False(store1.healthStatus.IsSlow())
 
@@ -2206,11 +2206,44 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.False(store1.healthStatus.IsSlow())
 	s.Equal(int64(50), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
 
-	store2, exists := s.cache.getStore(s.store2)
+	store2, exists := s.cache.stores.get(s.store2)
 	s.True(exists)
 	// Store 2 is never affected by updating store 1
 	s.LessOrEqual(store2.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
 	s.False(store2.healthStatus.IsSlow())
+}
+
+func (s *testRegionCacheSuite) TestSplitThenLocateInvalidRegion() {
+	s.testSplitThenLocateKey(func(r *Region) { r.invalidate(Other) })
+}
+
+func (s *testRegionCacheSuite) TestSplitThenLocateRegionNeedReloadOnAccess() {
+	s.testSplitThenLocateKey(func(r *Region) { r.setSyncFlags(needReloadOnAccess) })
+}
+
+func (s *testRegionCacheSuite) TestSplitThenLocateRegionNeedDelayedReload() {
+	s.testSplitThenLocateKey(func(r *Region) { r.setSyncFlags(needDelayedReloadReady) })
+}
+
+func (s *testRegionCacheSuite) testSplitThenLocateKey(markRegion func(r *Region)) {
+	k := []byte("k")
+
+	// load region to cache
+	_, err := s.cache.LocateRegionByID(s.bo, s.region1)
+	s.NoError(err)
+	r1, expired := s.cache.searchCachedRegionByKey(k, false)
+	s.NotNil(r1)
+	s.False(expired)
+
+	// split region and mark it need sync
+	r2ids := s.cluster.AllocIDs(3)
+	s.cluster.Split(s.region1, r2ids[0], k, r2ids[1:], r2ids[1])
+	markRegion(r1)
+
+	// locate key
+	loc, err := s.cache.LocateKey(s.bo, k)
+	s.NoError(err)
+	s.True(loc.Contains(k))
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {

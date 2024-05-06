@@ -47,6 +47,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -145,25 +146,40 @@ func (s *testSnapshotSuite) TestBatchGet() {
 	}
 }
 
-type contextKey string
-
 func (s *testSnapshotSuite) TestSnapshotCache() {
 	txn := s.beginTxn()
 	s.Nil(txn.Set([]byte("x"), []byte("x")))
-	s.Nil(txn.Delete([]byte("y"))) // store data is affected by othe)
+	s.Nil(txn.Delete([]byte("y"))) // delete should also be cached
+	s.Nil(txn.Set([]byte("a"), []byte("a")))
+	s.Nil(txn.Delete([]byte("b")))
 	s.Nil(txn.Commit(context.Background()))
 
 	txn = s.beginTxn()
 	snapshot := txn.GetSnapshot()
+	// generate cache by BatchGet
 	_, err := snapshot.BatchGet(context.Background(), [][]byte{[]byte("x"), []byte("y")})
 	s.Nil(err)
+	// generate cache by Get
+	_, err = snapshot.Get(context.Background(), []byte("a"))
+	s.Nil(err)
+	_, err = snapshot.Get(context.Background(), []byte("b"))
+	s.True(error.IsErrNotFound(err))
 
 	s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
-	ctx := context.WithValue(context.Background(), contextKey("TestSnapshotCache"), true)
-	_, err = snapshot.Get(ctx, []byte("x"))
-	s.Nil(err)
+	ctx := context.WithValue(context.Background(), "TestSnapshotCache", true)
 
+	// check cache from BatchGet
+	value, err := snapshot.Get(ctx, []byte("x"))
+	s.Nil(err)
+	s.Equal([]byte("x"), value)
 	_, err = snapshot.Get(ctx, []byte("y"))
+	s.True(error.IsErrNotFound(err))
+
+	// check cache from Get
+	value, err = snapshot.Get(ctx, []byte("a"))
+	s.Nil(err)
+	s.Equal([]byte("a"), value)
+	_, err = snapshot.Get(ctx, []byte("b"))
 	s.True(error.IsErrNotFound(err))
 
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
@@ -287,13 +303,13 @@ func (s *testSnapshotSuite) TestSnapshotThreadSafe() {
 
 func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 	reqStats := tikv.NewRegionRequestRuntimeStats()
-	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Second)
-	tikv.RecordRegionRequestRuntimeStats(reqStats.Stats, tikvrpc.CmdGet, time.Millisecond)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Second)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Millisecond)
 	snapshot := s.store.GetSnapshot(0)
 	runtimeStats := &txnkv.SnapshotRuntimeStats{}
 	snapshot.SetRuntimeStats(runtimeStats)
-	snapshot.MergeRegionRequestStats(reqStats.Stats)
-	snapshot.MergeRegionRequestStats(reqStats.Stats)
+	snapshot.MergeRegionRequestStats(reqStats)
+	snapshot.MergeRegionRequestStats(reqStats)
 	bo := tikv.NewBackofferWithVars(context.Background(), 2000, nil)
 	err := bo.BackoffWithMaxSleepTxnLockFast(5, errors.New("test"))
 	s.Nil(err)
@@ -379,4 +395,28 @@ func (s *testSnapshotSuite) TestRCRead() {
 		committer1.Cleanup(context.Background())
 		s.deleteKeys(keys)
 	}
+}
+
+func (s *testSnapshotSuite) TestSnapshotCacheBypassMaxUint64() {
+	txn := s.beginTxn()
+	s.Nil(txn.Set([]byte("x"), []byte("x")))
+	s.Nil(txn.Set([]byte("y"), []byte("y")))
+	s.Nil(txn.Set([]byte("z"), []byte("z")))
+	s.Nil(txn.Commit(context.Background()))
+	// cache version < math.MaxUint64
+	startTS, err := s.store.GetTimestampWithRetry(tikv.NewNoopBackoff(context.Background()), oracle.GlobalTxnScope)
+	s.Nil(err)
+	snapshot := s.store.GetSnapshot(startTS)
+	snapshot.Get(context.Background(), []byte("x"))
+	snapshot.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+	s.Equal(snapshot.SnapCache(), map[string][]byte{
+		"x": []byte("x"),
+		"y": []byte("y"),
+		"z": []byte("z"),
+	})
+	// not cache version == math.MaxUint64
+	snapshot = s.store.GetSnapshot(math.MaxUint64)
+	snapshot.Get(context.Background(), []byte("x"))
+	snapshot.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+	s.Empty(snapshot.SnapCache())
 }

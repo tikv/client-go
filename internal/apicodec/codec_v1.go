@@ -3,6 +3,7 @@ package apicodec
 import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -214,4 +215,8 @@ func (c *codecV1) DecodeBucketKeys(keys [][]byte) ([][]byte, error) {
 		ks = append(ks, k)
 	}
 	return ks, nil
+}
+
+func (c *codecV1) GetKeyspaceMeta() *keyspacepb.KeyspaceMeta {
+	return nil
 }
