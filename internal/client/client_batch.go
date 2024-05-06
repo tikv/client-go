@@ -44,6 +44,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -777,7 +778,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 	}
 }
 
-func (c *batchCommandsClient) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (c *batchCommandsClient) onHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	if h := c.eventListener.Load(); h != nil {
 		(*h).OnHealthFeedback(feedback)
 	}

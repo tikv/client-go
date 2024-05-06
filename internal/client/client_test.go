@@ -817,16 +817,16 @@ func TestPrioritySentLimit(t *testing.T) {
 }
 
 type testClientEventListener struct {
-	healthFeedbackCh chan *tikvpb.HealthFeedback
+	healthFeedbackCh chan *kvrpcpb.HealthFeedback
 }
 
 func newTestClientEventListener() *testClientEventListener {
 	return &testClientEventListener{
-		healthFeedbackCh: make(chan *tikvpb.HealthFeedback, 100),
+		healthFeedbackCh: make(chan *kvrpcpb.HealthFeedback, 100),
 	}
 }
 
-func (l *testClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (l *testClientEventListener) OnHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	l.healthFeedbackCh <- feedback
 }
 

@@ -24,8 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -1001,7 +1001,7 @@ func (s *StoreHealthStatus) setTiKVSlowScoreLastUpdateTimeForTest(lastUpdateTime
 	s.tikvSideSlowScore.lastUpdateTime.Store(&lastUpdateTime)
 }
 
-func (s *Store) recordHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	// Note that the `FeedbackSeqNo` field of `HealthFeedback` is not used yet. It's a monotonic value that can help
 	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
 	// only a slow score. It's prepared for possible use in the future.

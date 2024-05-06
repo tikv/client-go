@@ -49,8 +49,8 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -2169,7 +2169,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.True(exists)
 	s.False(store1.healthStatus.IsSlow())
 
-	feedbackMsg := &tikvpb.HealthFeedback{
+	feedbackMsg := &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 1,
 		SlowScore:     100,
@@ -2178,7 +2178,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.True(store1.healthStatus.IsSlow())
 	s.Equal(int64(100), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
 
-	feedbackMsg = &tikvpb.HealthFeedback{
+	feedbackMsg = &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 2,
 		SlowScore:     90,
@@ -2187,7 +2187,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.cache.onHealthFeedback(feedbackMsg)
 	s.Equal(int64(100), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
 
-	feedbackMsg = &tikvpb.HealthFeedback{
+	feedbackMsg = &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 3,
 		SlowScore:     90,
@@ -2196,7 +2196,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.cache.onHealthFeedback(feedbackMsg)
 	s.Equal(int64(90), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
 
-	feedbackMsg = &tikvpb.HealthFeedback{
+	feedbackMsg = &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 4,
 		SlowScore:     50,
