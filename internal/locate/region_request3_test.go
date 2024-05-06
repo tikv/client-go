@@ -351,6 +351,14 @@ func refreshLivenessStates(regionStore *regionStore) {
 	}
 }
 
+func refreshStoreHealthStatus(regionStore *regionStore) {
+	for _, store := range regionStore.stores {
+		store.healthStatus.clientSideSlowScore.resetSlowScore()
+		store.healthStatus.resetTiKVServerSideSlowScoreForTest()
+		store.healthStatus.updateSlowFlag()
+	}
+}
+
 func AssertRPCCtxEqual(s *testRegionRequestToThreeStoresSuite, rpcCtx *RPCContext, target *replica, proxy *replica) {
 	s.Equal(rpcCtx.Store, target.store)
 	s.Equal(rpcCtx.Peer, target.peer)
@@ -445,7 +453,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	region.meta.Peers = append(region.meta.Peers, tiflash)
 	atomic.StorePointer(&region.store, unsafe.Pointer(regionStore))
 
-	cache := NewRegionCache(s.cache.pdClient)
+	// Disable the tick on health status.
+	cache := NewRegionCache(s.cache.pdClient, RegionCacheNoHealthTick)
 	defer cache.Close()
 	cache.mu.Lock()
 	cache.insertRegionToCache(region, true, true)
@@ -629,6 +638,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelector() {
 	// Test accessFollower state filtering label-not-match stores.
 	refreshRegionTTL(region)
 	refreshEpochs(regionStore)
+	refreshStoreHealthStatus(regionStore)
 	labels := []*metapb.StoreLabel{
 		{
 			Key:   "a",
