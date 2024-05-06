@@ -325,5 +325,12 @@ func execRawKV(cmd string) {
 		fmt.Printf("create RawKV workload failed: %v\n", err)
 		return
 	}
+
+	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, rawKVConfig.global.TotalTime)
+	workloads.GlobalContext = timeoutCtx
+	defer cancel()
+
 	workload.Execute(cmd)
+	fmt.Println("RawKV workload finished")
+	workload.OutputStats(true)
 }
