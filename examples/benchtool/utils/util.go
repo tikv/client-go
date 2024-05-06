@@ -96,8 +96,8 @@ func RenderString(format string, headers []string, values [][]string) {
 
 	buf := new(bytes.Buffer)
 	for _, value := range values {
-		args := make([]string, len(headers)-2)
-		for i, header := range headers[2:] {
+		args := make([]string, len(headers))
+		for i, header := range headers {
 			args[i] = header + ": " + value[i+2]
 		}
 		buf.WriteString(fmt.Sprintf(format, value[0], value[1], strings.Join(args, ", ")))

@@ -45,15 +45,16 @@ type GlobalConfig struct {
 	Security config.Security
 }
 
-func (c *GlobalConfig) ParsePdAddrs() {
+func (c *GlobalConfig) ParsePdAddrs() error {
 	if len(c.hosts) == 0 {
-		return
+		return fmt.Errorf("PD address is empty")
 	}
 	targets := make([]string, 0, len(c.hosts))
 	for _, host := range c.hosts {
 		targets = append(targets, host+":"+strconv.Itoa(c.port))
 	}
 	c.Targets = targets
+	return nil
 }
 
 func (c *GlobalConfig) Format() string {

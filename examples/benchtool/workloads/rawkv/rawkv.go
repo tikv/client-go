@@ -8,8 +8,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,9 +26,6 @@ const (
 
 	WorkloadMaxInt64 = 1<<63 - 1
 )
-
-// Format: "Elapsed" - "Sum" - "Count" - "Ops" - "Avg" - "P50" - "P90" - "P95" - "P99" - "P999" - "P9999" - "Min" - "Max
-var workloadFormat = []string{"Prefix", "Operation", "Takes(s)", "Count", "Ops", "Avg(ms)", "50th(ms)", "90th(ms)", "95th(ms)", "99th(ms)", "99.9th(ms)", "99.99th(ms)", "Min(ms)", "Max(ms)"}
 
 type RawKVConfig struct {
 	keySize   int
@@ -52,7 +47,7 @@ func (c *RawKVConfig) Validate() error {
 	if err := c.readWriteRatio.ParseRatio(); err != nil {
 		return fmt.Errorf("parse read-write-ratio failed: %v", err)
 	}
-	return nil
+	return c.global.ParsePdAddrs()
 }
 
 // Register registers the workload to the command line parser
@@ -241,35 +236,8 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	return nil
 }
 
-func outputFunc(outputStyle string, prefix string, perfHist map[string]*statistics.PerfHistogram) {
-	keys := make([]string, 0, len(perfHist))
-	for k := range perfHist {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	lines := [][]string{}
-	for _, op := range keys {
-		hist := perfHist[op]
-		if !hist.Empty() {
-			op = strings.ToUpper(op)
-			line := []string{prefix, op}
-			line = append(line, hist.Format()...)
-			lines = append(lines, line)
-		}
-	}
-	switch outputStyle {
-	case utils.OutputStylePlain:
-		utils.RenderString("%s%-6s - %s\n", workloadFormat, lines)
-	case utils.OutputStyleTable:
-		utils.RenderTable(workloadFormat, lines)
-	case utils.OutputStyleJson:
-		utils.RenderJson(workloadFormat, lines)
-	}
-}
-
 func (w *WorkloadImpl) OutputStats(ifSummaryReport bool) {
-	w.stats.PrintFmt(ifSummaryReport, w.cfg.global.OutputStyle, outputFunc)
+	w.stats.PrintFmt(ifSummaryReport, w.cfg.global.OutputStyle, statistics.HistogramOutputFunc)
 }
 
 // DBName returns the name of test db.

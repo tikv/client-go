@@ -16,6 +16,8 @@ package statistics
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +25,9 @@ import (
 
 	"github.com/HdrHistogram/hdrhistogram-go"
 )
+
+// Format: "Elapsed" - "Sum" - "Count" - "Ops" - "Avg" - "P50" - "P90" - "P95" - "P99" - "P999" - "P9999" - "Min" - "Max
+var WorkloadFormat = []string{"Elapsed(s)", "Sum", "Count", "Ops", "Avg(ms)", "50th(ms)", "90th(ms)", "95th(ms)", "99th(ms)", "99.9th(ms)", "99.99th(ms)", "Min(ms)", "Max(ms)"}
 
 type RuntimeStatistics struct {
 	elapsed float64
@@ -84,7 +89,7 @@ func (h *PerfHistogram) Empty() bool {
 func (h *PerfHistogram) Format() []string {
 	res := h.GetRuntimeStatistics()
 
-	// Format: "Elapsed" - "Sum" - "Count" - "Ops" - "Avg" - "P50" - "P90" - "P95" - "P99" - "P999" - "P9999" - "Min" - "Max
+	// Format: "Elapsed(s)" - "Sum" - "Count" - "Ops" - "Avg" - "P50" - "P90" - "P95" - "P99" - "P999" - "P9999" - "Min" - "Max
 	return []string{
 		utils.FloatToString(res.elapsed),
 		utils.FloatToString(res.sum),
@@ -96,7 +101,7 @@ func (h *PerfHistogram) Format() []string {
 		utils.FloatToString(res.p95),
 		utils.FloatToString(res.p99),
 		utils.FloatToString(res.p999),
-		utils.FloatToString(res.p999),
+		utils.FloatToString(res.p9999),
 		utils.FloatToString(res.min),
 		utils.FloatToString(res.max),
 	}
@@ -126,4 +131,32 @@ func (h *PerfHistogram) GetRuntimeStatistics() RuntimeStatistics {
 		max:     time.Duration(h.Max()).Seconds() * 1000,
 	}
 	return info
+}
+
+func HistogramOutputFunc(outputStyle string, prefix string, perfHist map[string]*PerfHistogram) {
+	keys := make([]string, 0, len(perfHist))
+	for k := range perfHist {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	lines := [][]string{}
+	for _, op := range keys {
+		hist := perfHist[op]
+		if !hist.Empty() {
+			op = strings.ToUpper(op)
+			line := []string{prefix, op}
+			line = append(line, hist.Format()...)
+			fmt.Println(line)
+			lines = append(lines, line)
+		}
+	}
+	switch outputStyle {
+	case utils.OutputStylePlain:
+		utils.RenderString("%s%-6s - %s\n", WorkloadFormat, lines)
+	case utils.OutputStyleTable:
+		utils.RenderTable(WorkloadFormat, lines)
+	case utils.OutputStyleJson:
+		utils.RenderJson(WorkloadFormat, lines)
+	}
 }
