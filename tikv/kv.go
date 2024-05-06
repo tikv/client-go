@@ -575,7 +575,7 @@ func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
 func (s *KVStore) setMinSafeTS(txnScope string, safeTS uint64) {
 	// ensure safeTS is not set to max uint64
 	if safeTS == math.MaxUint64 {
-		logutil.BgLogger().Warn("skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
+		logutil.AssertWarn(logutil.BgLogger(), "skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
 		return
 	}
 	s.minSafeTS.Store(txnScope, safeTS)
@@ -618,7 +618,7 @@ func (s *KVStore) getSafeTS(storeID uint64) (bool, uint64) {
 func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
 	// ensure safeTS is not set to max uint64
 	if safeTS == math.MaxUint64 {
-		logutil.BgLogger().Warn("skip setting safe-ts to max uint64", zap.Uint64("storeID", storeID), zap.Stack("stack"))
+		logutil.AssertWarn(logutil.BgLogger(), "skip setting safe-ts to max uint64", zap.Uint64("storeID", storeID), zap.Stack("stack"))
 		return
 	}
 	s.safeTSMap.Store(storeID, safeTS)
@@ -627,8 +627,11 @@ func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
 func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 	minSafeTS := uint64(math.MaxUint64)
 	// when there is no store, return 0 in order to let minStartTS become startTS directly
+	// actually storeIDs won't be empty since updateMinSafeTS is only called by updateSafeTS and updateSafeTS builds
+	// txnScopeMap with non-empty values. here we check it to make the logic more robust.
 	if len(storeIDs) < 1 {
 		s.setMinSafeTS(txnScope, 0)
+		return
 	}
 	for _, store := range storeIDs {
 		ok, safeTS := s.getSafeTS(store)
@@ -640,6 +643,10 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 		} else {
 			minSafeTS = 0
 		}
+	}
+	// if minSafeTS is still math.MaxUint64, that means all store safe ts are 0, then we set minSafeTS to 0.
+	if minSafeTS == math.MaxUint64 {
+		minSafeTS = 0
 	}
 	s.setMinSafeTS(txnScope, minSafeTS)
 }

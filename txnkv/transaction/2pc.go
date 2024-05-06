@@ -1158,7 +1158,7 @@ func (tm *ttlManager) run(c *twoPhaseCommitter, lockCtx *kv.LockCtx, isPipelined
 	tm.ch = make(chan struct{})
 	tm.lockCtx = lockCtx
 
-	go keepAlive(c, tm.ch, c.primary(), lockCtx, isPipelinedTxn)
+	go keepAlive(c, tm.ch, tm, c.primary(), lockCtx, isPipelinedTxn)
 }
 
 func (tm *ttlManager) close() {
@@ -1180,7 +1180,7 @@ const pessimisticLockMaxBackoff = 20000
 const maxConsecutiveFailure = 10
 
 func keepAlive(
-	c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte,
+	c *twoPhaseCommitter, closeCh chan struct{}, tm *ttlManager, primaryKey []byte,
 	lockCtx *kv.LockCtx, isPipelinedTxn bool,
 ) {
 	// Ticker is set to 1/2 of the ManagedLockTTL.
@@ -1193,6 +1193,7 @@ func keepAlive(
 	keepFail := 0
 	for {
 		select {
+		// because ttlManager can be reset, closeCh may not be equal to tm.ch.
 		case <-closeCh:
 			return
 		case <-ticker.C:
@@ -1219,19 +1220,29 @@ func keepAlive(
 				logutil.Logger(bo.GetCtx()).Info("ttlManager live up to its lifetime",
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Uint64("uptime", uptime),
-					zap.Uint64("maxTxnTTL", config.GetGlobalConfig().MaxTxnTTL))
+					zap.Uint64("maxTxnTTL", config.GetGlobalConfig().MaxTxnTTL),
+					zap.Bool("isPipelinedTxn", isPipelinedTxn),
+				)
 				metrics.TiKVTTLLifeTimeReachCounter.Inc()
 				// the pessimistic locks may expire if the ttl manager has timed out, set `LockExpired` flag
 				// so that this transaction could only commit or rollback with no more statement executions
 				if c.isPessimistic && lockCtx != nil && lockCtx.LockExpired != nil {
 					atomic.StoreUint32(lockCtx.LockExpired, 1)
 				}
+				if isPipelinedTxn {
+					// the pipelined txn can last a long time after max ttl exceeded.
+					// if we don't stop it, it may fail when committing the primary key with high probability.
+					tm.close()
+				}
 				return
 			}
 
 			newTTL := uptime + atomic.LoadUint64(&ManagedLockTTL)
 			logutil.Logger(bo.GetCtx()).Info("send TxnHeartBeat",
-				zap.Uint64("startTS", c.startTS), zap.Uint64("newTTL", newTTL))
+				zap.Uint64("startTS", c.startTS),
+				zap.Uint64("newTTL", newTTL),
+				zap.Bool("isPipelinedTxn", isPipelinedTxn),
+			)
 			startTime := time.Now()
 			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL)
 			if err != nil {
@@ -1239,12 +1250,22 @@ func keepAlive(
 				metrics.TxnHeartBeatHistogramError.Observe(time.Since(startTime).Seconds())
 				logutil.Logger(bo.GetCtx()).Debug("send TxnHeartBeat failed",
 					zap.Error(err),
-					zap.Uint64("txnStartTS", c.startTS))
+					zap.Uint64("txnStartTS", c.startTS),
+					zap.Bool("isPipelinedTxn", isPipelinedTxn),
+				)
 				if stopHeartBeat || keepFail > maxConsecutiveFailure {
 					logutil.Logger(bo.GetCtx()).Warn("stop TxnHeartBeat",
 						zap.Error(err),
 						zap.Int("consecutiveFailure", keepFail),
-						zap.Uint64("txnStartTS", c.startTS))
+						zap.Uint64("txnStartTS", c.startTS),
+						zap.Bool("isPipelinedTxn", isPipelinedTxn),
+					)
+					if isPipelinedTxn {
+						// pipelined DML cannot run without the ttlManager.
+						// Once the ttl manager fails, the transaction should be rolled back to avoid writing useless locks.
+						// close the ttlManager and the further flush will stop.
+						tm.close()
+					}
 					return
 				}
 				continue
@@ -1837,7 +1858,9 @@ func (c *twoPhaseCommitter) checkSchemaValid(ctx context.Context, checkTS uint64
 	}
 	if c.txn.schemaLeaseChecker == nil {
 		if c.sessionID > 0 {
-			logutil.Logger(ctx).Warn("schemaLeaseChecker is not set for this transaction",
+			// Schema check is not mandatory since MDL is introduced.
+			logutil.Logger(ctx).Debug(
+				"schemaLeaseChecker is not set for this transaction",
 				zap.Uint64("sessionID", c.sessionID),
 				zap.Uint64("startTS", c.startTS),
 				zap.Uint64("checkTS", checkTS))
@@ -2047,16 +2070,18 @@ func (batchExe *batchExecutor) process(batches []batchMutations) error {
 		return err
 	}
 
-	// For prewrite, stop sending other requests after receiving first error.
+	// For prewrite and flush, stop sending other requests after receiving first error.
 	// However, AssertionFailed error is less prior to other kinds of errors. If we meet an AssertionFailed error,
 	// we hold it to see if there's other error, and return it if there are no other kinds of errors.
 	// This is because when there are transaction conflicts in pessimistic transaction, it's possible that the
 	// non-pessimistic-locked keys may report false-positive assertion failure.
 	// See also: https://github.com/tikv/tikv/issues/12113
 	var cancel context.CancelFunc
-	if _, ok := batchExe.action.(actionPrewrite); ok {
+	switch batchExe.action.(type) {
+	case actionPrewrite, actionPipelinedFlush:
 		batchExe.backoffer, cancel = batchExe.backoffer.Fork()
 		defer cancel()
+	default:
 	}
 	var assertionFailedErr error = nil
 	// concurrently do the work for each batch.

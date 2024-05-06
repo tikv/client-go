@@ -62,32 +62,32 @@ const (
 	// small batch can lead to poor performance and resource waste in random write workload.
 	// 10K batch size is large enough to get good performance with random write workloads in tests.
 	MinFlushKeys = 10000
-	// MinFlushSize is the minimum size of MemDB to trigger flush.
-	MinFlushSize = 16 * 1024 * 1024 // 16MB
-	// ForceFlushSizeThreshold is the threshold to force flush MemDB, which controls the max memory consumption of PipelinedMemDB.
-	ForceFlushSizeThreshold = 128 * 1024 * 1024 // 128MB
+	// MinFlushMemSize is the minimum size of MemDB to trigger flush.
+	MinFlushMemSize uint64 = 16 * 1024 * 1024 // 16MB
+	// ForceFlushMemSizeThreshold is the threshold to force flush MemDB, which controls the max memory consumption of PipelinedMemDB.
+	ForceFlushMemSizeThreshold uint64 = 128 * 1024 * 1024 // 128MB
 )
 
 type flushOption struct {
-	MinFlushKeys            int
-	MinFlushSize            int
-	ForceFlushSizeThreshold int
+	MinFlushKeys               uint64
+	MinFlushMemSize            uint64
+	ForceFlushMemSizeThreshold uint64
 }
 
 func newFlushOption() flushOption {
 	opt := flushOption{
-		MinFlushKeys:            MinFlushKeys,
-		MinFlushSize:            MinFlushSize,
-		ForceFlushSizeThreshold: ForceFlushSizeThreshold,
+		MinFlushKeys:               MinFlushKeys,
+		MinFlushMemSize:            MinFlushMemSize,
+		ForceFlushMemSizeThreshold: ForceFlushMemSizeThreshold,
 	}
 	if val, err := util.EvalFailpoint("pipelinedMemDBMinFlushKeys"); err == nil && val != nil {
-		opt.MinFlushKeys = val.(int)
+		opt.MinFlushKeys = uint64(val.(int))
 	}
 	if val, err := util.EvalFailpoint("pipelinedMemDBMinFlushSize"); err == nil && val != nil {
-		opt.MinFlushSize = val.(int)
+		opt.MinFlushMemSize = uint64(val.(int))
 	}
 	if val, err := util.EvalFailpoint("pipelinedMemDBForceFlushSizeThreshold"); err == nil && val != nil {
-		opt.ForceFlushSizeThreshold = val.(int)
+		opt.ForceFlushMemSizeThreshold = uint64(val.(int))
 	}
 	return opt
 }
@@ -323,15 +323,33 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 }
 
 func (p *PipelinedMemDB) needFlush() bool {
-	size := p.memDB.Size()
-	// size < MinFlushSize, do not flush.
-	// MinFlushSize <= size < ForceFlushSizeThreshold && keys < MinFlushKeys, do not flush.
-	// MinFlushSize <= size < ForceFlushSizeThreshold && keys >= MinFlushKeys, flush.
-	// size >= ForceFlushSizeThreshold, flush.
-	if size < p.flushOption.MinFlushSize || (p.memDB.Len() < p.flushOption.MinFlushKeys && size < p.flushOption.ForceFlushSizeThreshold) {
+	size := p.memDB.Mem()
+	// mem size < MinFlushMemSize, do not flush.
+	// MinFlushMemSize <= mem size < ForceFlushMemSizeThreshold && keys < MinFlushKeys, do not flush.
+	// MinFlushMemSize <= mem size < ForceFlushMemSizeThreshold && keys >= MinFlushKeys, flush.
+	// mem size >= ForceFlushMemSizeThreshold, flush.
+
+	/*
+	              Keys
+	               ^
+	               |       |
+	               |       |
+	               |       |
+	               |       |    Flush
+	               |       |
+	   MinKey(10k) |       +------------+
+	               |       |            |
+	               |  No   |  No Flush  |   Flush
+	               | Flush |            |
+	               +-----------------------------------------> Size
+	               0   MinSize(16MB)   Force(128MB)
+	*/
+	if size < p.flushOption.MinFlushMemSize ||
+		(uint64(p.memDB.Len()) < p.flushOption.MinFlushKeys &&
+			size < p.flushOption.ForceFlushMemSizeThreshold) {
 		return false
 	}
-	if p.onFlushing.Load() && size < p.flushOption.ForceFlushSizeThreshold {
+	if p.onFlushing.Load() && size < p.flushOption.ForceFlushMemSizeThreshold {
 		return false
 	}
 	return true
@@ -391,7 +409,11 @@ func (p *PipelinedMemDB) Len() int {
 }
 
 func (p *PipelinedMemDB) Size() int {
-	return p.memDB.Size() + p.size
+	size := p.size
+	if p.memDB != nil {
+		size += p.memDB.Size()
+	}
+	return size
 }
 
 func (p *PipelinedMemDB) OnFlushing() bool {

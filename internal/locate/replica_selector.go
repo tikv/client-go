@@ -45,7 +45,7 @@ func newReplicaSelector(
 ) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion == nil || !cachedRegion.isValid() {
-		return nil, errors.New("cached region invalid")
+		return nil, nil
 	}
 	replicas := buildTiKVReplicas(cachedRegion)
 	option := storeSelectorOp{}
@@ -121,8 +121,11 @@ func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCt
 func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	if s.regionCache.enableForwarding {
 		strategy := ReplicaSelectLeaderWithProxyStrategy{}
-		s.target, s.proxy = strategy.next(s.replicas, s.region)
+		s.target, s.proxy = strategy.next(s)
 		if s.target != nil && s.proxy != nil {
+			return
+		}
+		if s.target == nil && s.proxy == nil {
 			return
 		}
 	}
@@ -168,17 +171,10 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 			return
 		}
 	}
-	preferLeader := s.option.preferLeader
-	if s.attempts > 1 {
-		if req.ReplicaReadType == kv.ReplicaReadMixed {
-			// For mixed read retry, prefer retry leader first.
-			preferLeader = true
-		}
-	}
 	strategy := ReplicaSelectMixedStrategy{
 		leaderIdx:    leaderIdx,
 		tryLeader:    req.ReplicaReadType == kv.ReplicaReadMixed || req.ReplicaReadType == kv.ReplicaReadPreferLeader,
-		preferLeader: preferLeader,
+		preferLeader: s.option.preferLeader,
 		leaderOnly:   s.option.leaderOnly,
 		learnerOnly:  req.ReplicaReadType == kv.ReplicaReadLearner,
 		labels:       s.option.labels,
@@ -260,7 +256,7 @@ type ReplicaSelectMixedStrategy struct {
 func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	replicas := selector.replicas
 	maxScoreIdxes := make([]int, 0, len(replicas))
-	maxScore := -1
+	var maxScore storeSelectionScore = -1
 	reloadRegion := false
 	for i, r := range replicas {
 		epochStale := r.isEpochStale()
@@ -323,7 +319,7 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	if r.hasFlag(dataIsNotReadyFlag) && !isLeader {
 		// If the replica is failed by data not ready with stale read, we can retry it with replica-read.
 		// 	after https://github.com/tikv/tikv/pull/15726, the leader will not return DataIsNotReady error,
-		//	then no need to retry leader again, if you try it again, you may got a NotLeader error.
+		//	then no need to retry leader again. If you try it again, you may get a NotLeader error.
 		maxAttempt = 2
 	}
 	if r.isExhausted(maxAttempt, 0) {
@@ -344,20 +340,51 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	return true
 }
 
+type storeSelectionScore int64
+
 const (
 	// The definition of the score is:
-	// MSB                                                                               LSB
-	// [unused bits][1 bit: LabelMatches][1 bit: PreferLeader][2 bits: NormalPeer + NotSlow]
-	flagLabelMatches = 1 << 4
-	flagPreferLeader = 1 << 3
-	flagNormalPeer   = 1 << 2
-	flagNotSlow      = 1 << 1
-	flagNotAttempt   = 1
+	// MSB                                                                                                         LSB
+	// [unused bits][1 bit: NotSlow][1 bit: LabelMatches][1 bit: PreferLeader][1 bit: NormalPeer][1 bit: NotAttempted]
+	flagNotAttempted storeSelectionScore = 1 << iota
+	flagNormalPeer
+	flagPreferLeader
+	flagLabelMatches
+	flagNotSlow
 )
 
+func (s storeSelectionScore) String() string {
+	if s == 0 {
+		return "0"
+	}
+	res := ""
+	appendFactor := func(name string) {
+		if len(res) != 0 {
+			res += "|"
+		}
+		res += name
+	}
+	if (s & flagNotSlow) != 0 {
+		appendFactor("NotSlow")
+	}
+	if (s & flagLabelMatches) != 0 {
+		appendFactor("LableMatches")
+	}
+	if (s & flagPreferLeader) != 0 {
+		appendFactor("PreferLeader")
+	}
+	if (s & flagNormalPeer) != 0 {
+		appendFactor("NormalPeer")
+	}
+	if (s & flagNotAttempted) != 0 {
+		appendFactor("NotAttempted")
+	}
+	return res
+}
+
 // calculateScore calculates the score of the replica.
-func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) int {
-	score := 0
+func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) storeSelectionScore {
+	var score storeSelectionScore = 0
 	if r.store.IsStoreMatch(s.stores) && r.store.IsLabelsMatch(s.labels) {
 		score |= flagLabelMatches
 	}
@@ -372,7 +399,8 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 			}
 		} else if s.tryLeader {
 			if len(s.labels) > 0 {
-				// When the leader has matching labels, prefer leader than other mismatching peers.
+				// When label matching is enabled, prefer selecting the leader for replicas that has same label-matching
+				// results.
 				score |= flagPreferLeader
 			} else {
 				score |= flagNormalPeer
@@ -391,21 +419,22 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) i
 		score |= flagNotSlow
 	}
 	if r.attempts == 0 {
-		score |= flagNotAttempt
+		score |= flagNotAttempted
 	}
 	return score
 }
 
 type ReplicaSelectLeaderWithProxyStrategy struct{}
 
-func (s ReplicaSelectLeaderWithProxyStrategy) next(replicas []*replica, region *Region) (leader *replica, proxy *replica) {
-	rs := region.getStore()
+func (s ReplicaSelectLeaderWithProxyStrategy) next(selector *replicaSelector) (leader *replica, proxy *replica) {
+	rs := selector.region.getStore()
 	leaderIdx := rs.workTiKVIdx
+	replicas := selector.replicas
 	leader = replicas[leaderIdx]
 	if leader.store.getLivenessState() == reachable || leader.hasFlag(notLeaderFlag) {
 		// if leader's store is reachable, no need use proxy.
-		rs.unsetProxyStoreIfNeeded(region)
-		return nil, nil
+		rs.unsetProxyStoreIfNeeded(selector.region)
+		return leader, nil
 	}
 	proxyIdx := rs.proxyTiKVIdx
 	if proxyIdx >= 0 && int(proxyIdx) < len(replicas) && s.isCandidate(replicas[proxyIdx], proxyIdx == leaderIdx) {
@@ -417,6 +446,10 @@ func (s ReplicaSelectLeaderWithProxyStrategy) next(replicas []*replica, region *
 			return leader, r
 		}
 	}
+	// If all followers are tried as a proxy and fail, mark the leader store invalid, then backoff and retry.
+	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
+	selector.invalidateReplicaStore(leader, errors.Errorf("all followers are tried as proxy but fail"))
+	selector.region.setSyncFlags(needReloadOnAccess)
 	return nil, nil
 }
 

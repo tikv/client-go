@@ -429,6 +429,7 @@ func (action actionPrewrite) handleSingleBatch(
 			return nil
 		}
 		var locks []*txnlock.Lock
+		logged := make(map[uint64]struct{})
 		for _, keyErr := range keyErrs {
 			// Check already exists error
 			if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
@@ -441,12 +442,16 @@ func (action actionPrewrite) handleSingleBatch(
 			if err1 != nil {
 				return err1
 			}
-			logutil.BgLogger().Info(
-				"prewrite encounters lock",
-				zap.Uint64("session", c.sessionID),
-				zap.Uint64("txnID", c.startTS),
-				zap.Stringer("lock", lock),
-			)
+			if _, ok := logged[lock.TxnID]; !ok {
+				logutil.BgLogger().Info(
+					"prewrite encounters lock. "+
+						"More locks belonging to the same transaction may be omitted",
+					zap.Uint64("session", c.sessionID),
+					zap.Uint64("txnID", c.startTS),
+					zap.Stringer("lock", lock),
+				)
+				logged[lock.TxnID] = struct{}{}
+			}
 			// If an optimistic transaction encounters a lock with larger TS, this transaction will certainly
 			// fail due to a WriteConflict error. So we can construct and return an error here early.
 			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,

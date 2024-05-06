@@ -32,6 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
@@ -47,39 +48,20 @@ type testingKnobs interface {
 	setMockRequestLiveness(f livenessFunc)
 }
 
-func (c *RegionCache) getMockRequestLiveness() livenessFunc {
-	f := c.testingKnobs.mockRequestLiveness.Load()
-	if f == nil {
-		return nil
-	}
-	return *f
-}
-
-func (c *RegionCache) setMockRequestLiveness(f livenessFunc) {
-	c.testingKnobs.mockRequestLiveness.Store(&f)
-}
-
 type storeRegistry interface {
 	fetchStore(ctx context.Context, id uint64) (*metapb.Store, error)
 	fetchAllStores(ctx context.Context) ([]*metapb.Store, error)
 }
 
-func (c *RegionCache) fetchStore(ctx context.Context, id uint64) (*metapb.Store, error) {
-	return c.pdClient.GetStore(ctx, id)
-}
-
-func (c *RegionCache) fetchAllStores(ctx context.Context) ([]*metapb.Store, error) {
-	return c.pdClient.GetAllStores(ctx)
-}
-
 type storeCache interface {
+	testingKnobs
 	storeRegistry
-	getStore(id uint64) (store *Store, exists bool)
-	getStoreOrInsertDefault(id uint64) *Store
-	putStore(store *Store)
-	clearStores()
-	forEachStore(f func(*Store))
-	filterStores(dst []*Store, predicate func(*Store) bool) []*Store
+	get(id uint64) (store *Store, exists bool)
+	getOrInsertDefault(id uint64) *Store
+	put(store *Store)
+	clear()
+	forEach(f func(*Store))
+	filter(dst []*Store, predicate func(*Store) bool) []*Store
 	listTiflashComputeStores() (stores []*Store, needReload bool)
 	setTiflashComputeStores(stores []*Store)
 	markTiflashComputeStoresNeedReload()
@@ -87,14 +69,65 @@ type storeCache interface {
 	getCheckStoreEvents() <-chan struct{}
 }
 
-func (c *RegionCache) getStore(id uint64) (store *Store, exists bool) {
+func newStoreCache(pdClient pd.Client) *storeCacheImpl {
+	c := &storeCacheImpl{pdClient: pdClient}
+	c.notifyCheckCh = make(chan struct{}, 1)
+	c.storeMu.stores = make(map[uint64]*Store)
+	c.tiflashComputeStoreMu.needReload = true
+	c.tiflashComputeStoreMu.stores = make([]*Store, 0)
+	return c
+}
+
+type storeCacheImpl struct {
+	pdClient pd.Client
+
+	testingKnobs struct {
+		// Replace the requestLiveness function for test purpose. Note that in unit tests, if this is not set,
+		// requestLiveness always returns unreachable.
+		mockRequestLiveness atomic.Pointer[livenessFunc]
+	}
+
+	notifyCheckCh chan struct{}
+	storeMu       struct {
+		sync.RWMutex
+		stores map[uint64]*Store
+	}
+
+	tiflashComputeStoreMu struct {
+		sync.RWMutex
+		needReload bool
+		stores     []*Store
+	}
+}
+
+func (c *storeCacheImpl) getMockRequestLiveness() livenessFunc {
+	f := c.testingKnobs.mockRequestLiveness.Load()
+	if f == nil {
+		return nil
+	}
+	return *f
+}
+
+func (c *storeCacheImpl) setMockRequestLiveness(f livenessFunc) {
+	c.testingKnobs.mockRequestLiveness.Store(&f)
+}
+
+func (c *storeCacheImpl) fetchStore(ctx context.Context, id uint64) (*metapb.Store, error) {
+	return c.pdClient.GetStore(ctx, id)
+}
+
+func (c *storeCacheImpl) fetchAllStores(ctx context.Context) ([]*metapb.Store, error) {
+	return c.pdClient.GetAllStores(ctx)
+}
+
+func (c *storeCacheImpl) get(id uint64) (store *Store, exists bool) {
 	c.storeMu.RLock()
 	store, exists = c.storeMu.stores[id]
 	c.storeMu.RUnlock()
 	return
 }
 
-func (c *RegionCache) getStoreOrInsertDefault(id uint64) *Store {
+func (c *storeCacheImpl) getOrInsertDefault(id uint64) *Store {
 	c.storeMu.Lock()
 	store, exists := c.storeMu.stores[id]
 	if !exists {
@@ -105,19 +138,19 @@ func (c *RegionCache) getStoreOrInsertDefault(id uint64) *Store {
 	return store
 }
 
-func (c *RegionCache) putStore(store *Store) {
+func (c *storeCacheImpl) put(store *Store) {
 	c.storeMu.Lock()
 	c.storeMu.stores[store.storeID] = store
 	c.storeMu.Unlock()
 }
 
-func (c *RegionCache) clearStores() {
+func (c *storeCacheImpl) clear() {
 	c.storeMu.Lock()
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.storeMu.Unlock()
 }
 
-func (c *RegionCache) forEachStore(f func(*Store)) {
+func (c *storeCacheImpl) forEach(f func(*Store)) {
 	c.storeMu.RLock()
 	defer c.storeMu.RUnlock()
 	for _, s := range c.storeMu.stores {
@@ -125,7 +158,7 @@ func (c *RegionCache) forEachStore(f func(*Store)) {
 	}
 }
 
-func (c *RegionCache) filterStores(dst []*Store, predicate func(*Store) bool) []*Store {
+func (c *storeCacheImpl) filter(dst []*Store, predicate func(*Store) bool) []*Store {
 	c.storeMu.RLock()
 	for _, store := range c.storeMu.stores {
 		if predicate == nil || predicate(store) {
@@ -136,7 +169,7 @@ func (c *RegionCache) filterStores(dst []*Store, predicate func(*Store) bool) []
 	return dst
 }
 
-func (c *RegionCache) listTiflashComputeStores() (stores []*Store, needReload bool) {
+func (c *storeCacheImpl) listTiflashComputeStores() (stores []*Store, needReload bool) {
 	c.tiflashComputeStoreMu.RLock()
 	needReload = c.tiflashComputeStoreMu.needReload
 	stores = c.tiflashComputeStoreMu.stores
@@ -144,20 +177,20 @@ func (c *RegionCache) listTiflashComputeStores() (stores []*Store, needReload bo
 	return
 }
 
-func (c *RegionCache) setTiflashComputeStores(stores []*Store) {
+func (c *storeCacheImpl) setTiflashComputeStores(stores []*Store) {
 	c.tiflashComputeStoreMu.Lock()
 	c.tiflashComputeStoreMu.stores = stores
 	c.tiflashComputeStoreMu.needReload = false
 	c.tiflashComputeStoreMu.Unlock()
 }
 
-func (c *RegionCache) markTiflashComputeStoresNeedReload() {
+func (c *storeCacheImpl) markTiflashComputeStoresNeedReload() {
 	c.tiflashComputeStoreMu.Lock()
 	c.tiflashComputeStoreMu.needReload = true
 	c.tiflashComputeStoreMu.Unlock()
 }
 
-func (c *RegionCache) markStoreNeedCheck(store *Store) {
+func (c *storeCacheImpl) markStoreNeedCheck(store *Store) {
 	if store.changeResolveStateTo(resolved, needCheck) {
 		select {
 		case c.notifyCheckCh <- struct{}{}:
@@ -166,7 +199,7 @@ func (c *RegionCache) markStoreNeedCheck(store *Store) {
 	}
 }
 
-func (c *RegionCache) getCheckStoreEvents() <-chan struct{} {
+func (c *storeCacheImpl) getCheckStoreEvents() <-chan struct{} {
 	return c.notifyCheckCh
 }
 
@@ -214,7 +247,7 @@ func newStore(
 		peerAddr:  peerAddr,
 		saddr:     statusAddr,
 		// Make sure healthStatus field is never null.
-		healthStatus: newStoreHealthStatus(),
+		healthStatus: newStoreHealthStatus(id),
 	}
 }
 
@@ -223,7 +256,7 @@ func newUninitializedStore(id uint64) *Store {
 	return &Store{
 		storeID: id,
 		// Make sure healthStatus field is never null.
-		healthStatus: newStoreHealthStatus(),
+		healthStatus: newStoreHealthStatus(id),
 	}
 }
 
@@ -435,7 +468,7 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 		if s.addr == addr {
 			newStore.healthStatus = s.healthStatus
 		}
-		c.putStore(newStore)
+		c.put(newStore)
 		s.setResolveState(deleted)
 		return false, nil
 	}
@@ -536,7 +569,7 @@ func (s *Store) getLivenessState() livenessState {
 	return livenessState(atomic.LoadUint32(&s.livenessState))
 }
 
-func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoffer, c *RegionCache) (liveness livenessState) {
+func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoffer, scheduler *bgRunner, c storeCache) (liveness livenessState) {
 	liveness = requestLiveness(bo.GetCtx(), s, c)
 	if liveness == reachable {
 		return
@@ -560,15 +593,15 @@ func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoff
 		if _, err := util.EvalFailpoint("skipStoreCheckUntilHealth"); err == nil {
 			return
 		}
-		startHealthCheckLoop(c, s, liveness, reResolveInterval)
+		startHealthCheckLoop(scheduler, c, s, liveness, reResolveInterval)
 	}
 	return
 }
 
-func startHealthCheckLoop(c *RegionCache, s *Store, liveness livenessState, reResolveInterval time.Duration) {
+func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness livenessState, reResolveInterval time.Duration) {
 	lastCheckPDTime := time.Now()
 
-	c.bg.schedule(func(ctx context.Context, t time.Time) bool {
+	scheduler.schedule(func(ctx context.Context, t time.Time) bool {
 		if t.Sub(lastCheckPDTime) > reResolveInterval {
 			lastCheckPDTime = t
 
@@ -584,7 +617,7 @@ func startHealthCheckLoop(c *RegionCache, s *Store, liveness livenessState, reRe
 					return true
 				}
 				// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
-				newStore, _ := c.getStore(s.storeID)
+				newStore, _ := c.get(s.storeID)
 				logutil.BgLogger().Info("[health check] store meta changed",
 					zap.Uint64("storeID", s.storeID),
 					zap.String("oldAddr", s.addr),
@@ -794,6 +827,9 @@ const (
 )
 
 type StoreHealthStatus struct {
+	// Used for logging.
+	storeID uint64
+
 	isSlow atomic.Bool
 
 	// A statistic for counting the request latency to this store
@@ -816,8 +852,18 @@ type HealthStatusDetail struct {
 	TiKVSideSlowScore   int64
 }
 
-func newStoreHealthStatus() *StoreHealthStatus {
-	return &StoreHealthStatus{}
+func (d HealthStatusDetail) IsSlow() bool {
+	return clientSideSlowScoreIsSlow(uint64(d.ClientSideSlowScore)) || d.TiKVSideSlowScore >= tikvSlowScoreSlowThreshold
+}
+
+func (d HealthStatusDetail) String() string {
+	return fmt.Sprintf("{ ClientSideSlowScore: %d, TiKVSideSlowScore: %d }", d.ClientSideSlowScore, d.TiKVSideSlowScore)
+}
+
+func newStoreHealthStatus(storeID uint64) *StoreHealthStatus {
+	return &StoreHealthStatus{
+		storeID: storeID,
+	}
 }
 
 // IsSlow returns whether current Store is slow.
@@ -935,9 +981,18 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
 }
 
+func (s *StoreHealthStatus) resetTiKVServerSideSlowScoreForTest() {
+	s.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Hour * 2))
+	s.updateTiKVServerSideSlowScore(1, time.Now().Add(-time.Hour))
+}
+
 func (s *StoreHealthStatus) updateSlowFlag() {
-	isSlow := s.clientSideSlowScore.isSlow() || s.tikvSideSlowScore.score.Load() >= tikvSlowScoreSlowThreshold
-	s.isSlow.Store(isSlow)
+	healthDetail := s.GetHealthStatusDetail()
+	isSlow := healthDetail.IsSlow()
+	old := s.isSlow.Swap(isSlow)
+	if old != isSlow {
+		logutil.BgLogger().Info("store health status changed", zap.Uint64("storeID", s.storeID), zap.Bool("isSlow", isSlow), zap.Stringer("healthDetail", healthDetail))
+	}
 }
 
 // setTiKVSlowScoreLastUpdateTimeForTest force sets last update time of TiKV server side slow score to specified value.
