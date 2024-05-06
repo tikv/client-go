@@ -51,6 +51,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/debugpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
@@ -110,7 +111,7 @@ type Client interface {
 // ClientEventListener is a listener to handle events produced by `Client`.
 type ClientEventListener interface {
 	// OnHealthFeedback is called when `Client` receives a response that carries the HealthFeedback information.
-	OnHealthFeedback(feedback *tikvpb.HealthFeedback)
+	OnHealthFeedback(feedback *kvrpcpb.HealthFeedback)
 }
 
 // ClientExt is a client has extended interfaces.

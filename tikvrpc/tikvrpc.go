@@ -99,7 +99,7 @@ const (
 	CmdStoreSafeTS
 	CmdLockWaitInfo
 
-	CmdRequestHealthFeedback
+	CmdGetHealthFeedback
 
 	CmdCop CmdType = 512 + iota
 	CmdCopStream
@@ -219,8 +219,8 @@ func (t CmdType) String() string {
 		return "StoreSafeTS"
 	case CmdLockWaitInfo:
 		return "LockWaitInfo"
-	case CmdRequestHealthFeedback:
-		return "RequestHealthFeedback"
+	case CmdGetHealthFeedback:
+		return "GetHealthFeedback"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
 	case CmdPrepareFlashbackToVersion:
@@ -563,9 +563,9 @@ func (req *Request) LockWaitInfo() *kvrpcpb.GetLockWaitInfoRequest {
 	return req.Req.(*kvrpcpb.GetLockWaitInfoRequest)
 }
 
-// RequestHealthFeedback returns RequestHealthFeedbackRequest in request.
-func (req *Request) RequestHealthFeedback() *kvrpcpb.RequestHealthFeedbackRequest {
-	return req.Req.(*kvrpcpb.RequestHealthFeedbackRequest)
+// GetHealthFeedback returns GetHealthFeedbackRequest in request.
+func (req *Request) GetHealthFeedback() *kvrpcpb.GetHealthFeedbackRequest {
+	return req.Req.(*kvrpcpb.GetHealthFeedbackRequest)
 }
 
 // FlashbackToVersion returns FlashbackToVersionRequest in request.
@@ -651,8 +651,8 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Flush{Flush: req.Flush()}}
 	case CmdBufferBatchGet:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_BufferBatchGet{BufferBatchGet: req.BufferBatchGet()}}
-	case CmdRequestHealthFeedback:
-		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_RequestHealthFeedback{RequestHealthFeedback: req.RequestHealthFeedback()}}
+	case CmdGetHealthFeedback:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_GetHealthFeedback{GetHealthFeedback: req.GetHealthFeedback()}}
 	}
 	return nil
 }
@@ -728,8 +728,8 @@ func FromBatchCommandsResponse(res *tikvpb.BatchCommandsResponse_Response) (*Res
 		return &Response{Resp: res.Flush}, nil
 	case *tikvpb.BatchCommandsResponse_Response_BufferBatchGet:
 		return &Response{Resp: res.BufferBatchGet}, nil
-	case *tikvpb.BatchCommandsResponse_Response_RequestHealthFeedback:
-		return &Response{Resp: res.RequestHealthFeedback}, nil
+	case *tikvpb.BatchCommandsResponse_Response_GetHealthFeedback:
+		return &Response{Resp: res.GetHealthFeedback}, nil
 	}
 	panic("unreachable")
 }
@@ -963,8 +963,8 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		p = &kvrpcpb.BufferBatchGetResponse{
 			RegionError: e,
 		}
-	case CmdRequestHealthFeedback:
-		p = &kvrpcpb.RequestHealthFeedbackResponse{
+	case CmdGetHealthFeedback:
+		p = &kvrpcpb.GetHealthFeedbackResponse{
 			RegionError: e,
 		}
 	default:
@@ -1141,8 +1141,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.KvFlush(ctx, req.Flush())
 	case CmdBufferBatchGet:
 		resp.Resp, err = client.KvBufferBatchGet(ctx, req.BufferBatchGet())
-	case CmdRequestHealthFeedback:
-		return nil, errors.New("RequestHealthFeedback can only work in batch rpc mode")
+	case CmdGetHealthFeedback:
+		resp.Resp, err = client.GetHealthFeedback(ctx, req.GetHealthFeedback())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}

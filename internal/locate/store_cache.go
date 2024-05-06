@@ -890,7 +890,7 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(ctx context.Cont
 		return
 	}
 
-	// If not updated for too long, try to actively fetch it from TiKV.
+	// If not updated for too long, try to explicitly fetch it from TiKV.
 	// Note that this can't be done while holding the mutex, because the updating is done by the client when receiving
 	// the response (in the same way as handling the feedback information pushed from TiKV), which needs acquiring the
 	// mutex.

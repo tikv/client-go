@@ -55,7 +55,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
@@ -658,8 +657,8 @@ type RegionCache struct {
 }
 
 type regionCacheOptions struct {
-	noHealthTick          bool
-	requestHealthFeedback func(ctx context.Context, addr string) error
+	noHealthTick                  bool
+	requestHealthFeedbackCallback func(ctx context.Context, addr string) error
 }
 
 type RegionCacheOpt func(*regionCacheOptions)
@@ -668,9 +667,9 @@ func RegionCacheNoHealthTick(o *regionCacheOptions) {
 	o.noHealthTick = true
 }
 
-func WithRequestHealthFeedback(callback func(ctx context.Context, addr string) error) RegionCacheOpt {
+func WithRequestHealthFeedbackCallback(callback func(ctx context.Context, addr string) error) RegionCacheOpt {
 	return func(options *regionCacheOptions) {
-		options.requestHealthFeedback = callback
+		options.requestHealthFeedbackCallback = callback
 	}
 }
 
@@ -683,7 +682,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 
 	c := &RegionCache{
 		pdClient:                      pdClient,
-		requestHealthFeedbackCallback: options.requestHealthFeedback,
+		requestHealthFeedbackCallback: options.requestHealthFeedbackCallback,
 	}
 
 	c.codec = apicodec.NewCodecV1(apicodec.ModeRaw)
@@ -2701,7 +2700,7 @@ func contains(startKey, endKey, key []byte) bool {
 		(bytes.Compare(key, endKey) < 0 || len(endKey) == 0)
 }
 
-func (c *RegionCache) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (c *RegionCache) onHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	store, ok := c.getStore(feedback.GetStoreId())
 	if !ok {
 		logutil.BgLogger().Info("dropped health feedback info due to unknown store id", zap.Uint64("storeID", feedback.GetStoreId()))
@@ -2722,6 +2721,6 @@ type regionCacheClientEventListener struct {
 }
 
 // OnHealthFeedback implements the `client.ClientEventListener` interface.
-func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	l.c.onHealthFeedback(feedback)
 }

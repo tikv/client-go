@@ -236,10 +236,15 @@ func loadOption(store *KVStore, opt ...Option) {
 	}
 }
 
-const requestHealthFeedbackTimeout = time.Second * 2
+const getHealthFeedbackTimeout = time.Second * 2
 
 func requestHealthFeedbackFromKVClient(ctx context.Context, addr string, tikvClient Client) error {
-	resp, err := tikvClient.SendRequest(ctx, addr, tikvrpc.NewRequest(tikvrpc.CmdRequestHealthFeedback, &kvrpcpb.RequestHealthFeedbackRequest{}), requestHealthFeedbackTimeout)
+	// When batch RPC is enabled (`MaxBatchSize` > 0), a `GetHealthFeedback` RPC call will cause TiKV also sending the
+	// health feedback information in via the `BatchCommandsResponse`, which will be handled by the batch client.
+	// Therefore the same information carried in the response don't need to be handled in this case. And as we're
+	// currently not supporting health feedback mechanism without enabling batch RPC, we do not use the information
+	// carried in the `resp` here.
+	resp, err := tikvClient.SendRequest(ctx, addr, tikvrpc.NewRequest(tikvrpc.CmdGetHealthFeedback, &kvrpcpb.GetHealthFeedbackRequest{}), getHealthFeedbackTimeout)
 	if err != nil {
 		return err
 	}
@@ -260,7 +265,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedback(func(ctx context.Context, addr string) error {
+	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
 		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
 	}))
 	store := &KVStore{

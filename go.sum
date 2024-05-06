@@ -1,8 +1,8 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/MyonKeminta/kvproto v0.0.0-20240408102041-05784a0bc698 h1:3eRDRr/Z6I4x62V6i1/pO/ZYVeqm5Sk2Rctr/2AUSNM=
-github.com/MyonKeminta/kvproto v0.0.0-20240408102041-05784a0bc698/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
+github.com/MyonKeminta/kvproto v0.0.0-20240425072900-18d57b8e4657 h1:WehrZbBXr/K5yXzoMOqeuibcH7jdfxPCEs5IIFr889A=
+github.com/MyonKeminta/kvproto v0.0.0-20240425072900-18d57b8e4657/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
