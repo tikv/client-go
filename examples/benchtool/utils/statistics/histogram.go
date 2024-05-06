@@ -147,7 +147,6 @@ func HistogramOutputFunc(outputStyle string, prefix string, perfHist map[string]
 			op = strings.ToUpper(op)
 			line := []string{prefix, op}
 			line = append(line, hist.Format()...)
-			fmt.Println(line)
 			lines = append(lines, line)
 		}
 	}

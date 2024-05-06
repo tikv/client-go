@@ -57,7 +57,7 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 	}
 	rawKVConfig := &RawKVConfig{
 		global:         command.GetConfig(),
-		readWriteRatio: utils.NewReadWriteRatio("1:1"),
+		readWriteRatio: utils.NewReadWriteRatio("1:1"), // TODO: generate workloads meeting the read-write ratio
 	}
 
 	cmd := &cobra.Command{
