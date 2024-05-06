@@ -7,6 +7,7 @@ import (
 	"benchtool/workloads"
 	"context"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,11 @@ const (
 
 	WorkloadTypePut = "put"
 	WorkloadTypeGet = "get"
+
+	WorkloadDefaultKey   = "rawkv_key"
+	WorkloadDefaultValue = "rawkv_value"
+
+	WorkloadMaxInt64 = 1<<63 - 1
 )
 
 // Format: "Elapsed" - "Sum" - "Count" - "Ops" - "Avg" - "P50" - "P90" - "P95" - "P99" - "P999" - "P9999" - "Min" - "Max
@@ -34,6 +40,7 @@ type RawKVConfig struct {
 	prepareRetryInterval time.Duration
 	randomize            bool
 	readWriteRatio       *utils.ReadWriteRatio
+	commandType          string
 
 	global *config.GlobalConfig
 }
@@ -64,6 +71,7 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, rawKVConfig)
 		},
 	}
+	cmd.PersistentFlags().StringVar(&rawKVConfig.commandType, "cmd", "put", "Type of command to execute (put/get)")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.keySize, "key-size", 1, "Size of key in bytes")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
 	cmd.PersistentFlags().BoolVar(&rawKVConfig.randomize, "random", false, "Whether to randomize each value")
@@ -113,6 +121,10 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 func getRawKvConfig(ctx context.Context) *RawKVConfig {
 	c := ctx.Value(WorkloadImplName).(*RawKVConfig)
 	return c
+}
+
+func genRandomStr(prefix string, keySize int) string {
+	return fmt.Sprintf("%s_%0*d", prefix, keySize, rand.Intn(WorkloadMaxInt64))
 }
 
 type WorkloadImpl struct {
@@ -193,17 +205,22 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		return fmt.Errorf("no valid RawKV clients")
 	}
 	client := w.clients[threadID]
-
-	for i := 0; i < 10; i++ {
-		start := time.Now()
-		// Put
-		client.Put(ctx, []byte("Company"), []byte("PingCAP"))
-		w.stats.Record(WorkloadTypePut, time.Since(start))
-		// Get
-		start = time.Now()
-		client.Get(ctx, []byte("Company"))
-		w.stats.Record(WorkloadTypeGet, time.Since(start))
+	key := WorkloadDefaultKey
+	val := WorkloadDefaultValue
+	if w.cfg.randomize {
+		key = genRandomStr(WorkloadDefaultKey, w.cfg.keySize)
+		val = genRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
 	}
+
+	start := time.Now()
+	switch w.cfg.commandType {
+	case WorkloadTypePut:
+		client.Put(ctx, []byte(key), []byte(val))
+	case WorkloadTypeGet:
+		client.Get(ctx, []byte(key))
+		// TODO: add BatchGet and BatchPut
+	}
+	w.stats.Record(w.cfg.commandType, time.Since(start))
 	return nil
 }
 
