@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
@@ -48,6 +49,8 @@ type Codec interface {
 	GetKeyspace() []byte
 	// GetKeyspaceID return the keyspace id of the codec.
 	GetKeyspaceID() KeyspaceID
+	// GetKeyspaceMeta return the keyspace meta of the codec.
+	GetKeyspaceMeta() *keyspacepb.KeyspaceMeta
 	// EncodeRequest encodes with the given Codec.
 	// NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 	EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error)
