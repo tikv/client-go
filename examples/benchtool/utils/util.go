@@ -1,9 +1,24 @@
+// Copyright 2024 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package utils
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +28,7 @@ import (
 
 const (
 	DEFAULT_PRECISION = 2
+	MAX_INT64         = 1<<63 - 1
 )
 
 const (
@@ -21,6 +37,7 @@ const (
 	OutputStyleJson  = "json"
 )
 
+// ReadWriteRatio is used to parse the read-write ratio.
 type ReadWriteRatio struct {
 	Ratio        string
 	readPercent  int
@@ -42,9 +59,11 @@ func (r *ReadWriteRatio) ParseRatio() error {
 
 		readRatio, _ = strconv.Atoi(ratios[0])
 		writeRatio, _ = strconv.Atoi(ratios[1])
+		if readRatio < 0 || writeRatio < 0 {
+			return fmt.Errorf("invalid read-write-ratio format")
+		}
 
 		sumRatio := readRatio + writeRatio
-
 		r.readPercent = readRatio * 100 / sumRatio
 		r.writePercent = 100 - r.readPercent
 	} else {
@@ -71,6 +90,8 @@ func (r *ReadWriteRatio) GetPercent(choice string) int {
 	return 0
 }
 
+// Converting functions.
+
 func FloatToString(num float64) string {
 	return strconv.FormatFloat(num, 'f', DEFAULT_PRECISION, 64)
 }
@@ -78,6 +99,36 @@ func FloatToString(num float64) string {
 func IntToString(num int64) string {
 	return strconv.FormatInt(num, 10)
 }
+
+func StrArrsToByteArrs(strArrs []string) [][]byte {
+	byteArrs := make([][]byte, 0, len(strArrs))
+	for _, strArr := range strArrs {
+		byteArrs = append(byteArrs, []byte(strArr))
+	}
+	return byteArrs
+}
+
+func GenRandomStr(prefix string, keySize int) string {
+	return fmt.Sprintf("%s@%0*d", prefix, keySize, rand.Intn(MAX_INT64))
+}
+
+func GenRandomStrArrs(prefix string, keySize, count int) []string {
+	keys := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		keys = append(keys, GenRandomStr(prefix, keySize))
+	}
+	return keys
+}
+
+func GenRandomByteArrs(prefix string, keySize, count int) [][]byte {
+	keys := make([][]byte, 0, count)
+	for i := 0; i < count; i++ {
+		keys = append(keys, []byte(GenRandomStr(prefix, keySize)))
+	}
+	return keys
+}
+
+// Output formatting functions.
 
 func RenderString(format string, headers []string, values [][]string) {
 	if len(values) == 0 {

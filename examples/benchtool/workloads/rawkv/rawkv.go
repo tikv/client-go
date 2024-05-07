@@ -1,3 +1,17 @@
+// Copyright 2024 TiKV Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package rawkv
 
 import (
@@ -7,7 +21,6 @@ import (
 	"benchtool/workloads"
 	"context"
 	"fmt"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -18,18 +31,23 @@ import (
 const (
 	WorkloadImplName = "rawkv"
 
-	WorkloadTypePut = "put"
-	WorkloadTypeGet = "get"
+	WorkloadTypePut      = "put"
+	WorkloadTypeGet      = "get"
+	WorkloadTypeBatchPut = "batch_put"
+	WorkloadTypeBatchGet = "batch_get"
 
 	WorkloadDefaultKey   = "rawkv_key"
 	WorkloadDefaultValue = "rawkv_value"
-
-	WorkloadMaxInt64 = 1<<63 - 1
 )
+
+func isReadCommand(cmd string) bool {
+	return cmd == WorkloadTypeGet || cmd == WorkloadTypeBatchGet
+}
 
 type RawKVConfig struct {
 	keySize   int
 	valueSize int
+	batchSize int
 
 	prepareRetryCount    int
 	prepareRetryInterval time.Duration
@@ -69,6 +87,7 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 	cmd.PersistentFlags().StringVar(&rawKVConfig.commandType, "cmd", "put", "Type of command to execute (put/get)")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.keySize, "key-size", 1, "Size of key in bytes")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
+	cmd.PersistentFlags().IntVar(&rawKVConfig.batchSize, "batch-size", 1, "Size of batch for batch operations")
 	cmd.PersistentFlags().BoolVar(&rawKVConfig.randomize, "random", false, "Whether to randomize each value")
 	cmd.PersistentFlags().StringVar(&rawKVConfig.readWriteRatio.Ratio, "read-write-ratio", "1:1", "Read write ratio")
 
@@ -116,10 +135,6 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 func getRawKvConfig(ctx context.Context) *RawKVConfig {
 	c := ctx.Value(WorkloadImplName).(*RawKVConfig)
 	return c
-}
-
-func genRandomStr(prefix string, keySize int) string {
-	return fmt.Sprintf("%s_%0*d", prefix, keySize, rand.Intn(WorkloadMaxInt64))
 }
 
 type WorkloadImpl struct {
@@ -199,12 +214,33 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
 		return fmt.Errorf("no valid RawKV clients")
 	}
+
 	client := w.clients[threadID]
+
+	// For unary operations.
 	key := WorkloadDefaultKey
 	val := WorkloadDefaultValue
-	if w.cfg.randomize {
-		key = genRandomStr(WorkloadDefaultKey, w.cfg.keySize)
-		val = genRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
+
+	// For batch operations.
+	var (
+		keys [][]byte
+		vals [][]byte
+	)
+	switch w.cfg.commandType {
+	case WorkloadTypePut, WorkloadTypeGet:
+		if w.cfg.randomize {
+			key = utils.GenRandomStr(WorkloadDefaultKey, w.cfg.keySize)
+			if !isReadCommand(w.cfg.commandType) {
+				val = utils.GenRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
+			}
+		}
+	case WorkloadTypeBatchPut, WorkloadTypeBatchGet:
+		if w.cfg.randomize {
+			keys = utils.GenRandomByteArrs(WorkloadDefaultKey, w.cfg.keySize, w.cfg.batchSize)
+			if !isReadCommand(w.cfg.commandType) {
+				vals = utils.GenRandomByteArrs(WorkloadDefaultValue, w.cfg.valueSize, w.cfg.batchSize)
+			}
+		}
 	}
 
 	start := time.Now()
@@ -213,7 +249,10 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		client.Put(ctx, []byte(key), []byte(val))
 	case WorkloadTypeGet:
 		client.Get(ctx, []byte(key))
-		// TODO: add BatchGet and BatchPut
+	case WorkloadTypeBatchPut:
+		client.BatchPut(ctx, keys, vals)
+	case WorkloadTypeBatchGet:
+		client.BatchGet(ctx, keys)
 	}
 	w.stats.Record(w.cfg.commandType, time.Since(start))
 	return nil
@@ -231,7 +270,7 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		client.DeleteRange(ctx, []byte(""), []byte("")) // delete all keys
+		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultKey)) // delete all keys
 	}
 	return nil
 }
