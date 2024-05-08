@@ -15,8 +15,6 @@
 package util
 
 import (
-	// "container/list"
-	// "container/list"
 	"container/list"
 	"fmt"
 	"testing"
@@ -29,13 +27,13 @@ func TestMergeRangesSearchOverlapped(t *testing.T) {
 
 	mr := NewMergeRanges()
 	type Case struct {
-		key int
-		ok  bool
-		rng *keyRange
+		key        int
+		overlapped bool
+		rng        *keyRange // the range overlap with or after the key
 	}
 	checkOverlapped := func(c Case) {
-		mark, ok := mr.searchOverlapped(iToKey(c.key))
-		assert.Equal(c.ok, ok)
+		mark, overlapped := mr.searchOverlapped(iToKey(c.key))
+		assert.Equal(c.overlapped, overlapped)
 		if c.rng == nil {
 			assert.Nil(mark)
 		} else {
@@ -43,26 +41,29 @@ func TestMergeRangesSearchOverlapped(t *testing.T) {
 		}
 	}
 
+	// mr: empty
 	checkOverlapped(Case{0, false, nil})
 
-	insert(mr, 0, 1)
+	insertRange(mr, 0, 1)
+	// mr: [0,1)
 	cases := []Case{
-		{0, true, makeKeyRange(0, 1)},
-		{1, true, makeKeyRange(0, 1)},
+		{0, true, makeRange(0, 1)},
+		{1, true, makeRange(0, 1)},
 		{2, false, nil},
 	}
 	for _, c := range cases {
 		checkOverlapped(c)
 	}
 
-	insert(mr, 3, 5)
+	insertRange(mr, 3, 5)
+	// mr: [0,1), [3,5)
 	cases = []Case{
-		{0, true, makeKeyRange(0, 1)},
-		{1, true, makeKeyRange(0, 1)},
-		{2, false, makeKeyRange(3, 5)},
-		{3, true, makeKeyRange(3, 5)},
-		{4, true, makeKeyRange(3, 5)},
-		{5, true, makeKeyRange(3, 5)},
+		{0, true, makeRange(0, 1)},
+		{1, true, makeRange(0, 1)},
+		{2, false, makeRange(3, 5)},
+		{3, true, makeRange(3, 5)},
+		{4, true, makeRange(3, 5)},
+		{5, true, makeRange(3, 5)},
 		{6, false, nil},
 	}
 	for _, c := range cases {
@@ -75,17 +76,19 @@ func TestMergeRangesCovered(t *testing.T) {
 
 	mr := NewMergeRanges()
 	type Case struct {
-		start    int
-		end      int
-		expected bool
+		start   int
+		end     int
+		covered bool
 	}
 	checkCovered := func(c Case) {
-		assert.Equal(c.expected, mr.Covered(iToKey(c.start), iToKey(c.end)))
+		assert.Equal(c.covered, mr.Covered(iToKey(c.start), iToKey(c.end)))
 	}
 
+	// mr: empty
 	checkCovered(Case{0, 1, false})
 
-	insert(mr, 0, 1)
+	insertRange(mr, 0, 1)
+	// mr: [0,1)
 	cases := []Case{
 		{0, 1, true},
 		{1, 2, false},
@@ -94,7 +97,8 @@ func TestMergeRangesCovered(t *testing.T) {
 		checkCovered(c)
 	}
 
-	insert(mr, 2, 4)
+	insertRange(mr, 2, 4)
+	// mr: [0,1), [2,4)
 	cases = []Case{
 		{0, 1, true},
 		{1, 2, false},
@@ -117,30 +121,30 @@ func TestMergeRangesInsert(t *testing.T) {
 	assert := require.New(t)
 
 	mr := NewMergeRanges()
-	checkMr := func(keys [][2]int) {
+	assertEqual := func(keys [][2]int) {
 		expected := makeMergeRanges(keys)
 		assert.Equal(expected.ranges, mr.ranges)
 	}
 
-	insert(mr, 2, 3)
-	checkMr([][2]int{{2, 3}})
-	insert(mr, 3, 4)
-	checkMr([][2]int{{2, 4}})
+	insertRange(mr, 2, 3)
+	assertEqual([][2]int{{2, 3}})
+	insertRange(mr, 3, 4)
+	assertEqual([][2]int{{2, 4}})
 
-	insert(mr, 0, 1)
-	checkMr([][2]int{{0, 1}, {2, 4}})
-	insert(mr, 1, 2)
-	checkMr([][2]int{{0, 4}})
+	insertRange(mr, 0, 1)
+	assertEqual([][2]int{{0, 1}, {2, 4}})
+	insertRange(mr, 1, 2)
+	assertEqual([][2]int{{0, 4}})
 
-	insert(mr, 5, 6)
-	checkMr([][2]int{{0, 4}, {5, 6}})
-	insert(mr, 4, 5)
-	checkMr([][2]int{{0, 6}})
+	insertRange(mr, 5, 6)
+	assertEqual([][2]int{{0, 4}, {5, 6}})
+	insertRange(mr, 4, 5)
+	assertEqual([][2]int{{0, 6}})
 
-	insert(mr, 10, 11)
-	checkMr([][2]int{{0, 6}, {10, 11}})
-	insert(mr, 3, 12)
-	checkMr([][2]int{{0, 12}})
+	insertRange(mr, 10, 11)
+	assertEqual([][2]int{{0, 6}, {10, 11}})
+	insertRange(mr, 3, 12)
+	assertEqual([][2]int{{0, 12}})
 
 	assert.True(mr.Covered(iToKey(0), iToKey(12)))
 }
@@ -148,39 +152,40 @@ func TestMergeRangesInsert(t *testing.T) {
 func TestMergeRangesOverlappingRanges(t *testing.T) {
 	assert := require.New(t)
 
+	// mr: [2,12)
 	mr := makeMergeRanges([][2]int{{2, 12}})
-	checkMr := func(keys [][2]int) {
+	assertEqual := func(keys [][2]int) {
 		expected := makeMergeRanges(keys)
 		assert.Equal(expected.ranges, mr.ranges)
 	}
 
-	insert(mr, 2, 6)
-	checkMr([][2]int{{2, 12}})
+	insertRange(mr, 2, 6)
+	assertEqual([][2]int{{2, 12}})
 
-	insert(mr, 3, 8)
-	checkMr([][2]int{{2, 12}})
+	insertRange(mr, 3, 8)
+	assertEqual([][2]int{{2, 12}})
 
-	insert(mr, 6, 12)
-	checkMr([][2]int{{2, 12}})
+	insertRange(mr, 6, 12)
+	assertEqual([][2]int{{2, 12}})
 
-	insert(mr, 1, 4)
-	checkMr([][2]int{{1, 12}})
+	insertRange(mr, 1, 4)
+	assertEqual([][2]int{{1, 12}})
 
-	insert(mr, 4, 15)
-	checkMr([][2]int{{1, 15}})
+	insertRange(mr, 4, 15)
+	assertEqual([][2]int{{1, 15}})
 
-	insert(mr, 20, 21)
-	insert(mr, 22, 23)
-	insert(mr, 24, 25)
-	insert(mr, 14, 30)
-	checkMr([][2]int{{1, 30}})
+	insertRange(mr, 20, 21)
+	insertRange(mr, 22, 23)
+	insertRange(mr, 24, 25)
+	insertRange(mr, 14, 30)
+	assertEqual([][2]int{{1, 30}})
 
-	insert(mr, 40, 41)
-	insert(mr, 42, 43)
-	insert(mr, 50, 51)
-	insert(mr, 53, 54)
-	insert(mr, 0, 42)
-	checkMr([][2]int{{0, 43}, {50, 51}, {53, 54}})
+	insertRange(mr, 40, 41)
+	insertRange(mr, 42, 43)
+	insertRange(mr, 50, 51)
+	insertRange(mr, 53, 54)
+	insertRange(mr, 0, 42)
+	assertEqual([][2]int{{0, 43}, {50, 51}, {53, 54}})
 }
 
 func TestMergeRangesEmptyKey(t *testing.T) {
@@ -190,8 +195,8 @@ func TestMergeRangesEmptyKey(t *testing.T) {
 
 	assert.False(mr.Covered(nil, nil))
 
-	mr.Insert(nil, iToKey(10))
-	mr.Insert(iToKey(10), nil)
+	mr.Insert(nil, iToKey(10)) // (infinite, 10)
+	mr.Insert(iToKey(10), nil) // [10, infinite)
 	assert.True(mr.Covered(iToKey(0), iToKey(100)))
 	assert.True(mr.Covered(nil, nil))
 }
@@ -200,14 +205,14 @@ func iToKey(i int) []byte {
 	return []byte(fmt.Sprintf("%04d", i))
 }
 
-func makeKeyRange(start, end int) *keyRange {
+func makeRange(start, end int) *keyRange {
 	return &keyRange{
 		start: iToKey(start),
 		end:   iToKey(end),
 	}
 }
 
-func insert(mr *MergeRanges, start, end int) {
+func insertRange(mr *MergeRanges, start, end int) {
 	mr.Insert(iToKey(start), iToKey(end))
 }
 

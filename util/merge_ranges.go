@@ -62,9 +62,9 @@ func (m *MergeRanges) searchByStart(key []byte) (mark *list.Element, ok bool) {
 // range.start <= key <= range.end
 // If the key is found, return the element and true.
 // If the key is not found, return the element to insert BEFORE and false. When the mark is nil, push to the back.
-func (m *MergeRanges) searchOverlapped(key []byte) (mark *list.Element, ok bool) {
-	mark, ok = m.searchByStart(key)
-	if ok {
+func (m *MergeRanges) searchOverlapped(key []byte) (mark *list.Element, overlapped bool) {
+	mark, overlapped = m.searchByStart(key)
+	if overlapped {
 		return mark, true
 	}
 
@@ -84,6 +84,7 @@ func (m *MergeRanges) searchOverlapped(key []byte) (mark *list.Element, ok bool)
 	return mark, false
 }
 
+// Covered returns whether the range [start,end) is fully covered.
 func (m *MergeRanges) Covered(start []byte, end []byte) bool {
 	if len(end) == 0 {
 		end = maxEndKey
@@ -96,6 +97,7 @@ func (m *MergeRanges) Covered(start []byte, end []byte) bool {
 	return false
 }
 
+// Insert inserts the range [start,end) into MergeRanges.
 func (m *MergeRanges) Insert(start []byte, end []byte) {
 	if len(end) == 0 {
 		end = maxEndKey
