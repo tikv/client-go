@@ -90,6 +90,15 @@ type TiKVClient struct {
 
 	// RemoteCoprocessorAddr is the address of the remote coprocessor.
 	RemoteCoprocessorAddr string `toml:"remote-coprocessor-addr" json:"remote-coprocessor-addr"`
+
+	// TxnChunkWriterAddr is the address of the txn chunk writer for file-based txn.
+	TxnChunkWriterAddr string `toml:"txn-chunk-writer-addr" json:"txn-chunk-writer-addr"`
+	// TxnChunkWriterConcurrency is the concurrency to request the txn chunk writer for file-based txn.
+	TxnChunkWriterConcurrency uint `toml:"txn-chunk-writer-concurrency" json:"txn-chunk-writer-concurrency"`
+	// TxnChunkMaxSize is the maximum size of a txn chunk of file-based txn.
+	TxnChunkMaxSize uint64 `toml:"txn-chunk-max-size" json:"txn-chunk-max-size"`
+	// TxnFileMinMutationSize is the minimum size of mutations to use file-based txn.
+	TxnFileMinMutationSize uint64 `toml:"txn-file-min-mutation-size" json:"txn-file-min-mutation-size"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -159,6 +168,10 @@ func DefaultTiKVClient() TiKVClient {
 		CoprReqTimeout: 60 * time.Second,
 
 		ResolveLockLiteThreshold: 16,
+
+		TxnChunkWriterConcurrency: 4,
+		TxnChunkMaxSize:           128 * 1024 * 1024,
+		TxnFileMinMutationSize:    16 * 1024 * 1024,
 	}
 }
 
