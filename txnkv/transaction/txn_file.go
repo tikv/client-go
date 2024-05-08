@@ -46,7 +46,7 @@ import (
 )
 
 var (
-	// BuildTxnFileMaxBackoff is max sleep time to build TxnFile.
+	// BuildTxnFileMaxBackoff is max sleep time (in millisecond) to build TxnFile.
 	BuildTxnFileMaxBackoff = atomicutil.NewUint64(60000)
 
 	buildChunkErrMsg string = "txn file: build chunk failed"
