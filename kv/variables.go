@@ -60,7 +60,7 @@ func NewVariables(killed *uint32) *Variables {
 		BackoffLockFast: DefBackoffLockFast,
 		BackOffWeight:   DefBackOffWeight,
 		Killed:          killed,
-		EnableTxnFile:   true,
+		EnableTxnFile:   false,
 	}
 }
 
