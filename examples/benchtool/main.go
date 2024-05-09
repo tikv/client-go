@@ -18,6 +18,7 @@ import (
 	"benchtool/config"
 	"benchtool/workloads"
 	"benchtool/workloads/rawkv"
+	"benchtool/workloads/txnkv"
 	"context"
 	"fmt"
 	"os"
@@ -37,6 +38,7 @@ func main() {
 	// register all workloads
 	// TODO: add more workloads
 	rawkv.Register(commandLineParser)
+	txnkv.Register(commandLineParser)
 
 	var cancel context.CancelFunc
 	workloads.GlobalContext, cancel = context.WithCancel(context.Background())

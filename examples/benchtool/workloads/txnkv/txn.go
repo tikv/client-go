@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rawkv
+package txnkv
 
 import (
 	"benchtool/config"
@@ -25,40 +25,39 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tikv/client-go/v2/rawkv"
+	clientConfig "github.com/tikv/client-go/v2/config"
+	clientTxnKV "github.com/tikv/client-go/v2/txnkv"
 )
 
 const (
-	WorkloadImplName = "rawkv"
+	WorkloadImplName = "txnkv"
 
-	WorkloadTypePut      = "put"
-	WorkloadTypeGet      = "get"
-	WorkloadTypeBatchPut = "batch_put"
-	WorkloadTypeBatchGet = "batch_get"
+	WorkloadTypeWrite = "write"
+	WorkloadTypeRead  = "read"
 
-	WorkloadDefaultKey   = "rawkv_key"
-	WorkloadDefaultValue = "rawkv_value"
+	WorkloadDefaultKey   = "txnkv_key"
+	WorkloadDefaultValue = "txnkv_value"
+
+	WorkloadTxnModeDefault     = "2pc"
+	WorkloadTxnMode1PC         = "1pc"
+	WorkloadTxnModeAsyncCommit = "async-commit"
 )
 
-func isReadCommand(cmd string) bool {
-	return cmd == WorkloadTypeGet || cmd == WorkloadTypeBatchGet
-}
-
-type RawKVConfig struct {
-	keySize   int
-	valueSize int
-	batchSize int
+type TxnKVConfig struct {
+	keySize    int
+	valueSize  int
+	columnSize int
+	txnSize    int
 
 	prepareRetryCount    int
 	prepareRetryInterval time.Duration
-	randomize            bool
 	readWriteRatio       *utils.ReadWriteRatio
-	commandType          string
+	txnMode              string
 
 	global *config.GlobalConfig
 }
 
-func (c *RawKVConfig) Validate() error {
+func (c *TxnKVConfig) Validate() error {
 	if c.keySize <= 0 || c.valueSize <= 0 {
 		return fmt.Errorf("key size or value size must be greater than 0")
 	}
@@ -69,11 +68,11 @@ func (c *RawKVConfig) Validate() error {
 }
 
 // Register registers the workload to the command line parser
-func Register(command *config.CommandLineParser) *RawKVConfig {
+func Register(command *config.CommandLineParser) *TxnKVConfig {
 	if command == nil {
 		return nil
 	}
-	rawKVConfig := &RawKVConfig{
+	txnKVConfig := &TxnKVConfig{
 		global:         command.GetConfig(),
 		readWriteRatio: utils.NewReadWriteRatio("1:1"), // TODO: generate workloads meeting the read-write ratio
 	}
@@ -81,31 +80,31 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 	cmd := &cobra.Command{
 		Use: WorkloadImplName,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, rawKVConfig)
+			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, txnKVConfig)
 		},
 	}
-	cmd.PersistentFlags().StringVar(&rawKVConfig.commandType, "cmd", "put", "Type of command to execute (put/get)")
-	cmd.PersistentFlags().IntVar(&rawKVConfig.keySize, "key-size", 1, "Size of key in bytes")
-	cmd.PersistentFlags().IntVar(&rawKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
-	cmd.PersistentFlags().IntVar(&rawKVConfig.batchSize, "batch-size", 1, "Size of batch for batch operations")
-	cmd.PersistentFlags().BoolVar(&rawKVConfig.randomize, "random", false, "Whether to randomize each value")
-	cmd.PersistentFlags().StringVar(&rawKVConfig.readWriteRatio.Ratio, "read-write-ratio", "1:1", "Read write ratio")
+	cmd.PersistentFlags().StringVar(&txnKVConfig.readWriteRatio.Ratio, "read-write-ratio", "1:1", "Read write ratio")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.keySize, "key-size", 1, "Size of key in bytes")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.columnSize, "column-size", 1, "Size of column")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.txnSize, "txn-size", 1, "Size of transaction (normally, the lines of kv pairs)")
+	cmd.PersistentFlags().StringVar(&txnKVConfig.txnMode, "txn-mode", "2pc", "Mode of transaction (2pc/1pc/async-commit), default: 2pc")
 
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
-		Short: "Prepare data for RawKV workload",
+		Short: "Prepare data for TxnKV workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execRawKV("prepare")
+			execTxnKV("prepare")
 		},
 	}
-	cmdPrepare.PersistentFlags().IntVar(&rawKVConfig.prepareRetryCount, "retry-count", 50, "Retry count when errors occur")
-	cmdPrepare.PersistentFlags().DurationVar(&rawKVConfig.prepareRetryInterval, "retry-interval", 10*time.Millisecond, "The interval for each retry")
+	cmdPrepare.PersistentFlags().IntVar(&txnKVConfig.prepareRetryCount, "retry-count", 50, "Retry count when errors occur")
+	cmdPrepare.PersistentFlags().DurationVar(&txnKVConfig.prepareRetryInterval, "retry-interval", 10*time.Millisecond, "The interval for each retry")
 
 	var cmdRun = &cobra.Command{
 		Use:   "run",
 		Short: "Run workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execRawKV("run")
+			execTxnKV("run")
 		},
 	}
 
@@ -113,7 +112,7 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 		Use:   "cleanup",
 		Short: "Cleanup data for the workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execRawKV("cleanup")
+			execTxnKV("cleanup")
 		},
 	}
 
@@ -121,7 +120,7 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 		Use:   "check",
 		Short: "Check data consistency for the workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execRawKV("check")
+			execTxnKV("check")
 		},
 	}
 
@@ -129,24 +128,25 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 
 	command.GetCommand().AddCommand(cmd)
 
-	return rawKVConfig
+	return txnKVConfig
 }
 
-func getRawKvConfig(ctx context.Context) *RawKVConfig {
-	c := ctx.Value(WorkloadImplName).(*RawKVConfig)
+func getTxnKVConfig(ctx context.Context) *TxnKVConfig {
+	c := ctx.Value(WorkloadImplName).(*TxnKVConfig)
 	return c
 }
 
+// Workload is the implementation of WorkloadInterface
 type WorkloadImpl struct {
-	cfg     *RawKVConfig
-	clients []*rawkv.Client
+	cfg     *TxnKVConfig
+	clients []*clientTxnKV.Client
 
 	wait sync.WaitGroup
 
 	stats *statistics.PerfProfile
 }
 
-func NewRawKVWorkload(cfg *RawKVConfig) (*WorkloadImpl, error) {
+func NewTxnKVWorkload(cfg *TxnKVConfig) (*WorkloadImpl, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -155,9 +155,18 @@ func NewRawKVWorkload(cfg *RawKVConfig) (*WorkloadImpl, error) {
 		stats: statistics.NewPerfProfile(),
 	}
 
-	w.clients = make([]*rawkv.Client, 0, w.cfg.global.Threads)
+	clientConfig.UpdateGlobal(func(conf *clientConfig.Config) {
+		conf.TiKVClient.MaxBatchSize = (uint)(cfg.txnSize + 10)
+	})
+	// TODO: setting batch.
+	// defer config.UpdateGlobal(func(conf *config.Config) {
+	// 	conf.TiKVClient.MaxBatchSize = 0
+	// 	conf.TiKVClient.GrpcConnectionCount = 1
+	// })()
+
+	w.clients = make([]*clientTxnKV.Client, 0, w.cfg.global.Threads)
 	for i := 0; i < w.cfg.global.Threads; i++ {
-		client, err := rawkv.NewClient(workloads.GlobalContext, w.cfg.global.Targets, w.cfg.global.Security)
+		client, err := clientTxnKV.NewClient(w.cfg.global.Targets)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +206,7 @@ func (w *WorkloadImpl) CleanupThread(ctx context.Context, threadID int) {
 // Prepare implements WorkloadInterface
 func (w *WorkloadImpl) Prepare(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
-		return fmt.Errorf("no valid RawKV clients")
+		return fmt.Errorf("no valid TxnKV clients")
 	}
 
 	// return prepareWorkloadImpl(ctx, w, w.cfg.Threads, w.cfg.Warehouses, threadID)
@@ -212,53 +221,45 @@ func (w *WorkloadImpl) CheckPrepare(ctx context.Context, threadID int) error {
 
 func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
-		return fmt.Errorf("no valid RawKV clients")
+		return fmt.Errorf("no valid TxnKV clients")
 	}
 
 	client := w.clients[threadID]
-
-	// For unary operations.
 	key := WorkloadDefaultKey
-	val := WorkloadDefaultValue
+	val := utils.GenRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
 
-	// For batch operations.
-	var (
-		keys [][]byte
-		vals [][]byte
-		err  error
-	)
-	switch w.cfg.commandType {
-	case WorkloadTypePut, WorkloadTypeGet:
-		if w.cfg.randomize {
-			key = utils.GenRandomStr(WorkloadDefaultKey, w.cfg.keySize)
-			if !isReadCommand(w.cfg.commandType) {
-				val = utils.GenRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
-			}
-		}
-	case WorkloadTypeBatchPut, WorkloadTypeBatchGet:
-		if w.cfg.randomize {
-			keys = utils.GenRandomByteArrs(WorkloadDefaultKey, w.cfg.keySize, w.cfg.batchSize)
-			if !isReadCommand(w.cfg.commandType) {
-				vals = utils.GenRandomByteArrs(WorkloadDefaultValue, w.cfg.valueSize, w.cfg.batchSize)
-			}
-		}
-	}
-
-	start := time.Now()
-	switch w.cfg.commandType {
-	case WorkloadTypePut:
-		err = client.Put(ctx, []byte(key), []byte(val))
-	case WorkloadTypeGet:
-		_, err = client.Get(ctx, []byte(key))
-	case WorkloadTypeBatchPut:
-		err = client.BatchPut(ctx, keys, vals)
-	case WorkloadTypeBatchGet:
-		_, err = client.BatchGet(ctx, keys)
-	}
+	// Constructs the txn client and sets the txn mode
+	txn, err := client.Begin()
 	if err != nil {
-		return fmt.Errorf("execute %s failed: %v", w.cfg.commandType, err)
+		return fmt.Errorf("txn begin failed, err %v", err)
 	}
-	w.stats.Record(w.cfg.commandType, time.Since(start))
+	switch w.cfg.txnMode {
+	case WorkloadTxnMode1PC:
+		txn.SetEnable1PC(true)
+	case WorkloadTxnModeAsyncCommit:
+		txn.SetEnableAsyncCommit(true)
+	}
+
+	for row := 0; row < w.cfg.txnSize; row++ {
+		key = fmt.Sprintf("%s@col_", utils.GenRandomStr(key, w.cfg.keySize))
+		for col := 0; col < w.cfg.columnSize; col++ {
+			colKey := fmt.Sprintf("%s%d", key, col)
+			err = txn.Set([]byte(colKey), []byte(val))
+			if err != nil {
+				return fmt.Errorf("txn set failed, err %v", err)
+			}
+			_, err = txn.Get(ctx, []byte(colKey))
+			if err != nil {
+				return fmt.Errorf("txn get failed, err %v", err)
+			}
+		}
+	}
+	start := time.Now()
+	err = txn.Commit(ctx)
+	if err != nil {
+		return fmt.Errorf("txn commit failed, err %v", err)
+	}
+	w.stats.Record(w.cfg.txnMode, time.Since(start))
 	return nil
 }
 
@@ -270,11 +271,11 @@ func (w *WorkloadImpl) Check(ctx context.Context, threadID int) error {
 // Cleanup implements WorkloadInterface
 func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
-		return fmt.Errorf("no valid RawKV clients")
+		return fmt.Errorf("no valid TxnKV clients")
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultKey)) // delete all keys
+		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultKey), w.cfg.global.Threads) // delete all keys
 	}
 	return nil
 }
@@ -324,24 +325,24 @@ func (w *WorkloadImpl) Execute(cmd string) {
 	<-ch
 }
 
-func execRawKV(cmd string) {
+func execTxnKV(cmd string) {
 	if cmd == "" {
 		return
 	}
-	rawKVConfig := getRawKvConfig(workloads.GlobalContext)
+	TxnKVConfig := getTxnKVConfig(workloads.GlobalContext)
 
 	var workload *WorkloadImpl
 	var err error
-	if workload, err = NewRawKVWorkload(rawKVConfig); err != nil {
-		fmt.Printf("create RawKV workload failed: %v\n", err)
+	if workload, err = NewTxnKVWorkload(TxnKVConfig); err != nil {
+		fmt.Printf("create TxnKV workload failed: %v\n", err)
 		return
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, rawKVConfig.global.TotalTime)
+	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, TxnKVConfig.global.TotalTime)
 	workloads.GlobalContext = timeoutCtx
 	defer cancel()
 
 	workload.Execute(cmd)
-	fmt.Println("RawKV workload finished")
+	fmt.Println("TxnKV workload finished")
 	workload.OutputStats(true)
 }
