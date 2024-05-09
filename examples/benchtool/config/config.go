@@ -28,10 +28,6 @@ type GlobalConfig struct {
 	port       int
 	StatusPort int
 
-	Username string
-	Password string
-	DbName   string
-
 	Threads        int
 	TotalTime      time.Duration
 	TotalCount     int
@@ -58,8 +54,8 @@ func (c *GlobalConfig) ParsePdAddrs() error {
 }
 
 func (c *GlobalConfig) Format() string {
-	return fmt.Sprintf("Hosts: %v, Port: %d, StatusPort: %d, Username: %s, Password: %s, DbName: %s, Threads: %d, TotalTime: %v, TotalCount: %d, DropData: %t, IgnoreError: %t, OutputInterval: %v, Silence: %t, OutputStyle: %s",
-		c.hosts, c.port, c.StatusPort, c.Username, c.Password, c.DbName, c.Threads, c.TotalTime, c.TotalCount, c.DropData, c.IgnoreError, c.OutputInterval, c.Silence, c.OutputStyle)
+	return fmt.Sprintf("Hosts: %v, Port: %d, StatusPort: %d, Threads: %d, TotalTime: %v, TotalCount: %d, DropData: %t, IgnoreError: %t, OutputInterval: %v, Silence: %t, OutputStyle: %s",
+		c.hosts, c.port, c.StatusPort, c.Threads, c.TotalTime, c.TotalCount, c.DropData, c.IgnoreError, c.OutputInterval, c.Silence, c.OutputStyle)
 }
 
 type CommandLineParser struct {
@@ -80,10 +76,6 @@ func (p *CommandLineParser) Initialize() {
 	rootCmd.PersistentFlags().StringSliceVarP(&globalCfg.hosts, "host", "H", []string{"127.0.0.1"}, "PD host")
 	rootCmd.PersistentFlags().IntVarP(&globalCfg.port, "port", "P", 4000, "PD port")
 	rootCmd.PersistentFlags().IntVarP(&globalCfg.StatusPort, "statusPort", "S", 10080, "PD status port")
-	// Maybe unnecessary
-	rootCmd.PersistentFlags().StringVarP(&globalCfg.Username, "username", "U", "root", "Database user")
-	rootCmd.PersistentFlags().StringVarP(&globalCfg.Password, "password", "p", "", "Password for user")
-	rootCmd.PersistentFlags().StringVarP(&globalCfg.DbName, "db", "D", "test", "Database name")
 
 	rootCmd.PersistentFlags().IntVarP(&globalCfg.Threads, "threads", "T", 1, "Thread concurrency")
 	rootCmd.PersistentFlags().DurationVar(&globalCfg.TotalTime, "time", 1<<63-1, "Total execution time")

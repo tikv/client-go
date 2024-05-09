@@ -284,11 +284,6 @@ func (w *WorkloadImpl) OutputStats(ifSummaryReport bool) {
 	w.stats.PrintFmt(ifSummaryReport, w.cfg.global.OutputStyle, statistics.HistogramOutputFunc)
 }
 
-// DBName returns the name of test db.
-func (w *WorkloadImpl) DBName() string {
-	return w.cfg.global.DbName
-}
-
 func (w *WorkloadImpl) Execute(cmd string) {
 	w.wait.Add(w.cfg.global.Threads)
 

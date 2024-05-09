@@ -36,7 +36,6 @@ type WorkloadInterface interface {
 	Cleanup(ctx context.Context, threadID int) error
 	Check(ctx context.Context, threadID int) error
 	OutputStats(ifSummaryReport bool)
-	DBName() string
 }
 
 var GlobalContext context.Context
