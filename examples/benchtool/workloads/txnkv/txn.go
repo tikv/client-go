@@ -21,6 +21,7 @@ import (
 	"benchtool/workloads"
 	"context"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -240,17 +241,21 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		txn.SetEnableAsyncCommit(true)
 	}
 
+	sum := w.cfg.txnSize * w.cfg.columnSize
+	readCount := sum - w.cfg.readWriteRatio.GetPercent(utils.ReadPercent)/100
+
 	for row := 0; row < w.cfg.txnSize; row++ {
 		key = fmt.Sprintf("%s@col_", utils.GenRandomStr(key, w.cfg.keySize))
 		for col := 0; col < w.cfg.columnSize; col++ {
 			colKey := fmt.Sprintf("%s%d", key, col)
-			err = txn.Set([]byte(colKey), []byte(val))
-			if err != nil {
-				return fmt.Errorf("txn set failed, err %v", err)
+			if readCount > 0 && rand.Intn(sum)/2 == 0 {
+				_, err = txn.Get(ctx, []byte(colKey))
+				readCount -= 1
+			} else {
+				err = txn.Set([]byte(colKey), []byte(val))
 			}
-			_, err = txn.Get(ctx, []byte(colKey))
 			if err != nil {
-				return fmt.Errorf("txn get failed, err %v", err)
+				return fmt.Errorf("txn set / get failed, err %v", err)
 			}
 		}
 	}

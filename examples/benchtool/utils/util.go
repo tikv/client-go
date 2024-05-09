@@ -37,6 +37,11 @@ const (
 	OutputStyleJson  = "json"
 )
 
+const (
+	ReadPercent  = "read"
+	WritePercent = "write"
+)
+
 // ReadWriteRatio is used to parse the read-write ratio.
 type ReadWriteRatio struct {
 	Ratio        string
@@ -82,9 +87,9 @@ func (r *ReadWriteRatio) GetPercent(choice string) int {
 			return 0
 		}
 	}
-	if choice == "read" {
+	if choice == ReadPercent {
 		return r.readPercent
-	} else if choice == "write" {
+	} else if choice == WritePercent {
 		return r.writePercent
 	}
 	return 0
