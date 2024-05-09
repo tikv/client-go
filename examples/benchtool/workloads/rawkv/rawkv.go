@@ -36,8 +36,9 @@ const (
 	WorkloadTypeBatchPut = "batch_put"
 	WorkloadTypeBatchGet = "batch_get"
 
-	WorkloadDefaultKey   = "rawkv_key"
-	WorkloadDefaultValue = "rawkv_value"
+	WorkloadDefaultKey    = "rawkv_key"
+	WorkloadDefaultEndKey = "rawkv_key`"
+	WorkloadDefaultValue  = "rawkv_value"
 )
 
 func isReadCommand(cmd string) bool {
@@ -274,7 +275,7 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultKey)) // delete all keys
+		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey)) // delete all keys
 	}
 	return nil
 }

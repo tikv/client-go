@@ -37,8 +37,9 @@ const (
 	WorkloadTypeWrite = "write"
 	WorkloadTypeRead  = "read"
 
-	WorkloadDefaultKey   = "txnkv_key"
-	WorkloadDefaultValue = "txnkv_value"
+	WorkloadDefaultKey    = "txnkv_key"
+	WorkloadDefaultEndKey = "txnkv_key`"
+	WorkloadDefaultValue  = "txnkv_value"
 
 	WorkloadTxnModeDefault     = "2PC"
 	WorkloadTxnMode1PC         = "1PC"
@@ -285,7 +286,7 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultKey), w.cfg.global.Threads) // delete all keys
+		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey), w.cfg.global.Threads) // delete all keys
 	}
 	return nil
 }
