@@ -38,8 +38,8 @@ const (
 	WorkloadDefaultKey   = "txnkv_key"
 	WorkloadDefaultValue = "txnkv_value"
 
-	WorkloadTxnModeDefault     = "2pc"
-	WorkloadTxnMode1PC         = "1pc"
+	WorkloadTxnModeDefault     = "2PC"
+	WorkloadTxnMode1PC         = "1PC"
 	WorkloadTxnModeAsyncCommit = "async-commit"
 )
 
@@ -88,7 +88,7 @@ func Register(command *config.CommandLineParser) *TxnKVConfig {
 	cmd.PersistentFlags().IntVar(&txnKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
 	cmd.PersistentFlags().IntVar(&txnKVConfig.columnSize, "column-size", 1, "Size of column")
 	cmd.PersistentFlags().IntVar(&txnKVConfig.txnSize, "txn-size", 1, "Size of transaction (normally, the lines of kv pairs)")
-	cmd.PersistentFlags().StringVar(&txnKVConfig.txnMode, "txn-mode", "2pc", "Mode of transaction (2pc/1pc/async-commit), default: 2pc")
+	cmd.PersistentFlags().StringVar(&txnKVConfig.txnMode, "txn-mode", "2PC", "Mode of transaction (2PC/1PC/async-commit)")
 
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
