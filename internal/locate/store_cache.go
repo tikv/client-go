@@ -261,6 +261,11 @@ func newUninitializedStore(id uint64) *Store {
 	}
 }
 
+// StoreType returns the type of the store.
+func (s *Store) StoreType() tikvrpc.EndpointType {
+	return s.storeType
+}
+
 // IsTiFlash returns true if the storeType is TiFlash
 func (s *Store) IsTiFlash() bool {
 	return s.storeType == tikvrpc.TiFlash
@@ -323,6 +328,11 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 		}
 	}
 	return true
+}
+
+// GetHealthStatus returns the health status of the store. This is exported for test purpose.
+func (s *Store) GetHealthStatus() *StoreHealthStatus {
+	return s.healthStatus
 }
 
 func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
@@ -1012,9 +1022,12 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
 }
 
-func (s *StoreHealthStatus) resetTiKVServerSideSlowScoreForTest() {
+// ResetTiKVServerSideSlowScoreForTest resets the TiKV-side slow score information and make it expired so that the
+// next update can be effective. A new score should be passed to the function. For a store that's running normally
+// without any sign of being slow, the value should be 1.
+func (s *StoreHealthStatus) ResetTiKVServerSideSlowScoreForTest(score int64) {
 	s.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Hour * 2))
-	s.updateTiKVServerSideSlowScore(1, time.Now().Add(-time.Hour))
+	s.updateTiKVServerSideSlowScore(score, time.Now().Add(-time.Hour))
 }
 
 func (s *StoreHealthStatus) updateSlowFlag() {
