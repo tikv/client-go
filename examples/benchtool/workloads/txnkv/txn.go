@@ -27,6 +27,7 @@ import (
 
 	"github.com/spf13/cobra"
 	clientConfig "github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
 	clientTxnKV "github.com/tikv/client-go/v2/txnkv"
 )
 
@@ -90,6 +91,7 @@ func Register(command *config.CommandLineParser) *TxnKVConfig {
 	cmd.PersistentFlags().IntVar(&txnKVConfig.columnSize, "column-size", 1, "Size of column")
 	cmd.PersistentFlags().IntVar(&txnKVConfig.txnSize, "txn-size", 1, "Size of transaction (normally, the lines of kv pairs)")
 	cmd.PersistentFlags().StringVar(&txnKVConfig.txnMode, "txn-mode", "2PC", "Mode of transaction (2PC/1PC/async-commit)")
+	// TODO: add more flags on txn, such as pessimistic/optimistic lock, etc.
 
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
@@ -250,6 +252,9 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 			colKey := fmt.Sprintf("%s%d", key, col)
 			if readCount > 0 && rand.Intn(sum)/2 == 0 {
 				_, err = txn.Get(ctx, []byte(colKey))
+				if tikverr.IsErrNotFound(err) {
+					err = txn.Set([]byte(colKey), []byte(val))
+				}
 				readCount -= 1
 			} else {
 				err = txn.Set([]byte(colKey), []byte(val))
