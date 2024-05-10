@@ -982,6 +982,16 @@ type getRegionError interface {
 	GetRegionError() *errorpb.Error
 }
 
+func isResponseOKToNotImplGetRegionError(resp interface{}) bool {
+	switch resp.(type) {
+	case *MPPStreamResponse, *mpp.CancelTaskResponse, *mpp.IsAliveResponse,
+		*mpp.DispatchTaskResponse, *BatchCopStreamResponse, *tikvpb.BatchCommandsEmptyResponse:
+		return true
+	default:
+		return false
+	}
+}
+
 // GetRegionError returns the RegionError of the underlying concrete response.
 func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 	if resp.Resp == nil {
@@ -989,7 +999,7 @@ func (resp *Response) GetRegionError() (*errorpb.Error, error) {
 	}
 	err, ok := resp.Resp.(getRegionError)
 	if !ok {
-		if _, isEmpty := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); isEmpty {
+		if isResponseOKToNotImplGetRegionError(resp.Resp) {
 			return nil, nil
 		}
 		return nil, errors.Errorf("invalid response type %v", resp)
