@@ -39,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -812,7 +813,12 @@ func (s *replicaSelector) proxyReplica() *replica {
 // sliceIdentical checks whether two slices are referencing the same block of memory. Two `nil`s are also considered
 // the same.
 func sliceIdentical[T any](a, b []T) bool {
-	return len(a) == len(b) && unsafe.SliceData(a) == unsafe.SliceData(b)
+	if len(a) != len(b) {
+		return false
+	}
+	aHeader := (*reflect.SliceHeader)(unsafe.Pointer(&a))
+	bHeader := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	return aHeader.Data == bHeader.Data
 }
 
 func (s *replicaSelector) refreshRegionStore() {

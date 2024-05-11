@@ -36,6 +36,7 @@ package locate
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -173,7 +174,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeaderErrorWit
 	s.Nil(err)
 	s.NotNil(location)
 	bo := retry.NewBackoffer(context.Background(), 1000)
-	resp, _, _, err := NewRegionRequestSender(s.cache, cli).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
+	resp, _, err := NewRegionRequestSender(s.cache, cli).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, err := resp.GetRegionError()
@@ -189,8 +190,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSliceIdentical() {
 	a := make([]int, 0)
 	b := a
 	s.True(sliceIdentical(a, b))
-	b = make([]int, 0)
-	s.False(sliceIdentical(a, b))
+	// This is not guaranteed.
+	// b = make([]int, 0)
+	// s.False(sliceIdentical(a, b))
 
 	a = append(a, 1, 2, 3)
 	b = a
