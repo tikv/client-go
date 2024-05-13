@@ -834,7 +834,7 @@ const (
 	tikvSlowScoreSlowThreshold int64   = 80
 
 	tikvSlowScoreUpdateInterval       = time.Millisecond * 100
-	tikvSlowScoreActiveUpdateInterval = time.Second * 30
+	tikvSlowScoreActiveUpdateInterval = time.Second * 15
 )
 
 type StoreHealthStatus struct {
@@ -919,6 +919,12 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(ctx context.Cont
 		return
 	}
 
+	// Skip tick if the store's slow score is 1, as it's likely to be a normal case that a health store is not being
+	// accessed.
+	if s.tikvSideSlowScore.score.Load() <= 1 {
+		return
+	}
+
 	needRefreshing := func() bool {
 		lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
 		if lastUpdateTime == nil {
@@ -991,6 +997,20 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	lastScore := s.tikvSideSlowScore.score.Load()
 
 	if lastScore == score {
+		// It's still needed to update the lastUpdateTime to tell whether the slow score is not being updated for too
+		// long (so that it's needed to explicitly get the slow score).
+		// from TiKV.
+		// But it can be safely skipped if the score is 1 (as explicit getting slow score won't be performed in this
+		// case). And note that it should be updated within mutex.
+		if score > 1 {
+			// Skip if not locked as it's being updated concurrently.
+			if s.tikvSideSlowScore.TryLock() {
+				newUpdateTime := new(time.Time)
+				*newUpdateTime = currTime
+				s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
+				s.tikvSideSlowScore.Unlock()
+			}
+		}
 		return
 	}
 
