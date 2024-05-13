@@ -1516,61 +1516,6 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 }
 
-//<<<<<<< HEAD
-//func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, totalErrors map[string]int) {
-//	var replicaStatus []string
-//	replicaSelectorState := "nil"
-//	cacheRegionIsValid := "unknown"
-//	if s.replicaSelector != nil {
-//		switch s.replicaSelector.state.(type) {
-//		case *accessKnownLeader:
-//			replicaSelectorState = "accessKnownLeader"
-//		case *accessFollower:
-//			replicaSelectorState = "accessFollower"
-//		case *accessByKnownProxy:
-//			replicaSelectorState = "accessByKnownProxy"
-//		case *tryFollower:
-//			replicaSelectorState = "tryFollower"
-//		case *tryNewProxy:
-//			replicaSelectorState = "tryNewProxy"
-//		case *invalidLeader:
-//			replicaSelectorState = "invalidLeader"
-//		case *invalidStore:
-//			replicaSelectorState = "invalidStore"
-//		case *stateBase:
-//			replicaSelectorState = "stateBase"
-//		case nil:
-//			replicaSelectorState = "nil"
-//		}
-//		if s.replicaSelector.region != nil {
-//			if s.replicaSelector.region.isValid() {
-//				cacheRegionIsValid = "true"
-//			} else {
-//				cacheRegionIsValid = "false"
-//			}
-//		}
-//		for _, replica := range s.replicaSelector.replicas {
-//			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
-//				replica.peer.GetId(),
-//				replica.store.storeID,
-//				replica.isEpochStale(),
-//				replica.attempts,
-//				replica.epoch,
-//				atomic.LoadUint32(&replica.store.epoch),
-//				replica.store.getResolveState(),
-//				replica.store.getLivenessState(),
-//			))
-//		}
-//	}
-//	var totalErrorStr bytes.Buffer
-//	for err, cnt := range totalErrors {
-//		if totalErrorStr.Len() > 0 {
-//			totalErrorStr.WriteString(", ")
-//		}
-//		totalErrorStr.WriteString(err)
-//		totalErrorStr.WriteString(":")
-//		totalErrorStr.WriteString(strconv.Itoa(cnt))
-
 func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, tryTimes int, req *tikvrpc.Request, cost time.Duration, currentBackoffMs int, timeout time.Duration) {
 	var builder strings.Builder
 	// build the total round stats string.
