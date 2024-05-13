@@ -128,9 +128,15 @@ func TestCancelTimeoutRetErr(t *testing.T) {
 func TestSendWhenReconnect(t *testing.T) {
 	server, port := mockserver.StartMockTikvService()
 	require.True(t, port > 0)
+	restoreFn := config.UpdateGlobal(func(conf *config.Config) {
+		conf.TiKVClient.MaxConcurrencyRequestLimit = 10000
+	})
 
 	rpcClient := NewRPCClient()
-	defer rpcClient.Close()
+	defer func() {
+		rpcClient.Close()
+		restoreFn()
+	}()
 	addr := server.Addr()
 	conn, err := rpcClient.getConnArray(addr, true)
 	assert.Nil(t, err)
@@ -142,7 +148,7 @@ func TestSendWhenReconnect(t *testing.T) {
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 5*time.Second)
-	assert.True(t, strings.Contains(err.Error(), "timeout"))
+	require.Regexp(t, "wait recvLoop timeout,timeout:5s, wait_duration:.* context deadline exceeded", err.Error())
 	server.Stop()
 }
 
@@ -950,6 +956,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 					err.Error() == "rpc error: code = Unavailable desc = error reading from server: EOF" ||
 					strings.Contains(err.Error(), "context deadline exceeded") ||
 					strings.Contains(err.Error(), "connect: connection refused") ||
+					strings.Contains(err.Error(), "no available connections") ||
 					strings.Contains(err.Error(), "rpc error: code = Unavailable desc = error reading from server") {
 					continue
 				}
@@ -1009,4 +1016,34 @@ func TestErrConn(t *testing.T) {
 	errMsg := errors.New("unknown")
 	assert.True(t, errors.As(err1, &errMsg))
 	assert.EqualError(t, err1, errMsg.Error())
+}
+
+func TestFastFailWhenNoAvailableConn(t *testing.T) {
+	server, port := mockserver.StartMockTikvService()
+	require.True(t, port > 0)
+	require.True(t, server.IsRunning())
+	addr := server.Addr()
+	client := NewRPCClient()
+	defer func() {
+		err := client.Close()
+		require.NoError(t, err)
+		server.Stop()
+	}()
+
+	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
+	conn, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second, 0)
+	require.NoError(t, err)
+
+	for _, c := range conn.batchConn.batchCommandsClients {
+		// mock all client a in recreate.
+		c.lockForRecreate()
+	}
+	start := time.Now()
+	timeout := time.Second
+	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, timeout, 0)
+	require.Error(t, err)
+	require.Equal(t, "no available connections", err.Error())
+	require.Less(t, time.Since(start), timeout)
 }

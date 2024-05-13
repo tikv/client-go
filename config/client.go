@@ -44,9 +44,10 @@ import (
 
 const (
 	// DefStoreLivenessTimeout is the default value for store liveness timeout.
-	DefStoreLivenessTimeout      = "1s"
-	DefGrpcInitialWindowSize     = 1 << 27 // 128MiB
-	DefGrpcInitialConnWindowSize = 1 << 27 // 128MiB
+	DefStoreLivenessTimeout       = "1s"
+	DefGrpcInitialWindowSize      = 1 << 27 // 128MiB
+	DefGrpcInitialConnWindowSize  = 1 << 27 // 128MiB
+	DefMaxConcurrencyRequestLimit = math.MaxInt64
 )
 
 // TiKVClient is the config for tikv client.
@@ -174,7 +175,7 @@ func DefaultTiKVClient() TiKVClient {
 		CoprReqTimeout: 60 * time.Second,
 
 		ResolveLockLiteThreshold:   16,
-		MaxConcurrencyRequestLimit: math.MaxInt64,
+		MaxConcurrencyRequestLimit: DefMaxConcurrencyRequestLimit,
 		EnableReplicaSelectorV2:    true,
 	}
 }
