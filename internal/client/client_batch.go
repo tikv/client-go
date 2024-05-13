@@ -944,7 +944,8 @@ func sendBatchRequest(
 		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
-		reason := fmt.Sprintf("wait recvLoop timeout,timeout:%s, wait_send_duration:%s, wait_recv_duration:%s", timeout, waitSendDuration, time.Since(start)-waitSendDuration)
+		reason := fmt.Sprintf("wait recvLoop timeout, timeout:%s, wait_send_duration:%s, wait_recv_duration:%s",
+			timeout, util.FormatDuration(waitSendDuration), util.FormatDuration(time.Since(start)-waitSendDuration))
 		return nil, errors.WithMessage(context.DeadlineExceeded, reason)
 	}
 }
