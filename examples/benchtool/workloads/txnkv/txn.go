@@ -56,6 +56,7 @@ type TxnKVConfig struct {
 	prepareRetryInterval time.Duration
 	readWriteRatio       *utils.ReadWriteRatio
 	txnMode              string
+	lockTimeout          int
 
 	global *config.GlobalConfig
 }
@@ -92,6 +93,7 @@ func Register(command *config.CommandLineParser) *TxnKVConfig {
 	cmd.PersistentFlags().IntVar(&txnKVConfig.columnSize, "column-size", 1, "Size of column")
 	cmd.PersistentFlags().IntVar(&txnKVConfig.txnSize, "txn-size", 1, "Size of transaction (normally, the lines of kv pairs)")
 	cmd.PersistentFlags().StringVar(&txnKVConfig.txnMode, "txn-mode", "2PC", "Mode of transaction (2PC/1PC/async-commit)")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.lockTimeout, "lock-timeout", 0, "Lock timeout for each key in txn (>0 means pessimistic mode, 0 means optimistic mode)")
 	// TODO: add more flags on txn, such as pessimistic/optimistic lock, etc.
 
 	var cmdPrepare = &cobra.Command{
@@ -138,6 +140,14 @@ func Register(command *config.CommandLineParser) *TxnKVConfig {
 func getTxnKVConfig(ctx context.Context) *TxnKVConfig {
 	c := ctx.Value(WorkloadImplName).(*TxnKVConfig)
 	return c
+}
+
+// Assistants for TxnKV workload
+func prepareLockKeyWithTimeout(ctx context.Context, txn *clientTxnKV.KVTxn, key []byte, timeout int64) error {
+	if timeout > 0 {
+		return txn.LockKeysWithWaitTime(ctx, timeout, key)
+	}
+	return nil
 }
 
 // Workload is the implementation of WorkloadInterface
@@ -231,6 +241,7 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	client := w.clients[threadID]
 	key := WorkloadDefaultKey
 	val := utils.GenRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
+	lockTimeout := int64(w.cfg.lockTimeout)
 
 	// Constructs the txn client and sets the txn mode
 	txn, err := client.Begin()
@@ -243,22 +254,36 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	case WorkloadTxnModeAsyncCommit:
 		txn.SetEnableAsyncCommit(true)
 	}
+	// Default is optimistic lock mode.
+
+	txn.SetPessimistic(lockTimeout > 0)
 
 	sum := w.cfg.txnSize * w.cfg.columnSize
-	readCount := sum - w.cfg.readWriteRatio.GetPercent(utils.ReadPercent)/100
+	readCount := sum * w.cfg.readWriteRatio.GetPercent(utils.ReadPercent) / 100
+	writeCount := sum - readCount
+	canRead := func(sum, readCount, writeCount int) bool {
+		return readCount > 0 && (writeCount <= 0 || rand.Intn(sum)/2 == 0)
+	}
 
 	for row := 0; row < w.cfg.txnSize; row++ {
 		key = fmt.Sprintf("%s@col_", utils.GenRandomStr(key, w.cfg.keySize))
+		// Lock the key with timeout if necessary.
+		if err = prepareLockKeyWithTimeout(ctx, txn, []byte(key), lockTimeout); err != nil {
+			fmt.Printf("txn lock key failed, err %v", err)
+			continue
+		}
 		for col := 0; col < w.cfg.columnSize; col++ {
 			colKey := fmt.Sprintf("%s%d", key, col)
-			if readCount > 0 && rand.Intn(sum)/2 == 0 {
+			if canRead(sum, readCount, writeCount) {
 				_, err = txn.Get(ctx, []byte(colKey))
 				if tikverr.IsErrNotFound(err) {
 					err = txn.Set([]byte(colKey), []byte(val))
+					writeCount -= 1
 				}
 				readCount -= 1
 			} else {
 				err = txn.Set([]byte(colKey), []byte(val))
+				writeCount -= 1
 			}
 			if err != nil {
 				return fmt.Errorf("txn set / get failed, err %v", err)
