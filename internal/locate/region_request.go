@@ -88,24 +88,20 @@ type ReplicaSelectorExperimentalOptions struct {
 	}
 }
 
-var (
-	selectorExpOpts     ReplicaSelectorExperimentalOptions
-	selectorExpOptsLock sync.RWMutex
-)
+var selectorExpOpts atomic.Pointer[ReplicaSelectorExperimentalOptions]
 
 // SetReplicaSelectorExperimentalOptions sets experimental options of replica selector.
 func SetReplicaSelectorExperimentalOptions(opts ReplicaSelectorExperimentalOptions) {
-	selectorExpOptsLock.Lock()
-	selectorExpOpts = opts
-	selectorExpOptsLock.Unlock()
+	selectorExpOpts.Store(&opts)
 }
 
 // GetReplicaSelectorExperimentalOptions gets experimental options of replica selector.
 func GetReplicaSelectorExperimentalOptions() (opts ReplicaSelectorExperimentalOptions) {
-	selectorExpOptsLock.RLock()
-	opts = selectorExpOpts
-	selectorExpOptsLock.RUnlock()
-	return
+	ptr := selectorExpOpts.Load()
+	if ptr == nil {
+		return ReplicaSelectorExperimentalOptions{}
+	}
+	return *ptr
 }
 
 // RegionRequestSender sends KV/Cop requests to tikv server. It handles network
