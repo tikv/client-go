@@ -47,6 +47,7 @@ import (
 	"time"
 	"unsafe"
 
+	uatomic "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -80,6 +81,30 @@ func StoreShuttingDown(v uint32) {
 // LoadShuttingDown atomically loads ShuttingDown.
 func LoadShuttingDown() uint32 {
 	return atomic.LoadUint32(&shuttingDown)
+}
+
+// ReplicaSelectorExperimentalOptions defines experimental options of replica selector.
+type ReplicaSelectorExperimentalOptions struct {
+	StaleRead struct {
+		PreventRetryFollower     bool
+		RetryLeaderTimeoutFactor float64
+	}
+}
+
+var selectorExpOpts uatomic.Pointer[ReplicaSelectorExperimentalOptions]
+
+// SetReplicaSelectorExperimentalOptions sets experimental options of replica selector.
+func SetReplicaSelectorExperimentalOptions(opts ReplicaSelectorExperimentalOptions) {
+	selectorExpOpts.Store(&opts)
+}
+
+// GetReplicaSelectorExperimentalOptions gets experimental options of replica selector.
+func GetReplicaSelectorExperimentalOptions() (opts ReplicaSelectorExperimentalOptions) {
+	ptr := selectorExpOpts.Load()
+	if ptr == nil {
+		return ReplicaSelectorExperimentalOptions{}
+	}
+	return *ptr
 }
 
 // RegionRequestSender sends KV/Cop requests to tikv server. It handles network
@@ -265,6 +290,8 @@ type replicaSelector struct {
 	targetIdx AccessIndex
 	// replicas[proxyIdx] is the store used to redirect requests this time
 	proxyIdx AccessIndex
+
+	ReplicaSelectorExperimentalOptions
 }
 
 // selectorState is the interface of states of the replicaSelector.
@@ -627,22 +654,28 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		leader := selector.replicas[state.leaderIdx]
 		leaderEpochStale := leader.isEpochStale()
 		leaderUnreachable := leader.store.getLivenessState() != reachable
-		leaderInvalid := leaderEpochStale || leaderUnreachable || state.IsLeaderExhausted(leader)
-		if len(state.option.labels) > 0 {
-			logutil.BgLogger().Warn("unable to find stores with given labels",
+		leaderExhausted := state.IsLeaderExhausted(leader)
+		leaderTimeout := leader.deadlineErrUsingConfTimeout
+		if len(state.option.labels) > 0 && !state.option.leaderOnly {
+			logutil.BgLogger().Warn("unable to find a store with given labels",
 				zap.Uint64("region", selector.region.GetID()),
-				zap.Bool("leader-epoch-stale", leaderEpochStale),
-				zap.Bool("leader-unreachable", leaderUnreachable),
-				zap.Bool("leader-invalid", leaderInvalid),
 				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
 		}
-		if leaderInvalid || leader.deadlineErrUsingConfTimeout {
+		if leaderEpochStale || leaderUnreachable || leaderExhausted || leaderTimeout {
+			logutil.BgLogger().Warn("unable to find a valid leader",
+				zap.Uint64("region", selector.region.GetID()),
+				zap.Bool("stale-read", state.isStaleRead),
+				zap.Bool("epoch-stale", leaderEpochStale),
+				zap.Bool("unreachable", leaderUnreachable),
+				zap.Bool("exhausted", leaderExhausted),
+				zap.Bool("timeout", leaderTimeout))
 			// In stale-read, the request will fallback to leader after the local follower failure.
 			// If the leader is also unavailable, we can fallback to the follower and use replica-read flag again,
 			// The remote follower not tried yet, and the local follower can retry without stale-read flag.
 			// If leader tried and received deadline exceeded error, try follower.
-			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
+			if (state.isStaleRead && !selector.StaleRead.PreventRetryFollower) ||
+				(!state.isStaleRead && leader.deadlineErrUsingConfTimeout) {
 				selector.state = &tryFollower{
 					leaderIdx: state.leaderIdx,
 					lastIdx:   state.leaderIdx,
@@ -667,6 +700,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 	if resetStaleRead {
 		staleRead := false
 		rpcCtx.contextPatcher.staleRead = &staleRead
+		rpcCtx.contextPatcher.timeoutFactor = selector.StaleRead.RetryLeaderTimeoutFactor
 	}
 	return rpcCtx, nil
 }
@@ -772,6 +806,7 @@ func newReplicaSelector(regionCache *RegionCache, regionID RegionVerID, req *tik
 		state,
 		-1,
 		-1,
+		GetReplicaSelectorExperimentalOptions(),
 	}, nil
 }
 
@@ -1210,7 +1245,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 
-		rpcCtx.contextPatcher.applyTo(&req.Context)
+		timeout = rpcCtx.contextPatcher.applyTo(&req.Context, timeout)
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
 		}
