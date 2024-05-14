@@ -55,6 +55,9 @@ type PipelinedMemDB struct {
 	//   Some([]) -> delete
 	batchGetCache map[string]util.Option[[]byte]
 	memChangeHook func(uint64)
+
+	// metrics
+	flushWaitDuration time.Duration
 }
 
 const (
@@ -358,12 +361,14 @@ func (p *PipelinedMemDB) needFlush() bool {
 // FlushWait will wait for all flushing tasks are done and return the error if there is a failure.
 func (p *PipelinedMemDB) FlushWait() error {
 	if p.flushingMemDB != nil {
+		now := time.Now()
 		err := <-p.errCh
 		if err != nil {
 			err = p.handleAlreadyExistErr(err)
 		}
 		// cleanup the flushingMemDB so the next call of FlushWait will not wait for the error channel.
 		p.flushingMemDB = nil
+		p.flushWaitDuration += time.Since(now)
 		return err
 	}
 	return nil
@@ -512,4 +517,9 @@ func (p *PipelinedMemDB) Checkpoint() *MemDBCheckpoint {
 // RevertToCheckpoint implements MemBuffer interface.
 func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
 	panic("RevertToCheckpoint is not supported for PipelinedMemDB")
+}
+
+// FlushWaitDuration implements MemBuffer interface.
+func (p *PipelinedMemDB) FlushWaitDuration() time.Duration {
+	return p.flushWaitDuration
 }
