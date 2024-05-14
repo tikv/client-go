@@ -519,7 +519,9 @@ func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
 	panic("RevertToCheckpoint is not supported for PipelinedMemDB")
 }
 
-// FlushWaitDuration implements MemBuffer interface.
-func (p *PipelinedMemDB) FlushWaitDuration() time.Duration {
-	return p.flushWaitDuration
+// GetFlushMetrics implements MemBuffer interface.
+func (p *PipelinedMemDB) GetFlushMetrics() FlushMetrics {
+	return FlushMetrics{
+		WaitDuration: p.flushWaitDuration,
+	}
 }

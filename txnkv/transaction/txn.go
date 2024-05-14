@@ -876,7 +876,7 @@ func (txn *KVTxn) onCommitted(err error) {
 			AsyncCommitFallback: txn.committer.hasTriedAsyncCommit && !isAsyncCommit,
 			OnePCFallback:       txn.committer.hasTriedOnePC && !isOnePC,
 			Pipelined:           txn.IsPipelined(),
-			FlushWaitMs:         txn.GetMemBuffer().FlushWaitDuration().Milliseconds(),
+			FlushWaitMs:         txn.GetMemBuffer().GetFlushMetrics().WaitDuration.Milliseconds(),
 		}
 		if err != nil {
 			info.ErrMsg = err.Error()
