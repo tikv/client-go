@@ -45,6 +45,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	uatomic "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -88,7 +89,7 @@ type ReplicaSelectorExperimentalOptions struct {
 	}
 }
 
-var selectorExpOpts atomic.Pointer[ReplicaSelectorExperimentalOptions]
+var selectorExpOpts uatomic.Pointer[ReplicaSelectorExperimentalOptions]
 
 // SetReplicaSelectorExperimentalOptions sets experimental options of replica selector.
 func SetReplicaSelectorExperimentalOptions(opts ReplicaSelectorExperimentalOptions) {
