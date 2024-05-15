@@ -36,6 +36,7 @@ package locate
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -135,6 +136,82 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeader() {
 	resp, err := s.regionRequestSender.SendReq(bo, req, loc.Region, time.Second)
 	s.Nil(err)
 	s.NotNil(resp)
+	s.Nil(resp.GetRegionError())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeaderErrorWithNewLeaderInfo() {
+	cnt := 0
+	var location *KeyLocation
+	cli := &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		cnt++
+		switch cnt {
+		case 1:
+			region := s.cache.GetCachedRegionWithRLock(location.Region)
+			s.NotNil(region)
+			leaderPeerIdx := int(region.getStore().workTiKVIdx)
+			peers := region.meta.Peers
+			// return no leader with new leader info
+			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{
+					RegionId: req.RegionId,
+					Leader:   peers[(leaderPeerIdx+1)%len(peers)],
+				}},
+			}}
+		case 2:
+			response = &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				Value: []byte("a"),
+			}}
+		default:
+			return nil, fmt.Errorf("unexpected request")
+		}
+		return response, err
+	}}
+
+	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: []byte("a")}, kvrpcpb.Context{})
+	req.ReplicaReadType = kv.ReplicaReadLeader
+	var err error
+	location, err = s.cache.LocateKey(s.bo, []byte("a"))
+	s.Nil(err)
+	s.NotNil(location)
+	bo := retry.NewBackoffer(context.Background(), 1000)
+	resp, _, err := NewRegionRequestSender(s.cache, cli).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
+	s.Nil(err)
+	s.NotNil(resp)
+	regionErr, err := resp.GetRegionError()
+	s.Nil(err)
+	s.Nil(regionErr)
+	// It's unreasoneable to retry in upper layer, such as cop request, the upper layer will need to rebuild cop request and retry, there are some unnecessary overhead.
+	s.Equal(cnt, 2)
+	r := s.cache.GetCachedRegionWithRLock(location.Region)
+	s.True(r.isValid())
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestSliceIdentical() {
+	a := make([]int, 0)
+	b := a
+	s.True(sliceIdentical(a, b))
+	// This is not guaranteed.
+	// b = make([]int, 0)
+	// s.False(sliceIdentical(a, b))
+
+	a = append(a, 1, 2, 3)
+	b = a
+	s.True(sliceIdentical(a, b))
+	b = a[:2]
+	s.False(sliceIdentical(a, b))
+	b = a[1:]
+	s.False(sliceIdentical(a, b))
+	a = a[1:]
+	s.True(sliceIdentical(a, b))
+
+	a = nil
+	b = nil
+
+	s.True(sliceIdentical(a, b))
+	a = make([]int, 0)
+	s.False(sliceIdentical(a, b))
+	a = append(a, 1)
+	s.False(sliceIdentical(a, b))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) loadAndGetLeaderStore() (*Store, string) {
@@ -1441,4 +1518,109 @@ func (s *testRegionRequestToThreeStoresSuite) TestRetryRequestSource() {
 			s.Equal("test-retry_"+firstReplica+"_"+retryReplica, req.RequestSource)
 		}
 	}
+}
+
+func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorExperimentalOptions() {
+	key := []byte("key")
+	bo := retry.NewBackoffer(context.Background(), -1)
+
+	loc, err := s.cache.LocateKey(bo, key)
+	s.Require().NoError(err)
+
+	region := s.cache.GetCachedRegionWithRLock(loc.Region)
+	leader, _, _, _ := region.WorkStorePeer(region.getStore())
+	follower, _, _, _ := region.FollowerStorePeer(region.getStore(), 0, &storeSelectorOp{})
+
+	newStaleReadReq := func() *tikvrpc.Request {
+		req := tikvrpc.NewReplicaReadRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{Key: key}, kv.ReplicaReadMixed, nil)
+		req.ReadReplicaScope = oracle.GlobalTxnScope
+		req.TxnScope = oracle.GlobalTxnScope
+		req.EnableStaleRead()
+		return req
+	}
+
+	errRespTimeout := &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{Reason: "mock: deadline is exceeded"}}}}
+	errRespDataNotReady := &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}}}
+
+	mockLeaderTimeout := func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if addr == leader.addr {
+			return errRespTimeout, nil
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
+	}
+
+	mockLeaderSlow := func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		if addr == leader.addr && timeout <= 300*time.Millisecond {
+			return errRespTimeout, nil
+		}
+		if addr == follower.addr {
+			if req.StaleRead {
+				return errRespDataNotReady, nil
+			} else {
+				return errRespTimeout, nil
+			}
+		}
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
+	}
+
+	s.Run("PreventRetryFollowerOn", func() {
+		// 1. access local leader -> timeout
+		// 2. cannot retry leader (since timeout), cannot fallback to tryFollower -> pseudo error
+		defer SetReplicaSelectorExperimentalOptions(GetReplicaSelectorExperimentalOptions())
+		var opts ReplicaSelectorExperimentalOptions
+		opts.StaleRead.PreventRetryFollower = true
+		SetReplicaSelectorExperimentalOptions(opts)
+
+		s.regionRequestSender.client = &fnClient{fn: mockLeaderTimeout}
+		s.cache.LocateKey(bo, key)
+
+		resp, _, err := s.regionRequestSender.SendReqCtx(bo, newStaleReadReq(), loc.Region, time.Second, tikvrpc.TiKV, WithMatchLabels(leader.labels))
+		s.Require().NoError(err)
+		regionErr, err := resp.GetRegionError()
+		s.Require().NoError(err)
+		s.Require().NotNil(regionErr)
+		s.Require().True(IsFakeRegionError(regionErr))
+	})
+
+	s.Run("PreventRetryFollowerOff", func() {
+		// 1. access local leader -> timeout
+		// 2. cannot retry leader (since timeout), fallback to tryFollower, access follower -> ok
+		s.regionRequestSender.client = &fnClient{fn: mockLeaderTimeout}
+		s.cache.LocateKey(bo, key)
+
+		resp, rpcCtx, err := s.regionRequestSender.SendReqCtx(bo, newStaleReadReq(), loc.Region, time.Second, tikvrpc.TiKV, WithMatchLabels(leader.labels))
+		s.Require().NoError(err)
+		s.Require().Equal(rpcCtx.Addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+	})
+
+	s.Run("RetryLeaderTimeoutFactorOn", func() {
+		// 1. access local follower -> data is not ready
+		// 2. retry leader with timeout*2 -> ok
+		defer SetReplicaSelectorExperimentalOptions(GetReplicaSelectorExperimentalOptions())
+		var opts ReplicaSelectorExperimentalOptions
+		opts.StaleRead.RetryLeaderTimeoutFactor = 2
+		SetReplicaSelectorExperimentalOptions(opts)
+
+		s.regionRequestSender.client = &fnClient{fn: mockLeaderSlow}
+		s.cache.LocateKey(bo, key)
+
+		resp, _, err := s.regionRequestSender.SendReqCtx(bo, newStaleReadReq(), loc.Region, 200*time.Millisecond, tikvrpc.TiKV, WithMatchLabels(follower.labels))
+		s.Require().NoError(err)
+		s.Require().Equal(leader.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+	})
+
+	s.Run("RetryLeaderTimeoutFactorOff", func() {
+		// 1. access local follower -> data is not ready
+		// 2. retry leader with timeout -> timeout
+		// 3. fallback to tryFollower, access local follower with replica read -> timeout
+		// 4. access the other follower -> ok
+		s.regionRequestSender.client = &fnClient{fn: mockLeaderSlow}
+		s.cache.LocateKey(bo, key)
+
+		resp, rpcCtx, err := s.regionRequestSender.SendReqCtx(bo, newStaleReadReq(), loc.Region, 200*time.Millisecond, tikvrpc.TiKV, WithMatchLabels(follower.labels))
+		s.Require().NoError(err)
+		s.Require().Equal(rpcCtx.Addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+		s.Require().NotEqual(leader.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+		s.Require().NotEqual(follower.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+	})
 }

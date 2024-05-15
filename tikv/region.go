@@ -79,6 +79,9 @@ type RPCCancellerCtxKey = locate.RPCCancellerCtxKey
 // simply return the error to caller.
 type RegionRequestSender = locate.RegionRequestSender
 
+// ReplicaSelectorExperimentalOptions defines experimental options of replica selector.
+type ReplicaSelectorExperimentalOptions = locate.ReplicaSelectorExperimentalOptions
+
 // StoreSelectorOption configures storeSelectorOp.
 type StoreSelectorOption = locate.StoreSelectorOption
 
@@ -145,6 +148,16 @@ func LoadShuttingDown() uint32 {
 // StoreShuttingDown atomically stores ShuttingDown into v.
 func StoreShuttingDown(v uint32) {
 	locate.StoreShuttingDown(v)
+}
+
+// SetReplicaSelectorExperimentalOptions sets experimental options of replica selector.
+func SetReplicaSelectorExperimentalOptions(opts ReplicaSelectorExperimentalOptions) {
+	locate.SetReplicaSelectorExperimentalOptions(opts)
+}
+
+// GetReplicaSelectorExperimentalOptions gets experimental options of replica selector.
+func GetReplicaSelectorExperimentalOptions() (opts ReplicaSelectorExperimentalOptions) {
+	return locate.GetReplicaSelectorExperimentalOptions()
 }
 
 // WithMatchLabels indicates selecting stores with matched labels
