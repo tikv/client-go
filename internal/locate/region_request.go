@@ -509,8 +509,10 @@ func (s *replicaSelector) String() string {
 	}
 	var replicaStatus []string
 	cacheRegionIsValid := "unknown"
+	leaderPeerID := uint64(0)
 	if s != nil {
 		if s.region != nil {
+			leaderPeerID = s.region.GetLeaderPeerID()
 			if s.region.isValid() {
 				cacheRegionIsValid = "true"
 			} else {
@@ -531,7 +533,8 @@ func (s *replicaSelector) String() string {
 			))
 		}
 	}
-	return fmt.Sprintf("{state: %v, cacheRegionIsValid: %v, replicaStatus: %v}", selectorStateStr, cacheRegionIsValid, replicaStatus)
+	return fmt.Sprintf("{state: %v, cacheRegionIsValid: %v, leaderPeerID: %v, replicaStatus: %v}",
+		selectorStateStr, cacheRegionIsValid, leaderPeerID, replicaStatus)
 }
 
 // selectorState is the interface of states of the replicaSelector.
