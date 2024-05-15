@@ -133,7 +133,7 @@ func (b *Backoffer) BackoffWithMaxSleepTxnLockFast(maxSleepMs int, err error) er
 // and never sleep more than maxSleepMs for each sleep.
 func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err error) error {
 	if strings.Contains(err.Error(), tikverr.MismatchClusterID) {
-		logutil.BgLogger().Fatal("critical error", zap.Error(err))
+		logutil.Logger(b.ctx).Fatal("critical error", zap.Error(err))
 	}
 	select {
 	case <-b.ctx.Done():
@@ -176,7 +176,7 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 			errMsg += fmt.Sprintf("\nlongest sleep type: %s, time: %dms", longestSleepCfg.String(), longestSleepTime)
 			returnedErr = longestSleepCfg.err
 		}
-		logutil.BgLogger().Warn(errMsg)
+		logutil.Logger(b.ctx).Warn(errMsg)
 		// Use the backoff type that contributes most to the timeout to generate a MySQL error.
 		return errors.WithStack(returnedErr)
 	}
