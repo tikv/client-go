@@ -56,6 +56,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -871,4 +872,21 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 		"{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}, {peer:5, store:6, err:server_is_Busy}, {peer:6, store:6, err:server_is_Busy}, overflow_count:{{peer:6, error_stats:{server_is_Busy:9}}, {peer:5, error_stats:{server_is_Busy:9}}}",
 	}
 	s.Contains(expecteds, access.String())
+}
+
+type noCauseError struct {
+	error
+}
+
+func (_ noCauseError) Cause() error {
+	return nil
+}
+
+func TestGetErrMsg(t *testing.T) {
+	err := noCauseError{error: errors.New("no cause err")}
+	require.Equal(t, nil, errors.Cause(err))
+	require.Panicsf(t, func() {
+		errors.Cause(err).Error()
+	}, "should panic")
+	require.Equal(t, "no cause err", getErrMsg(err))
 }
