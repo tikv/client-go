@@ -25,11 +25,12 @@ import (
 )
 
 func TestGetHealthFeedback(t *testing.T) {
-	if *withTiKV {
+	if !*withTiKV {
 		return
 	}
 
 	tikvCluster := NewTestStore(t)
+	defer tikvCluster.Close()
 
 	// Find any TiKV node
 	store := tikvCluster.GetRegionCache().GetAllStores()[0]
@@ -52,8 +53,8 @@ func TestGetHealthFeedback(t *testing.T) {
 		require.NoError(t, err)
 		getHealthFeedbackResp := resp.Resp.(*kvrpcpb.GetHealthFeedbackResponse)
 		require.NotNil(t, getHealthFeedbackResp)
-		require.NotEqual(t, 0, getHealthFeedbackResp.GetHealthFeedback().GetFeedbackSeqNo())
-		require.Equal(t, 1, getHealthFeedbackResp.GetHealthFeedback().GetSlowScore())
+		require.NotEqual(t, uint64(0), getHealthFeedbackResp.GetHealthFeedback().GetFeedbackSeqNo())
+		require.Equal(t, int32(1), getHealthFeedbackResp.GetHealthFeedback().GetSlowScore())
 		require.Equal(t, store.StoreID(), getHealthFeedbackResp.GetHealthFeedback().GetStoreId())
 		// Updated in batch RPC stream.
 		require.Equal(t, int64(1), store.GetHealthStatus().GetHealthStatusDetail().TiKVSideSlowScore)
