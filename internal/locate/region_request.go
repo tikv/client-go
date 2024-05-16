@@ -2222,9 +2222,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 			}
 		}
 	}
-	if errStr := getErrMsg(err); len(errStr) > 0 {
-		metrics.TiKVRPCErrorCounter.WithLabelValues(errStr, storeLabel).Inc()
-	}
+	metrics.TiKVRPCErrorCounter.WithLabelValues(getErrMsg(err), storeLabel).Inc()
 
 	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
 		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
