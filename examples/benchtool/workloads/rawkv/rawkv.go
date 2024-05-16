@@ -31,14 +31,23 @@ import (
 const (
 	WorkloadImplName = "rawkv"
 
-	WorkloadTypePut      = "put"
-	WorkloadTypeGet      = "get"
-	WorkloadTypeBatchPut = "batch_put"
-	WorkloadTypeBatchGet = "batch_get"
+	WorkloadTypePut            = "put"
+	WorkloadTypeGet            = "get"
+	WorkloadTypeDel            = "del"
+	WorkloadTypeBatchPut       = "batch_put"
+	WorkloadTypeBatchGet       = "batch_get"
+	WorkloadTypeBatchDel       = "batch_del"
+	WorkloadTypeScan           = "scan"
+	WorkloadTypeReverseScan    = "reverse_scan"
+	WorkloadTypeCompareAndSwap = "cas"
 
 	WorkloadDefaultKey    = "rawkv_key"
 	WorkloadDefaultEndKey = "rawkv_key`"
 	WorkloadDefaultValue  = "rawkv_value"
+
+	WorkloadColumnFamilyDefault = "CF_DEFAULT"
+	WorkloadColumnFamilyWrite   = "CF_WRITE"
+	WorkloadColumnFamilyLock    = "CF_LOCK"
 )
 
 func isReadCommand(cmd string) bool {
@@ -50,11 +59,11 @@ type RawKVConfig struct {
 	valueSize int
 	batchSize int
 
+	columnFamily         string
+	commandType          string
 	prepareRetryCount    int
 	prepareRetryInterval time.Duration
 	randomize            bool
-	readWriteRatio       *utils.ReadWriteRatio
-	commandType          string
 
 	global *config.GlobalConfig
 }
@@ -63,8 +72,10 @@ func (c *RawKVConfig) Validate() error {
 	if c.keySize <= 0 || c.valueSize <= 0 {
 		return fmt.Errorf("key size or value size must be greater than 0")
 	}
-	if err := c.readWriteRatio.ParseRatio(); err != nil {
-		return fmt.Errorf("parse read-write-ratio failed: %v", err)
+	if c.columnFamily != WorkloadColumnFamilyDefault &&
+		c.columnFamily != WorkloadColumnFamilyWrite &&
+		c.columnFamily != WorkloadColumnFamilyLock {
+		return fmt.Errorf("invalid column family: %s", c.columnFamily)
 	}
 	return c.global.ParsePdAddrs()
 }
@@ -75,8 +86,7 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 		return nil
 	}
 	rawKVConfig := &RawKVConfig{
-		global:         command.GetConfig(),
-		readWriteRatio: utils.NewReadWriteRatio("1:1"), // TODO: generate workloads meeting the read-write ratio
+		global: command.GetConfig(),
 	}
 
 	cmd := &cobra.Command{
@@ -85,12 +95,12 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, rawKVConfig)
 		},
 	}
-	cmd.PersistentFlags().StringVar(&rawKVConfig.commandType, "cmd", "put", "Type of command to execute (put/get)")
+	cmd.PersistentFlags().StringVar(&rawKVConfig.columnFamily, "cf", "default", "Column family name (default|write|lock)")
+	cmd.PersistentFlags().StringVar(&rawKVConfig.commandType, "cmd", "put", "Type of command to execute (put|get|del|batch_put|batch_get|batch_del|scan|reserve_scan|cas)")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.keySize, "key-size", 1, "Size of key in bytes")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
 	cmd.PersistentFlags().IntVar(&rawKVConfig.batchSize, "batch-size", 1, "Size of batch for batch operations")
 	cmd.PersistentFlags().BoolVar(&rawKVConfig.randomize, "random", false, "Whether to randomize each value")
-	cmd.PersistentFlags().StringVar(&rawKVConfig.readWriteRatio.Ratio, "read-write-ratio", "1:1", "Read write ratio")
 
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
@@ -182,6 +192,12 @@ func (w *WorkloadImpl) isValidThread(threadID int) bool {
 // InitThread implements WorkloadInterface
 func (w *WorkloadImpl) InitThread(ctx context.Context, threadID int) error {
 	// Nothing to do
+	if !w.isValidThread(threadID) {
+		return fmt.Errorf("no valid RawKV clients")
+	}
+	client := w.clients[threadID]
+	client.SetAtomicForCAS(w.cfg.commandType == WorkloadTypeCompareAndSwap)
+	client.SetColumnFamily(w.cfg.columnFamily)
 	return nil
 }
 
@@ -229,14 +245,14 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		err  error
 	)
 	switch w.cfg.commandType {
-	case WorkloadTypePut, WorkloadTypeGet:
+	case WorkloadTypePut, WorkloadTypeGet, WorkloadTypeDel, WorkloadTypeCompareAndSwap, WorkloadTypeScan, WorkloadTypeReverseScan:
 		if w.cfg.randomize {
 			key = utils.GenRandomStr(WorkloadDefaultKey, w.cfg.keySize)
 			if !isReadCommand(w.cfg.commandType) {
 				val = utils.GenRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
 			}
 		}
-	case WorkloadTypeBatchPut, WorkloadTypeBatchGet:
+	case WorkloadTypeBatchPut, WorkloadTypeBatchGet, WorkloadTypeBatchDel:
 		if w.cfg.randomize {
 			keys = utils.GenRandomByteArrs(WorkloadDefaultKey, w.cfg.keySize, w.cfg.batchSize)
 			if !isReadCommand(w.cfg.commandType) {
@@ -251,12 +267,24 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		err = client.Put(ctx, []byte(key), []byte(val))
 	case WorkloadTypeGet:
 		_, err = client.Get(ctx, []byte(key))
+	case WorkloadTypeDel:
+		err = client.Delete(ctx, []byte(key))
 	case WorkloadTypeBatchPut:
 		err = client.BatchPut(ctx, keys, vals)
 	case WorkloadTypeBatchGet:
 		_, err = client.BatchGet(ctx, keys)
+	case WorkloadTypeBatchDel:
+		err = client.BatchDelete(ctx, keys)
+	case WorkloadTypeCompareAndSwap:
+		var oldVal []byte
+		oldVal, _ = client.Get(ctx, []byte(key))
+		_, _, err = client.CompareAndSwap(ctx, []byte(key), []byte(oldVal), []byte(val)) // Experimental
+	case WorkloadTypeScan:
+		_, _, err = client.Scan(ctx, []byte(key), []byte(WorkloadDefaultEndKey), w.cfg.batchSize)
+	case WorkloadTypeReverseScan:
+		_, _, err = client.ReverseScan(ctx, []byte(key), []byte(WorkloadDefaultKey), w.cfg.batchSize)
 	}
-	if err != nil {
+	if err != nil && !w.cfg.global.IgnoreError {
 		return fmt.Errorf("execute %s failed: %v", w.cfg.commandType, err)
 	}
 	w.stats.Record(w.cfg.commandType, time.Since(start))
@@ -265,6 +293,18 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 
 // Check implements WorkloadInterface
 func (w *WorkloadImpl) Check(ctx context.Context, threadID int) error {
+	if !w.isValidThread(threadID) {
+		return fmt.Errorf("no valid RawKV clients")
+	}
+	if threadID == 0 {
+		client := w.clients[threadID]
+		checksum, err := client.Checksum(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey))
+		if err != nil {
+			return nil
+		} else {
+			fmt.Printf("RawKV checksum: %d\n", checksum)
+		}
+	}
 	return nil
 }
 
