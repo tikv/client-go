@@ -886,7 +886,7 @@ func TestGetErrMsg(t *testing.T) {
 	err := noCauseError{error: errors.New("no cause err")}
 	require.Equal(t, nil, errors.Cause(err))
 	require.Panicsf(t, func() {
-		errors.Cause(err).Error()
+		_ = errors.Cause(err).Error()
 	}, "should panic")
 	require.Equal(t, "no cause err", getErrMsg(err))
 }
