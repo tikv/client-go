@@ -52,6 +52,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -743,4 +744,21 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 	wg.Wait()
 	// batchSendLoop should not panic.
 	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicCounter), int64(0))
+}
+
+type noCauseError struct {
+	error
+}
+
+func (_ noCauseError) Cause() error {
+	return nil
+}
+
+func TestGetErrMsg(t *testing.T) {
+	err := noCauseError{error: errors.New("no cause err")}
+	require.Equal(t, nil, errors.Cause(err))
+	require.Panicsf(t, func() {
+		_ = errors.Cause(err).Error()
+	}, "should panic")
+	require.Equal(t, "no cause err", getErrMsg(err))
 }
