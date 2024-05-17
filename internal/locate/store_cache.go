@@ -706,7 +706,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	conn, cli, err := createKVHealthClient(ctx, addr)
+	conn, cli, err := createKVHealthClient(addr)
 	if err != nil {
 		logutil.BgLogger().Info("[health check] create grpc connection failed", zap.String("store", addr), zap.Error(err))
 		l = unreachable
@@ -744,7 +744,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 	return
 }
 
-func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
+func createKVHealthClient(addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
 	// Temporarily directly load the config from the global config, however it's not a good idea to let RegionCache to
 	// access it.
 	// TODO: Pass the config in a better way, or use the connArray inner the client directly rather than creating new
@@ -762,8 +762,7 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	keepAliveTimeout := cfg.TiKVClient.GrpcKeepAliveTimeout
-	conn, err := grpc.DialContext(
-		ctx,
+	conn, err := grpc.NewClient(
 		addr,
 		opt,
 		grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
