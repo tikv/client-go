@@ -37,7 +37,6 @@ package locate
 import (
 	"context"
 	"fmt"
-	"maps"
 	"math/rand"
 	"reflect"
 	"strconv"
@@ -262,10 +261,14 @@ func (r *RequestErrorStats) String() string {
 // Clone returns a copy of itself.
 func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
-	maps.Copy(newRs.RPCStats, r.RPCStats)
+	for k, v := range r.RPCStats {
+		newRs.RPCStats[k] = v
+	}
 	if len(r.ErrStats) > 0 {
 		newRs.ErrStats = make(map[string]int)
-		maps.Copy(newRs.ErrStats, r.ErrStats)
+		for k, v := range r.ErrStats {
+			newRs.ErrStats[k] = v
+		}
 		newRs.OtherErrCnt = r.OtherErrCnt
 	}
 	return newRs
