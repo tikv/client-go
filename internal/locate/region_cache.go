@@ -2067,7 +2067,9 @@ func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	var stores []*Store
 	for _, s := range c.storeMu.stores {
 		if s.storeType == tikvrpc.TiFlash {
-			if !labelFilter(s.labels) {
+			// it should only returns resolved stores so that users won't be bothered by tombstones.
+			// ref: https://github.com/pingcap/tidb/issues/46602
+			if !labelFilter(s.labels) || s.getResolveState() != resolved {
 				continue
 			}
 			stores = append(stores, s)
@@ -2629,7 +2631,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	if store == nil || (store != nil && store.GetState() == metapb.StoreState_Tombstone) {
 		// store has be removed in PD, we should invalidate all regions using those store.
 		logutil.BgLogger().Info("invalidate regions in removed store",
-			zap.Uint64("store", s.storeID), zap.String("add", s.addr))
+			zap.Uint64("store", s.storeID), zap.String("addr", s.addr))
 		atomic.AddUint32(&s.epoch, 1)
 		s.setResolveState(tombstone)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
