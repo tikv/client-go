@@ -901,7 +901,7 @@ func (w *chunkWriterClient) buildChunk(bo *retry.Backoffer, buf []byte) (uint64,
 				bodyStr = string(data)
 			}
 			logutil.Logger(bo.GetCtx()).Warn("build txn file service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
-			err = bo.Backoff(retry.BoTiKVServerBusy, errors.WithMessagef(err, "build txn file service error, http status %s", resp.Status))
+			err = bo.Backoff(retry.BoTiKVServerBusy, fmt.Errorf("build txn file service error, http status %s", resp.Status))
 			if err != nil {
 				return 0, errors.WithStack(err)
 			}
