@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -743,4 +745,64 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 	wg.Wait()
 	// batchSendLoop should not panic.
 	s.Equal(atomic.LoadInt64(&client.BatchSendLoopPanicCounter), int64(0))
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
+	reqStats := NewRegionRequestRuntimeStats()
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Second)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdGet, time.Millisecond)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdCop, time.Second*2)
+	reqStats.RecordRPCRuntimeStats(tikvrpc.CmdCop, time.Millisecond*200)
+	reqStats.RecordRPCErrorStats("context canceled")
+	reqStats.RecordRPCErrorStats("context canceled")
+	reqStats.RecordRPCErrorStats("region_not_found")
+	reqStats.Merge(NewRegionRequestRuntimeStats())
+	reqStats2 := NewRegionRequestRuntimeStats()
+	reqStats2.Merge(reqStats.Clone())
+	expecteds := []string{
+		// Since map iteration order is random, we need to check all possible orders.
+		"Get:{num_rpc:2, total_time:1s},Cop:{num_rpc:2, total_time:2.2s}, rpc_errors:{region_not_found:1, context canceled:2}",
+		"Get:{num_rpc:2, total_time:1s},Cop:{num_rpc:2, total_time:2.2s}, rpc_errors:{context canceled:2, region_not_found:1}",
+		"Cop:{num_rpc:2, total_time:2.2s},Get:{num_rpc:2, total_time:1s}, rpc_errors:{context canceled:2, region_not_found:1}",
+		"Cop:{num_rpc:2, total_time:2.2s},Get:{num_rpc:2, total_time:1s}, rpc_errors:{region_not_found:1, context canceled:2}",
+	}
+	s.Contains(expecteds, reqStats.String())
+	s.Contains(expecteds, reqStats2.String())
+	for i := 0; i < 50; i++ {
+		reqStats.RecordRPCErrorStats("err_" + strconv.Itoa(i))
+	}
+	s.Regexp("{.*err_.*:1.*, other_error:36}", reqStats.RequestErrorStats.String())
+	s.Regexp(".*num_rpc.*total_time.*, rpc_errors:{.*err.*, other_error:36}", reqStats.String())
+
+	access := &ReplicaAccessStats{}
+	access.recordReplicaAccessInfo(true, false, 1, 2, "data_not_ready")
+	access.recordReplicaAccessInfo(false, false, 3, 4, "not_leader")
+	access.recordReplicaAccessInfo(false, true, 5, 6, "server_is_Busy")
+	s.Equal("{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}", access.String())
+	for i := 0; i < 20; i++ {
+		access.recordReplicaAccessInfo(false, false, 5+uint64(i)%2, 6, "server_is_Busy")
+	}
+	expecteds = []string{
+		// Since map iteration order is random, we need to check all possible orders.
+		"{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}, {peer:5, store:6, err:server_is_Busy}, {peer:6, store:6, err:server_is_Busy}, overflow_count:{{peer:5, error_stats:{server_is_Busy:9}}, {peer:6, error_stats:{server_is_Busy:9}}}",
+		"{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}, {peer:5, store:6, err:server_is_Busy}, {peer:6, store:6, err:server_is_Busy}, overflow_count:{{peer:6, error_stats:{server_is_Busy:9}}, {peer:5, error_stats:{server_is_Busy:9}}}",
+	}
+	s.Contains(expecteds, access.String())
+}
+
+type noCauseError struct {
+	error
+}
+
+func (_ noCauseError) Cause() error {
+	return nil
+}
+
+func TestGetErrMsg(t *testing.T) {
+	err := noCauseError{error: errors.New("no cause err")}
+	require.Equal(t, nil, errors.Cause(err))
+	require.Panicsf(t, func() {
+		_ = errors.Cause(err).Error()
+	}, "should panic")
+	require.Equal(t, "no cause err", getErrMsg(err))
 }

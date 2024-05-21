@@ -111,11 +111,6 @@ var (
 	ModeTxn Mode = client.ModeTxn
 )
 
-// RecordRegionRequestRuntimeStats records request runtime stats.
-func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*locate.RPCRuntimeStats, cmd tikvrpc.CmdType, d time.Duration) {
-	locate.RecordRegionRequestRuntimeStats(stats, cmd, d)
-}
-
 // Store contains a kv process's address.
 type Store = locate.Store
 
@@ -171,7 +166,7 @@ func WithMatchLabels(labels []*metapb.StoreLabel) StoreSelectorOption {
 }
 
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
-func NewRegionRequestRuntimeStats() RegionRequestRuntimeStats {
+func NewRegionRequestRuntimeStats() *RegionRequestRuntimeStats {
 	return locate.NewRegionRequestRuntimeStats()
 }
 
