@@ -97,9 +97,6 @@ type TiKVClient struct {
 	// TTLRefreshedTxnSize controls whether a transaction should update its TTL or not.
 	TTLRefreshedTxnSize      int64  `toml:"ttl-refreshed-txn-size" json:"ttl-refreshed-txn-size"`
 	ResolveLockLiteThreshold uint64 `toml:"resolve-lock-lite-threshold" json:"resolve-lock-lite-threshold"`
-	// MaxConcurrencyRequestLimit is the max concurrency number of request to be sent the tikv
-	// 0 means auto adjust by feedback.
-	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
 	// EnableReplicaSelectorV2 indicate whether to use the new replica-selector-v2.
 	// TODO(crazycs520): remove this config after the new replica-selector-v2 is stable.
 	EnableReplicaSelectorV2 bool `toml:"enable-replica-selector-v2" json:"enable-replica-selector-v2"`
@@ -174,9 +171,8 @@ func DefaultTiKVClient() TiKVClient {
 		},
 		CoprReqTimeout: 60 * time.Second,
 
-		ResolveLockLiteThreshold:   16,
-		MaxConcurrencyRequestLimit: DefMaxConcurrencyRequestLimit,
-		EnableReplicaSelectorV2:    true,
+		ResolveLockLiteThreshold: 16,
+		EnableReplicaSelectorV2:  true,
 	}
 }
 
