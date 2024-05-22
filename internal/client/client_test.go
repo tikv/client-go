@@ -484,7 +484,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 	// Test reset
 	builder.reset()
 	assert.Equal(t, builder.len(), 0)
-	assert.Equal(t, builder.entries.Len(), 0)
+	assert.Equal(t, len(builder.entries), 0)
 	assert.Equal(t, len(builder.requests), 0)
 	assert.Equal(t, len(builder.requestIDs), 0)
 	assert.Equal(t, len(builder.forwardingReqs), 0)
@@ -492,6 +492,7 @@ func TestBatchCommandsBuilder(t *testing.T) {
 }
 
 func TestTraceExecDetails(t *testing.T) {
+
 	assert.Nil(t, buildSpanInfoFromResp(nil))
 	assert.Nil(t, buildSpanInfoFromResp(&tikvrpc.Response{}))
 	assert.Nil(t, buildSpanInfoFromResp(&tikvrpc.Response{Resp: &kvrpcpb.GetResponse{}}))
