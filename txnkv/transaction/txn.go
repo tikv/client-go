@@ -186,7 +186,7 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		RequestSource:     snapshot.RequestSource,
 	}
 	if !options.PipelinedMemDB {
-		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDBWithContext(), snapshot)
+		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewArenaArt(), snapshot)
 		return newTiKVTxn, nil
 	}
 	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
@@ -293,7 +293,6 @@ func (txn *KVTxn) SetSchemaVer(schemaVer SchemaVer) {
 
 // SetPriority sets the priority for both write and read.
 func (txn *KVTxn) SetPriority(pri txnutil.Priority) {
-	txn.priority = pri
 	txn.GetSnapshot().SetPriority(pri)
 }
 
@@ -466,7 +465,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	flushedKeys, flushedSize := 0, 0
 	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
-	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
+	}, func(generation uint64, memdb *unionstore.ArenaArt) (err error) {
 		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")
 		}
@@ -501,7 +500,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 		{
 			var it unionstore.Iterator
 			// lower bound
-			it = memdb.IterWithFlags(nil, nil)
+			it, _ = memdb.Iter(nil, nil)
 			if !it.Valid() {
 				return errors.New("invalid iterator")
 			}
@@ -512,7 +511,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			}
 			it.Close()
 			// upper bound
-			it = memdb.IterReverseWithFlags(nil)
+			it, _ = memdb.IterReverse(nil, nil)
 			if !it.Valid() {
 				return errors.New("invalid iterator")
 			}
@@ -524,10 +523,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			it.Close()
 		}
 		// TODO: reuse initKeysAndMutations
-		for it := memdb.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
-			if err != nil {
-				return err
-			}
+		for it := memdb.IterWithFlags(nil, nil); it.Valid(); it.Next() {
 			flags := it.Flags()
 			var value []byte
 			var op kvrpcpb.Op
@@ -667,10 +663,10 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		txn.committer = committer
 	}
 
-	committer.SetDiskFullOpt(txn.diskFullOpt)
-	committer.SetTxnSource(txn.txnSource)
 	txn.committer.forUpdateTSConstraints = txn.forUpdateTSChecks
 
+	committer.SetDiskFullOpt(txn.diskFullOpt)
+	committer.SetTxnSource(txn.txnSource)
 	defer committer.ttlManager.close()
 
 	if !txn.isPipelined {
@@ -793,6 +789,8 @@ func (txn *KVTxn) Rollback() error {
 		txn.pipelinedCancel()
 		txn.GetMemBuffer().FlushWait()
 		txn.committer.ttlManager.close()
+	}
+	if txn.IsPipelined() && txn.committer != nil {
 		// no need to clean up locks when no flush triggered.
 		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
 		if len(pipelinedStart) != 0 && len(pipelinedEnd) != 0 {
@@ -828,7 +826,7 @@ func (txn *KVTxn) rollbackPessimisticLocks() error {
 
 func (txn *KVTxn) collectLockedKeys() [][]byte {
 	keys := make([][]byte, 0, txn.lockedCnt)
-	buf := txn.GetMemBuffer().GetMemDB()
+	buf := txn.GetMemBuffer().(*unionstore.ArenaArt)
 	var err error
 	for it := buf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err

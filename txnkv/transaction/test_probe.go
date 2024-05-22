@@ -427,8 +427,12 @@ type MemBufferMutationsProbe struct {
 	*memBufferMutations
 }
 
+func ToArenaArt(db unionstore.MemBuffer) *unionstore.ArenaArt {
+	return db.(*unionstore.ArenaArt)
+}
+
 // NewMemBufferMutationsProbe creates a new memBufferMutations instance for testing purpose.
-func NewMemBufferMutationsProbe(sizeHint int, storage *unionstore.MemDB) MemBufferMutationsProbe {
+func NewMemBufferMutationsProbe(sizeHint int, storage *unionstore.ArenaArt) MemBufferMutationsProbe {
 	return MemBufferMutationsProbe{newMemBufferMutations(sizeHint, storage)}
 }
 

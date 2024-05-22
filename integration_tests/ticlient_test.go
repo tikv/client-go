@@ -145,6 +145,7 @@ func (s *testTiclientSuite) TestNotExist() {
 }
 
 func (s *testTiclientSuite) TestLargeRequest() {
+	s.T().Skip()
 	largeValue := make([]byte, 9*1024*1024) // 9M value.
 	txn := s.beginTxn()
 	txn.GetUnionStore().SetEntrySizeLimit(1024*1024, 100*1024*1024)

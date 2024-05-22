@@ -32,7 +32,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unionstore
+package art
 
 import (
 	"context"
@@ -40,85 +40,88 @@ import (
 	tikverr "github.com/tikv/client-go/v2/error"
 )
 
+func (t *Art) getSnapshot() ARTCheckpoint {
+	if len(t.stages) > 0 {
+		return t.stages[0]
+	}
+	return t.checkpoint()
+}
+
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *MemDB) SnapshotGetter() Getter {
-	return &memdbSnapGetter{
-		db: db,
-		cp: db.getSnapshot(),
+func (t *Art) SnapshotGetter() *SnapGetter {
+	return &SnapGetter{
+		db: t,
+		cp: t.getSnapshot(),
 	}
 }
 
-// SnapshotIter returns a Iterator for a snapshot of MemBuffer.
-func (db *MemDB) SnapshotIter(start, end []byte) Iterator {
-	it := &memdbSnapIter{
-		MemdbIterator: &MemdbIterator{
-			db:    db,
-			start: start,
-			end:   end,
-		},
-		cp: db.getSnapshot(),
+// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
+func (t *Art) SnapshotIter(start, end []byte) *SnapIter {
+	inner, err := t.Iter(start, end)
+	if err != nil {
+		panic(err)
 	}
-	it.init()
+	it := &SnapIter{
+		ArtIterator: inner,
+		cp:          t.getSnapshot(),
+	}
+	for !it.setValue() && it.valid {
+		_ = it.Next()
+	}
 	return it
 }
 
 // SnapshotIterReverse returns a reverse Iterator for a snapshot of MemBuffer.
-func (db *MemDB) SnapshotIterReverse(k, lowerBound []byte) Iterator {
-	it := &memdbSnapIter{
-		MemdbIterator: &MemdbIterator{
-			db:      db,
-			start:   lowerBound,
-			end:     k,
-			reverse: true,
-		},
-		cp: db.getSnapshot(),
+func (t *Art) SnapshotIterReverse(k, lowerBound []byte) *SnapIter {
+	inner, err := t.IterReverse(k, lowerBound)
+	if err != nil {
+		panic(err)
 	}
-	it.init()
+	it := &SnapIter{
+		ArtIterator: inner,
+		cp:          t.getSnapshot(),
+	}
+	for !it.setValue() && it.valid {
+		_ = it.Next()
+	}
 	return it
 }
 
-func (db *MemDB) getSnapshot() MemDBCheckpoint {
-	if len(db.stages) > 0 {
-		return db.stages[0]
-	}
-	return db.vlog.checkpoint()
+type SnapGetter struct {
+	db *Art
+	cp ARTCheckpoint
 }
 
-type memdbSnapGetter struct {
-	db *MemDB
-	cp MemDBCheckpoint
-}
-
-func (snap *memdbSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
-	x := snap.db.traverse(key, false)
-	if x.isNull() {
+func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
+	addr, lf := snap.db.search(key)
+	if addr.isNull() {
 		return nil, tikverr.ErrNotExist
 	}
-	if x.vptr.isNull() {
+	if lf.vAddr.isNull() {
 		// A flags only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
-	v, ok := snap.db.vlog.getSnapshotValue(x.vptr, &snap.cp)
+	v, ok := snap.db.getSnapshotValue(lf.vAddr, &snap.cp)
 	if !ok {
 		return nil, tikverr.ErrNotExist
 	}
 	return v, nil
 }
 
-type memdbSnapIter struct {
-	*MemdbIterator
+type SnapIter struct {
+	*ArtIterator
 	value []byte
-	cp    MemDBCheckpoint
+	cp    ARTCheckpoint
 }
 
-func (i *memdbSnapIter) Value() []byte {
+func (i *SnapIter) Value() []byte {
 	return i.value
 }
 
-func (i *memdbSnapIter) Next() error {
+func (i *SnapIter) Next() error {
 	i.value = nil
 	for i.Valid() {
-		if err := i.MemdbIterator.Next(); err != nil {
+		if err := i.ArtIterator.Next(); err != nil {
 			return err
 		}
 		if i.setValue() {
@@ -128,34 +131,13 @@ func (i *memdbSnapIter) Next() error {
 	return nil
 }
 
-func (i *memdbSnapIter) setValue() bool {
+func (i *SnapIter) setValue() bool {
 	if !i.Valid() {
 		return false
 	}
-	if v, ok := i.db.vlog.getSnapshotValue(i.curr.vptr, &i.cp); ok {
+	if v, ok := i.tree.getSnapshotValue(i.currLeaf.vAddr, &i.cp); ok {
 		i.value = v
 		return true
 	}
 	return false
-}
-
-func (i *memdbSnapIter) init() {
-	if i.reverse {
-		if len(i.end) == 0 {
-			i.seekToLast()
-		} else {
-			i.seek(i.end)
-		}
-	} else {
-		if len(i.start) == 0 {
-			i.seekToFirst()
-		} else {
-			i.seek(i.start)
-		}
-	}
-
-	if !i.setValue() {
-		err := i.Next()
-		_ = err // memdbIterator will never fail
-	}
 }

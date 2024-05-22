@@ -61,13 +61,17 @@ func TestRandom(t *testing.T) {
 
 	p1 := newMemDB()
 	p2 := leveldb.New(comparer.DefaultComparer, 4*1024)
+	p3 := NewArenaArt()
 	for _, k := range keys {
 		p1.Set(k, k)
 		_ = p2.Put(k, k)
+		p3.Set(k, k)
 	}
 
 	require.Equal(p1.Len(), p2.Len())
 	require.Equal(p1.Size(), p2.Size())
+	require.Equal(p1.Len(), p3.Len())
+	require.Equal(p1.Size(), p3.Size())
 
 	rand.Shuffle(cnt, func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
 

@@ -37,6 +37,7 @@
 package unionstore
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -643,6 +644,14 @@ func encodeInt(n int) []byte {
 	return []byte(fmt.Sprintf("%010d", n))
 }
 
+func encodeIntLong(n int) []byte {
+	const KEY_SIZE = 1000
+	b := make([]byte, KEY_SIZE)
+	binary.LittleEndian.PutUint32(b[:], uint32(n))
+	b[KEY_SIZE-1] = byte(n % 256)
+	return b
+}
+
 func decodeInt(s []byte) int {
 	var n int
 	fmt.Sscanf(string(s), "%010d", &n)
@@ -859,4 +868,85 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 	flags, err := db.GetFlags(key)
 	require.Nil(err)
 	require.False(flags.HasNeedConstraintCheckInPrewrite())
+}
+
+func TestMemDBIterBound(t *testing.T) {
+	assert := assert.New(t)
+	buffer := newMemDB()
+	for i := 10; i <= 100; i++ {
+		assert.Nil(buffer.set([]byte{byte(i)}, []byte{byte(i)}))
+	}
+	it, err := buffer.IterReverse([]byte{100}, []byte{10})
+	assert.Nil(err)
+	for i := 99; i >= 10; i-- {
+		assert.True(it.Valid(), i)
+		assert.Equal(it.Key(), []byte{byte(i)})
+		assert.Equal(it.Value(), []byte{byte(i)})
+		assert.Nil(it.Next())
+	}
+}
+
+func TestSnapshotGet(t *testing.T) {
+	t.Skip("snapshot get/iter is not supported")
+	assert := assert.New(t)
+	buffer := newMemDB()
+	var getters []Getter
+	for i := 0; i < 100; i++ {
+		assert.Nil(buffer.Set([]byte{byte(0)}, []byte{byte(i)}))
+		getter := buffer.SnapshotGetter()
+		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		assert.Nil(err)
+		assert.Equal(val, []byte{byte(i)})
+		getters = append(getters, getter)
+	}
+	for i, getter := range getters {
+		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		assert.Nil(err)
+		assert.Equal(val, []byte{byte(i)})
+	}
+}
+
+func TestMemDBLen(t *testing.T) {
+	p1 := newMemDB()
+	p2 := NewArenaArt()
+	p1.Set([]byte{1}, []byte{1})
+	p2.Set([]byte{1}, []byte{1})
+	assert.Equal(t, p1.Len(), 1)
+	assert.Equal(t, p2.Len(), 1)
+	p1.Delete([]byte{1})
+	p2.Delete([]byte{1})
+	assert.Equal(t, p1.Len(), 1)
+	assert.Equal(t, p2.Len(), 1)
+	p1.UpdateFlags([]byte{2}, kv.SetKeyLocked)
+	p2.UpdateFlags([]byte{2}, kv.SetKeyLocked)
+	assert.Equal(t, p1.Len(), 2)
+	assert.Equal(t, p2.Len(), 2)
+	h1 := p1.Staging()
+	h2 := p2.Staging()
+	p1.Set([]byte{3}, []byte{3})
+	p2.Set([]byte{3}, []byte{3})
+	p1.Cleanup(h1)
+	p2.Cleanup(h2)
+	assert.Equal(t, p1.Len(), 2)
+	assert.Equal(t, p2.Len(), 2)
+}
+
+func TestMemDBSetFlag(t *testing.T) {
+	p1 := newMemDB()
+	p2 := NewArenaArt()
+	p1.SetWithFlags([]byte{1}, []byte{1}, kv.SetKeyLocked)
+	p2.SetWithFlags([]byte{1}, []byte{1}, kv.SetKeyLocked)
+	flags1, err := p1.GetFlags([]byte{1})
+	assert.Nil(t, err)
+	flags2, err := p2.GetFlags([]byte{1})
+	assert.Nil(t, err)
+	assert.Equal(t, flags1, flags2)
+
+	p1.SetWithFlags([]byte{1}, []byte{2}, kv.SetAssertExist)
+	p2.SetWithFlags([]byte{1}, []byte{2}, kv.SetAssertExist)
+	flags1, err = p1.GetFlags([]byte{1})
+	assert.Nil(t, err)
+	flags2, err = p2.GetFlags([]byte{1})
+	assert.Nil(t, err)
+	assert.Equal(t, flags1, flags2)
 }

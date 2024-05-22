@@ -67,7 +67,7 @@ func (h MemKeyHandle) toAddr() memdbArenaAddr {
 //
 // The value map is rollbackable, that means you can use the `Staging`, `Release` and `Cleanup` API to safely modify KVs.
 //
-// The flags map is not rollbackable. There are two types of flag, persistent and non-persistent.
+// The flags map is not rollbackable. There are two types of flags, persistent and non-persistent.
 // When discarding a newly added KV in `Cleanup`, the non-persistent flags will be cleared.
 // If there are persistent flags associated with key, we will keep this key in node without value.
 type MemDB struct {
@@ -221,7 +221,7 @@ func (db *MemDB) Get(key []byte) ([]byte, error) {
 		return nil, tikverr.ErrNotExist
 	}
 	if x.vptr.isNull() {
-		// A flag only key, act as value not exists
+		// A flags only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
 	return db.vlog.getValue(x.vptr), nil
@@ -234,7 +234,7 @@ func (db *MemDB) SelectValueHistory(key []byte, predicate func(value []byte) boo
 		return nil, tikverr.ErrNotExist
 	}
 	if x.vptr.isNull() {
-		// A flag only key, act as value not exists
+		// A flags only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
 	result := db.vlog.selectValueHistory(x.vptr, func(addr memdbArenaAddr) bool {

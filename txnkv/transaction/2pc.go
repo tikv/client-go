@@ -59,6 +59,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/unionstore"
+	"github.com/tikv/client-go/v2/internal/unionstore/art"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -204,17 +205,17 @@ type twoPhaseCommitter struct {
 }
 
 type memBufferMutations struct {
-	storage *unionstore.MemDB
+	storage *unionstore.ArenaArt
 
 	// The format to put to the UserData of the handles:
 	// MSB									                                                                              LSB
 	// [12 bits: Op][1 bit: NeedConstraintCheckInPrewrite][1 bit: assertNotExist][1 bit: assertExist][1 bit: isPessimisticLock]
-	handles []unionstore.MemKeyHandle
+	handles []art.ArtMemKeyHandle
 }
 
-func newMemBufferMutations(sizeHint int, storage *unionstore.MemDB) *memBufferMutations {
+func newMemBufferMutations(sizeHint int, storage *unionstore.ArenaArt) *memBufferMutations {
 	return &memBufferMutations{
-		handles: make([]unionstore.MemKeyHandle, 0, sizeHint),
+		handles: make([]art.ArtMemKeyHandle, 0, sizeHint),
 		storage: storage,
 	}
 }
@@ -268,7 +269,7 @@ func (m *memBufferMutations) Slice(from, to int) CommitterMutations {
 }
 
 func (m *memBufferMutations) Push(op kvrpcpb.Op, isPessimisticLock, assertExist, assertNotExist, NeedConstraintCheckInPrewrite bool,
-	handle unionstore.MemKeyHandle) {
+	handle art.ArtMemKeyHandle) {
 	// See comments of `m.handles` field about the format of the user data `aux`.
 	aux := uint16(op) << 4
 	if isPessimisticLock {
@@ -550,7 +551,8 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	var size, putCnt, delCnt, lockCnt, checkCnt int
 
 	txn := c.txn
-	memBuf := txn.GetMemBuffer().GetMemDB()
+	//memBuf := txn.GetMemBuffer().GetMemDB()
+	memBuf := txn.GetMemBuffer().(*unionstore.ArenaArt)
 	sizeHint := txn.us.GetMemBuffer().Len()
 	c.mutations = newMemBufferMutations(sizeHint, memBuf)
 	c.isPessimistic = txn.IsPessimistic()
@@ -1777,7 +1779,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 }
 
 func (c *twoPhaseCommitter) commitTxn(ctx context.Context, commitDetail *util.CommitDetails) error {
-	c.txn.GetMemBuffer().GetMemDB().DiscardValues()
+	c.txn.GetMemBuffer().(*unionstore.ArenaArt).DiscardValues()
 	start := time.Now()
 
 	// Use the VeryLongMaxBackoff to commit the primary key.
