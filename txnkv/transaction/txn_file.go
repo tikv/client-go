@@ -171,7 +171,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 	sort.Slice(batches, func(i, j int) bool {
 		// Sort by both chunks and region, to make sure that primary key is in the first batch:
 		// 1. Different batches may contain the same chunks.
-		// 2. Different batches may have regions with same start key (if region merge happens during grouping)
+		// 2. Different batches may have regions with same start key (if region merge happens during grouping).
 		cmp := bytes.Compare(batches[i].region.StartKey, batches[j].region.StartKey)
 		if cmp == 0 {
 			return bytes.Compare(batches[i].Smallest(), batches[j].Smallest()) < 0
