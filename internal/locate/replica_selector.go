@@ -21,45 +21,15 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
+	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util"
 )
 
-type ReplicaSelector interface {
-	next(bo *retry.Backoffer, req *tikvrpc.Request) (*RPCContext, error)
-	targetReplica() *replica
-	proxyReplica() *replica
-	replicaType(rpcCtx *RPCContext) string
-	String() string
-	getBaseReplicaSelector() *baseReplicaSelector
-	getLabels() []*metapb.StoreLabel
-	onSendSuccess(req *tikvrpc.Request)
-	onSendFailure(bo *retry.Backoffer, err error)
-	invalidateRegion()
-	// Following methods are used to handle region errors.
-	onNotLeader(bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader) (shouldRetry bool, err error)
-	onDataIsNotReady()
-	onServerIsBusy(bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy) (shouldRetry bool, err error)
-	onReadReqConfigurableTimeout(req *tikvrpc.Request) bool
-	isValid() bool
-}
-
-// NewReplicaSelector returns a new ReplicaSelector.
-//
-//nolint:staticcheck // ignore SA4023, never returns a nil interface value
-func NewReplicaSelector(
-	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
-) (ReplicaSelector, error) {
-	if config.GetGlobalConfig().TiKVClient.EnableReplicaSelectorV2 {
-		return newReplicaSelectorV2(regionCache, regionID, req, opts...)
-	}
-	return newReplicaSelector(regionCache, regionID, req, opts...)
-}
-
-type replicaSelectorV2 struct {
+type replicaSelector struct {
 	baseReplicaSelector
 	replicaReadType kv.ReplicaReadType
 	isStaleRead     bool
@@ -70,9 +40,9 @@ type replicaSelectorV2 struct {
 	attempts        int
 }
 
-func newReplicaSelectorV2(
+func newReplicaSelector(
 	regionCache *RegionCache, regionID RegionVerID, req *tikvrpc.Request, opts ...StoreSelectorOption,
-) (*replicaSelectorV2, error) {
+) (*replicaSelector, error) {
 	cachedRegion := regionCache.GetCachedRegionWithRLock(regionID)
 	if cachedRegion == nil || !cachedRegion.isValid() {
 		return nil, nil
@@ -85,7 +55,7 @@ func newReplicaSelectorV2(
 	if req.ReplicaReadType == kv.ReplicaReadPreferLeader {
 		WithPerferLeader()(&option)
 	}
-	return &replicaSelectorV2{
+	return &replicaSelector{
 		baseReplicaSelector: baseReplicaSelector{
 			regionCache:   regionCache,
 			region:        cachedRegion,
@@ -101,11 +71,33 @@ func newReplicaSelectorV2(
 	}, nil
 }
 
-func (s *replicaSelectorV2) isValid() bool {
-	return s != nil
+func buildTiKVReplicas(region *Region) []*replica {
+	regionStore := region.getStore()
+	replicas := make([]*replica, 0, regionStore.accessStoreNum(tiKVOnly))
+	for _, storeIdx := range regionStore.accessIndex[tiKVOnly] {
+		replicas = append(
+			replicas, &replica{
+				store:    regionStore.stores[storeIdx],
+				peer:     region.meta.Peers[storeIdx],
+				epoch:    regionStore.storeEpochs[storeIdx],
+				attempts: 0,
+			},
+		)
+	}
+
+	if val, err := util.EvalFailpoint("newReplicaSelectorInitialAttemptedTime"); err == nil {
+		attemptedTime, err := time.ParseDuration(val.(string))
+		if err != nil {
+			panic(err)
+		}
+		for _, r := range replicas {
+			r.attemptedTime = attemptedTime
+		}
+	}
+	return replicas
 }
 
-func (s *replicaSelectorV2) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
+func (s *replicaSelector) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpcCtx *RPCContext, err error) {
 	if !s.region.isValid() {
 		metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("invalid").Inc()
 		return nil, nil
@@ -126,7 +118,7 @@ func (s *replicaSelectorV2) next(bo *retry.Backoffer, req *tikvrpc.Request) (rpc
 	return s.buildRPCContext(bo, s.target, s.proxy)
 }
 
-func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
+func (s *replicaSelector) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	if s.regionCache.enableForwarding {
 		strategy := ReplicaSelectLeaderWithProxyStrategy{}
 		s.target, s.proxy = strategy.next(s)
@@ -140,7 +132,7 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	leaderIdx := s.region.getStore().workTiKVIdx
 	strategy := ReplicaSelectLeaderStrategy{leaderIdx: leaderIdx}
 	s.target = strategy.next(s.replicas)
-	if s.target != nil && s.busyThreshold > 0 && s.isReadOnlyReq && (s.target.store.EstimatedWaitTime() > s.busyThreshold || s.target.serverIsBusy) {
+	if s.target != nil && s.busyThreshold > 0 && s.isReadOnlyReq && (s.target.store.EstimatedWaitTime() > s.busyThreshold || s.target.hasFlag(serverIsBusyFlag)) {
 		// If the leader is busy in our estimation, try other idle replicas.
 		// If other replicas are all busy, tryIdleReplica will try the leader again without busy threshold.
 		mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, busyThreshold: s.busyThreshold}
@@ -160,13 +152,13 @@ func (s *replicaSelectorV2) nextForReplicaReadLeader(req *tikvrpc.Request) {
 	}
 	mixedStrategy := ReplicaSelectMixedStrategy{leaderIdx: leaderIdx, leaderOnly: s.option.leaderOnly}
 	s.target = mixedStrategy.next(s)
-	if s.target != nil && s.isReadOnlyReq && s.replicas[leaderIdx].deadlineErrUsingConfTimeout {
+	if s.target != nil && s.isReadOnlyReq && s.replicas[leaderIdx].hasFlag(deadlineErrUsingConfTimeoutFlag) {
 		req.ReplicaRead = true
 		req.StaleRead = false
 	}
 }
 
-func (s *replicaSelectorV2) nextForReplicaReadMixed(req *tikvrpc.Request) {
+func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 	leaderIdx := s.region.getStore().workTiKVIdx
 	if s.isStaleRead && s.attempts == 2 {
 		// For stale read second retry, try leader by leader read.
@@ -230,6 +222,24 @@ func (s ReplicaSelectLeaderStrategy) next(replicas []*replica) *replica {
 	return nil
 }
 
+// check leader is candidate or not.
+func isLeaderCandidate(leader *replica) bool {
+	// If hibernate region is enabled and the leader is not reachable, the raft group
+	// will not be wakened up and re-elect the leader until the follower receives
+	// a request. So, before the new leader is elected, we should not send requests
+	// to the unreachable old leader to avoid unnecessary timeout.
+	// If leader.deadlineErrUsingConfTimeout is true, it means the leader is already tried and received deadline exceeded error, then don't retry it.
+	// If leader.notLeader is true, it means the leader is already tried and received not leader error, then don't retry it.
+	if leader.store.getLivenessState() != reachable ||
+		leader.isExhausted(maxReplicaAttempt, maxReplicaAttemptTime) ||
+		leader.hasFlag(deadlineErrUsingConfTimeoutFlag) ||
+		leader.hasFlag(notLeaderFlag) ||
+		leader.isEpochStale() { // check leader epoch here, if leader.epoch staled, we can try other replicas. instead of buildRPCContext failed and invalidate region then retry.
+		return false
+	}
+	return true
+}
+
 // ReplicaSelectMixedStrategy is used to select a replica by calculating a score for each replica, and then choose the one with the highest score.
 // Attention, if you want the leader replica must be chosen in some case, you should use ReplicaSelectLeaderStrategy, instead of use ReplicaSelectMixedStrategy with preferLeader flag.
 type ReplicaSelectMixedStrategy struct {
@@ -243,7 +253,7 @@ type ReplicaSelectMixedStrategy struct {
 	busyThreshold time.Duration
 }
 
-func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2) *replica {
+func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	replicas := selector.replicas
 	maxScoreIdxes := make([]int, 0, len(replicas))
 	var maxScore storeSelectionScore = -1
@@ -290,13 +300,23 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelectorV2) *replica 
 	return nil
 }
 
+func hasDeadlineExceededError(replicas []*replica) bool {
+	for _, replica := range replicas {
+		if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) {
+			// when meet deadline exceeded error, do fast retry without invalidate region cache.
+			return true
+		}
+	}
+	return false
+}
+
 func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epochStale bool, liveness livenessState) bool {
 	if epochStale || liveness == unreachable {
 		// the replica is not available, skip it.
 		return false
 	}
 	maxAttempt := 1
-	if r.dataIsNotReady && !isLeader {
+	if r.hasFlag(dataIsNotReadyFlag) && !isLeader {
 		// If the replica is failed by data not ready with stale read, we can retry it with replica-read.
 		// 	after https://github.com/tikv/tikv/pull/15726, the leader will not return DataIsNotReady error,
 		//	then no need to retry leader again. If you try it again, you may get a NotLeader error.
@@ -309,7 +329,7 @@ func (s *ReplicaSelectMixedStrategy) isCandidate(r *replica, isLeader bool, epoc
 	if s.leaderOnly && !isLeader {
 		return false
 	}
-	if s.busyThreshold > 0 && (r.store.EstimatedWaitTime() > s.busyThreshold || r.serverIsBusy || isLeader) {
+	if s.busyThreshold > 0 && (r.store.EstimatedWaitTime() > s.busyThreshold || r.hasFlag(serverIsBusyFlag) || isLeader) {
 		return false
 	}
 	if s.preferLeader && r.store.healthStatus.IsSlow() && !isLeader {
@@ -406,12 +426,12 @@ func (s *ReplicaSelectMixedStrategy) calculateScore(r *replica, isLeader bool) s
 
 type ReplicaSelectLeaderWithProxyStrategy struct{}
 
-func (s ReplicaSelectLeaderWithProxyStrategy) next(selector *replicaSelectorV2) (leader *replica, proxy *replica) {
+func (s ReplicaSelectLeaderWithProxyStrategy) next(selector *replicaSelector) (leader *replica, proxy *replica) {
 	rs := selector.region.getStore()
 	leaderIdx := rs.workTiKVIdx
 	replicas := selector.replicas
 	leader = replicas[leaderIdx]
-	if leader.store.getLivenessState() == reachable || leader.notLeader {
+	if leader.store.getLivenessState() == reachable || leader.hasFlag(notLeaderFlag) {
 		// if leader's store is reachable, no need use proxy.
 		rs.unsetProxyStoreIfNeeded(selector.region)
 		return leader, nil
@@ -444,16 +464,19 @@ func (s ReplicaSelectLeaderWithProxyStrategy) isCandidate(r *replica, isLeader b
 	return true
 }
 
-func (s *replicaSelectorV2) onNotLeader(
+func (s *replicaSelector) onNotLeader(
 	bo *retry.Backoffer, ctx *RPCContext, notLeader *errorpb.NotLeader,
 ) (shouldRetry bool, err error) {
 	if s.target != nil {
-		s.target.notLeader = true
+		s.target.addFlag(notLeaderFlag)
 	}
-	leaderIdx, err := s.baseReplicaSelector.onNotLeader(bo, ctx, notLeader)
-	if err != nil {
-		return false, err
+	leader := notLeader.GetLeader()
+	if leader == nil {
+		// The region may be during transferring leader.
+		err = bo.Backoff(retry.BoRegionScheduling, errors.Errorf("no leader, ctx: %v", ctx))
+		return err == nil, err
 	}
+	leaderIdx := s.updateLeader(leader)
 	if leaderIdx >= 0 {
 		if isLeaderCandidate(s.replicas[leaderIdx]) {
 			s.replicaReadType = kv.ReplicaReadLeader
@@ -462,7 +485,7 @@ func (s *replicaSelectorV2) onNotLeader(
 	return true, nil
 }
 
-func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.Request) bool {
+func (s *replicaSelector) onFlashbackInProgress(req *tikvrpc.Request) bool {
 	// if the failure is caused by replica read, we can retry it with leader safely.
 	if req.ReplicaRead && s.target != nil && s.target.peer.Id != s.region.GetLeaderPeerID() {
 		req.BusyThresholdMs = 0
@@ -474,13 +497,13 @@ func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.
 	return false
 }
 
-func (s *replicaSelectorV2) onDataIsNotReady() {
+func (s *replicaSelector) onDataIsNotReady() {
 	if s.target != nil {
-		s.target.dataIsNotReady = true
+		s.target.addFlag(dataIsNotReadyFlag)
 	}
 }
 
-func (s *replicaSelectorV2) onServerIsBusy(
+func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
 	var store *Store
@@ -495,7 +518,7 @@ func (s *replicaSelectorV2) onServerIsBusy(
 					return false, nil
 				}
 				if s.target != nil {
-					s.target.serverIsBusy = true
+					s.target.addFlag(serverIsBusyFlag)
 				}
 			}
 		} else {
@@ -515,28 +538,47 @@ func (s *replicaSelectorV2) onServerIsBusy(
 	return true, nil
 }
 
-func (s *replicaSelectorV2) canFastRetry() bool {
+func (s *replicaSelector) canFastRetry() bool {
 	if s.replicaReadType == kv.ReplicaReadLeader {
 		leaderIdx := s.region.getStore().workTiKVIdx
 		leader := s.replicas[leaderIdx]
-		if isLeaderCandidate(leader) && !leader.serverIsBusy {
+		if isLeaderCandidate(leader) && !leader.hasFlag(serverIsBusyFlag) {
 			return false
 		}
 	}
 	return true
 }
 
-func (s *replicaSelectorV2) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
 	if isReadReqConfigurableTimeout(req) {
 		if s.target != nil {
-			s.target.deadlineErrUsingConfTimeout = true
+			s.target.addFlag(deadlineErrUsingConfTimeoutFlag)
 		}
 		return true
 	}
 	return false
 }
 
-func (s *replicaSelectorV2) onSendFailure(bo *retry.Backoffer, err error) {
+func isReadReqConfigurableTimeout(req *tikvrpc.Request) bool {
+	if req.MaxExecutionDurationMs >= uint64(client.ReadTimeoutShort.Milliseconds()) {
+		// Configurable timeout should less than `ReadTimeoutShort`.
+		return false
+	}
+	// Only work for read requests, return false for non-read requests.
+	return isReadReq(req.Type)
+}
+
+func isReadReq(tp tikvrpc.CmdType) bool {
+	switch tp {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *replicaSelector) onSendFailure(bo *retry.Backoffer, err error) {
 	metrics.RegionCacheCounterWithSendFail.Inc()
 	// todo: mark store need check and return to fast retry.
 	target := s.target
@@ -554,7 +596,7 @@ func (s *replicaSelectorV2) onSendFailure(bo *retry.Backoffer, err error) {
 	}
 }
 
-func (s *replicaSelectorV2) onSendSuccess(req *tikvrpc.Request) {
+func (s *replicaSelector) onSendSuccess(req *tikvrpc.Request) {
 	if s.proxy != nil && s.target != nil {
 		for idx, r := range s.replicas {
 			if r.peer.Id == s.proxy.peer.Id {
@@ -568,19 +610,7 @@ func (s *replicaSelectorV2) onSendSuccess(req *tikvrpc.Request) {
 	}
 }
 
-func (s *replicaSelectorV2) targetReplica() *replica {
-	return s.target
-}
-
-func (s *replicaSelectorV2) proxyReplica() *replica {
-	return s.proxy
-}
-
-func (s *replicaSelectorV2) getLabels() []*metapb.StoreLabel {
-	return s.option.labels
-}
-
-func (s *replicaSelectorV2) replicaType(_ *RPCContext) string {
+func (s *replicaSelector) replicaType() string {
 	if s.target != nil {
 		if s.target.peer.Id == s.region.GetLeaderPeerID() {
 			return "leader"
@@ -590,7 +620,7 @@ func (s *replicaSelectorV2) replicaType(_ *RPCContext) string {
 	return "unknown"
 }
 
-func (s *replicaSelectorV2) String() string {
+func (s *replicaSelector) String() string {
 	if s == nil {
 		return ""
 	}
