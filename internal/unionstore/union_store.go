@@ -37,6 +37,7 @@ package unionstore
 import (
 	"context"
 	"math"
+	"time"
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
@@ -236,6 +237,12 @@ type MemBuffer interface {
 	Flush(force bool) (bool, error)
 	// FlushWait waits for the flushing task done and return error.
 	FlushWait() error
+	// GetFlushDetails returns the metrics related to flushing
+	GetFlushMetrics() FlushMetrics
+}
+
+type FlushMetrics struct {
+	WaitDuration time.Duration
 }
 
 var (
@@ -287,3 +294,6 @@ func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[st
 	}
 	return m, nil
 }
+
+// GetFlushMetrisc implements the MemBuffer interface.
+func (db *MemDBWithContext) GetFlushMetrics() FlushMetrics { return FlushMetrics{} }

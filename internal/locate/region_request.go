@@ -178,6 +178,17 @@ func (r *RequestErrorStats) RecordRPCErrorStats(errLabel string) {
 	}
 }
 
+// getErrMsg returns error message. if the error has cause error, then return cause error message.
+func getErrMsg(err error) string {
+	if err == nil {
+		return ""
+	}
+	if causeErr := errors.Cause(err); causeErr != nil {
+		return causeErr.Error()
+	}
+	return err.Error()
+}
+
 // String implements fmt.Stringer interface.
 func (r *RegionRequestRuntimeStats) String() string {
 	if r == nil {
@@ -1177,7 +1188,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 	if err != nil {
 		s.rpcError = err
 		if s.Stats != nil {
-			errStr := errors.Cause(err).Error()
+			errStr := getErrMsg(err)
 			s.Stats.RecordRPCErrorStats(errStr)
 			s.recordRPCAccessInfo(req, rpcCtx, errStr)
 		}
@@ -1273,7 +1284,11 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 			}
 		}
 	}
-	metrics.TiKVRPCErrorCounter.WithLabelValues(errors.Cause(err).Error(), storeLabel).Inc()
+	if errStr := getErrMsg(err); len(errStr) > 0 {
+		metrics.TiKVRPCErrorCounter.WithLabelValues(getErrMsg(err), storeLabel).Inc()
+	} else {
+		metrics.TiKVRPCErrorCounter.WithLabelValues("unknown", storeLabel).Inc()
+	}
 
 	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
 		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
