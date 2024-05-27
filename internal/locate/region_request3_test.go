@@ -354,7 +354,7 @@ func refreshLivenessStates(regionStore *regionStore) {
 func refreshStoreHealthStatus(regionStore *regionStore) {
 	for _, store := range regionStore.stores {
 		store.healthStatus.clientSideSlowScore.resetSlowScore()
-		store.healthStatus.resetTiKVServerSideSlowScoreForTest()
+		store.healthStatus.ResetTiKVServerSideSlowScoreForTest(50)
 		store.healthStatus.updateSlowFlag()
 	}
 }

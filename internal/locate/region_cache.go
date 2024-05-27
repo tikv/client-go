@@ -52,6 +52,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
