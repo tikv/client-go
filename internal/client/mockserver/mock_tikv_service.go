@@ -99,7 +99,7 @@ func (s *MockServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 		err = ss.Send(&tikvpb.BatchCommandsResponse{
 			Responses:  responses,
 			RequestIds: req.GetRequestIds(),
-			HealthFeedback: &tikvpb.HealthFeedback{
+			HealthFeedback: &kvrpcpb.HealthFeedback{
 				StoreId:       1,
 				FeedbackSeqNo: feedbackSeq,
 				SlowScore:     1,

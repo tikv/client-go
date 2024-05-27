@@ -55,7 +55,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
@@ -631,6 +630,8 @@ type RegionCache struct {
 	codec            apicodec.Codec
 	enableForwarding bool
 
+	requestHealthFeedbackCallback func(ctx context.Context, addr string) error
+
 	mu regionIndexMu
 
 	stores storeCache
@@ -642,13 +643,20 @@ type RegionCache struct {
 }
 
 type regionCacheOptions struct {
-	noHealthTick bool
+	noHealthTick                  bool
+	requestHealthFeedbackCallback func(ctx context.Context, addr string) error
 }
 
 type RegionCacheOpt func(*regionCacheOptions)
 
 func RegionCacheNoHealthTick(o *regionCacheOptions) {
 	o.noHealthTick = true
+}
+
+func WithRequestHealthFeedbackCallback(callback func(ctx context.Context, addr string) error) RegionCacheOpt {
+	return func(options *regionCacheOptions) {
+		options.requestHealthFeedbackCallback = callback
+	}
 }
 
 // NewRegionCache creates a RegionCache.
@@ -659,7 +667,8 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	}
 
 	c := &RegionCache{
-		pdClient: pdClient,
+		pdClient:                      pdClient,
+		requestHealthFeedbackCallback: options.requestHealthFeedbackCallback,
 	}
 
 	c.codec = apicodec.NewCodecV1(apicodec.ModeRaw)
@@ -704,7 +713,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 		return false
 	}, time.Duration(refreshStoreInterval/4)*time.Second, c.stores.getCheckStoreEvents())
 	if !options.noHealthTick {
-		c.bg.schedule(repeat(c.checkAndUpdateStoreHealthStatus), time.Duration(refreshStoreInterval/4)*time.Second)
+		c.bg.schedule(c.checkAndUpdateStoreHealthStatus, time.Duration(refreshStoreInterval/4)*time.Second)
 	}
 	c.bg.schedule(repeat(c.reportStoreReplicaFlows), time.Duration(refreshStoreInterval/2)*time.Second)
 	if refreshCacheInterval := config.GetGlobalConfig().RegionsRefreshInterval; refreshCacheInterval > 0 {
@@ -2618,7 +2627,7 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 }
 
 // checkAndUpdateStoreHealthStatus checks and updates health stats on each store.
-func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
+func (c *RegionCache) checkAndUpdateStoreHealthStatus(ctx context.Context, now time.Time) bool {
 	defer func() {
 		r := recover()
 		if r != nil {
@@ -2630,16 +2639,18 @@ func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
 			}
 		}
 	}()
-	healthDetails := make(map[uint64]HealthStatusDetail)
-	now := time.Now()
+	var stores []*Store
 	c.stores.forEach(func(store *Store) {
-		store.healthStatus.tick(now)
-		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
+		stores = append(stores, store)
 	})
-	for store, details := range healthDetails {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.ClientSideSlowScore))
-		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.TiKVSideSlowScore))
+	for _, store := range stores {
+		store.healthStatus.tick(ctx, now, store, c.requestHealthFeedbackCallback)
+		healthDetails := store.healthStatus.GetHealthStatusDetail()
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(healthDetails.ClientSideSlowScore))
+		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(healthDetails.TiKVSideSlowScore))
 	}
+
+	return false
 }
 
 // reportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
@@ -2662,7 +2673,7 @@ func contains(startKey, endKey, key []byte) bool {
 		(bytes.Compare(key, endKey) < 0 || len(endKey) == 0)
 }
 
-func (c *RegionCache) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (c *RegionCache) onHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	store, ok := c.stores.get(feedback.GetStoreId())
 	if !ok {
 		logutil.BgLogger().Info("dropped health feedback info due to unknown store id", zap.Uint64("storeID", feedback.GetStoreId()))
@@ -2683,6 +2694,6 @@ type regionCacheClientEventListener struct {
 }
 
 // OnHealthFeedback implements the `client.ClientEventListener` interface.
-func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	l.c.onHealthFeedback(feedback)
 }

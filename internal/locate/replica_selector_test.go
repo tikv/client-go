@@ -3101,7 +3101,7 @@ func (s *testReplicaSelectorSuite) resetStoreState() {
 	for _, store := range rc.getStore().stores {
 		store.loadStats.Store(nil)
 		store.healthStatus.clientSideSlowScore.resetSlowScore()
-		store.healthStatus.resetTiKVServerSideSlowScoreForTest()
+		store.healthStatus.ResetTiKVServerSideSlowScoreForTest(1)
 		store.healthStatus.updateSlowFlag()
 		atomic.StoreUint32(&store.livenessState, uint32(reachable))
 		store.setResolveState(resolved)

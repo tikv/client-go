@@ -18,13 +18,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
@@ -260,6 +261,11 @@ func newUninitializedStore(id uint64) *Store {
 	}
 }
 
+// StoreType returns the type of the store.
+func (s *Store) StoreType() tikvrpc.EndpointType {
+	return s.storeType
+}
+
 // IsTiFlash returns true if the storeType is TiFlash
 func (s *Store) IsTiFlash() bool {
 	return s.storeType == tikvrpc.TiFlash
@@ -322,6 +328,11 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 		}
 	}
 	return true
+}
+
+// GetHealthStatus returns the health status of the store. This is exported for test purpose.
+func (s *Store) GetHealthStatus() *StoreHealthStatus {
+	return s.healthStatus
 }
 
 func isStoreContainLabel(labels []*metapb.StoreLabel, key string, val string) (res bool) {
@@ -822,7 +833,7 @@ const (
 	tikvSlowScoreSlowThreshold int64   = 80
 
 	tikvSlowScoreUpdateInterval       = time.Millisecond * 100
-	tikvSlowScoreUpdateFromPDInterval = time.Minute
+	tikvSlowScoreActiveUpdateInterval = time.Second * 15
 )
 
 type StoreHealthStatus struct {
@@ -880,9 +891,10 @@ func (s *StoreHealthStatus) GetHealthStatusDetail() HealthStatusDetail {
 
 // tick updates the health status that changes over time, such as slow score's decaying, etc. This function is expected
 // to be called periodically.
-func (s *StoreHealthStatus) tick(now time.Time) {
+func (s *StoreHealthStatus) tick(ctx context.Context, now time.Time, store *Store, requestHealthFeedbackCallback func(ctx context.Context, addr string) error) {
+	metrics.TiKVHealthFeedbackOpsCounter.WithLabelValues(strconv.FormatUint(store.StoreID(), 10), "tick").Inc()
 	s.clientSideSlowScore.updateSlowScore()
-	s.updateTiKVServerSideSlowScoreOnTick(now)
+	s.updateTiKVServerSideSlowScoreOnTick(ctx, now, store, requestHealthFeedbackCallback)
 	s.updateSlowFlag()
 }
 
@@ -900,15 +912,53 @@ func (s *StoreHealthStatus) markAlreadySlow() {
 
 // updateTiKVServerSideSlowScoreOnTick updates the slow score actively, which is expected to be a periodic job.
 // It skips updating if the last update time didn't elapse long enough, or it's being updated concurrently.
-func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {
+func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(ctx context.Context, now time.Time, store *Store, requestHealthFeedbackCallback func(ctx context.Context, addr string) error) {
 	if !s.tikvSideSlowScore.hasTiKVFeedback.Load() {
 		// Do nothing if no feedback has been received from this store yet.
 		return
 	}
-	lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
-	if lastUpdateTime == nil || now.Sub(*lastUpdateTime) < tikvSlowScoreUpdateFromPDInterval {
-		// If the first feedback is
+
+	// Skip tick if the store's slow score is 1, as it's likely to be a normal case that a health store is not being
+	// accessed.
+	if s.tikvSideSlowScore.score.Load() <= 1 {
 		return
+	}
+
+	needRefreshing := func() bool {
+		lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
+		if lastUpdateTime == nil {
+			// If the first hasn't been received yet, assume the store doesn't support feeding back and skip the tick.
+			return false
+		}
+
+		return now.Sub(*lastUpdateTime) >= tikvSlowScoreActiveUpdateInterval
+	}
+
+	if !needRefreshing() {
+		return
+	}
+
+	// If not updated for too long, try to explicitly fetch it from TiKV.
+	// Note that this can't be done while holding the mutex, because the updating is done by the client when receiving
+	// the response (in the same way as handling the feedback information pushed from TiKV), which needs acquiring the
+	// mutex.
+	if requestHealthFeedbackCallback != nil && store.getLivenessState() == reachable {
+		addr := store.GetAddr()
+		if len(addr) == 0 {
+			logutil.Logger(ctx).Warn("skip actively request health feedback info from store due to unknown addr", zap.Uint64("storeID", store.StoreID()))
+		} else {
+			metrics.TiKVHealthFeedbackOpsCounter.WithLabelValues(strconv.FormatUint(store.StoreID(), 10), "active_update").Inc()
+			err := requestHealthFeedbackCallback(ctx, store.GetAddr())
+			if err != nil {
+				metrics.TiKVHealthFeedbackOpsCounter.WithLabelValues(strconv.FormatUint(store.StoreID(), 10), "active_update_err").Inc()
+				logutil.Logger(ctx).Warn("actively request health feedback info from store got error", zap.Uint64("storeID", store.StoreID()), zap.Error(err))
+			}
+		}
+
+		// Continue if active updating is unsuccessful.
+		if !needRefreshing() {
+			return
+		}
 	}
 
 	if !s.tikvSideSlowScore.TryLock() {
@@ -918,16 +968,13 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScoreOnTick(now time.Time) {
 	defer s.tikvSideSlowScore.Unlock()
 
 	// Reload update time as it might be updated concurrently before acquiring mutex
-	lastUpdateTime = s.tikvSideSlowScore.lastUpdateTime.Load()
+	lastUpdateTime := s.tikvSideSlowScore.lastUpdateTime.Load()
 	elapsed := now.Sub(*lastUpdateTime)
-	if elapsed < tikvSlowScoreUpdateFromPDInterval {
+	if elapsed < tikvSlowScoreActiveUpdateInterval {
 		return
 	}
 
-	// TODO: Try to get store status from PD here. But it's not mandatory.
-	//       Don't forget to update tests if getting slow score from PD is implemented here.
-
-	// If updating from PD is not successful: decay the slow score.
+	// If requesting from TiKV is not successful: decay the slow score.
 	score := s.tikvSideSlowScore.score.Load()
 	if score < 1 {
 		return
@@ -949,6 +996,20 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	lastScore := s.tikvSideSlowScore.score.Load()
 
 	if lastScore == score {
+		// It's still needed to update the lastUpdateTime to tell whether the slow score is not being updated for too
+		// long (so that it's needed to explicitly get the slow score).
+		// from TiKV.
+		// But it can be safely skipped if the score is 1 (as explicit getting slow score won't be performed in this
+		// case). And note that it should be updated within mutex.
+		if score > 1 {
+			// Skip if not locked as it's being updated concurrently.
+			if s.tikvSideSlowScore.TryLock() {
+				newUpdateTime := new(time.Time)
+				*newUpdateTime = currTime
+				s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
+				s.tikvSideSlowScore.Unlock()
+			}
+		}
 		return
 	}
 
@@ -980,9 +1041,12 @@ func (s *StoreHealthStatus) updateTiKVServerSideSlowScore(score int64, currTime 
 	s.tikvSideSlowScore.lastUpdateTime.Store(newUpdateTime)
 }
 
-func (s *StoreHealthStatus) resetTiKVServerSideSlowScoreForTest() {
+// ResetTiKVServerSideSlowScoreForTest resets the TiKV-side slow score information and make it expired so that the
+// next update can be effective. A new score should be passed to the function. For a store that's running normally
+// without any sign of being slow, the value should be 1.
+func (s *StoreHealthStatus) ResetTiKVServerSideSlowScoreForTest(score int64) {
 	s.setTiKVSlowScoreLastUpdateTimeForTest(time.Now().Add(-time.Hour * 2))
-	s.updateTiKVServerSideSlowScore(1, time.Now().Add(-time.Hour))
+	s.updateTiKVServerSideSlowScore(score, time.Now().Add(-time.Hour))
 }
 
 func (s *StoreHealthStatus) updateSlowFlag() {
@@ -1002,7 +1066,7 @@ func (s *StoreHealthStatus) setTiKVSlowScoreLastUpdateTimeForTest(lastUpdateTime
 	s.tikvSideSlowScore.lastUpdateTime.Store(&lastUpdateTime)
 }
 
-func (s *Store) recordHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (s *Store) recordHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	// Note that the `FeedbackSeqNo` field of `HealthFeedback` is not used yet. It's a monotonic value that can help
 	// to drop out-of-order feedback messages. But it's not checked for now since it's not very necessary to receive
 	// only a slow score. It's prepared for possible use in the future.
