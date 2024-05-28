@@ -35,8 +35,14 @@
 package tikvrpc
 
 import (
+	"fmt"
+	"math/rand"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/pingcap/kvproto/pkg/coprocessor"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/assert"
 )
@@ -46,4 +52,86 @@ func TestBatchResponse(t *testing.T) {
 	batchResp, err := FromBatchCommandsResponse(resp)
 	assert.Nil(t, batchResp)
 	assert.NotNil(t, err)
+}
+
+// https://github.com/pingcap/tidb/issues/51921
+func TestTiDB51921(t *testing.T) {
+	for _, r := range []*Request{
+		NewRequest(CmdGet, &kvrpcpb.GetRequest{}),
+		NewRequest(CmdScan, &kvrpcpb.ScanRequest{}),
+		NewRequest(CmdPrewrite, &kvrpcpb.PrewriteRequest{}),
+		NewRequest(CmdPessimisticLock, &kvrpcpb.PessimisticLockRequest{}),
+		NewRequest(CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{}),
+		NewRequest(CmdCommit, &kvrpcpb.CommitRequest{}),
+		NewRequest(CmdCleanup, &kvrpcpb.CleanupRequest{}),
+		NewRequest(CmdBatchGet, &kvrpcpb.BatchGetRequest{}),
+		NewRequest(CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{}),
+		NewRequest(CmdScanLock, &kvrpcpb.ScanLockRequest{}),
+		NewRequest(CmdResolveLock, &kvrpcpb.ResolveLockRequest{}),
+		NewRequest(CmdGC, &kvrpcpb.GCRequest{}),
+		NewRequest(CmdDeleteRange, &kvrpcpb.DeleteRangeRequest{}),
+		NewRequest(CmdRawGet, &kvrpcpb.RawGetRequest{}),
+		NewRequest(CmdRawBatchGet, &kvrpcpb.RawBatchGetRequest{}),
+		NewRequest(CmdRawPut, &kvrpcpb.RawPutRequest{}),
+		NewRequest(CmdRawBatchPut, &kvrpcpb.RawBatchPutRequest{}),
+		NewRequest(CmdRawDelete, &kvrpcpb.RawDeleteRequest{}),
+		NewRequest(CmdRawBatchDelete, &kvrpcpb.RawBatchDeleteRequest{}),
+		NewRequest(CmdRawDeleteRange, &kvrpcpb.RawDeleteRangeRequest{}),
+		NewRequest(CmdRawScan, &kvrpcpb.RawScanRequest{}),
+		NewRequest(CmdRawGetKeyTTL, &kvrpcpb.RawGetKeyTTLRequest{}),
+		NewRequest(CmdRawCompareAndSwap, &kvrpcpb.RawCASRequest{}),
+		NewRequest(CmdRawChecksum, &kvrpcpb.RawChecksumRequest{}),
+		NewRequest(CmdUnsafeDestroyRange, &kvrpcpb.UnsafeDestroyRangeRequest{}),
+		NewRequest(CmdRegisterLockObserver, &kvrpcpb.RegisterLockObserverRequest{}),
+		NewRequest(CmdCheckLockObserver, &kvrpcpb.CheckLockObserverRequest{}),
+		NewRequest(CmdRemoveLockObserver, &kvrpcpb.RemoveLockObserverRequest{}),
+		NewRequest(CmdPhysicalScanLock, &kvrpcpb.PhysicalScanLockRequest{}),
+		NewRequest(CmdCop, &coprocessor.Request{}),
+		NewRequest(CmdCopStream, &coprocessor.Request{}),
+		NewRequest(CmdBatchCop, &coprocessor.BatchRequest{}),
+		NewRequest(CmdMvccGetByKey, &kvrpcpb.MvccGetByKeyRequest{}),
+		NewRequest(CmdMvccGetByStartTs, &kvrpcpb.MvccGetByStartTsRequest{}),
+		NewRequest(CmdSplitRegion, &kvrpcpb.SplitRegionRequest{}),
+		NewRequest(CmdTxnHeartBeat, &kvrpcpb.TxnHeartBeatRequest{}),
+		NewRequest(CmdCheckTxnStatus, &kvrpcpb.CheckTxnStatusRequest{}),
+		NewRequest(CmdCheckSecondaryLocks, &kvrpcpb.CheckSecondaryLocksRequest{}),
+		NewRequest(CmdFlashbackToVersion, &kvrpcpb.FlashbackToVersionRequest{}),
+		NewRequest(CmdPrepareFlashbackToVersion, &kvrpcpb.PrepareFlashbackToVersionRequest{}),
+	} {
+		req := r
+		t.Run(fmt.Sprintf("%s#%d", req.Type.String(), req.Type), func(t *testing.T) {
+			if req.ToBatchCommandsRequest() == nil {
+				t.Skipf("%s doesn't support batch commands", req.Type.String())
+			}
+			done := make(chan struct{})
+			cmds := make(chan *tikvpb.BatchCommandsRequest_Request, 8)
+			wg := sync.WaitGroup{}
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-done:
+						close(cmds)
+						return
+					default:
+						// mock relocate and retry
+						AttachContext(req, kvrpcpb.Context{RegionId: rand.Uint64()})
+						cmds <- req.ToBatchCommandsRequest()
+					}
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				for cmd := range cmds {
+					// mock send and marshal in batch-send-loop
+					cmd.Marshal()
+				}
+			}()
+
+			time.Sleep(time.Second / 4)
+			close(done)
+			wg.Wait()
+		})
+	}
 }
