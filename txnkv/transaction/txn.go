@@ -957,6 +957,11 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to cancel aggressive locking while it's not started")
 	}
+
+	defer func() {
+		txn.aggressiveLockingContext = nil
+	}()
+
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 	if txn.aggressiveLockingContext.assignedPrimaryKey {
 		txn.resetPrimary()
@@ -976,7 +981,6 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 		txn.asyncPessimisticRollback(context.Background(), keys, forUpdateTS)
 		txn.lockedCnt -= len(keys)
 	}
-	txn.aggressiveLockingContext = nil
 }
 
 // DoneAggressiveLocking finishes the current aggressive locking. The locked keys will be moved to the membuffer as if
@@ -985,6 +989,11 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
+
+	defer func() {
+		txn.aggressiveLockingContext = nil
+	}()
+
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 
 	if txn.forUpdateTSChecks == nil {
@@ -1009,7 +1018,6 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 			txn.committer.maxLockedWithConflictTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 		}
 	}
-	txn.aggressiveLockingContext = nil
 }
 
 // IsInAggressiveLockingMode checks if the transaction is currently in aggressive locking mode.
