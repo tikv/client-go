@@ -36,6 +36,7 @@ package tikv
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -122,7 +123,9 @@ func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack fu
 
 	// Make sure the uuid is unique.
 	uid := uuid.New().String()
-	spkv := NewMockSafePointKV(WithPrefix(string(keyspaceMeta.Id)))
+
+	keyspaceIdStr := strconv.FormatUint(uint64(keyspaceMeta.Id), 10)
+	spkv := NewMockSafePointKV(WithPrefix(keyspaceIdStr))
 	tikvStore, err := NewKVStore(uid, pdCli, spkv, client, opt...)
 
 	if txnLocalLatches > 0 {
