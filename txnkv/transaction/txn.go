@@ -958,6 +958,13 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 		panic("Trying to cancel aggressive locking while it's not started")
 	}
 
+	// Unset `aggressiveLockingContext` in a defer block to ensure it must be executed even it panicked on the half way.
+	// It's because that if it's panicked by an OOM-kill of TiDB, it can then be recovered and the user can still
+	// continue using the transaction's state.
+	// The usage of `defer` can be removed once we have other way to avoid the panicking.
+	// See: https://github.com/pingcap/tidb/issues/53540#issuecomment-2138089140
+	// Currently the problem only exists in `DoneAggressiveLocking`, but we do the same to `CancelAggressiveLocking`
+	// to the two function consistent, and prevent for new panics that might be introduced in the future.
 	defer func() {
 		txn.aggressiveLockingContext = nil
 	}()
@@ -990,6 +997,11 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
 
+	// Unset `aggressiveLockingContext` in a defer block to ensure it must be executed even it panicked on the half way.
+	// It's because that if it's panicked by an OOM-kill of TiDB, it can then be recovered and the user can still
+	// continue using the transaction's state.
+	// The usage of `defer` can be removed once we have other way to avoid the panicking.
+	// See: https://github.com/pingcap/tidb/issues/53540#issuecomment-2138089140
 	defer func() {
 		txn.aggressiveLockingContext = nil
 	}()
