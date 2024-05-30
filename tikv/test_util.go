@@ -122,7 +122,7 @@ func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack fu
 
 	// Make sure the uuid is unique.
 	uid := uuid.New().String()
-	spkv := NewMockSafePointKV()
+	spkv := NewMockSafePointKV(WithPrefix(string(keyspaceMeta.Id)))
 	tikvStore, err := NewKVStore(uid, pdCli, spkv, client, opt...)
 
 	if txnLocalLatches > 0 {
