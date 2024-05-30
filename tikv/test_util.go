@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -96,7 +97,7 @@ func NewTestTiKVStore(client Client, pdClient pd.Client, clientHijack func(Clien
 
 // NewTestTiKVStore creates a test store with Option
 func NewTestKeyspaceTiKVStore(client Client, pdClient pd.Client, clientHijack func(Client) Client, pdClientHijack func(pd.Client) pd.Client, txnLocalLatches uint, keyspaceMeta keyspacepb.KeyspaceMeta, opt ...Option) (*KVStore, error) {
-	codec, err := apicodec.NewCodecV2(apicodec.ModeTxn, keyspaceMeta.Id)
+	codec, err := apicodec.NewCodecV2(apicodec.ModeTxn, &keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
