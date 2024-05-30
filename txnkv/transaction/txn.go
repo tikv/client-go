@@ -957,6 +957,18 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to cancel aggressive locking while it's not started")
 	}
+
+	// Unset `aggressiveLockingContext` in a defer block to ensure it must be executed even it panicked on the half way.
+	// It's because that if it's panicked by an OOM-kill of TiDB, it can then be recovered and the user can still
+	// continue using the transaction's state.
+	// The usage of `defer` can be removed once we have other way to avoid the panicking.
+	// See: https://github.com/pingcap/tidb/issues/53540#issuecomment-2138089140
+	// Currently the problem only exists in `DoneAggressiveLocking`, but we do the same to `CancelAggressiveLocking`
+	// to the two function consistent, and prevent for new panics that might be introduced in the future.
+	defer func() {
+		txn.aggressiveLockingContext = nil
+	}()
+
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 	if txn.aggressiveLockingContext.assignedPrimaryKey {
 		txn.resetPrimary()
@@ -976,7 +988,6 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 		txn.asyncPessimisticRollback(context.Background(), keys, forUpdateTS)
 		txn.lockedCnt -= len(keys)
 	}
-	txn.aggressiveLockingContext = nil
 }
 
 // DoneAggressiveLocking finishes the current aggressive locking. The locked keys will be moved to the membuffer as if
@@ -985,6 +996,16 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext == nil {
 		panic("Trying to finish aggressive locking while it's not started")
 	}
+
+	// Unset `aggressiveLockingContext` in a defer block to ensure it must be executed even it panicked on the half way.
+	// It's because that if it's panicked by an OOM-kill of TiDB, it can then be recovered and the user can still
+	// continue using the transaction's state.
+	// The usage of `defer` can be removed once we have other way to avoid the panicking.
+	// See: https://github.com/pingcap/tidb/issues/53540#issuecomment-2138089140
+	defer func() {
+		txn.aggressiveLockingContext = nil
+	}()
+
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 
 	if txn.forUpdateTSChecks == nil {
@@ -1009,7 +1030,6 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 			txn.committer.maxLockedWithConflictTS = txn.aggressiveLockingContext.maxLockedWithConflictTS
 		}
 	}
-	txn.aggressiveLockingContext = nil
 }
 
 // IsInAggressiveLockingMode checks if the transaction is currently in aggressive locking mode.
