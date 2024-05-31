@@ -863,6 +863,10 @@ func (c *RPCClient) CloseAddr(addr string) error {
 
 func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
 	c.Lock()
+	if c.isClosed {
+		c.Unlock()
+		return nil
+	}
 	conn, ok := c.conns[addr]
 	if ok {
 		if conn.ver <= ver {
