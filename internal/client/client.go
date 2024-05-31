@@ -535,7 +535,6 @@ func (c *RPCClient) closeConns() {
 		for _, array := range c.conns {
 			array.Close()
 		}
-		c.conns = nil
 	}
 	c.Unlock()
 }
