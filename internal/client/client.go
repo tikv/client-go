@@ -532,10 +532,10 @@ func (c *RPCClient) closeConns() {
 	if !c.isClosed {
 		c.isClosed = true
 		// close all connections
-		for addr, array := range c.conns {
-			delete(c.conns, addr)
+		for _, array := range c.conns {
 			array.Close()
 		}
+		c.conns = nil
 	}
 	c.Unlock()
 }
@@ -861,6 +861,10 @@ func (c *RPCClient) CloseAddr(addr string) error {
 
 func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
 	c.Lock()
+	if c.isClosed {
+		c.Unlock()
+		return nil
+	}
 	conn, ok := c.conns[addr]
 	if ok {
 		if conn.ver <= ver {
