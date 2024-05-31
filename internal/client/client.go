@@ -786,6 +786,10 @@ func (c *RPCClient) Close() error {
 // CloseAddr closes gRPC connections to the address.
 func (c *RPCClient) CloseAddr(addr string) error {
 	c.Lock()
+	if c.isClosed {
+		c.Unlock()
+		return nil
+	}
 	conn, ok := c.conns[addr]
 	if ok {
 		delete(c.conns, addr)
