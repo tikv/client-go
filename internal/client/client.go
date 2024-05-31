@@ -467,7 +467,8 @@ func (c *RPCClient) closeConns() {
 	if !c.isClosed {
 		c.isClosed = true
 		// close all connections
-		for _, array := range c.conns {
+		for addr, array := range c.conns {
+			delete(c.conns, addr)
 			array.Close()
 		}
 	}
