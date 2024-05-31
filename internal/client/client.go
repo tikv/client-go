@@ -467,8 +467,7 @@ func (c *RPCClient) closeConns() {
 	if !c.isClosed {
 		c.isClosed = true
 		// close all connections
-		for addr, array := range c.conns {
-			delete(c.conns, addr)
+		for _, array := range c.conns {
 			array.Close()
 		}
 	}
@@ -787,6 +786,10 @@ func (c *RPCClient) Close() error {
 // CloseAddr closes gRPC connections to the address.
 func (c *RPCClient) CloseAddr(addr string) error {
 	c.Lock()
+	if c.isClosed {
+		c.Unlock()
+		return nil
+	}
 	conn, ok := c.conns[addr]
 	if ok {
 		delete(c.conns, addr)
