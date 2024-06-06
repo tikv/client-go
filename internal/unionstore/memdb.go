@@ -898,3 +898,8 @@ func (db *MemDB) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 func (db *MemDB) setSkipMutex(skip bool) {
 	db.skipMutex = skip
 }
+
+// MemHookSet implements the MemBuffer interface.
+func (db *MemDB) MemHookSet() bool {
+	return db.allocator.memChangeHook.Load() != nil
+}

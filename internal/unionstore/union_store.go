@@ -212,6 +212,8 @@ type MemBuffer interface {
 	Dirty() bool
 	// SetMemoryFootprintChangeHook sets the hook for memory footprint change.
 	SetMemoryFootprintChangeHook(hook func(uint64))
+	// MemHookSet returns whether the memory footprint change hook is set.
+	MemHookSet() bool
 	// Mem returns the memory usage of MemBuffer.
 	Mem() uint64
 	// Len returns the count of entries in the MemBuffer.
