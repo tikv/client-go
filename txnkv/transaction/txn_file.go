@@ -542,11 +542,11 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		return
 	}
 
-	err = c.preSplitTxnFileRegions(buildBo)
-	stepDone("pre-split")
-	if err != nil {
-		return
-	}
+	// err = c.preSplitTxnFileRegions(buildBo)
+	// stepDone("pre-split")
+	// if err != nil {
+	// 	return
+	// }
 
 	prewriteBo := retry.NewBackofferWithVars(ctx, int(PrewriteMaxBackoff.Load()), c.txn.vars)
 	err = c.executeTxnFileAction(prewriteBo, c.txnFileCtx.slice, txnFilePrewriteAction{})

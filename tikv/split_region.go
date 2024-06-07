@@ -53,6 +53,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
+	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -174,6 +175,20 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	}
 
 	spResp := resp.Resp.(*kvrpcpb.SplitRegionResponse)
+
+	keyErrs := spResp.GetErrors()
+	if len(keyErrs) > 0 {
+		err := s.handleSplitRegionKeyErrors(bo, keyErrs)
+		if err != nil {
+			batchResp.Error = err
+			return batchResp
+		}
+		resp, err = s.splitBatchRegionsReq(bo, batch.Keys, scatter, tableID)
+		batchResp.Response = resp
+		batchResp.Error = err
+		return batchResp
+	}
+
 	regions := spResp.GetRegions()
 	if len(regions) > 0 {
 		// Divide a region into n, one of them may not need to be scattered,
@@ -216,6 +231,54 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 		}
 	}
 	return batchResp
+}
+
+func (s *KVStore) handleSplitRegionKeyErrors(bo *Backoffer, keyErrs []*kvrpcpb.KeyError) error {
+	var (
+		resolvingRecordToken *int
+		locks                []*txnlock.Lock
+		startTS              uint64 = math.MaxUint64 // Set as MaxUint64 and check txn status will not push the minCommiTS.
+	)
+	for _, keyErr := range keyErrs {
+		// Extract lock from key error
+		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
+		if err1 != nil {
+			// Split region should return key error of locked only.
+			return err1
+		}
+		logutil.BgLogger().Info(
+			"split region encounters lock",
+			zap.Stringer("lock", lock),
+		)
+		locks = append(locks, lock)
+	}
+	if resolvingRecordToken == nil {
+		token := s.GetLockResolver().RecordResolvingLocks(locks, startTS)
+		resolvingRecordToken = &token
+		defer s.GetLockResolver().ResolveLocksDone(startTS, *resolvingRecordToken)
+	} else {
+		s.GetLockResolver().UpdateResolvingLocks(locks, startTS, *resolvingRecordToken)
+	}
+	resolveLockOpts := txnlock.ResolveLocksOptions{
+		CallerStartTS: startTS,
+		Locks:         locks,
+	}
+	resolveLockRes, err := s.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	msBeforeExpired := resolveLockRes.TTL
+	if msBeforeExpired > 0 {
+		err = bo.BackoffWithCfgAndMaxSleep(
+			retry.BoTxnLock,
+			int(msBeforeExpired),
+			errors.Errorf("split region lockedKeys: %d", len(locks)),
+		)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	return nil
 }
 
 const (
