@@ -175,6 +175,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	}
 
 	spResp := resp.Resp.(*kvrpcpb.SplitRegionResponse)
+	logutil.Logger(bo.GetCtx()).Info("split region response", zap.Stringer("response", spResp))
 
 	keyErrs := spResp.GetErrors()
 	if len(keyErrs) > 0 {

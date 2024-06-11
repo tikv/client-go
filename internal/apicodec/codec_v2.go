@@ -598,6 +598,10 @@ func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (
 		if err != nil {
 			return nil, err
 		}
+		r.Errors, err = c.decodeKeyErrors(r.Errors)
+		if err != nil {
+			return nil, err
+		}
 		r.Regions, err = c.decodeRegions(r.Regions)
 		if err != nil {
 			return nil, err
