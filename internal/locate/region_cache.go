@@ -1891,7 +1891,9 @@ func (c *RegionCache) GetTiFlashStores() []*Store {
 	defer c.storeMu.RUnlock()
 	var stores []*Store
 	for _, s := range c.storeMu.stores {
-		if s.storeType == tikvrpc.TiFlash {
+		// it should only returns resolved stores so that users won't be bothered by tombstones.
+		// ref: https://github.com/pingcap/tidb/issues/46602
+		if s.storeType == tikvrpc.TiFlash && s.getResolveState() == resolved {
 			stores = append(stores, s)
 		}
 	}
