@@ -175,7 +175,6 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 	}
 
 	spResp := resp.Resp.(*kvrpcpb.SplitRegionResponse)
-	logutil.Logger(bo.GetCtx()).Info("split region response", zap.Stringer("response", spResp))
 
 	keyErrs := spResp.GetErrors()
 	if len(keyErrs) > 0 {
@@ -236,30 +235,22 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 
 func (s *KVStore) handleSplitRegionKeyErrors(bo *Backoffer, keyErrs []*kvrpcpb.KeyError) error {
 	var (
-		resolvingRecordToken *int
-		locks                []*txnlock.Lock
-		startTS              uint64 = math.MaxUint64 // Set as MaxUint64 and check txn status will not push the minCommiTS.
+		locks   []*txnlock.Lock
+		startTS uint64 = math.MaxUint64 // Set as MaxUint64 and check txn status will not push the minCommiTS.
 	)
 	for _, keyErr := range keyErrs {
-		// Extract lock from key error
 		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 		if err1 != nil {
 			// Split region should return key error of locked only.
 			return err1
 		}
-		logutil.BgLogger().Info(
-			"split region encounters lock",
-			zap.Stringer("lock", lock),
-		)
+		logutil.Logger(bo.GetCtx()).Info("split region encounters lock", zap.Stringer("lock", lock))
 		locks = append(locks, lock)
 	}
-	if resolvingRecordToken == nil {
-		token := s.GetLockResolver().RecordResolvingLocks(locks, startTS)
-		resolvingRecordToken = &token
-		defer s.GetLockResolver().ResolveLocksDone(startTS, *resolvingRecordToken)
-	} else {
-		s.GetLockResolver().UpdateResolvingLocks(locks, startTS, *resolvingRecordToken)
-	}
+
+	token := s.GetLockResolver().RecordResolvingLocks(locks, startTS)
+	defer s.GetLockResolver().ResolveLocksDone(startTS, token)
+
 	resolveLockOpts := txnlock.ResolveLocksOptions{
 		CallerStartTS: startTS,
 		Locks:         locks,

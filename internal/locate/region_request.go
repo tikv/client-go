@@ -2306,7 +2306,7 @@ func (s *RegionRequestSender) onRegionError(
 		return false, nil
 	}
 
-	logutil.Logger(bo.GetCtx()).Info(
+	logutil.Logger(bo.GetCtx()).Debug(
 		"tikv reports region failed",
 		zap.Stringer("regionErr", regionErr),
 		zap.Stringer("ctx", ctx),
