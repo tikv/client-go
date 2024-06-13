@@ -35,6 +35,7 @@
 package locate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -2518,4 +2519,161 @@ func BenchmarkInsertRegionToCache2(b *testing.B) {
 		region.setStore(r.getStore())
 		cache.insertRegionToCache(region, true, true)
 	}
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegionsMerger() {
+	check := func(uncachedRegionKeys, cachedRegionKeys, expects []string) {
+		toRegions := func(keys []string) []*Region {
+			ranges := make([]*Region, 0, len(keys)/2)
+			rs := &regionStore{}
+			for i := 0; i < len(keys); i += 2 {
+				ranges = append(ranges, &Region{
+					meta:  &metapb.Region{StartKey: []byte(keys[i]), EndKey: []byte(keys[i+1])},
+					store: unsafe.Pointer(rs),
+				})
+			}
+			return ranges
+		}
+		merger := newBatchLocateRegionMerger(toRegions(cachedRegionKeys), 0)
+		for _, uncachedRegion := range toRegions(uncachedRegionKeys) {
+			merger.appendRegion(uncachedRegion)
+		}
+		locs := merger.build()
+		resultKeys := make([]string, 0, 2*len(locs))
+		for i := 0; i < len(locs); i++ {
+			resultKeys = append(resultKeys, string(locs[i].StartKey), string(locs[i].EndKey))
+		}
+		s.Equal(expects, resultKeys)
+	}
+
+	check([]string{"b", "c", "c", "d"}, []string{"a", "b"}, []string{"a", "b", "b", "c", "c", "d"})
+	check([]string{"a", "b", "c", "d"}, []string{"b", "c"}, []string{"a", "b", "b", "c", "c", "d"})
+	check([]string{"a", "b", "b", "c"}, []string{"c", "d"}, []string{"a", "b", "b", "c", "c", "d"})
+	check([]string{"", ""}, []string{"a", "b", "b", "c"}, []string{"", ""})
+	check([]string{"", "b"}, []string{"a", "b", "b", "c"}, []string{"", "b", "b", "c"})
+	check([]string{"b", ""}, []string{"a", "b", "b", "c"}, []string{"a", "b", "b", ""})
+	// when loaded region covers the cached region, the cached region can be skipped.
+	check([]string{"b", ""}, []string{"a", "b", "c", "d"}, []string{"a", "b", "b", ""})
+	check([]string{"b", "e"}, []string{"a", "b", "c", "d"}, []string{"a", "b", "b", "e"})
+	check([]string{"b", "i"}, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}, []string{"a", "b", "b", "i", "i", "j"})
+	// when loaded region and the cached region are overlapped, both regions are required.
+	check([]string{"b", "d"}, []string{"a", "b", "c", "e"}, []string{"a", "b", "b", "d", "c", "e"})
+	// cached region are covered by multi loaded regions, can also be skipped.
+	check([]string{"b", "d", "d", "f"}, []string{"a", "b", "c", "e"}, []string{"a", "b", "b", "d", "d", "f"})
+	check([]string{"b", "d", "d", "e", "e", "g"}, []string{"a", "b", "c", "f"}, []string{"a", "b", "b", "d", "d", "e", "e", "g"})
+	// loaded regions have hole and cannot fully cover the cached region, the cached region is required.
+	check([]string{"b", "d", "d", "e", "f", "h"}, []string{"a", "b", "c", "g"}, []string{"a", "b", "b", "d", "d", "e", "c", "g", "f", "h"})
+}
+
+func (s *testRegionCacheSuite) TestSplitKeyRanges() {
+	check := func(keyRangeKeys []string, splitKey string, expects []string) {
+		keyRanges := make([]pd.KeyRange, 0, len(keyRangeKeys)/2)
+		for i := 0; i < len(keyRangeKeys); i += 2 {
+			keyRanges = append(keyRanges, pd.KeyRange{StartKey: []byte(keyRangeKeys[i]), EndKey: []byte(keyRangeKeys[i+1])})
+		}
+		splitKeyRanges := nextRanges(keyRanges, []byte(splitKey))
+		splitKeys := make([]string, 0, 2*len(splitKeyRanges))
+		for _, r := range splitKeyRanges {
+			splitKeys = append(splitKeys, string(r.StartKey), string(r.EndKey))
+		}
+		s.Equal(expects, splitKeys)
+	}
+
+	check([]string{"a", "c"}, "a", []string{"a", "c"})
+	check([]string{"b", "c"}, "a", []string{"b", "c"})
+	check([]string{"a", "c"}, "b", []string{"b", "c"})
+	check([]string{"a", "c"}, "c", []string{})
+	check([]string{"a", "c"}, "", []string{})
+	check([]string{"a", ""}, "b", []string{"b", ""})
+	check([]string{"a", ""}, "", []string{})
+	check([]string{"a", "b", "c", "f"}, "a1", []string{"a1", "b", "c", "f"})
+	check([]string{"a", "b", "c", "f"}, "b", []string{"c", "f"})
+	check([]string{"a", "b", "c", "f"}, "b1", []string{"c", "f"})
+	check([]string{"a", "b", "c", "f"}, "c", []string{"c", "f"})
+	check([]string{"a", "b", "c", "f"}, "d", []string{"d", "f"})
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegions() {
+	// Split at "a", "b", "c", "d", "e", "f", "g"
+	// nil --- 'a' --- 'b' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 2 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
+	regions := s.cluster.AllocIDs(7)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 7; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 7; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'a' + byte(i)}, peers[i+1], peers[i+1][0])
+	}
+
+	check := func(scanRanges, cachedRanges []kv.KeyRange, afterCacheLoad func(), expected []uint64) {
+		s.cache.clear()
+		// fill in the cache
+		for _, r := range cachedRanges {
+			for {
+				loc, err := s.cache.LocateKey(s.bo, r.StartKey)
+				s.Nil(err)
+				if loc.Contains(r.EndKey) || bytes.Equal(r.EndKey, loc.EndKey) {
+					break
+				}
+				r.StartKey = loc.EndKey
+			}
+		}
+		if afterCacheLoad != nil {
+			afterCacheLoad()
+		}
+		scannedRegions, err := s.cache.BatchLocateKeyRanges(s.bo, scanRanges)
+		s.Nil(err)
+		s.Equal(len(expected), len(scannedRegions))
+		actual := make([]uint64, 0, len(scannedRegions))
+		for _, r := range scannedRegions {
+			actual = append(actual, r.Region.GetID())
+		}
+		s.Equal(expected, actual)
+	}
+
+	toRanges := func(keys ...string) []kv.KeyRange {
+		ranges := make([]kv.KeyRange, 0, len(keys)/2)
+		for i := 0; i < len(keys); i += 2 {
+			ranges = append(ranges, kv.KeyRange{StartKey: []byte(keys[i]), EndKey: []byte(keys[i+1])})
+		}
+		return ranges
+	}
+
+	// nil --- 'a' --- 'b' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 2 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
+	check(toRanges("a", "g"), nil, nil, regions[1:7])
+	check(toRanges("a", "g"), toRanges("a", "d"), nil, regions[1:7])
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "d"), nil, []uint64{regions[1], regions[2], regions[3], regions[5], regions[6]})
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "b", "e", "f"), nil, []uint64{regions[1], regions[2], regions[3], regions[5], regions[6]})
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "b", "e", "f"), nil, []uint64{regions[1], regions[2], regions[3], regions[5], regions[6]})
+
+	// after merge, the latest fetched regions from PD overwrites the cached regions.
+	// nil --- 'a' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "b", "e", "f"), func() {
+		s.cluster.Merge(regions[1], regions[2])
+	}, []uint64{regions[1], regions[3], regions[5], regions[6]})
+
+	// if the latest fetched regions from PD cannot cover the range, the cached region still need to be returned.
+	// before:
+	// nil --- 'a' --- 'c' --- 'd' --- 'e' --------- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 3 -> <- 4 -> <-    5    -> <- 6 -> <-  7  ->
+	// after:
+	// nil --- 'a' --- 'c' --- 'd' -- 'd2' ----- 'e1' ---- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 3 -> <- 4 -> <- new1 -> <-new2 -> <- 6 -> <-  7  ->
+	// cached ranges [a-c, e-f], cached regions: [1, 5]
+	// scan ranges [c-d3, f-g], scanned regions: [3, 4, new1, 6]
+	newID1 := s.cluster.AllocID()
+	newID2 := s.cluster.AllocID()
+	check(toRanges("a", "d3", "e", "g"), toRanges("a", "c", "e", "f"), func() {
+		s.cluster.Merge(regions[4], regions[5])
+		newPeers := s.cluster.AllocIDs(2)
+		s.cluster.Split(regions[4], newID1, []byte("d2"), newPeers, newPeers[0])
+		newPeers = s.cluster.AllocIDs(2)
+		s.cluster.Split(newID1, newID2, []byte("e1"), newPeers, newPeers[0])
+	}, []uint64{regions[1], regions[3], regions[4], newID1, regions[5], regions[6]})
 }
