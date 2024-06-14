@@ -1703,3 +1703,8 @@ func (txn *KVTxn) SetRequestSourceType(tp string) {
 func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 	txn.RequestSource.SetExplicitRequestSourceType(tp)
 }
+
+// MemHookSet returns whether the mem buffer has a memory footprint change hook set.
+func (txn *KVTxn) MemHookSet() bool {
+	return txn.us.GetMemBuffer().MemHookSet()
+}
