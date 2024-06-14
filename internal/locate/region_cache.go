@@ -2173,6 +2173,10 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 	}
 }
 
+func (c *RegionCache) Codec() apicodec.Codec {
+	return c.codec
+}
+
 const cleanCacheInterval = time.Second
 const cleanRegionNumPerRound = 50
 
