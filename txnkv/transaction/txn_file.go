@@ -833,7 +833,7 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, errors.Wrap(err, "acquire keyspace info failed")
 	}
-	return *keyspaceInfo.txnFileAvailable, nil
+	return keyspaceInfo.txnFileAvailable, nil
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
@@ -980,31 +980,30 @@ func (w *chunkWriterClient) asyncBuildChunk(bo *retry.Backoffer, buf []byte, chu
 }
 
 type keyspaceInfo struct {
-	txnFileAvailable *bool
+	txnFileAvailable bool
 }
 
 var currentKeyspaceInfo atomic.Value
 
-func init() {
-	currentKeyspaceInfo.Store(keyspaceInfo{})
-}
-
-func acquireKeyspaceInfo(ctx context.Context, keyspaceID apicodec.KeyspaceID) (keyspaceInfo, error) {
-	info := currentKeyspaceInfo.Load().(keyspaceInfo)
-	if info.txnFileAvailable == nil {
-		writer, err := newChunkWriterClient(keyspaceID)
-		if err != nil {
-			return info, errors.WithStack(err)
-		}
-
-		bo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), nil)
-		available, err := writer.queryAvailability(bo)
-		if err != nil {
-			return info, errors.WithStack(err)
-		}
-
-		info.txnFileAvailable = &available
-		currentKeyspaceInfo.Store(info)
+func acquireKeyspaceInfo(ctx context.Context, keyspaceID apicodec.KeyspaceID) (*keyspaceInfo, error) {
+	if info := currentKeyspaceInfo.Load(); info != nil {
+		return info.(*keyspaceInfo), nil
 	}
-	return info, nil
+
+	writer, err := newChunkWriterClient(keyspaceID)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	bo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), nil)
+	available, err := writer.queryAvailability(bo)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	newInfo := &keyspaceInfo{
+		txnFileAvailable: available,
+	}
+	currentKeyspaceInfo.Store(newInfo)
+	return newInfo, nil
 }
