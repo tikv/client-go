@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -32,6 +33,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -738,7 +740,7 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 		concurrency = totalChunks
 	}
 
-	writer, err := newChunkWriterClient()
+	writer, err := newChunkWriterClient(c.getKeyspaceID())
 	if err != nil {
 		return errors.Wrap(err, "new chunk writer client failed")
 	}
@@ -809,17 +811,29 @@ func (c *twoPhaseCommitter) buildTxnFiles(bo *retry.Backoffer, mutations Committ
 	return nil
 }
 
-func (c *twoPhaseCommitter) useTxnFile() bool {
+func (c *twoPhaseCommitter) getKeyspaceID() apicodec.KeyspaceID {
+	return c.store.GetRegionCache().Codec().GetKeyspaceID()
+}
+
+func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 	if c.txn == nil || !c.txn.vars.EnableTxnFile {
-		return false
+		return false, nil
 	}
 	conf := config.GetGlobalConfig()
 	// Don't use txn file for internal request to avoid affect system tables or metadata before it is stable enough.
 	// TODO: use txn file for internal TTL & DDL tasks.
-	return !c.txn.isPessimistic &&
-		!c.txn.isInternal() &&
-		len(conf.TiKVClient.TxnChunkWriterAddr) > 0 &&
-		uint64(c.txn.GetMemBuffer().Size()) >= conf.TiKVClient.TxnFileMinMutationSize
+	if c.txn.isPessimistic ||
+		c.txn.isInternal() ||
+		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 ||
+		uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.TxnFileMinMutationSize {
+		return false, nil
+	}
+
+	keyspaceInfo, err := acquireKeyspaceInfo(ctx, c.getKeyspaceID())
+	if err != nil {
+		return false, errors.Wrap(err, "acquire keyspace info failed")
+	}
+	return keyspaceInfo.txnFileAvailable, nil
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
@@ -847,7 +861,7 @@ type chunkWriterClient struct {
 	serviceAddr string
 }
 
-func newChunkWriterClient() (*chunkWriterClient, error) {
+func newChunkWriterClient(keyspaceID apicodec.KeyspaceID) (*chunkWriterClient, error) {
 	var (
 		cfg     = config.GetGlobalConfig()
 		scheme  = "http://"
@@ -866,34 +880,71 @@ func newChunkWriterClient() (*chunkWriterClient, error) {
 			ForceAttemptHTTP2: true,
 		}
 	}
-	serviceAddr := fmt.Sprintf("%s%s/txn_chunk", scheme, cfg.TiKVClient.TxnChunkWriterAddr)
+	serviceAddr := fmt.Sprintf("%s%s/txn_chunk?keyspace_id=%v", scheme, cfg.TiKVClient.TxnChunkWriterAddr, keyspaceID)
 	return &chunkWriterClient{client, serviceAddr}, nil
 }
 
 func (w *chunkWriterClient) buildChunk(bo *retry.Backoffer, buf []byte) (uint64, error) {
-	ctx := bo.GetCtx()
 	hash := crc32.New(crc32.MakeTable(crc32.IEEE))
 	hash.Write(buf)
 	crc := hash.Sum32()
 	buf = binary.LittleEndian.AppendUint32(buf, crc)
 
+	data, err := w.request(bo, "POST", buf)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	v := struct {
+		ChunkId uint64 `json:"chunk_id"`
+	}{}
+	if err = json.Unmarshal(data, &v); err != nil {
+		return 0, errors.Wrapf(err, "unmarshal response %s", string(data))
+	}
+	logutil.Logger(bo.GetCtx()).Debug("build txn file", zap.Int("size", len(buf)), zap.Uint64("chunkId", v.ChunkId))
+	return v.ChunkId, nil
+}
+
+func (w *chunkWriterClient) queryAvailability(bo *retry.Backoffer) (bool, error) {
+	data, err := w.request(bo, "GET", nil)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	v := struct {
+		Available bool `json:"available"`
+	}{}
+	if err = json.Unmarshal(data, &v); err != nil {
+		return false, errors.Wrapf(err, "unmarshal response %s", string(data))
+	}
+	logutil.Logger(bo.GetCtx()).Info("query txn file availability", zap.Bool("available", v.Available))
+	return v.Available, nil
+}
+
+func (w *chunkWriterClient) request(bo *retry.Backoffer, method string, data []byte) ([]byte, error) {
+	ctx := bo.GetCtx()
 	for {
 		if ctx.Err() != nil {
-			return 0, errors.WithStack(ctx.Err())
+			return nil, errors.WithStack(ctx.Err())
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", w.serviceAddr, bytes.NewReader(buf))
-		if err != nil {
-			return 0, errors.WithStack(err)
+		var body io.Reader
+		if len(data) > 0 {
+			body = bytes.NewReader(data)
 		}
-		req.Header.Set("Content-Type", "application/octet-stream")
+
+		req, err := http.NewRequestWithContext(ctx, method, w.serviceAddr, body)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/octet-stream")
+		}
 
 		resp, err := w.cli.Do(req)
 		if err != nil {
-			logutil.Logger(bo.GetCtx()).Warn("build txn file request failed", zap.Error(err), zap.String("addr", w.serviceAddr))
-			err = bo.Backoff(retry.BoTiKVRPC, errors.WithMessage(err, "build txn file request failed"))
+			logutil.Logger(ctx).Warn("request failed", zap.Error(err), zap.String("addr", w.serviceAddr))
+			err = bo.Backoff(retry.BoTiKVRPC, errors.WithMessage(err, "request failed"))
 			if err != nil {
-				return 0, errors.WithStack(err)
+				return nil, errors.WithStack(err)
 			}
 			continue
 		}
@@ -903,25 +954,15 @@ func (w *chunkWriterClient) buildChunk(bo *retry.Backoffer, buf []byte) (uint64,
 			if data, err := io.ReadAll(resp.Body); err == nil {
 				bodyStr = string(data)
 			}
-			logutil.Logger(bo.GetCtx()).Warn("build txn file service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
-			err = bo.Backoff(retry.BoTiKVServerBusy, fmt.Errorf("build txn file service error, http status %s", resp.Status))
+			logutil.Logger(ctx).Warn("service error", zap.String("http status", resp.Status), zap.String("body", bodyStr))
+			err = bo.Backoff(retry.BoTiKVServerBusy, fmt.Errorf("service error, http status %s", resp.Status))
 			if err != nil {
-				return 0, errors.WithStack(err)
+				return nil, errors.WithStack(err)
 			}
 			continue
 		}
 		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		v := struct {
-			ChunkId uint64 `json:"chunk_id"`
-		}{}
-		if err = json.Unmarshal(data, &v); err != nil {
-			return 0, errors.Wrapf(err, "unmarshal response %s", string(data))
-		}
-		logutil.Logger(bo.GetCtx()).Debug("build txn file", zap.Int("size", len(buf)), zap.Uint64("chunkId", v.ChunkId))
-		return v.ChunkId, nil
+		return data, errors.WithStack(err)
 	}
 }
 
@@ -936,4 +977,33 @@ func (w *chunkWriterClient) asyncBuildChunk(bo *retry.Backoffer, buf []byte, chu
 		chunkId, err := w.buildChunk(bo.Clone(), buf)
 		resultCh <- buildChunkResult{chunkId, chunkRange, err}
 	}()
+}
+
+type keyspaceInfo struct {
+	txnFileAvailable bool
+}
+
+var currentKeyspaceInfo atomic.Value
+
+func acquireKeyspaceInfo(ctx context.Context, keyspaceID apicodec.KeyspaceID) (*keyspaceInfo, error) {
+	if info := currentKeyspaceInfo.Load(); info != nil {
+		return info.(*keyspaceInfo), nil
+	}
+
+	writer, err := newChunkWriterClient(keyspaceID)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	bo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), nil)
+	available, err := writer.queryAvailability(bo)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	newInfo := &keyspaceInfo{
+		txnFileAvailable: available,
+	}
+	currentKeyspaceInfo.Store(newInfo)
+	return newInfo, nil
 }
