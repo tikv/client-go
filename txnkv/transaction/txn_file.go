@@ -935,7 +935,7 @@ func (w *chunkWriterClient) request(bo *retry.Backoffer, method string, data []b
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		if method == "POST" {
+		if body != nil {
 			req.Header.Set("Content-Type", "application/octet-stream")
 		}
 
