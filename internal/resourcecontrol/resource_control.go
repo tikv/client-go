@@ -41,6 +41,10 @@ type RequestInfo struct {
 	bypass bool
 }
 
+func NewRequestInfo(writeBytes int64, storeID uint64, replicaNumber int64, bypass bool) *RequestInfo {
+	return &RequestInfo{writeBytes: writeBytes, storeID: storeID, replicaNumber: replicaNumber, bypass: bypass}
+}
+
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
 func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	var bypass bool

@@ -30,6 +30,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -37,11 +38,14 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util"
+	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -538,6 +542,17 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	logutil.Logger(ctx).Debug("execute txn file", zap.Uint64("startTS", c.startTS))
 
 	buildBo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), c.txn.vars)
+
+	rcInterceptor := client.ResourceControlInterceptor.Load()
+	var ruDetails *util.RUDetails
+	if detail := ctx.Value(util.RUDetailsCtxKey); detail != nil {
+		ruDetails = detail.(*util.RUDetails)
+	}
+	reqInfo, err := c.beforeExecuteTxnFile(buildBo, rcInterceptor, ruDetails)
+	if err != nil {
+		return
+	}
+
 	err = c.buildTxnFiles(buildBo, c.mutations)
 	stepDone("build")
 	if err != nil {
@@ -564,6 +579,8 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	}
 	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
 	stepDone("commit")
+
+	err = c.afterExecuteTxnFile(rcInterceptor, reqInfo, ruDetails)
 	return
 }
 
@@ -854,6 +871,66 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 	}
 	_, err = c.store.SplitRegions(bo.GetCtx(), splitKeys, false, nil)
 	return errors.Wrap(err, "pre split regions failed")
+}
+
+func (c *twoPhaseCommitter) beforeExecuteTxnFile(
+	bo *retry.Backoffer,
+	rcInterceptor *resourceControlClient.ResourceGroupKVInterceptor,
+	ruDetails *util.RUDetails,
+) (*resourcecontrol.RequestInfo, error) {
+	if rcInterceptor == nil {
+		return nil, nil
+	}
+
+	ctx := bo.GetCtx()
+	regionCache := c.store.GetRegionCache()
+	loc, err := regionCache.LocateKey(bo, c.primary())
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to locate primary")
+	}
+	region := regionCache.GetCachedRegionWithRLock(loc.Region)
+
+	var replicaNumber int64 = 0
+	for _, peer := range region.GetMeta().GetPeers() {
+		if peer.GetRole() == metapb.PeerRole_Voter {
+			replicaNumber++
+		}
+	}
+
+	reqInfo := resourcecontrol.NewRequestInfo(
+		int64(c.txn.Size()),
+		region.GetLeaderStoreID(),
+		replicaNumber,
+		false,
+	)
+
+	consumption, _ /* penalty */, waitDuration, _ /* priority */, err := (*rcInterceptor).OnRequestWait(ctx, c.resourceGroupName, reqInfo)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if ruDetails != nil {
+		ruDetails.Update(consumption, waitDuration)
+	}
+
+	return reqInfo, nil
+}
+
+func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor *resourceControlClient.ResourceGroupKVInterceptor, reqInfo *resourcecontrol.RequestInfo, ruDetails *util.RUDetails) error {
+	if rcInterceptor == nil {
+		return nil
+	}
+
+	respInfo := &resourcecontrol.ResponseInfo{}
+	consumption, err := (*rcInterceptor).OnResponse(c.resourceGroupName, reqInfo, respInfo)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if ruDetails != nil {
+		ruDetails.Update(consumption, time.Duration(0))
+	}
+
+	return nil
 }
 
 type chunkWriterClient struct {
