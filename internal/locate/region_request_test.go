@@ -65,6 +65,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
 )
 
@@ -157,6 +158,37 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 		s.NotNil(resp)
 		regionErr, _ := resp.GetRegionError()
 		s.NotNil(regionErr)
+	}()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrottled() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+
+	// test ErrClientResourceGroupThrottled handled by regionRequestSender
+	func() {
+		oc := s.regionRequestSender.client
+		defer func() {
+			s.regionRequestSender.client = oc
+		}()
+		storeOld, _ := s.regionRequestSender.regionCache.stores.get(1)
+		epoch := storeOld.epoch
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+			return nil, pderr.ErrClientResourceGroupThrottled
+		}}
+		bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+		_, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+		s.NotNil(err)
+		storeNew, _ := s.regionRequestSender.regionCache.stores.get(1)
+		//  not mark the store need be refill, then the epoch should not be changed.
+		s.Equal(epoch, storeNew.epoch)
+		// no rpc error if the error is ErrClientResourceGroupThrottled
+		s.Nil(s.regionRequestSender.rpcError)
 	}()
 }
 
