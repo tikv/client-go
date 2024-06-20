@@ -525,3 +525,8 @@ func (p *PipelinedMemDB) GetFlushMetrics() FlushMetrics {
 		WaitDuration: p.flushWaitDuration,
 	}
 }
+
+// MemHookSet implements the MemBuffer interface.
+func (p *PipelinedMemDB) MemHookSet() bool {
+	return p.memChangeHook != nil
+}
