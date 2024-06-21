@@ -914,7 +914,7 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		leaderExhausted := state.IsLeaderExhausted(leader)
 		leaderTimeout := leader.deadlineErrUsingConfTimeout
 		if len(state.option.labels) > 0 && !state.option.leaderOnly {
-			logutil.BgLogger().Warn("unable to find a store with given labels",
+			logutil.BgLogger().Debug("unable to find a store with given labels",
 				zap.Uint64("region", selector.region.GetID()),
 				zap.Bool("stale-read", state.isStaleRead),
 				zap.Any("labels", state.option.labels))
