@@ -254,11 +254,11 @@ type monitoredConn struct {
 	Name string
 }
 
-func (a *connArray) monitoredDial(connName, target string, opts ...grpc.DialOption) (conn *monitoredConn, err error) {
+func (a *connArray) monitoredDial(ctx context.Context, connName, target string, opts ...grpc.DialOption) (conn *monitoredConn, err error) {
 	conn = &monitoredConn{
 		Name: connName,
 	}
-	conn.ClientConn, err = grpc.NewClient(target, opts...)
+	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +306,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	keepAliveTimeout := cfg.TiKVClient.GrpcKeepAliveTimeout
 	for i := range a.v {
+		ctx, cancel := context.WithTimeout(context.Background(), a.dialTimeout)
 		var callOptions []grpc.CallOption
 		callOptions = append(callOptions, grpc.MaxCallRecvMsgSize(MaxRecvMsgSize))
 		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
@@ -337,10 +338,13 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
 		}
 		conn, err := a.monitoredDial(
+			ctx,
 			fmt.Sprintf("%s-%d", a.target, i),
 			addr,
 			opts...,
 		)
+
+		cancel()
 		if err != nil {
 			// Cleanup if the initialization fails.
 			a.Close()
