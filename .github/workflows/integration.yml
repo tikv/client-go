@@ -53,14 +53,14 @@ jobs:
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
-          image: pingcap/pd:nightly
+          image: pingcap/pd:v7.5.2
           path: /pd-server
 
       - name: Fetch TiKV
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: pingcap/tikv:nightly
+          image: pingcap/tikv:v7.5.2
           path: /tikv-server
 
       - name: Run PD & TiKV
@@ -95,14 +95,14 @@ jobs:
         uses: shrink/actions-docker-extract@v1
         id: extract-pd
         with:
-          image: pingcap/pd:nightly
+          image: pingcap/pd:v7.5.2
           path: /pd-server
 
       - name: Fetch TiKV
         uses: shrink/actions-docker-extract@v1
         id: extract-tikv
         with:
-          image: pingcap/tikv:nightly
+          image: pingcap/tikv:v7.5.2
           path: /tikv-server
 
       - name: Run PD & TiKV
