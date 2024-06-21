@@ -206,7 +206,7 @@ func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
 		retryCount++
 	}
 	// Make sure the store's min resolved ts is not initialized.
-	require.Equal(uint64(math.MaxUint64), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	require.NoError(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 
 	// Try to get the minimum resolved timestamp of the cluster from PD.
