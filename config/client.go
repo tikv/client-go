@@ -78,6 +78,8 @@ type TiKVClient struct {
 	OverloadThreshold uint `toml:"overload-threshold" json:"overload-threshold"`
 	// MaxBatchWaitTime in nanosecond is the max wait time for batch.
 	MaxBatchWaitTime time.Duration `toml:"max-batch-wait-time" json:"max-batch-wait-time"`
+	// MaxBatchWaitAttempts is the max number of attempts for batching more requests when the queue is empty.
+	MaxBatchWaitAttempts uint `toml:"max-batch-wait-attempts" json:"max-batch-wait-attempts"`
 	// BatchWaitSize is the max wait size for batch.
 	BatchWaitSize uint `toml:"batch-wait-size" json:"batch-wait-size"`
 	// EnableChunkRPC indicate the data encode in chunk format for coprocessor requests.
@@ -150,10 +152,11 @@ func DefaultTiKVClient() TiKVClient {
 			AllowedClockDrift: 500 * time.Millisecond,
 		},
 
-		MaxBatchSize:      128,
-		OverloadThreshold: 200,
-		MaxBatchWaitTime:  0,
-		BatchWaitSize:     8,
+		MaxBatchSize:         128,
+		OverloadThreshold:    200,
+		MaxBatchWaitTime:     0,
+		MaxBatchWaitAttempts: 0,
+		BatchWaitSize:        8,
 
 		EnableChunkRPC: true,
 
