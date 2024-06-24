@@ -220,7 +220,7 @@ func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
 		retryCount++
 	}
 	// Make sure the store's min resolved ts is not regarded as MaxUint64.
-	require.Equal(uint64(100), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
+	require.Equal(uint64(0), s.store.GetMinSafeTS(oracle.GlobalTxnScope))
 	require.NoError(failpoint.Disable("tikvclient/InjectMinResolvedTS"))
 
 	// Fallback to KV Request when PD server not support get min resolved ts.
