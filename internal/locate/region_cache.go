@@ -1725,10 +1725,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRang
 		return
 	}
 	if len(regions) == 0 {
-		startKey, endKey := keyRanges[0].StartKey, keyRanges[len(keyRanges)-1].EndKey
-		err = errors.Errorf("PD returned no region, first range start_key: %q, last range end_key: %q, encode_start_key: %q, encode_end_key: %q",
-			util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey),
-			util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)))
+		err = errors.Errorf("PD returned no region, range num: %d, count: %d", len(keyRanges), count)
 		return
 	}
 
