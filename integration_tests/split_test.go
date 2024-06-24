@@ -243,7 +243,6 @@ func (c *mockPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyR
 		return nil, errors.WithStack(errStopped)
 	}
 	return c.client.BatchScanRegions(ctx, keyRanges, limit, opts...)
-
 }
 
 func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {

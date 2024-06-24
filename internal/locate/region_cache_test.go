@@ -2571,7 +2571,7 @@ func (s *testRegionCacheSuite) TestSplitKeyRanges() {
 		for i := 0; i < len(keyRangeKeys); i += 2 {
 			keyRanges = append(keyRanges, pd.KeyRange{StartKey: []byte(keyRangeKeys[i]), EndKey: []byte(keyRangeKeys[i+1])})
 		}
-		splitKeyRanges := nextRanges(keyRanges, []byte(splitKey))
+		splitKeyRanges := rangesAfterKey(keyRanges, []byte(splitKey))
 		splitKeys := make([]string, 0, 2*len(splitKeyRanges))
 		for _, r := range splitKeyRanges {
 			splitKeys = append(splitKeys, string(r.StartKey), string(r.EndKey))
@@ -2645,6 +2645,8 @@ func (s *testRegionCacheSuite) TestBatchScanRegions() {
 
 	// nil --- 'a' --- 'b' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
 	// <-  0  -> <- 1 -> <- 2 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
+	check(toRanges("A", "B", "C", "D", "E", "F"), toRanges("", "a"), nil, regions[:1])
+	check(toRanges("A", "B", "C", "D", "E", "F", "G", "c"), toRanges("", "c"), nil, regions[:3])
 	check(toRanges("a", "g"), nil, nil, regions[1:7])
 	check(toRanges("a", "g"), toRanges("a", "d"), nil, regions[1:7])
 	check(toRanges("a", "d", "e", "g"), toRanges("a", "d"), nil, []uint64{regions[1], regions[2], regions[3], regions[5], regions[6]})

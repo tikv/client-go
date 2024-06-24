@@ -1231,9 +1231,21 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 	uncachedRanges := make([]pd.KeyRange, 0, len(keyRanges))
 	cachedRegions := make([]*Region, 0, len(keyRanges))
 	// 1. find regions from cache
+	var lastRegion *Region
 	for _, keyRange := range keyRanges {
+		if lastRegion != nil {
+			if lastRegion.ContainsByEnd(keyRange.EndKey) {
+				continue
+			} else if lastRegion.Contains(keyRange.StartKey) {
+				keyRange.StartKey = lastRegion.EndKey()
+			}
+		}
 		for {
+			// TODO: find all the cached regions in the range.
+			// now we only check if the region is cached from the lower bound, if there is a uncached hole in the middle,
+			// we will load the rest regions even they are cached.
 			r := c.tryFindRegionByKey(keyRange.StartKey, false)
+			lastRegion = r
 			if r == nil {
 				// region cache miss, add the cut range to uncachedRanges, load from PD later.
 				uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
@@ -1265,13 +1277,13 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 			merger.appendRegion(r)
 		}
 		// if the regions are not loaded completely, split uncachedRanges and load the rest.
-		uncachedRanges = nextRanges(uncachedRanges, regions[len(regions)-1].EndKey())
+		uncachedRanges = rangesAfterKey(uncachedRanges, regions[len(regions)-1].EndKey())
 	}
 	return merger.build(), nil
 }
 
 type batchLocateRangesMerger struct {
-	lastEndKey      util.Option[[]byte]
+	lastEndKey      *[]byte
 	cachedIdx       int
 	cachedRegions   []*Region
 	mergedLocations []*KeyLocation
@@ -1279,7 +1291,7 @@ type batchLocateRangesMerger struct {
 
 func newBatchLocateRegionMerger(cachedRegions []*Region, sizeHint int) *batchLocateRangesMerger {
 	return &batchLocateRangesMerger{
-		lastEndKey:      util.None[[]byte](),
+		lastEndKey:      nil,
 		cachedRegions:   cachedRegions,
 		mergedLocations: make([]*KeyLocation, 0, sizeHint),
 	}
@@ -1298,29 +1310,33 @@ func (m *batchLocateRangesMerger) appendRegion(uncachedRegion *Region) {
 	defer func() {
 		endKey := uncachedRegion.EndKey()
 		if len(endKey) == 0 {
+			// len(end_key) == 0 means region end to +inf, it should be the last region.
+			// discard the rest cached regions by moving the cachedIdx to the end of cachedRegions.
 			m.cachedIdx = len(m.cachedRegions)
 		} else {
-			m.lastEndKey = util.Some(uncachedRegion.EndKey())
+			lastEndKey := uncachedRegion.EndKey()
+			m.lastEndKey = &lastEndKey
 		}
 	}()
 	if len(uncachedRegion.StartKey()) == 0 {
+		// len(start_key) == 0 means region start from -inf, it should be the first region.
 		m.appendKeyLocation(uncachedRegion)
 		return
 	}
-	lastEndKey := m.lastEndKey.Inner()
-	if lastEndKey != nil && bytes.Compare(*lastEndKey, uncachedRegion.StartKey()) >= 0 {
+	if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, uncachedRegion.StartKey()) >= 0 {
 		// the uncached regions are continued, do not consider cached region by now.
 		m.appendKeyLocation(uncachedRegion)
 		return
 	}
 	for ; m.cachedIdx < len(m.cachedRegions); m.cachedIdx++ {
-		if lastEndKey != nil && bytes.Compare(*lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
+		if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
 			// skip the cached region that is covered by the uncached region.
 			continue
 		}
 		if bytes.Compare(m.cachedRegions[m.cachedIdx].StartKey(), uncachedRegion.StartKey()) >= 0 {
 			break
 		}
+		// append the cached regions that are before the uncached region.
 		m.appendKeyLocation(m.cachedRegions[m.cachedIdx])
 	}
 	m.appendKeyLocation(uncachedRegion)
@@ -1329,7 +1345,7 @@ func (m *batchLocateRangesMerger) appendRegion(uncachedRegion *Region) {
 func (m *batchLocateRangesMerger) build() []*KeyLocation {
 	// append the rest cache hit regions
 	for ; m.cachedIdx < len(m.cachedRegions); m.cachedIdx++ {
-		if lastEndKey := m.lastEndKey.Inner(); lastEndKey != nil && bytes.Compare(*lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
+		if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
 			// skip the cached region that is covered by the uncached region.
 			continue
 		}
@@ -1338,22 +1354,25 @@ func (m *batchLocateRangesMerger) build() []*KeyLocation {
 	return m.mergedLocations
 }
 
-func nextRanges(keyRanges []pd.KeyRange, locatedKey []byte) []pd.KeyRange {
+// rangesAfterKey split the key ranges and return the rest ranges after splitKey.
+// the returned ranges are referenced to the input keyRanges, and the key range may be changed in place,
+// the input keyRanges should not be used after calling this function.
+func rangesAfterKey(keyRanges []pd.KeyRange, splitKey []byte) []pd.KeyRange {
 	if len(keyRanges) == 0 {
 		return nil
 	}
-	if len(locatedKey) == 0 || len(keyRanges[len(keyRanges)-1].EndKey) > 0 && bytes.Compare(locatedKey, keyRanges[len(keyRanges)-1].EndKey) >= 0 {
+	if len(splitKey) == 0 || len(keyRanges[len(keyRanges)-1].EndKey) > 0 && bytes.Compare(splitKey, keyRanges[len(keyRanges)-1].EndKey) >= 0 {
 		// fast check, if all ranges are loaded from PD, quit the loop.
 		return nil
 	}
 
 	n := sort.Search(len(keyRanges), func(i int) bool {
-		return len(keyRanges[i].EndKey) == 0 || bytes.Compare(keyRanges[i].EndKey, locatedKey) > 0
+		return len(keyRanges[i].EndKey) == 0 || bytes.Compare(keyRanges[i].EndKey, splitKey) > 0
 	})
 
 	keyRanges = keyRanges[n:]
-	if bytes.Compare(locatedKey, keyRanges[0].StartKey) > 0 {
-		keyRanges[0].StartKey = locatedKey
+	if bytes.Compare(splitKey, keyRanges[0].StartKey) > 0 {
+		keyRanges[0].StartKey = splitKey
 	}
 	return keyRanges
 }
@@ -2171,7 +2190,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			pdOpts = append(pdOpts, pd.WithBuckets())
 		}
 		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
-		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
+		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, range num: %d, limit: %d, err: %v",
@@ -2218,7 +2237,6 @@ func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.R
 			"regionCache: scanRegion finished but some regions has no leader.")
 	}
 	return regions, nil
-
 }
 
 // GetCachedRegionWithRLock returns region with lock.
