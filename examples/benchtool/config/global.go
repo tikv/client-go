@@ -23,6 +23,12 @@ import (
 	"github.com/tikv/client-go/v2/config"
 )
 
+const (
+	WorkloadColumnFamilyDefault = "CF_DEFAULT"
+	WorkloadColumnFamilyWrite   = "CF_WRITE"
+	WorkloadColumnFamilyLock    = "CF_LOCK"
+)
+
 type GlobalConfig struct {
 	hosts      []string
 	port       int

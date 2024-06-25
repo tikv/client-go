@@ -46,39 +46,14 @@ const (
 	WorkloadTxnModeAsyncCommit = "async-commit"
 )
 
-type TxnKVConfig struct {
-	keySize    int
-	valueSize  int
-	columnSize int
-	txnSize    int
-
-	prepareRetryCount    int
-	prepareRetryInterval time.Duration
-	readWriteRatio       *utils.ReadWriteRatio
-	txnMode              string
-	lockTimeout          int
-
-	global *config.GlobalConfig
-}
-
-func (c *TxnKVConfig) Validate() error {
-	if c.keySize <= 0 || c.valueSize <= 0 {
-		return fmt.Errorf("key size or value size must be greater than 0")
-	}
-	if err := c.readWriteRatio.ParseRatio(); err != nil {
-		return fmt.Errorf("parse read-write-ratio failed: %v", err)
-	}
-	return c.global.ParsePdAddrs()
-}
-
 // Register registers the workload to the command line parser
-func Register(command *config.CommandLineParser) *TxnKVConfig {
+func Register(command *config.CommandLineParser) *config.TxnKVConfig {
 	if command == nil {
 		return nil
 	}
-	txnKVConfig := &TxnKVConfig{
-		global:         command.GetConfig(),
-		readWriteRatio: utils.NewReadWriteRatio("1:1"), // TODO: generate workloads meeting the read-write ratio
+	txnKVConfig := &config.TxnKVConfig{
+		Global:         command.GetConfig(),
+		ReadWriteRatio: utils.NewReadWriteRatio("1:1"), // TODO: generate workloads meeting the read-write ratio
 	}
 
 	cmd := &cobra.Command{
@@ -87,13 +62,13 @@ func Register(command *config.CommandLineParser) *TxnKVConfig {
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, txnKVConfig)
 		},
 	}
-	cmd.PersistentFlags().StringVar(&txnKVConfig.readWriteRatio.Ratio, "read-write-ratio", "1:1", "Read write ratio")
-	cmd.PersistentFlags().IntVar(&txnKVConfig.keySize, "key-size", 1, "Size of key in bytes")
-	cmd.PersistentFlags().IntVar(&txnKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
-	cmd.PersistentFlags().IntVar(&txnKVConfig.columnSize, "column-size", 1, "Size of column")
-	cmd.PersistentFlags().IntVar(&txnKVConfig.txnSize, "txn-size", 1, "Size of transaction (normally, the lines of kv pairs)")
-	cmd.PersistentFlags().StringVar(&txnKVConfig.txnMode, "txn-mode", "2PC", "Mode of transaction (2PC/1PC/async-commit)")
-	cmd.PersistentFlags().IntVar(&txnKVConfig.lockTimeout, "lock-timeout", 0, "Lock timeout for each key in txn (>0 means pessimistic mode, 0 means optimistic mode)")
+	cmd.PersistentFlags().StringVar(&txnKVConfig.ReadWriteRatio.Ratio, "read-write-ratio", "1:1", "Read write ratio")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.KeySize, "key-size", 1, "Size of key in bytes")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.ValueSize, "value-size", 1, "Size of value in bytes")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.ColumnSize, "column-size", 1, "Size of column")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.TxnSize, "txn-size", 1, "Size of transaction (normally, the lines of kv pairs)")
+	cmd.PersistentFlags().StringVar(&txnKVConfig.TxnMode, "txn-mode", "2PC", "Mode of transaction (2PC/1PC/async-commit)")
+	cmd.PersistentFlags().IntVar(&txnKVConfig.LockTimeout, "lock-timeout", 0, "Lock timeout for each key in txn (>0 means pessimistic mode, 0 means optimistic mode)")
 	// TODO: add more flags on txn, such as pessimistic/optimistic lock, etc.
 
 	var cmdPrepare = &cobra.Command{
@@ -103,8 +78,8 @@ func Register(command *config.CommandLineParser) *TxnKVConfig {
 			execTxnKV("prepare")
 		},
 	}
-	cmdPrepare.PersistentFlags().IntVar(&txnKVConfig.prepareRetryCount, "retry-count", 50, "Retry count when errors occur")
-	cmdPrepare.PersistentFlags().DurationVar(&txnKVConfig.prepareRetryInterval, "retry-interval", 10*time.Millisecond, "The interval for each retry")
+	cmdPrepare.PersistentFlags().IntVar(&txnKVConfig.PrepareRetryCount, "retry-count", 50, "Retry count when errors occur")
+	cmdPrepare.PersistentFlags().DurationVar(&txnKVConfig.PrepareRetryInterval, "retry-interval", 10*time.Millisecond, "The interval for each retry")
 
 	var cmdRun = &cobra.Command{
 		Use:   "run",
@@ -137,8 +112,8 @@ func Register(command *config.CommandLineParser) *TxnKVConfig {
 	return txnKVConfig
 }
 
-func getTxnKVConfig(ctx context.Context) *TxnKVConfig {
-	c := ctx.Value(WorkloadImplName).(*TxnKVConfig)
+func getTxnKVConfig(ctx context.Context) *config.TxnKVConfig {
+	c := ctx.Value(WorkloadImplName).(*config.TxnKVConfig)
 	return c
 }
 
@@ -152,7 +127,7 @@ func prepareLockKeyWithTimeout(ctx context.Context, txn *clientTxnKV.KVTxn, key 
 
 // Workload is the implementation of WorkloadInterface
 type WorkloadImpl struct {
-	cfg     *TxnKVConfig
+	cfg     *config.TxnKVConfig
 	clients []*clientTxnKV.Client
 
 	wait sync.WaitGroup
@@ -160,7 +135,7 @@ type WorkloadImpl struct {
 	stats *statistics.PerfProfile
 }
 
-func NewTxnKVWorkload(cfg *TxnKVConfig) (*WorkloadImpl, error) {
+func NewTxnKVWorkload(cfg *config.TxnKVConfig) (*WorkloadImpl, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -170,7 +145,7 @@ func NewTxnKVWorkload(cfg *TxnKVConfig) (*WorkloadImpl, error) {
 	}
 
 	clientConfig.UpdateGlobal(func(conf *clientConfig.Config) {
-		conf.TiKVClient.MaxBatchSize = (uint)(cfg.txnSize + 10)
+		conf.TiKVClient.MaxBatchSize = (uint)(cfg.TxnSize + 10)
 	})
 	// TODO: setting batch.
 	// defer config.UpdateGlobal(func(conf *config.Config) {
@@ -178,9 +153,9 @@ func NewTxnKVWorkload(cfg *TxnKVConfig) (*WorkloadImpl, error) {
 	// 	conf.TiKVClient.GrpcConnectionCount = 1
 	// })()
 
-	w.clients = make([]*clientTxnKV.Client, 0, w.cfg.global.Threads)
-	for i := 0; i < w.cfg.global.Threads; i++ {
-		client, err := clientTxnKV.NewClient(w.cfg.global.Targets)
+	w.clients = make([]*clientTxnKV.Client, 0, w.cfg.Global.Threads)
+	for i := 0; i < w.cfg.Global.Threads; i++ {
+		client, err := clientTxnKV.NewClient(w.cfg.Global.Targets)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +169,7 @@ func (w *WorkloadImpl) Name() string {
 }
 
 func (w *WorkloadImpl) isValid() bool {
-	return w.cfg != nil && w.cfg.global != nil && len(w.clients) > 0
+	return w.cfg != nil && w.cfg.Global != nil && len(w.clients) > 0
 }
 
 func (w *WorkloadImpl) isValidThread(threadID int) bool {
@@ -240,15 +215,15 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 
 	client := w.clients[threadID]
 	key := WorkloadDefaultKey
-	val := utils.GenRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
-	lockTimeout := int64(w.cfg.lockTimeout)
+	val := utils.GenRandomStr(WorkloadDefaultValue, w.cfg.ValueSize)
+	lockTimeout := int64(w.cfg.LockTimeout)
 
 	// Constructs the txn client and sets the txn mode
 	txn, err := client.Begin()
 	if err != nil {
 		return fmt.Errorf("txn begin failed, err %v", err)
 	}
-	switch w.cfg.txnMode {
+	switch w.cfg.TxnMode {
 	case WorkloadTxnMode1PC:
 		txn.SetEnable1PC(true)
 	case WorkloadTxnModeAsyncCommit:
@@ -258,21 +233,21 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 
 	txn.SetPessimistic(lockTimeout > 0)
 
-	sum := w.cfg.txnSize * w.cfg.columnSize
-	readCount := sum * w.cfg.readWriteRatio.GetPercent(utils.ReadPercent) / 100
+	sum := w.cfg.TxnSize * w.cfg.ColumnSize
+	readCount := sum * w.cfg.ReadWriteRatio.GetPercent(utils.ReadPercent) / 100
 	writeCount := sum - readCount
 	canRead := func(sum, readCount, writeCount int) bool {
 		return readCount > 0 && (writeCount <= 0 || rand.Intn(sum)/2 == 0)
 	}
 
-	for row := 0; row < w.cfg.txnSize; row++ {
-		key = fmt.Sprintf("%s@col_", utils.GenRandomStr(key, w.cfg.keySize))
+	for row := 0; row < w.cfg.TxnSize; row++ {
+		key = fmt.Sprintf("%s@col_", utils.GenRandomStr(key, w.cfg.KeySize))
 		// Lock the key with timeout if necessary.
 		if err = prepareLockKeyWithTimeout(ctx, txn, []byte(key), lockTimeout); err != nil {
 			fmt.Printf("txn lock key failed, err %v", err)
 			continue
 		}
-		for col := 0; col < w.cfg.columnSize; col++ {
+		for col := 0; col < w.cfg.ColumnSize; col++ {
 			colKey := fmt.Sprintf("%s%d", key, col)
 			if canRead(sum, readCount, writeCount) {
 				_, err = txn.Get(ctx, []byte(colKey))
@@ -295,7 +270,7 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	if err != nil {
 		return fmt.Errorf("txn commit failed, err %v", err)
 	}
-	w.stats.Record(w.cfg.txnMode, time.Since(start))
+	w.stats.Record(w.cfg.TxnMode, time.Since(start))
 	return nil
 }
 
@@ -311,22 +286,22 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey), w.cfg.global.Threads) // delete all keys
+		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey), w.cfg.Global.Threads) // delete all keys
 	}
 	return nil
 }
 
 func (w *WorkloadImpl) OutputStats(ifSummaryReport bool) {
-	w.stats.PrintFmt(ifSummaryReport, w.cfg.global.OutputStyle, statistics.HistogramOutputFunc)
+	w.stats.PrintFmt(ifSummaryReport, w.cfg.Global.OutputStyle, statistics.HistogramOutputFunc)
 }
 
 func (w *WorkloadImpl) Execute(cmd string) {
-	w.wait.Add(w.cfg.global.Threads)
+	w.wait.Add(w.cfg.Global.Threads)
 
 	ctx, cancel := context.WithCancel(workloads.GlobalContext)
 	ch := make(chan struct{}, 1)
 	go func() {
-		ticker := time.NewTicker(w.cfg.global.OutputInterval)
+		ticker := time.NewTicker(w.cfg.Global.OutputInterval)
 		defer ticker.Stop()
 
 		for {
@@ -340,11 +315,11 @@ func (w *WorkloadImpl) Execute(cmd string) {
 		}
 	}()
 
-	count := w.cfg.global.TotalCount / w.cfg.global.Threads
-	for i := 0; i < w.cfg.global.Threads; i++ {
+	count := w.cfg.Global.TotalCount / w.cfg.Global.Threads
+	for i := 0; i < w.cfg.Global.Threads; i++ {
 		go func(index int) {
 			defer w.wait.Done()
-			if err := workloads.DispatchExecution(ctx, w, cmd, count, index, w.cfg.global.Silence, w.cfg.global.IgnoreError); err != nil {
+			if err := workloads.DispatchExecution(ctx, w, cmd, count, index, w.cfg.Global.Silence, w.cfg.Global.IgnoreError); err != nil {
 				fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), cmd, err)
 				return
 			}
@@ -369,7 +344,7 @@ func execTxnKV(cmd string) {
 		return
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, TxnKVConfig.global.TotalTime)
+	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, TxnKVConfig.Global.TotalTime)
 	workloads.GlobalContext = timeoutCtx
 	defer cancel()
 

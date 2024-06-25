@@ -44,49 +44,19 @@ const (
 	WorkloadDefaultKey    = "rawkv_key"
 	WorkloadDefaultEndKey = "rawkv_key`"
 	WorkloadDefaultValue  = "rawkv_value"
-
-	WorkloadColumnFamilyDefault = "CF_DEFAULT"
-	WorkloadColumnFamilyWrite   = "CF_WRITE"
-	WorkloadColumnFamilyLock    = "CF_LOCK"
 )
 
 func isReadCommand(cmd string) bool {
 	return cmd == WorkloadTypeGet || cmd == WorkloadTypeBatchGet
 }
 
-type RawKVConfig struct {
-	keySize   int
-	valueSize int
-	batchSize int
-
-	columnFamily         string
-	commandType          string
-	prepareRetryCount    int
-	prepareRetryInterval time.Duration
-	randomize            bool
-
-	global *config.GlobalConfig
-}
-
-func (c *RawKVConfig) Validate() error {
-	if c.keySize <= 0 || c.valueSize <= 0 {
-		return fmt.Errorf("key size or value size must be greater than 0")
-	}
-	if c.columnFamily != WorkloadColumnFamilyDefault &&
-		c.columnFamily != WorkloadColumnFamilyWrite &&
-		c.columnFamily != WorkloadColumnFamilyLock {
-		return fmt.Errorf("invalid column family: %s", c.columnFamily)
-	}
-	return c.global.ParsePdAddrs()
-}
-
 // Register registers the workload to the command line parser
-func Register(command *config.CommandLineParser) *RawKVConfig {
+func Register(command *config.CommandLineParser) *config.RawKVConfig {
 	if command == nil {
 		return nil
 	}
-	rawKVConfig := &RawKVConfig{
-		global: command.GetConfig(),
+	rawKVConfig := &config.RawKVConfig{
+		Global: command.GetConfig(),
 	}
 
 	cmd := &cobra.Command{
@@ -95,12 +65,12 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, rawKVConfig)
 		},
 	}
-	cmd.PersistentFlags().StringVar(&rawKVConfig.columnFamily, "cf", "default", "Column family name (default|write|lock)")
-	cmd.PersistentFlags().StringVar(&rawKVConfig.commandType, "cmd", "put", "Type of command to execute (put|get|del|batch_put|batch_get|batch_del|scan|reserve_scan|cas)")
-	cmd.PersistentFlags().IntVar(&rawKVConfig.keySize, "key-size", 1, "Size of key in bytes")
-	cmd.PersistentFlags().IntVar(&rawKVConfig.valueSize, "value-size", 1, "Size of value in bytes")
-	cmd.PersistentFlags().IntVar(&rawKVConfig.batchSize, "batch-size", 1, "Size of batch for batch operations")
-	cmd.PersistentFlags().BoolVar(&rawKVConfig.randomize, "random", false, "Whether to randomize each value")
+	cmd.PersistentFlags().StringVar(&rawKVConfig.ColumnFamily, "cf", "default", "Column family name (default|write|lock)")
+	cmd.PersistentFlags().StringVar(&rawKVConfig.CommandType, "cmd", "put", "Type of command to execute (put|get|del|batch_put|batch_get|batch_del|scan|reserve_scan|cas)")
+	cmd.PersistentFlags().IntVar(&rawKVConfig.KeySize, "key-size", 1, "Size of key in bytes")
+	cmd.PersistentFlags().IntVar(&rawKVConfig.ValueSize, "value-size", 1, "Size of value in bytes")
+	cmd.PersistentFlags().IntVar(&rawKVConfig.BatchSize, "batch-size", 1, "Size of batch for batch operations")
+	cmd.PersistentFlags().BoolVar(&rawKVConfig.Randomize, "random", false, "Whether to randomize each value")
 
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
@@ -109,8 +79,8 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 			execRawKV("prepare")
 		},
 	}
-	cmdPrepare.PersistentFlags().IntVar(&rawKVConfig.prepareRetryCount, "retry-count", 50, "Retry count when errors occur")
-	cmdPrepare.PersistentFlags().DurationVar(&rawKVConfig.prepareRetryInterval, "retry-interval", 10*time.Millisecond, "The interval for each retry")
+	cmdPrepare.PersistentFlags().IntVar(&rawKVConfig.PrepareRetryCount, "retry-count", 50, "Retry count when errors occur")
+	cmdPrepare.PersistentFlags().DurationVar(&rawKVConfig.PrepareRetryInterval, "retry-interval", 10*time.Millisecond, "The interval for each retry")
 
 	var cmdRun = &cobra.Command{
 		Use:   "run",
@@ -143,13 +113,13 @@ func Register(command *config.CommandLineParser) *RawKVConfig {
 	return rawKVConfig
 }
 
-func getRawKvConfig(ctx context.Context) *RawKVConfig {
-	c := ctx.Value(WorkloadImplName).(*RawKVConfig)
+func getRawKvConfig(ctx context.Context) *config.RawKVConfig {
+	c := ctx.Value(WorkloadImplName).(*config.RawKVConfig)
 	return c
 }
 
 type WorkloadImpl struct {
-	cfg     *RawKVConfig
+	cfg     *config.RawKVConfig
 	clients []*rawkv.Client
 
 	wait sync.WaitGroup
@@ -157,7 +127,7 @@ type WorkloadImpl struct {
 	stats *statistics.PerfProfile
 }
 
-func NewRawKVWorkload(cfg *RawKVConfig) (*WorkloadImpl, error) {
+func NewRawKVWorkload(cfg *config.RawKVConfig) (*WorkloadImpl, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -166,9 +136,9 @@ func NewRawKVWorkload(cfg *RawKVConfig) (*WorkloadImpl, error) {
 		stats: statistics.NewPerfProfile(),
 	}
 
-	w.clients = make([]*rawkv.Client, 0, w.cfg.global.Threads)
-	for i := 0; i < w.cfg.global.Threads; i++ {
-		client, err := rawkv.NewClient(workloads.GlobalContext, w.cfg.global.Targets, w.cfg.global.Security)
+	w.clients = make([]*rawkv.Client, 0, w.cfg.Global.Threads)
+	for i := 0; i < w.cfg.Global.Threads; i++ {
+		client, err := rawkv.NewClient(workloads.GlobalContext, w.cfg.Global.Targets, w.cfg.Global.Security)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +152,7 @@ func (w *WorkloadImpl) Name() string {
 }
 
 func (w *WorkloadImpl) isValid() bool {
-	return w.cfg != nil && w.cfg.global != nil && len(w.clients) > 0
+	return w.cfg != nil && w.cfg.Global != nil && len(w.clients) > 0
 }
 
 func (w *WorkloadImpl) isValidThread(threadID int) bool {
@@ -196,8 +166,8 @@ func (w *WorkloadImpl) InitThread(ctx context.Context, threadID int) error {
 		return fmt.Errorf("no valid RawKV clients")
 	}
 	client := w.clients[threadID]
-	client.SetAtomicForCAS(w.cfg.commandType == WorkloadTypeCompareAndSwap)
-	client.SetColumnFamily(w.cfg.columnFamily)
+	client.SetAtomicForCAS(w.cfg.CommandType == WorkloadTypeCompareAndSwap)
+	client.SetColumnFamily(w.cfg.ColumnFamily)
 	return nil
 }
 
@@ -244,25 +214,25 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		vals [][]byte
 		err  error
 	)
-	switch w.cfg.commandType {
+	switch w.cfg.CommandType {
 	case WorkloadTypePut, WorkloadTypeGet, WorkloadTypeDel, WorkloadTypeCompareAndSwap, WorkloadTypeScan, WorkloadTypeReverseScan:
-		if w.cfg.randomize {
-			key = utils.GenRandomStr(WorkloadDefaultKey, w.cfg.keySize)
-			if !isReadCommand(w.cfg.commandType) {
-				val = utils.GenRandomStr(WorkloadDefaultValue, w.cfg.valueSize)
+		if w.cfg.Randomize {
+			key = utils.GenRandomStr(WorkloadDefaultKey, w.cfg.KeySize)
+			if !isReadCommand(w.cfg.CommandType) {
+				val = utils.GenRandomStr(WorkloadDefaultValue, w.cfg.ValueSize)
 			}
 		}
 	case WorkloadTypeBatchPut, WorkloadTypeBatchGet, WorkloadTypeBatchDel:
-		if w.cfg.randomize {
-			keys = utils.GenRandomByteArrs(WorkloadDefaultKey, w.cfg.keySize, w.cfg.batchSize)
-			if !isReadCommand(w.cfg.commandType) {
-				vals = utils.GenRandomByteArrs(WorkloadDefaultValue, w.cfg.valueSize, w.cfg.batchSize)
+		if w.cfg.Randomize {
+			keys = utils.GenRandomByteArrs(WorkloadDefaultKey, w.cfg.KeySize, w.cfg.BatchSize)
+			if !isReadCommand(w.cfg.CommandType) {
+				vals = utils.GenRandomByteArrs(WorkloadDefaultValue, w.cfg.ValueSize, w.cfg.BatchSize)
 			}
 		}
 	}
 
 	start := time.Now()
-	switch w.cfg.commandType {
+	switch w.cfg.CommandType {
 	case WorkloadTypePut:
 		err = client.Put(ctx, []byte(key), []byte(val))
 	case WorkloadTypeGet:
@@ -280,14 +250,14 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		oldVal, _ = client.Get(ctx, []byte(key))
 		_, _, err = client.CompareAndSwap(ctx, []byte(key), []byte(oldVal), []byte(val)) // Experimental
 	case WorkloadTypeScan:
-		_, _, err = client.Scan(ctx, []byte(key), []byte(WorkloadDefaultEndKey), w.cfg.batchSize)
+		_, _, err = client.Scan(ctx, []byte(key), []byte(WorkloadDefaultEndKey), w.cfg.BatchSize)
 	case WorkloadTypeReverseScan:
-		_, _, err = client.ReverseScan(ctx, []byte(key), []byte(WorkloadDefaultKey), w.cfg.batchSize)
+		_, _, err = client.ReverseScan(ctx, []byte(key), []byte(WorkloadDefaultKey), w.cfg.BatchSize)
 	}
-	if err != nil && !w.cfg.global.IgnoreError {
-		return fmt.Errorf("execute %s failed: %v", w.cfg.commandType, err)
+	if err != nil && !w.cfg.Global.IgnoreError {
+		return fmt.Errorf("execute %s failed: %v", w.cfg.CommandType, err)
 	}
-	w.stats.Record(w.cfg.commandType, time.Since(start))
+	w.stats.Record(w.cfg.CommandType, time.Since(start))
 	return nil
 }
 
@@ -321,16 +291,16 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 }
 
 func (w *WorkloadImpl) OutputStats(ifSummaryReport bool) {
-	w.stats.PrintFmt(ifSummaryReport, w.cfg.global.OutputStyle, statistics.HistogramOutputFunc)
+	w.stats.PrintFmt(ifSummaryReport, w.cfg.Global.OutputStyle, statistics.HistogramOutputFunc)
 }
 
 func (w *WorkloadImpl) Execute(cmd string) {
-	w.wait.Add(w.cfg.global.Threads)
+	w.wait.Add(w.cfg.Global.Threads)
 
 	ctx, cancel := context.WithCancel(workloads.GlobalContext)
 	ch := make(chan struct{}, 1)
 	go func() {
-		ticker := time.NewTicker(w.cfg.global.OutputInterval)
+		ticker := time.NewTicker(w.cfg.Global.OutputInterval)
 		defer ticker.Stop()
 
 		for {
@@ -344,11 +314,11 @@ func (w *WorkloadImpl) Execute(cmd string) {
 		}
 	}()
 
-	count := w.cfg.global.TotalCount / w.cfg.global.Threads
-	for i := 0; i < w.cfg.global.Threads; i++ {
+	count := w.cfg.Global.TotalCount / w.cfg.Global.Threads
+	for i := 0; i < w.cfg.Global.Threads; i++ {
 		go func(index int) {
 			defer w.wait.Done()
-			if err := workloads.DispatchExecution(ctx, w, cmd, count, index, w.cfg.global.Silence, w.cfg.global.IgnoreError); err != nil {
+			if err := workloads.DispatchExecution(ctx, w, cmd, count, index, w.cfg.Global.Silence, w.cfg.Global.IgnoreError); err != nil {
 				fmt.Printf("[%s] execute %s failed, err %v\n", time.Now().Format("2006-01-02 15:04:05"), cmd, err)
 				return
 			}
@@ -373,7 +343,7 @@ func execRawKV(cmd string) {
 		return
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, rawKVConfig.global.TotalTime)
+	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, rawKVConfig.Global.TotalTime)
 	workloads.GlobalContext = timeoutCtx
 	defer cancel()
 
