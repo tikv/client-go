@@ -36,6 +36,7 @@ package logutil
 
 import (
 	"context"
+	"testing"
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
@@ -60,3 +61,11 @@ type ctxLogKeyType struct{}
 // CtxLogKey is the key to retrieve logger from context.
 // It can be assigned to another value.
 var CtxLogKey interface{} = ctxLogKeyType{}
+
+// AssertWarn panics when in testing mode, and logs a warning msg otherwise.
+func AssertWarn(logger *zap.Logger, msg string, fields ...zap.Field) {
+	if testing.Testing() {
+		logger.Panic(msg, fields...)
+	}
+	logger.Warn(msg, fields...)
+}

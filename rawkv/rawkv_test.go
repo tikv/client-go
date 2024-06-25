@@ -41,14 +41,17 @@ import (
 	"hash/crc64"
 	"testing"
 
+	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/tikv"
 )
 
 func TestRawKV(t *testing.T) {
+	tikv.EnableFailpoints()
 	suite.Run(t, new(testRawkvSuite))
 }
 
@@ -77,9 +80,11 @@ func (s *testRawkvSuite) SetupTest() {
 	s.peer1 = peerIDs[0]
 	s.peer2 = peerIDs[1]
 	s.bo = retry.NewBackofferWithVars(context.Background(), 5000, nil)
+	s.Nil(failpoint.Enable("tikvclient/injectReResolveInterval", `return("1s")`))
 }
 
 func (s *testRawkvSuite) TearDownTest() {
+	s.Nil(failpoint.Disable("tikvclient/injectReResolveInterval"))
 	s.mvccStore.Close()
 }
 
@@ -109,6 +114,9 @@ func (s *testRawkvSuite) TestReplaceAddrWithNewStore() {
 	s.cluster.RemoveStore(s.store1)
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
+
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
 
 	getVal, err := client.Get(context.Background(), testKey)
 
@@ -172,6 +180,9 @@ func (s *testRawkvSuite) TestReplaceNewAddrAndOldOfflineImmediately() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
+
 	getVal, err := client.Get(context.Background(), testKey)
 	s.Nil(err)
 	s.Equal(getVal, testValue)
@@ -199,6 +210,9 @@ func (s *testRawkvSuite) TestReplaceStore() {
 	s.cluster.AddPeer(s.region1, store3, peer3)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 	s.cluster.ChangeLeader(s.region1, peer3)
+
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
 
 	err = client.Put(context.Background(), testKey, testValue)
 	s.Nil(err)
@@ -233,6 +247,9 @@ func (s *testRawkvSuite) TestColumnFamilyForClient() {
 	s.cluster.RemoveStore(s.store1)
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
+
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
 
 	// test get
 	client.SetColumnFamily(cf1)
@@ -303,6 +320,9 @@ func (s *testRawkvSuite) TestColumnFamilyForOptions() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
+
 	// test get
 	getVal, err := client.Get(context.Background(), keyInCf1, SetColumnFamily(cf1))
 	s.Nil(err)
@@ -370,6 +390,9 @@ func (s *testRawkvSuite) TestBatch() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
+
 	// test BatchGet
 	returnValues, err := client.BatchGet(context.Background(), keys, SetColumnFamily(cf))
 	s.Nil(err)
@@ -425,6 +448,9 @@ func (s *testRawkvSuite) TestScan() {
 	s.cluster.RemoveStore(s.store1)
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
+
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
 
 	// test scan
 	startKey, endKey := []byte("key1"), []byte("keyz")
@@ -498,6 +524,9 @@ func (s *testRawkvSuite) TestDeleteRange() {
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
 
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
+
 	// test DeleteRange
 	startKey, endKey := []byte("key3"), []byte(nil)
 	err = client.DeleteRange(context.Background(), startKey, endKey, SetColumnFamily(cf))
@@ -534,6 +563,9 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 	s.cluster.RemoveStore(s.store1)
 	s.cluster.ChangeLeader(s.region1, s.peer2)
 	s.cluster.RemovePeer(s.region1, s.peer1)
+
+	s.Nil(failpoint.Enable("tikvclient/injectLiveness", `return("store1:reachable store2:unreachable")`))
+	defer failpoint.Disable("tikvclient/injectLiveness")
 
 	// test CompareAndSwap for false atomic
 	_, _, err = client.CompareAndSwap(
