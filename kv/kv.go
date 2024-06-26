@@ -79,6 +79,7 @@ type LockCtx struct {
 	// LockCtx specially.
 	ResourceGroupTagger func(*kvrpcpb.PessimisticLockRequest) []byte
 	OnDeadlock          func(*tikverr.ErrDeadlock)
+	OnMemChange         func(int)
 }
 
 // LockWaitTime returns lockWaitTimeInMs
@@ -134,4 +135,14 @@ func (ctx *LockCtx) IterateValuesNotLocked(f func([]byte, []byte)) {
 			f([]byte(key), val.Value)
 		}
 	}
+}
+
+// getValuesKSize returns Values key size
+func (ctx *LockCtx) GetValuesKSize() uint64 {
+	return uint64(unsafe.Sizeof(*new(string)))
+}
+
+// getValuesKSize returns Values value size
+func (ctx *LockCtx) GetValuesVSize() uint64 {
+	return uint64(unsafe.Sizeof(*new(ReturnedValue)))
 }
