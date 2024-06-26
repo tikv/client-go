@@ -281,10 +281,13 @@ func (s *KVStore) WaitScatterRegionFinish(ctx context.Context, regionID uint64, 
 
 	bo := retry.NewBackofferWithVars(ctx, backOff, nil)
 	logFreq := 0
+	desc := []byte("scatter-region")
 	for {
 		resp, err := s.pdClient.GetOperator(ctx, regionID)
 		if err == nil && resp != nil {
-			if !bytes.Equal(resp.Desc, []byte("scatter-region")) || resp.Status != pdpb.OperatorStatus_RUNNING {
+			// The PD's `records` is only a TTL (10m) cache which will record the latest successful operator.
+			// If the operator is not scatter region, it's likely that the scatter region operator is finished.
+			if (bytes.Equal(resp.Desc, desc) && resp.Status == pdpb.OperatorStatus_SUCCESS) || !bytes.Equal(resp.Desc, desc) {
 				logutil.BgLogger().Info("wait scatter region finished",
 					zap.Uint64("regionID", regionID))
 				return nil
