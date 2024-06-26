@@ -6,6 +6,23 @@ import (
 	"time"
 )
 
+const (
+	WorkloadTypeTxnKV = "txnkv"
+)
+
+const (
+	TxnKVCommandTypeWrite = "write"
+	TxnKVCommandTypeRead  = "read"
+
+	TxnKVCommandDefaultKey    = "txnkv_key"
+	TxnKVCommandDefaultEndKey = "txnkv_key`"
+	TxnKVCommandDefaultValue  = "txnkv_value"
+
+	TxnKVModeDefault     = "2PC"
+	TxnKVMode1PC         = "1PC"
+	TxnKVModeAsyncCommit = "async-commit"
+)
+
 type TxnKVConfig struct {
 	KeySize    int
 	ValueSize  int

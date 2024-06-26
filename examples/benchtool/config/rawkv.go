@@ -19,6 +19,26 @@ import (
 	"time"
 )
 
+const (
+	WorkloadTypeRawKV = "rawkv"
+)
+
+const (
+	RawKVCommandTypePut         = "put"
+	RawKVCommandTypeGet         = "get"
+	RawKVCommandTypeDel         = "del"
+	RawKVCommandTypeBatchPut    = "batch_put"
+	RawKVCommandTypeBatchGet    = "batch_get"
+	RawKVCommandTypeBatchDel    = "batch_del"
+	RawKVCommandTypeScan        = "scan"
+	RawKVCommandTypeReverseScan = "reverse_scan"
+	RawKVCommandTypeCAS         = "cas"
+
+	RawKVCommandDefaultKey    = "rawkv_key"
+	RawKVCommandDefaultEndKey = "rawkv_key`"
+	RawKVCommandDefaultValue  = "rawkv_value"
+)
+
 type RawKVConfig struct {
 	KeySize   int
 	ValueSize int

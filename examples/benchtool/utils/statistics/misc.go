@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	defaultMinLatency = 1 * time.Millisecond
+	DefaultMinLatency = 1 * time.Millisecond
 	DefaultMaxLatency = 16 * time.Second
+
+	DefaultHistogramSize = 16
 )
 
 type PerfProfile struct {
@@ -36,11 +38,11 @@ type PerfProfile struct {
 
 func NewPerfProfile() *PerfProfile {
 	return &PerfProfile{
-		MinLatency:         defaultMinLatency,
+		MinLatency:         DefaultMinLatency,
 		MaxLatency:         DefaultMaxLatency,
 		SigFigs:            1,
-		PeriodicalPerfHist: make(map[string]*PerfHistogram, 16),
-		SummaryPerfHist:    make(map[string]*PerfHistogram, 16),
+		PeriodicalPerfHist: make(map[string]*PerfHistogram, DefaultHistogramSize),
+		SummaryPerfHist:    make(map[string]*PerfHistogram, DefaultHistogramSize),
 	}
 }
 
@@ -99,4 +101,21 @@ func (p *PerfProfile) PrintFmt(ifSummaryReport bool, outputStyle string, outputF
 	p.RLock()
 	defer p.RUnlock()
 	outputFunc(outputStyle, "[Current] ", periodicalHist)
+}
+
+func (p *PerfProfile) Clear() {
+	p.Lock()
+	defer p.Unlock()
+
+	perfHist := p.PeriodicalPerfHist
+	for k := range perfHist {
+		delete(perfHist, k)
+	}
+	perfHist = p.SummaryPerfHist
+	for k := range perfHist {
+		delete(perfHist, k)
+	}
+
+	p.PeriodicalPerfHist = make(map[string]*PerfHistogram, DefaultHistogramSize)
+	p.SummaryPerfHist = make(map[string]*PerfHistogram, DefaultHistogramSize)
 }

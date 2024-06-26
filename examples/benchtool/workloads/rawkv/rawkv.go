@@ -28,26 +28,8 @@ import (
 	"github.com/tikv/client-go/v2/rawkv"
 )
 
-const (
-	WorkloadImplName = "rawkv"
-
-	WorkloadTypePut            = "put"
-	WorkloadTypeGet            = "get"
-	WorkloadTypeDel            = "del"
-	WorkloadTypeBatchPut       = "batch_put"
-	WorkloadTypeBatchGet       = "batch_get"
-	WorkloadTypeBatchDel       = "batch_del"
-	WorkloadTypeScan           = "scan"
-	WorkloadTypeReverseScan    = "reverse_scan"
-	WorkloadTypeCompareAndSwap = "cas"
-
-	WorkloadDefaultKey    = "rawkv_key"
-	WorkloadDefaultEndKey = "rawkv_key`"
-	WorkloadDefaultValue  = "rawkv_value"
-)
-
 func isReadCommand(cmd string) bool {
-	return cmd == WorkloadTypeGet || cmd == WorkloadTypeBatchGet
+	return cmd == config.RawKVCommandTypeGet || cmd == config.RawKVCommandTypeBatchGet
 }
 
 // Register registers the workload to the command line parser
@@ -60,9 +42,9 @@ func Register(command *config.CommandLineParser) *config.RawKVConfig {
 	}
 
 	cmd := &cobra.Command{
-		Use: WorkloadImplName,
+		Use: config.WorkloadTypeRawKV,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, rawKVConfig)
+			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, config.WorkloadTypeRawKV, rawKVConfig)
 		},
 	}
 	cmd.PersistentFlags().StringVar(&rawKVConfig.ColumnFamily, "cf", "default", "Column family name (default|write|lock)")
@@ -114,7 +96,7 @@ func Register(command *config.CommandLineParser) *config.RawKVConfig {
 }
 
 func getRawKvConfig(ctx context.Context) *config.RawKVConfig {
-	c := ctx.Value(WorkloadImplName).(*config.RawKVConfig)
+	c := ctx.Value(config.WorkloadTypeRawKV).(*config.RawKVConfig)
 	return c
 }
 
@@ -148,7 +130,7 @@ func NewRawKVWorkload(cfg *config.RawKVConfig) (*WorkloadImpl, error) {
 }
 
 func (w *WorkloadImpl) Name() string {
-	return WorkloadImplName
+	return config.WorkloadTypeRawKV
 }
 
 func (w *WorkloadImpl) isValid() bool {
@@ -166,7 +148,7 @@ func (w *WorkloadImpl) InitThread(ctx context.Context, threadID int) error {
 		return fmt.Errorf("no valid RawKV clients")
 	}
 	client := w.clients[threadID]
-	client.SetAtomicForCAS(w.cfg.CommandType == WorkloadTypeCompareAndSwap)
+	client.SetAtomicForCAS(w.cfg.CommandType == config.RawKVCommandTypeCAS)
 	client.SetColumnFamily(w.cfg.ColumnFamily)
 	return nil
 }
@@ -205,8 +187,8 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	client := w.clients[threadID]
 
 	// For unary operations.
-	key := WorkloadDefaultKey
-	val := WorkloadDefaultValue
+	key := config.RawKVCommandDefaultKey
+	val := config.RawKVCommandDefaultValue
 
 	// For batch operations.
 	var (
@@ -215,44 +197,44 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		err  error
 	)
 	switch w.cfg.CommandType {
-	case WorkloadTypePut, WorkloadTypeGet, WorkloadTypeDel, WorkloadTypeCompareAndSwap, WorkloadTypeScan, WorkloadTypeReverseScan:
+	case config.RawKVCommandTypePut, config.RawKVCommandTypeGet, config.RawKVCommandTypeDel, config.RawKVCommandTypeCAS, config.RawKVCommandTypeScan, config.RawKVCommandTypeReverseScan:
 		if w.cfg.Randomize {
-			key = utils.GenRandomStr(WorkloadDefaultKey, w.cfg.KeySize)
+			key = utils.GenRandomStr(config.RawKVCommandDefaultKey, w.cfg.KeySize)
 			if !isReadCommand(w.cfg.CommandType) {
-				val = utils.GenRandomStr(WorkloadDefaultValue, w.cfg.ValueSize)
+				val = utils.GenRandomStr(config.RawKVCommandDefaultValue, w.cfg.ValueSize)
 			}
 		}
-	case WorkloadTypeBatchPut, WorkloadTypeBatchGet, WorkloadTypeBatchDel:
+	case config.RawKVCommandTypeBatchPut, config.RawKVCommandTypeBatchGet, config.RawKVCommandTypeBatchDel:
 		if w.cfg.Randomize {
-			keys = utils.GenRandomByteArrs(WorkloadDefaultKey, w.cfg.KeySize, w.cfg.BatchSize)
+			keys = utils.GenRandomByteArrs(config.RawKVCommandDefaultKey, w.cfg.KeySize, w.cfg.BatchSize)
 			if !isReadCommand(w.cfg.CommandType) {
-				vals = utils.GenRandomByteArrs(WorkloadDefaultValue, w.cfg.ValueSize, w.cfg.BatchSize)
+				vals = utils.GenRandomByteArrs(config.RawKVCommandDefaultValue, w.cfg.ValueSize, w.cfg.BatchSize)
 			}
 		}
 	}
 
 	start := time.Now()
 	switch w.cfg.CommandType {
-	case WorkloadTypePut:
+	case config.RawKVCommandTypePut:
 		err = client.Put(ctx, []byte(key), []byte(val))
-	case WorkloadTypeGet:
+	case config.RawKVCommandTypeGet:
 		_, err = client.Get(ctx, []byte(key))
-	case WorkloadTypeDel:
+	case config.RawKVCommandTypeDel:
 		err = client.Delete(ctx, []byte(key))
-	case WorkloadTypeBatchPut:
+	case config.RawKVCommandTypeBatchPut:
 		err = client.BatchPut(ctx, keys, vals)
-	case WorkloadTypeBatchGet:
+	case config.RawKVCommandTypeBatchGet:
 		_, err = client.BatchGet(ctx, keys)
-	case WorkloadTypeBatchDel:
+	case config.RawKVCommandTypeBatchDel:
 		err = client.BatchDelete(ctx, keys)
-	case WorkloadTypeCompareAndSwap:
+	case config.RawKVCommandTypeCAS:
 		var oldVal []byte
 		oldVal, _ = client.Get(ctx, []byte(key))
 		_, _, err = client.CompareAndSwap(ctx, []byte(key), []byte(oldVal), []byte(val)) // Experimental
-	case WorkloadTypeScan:
-		_, _, err = client.Scan(ctx, []byte(key), []byte(WorkloadDefaultEndKey), w.cfg.BatchSize)
-	case WorkloadTypeReverseScan:
-		_, _, err = client.ReverseScan(ctx, []byte(key), []byte(WorkloadDefaultKey), w.cfg.BatchSize)
+	case config.RawKVCommandTypeScan:
+		_, _, err = client.Scan(ctx, []byte(key), []byte(config.RawKVCommandDefaultEndKey), w.cfg.BatchSize)
+	case config.RawKVCommandTypeReverseScan:
+		_, _, err = client.ReverseScan(ctx, []byte(key), []byte(config.RawKVCommandDefaultKey), w.cfg.BatchSize)
 	}
 	if err != nil && !w.cfg.Global.IgnoreError {
 		return fmt.Errorf("execute %s failed: %v", w.cfg.CommandType, err)
@@ -268,7 +250,7 @@ func (w *WorkloadImpl) Check(ctx context.Context, threadID int) error {
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		checksum, err := client.Checksum(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey))
+		checksum, err := client.Checksum(ctx, []byte(config.RawKVCommandDefaultKey), []byte(config.RawKVCommandDefaultEndKey))
 		if err != nil {
 			return nil
 		} else {
@@ -285,7 +267,7 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey)) // delete all keys
+		client.DeleteRange(ctx, []byte(config.RawKVCommandDefaultKey), []byte(config.RawKVCommandDefaultEndKey)) // delete all keys
 	}
 	return nil
 }

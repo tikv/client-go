@@ -31,21 +31,6 @@ import (
 	clientTxnKV "github.com/tikv/client-go/v2/txnkv"
 )
 
-const (
-	WorkloadImplName = "txnkv"
-
-	WorkloadTypeWrite = "write"
-	WorkloadTypeRead  = "read"
-
-	WorkloadDefaultKey    = "txnkv_key"
-	WorkloadDefaultEndKey = "txnkv_key`"
-	WorkloadDefaultValue  = "txnkv_value"
-
-	WorkloadTxnModeDefault     = "2PC"
-	WorkloadTxnMode1PC         = "1PC"
-	WorkloadTxnModeAsyncCommit = "async-commit"
-)
-
 // Register registers the workload to the command line parser
 func Register(command *config.CommandLineParser) *config.TxnKVConfig {
 	if command == nil {
@@ -57,9 +42,9 @@ func Register(command *config.CommandLineParser) *config.TxnKVConfig {
 	}
 
 	cmd := &cobra.Command{
-		Use: WorkloadImplName,
+		Use: config.WorkloadTypeTxnKV,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, WorkloadImplName, txnKVConfig)
+			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, config.WorkloadTypeTxnKV, txnKVConfig)
 		},
 	}
 	cmd.PersistentFlags().StringVar(&txnKVConfig.ReadWriteRatio.Ratio, "read-write-ratio", "1:1", "Read write ratio")
@@ -113,7 +98,7 @@ func Register(command *config.CommandLineParser) *config.TxnKVConfig {
 }
 
 func getTxnKVConfig(ctx context.Context) *config.TxnKVConfig {
-	c := ctx.Value(WorkloadImplName).(*config.TxnKVConfig)
+	c := ctx.Value(config.WorkloadTypeTxnKV).(*config.TxnKVConfig)
 	return c
 }
 
@@ -165,7 +150,7 @@ func NewTxnKVWorkload(cfg *config.TxnKVConfig) (*WorkloadImpl, error) {
 }
 
 func (w *WorkloadImpl) Name() string {
-	return WorkloadImplName
+	return config.WorkloadTypeTxnKV
 }
 
 func (w *WorkloadImpl) isValid() bool {
@@ -214,8 +199,8 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	}
 
 	client := w.clients[threadID]
-	key := WorkloadDefaultKey
-	val := utils.GenRandomStr(WorkloadDefaultValue, w.cfg.ValueSize)
+	key := config.TxnKVCommandDefaultKey
+	val := utils.GenRandomStr(config.TxnKVCommandDefaultValue, w.cfg.ValueSize)
 	lockTimeout := int64(w.cfg.LockTimeout)
 
 	// Constructs the txn client and sets the txn mode
@@ -224,9 +209,9 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 		return fmt.Errorf("txn begin failed, err %v", err)
 	}
 	switch w.cfg.TxnMode {
-	case WorkloadTxnMode1PC:
+	case config.TxnKVMode1PC:
 		txn.SetEnable1PC(true)
-	case WorkloadTxnModeAsyncCommit:
+	case config.TxnKVModeAsyncCommit:
 		txn.SetEnableAsyncCommit(true)
 	}
 	// Default is optimistic lock mode.
@@ -286,7 +271,7 @@ func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	}
 	if threadID == 0 {
 		client := w.clients[threadID]
-		client.DeleteRange(ctx, []byte(WorkloadDefaultKey), []byte(WorkloadDefaultEndKey), w.cfg.Global.Threads) // delete all keys
+		client.DeleteRange(ctx, []byte(config.TxnKVCommandDefaultKey), []byte(config.TxnKVCommandDefaultEndKey), w.cfg.Global.Threads) // delete all keys
 	}
 	return nil
 }
