@@ -39,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
@@ -250,6 +251,7 @@ func (a *batchConn) isIdle() bool {
 // fetchAllPendingRequests fetches all pending requests from the channel.
 func (a *batchConn) fetchAllPendingRequests(
 	maxBatchSize int,
+	maxWaitAttempts int,
 ) time.Time {
 	// Block on the first element.
 	var headEntry *batchCommandsEntry
@@ -275,6 +277,7 @@ func (a *batchConn) fetchAllPendingRequests(
 	a.reqBuilder.push(headEntry)
 
 	// This loop is for trying best to collect more requests.
+	attempts := 0
 	for a.reqBuilder.len() < maxBatchSize {
 		select {
 		case entry := <-a.batchCommandsCh:
@@ -283,7 +286,11 @@ func (a *batchConn) fetchAllPendingRequests(
 			}
 			a.reqBuilder.push(entry)
 		default:
-			return ts
+			if attempts >= maxWaitAttempts {
+				return ts
+			}
+			runtime.Gosched()
+			attempts++
 		}
 	}
 	return ts
@@ -348,7 +355,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	for {
 		a.reqBuilder.reset()
 
-		start := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
+		start := a.fetchAllPendingRequests(int(cfg.MaxBatchSize), int(cfg.MaxBatchWaitAttempts))
 
 		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/tikvclient/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
