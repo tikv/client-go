@@ -101,7 +101,7 @@ type TiKVClient struct {
 	// 0 means auto adjust by feedback.
 	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
 	// EnableReplicaSelectorV2 was deprecated.
-	// TODO(crazycs520): remove this config in 9.2 LTS version.
+	// TODO(crazycs520): remove this config in 8.6 LTS version.
 	EnableReplicaSelectorV2 bool `toml:"enable-replica-selector-v2" json:"enable-replica-selector-v2"`
 }
 
