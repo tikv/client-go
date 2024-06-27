@@ -17,6 +17,7 @@ package main
 import (
 	"benchtool/config"
 	"benchtool/workloads"
+	"benchtool/workloads/patterns"
 	"benchtool/workloads/rawkv"
 	"benchtool/workloads/txnkv"
 	"context"
@@ -39,6 +40,7 @@ func main() {
 	// TODO: add more workloads
 	rawkv.Register(commandLineParser)
 	txnkv.Register(commandLineParser)
+	patterns.Register(commandLineParser)
 
 	var cancel context.CancelFunc
 	workloads.GlobalContext, cancel = context.WithCancel(context.Background())
