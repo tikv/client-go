@@ -2216,6 +2216,32 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 	}
 }
 
+func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []pd.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
+	logutil.Logger(bo.GetCtx()).Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
+	res := make([]*Region, 0, len(keyRanges))
+	var lastRegion *Region
+	for _, keyRange := range keyRanges {
+		if lastRegion != nil {
+			endKey := lastRegion.EndKey()
+			if len(endKey) == 0 || bytes.Compare(endKey, keyRange.EndKey) >= 0 {
+				continue
+			}
+			if bytes.Compare(endKey, keyRange.StartKey) > 0 {
+				keyRange.StartKey = endKey
+			}
+		}
+		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit)
+		if err != nil {
+			return nil, err
+		}
+		if len(regions) > 0 {
+			lastRegion = regions[len(regions)-1]
+		}
+		res = append(res, regions...)
+	}
+	return res, nil
+}
+
 func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.Region, needLeader bool) ([]*Region, error) {
 	regions := make([]*Region, 0, len(regionsInfo))
 	for _, r := range regionsInfo {
