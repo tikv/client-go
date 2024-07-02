@@ -2679,3 +2679,53 @@ func (s *testRegionCacheSuite) TestBatchScanRegions() {
 		s.cluster.Split(newID1, newID2, []byte("e1"), newPeers, newPeers[0])
 	}, []uint64{regions[1], regions[3], regions[4], newID1, regions[5], regions[6]})
 }
+
+func (s *testRegionCacheSuite) TestScanRegionsWithCavity() {
+	// Split at "a", "c", "e"
+	// nil --- 'a' --- 'c' --- 'e' --- nil
+	// <-  0  -> <- 1 -> <- 2 -> <- 3 -->
+	regions := s.cluster.AllocIDs(3)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 3; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 3; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'a' + 2*byte(i)}, peers[i+1], peers[i+1][0])
+	}
+
+	// the last region is not reported to PD yet
+	getRegionIDsWithInject := func(fn func() ([]*Region, error)) []uint64 {
+		s.cache.clear()
+		err := failpoint.Enable("tikvclient/mockSplitRegionNotReportToPD", fmt.Sprintf(`return(%d)`, regions[2]))
+		s.Nil(err)
+		resCh := make(chan []*Region)
+		errCh := make(chan error)
+		go func() {
+			rs, err := fn()
+			errCh <- err
+			resCh <- rs
+		}()
+		time.Sleep(time.Second)
+		failpoint.Disable("tikvclient/mockSplitRegionNotReportToPD")
+		s.Nil(<-errCh)
+		rs := <-resCh
+		regionIDs := make([]uint64, 0, len(rs))
+		for _, r := range rs {
+			regionIDs = append(regionIDs, r.GetID())
+		}
+		return regionIDs
+	}
+
+	scanRegionRes := getRegionIDsWithInject(func() ([]*Region, error) {
+		return s.cache.BatchLoadRegionsWithKeyRange(s.bo, []byte(""), []byte(""), 10)
+	})
+	s.Equal(scanRegionRes, regions)
+
+	batchScanRegionRes := getRegionIDsWithInject(func() ([]*Region, error) {
+		return s.cache.BatchLoadRegionsWithKeyRanges(s.bo, []pd.KeyRange{{StartKey: []byte{}, EndKey: []byte{}}}, 10)
+	})
+	s.Equal(batchScanRegionRes, regions)
+}
