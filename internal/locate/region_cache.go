@@ -2157,7 +2157,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			backoffErr = errors.Errorf("PD returned no region, limit: %d", limit)
 			continue
 		}
-		if !rangesAreCovered([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo) {
+		if regionsHaveGap([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo, limit) {
 			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
 			continue
 		}
@@ -2218,7 +2218,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			)
 			continue
 		}
-		if !rangesAreCovered(keyRanges, regionsInfo) {
+		if regionsHaveGap(keyRanges, regionsInfo, limit) {
 			backoffErr = errors.Errorf(
 				"PD returned regions have gaps, range num: %d, limit: %d",
 				len(keyRanges), limit,
@@ -2229,28 +2229,28 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 	}
 }
 
-func rangesAreCovered(ranges []pd.KeyRange, regionsInfo []*pd.Region) bool {
+func regionsHaveGap(ranges []pd.KeyRange, regionsInfo []*pd.Region, limit int) bool {
 	if len(ranges) == 0 {
-		return true
+		return false
 	}
 	if len(regionsInfo) == 0 {
-		return false
+		return true
 	}
 	checkIdx := 0                  // checked index of ranges
 	checkKey := ranges[0].StartKey // checked key of ranges
 	for _, r := range regionsInfo {
 		if r.Meta == nil {
-			return false
+			return true
 		}
 		if len(r.Meta.StartKey) == 0 {
 			checkKey = r.Meta.EndKey
 		} else if bytes.Compare(r.Meta.StartKey, checkKey) > 0 {
 			// there is a gap between returned region's start_key and current check key
-			return false
+			return true
 		}
 		if len(r.Meta.EndKey) == 0 {
 			// the current region contains all the rest ranges.
-			return true
+			return false
 		}
 		checkKey = r.Meta.EndKey
 		for len(ranges[checkIdx].EndKey) > 0 && bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0 {
@@ -2258,7 +2258,7 @@ func rangesAreCovered(ranges []pd.KeyRange, regionsInfo []*pd.Region) bool {
 			checkIdx++
 			if checkIdx == len(ranges) {
 				// all ranges are covered.
-				return true
+				return false
 			}
 		}
 		if bytes.Compare(checkKey, ranges[checkIdx].StartKey) < 0 {
@@ -2266,16 +2266,21 @@ func rangesAreCovered(ranges []pd.KeyRange, regionsInfo []*pd.Region) bool {
 			checkKey = ranges[checkIdx].StartKey
 		}
 	}
+	if limit > 0 && len(regionsInfo) == limit {
+		// the regionsInfo is limited by the limit, so there may be some ranges not covered.
+		// But the previous regions are continuous, so we just need to check the rest ranges.
+		return false
+	}
 	if checkIdx < len(ranges)-1 {
 		// there are still some ranges not covered.
-		return false
+		return true
 	}
 	if len(checkKey) == 0 {
-		return true
-	} else if len(ranges[checkIdx].EndKey) == 0 {
 		return false
+	} else if len(ranges[checkIdx].EndKey) == 0 {
+		return true
 	}
-	return bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0
+	return bytes.Compare(checkKey, ranges[checkIdx].EndKey) < 0
 }
 
 func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.Region, needLeader bool) ([]*Region, error) {

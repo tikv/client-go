@@ -2681,7 +2681,7 @@ func (s *testRegionCacheSuite) TestBatchScanRegions() {
 }
 
 func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
-	check := func(ranges []string, regions []string, expect bool) {
+	check := func(ranges []string, regions []string, limit int, expect bool) {
 		rs := make([]pd.KeyRange, 0, len(ranges)/2)
 		for i := 0; i < len(ranges); i += 2 {
 			rs = append(rs, pd.KeyRange{StartKey: []byte(ranges[i]), EndKey: []byte(ranges[i+1])})
@@ -2693,7 +2693,7 @@ func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 				EndKey:   []byte(regions[i+1]),
 			}})
 		}
-		s.Equal(expect, rangesAreCovered(rs, rgs))
+		s.Equal(expect, regionsHaveGap(rs, rgs, limit))
 	}
 	boundCases := [][]string{
 		{"a", "c"},
@@ -2702,25 +2702,25 @@ func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 	}
 	for _, boundCase := range boundCases {
 		// positive
-		check(boundCase, []string{"a", "c"}, true)
-		check(boundCase, []string{"a", ""}, true)
-		check(boundCase, []string{"", "c"}, true)
+		check(boundCase, []string{"a", "c"}, -1, false)
+		check(boundCase, []string{"a", ""}, -1, false)
+		check(boundCase, []string{"", "c"}, -1, false)
 		// negative
-		check(boundCase, []string{"a", "b"}, false)
-		check(boundCase, []string{"b", "c"}, false)
-		check(boundCase, []string{"b", ""}, false)
-		check(boundCase, []string{"", "b"}, false)
+		check(boundCase, []string{"a", "b"}, -1, true)
+		check(boundCase, []string{"b", "c"}, -1, true)
+		check(boundCase, []string{"b", ""}, -1, true)
+		check(boundCase, []string{"", "b"}, -1, true)
 		// positive
-		check(boundCase, []string{"a", "b", "b", "c"}, true)
-		check(boundCase, []string{"", "b", "b", "c"}, true)
-		check(boundCase, []string{"a", "b", "b", ""}, true)
-		check(boundCase, []string{"", "b", "b", ""}, true)
+		check(boundCase, []string{"a", "b", "b", "c"}, -1, false)
+		check(boundCase, []string{"", "b", "b", "c"}, -1, false)
+		check(boundCase, []string{"a", "b", "b", ""}, -1, false)
+		check(boundCase, []string{"", "b", "b", ""}, -1, false)
 		// negative
-		check(boundCase, []string{"a", "b", "b1", "c"}, false)
-		check(boundCase, []string{"", "b", "b1", "c"}, false)
-		check(boundCase, []string{"a", "b", "b1", ""}, false)
-		check(boundCase, []string{"", "b", "b1", ""}, false)
-		check(boundCase, []string{}, false)
+		check(boundCase, []string{"a", "b", "b1", "c"}, -1, true)
+		check(boundCase, []string{"", "b", "b1", "c"}, -1, true)
+		check(boundCase, []string{"a", "b", "b1", ""}, -1, true)
+		check(boundCase, []string{"", "b", "b1", ""}, -1, true)
+		check(boundCase, []string{}, -1, true)
 	}
 
 	nonContinuousCases := [][]string{
@@ -2731,16 +2731,16 @@ func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 	}
 	for _, nonContinuousCase := range nonContinuousCases {
 		// positive
-		check(nonContinuousCase, []string{"a", "d"}, true)
-		check(nonContinuousCase, []string{"", "d"}, true)
-		check(nonContinuousCase, []string{"a", ""}, true)
-		check(nonContinuousCase, []string{"", ""}, true)
+		check(nonContinuousCase, []string{"a", "d"}, -1, false)
+		check(nonContinuousCase, []string{"", "d"}, -1, false)
+		check(nonContinuousCase, []string{"a", ""}, -1, false)
+		check(nonContinuousCase, []string{"", ""}, -1, false)
 		// negative
-		check(nonContinuousCase, []string{"a", "b"}, false)
-		check(nonContinuousCase, []string{"b", "c"}, false)
-		check(nonContinuousCase, []string{"c", "d"}, false)
-		check(nonContinuousCase, []string{"", "b"}, false)
-		check(nonContinuousCase, []string{"c", ""}, false)
+		check(nonContinuousCase, []string{"a", "b"}, -1, true)
+		check(nonContinuousCase, []string{"b", "c"}, -1, true)
+		check(nonContinuousCase, []string{"c", "d"}, -1, true)
+		check(nonContinuousCase, []string{"", "b"}, -1, true)
+		check(nonContinuousCase, []string{"c", ""}, -1, true)
 	}
 
 	unboundCases := [][]string{
@@ -2750,18 +2750,18 @@ func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 	}
 	for _, unboundCase := range unboundCases {
 		// positive
-		check(unboundCase, []string{"", ""}, true)
+		check(unboundCase, []string{"", ""}, -1, false)
 		// negative
-		check(unboundCase, []string{"a", "c"}, false)
-		check(unboundCase, []string{"a", ""}, false)
-		check(unboundCase, []string{"", "c"}, false)
+		check(unboundCase, []string{"a", "c"}, -1, true)
+		check(unboundCase, []string{"a", ""}, -1, true)
+		check(unboundCase, []string{"", "c"}, -1, true)
 		// positive
-		check(unboundCase, []string{"", "b", "b", ""}, true)
+		check(unboundCase, []string{"", "b", "b", ""}, -1, false)
 		// negative
-		check(unboundCase, []string{"", "b", "b1", ""}, false)
-		check(unboundCase, []string{"a", "b", "b", ""}, false)
-		check(unboundCase, []string{"", "b", "b", "c"}, false)
-		check(unboundCase, []string{}, false)
+		check(unboundCase, []string{"", "b", "b1", ""}, -1, true)
+		check(unboundCase, []string{"a", "b", "b", ""}, -1, true)
+		check(unboundCase, []string{"", "b", "b", "c"}, -1, true)
+		check(unboundCase, []string{}, -1, true)
 	}
 }
 
