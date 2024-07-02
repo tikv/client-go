@@ -2154,7 +2154,12 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		metrics.RegionCacheCounterWithScanRegionsOK.Inc()
 
 		if len(regionsInfo) == 0 {
-			return nil, errors.Errorf("PD returned no region, limit: %d", limit)
+			backoffErr = errors.Errorf("PD returned no region, limit: %d", limit)
+			continue
+		}
+		if !rangesAreCovered([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo) {
+			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
+			continue
 		}
 		return c.handleRegionInfos(bo, regionsInfo, true)
 	}
@@ -2207,13 +2212,70 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 
 		metrics.RegionCacheCounterWithBatchScanRegionsOK.Inc()
 		if len(regionsInfo) == 0 {
-			return nil, errors.Errorf(
+			backoffErr = errors.Errorf(
 				"PD returned no region, range num: %d, limit: %d",
 				len(keyRanges), limit,
 			)
+			continue
+		}
+		if !rangesAreCovered(keyRanges, regionsInfo) {
+			backoffErr = errors.Errorf(
+				"PD returned regions have gaps, range num: %d, limit: %d",
+				len(keyRanges), limit,
+			)
+			continue
 		}
 		return c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
 	}
+}
+
+func rangesAreCovered(ranges []pd.KeyRange, regionsInfo []*pd.Region) bool {
+	if len(ranges) == 0 {
+		return true
+	}
+	if len(regionsInfo) == 0 {
+		return false
+	}
+	checkIdx := 0                  // checked index of ranges
+	checkKey := ranges[0].StartKey // checked key of ranges
+	for _, r := range regionsInfo {
+		if r.Meta == nil {
+			return false
+		}
+		if len(r.Meta.StartKey) == 0 {
+			checkKey = r.Meta.EndKey
+		} else if bytes.Compare(r.Meta.StartKey, checkKey) > 0 {
+			// there is a gap between returned region's start_key and current check key
+			return false
+		}
+		if len(r.Meta.EndKey) == 0 {
+			// the current region contains all the rest ranges.
+			return true
+		}
+		checkKey = r.Meta.EndKey
+		for len(ranges[checkIdx].EndKey) > 0 && bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0 {
+			// the end_key of returned region can cover multi ranges.
+			checkIdx++
+			if checkIdx == len(ranges) {
+				// all ranges are covered.
+				return true
+			}
+		}
+		if bytes.Compare(checkKey, ranges[checkIdx].StartKey) < 0 {
+			// if check_key < start_key, move it forward to start_key.
+			checkKey = ranges[checkIdx].StartKey
+		}
+	}
+	if checkIdx < len(ranges)-1 {
+		// there are still some ranges not covered.
+		return false
+	}
+	if len(checkKey) == 0 {
+		return true
+	} else if len(ranges[checkIdx].EndKey) == 0 {
+		return false
+	}
+	return bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0
 }
 
 func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.Region, needLeader bool) ([]*Region, error) {

@@ -2680,7 +2680,92 @@ func (s *testRegionCacheSuite) TestBatchScanRegions() {
 	}, []uint64{regions[1], regions[3], regions[4], newID1, regions[5], regions[6]})
 }
 
-func (s *testRegionCacheSuite) TestScanRegionsWithCavity() {
+func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
+	check := func(ranges []string, regions []string, expect bool) {
+		rs := make([]pd.KeyRange, 0, len(ranges)/2)
+		for i := 0; i < len(ranges); i += 2 {
+			rs = append(rs, pd.KeyRange{StartKey: []byte(ranges[i]), EndKey: []byte(ranges[i+1])})
+		}
+		rgs := make([]*pd.Region, 0, len(regions))
+		for i := 0; i < len(regions); i += 2 {
+			rgs = append(rgs, &pd.Region{Meta: &metapb.Region{
+				StartKey: []byte(regions[i]),
+				EndKey:   []byte(regions[i+1]),
+			}})
+		}
+		s.Equal(expect, rangesAreCovered(rs, rgs))
+	}
+	boundCases := [][]string{
+		{"a", "c"},
+		{"a", "b", "b", "c"},
+		{"a", "a1", "a1", "b", "b", "b1", "b1", "c"},
+	}
+	for _, boundCase := range boundCases {
+		// positive
+		check(boundCase, []string{"a", "c"}, true)
+		check(boundCase, []string{"a", ""}, true)
+		check(boundCase, []string{"", "c"}, true)
+		// negative
+		check(boundCase, []string{"a", "b"}, false)
+		check(boundCase, []string{"b", "c"}, false)
+		check(boundCase, []string{"b", ""}, false)
+		check(boundCase, []string{"", "b"}, false)
+		// positive
+		check(boundCase, []string{"a", "b", "b", "c"}, true)
+		check(boundCase, []string{"", "b", "b", "c"}, true)
+		check(boundCase, []string{"a", "b", "b", ""}, true)
+		check(boundCase, []string{"", "b", "b", ""}, true)
+		// negative
+		check(boundCase, []string{"a", "b", "b1", "c"}, false)
+		check(boundCase, []string{"", "b", "b1", "c"}, false)
+		check(boundCase, []string{"a", "b", "b1", ""}, false)
+		check(boundCase, []string{"", "b", "b1", ""}, false)
+		check(boundCase, []string{}, false)
+	}
+
+	nonContinuousCases := [][]string{
+		{"a", "b", "c", "d"},
+		{"a", "b1", "b1", "b", "c", "d"},
+		{"a", "b", "c", "c1", "c1", "d"},
+		{"a", "b1", "b1", "b", "c", "c1", "c1", "d"},
+	}
+	for _, nonContinuousCase := range nonContinuousCases {
+		// positive
+		check(nonContinuousCase, []string{"a", "d"}, true)
+		check(nonContinuousCase, []string{"", "d"}, true)
+		check(nonContinuousCase, []string{"a", ""}, true)
+		check(nonContinuousCase, []string{"", ""}, true)
+		// negative
+		check(nonContinuousCase, []string{"a", "b"}, false)
+		check(nonContinuousCase, []string{"b", "c"}, false)
+		check(nonContinuousCase, []string{"c", "d"}, false)
+		check(nonContinuousCase, []string{"", "b"}, false)
+		check(nonContinuousCase, []string{"c", ""}, false)
+	}
+
+	unboundCases := [][]string{
+		{"", ""},
+		{"", "b", "b", ""},
+		{"", "a1", "a1", "b", "b", "b1", "b1", ""},
+	}
+	for _, unboundCase := range unboundCases {
+		// positive
+		check(unboundCase, []string{"", ""}, true)
+		// negative
+		check(unboundCase, []string{"a", "c"}, false)
+		check(unboundCase, []string{"a", ""}, false)
+		check(unboundCase, []string{"", "c"}, false)
+		// positive
+		check(unboundCase, []string{"", "b", "b", ""}, true)
+		// negative
+		check(unboundCase, []string{"", "b", "b1", ""}, false)
+		check(unboundCase, []string{"a", "b", "b", ""}, false)
+		check(unboundCase, []string{"", "b", "b", "c"}, false)
+		check(unboundCase, []string{}, false)
+	}
+}
+
+func (s *testRegionCacheSuite) TestScanRegionsWithGaps() {
 	// Split at "a", "c", "e"
 	// nil --- 'a' --- 'c' --- 'e' --- nil
 	// <-  0  -> <- 1 -> <- 2 -> <- 3 -->
