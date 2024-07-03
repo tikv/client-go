@@ -2192,6 +2192,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
+			if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+				return c.batchScanRegionsFallback(bo, keyRanges, limit, opts...)
+			}
 			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, range num: %d, limit: %d, err: %v",
 					len(keyRanges), limit, err)
@@ -2217,7 +2220,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 }
 
 func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []pd.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
-	logutil.Logger(bo.GetCtx()).Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
+	logutil.BgLogger().Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
 	res := make([]*Region, 0, len(keyRanges))
 	var lastRegion *Region
 	for _, keyRange := range keyRanges {
@@ -2238,6 +2241,10 @@ func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []
 			lastRegion = regions[len(regions)-1]
 		}
 		res = append(res, regions...)
+		if len(regions) >= limit {
+			return res, nil
+		}
+		limit -= len(regions)
 	}
 	return res, nil
 }
