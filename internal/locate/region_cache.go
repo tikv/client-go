@@ -2257,8 +2257,7 @@ func regionsHaveGapInRanges(ranges []pd.KeyRange, regionsInfo []*pd.Region, limi
 			return false
 		}
 		checkKey = r.Meta.EndKey
-		for len(ranges[c
-		eckIdx].EndKey) > 0 && bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0 {
+		for len(ranges[checkIdx].EndKey) > 0 && bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0 {
 			// the end_key of returned region can cover multi ranges.
 			checkIdx++
 			if checkIdx == len(ranges) {
