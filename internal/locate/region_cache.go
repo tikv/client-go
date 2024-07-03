@@ -2248,7 +2248,7 @@ func regionsHaveGapInRanges(ranges []pd.KeyRange, regionsInfo []*pd.Region, limi
 		if r.Meta == nil {
 			return true
 		}
-		if len(r.Meta.StartKey) != 0 && bytes.Compare(r.Meta.StartKey, checkKey) > 0 {
+		if bytes.Compare(r.Meta.StartKey, checkKey) > 0 {
 			// there is a gap between returned region's start_key and current check key
 			return true
 		}
@@ -2257,7 +2257,8 @@ func regionsHaveGapInRanges(ranges []pd.KeyRange, regionsInfo []*pd.Region, limi
 			return false
 		}
 		checkKey = r.Meta.EndKey
-		for len(ranges[checkIdx].EndKey) > 0 && bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0 {
+		for len(ranges[c
+		eckIdx].EndKey) > 0 && bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0 {
 			// the end_key of returned region can cover multi ranges.
 			checkIdx++
 			if checkIdx == len(ranges) {
