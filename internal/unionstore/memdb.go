@@ -88,6 +88,10 @@ type MemDB struct {
 	stages      []MemDBCheckpoint
 	// when the MemDB is wrapper by upper RWMutex, we can skip the internal mutex.
 	skipMutex bool
+
+	// only stores the pair if they exist.
+	lastTraversedKey  []byte
+	lastTraversedNode memdbNodeAddr
 }
 
 func newMemDB() *MemDB {
@@ -396,6 +400,10 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
 func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
+	if bytes.Compare(db.lastTraversedKey, key) == 0 {
+		return db.lastTraversedNode
+	}
+
 	x := db.getRoot()
 	y := memdbNodeAddr{nil, nullAddr}
 	found := false
@@ -411,6 +419,11 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 		} else {
 			found = true
 		}
+	}
+
+	if found {
+		db.lastTraversedKey = key
+		db.lastTraversedNode = x
 	}
 
 	if found || !insert {
@@ -505,6 +518,9 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 
 	// Set the root node black
 	db.getRoot().setBlack()
+
+	db.lastTraversedKey = key
+	db.lastTraversedNode = z
 
 	return z
 }
