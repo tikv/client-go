@@ -2197,6 +2197,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
+			if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+				return c.batchScanRegionsFallback(bo, keyRanges, limit, opts...)
+			}
 			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, range num: %d, limit: %d, err: %v",
 					len(keyRanges), limit, err)
@@ -2282,6 +2285,40 @@ func regionsHaveGapInRanges(ranges []pd.KeyRange, regionsInfo []*pd.Region, limi
 		return true
 	}
 	return bytes.Compare(checkKey, ranges[checkIdx].EndKey) < 0
+}
+
+func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []pd.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
+	logutil.BgLogger().Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
+	res := make([]*Region, 0, len(keyRanges))
+	var lastRegion *Region
+	for _, keyRange := range keyRanges {
+		if lastRegion != nil {
+			endKey := lastRegion.EndKey()
+			if len(endKey) == 0 {
+				// end_key is empty means the last region is the last region of the store, which certainly contains all the rest ranges.
+				break
+			}
+			if bytes.Compare(endKey, keyRange.EndKey) >= 0 {
+				continue
+			}
+			if bytes.Compare(endKey, keyRange.StartKey) > 0 {
+				keyRange.StartKey = endKey
+			}
+		}
+		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit)
+		if err != nil {
+			return nil, err
+		}
+		if len(regions) > 0 {
+			lastRegion = regions[len(regions)-1]
+		}
+		res = append(res, regions...)
+		if len(regions) >= limit {
+			return res, nil
+		}
+		limit -= len(regions)
+	}
+	return res, nil
 }
 
 func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.Region, needLeader bool) ([]*Region, error) {

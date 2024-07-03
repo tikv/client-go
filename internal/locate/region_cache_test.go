@@ -2594,6 +2594,16 @@ func (s *testRegionCacheSuite) TestSplitKeyRanges() {
 }
 
 func (s *testRegionCacheSuite) TestBatchScanRegions() {
+	s.testBatchScanRegions()
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegionsFallback() {
+	s.Nil(failpoint.Enable("tikvclient/mockBatchScanRegionsUnimplemented", `return`))
+	s.testBatchScanRegions()
+	s.Nil(failpoint.Disable("tikvclient/mockBatchScanRegionsUnimplemented"))
+}
+
+func (s *testRegionCacheSuite) testBatchScanRegions() {
 	// Split at "a", "b", "c", "d", "e", "f", "g"
 	// nil --- 'a' --- 'b' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
 	// <-  0  -> <- 1 -> <- 2 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
