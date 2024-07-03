@@ -2242,9 +2242,7 @@ func regionsHaveGap(ranges []pd.KeyRange, regionsInfo []*pd.Region, limit int) b
 		if r.Meta == nil {
 			return true
 		}
-		if len(r.Meta.StartKey) == 0 {
-			checkKey = r.Meta.EndKey
-		} else if bytes.Compare(r.Meta.StartKey, checkKey) > 0 {
+		if len(r.Meta.StartKey) != 0 && bytes.Compare(r.Meta.StartKey, checkKey) > 0 {
 			// there is a gap between returned region's start_key and current check key
 			return true
 		}
