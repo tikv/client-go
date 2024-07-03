@@ -2773,6 +2773,15 @@ func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 		check(unboundCase, []string{"", "b", "b", "c"}, -1, true)
 		check(unboundCase, []string{}, -1, true)
 	}
+
+	// test half bounded ranges
+	check([]string{"", "b"}, []string{"", "a"}, -1, true)
+	check([]string{"", "b"}, []string{"", "a"}, 1, false) // it's just limitation reached
+	check([]string{"", "b"}, []string{"", "a"}, 2, true)
+	check([]string{"a", ""}, []string{"b", ""}, -1, true)
+	check([]string{"a", ""}, []string{"b", ""}, 1, true)
+	check([]string{"a", ""}, []string{"b", "c"}, 1, true)
+	check([]string{"a", ""}, []string{"a", ""}, -1, false)
 }
 
 func (s *testRegionCacheSuite) TestScanRegionsWithGaps() {
