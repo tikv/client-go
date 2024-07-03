@@ -2226,7 +2226,11 @@ func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []
 	for _, keyRange := range keyRanges {
 		if lastRegion != nil {
 			endKey := lastRegion.EndKey()
-			if len(endKey) == 0 || bytes.Compare(endKey, keyRange.EndKey) >= 0 {
+			if len(endKey) == 0 {
+				// end_key is empty means the last region is the last region of the store, which certainly contains all the rest ranges.
+				break
+			}
+			if bytes.Compare(endKey, keyRange.EndKey) >= 0 {
 				continue
 			}
 			if bytes.Compare(endKey, keyRange.StartKey) > 0 {
