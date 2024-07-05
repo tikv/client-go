@@ -49,8 +49,11 @@ import (
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Use global variables to prevent pdClients from creating duplicate timestamps.
@@ -254,6 +257,9 @@ func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []by
 }
 
 func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+	if _, err := util.EvalFailpoint("mockBatchScanRegionsUnimplemented"); err == nil {
+		return nil, status.Errorf(codes.Unimplemented, "mock BatchScanRegions is not implemented")
+	}
 	regions := make([]*pd.Region, 0, len(keyRanges))
 	var lastRegion *pd.Region
 	for _, keyRange := range keyRanges {
