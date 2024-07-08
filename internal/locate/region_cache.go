@@ -1790,7 +1790,6 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 				util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey), limit,
 				util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)),
 			)
-			continue
 		}
 
 		if regionsHaveGapInRanges(startKey, endKey, regionsInfo, limit) {

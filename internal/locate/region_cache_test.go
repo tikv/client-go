@@ -38,7 +38,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/pingcap/failpoint"
 	"math/rand"
 	"reflect"
 	"sync/atomic"
@@ -47,6 +46,7 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
