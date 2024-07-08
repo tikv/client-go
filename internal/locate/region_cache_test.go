@@ -47,6 +47,7 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"

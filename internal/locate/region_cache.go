@@ -65,9 +65,7 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	atomic2 "go.uber.org/atomic"
-	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -1829,7 +1827,6 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 				util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey), limit,
 				util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)),
 			)
-			continue
 		}
 
 		if regionsHaveGapInRanges(startKey, endKey, regionsInfo, limit) {
