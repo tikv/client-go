@@ -616,10 +616,11 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			if c.isStopped() {
 				return
 			}
-			logutil.BgLogger().Debug(
+			logutil.BgLogger().Info(
 				"batchRecvLoop fails when receiving, needs to reconnect",
 				zap.String("target", c.target),
 				zap.String("forwardedHost", streamClient.forwardedHost),
+				zap.String("conn-state", c.conn.GetState().String()),
 				zap.Error(err),
 			)
 
