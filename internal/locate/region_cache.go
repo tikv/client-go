@@ -57,7 +57,6 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
-	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
@@ -2068,7 +2067,9 @@ func (c *RegionCache) GetTiFlashStores(labelFilter LabelFilter) []*Store {
 	var stores []*Store
 	for _, s := range c.storeMu.stores {
 		if s.storeType == tikvrpc.TiFlash {
-			if !labelFilter(s.labels) {
+			// it should only returns resolved stores so that users won't be bothered by tombstones.
+			// ref: https://github.com/pingcap/tidb/issues/46602
+			if !labelFilter(s.labels) || s.getResolveState() != resolved {
 				continue
 			}
 			stores = append(stores, s)
@@ -2634,7 +2635,7 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	if store == nil || (store != nil && store.GetState() == metapb.StoreState_Tombstone) {
 		// store has be removed in PD, we should invalidate all regions using those store.
 		logutil.BgLogger().Info("invalidate regions in removed store",
-			zap.Uint64("store", s.storeID), zap.String("add", s.addr))
+			zap.Uint64("store", s.storeID), zap.String("addr", s.addr))
 		atomic.AddUint32(&s.epoch, 1)
 		s.setResolveState(tombstone)
 		metrics.RegionCacheCounterWithInvalidateStoreRegionsOK.Inc()
@@ -2645,6 +2646,8 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
+		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
+		newStore.unreachableSince = s.unreachableSince
 		c.storeMu.Lock()
 		if s.addr == addr {
 			newStore.slowScore = s.slowScore
@@ -2814,15 +2817,27 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessSt
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		go s.checkUntilHealth(c)
+		reResolveInterval := 30 * time.Second
+		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
+			if dur, err := time.ParseDuration(val.(string)); err == nil {
+				reResolveInterval = dur
+			}
+		}
+		go s.checkUntilHealth(c, liveness, reResolveInterval)
 	}
 }
 
-func (s *Store) checkUntilHealth(c *RegionCache) {
-	defer atomic.StoreUint32(&s.livenessState, uint32(reachable))
-
+func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResolveInterval time.Duration) {
 	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		if liveness != reachable {
+			logutil.BgLogger().Warn("[health check] store was still not reachable at the end of health check loop",
+				zap.Uint64("storeID", s.storeID),
+				zap.String("state", s.getResolveState().String()),
+				zap.String("liveness", s.getLivenessState().String()))
+		}
+	}()
 	lastCheckPDTime := time.Now()
 
 	for {
@@ -2830,26 +2845,37 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			if time.Since(lastCheckPDTime) > time.Second*30 {
+			if time.Since(lastCheckPDTime) > reResolveInterval {
 				lastCheckPDTime = time.Now()
 
 				valid, err := s.reResolve(c)
 				if err != nil {
 					logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 				} else if !valid {
-					logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr))
+					if s.getResolveState() == deleted {
+						// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
+						c.storeMu.RLock()
+						newStore := c.storeMu.stores[s.storeID]
+						c.storeMu.RUnlock()
+						logutil.BgLogger().Info("[health check] store meta changed",
+							zap.Uint64("storeID", s.storeID),
+							zap.String("oldAddr", s.addr),
+							zap.String("oldLabels", fmt.Sprintf("%v", s.labels)),
+							zap.String("newAddr", newStore.addr),
+							zap.String("newLabels", fmt.Sprintf("%v", newStore.labels)))
+						go newStore.checkUntilHealth(c, liveness, reResolveInterval)
+					}
 					return
 				}
 			}
 
 			bo := retry.NewNoopBackoff(c.ctx)
-			l := s.requestLiveness(bo, c)
-			if l == reachable {
+			liveness = s.requestLiveness(bo, c)
+			atomic.StoreUint32(&s.livenessState, uint32(liveness))
+			if liveness == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
-
 				return
 			}
-			atomic.StoreUint32(&s.livenessState, uint32(l))
 		}
 	}
 }
@@ -2857,7 +2883,20 @@ func (s *Store) checkUntilHealth(c *RegionCache) {
 func (s *Store) requestLiveness(bo *retry.Backoffer, c *RegionCache) (l livenessState) {
 	// It's not convenient to mock liveness in integration tests. Use failpoint to achieve that instead.
 	if val, err := util.EvalFailpoint("injectLiveness"); err == nil {
-		switch val.(string) {
+		liveness := val.(string)
+		if strings.Contains(liveness, " ") {
+			for _, item := range strings.Split(liveness, " ") {
+				kv := strings.Split(item, ":")
+				if len(kv) != 2 {
+					continue
+				}
+				if kv[0] == s.addr {
+					liveness = kv[1]
+					break
+				}
+			}
+		}
+		switch liveness {
 		case "unreachable":
 			return unreachable
 		case "reachable":
@@ -3097,8 +3136,8 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 		ctx,
 		addr,
 		opt,
-		grpc.WithInitialWindowSize(client.GrpcInitialWindowSize),
-		grpc.WithInitialConnWindowSize(client.GrpcInitialConnWindowSize),
+		grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
+		grpc.WithInitialConnWindowSize(cfg.TiKVClient.GrpcInitialConnWindowSize),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
 				BaseDelay:  100 * time.Millisecond, // Default was 1s.
