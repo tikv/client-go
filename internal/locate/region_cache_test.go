@@ -1794,7 +1794,7 @@ func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 				EndKey:   []byte(regions[i+1]),
 			}})
 		}
-		s.Equal(expect, regionsHaveGapInRanges([]byte(ranges[0]), []byte(ranges[1]), rgs, limit))
+		s.Equal(expect, regionsHaveGapInRange([]byte(ranges[0]), []byte(ranges[1]), rgs, limit))
 	}
 
 	boundCase := []string{"a", "c"}
