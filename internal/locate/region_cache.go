@@ -1980,7 +1980,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			)
 		}
 
-		if regionsHaveGapInRanges(startKey, endKey, regionsInfo, limit) {
+		if regionsHaveGapInRange(startKey, endKey, regionsInfo, limit) {
 			backoffErr = errors.Errorf(
 				"PD returned regions have gaps, startKey: %q, endKey: %q, limit: %d",
 				startKey, endKey, limit,
@@ -2010,10 +2010,10 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 	}
 }
 
-// regionsHaveGapInRanges checks if the loaded regions can fully cover the key ranges.
+// regionsHaveGapInRange checks if the loaded regions can fully cover the key ranges.
 // If there are any gaps between the regions, it returns true, then the requests might be retried.
 // TODO: remove this function after PD client supports gap detection and handling it.
-func regionsHaveGapInRanges(start, end []byte, regionsInfo []*pd.Region, limit int) bool {
+func regionsHaveGapInRange(start, end []byte, regionsInfo []*pd.Region, limit int) bool {
 	if len(regionsInfo) == 0 {
 		return true
 	}
@@ -2041,11 +2041,12 @@ func regionsHaveGapInRanges(start, end []byte, regionsInfo []*pd.Region, limit i
 	}
 	if limit > 0 && len(regionsInfo) == limit {
 		// the regionsInfo is limited by the limit, so there may be some ranges not covered.
-		// But the previous regions are continuous, so we just need to check the rest ranges.
+		// The rest range will be loaded in the next scanRegions call.
 		return false
 	}
 	if len(end) == 0 {
-		return len(lastEndKey) != 0
+		// the end key of the range is empty, but we can't cover it.
+		return true
 	}
 	return bytes.Compare(lastEndKey, end) < 0
 }
