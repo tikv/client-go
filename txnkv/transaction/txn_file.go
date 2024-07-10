@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -845,12 +844,7 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 		uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.TxnFileMinMutationSize {
 		return false, nil
 	}
-
-	keyspaceInfo, err := acquireKeyspaceInfo(ctx, c.getKeyspaceID())
-	if err != nil {
-		return false, errors.Wrap(err, "acquire keyspace info failed")
-	}
-	return keyspaceInfo.txnFileAvailable, nil
+	return true, nil
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
@@ -981,21 +975,6 @@ func (w *chunkWriterClient) buildChunk(bo *retry.Backoffer, buf []byte) (uint64,
 	return v.ChunkId, nil
 }
 
-func (w *chunkWriterClient) queryAvailability(bo *retry.Backoffer) (bool, error) {
-	data, err := w.request(bo, "GET", nil)
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	v := struct {
-		Available bool `json:"available"`
-	}{}
-	if err = json.Unmarshal(data, &v); err != nil {
-		return false, errors.Wrapf(err, "unmarshal response %s", string(data))
-	}
-	logutil.Logger(bo.GetCtx()).Info("query txn file availability", zap.Bool("available", v.Available))
-	return v.Available, nil
-}
-
 func (w *chunkWriterClient) request(bo *retry.Backoffer, method string, data []byte) ([]byte, error) {
 	ctx := bo.GetCtx()
 	for {
@@ -1054,33 +1033,4 @@ func (w *chunkWriterClient) asyncBuildChunk(bo *retry.Backoffer, buf []byte, chu
 		chunkId, err := w.buildChunk(bo.Clone(), buf)
 		resultCh <- buildChunkResult{chunkId, chunkRange, err}
 	}()
-}
-
-type keyspaceInfo struct {
-	txnFileAvailable bool
-}
-
-var currentKeyspaceInfo atomic.Value
-
-func acquireKeyspaceInfo(ctx context.Context, keyspaceID apicodec.KeyspaceID) (*keyspaceInfo, error) {
-	if info := currentKeyspaceInfo.Load(); info != nil {
-		return info.(*keyspaceInfo), nil
-	}
-
-	writer, err := newChunkWriterClient(keyspaceID)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	bo := retry.NewBackofferWithVars(ctx, int(BuildTxnFileMaxBackoff.Load()), nil)
-	available, err := writer.queryAvailability(bo)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	newInfo := &keyspaceInfo{
-		txnFileAvailable: available,
-	}
-	currentKeyspaceInfo.Store(newInfo)
-	return newInfo, nil
 }
