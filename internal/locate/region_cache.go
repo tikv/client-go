@@ -1854,7 +1854,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			return nil, errors.New("receive Regions with no peer")
 		}
 		if len(regions) < len(regionsInfo) {
-			logutil.Logger(context.Background()).Debug(
+			logutil.Logger(context.Background()).Warn(
 				"regionCache: scanRegion finished but some regions has no leader.")
 		}
 		return regions, nil
