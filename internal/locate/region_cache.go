@@ -1979,6 +1979,14 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 				util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)),
 			)
 		}
+
+		if regionsHaveGapInRange(startKey, endKey, regionsInfo, limit) {
+			backoffErr = errors.Errorf(
+				"PD returned regions have gaps, startKey: %q, endKey: %q, limit: %d",
+				startKey, endKey, limit,
+			)
+			continue
+		}
 		regions := make([]*Region, 0, len(regionsInfo))
 		for _, r := range regionsInfo {
 			// Leader id = 0 indicates no leader.
@@ -1995,11 +2003,52 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			return nil, errors.New("receive Regions with no peer")
 		}
 		if len(regions) < len(regionsInfo) {
-			logutil.Logger(context.Background()).Debug(
+			logutil.Logger(context.Background()).Warn(
 				"regionCache: scanRegion finished but some regions has no leader.")
 		}
 		return regions, nil
 	}
+}
+
+// regionsHaveGapInRange checks if the loaded regions can fully cover the key ranges.
+// If there are any gaps between the regions, it returns true, then the requests might be retried.
+// TODO: remove this function after PD client supports gap detection and handling it.
+func regionsHaveGapInRange(start, end []byte, regionsInfo []*pd.Region, limit int) bool {
+	if len(regionsInfo) == 0 {
+		return true
+	}
+	var lastEndKey []byte
+	for i, r := range regionsInfo {
+		if r.Meta == nil {
+			return true
+		}
+		if i == 0 {
+			if bytes.Compare(r.Meta.StartKey, start) > 0 {
+				// there is a gap between first returned region's start_key and start key.
+				return true
+			}
+		}
+		if i > 0 && bytes.Compare(r.Meta.StartKey, lastEndKey) > 0 {
+			// there is a gap between two regions.
+			return true
+		}
+		if len(r.Meta.EndKey) == 0 {
+			// the current region contains all the rest ranges.
+			return false
+		}
+		// note lastEndKey never be empty.
+		lastEndKey = r.Meta.EndKey
+	}
+	if limit > 0 && len(regionsInfo) == limit {
+		// the regionsInfo is limited by the limit, so there may be some ranges not covered.
+		// The rest range will be loaded in the next scanRegions call.
+		return false
+	}
+	if len(end) == 0 {
+		// the end key of the range is empty, but we can't cover it.
+		return true
+	}
+	return bytes.Compare(lastEndKey, end) < 0
 }
 
 // GetCachedRegionWithRLock returns region with lock.
