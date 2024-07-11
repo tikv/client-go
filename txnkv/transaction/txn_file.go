@@ -884,11 +884,27 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 
 	ctx := bo.GetCtx()
 	regionCache := c.store.GetRegionCache()
-	loc, err := regionCache.LocateKey(bo, c.primary())
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to locate primary")
+
+	var region *locate.Region
+	for {
+		loc, err := regionCache.LocateKey(bo, c.primary())
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to locate primary")
+		}
+
+		region = regionCache.GetCachedRegionWithRLock(loc.Region)
+		if region != nil {
+			break
+		}
+
+		err = bo.Backoff(retry.BoRegionMiss, errors.New("cached region not found"))
+		if err != nil {
+			logutil.Logger(ctx).Error("txn file: cached region not found",
+				zap.String("key", kv.StrKey(c.primary())),
+				zap.Stringer("loc", loc))
+			return nil, errors.WithStack(err)
+		}
 	}
-	region := regionCache.GetCachedRegionWithRLock(loc.Region)
 
 	var replicaNumber int64 = 0
 	for _, peer := range region.GetMeta().GetPeers() {
