@@ -279,7 +279,7 @@ func (a *nodeAllocator) freeNode(addr memdbArenaAddr) {
 		n.vptr = badAddr
 		return
 	}
-	// TODO: reuse freed nodes.
+	// TODO: reuse freed nodes. Need to fix lastTraversedNode when implementing this.
 }
 
 func (a *nodeAllocator) reset() {
