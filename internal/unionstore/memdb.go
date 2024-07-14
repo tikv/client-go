@@ -89,6 +89,11 @@ type MemDB struct {
 	// when the MemDB is wrapper by upper RWMutex, we can skip the internal mutex.
 	skipMutex bool
 
+	// The cache makes read operations stateful so that it can trigger data race when misused,
+	// e.g. concurrent `Get`s.
+	// We should carefully control where it is used.
+	// Also disable it when the cache won't benefit us to save the maintenance cost.
+	enableCache bool
 	// only stores the pair if they exist.
 	lastTraversedKey  []byte
 	lastTraversedNode memdbNodeAddr
@@ -400,7 +405,7 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
 func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
-	if len(db.lastTraversedKey) > 0 && bytes.Equal(key, db.lastTraversedKey) {
+	if db.enableCache && len(db.lastTraversedKey) > 0 && bytes.Equal(key, db.lastTraversedKey) {
 		return db.lastTraversedNode
 	}
 
@@ -421,7 +426,7 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 		}
 	}
 
-	if found {
+	if db.enableCache && found {
 		if cap(db.lastTraversedKey) < len(key) {
 			db.lastTraversedKey = make([]byte, len(key))
 		} else {
@@ -524,14 +529,16 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	// Set the root node black
 	db.getRoot().setBlack()
 
-	// Update the last traversed node
-	if cap(db.lastTraversedKey) < len(key) {
-		db.lastTraversedKey = make([]byte, len(key))
-	} else {
-		db.lastTraversedKey = db.lastTraversedKey[:len(key)]
+	if db.enableCache {
+		// Update the last traversed node
+		if cap(db.lastTraversedKey) < len(key) {
+			db.lastTraversedKey = make([]byte, len(key))
+		} else {
+			db.lastTraversedKey = db.lastTraversedKey[:len(key)]
+		}
+		copy(db.lastTraversedKey, key)
+		db.lastTraversedNode = z
 	}
-	copy(db.lastTraversedKey, key)
-	db.lastTraversedNode = z
 
 	return z
 }
@@ -929,4 +936,12 @@ func (db *MemDB) setSkipMutex(skip bool) {
 // MemHookSet implements the MemBuffer interface.
 func (db *MemDB) MemHookSet() bool {
 	return db.allocator.memChangeHook.Load() != nil
+}
+
+func (db *MemDB) EnableCache() {
+	db.enableCache = true
+}
+
+func (db *MemDB) DisableCache() {
+	db.enableCache = false
 }

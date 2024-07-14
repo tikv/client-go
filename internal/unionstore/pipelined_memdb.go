@@ -530,3 +530,15 @@ func (p *PipelinedMemDB) GetFlushMetrics() FlushMetrics {
 func (p *PipelinedMemDB) MemHookSet() bool {
 	return p.memChangeHook != nil
 }
+
+func (p *PipelinedMemDB) EnableCache() {
+	if p.memDB != nil {
+		p.memDB.EnableCache()
+	}
+}
+
+func (p *PipelinedMemDB) DisableCache() {
+	if p.memDB != nil {
+		p.memDB.DisableCache()
+	}
+}
