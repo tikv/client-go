@@ -242,6 +242,8 @@ type batchConn struct {
 	idleNotify *uint32
 	idleDetect *time.Timer
 
+	fetchMoreTimer *time.Timer
+
 	index uint32
 
 	metrics batchConnMetrics
@@ -328,19 +330,28 @@ func (a *batchConn) fetchMorePendingRequests(
 	maxWaitTime time.Duration,
 ) {
 	// Try to collect `batchWaitSize` requests, or wait `maxWaitTime`.
-	after := time.NewTimer(maxWaitTime)
+	if a.fetchMoreTimer == nil {
+		a.fetchMoreTimer = time.NewTimer(maxWaitTime)
+	} else {
+		a.fetchMoreTimer.Reset(maxWaitTime)
+	}
 	for a.reqBuilder.len() < batchWaitSize {
 		select {
 		case entry := <-a.batchCommandsCh:
 			if entry == nil {
+				if !a.fetchMoreTimer.Stop() {
+					<-a.fetchMoreTimer.C
+				}
 				return
 			}
 			a.reqBuilder.push(entry)
-		case <-after.C:
+		case <-a.fetchMoreTimer.C:
 			return
 		}
 	}
-	after.Stop()
+	if !a.fetchMoreTimer.Stop() {
+		<-a.fetchMoreTimer.C
+	}
 
 	// Do an additional non-block try. Here we test the length with `maxBatchSize` instead
 	// of `batchWaitSize` because trying best to fetch more requests is necessary so that
@@ -359,6 +370,7 @@ func (a *batchConn) fetchMorePendingRequests(
 }
 
 const idleTimeout = 3 * time.Minute
+const recentWaitHeadSize = 10
 
 // BatchSendLoopPanicCounter is only used for testing.
 var BatchSendLoopPanicCounter int64 = 0
@@ -377,11 +389,17 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	}()
 
 	bestBatchWaitSize := cfg.BatchWaitSize
+	recentWaitHeadDurs := [recentWaitHeadSize]time.Duration{}
+	recentWaitHeadIdx := 0
+
 	for {
 		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()
 
 		headRecvTime := a.fetchAllPendingRequests(int(cfg.MaxBatchSize), int(cfg.MaxBatchWaitAttempts))
+		waitHeadDur := headRecvTime.Sub(sendLoopStartTime)
+		recentWaitHeadDurs[recentWaitHeadIdx] = waitHeadDur
+		recentWaitHeadIdx = (recentWaitHeadIdx + 1) % recentWaitHeadSize
 
 		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/tikvclient/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
@@ -393,7 +411,18 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		if a.reqBuilder.len() < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
 			if cfg.OverloadThreshold == 0 {
 				// If the overload threshold is zero, do aggressive batching.
-				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.BatchWaitSize), cfg.MaxBatchWaitTime)
+				tailWaitHeadCount := 0
+				for _, dur := range recentWaitHeadDurs {
+					if dur > cfg.MaxBatchWaitTime {
+						tailWaitHeadCount++
+						if tailWaitHeadCount > recentWaitHeadSize/5 {
+							break
+						}
+					}
+				}
+				if tailWaitHeadCount <= recentWaitHeadSize/5 {
+					a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.MaxBatchSize), cfg.MaxBatchWaitTime)
+				}
 			} else if atomic.LoadUint64(&a.tikvTransportLayerLoad) > uint64(cfg.OverloadThreshold) {
 				// If the target TiKV is overload, wait a while to collect more requests.
 				metrics.TiKVBatchWaitOverLoad.Inc()
@@ -415,10 +444,12 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.metrics.sendLoopWaitMoreDur.Observe(time.Since(sendLoopStartTime).Seconds())
 
 		a.getClientAndSend()
-		if dur := time.Since(headRecvTime); dur > 5*time.Millisecond {
+
+		sendLoopEndTime := time.Now()
+		a.metrics.sendLoopSendDur.Observe(sendLoopEndTime.Sub(sendLoopStartTime).Seconds())
+		if dur := sendLoopEndTime.Sub(headRecvTime); dur > 5*time.Millisecond {
 			metrics.TiKVBatchSendTailLatency.Observe(dur.Seconds())
 		}
-		a.metrics.sendLoopSendDur.Observe(time.Since(sendLoopStartTime).Seconds())
 	}
 }
 
