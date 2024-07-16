@@ -17,6 +17,7 @@ package unionstore
 import (
 	"context"
 	stderrors "errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,16 +39,16 @@ type PipelinedMemDB struct {
 	// Like MemDB, this RWMutex only used to ensure memdbSnapGetter.Get will not race with
 	// concurrent memdb.Set, memdb.SetWithFlags, memdb.Delete and memdb.UpdateFlags.
 	sync.RWMutex
-	onFlushing              atomic.Bool
-	errCh                   chan error
-	flushFunc               FlushFunc
-	bufferBatchGetter       BufferBatchGetter
-	memDB                   *MemDB
-	flushingMemDB           *MemDB // the flushingMemDB is not wrapped by a mutex, because there is no data race in it.
-	len, size               int    // len and size records the total flushed and onflushing memdb.
-	generation              uint64
-	entryLimit, bufferLimit uint64
-	flushOption             flushOption
+	onFlushing        atomic.Bool
+	errCh             chan error
+	flushFunc         FlushFunc
+	bufferBatchGetter BufferBatchGetter
+	memDB             *MemDB
+	flushingMemDB     *MemDB // the flushingMemDB is not wrapped by a mutex, because there is no data race in it.
+	len, size         int    // len and size records the total flushed and onflushing memdb.
+	generation        uint64
+	entryLimit        uint64
+	flushOption       flushOption
 	// prefetchCache is used to cache the result of BatchGet, it's invalidated when Flush.
 	// the values are wrapped by util.Option.
 	//   None -> not found
@@ -110,7 +111,6 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		generation:        0,
 		// keep entryLimit and bufferLimit same with the memdb's default values.
 		entryLimit:  memdb.entrySizeLimit,
-		bufferLimit: memdb.bufferSizeLimit,
 		flushOption: flushOpt,
 	}
 }
@@ -306,7 +306,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.len += p.flushingMemDB.Len()
 	p.size += p.flushingMemDB.Size()
 	p.memDB = newMemDB()
-	p.memDB.SetEntrySizeLimit(p.entryLimit, p.bufferLimit)
+	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit
+	p.memDB.SetEntrySizeLimit(p.entryLimit, math.MaxUint64)
 	p.memDB.setSkipMutex(true)
 	p.generation++
 	go func(generation uint64) {
@@ -404,9 +405,10 @@ func (p *PipelinedMemDB) IterReverse([]byte, []byte) (Iterator, error) {
 }
 
 // SetEntrySizeLimit sets the size limit for each entry and total buffer.
-func (p *PipelinedMemDB) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
-	p.entryLimit, p.bufferLimit = entryLimit, bufferLimit
-	p.memDB.SetEntrySizeLimit(entryLimit, bufferLimit)
+func (p *PipelinedMemDB) SetEntrySizeLimit(entryLimit, _ uint64) {
+	p.entryLimit = entryLimit
+	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit.
+	p.memDB.SetEntrySizeLimit(entryLimit, math.MaxUint64)
 }
 
 func (p *PipelinedMemDB) Len() int {
