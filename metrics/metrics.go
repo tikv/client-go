@@ -67,6 +67,7 @@ var (
 	TiKVBatchSendTailLatency                 prometheus.Histogram
 	TiKVBatchSendLoopDuration                *prometheus.SummaryVec
 	TiKVBatchRecvLoopDuration                *prometheus.SummaryVec
+	TiKVBatchMoreRequests                    *prometheus.SummaryVec
 	TiKVBatchWaitOverLoad                    prometheus.Counter
 	TiKVBatchPendingRequests                 *prometheus.HistogramVec
 	TiKVBatchRequests                        *prometheus.HistogramVec
@@ -386,6 +387,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "batch recv loop duration breakdown by steps",
 			ConstLabels: constLabels,
 		}, []string{"store", "step"})
+
+	TiKVBatchMoreRequests = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_more_requests_total",
+			Help:        "number of requests batched by extra fetch",
+			ConstLabels: constLabels,
+		}, []string{"store"})
 
 	TiKVBatchWaitOverLoad = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -850,6 +860,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchSendTailLatency)
 	prometheus.MustRegister(TiKVBatchSendLoopDuration)
 	prometheus.MustRegister(TiKVBatchRecvLoopDuration)
+	prometheus.MustRegister(TiKVBatchMoreRequests)
 	prometheus.MustRegister(TiKVBatchWaitOverLoad)
 	prometheus.MustRegister(TiKVBatchPendingRequests)
 	prometheus.MustRegister(TiKVBatchRequests)
