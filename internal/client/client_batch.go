@@ -104,6 +104,8 @@ type batchCommandsBuilder struct {
 	requestIDs []uint64
 	// In most cases, there isn't any forwardingReq.
 	forwardingReqs map[string]*tikvpb.BatchCommandsRequest
+
+	maxReqStartTime time.Time
 }
 
 func (b *batchCommandsBuilder) len() int {
@@ -112,6 +114,9 @@ func (b *batchCommandsBuilder) len() int {
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries.Push(entry)
+	if entry.start.After(b.maxReqStartTime) {
+		b.maxReqStartTime = entry.start
+	}
 }
 
 const highTaskPriority = 10
@@ -225,7 +230,10 @@ type batchConnMetrics struct {
 	recvLoopRecvDur    prometheus.Observer
 	recvLoopProcessDur prometheus.Observer
 
-	batchMoreRequests prometheus.Observer
+	headArrivalInterval prometheus.Observer
+	batchMoreRequests   prometheus.Observer
+
+	bestBatchSize prometheus.Observer
 }
 
 type batchConn struct {
@@ -272,7 +280,9 @@ func (a *batchConn) initMetrics(target string) {
 	a.metrics.sendLoopSendDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "send")
 	a.metrics.recvLoopRecvDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "recv")
 	a.metrics.recvLoopProcessDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "process")
+	a.metrics.headArrivalInterval = metrics.TiKVBatchHeadArrivalInterval.WithLabelValues(target)
 	a.metrics.batchMoreRequests = metrics.TiKVBatchMoreRequests.WithLabelValues(target)
+	a.metrics.bestBatchSize = metrics.TiKVBatchBestSize.WithLabelValues(target)
 }
 
 func (a *batchConn) isIdle() bool {
@@ -280,11 +290,9 @@ func (a *batchConn) isIdle() bool {
 }
 
 // fetchAllPendingRequests fetches all pending requests from the channel.
-func (a *batchConn) fetchAllPendingRequests(
-	maxBatchSize int,
-	maxWaitAttempts int,
-) time.Time {
+func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time.Time, headArrivalInterval time.Duration) {
 	// Block on the first element.
+	lastReqStartTime := a.reqBuilder.maxReqStartTime
 	var headEntry *batchCommandsEntry
 	select {
 	case headEntry = <-a.batchCommandsCh:
@@ -297,34 +305,32 @@ func (a *batchConn) fetchAllPendingRequests(
 		atomic.AddUint32(&a.idle, 1)
 		atomic.CompareAndSwapUint32(a.idleNotify, 0, 1)
 		// This batchConn to be recycled
-		return time.Now()
+		return time.Now(), 0
 	case <-a.closed:
-		return time.Now()
+		return time.Now(), 0
 	}
 	if headEntry == nil {
-		return time.Now()
+		return time.Now(), 0
 	}
-	ts := time.Now()
+	headRecvTime = time.Now()
+	if headEntry.start.After(lastReqStartTime) {
+		headArrivalInterval = headEntry.start.Sub(lastReqStartTime)
+	}
 	a.reqBuilder.push(headEntry)
 
 	// This loop is for trying best to collect more requests.
-	attempts := 0
 	for a.reqBuilder.len() < maxBatchSize {
 		select {
 		case entry := <-a.batchCommandsCh:
 			if entry == nil {
-				return ts
+				return
 			}
 			a.reqBuilder.push(entry)
 		default:
-			if attempts >= maxWaitAttempts {
-				return ts
-			}
-			runtime.Gosched()
-			attempts++
+			return
 		}
 	}
-	return ts
+	return
 }
 
 // fetchMorePendingRequests fetches more pending requests from the channel.
@@ -360,6 +366,7 @@ func (a *batchConn) fetchMorePendingRequests(
 	// Do an additional non-block try. Here we test the length with `maxBatchSize` instead
 	// of `batchWaitSize` because trying best to fetch more requests is necessary so that
 	// we can adjust the `batchWaitSize` dynamically.
+	yield := false
 	for a.reqBuilder.len() < maxBatchSize {
 		select {
 		case entry := <-a.batchCommandsCh:
@@ -368,7 +375,12 @@ func (a *batchConn) fetchMorePendingRequests(
 			}
 			a.reqBuilder.push(entry)
 		default:
-			return
+			if yield {
+				return
+			}
+			// yield once to batch more requests.
+			runtime.Gosched()
+			yield = true
 		}
 	}
 }
@@ -376,9 +388,63 @@ func (a *batchConn) fetchMorePendingRequests(
 const idleTimeout = 3 * time.Minute
 
 type expBatchOptions struct {
-	Ver  int     `json:"ver"`
-	Size int     `json:"size"`
-	Prob float64 `json:"prob"`
+	V int     `json:"v"`
+	N int     `json:"n,omitempty"`
+	P float64 `json:"p,omitempty"`
+	W float64 `json:"w,omitempty"`
+}
+
+type expBatchTrigger struct {
+	opts expBatchOptions
+
+	estFetchMoreProb       float64
+	estArrivalInterval     time.Duration
+	maxArrivalInterval     time.Duration
+	recentArrivalIntervals []time.Duration
+	recentArrivalIdx       int
+}
+
+func (t *expBatchTrigger) needFetchMore(reqArrivalInterval time.Duration, maxBatchWaitTime time.Duration) bool {
+	if t.opts.V == 1 {
+		if t.recentArrivalIntervals == nil {
+			t.recentArrivalIntervals = make([]time.Duration, t.opts.N)
+		}
+		t.recentArrivalIntervals[t.recentArrivalIdx] = reqArrivalInterval
+		t.recentArrivalIdx = (t.recentArrivalIdx + 1) % t.opts.N
+		tailLimit := int(float64(t.opts.N) * (1 - t.opts.P))
+		tailCount := 0
+		for _, dur := range t.recentArrivalIntervals {
+			if dur > maxBatchWaitTime {
+				tailCount++
+				if tailCount > tailLimit {
+					return false
+				}
+			}
+		}
+		return true
+	} else if t.opts.V == 2 {
+		if t.maxArrivalInterval == 0 {
+			t.maxArrivalInterval = maxBatchWaitTime * time.Duration(t.opts.N)
+		}
+		if reqArrivalInterval > t.maxArrivalInterval {
+			reqArrivalInterval = t.maxArrivalInterval
+		}
+		if t.estArrivalInterval == 0 {
+			t.estArrivalInterval = reqArrivalInterval
+		} else {
+			t.estArrivalInterval = time.Duration(t.opts.W*float64(reqArrivalInterval) + (1-t.opts.W)*float64(t.estArrivalInterval))
+		}
+		return t.estArrivalInterval < maxBatchWaitTime
+	} else if t.opts.V == 3 {
+		var thisProb float64
+		if reqArrivalInterval < maxBatchWaitTime {
+			thisProb = 1
+		}
+		t.estFetchMoreProb = t.opts.W*thisProb + (1-t.opts.W)*t.estFetchMoreProb
+		return t.estFetchMoreProb > t.opts.P
+	} else {
+		return true
+	}
 }
 
 var logExpBatchOptionsOnce sync.Once
@@ -399,59 +465,24 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		}
 	}()
 
-	var (
-		expBatchOpts       expBatchOptions
-		recentWaitHeadDurs []time.Duration
-		recentWaitHeadIdx  int
-		estWaitHeadDur     time.Duration
-	)
+	var trigger expBatchTrigger
 	if len(cfg.ExperimentalBatchOptions) > 0 {
-		err := json.Unmarshal([]byte(cfg.ExperimentalBatchOptions), &expBatchOpts)
+		err := json.Unmarshal([]byte(cfg.ExperimentalBatchOptions), &trigger.opts)
 		if err != nil {
 			logutil.BgLogger().Warn("failed to unmarshal experimental batch options", zap.Error(err))
 		} else {
 			logExpBatchOptionsOnce.Do(func() {
-				logutil.BgLogger().Info("experimental batch options", zap.Any("options", expBatchOpts))
+				logutil.BgLogger().Info("init experimental batch trigger", zap.Any("options", trigger.opts))
 			})
 		}
 	}
 
-	needFetchMore := func(waitHeadDur time.Duration) bool {
-		if expBatchOpts.Ver == 1 {
-			if recentWaitHeadDurs == nil {
-				recentWaitHeadDurs = make([]time.Duration, expBatchOpts.Size)
-			}
-			recentWaitHeadDurs[recentWaitHeadIdx] = waitHeadDur
-			recentWaitHeadIdx = (recentWaitHeadIdx + 1) % expBatchOpts.Size
-			tailWaitHeadLimit := int(float64(expBatchOpts.Size) * (1 - expBatchOpts.Prob))
-			tailWaitHeadCount := 0
-			for _, dur := range recentWaitHeadDurs {
-				if dur > cfg.MaxBatchWaitTime {
-					tailWaitHeadCount++
-					if tailWaitHeadCount > tailWaitHeadLimit {
-						return false
-					}
-				}
-			}
-			return true
-		} else if expBatchOpts.Ver == 2 {
-			if estWaitHeadDur == 0 {
-				estWaitHeadDur = waitHeadDur
-			} else {
-				estWaitHeadDur = time.Duration(float64(estWaitHeadDur)*expBatchOpts.Prob + float64(waitHeadDur)*(1-expBatchOpts.Prob))
-			}
-			return estWaitHeadDur < cfg.MaxBatchWaitTime
-		} else {
-			return true
-		}
-	}
-
-	bestBatchWaitSize := cfg.BatchWaitSize
+	bestBatchWaitSize := float64(cfg.BatchWaitSize)
 	for {
 		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()
 
-		headRecvTime := a.fetchAllPendingRequests(int(cfg.MaxBatchSize), int(cfg.MaxBatchWaitAttempts))
+		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
 
 		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/tikvclient/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
@@ -460,30 +491,33 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			}
 		}
 
-		if pendings := a.reqBuilder.len(); pendings < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
+		if batchSize := a.reqBuilder.len(); batchSize < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
 			if cfg.OverloadThreshold == 0 {
-				// If the overload threshold is zero, do aggressive batching according to wait head duration.
-				if needFetchMore(headRecvTime.Sub(sendLoopStartTime)) {
-					a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.MaxBatchSize), cfg.MaxBatchWaitTime)
-					a.metrics.batchMoreRequests.Observe(float64(a.reqBuilder.len() - pendings))
+				// If the overload threshold is zero, do aggressive batching according to head arrival interval.
+				if trigger.needFetchMore(headArrivalInterval, cfg.MaxBatchWaitTime) {
+					batchWaitSize := int(bestBatchWaitSize) + 1
+					if trigger.opts.V == 0 {
+						batchWaitSize = int(cfg.MaxBatchSize)
+					}
+					a.fetchMorePendingRequests(int(cfg.MaxBatchSize), batchWaitSize, cfg.MaxBatchWaitTime)
+					a.metrics.batchMoreRequests.Observe(float64(a.reqBuilder.len() - batchSize))
 				}
 			} else if atomic.LoadUint64(&a.tikvTransportLayerLoad) > uint64(cfg.OverloadThreshold) {
 				// If the target TiKV is overload, wait a while to collect more requests.
 				metrics.TiKVBatchWaitOverLoad.Inc()
-				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(bestBatchWaitSize), cfg.MaxBatchWaitTime)
+				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.MaxBatchSize), cfg.MaxBatchWaitTime)
 			}
 		}
-		a.metrics.pendingRequests.Observe(float64(len(a.batchCommandsCh) + a.reqBuilder.len()))
 		length := a.reqBuilder.len()
+		a.metrics.pendingRequests.Observe(float64(len(a.batchCommandsCh) + length))
 		if uint(length) == 0 {
 			// The batch command channel is closed.
 			return
-		} else if uint(length) < bestBatchWaitSize && bestBatchWaitSize > 1 {
-			// Waits too long to collect requests, reduce the target batch size.
-			bestBatchWaitSize--
-		} else if uint(length) > bestBatchWaitSize+4 && bestBatchWaitSize < cfg.MaxBatchSize {
-			bestBatchWaitSize++
+		} else {
+			bestBatchWaitSize = 0.2*float64(length) + 0.8*bestBatchWaitSize
 		}
+		a.metrics.bestBatchSize.Observe(bestBatchWaitSize)
+		a.metrics.headArrivalInterval.Observe(headArrivalInterval.Seconds())
 		a.metrics.sendLoopWaitHeadDur.Observe(headRecvTime.Sub(sendLoopStartTime).Seconds())
 		a.metrics.sendLoopWaitMoreDur.Observe(time.Since(sendLoopStartTime).Seconds())
 

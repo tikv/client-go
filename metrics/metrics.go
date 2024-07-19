@@ -67,6 +67,8 @@ var (
 	TiKVBatchSendTailLatency                 prometheus.Histogram
 	TiKVBatchSendLoopDuration                *prometheus.SummaryVec
 	TiKVBatchRecvLoopDuration                *prometheus.SummaryVec
+	TiKVBatchHeadArrivalInterval             *prometheus.SummaryVec
+	TiKVBatchBestSize                        *prometheus.SummaryVec
 	TiKVBatchMoreRequests                    *prometheus.SummaryVec
 	TiKVBatchWaitOverLoad                    prometheus.Counter
 	TiKVBatchPendingRequests                 *prometheus.HistogramVec
@@ -387,6 +389,24 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "batch recv loop duration breakdown by steps",
 			ConstLabels: constLabels,
 		}, []string{"store", "step"})
+
+	TiKVBatchHeadArrivalInterval = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_head_arrival_interval_seconds",
+			Help:        "arrival interval of the head request in batch",
+			ConstLabels: constLabels,
+		}, []string{"store"})
+
+	TiKVBatchBestSize = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_best_size",
+			Help:        "best batch size estimated by the batch client",
+			ConstLabels: constLabels,
+		}, []string{"store"})
 
 	TiKVBatchMoreRequests = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -860,6 +880,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVBatchSendTailLatency)
 	prometheus.MustRegister(TiKVBatchSendLoopDuration)
 	prometheus.MustRegister(TiKVBatchRecvLoopDuration)
+	prometheus.MustRegister(TiKVBatchHeadArrivalInterval)
+	prometheus.MustRegister(TiKVBatchBestSize)
 	prometheus.MustRegister(TiKVBatchMoreRequests)
 	prometheus.MustRegister(TiKVBatchWaitOverLoad)
 	prometheus.MustRegister(TiKVBatchPendingRequests)
