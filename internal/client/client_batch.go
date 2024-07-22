@@ -398,8 +398,8 @@ type expBatchTrigger struct {
 	opts expBatchOptions
 
 	estFetchMoreProb       float64
-	estArrivalInterval     time.Duration
-	maxArrivalInterval     time.Duration
+	estArrivalInterval     float64
+	maxArrivalInterval     float64
 	recentArrivalIntervals []time.Duration
 	recentArrivalIdx       int
 }
@@ -423,18 +423,19 @@ func (t *expBatchTrigger) needFetchMore(reqArrivalInterval time.Duration, maxBat
 		}
 		return true
 	} else if t.opts.V == 2 {
+		thisArrivalInterval := float64(reqArrivalInterval)
 		if t.maxArrivalInterval == 0 {
-			t.maxArrivalInterval = maxBatchWaitTime * time.Duration(t.opts.N)
+			t.maxArrivalInterval = float64(maxBatchWaitTime) * float64(t.opts.N)
 		}
-		if reqArrivalInterval > t.maxArrivalInterval {
-			reqArrivalInterval = t.maxArrivalInterval
+		if thisArrivalInterval > t.maxArrivalInterval {
+			thisArrivalInterval = t.maxArrivalInterval
 		}
 		if t.estArrivalInterval == 0 {
-			t.estArrivalInterval = reqArrivalInterval
+			t.estArrivalInterval = thisArrivalInterval
 		} else {
-			t.estArrivalInterval = time.Duration(t.opts.W*float64(reqArrivalInterval) + (1-t.opts.W)*float64(t.estArrivalInterval))
+			t.estArrivalInterval = t.opts.W*thisArrivalInterval + (1-t.opts.W)*t.estArrivalInterval
 		}
-		return t.estArrivalInterval < maxBatchWaitTime
+		return t.estArrivalInterval < float64(maxBatchWaitTime)*t.opts.P
 	} else if t.opts.V == 3 {
 		var thisProb float64
 		if reqArrivalInterval < maxBatchWaitTime {
