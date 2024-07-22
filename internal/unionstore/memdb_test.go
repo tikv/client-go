@@ -862,7 +862,7 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 	require.False(flags.HasNeedConstraintCheckInPrewrite())
 }
 
-func TestSnapshotGet(t *testing.T) {
+func TestSnapshotGetIter(t *testing.T) {
 	assert := assert.New(t)
 	buffer := newMemDB()
 	var getters []Getter
