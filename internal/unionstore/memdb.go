@@ -107,15 +107,15 @@ func newMemDB() *MemDB {
 	return db
 }
 
-// UpdateLastTraversed updates the last traversed node atomically
-func (db *MemDB) UpdateLastTraversed(node memdbNodeAddr) {
+// updateLastTraversed updates the last traversed node atomically
+func (db *MemDB) updateLastTraversed(node memdbNodeAddr) {
 	db.lastTraversedNode.Store(&node)
 }
 
 // checkKeyInCache retrieves the last traversed node if the key matches
 func (db *MemDB) checkKeyInCache(key []byte) (memdbNodeAddr, bool) {
 	nodePtr := db.lastTraversedNode.Load()
-	if nodePtr == nil || *nodePtr == nullNodeAddr {
+	if nodePtr == nil || nodePtr.isNull() {
 		return nullNodeAddr, false
 	}
 
@@ -351,7 +351,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 
 	if db.vlogInvalid {
 		// panic for easier debugging.
-		panic("vlog is resetted")
+		panic("vlog is reset")
 	}
 
 	if value != nil {
@@ -442,7 +442,7 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	}
 
 	if found {
-		db.UpdateLastTraversed(x)
+		db.updateLastTraversed(x)
 	}
 
 	if found || !insert {
@@ -538,7 +538,7 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	// Set the root node black
 	db.getRoot().setBlack()
 
-	db.UpdateLastTraversed(z)
+	db.updateLastTraversed(z)
 
 	return z
 }
@@ -627,6 +627,9 @@ func (db *MemDB) rightRotate(y memdbNodeAddr) {
 
 func (db *MemDB) deleteNode(z memdbNodeAddr) {
 	var x, y memdbNodeAddr
+	if db.lastTraversedNode.Load().addr == z.addr {
+		db.lastTraversedNode.Store(&nullNodeAddr)
+	}
 
 	db.count--
 	db.size -= int(z.klen)
