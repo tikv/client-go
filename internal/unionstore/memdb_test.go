@@ -37,6 +37,7 @@
 package unionstore
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -859,4 +860,39 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 	flags, err := db.GetFlags(key)
 	require.Nil(err)
 	require.False(flags.HasNeedConstraintCheckInPrewrite())
+}
+
+func TestSnapshotGet(t *testing.T) {
+	assert := assert.New(t)
+	buffer := newMemDB()
+	var getters []Getter
+	var iters []Iterator
+	for i := 0; i < 100; i++ {
+		assert.Nil(buffer.Set([]byte{byte(0)}, []byte{byte(i)}))
+		// getter
+		getter := buffer.SnapshotGetter()
+		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		assert.Nil(err)
+		assert.Equal(val, []byte{byte(min(i, 50))})
+		getters = append(getters, getter)
+		// iter
+		iter := buffer.SnapshotIter(nil, nil)
+		assert.Nil(err)
+		assert.Equal(iter.Key(), []byte{byte(0)})
+		assert.Equal(iter.Value(), []byte{byte(min(i, 50))})
+		iter.Close()
+		iters = append(iters, buffer.SnapshotIter(nil, nil))
+		if i == 50 {
+			_ = buffer.Staging()
+		}
+	}
+	for _, getter := range getters {
+		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		assert.Nil(err)
+		assert.Equal(val, []byte{byte(50)})
+	}
+	for _, iter := range iters {
+		assert.Equal(iter.Key(), []byte{byte(0)})
+		assert.Equal(iter.Value(), []byte{byte(50)})
+	}
 }
