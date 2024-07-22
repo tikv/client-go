@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -89,14 +90,8 @@ type MemDB struct {
 	// when the MemDB is wrapper by upper RWMutex, we can skip the internal mutex.
 	skipMutex bool
 
-	// The cache makes read operations stateful so that it can trigger data race when misused,
-	// e.g. concurrent `Get`s.
-	// We should carefully control where it is used.
-	// Also disable it when the cache won't benefit us to save the maintenance cost.
-	enableCache bool
-	// only stores the pair if they exist.
-	lastTraversedKey  []byte
-	lastTraversedNode memdbNodeAddr
+	// The lastTraversedNode must exist
+	lastTraversedNode atomic.Pointer[memdbNodeAddr]
 }
 
 func newMemDB() *MemDB {
@@ -108,7 +103,27 @@ func newMemDB() *MemDB {
 	db.bufferSizeLimit = math.MaxUint64
 	db.vlog.memdb = db
 	db.skipMutex = false
+	db.lastTraversedNode.Store(&nullNodeAddr)
 	return db
+}
+
+// UpdateLastTraversed updates the last traversed node atomically
+func (db *MemDB) UpdateLastTraversed(node memdbNodeAddr) {
+	db.lastTraversedNode.Store(&node)
+}
+
+// checkKeyInCache retrieves the last traversed node if the key matches
+func (db *MemDB) checkKeyInCache(key []byte) (memdbNodeAddr, bool) {
+	nodePtr := db.lastTraversedNode.Load()
+	if nodePtr == nil || *nodePtr == nullNodeAddr {
+		return nullNodeAddr, false
+	}
+
+	if bytes.Equal(key, nodePtr.memdbNode.getKey()) {
+		return *nodePtr, true
+	}
+
+	return nullNodeAddr, false
 }
 
 // Staging create a new staging buffer inside the MemBuffer.
@@ -405,8 +420,8 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
 func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
-	if db.enableCache && len(db.lastTraversedKey) > 0 && bytes.Equal(key, db.lastTraversedKey) {
-		return db.lastTraversedNode
+	if node, found := db.checkKeyInCache(key); found {
+		return node
 	}
 
 	x := db.getRoot()
@@ -426,14 +441,8 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 		}
 	}
 
-	if db.enableCache && found {
-		if cap(db.lastTraversedKey) < len(key) {
-			db.lastTraversedKey = make([]byte, len(key))
-		} else {
-			db.lastTraversedKey = db.lastTraversedKey[:len(key)]
-		}
-		copy(db.lastTraversedKey, key)
-		db.lastTraversedNode = x
+	if found {
+		db.UpdateLastTraversed(x)
 	}
 
 	if found || !insert {
@@ -529,16 +538,7 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	// Set the root node black
 	db.getRoot().setBlack()
 
-	if db.enableCache {
-		// Update the last traversed node
-		if cap(db.lastTraversedKey) < len(key) {
-			db.lastTraversedKey = make([]byte, len(key))
-		} else {
-			db.lastTraversedKey = db.lastTraversedKey[:len(key)]
-		}
-		copy(db.lastTraversedKey, key)
-		db.lastTraversedNode = z
-	}
+	db.UpdateLastTraversed(z)
 
 	return z
 }
@@ -936,12 +936,4 @@ func (db *MemDB) setSkipMutex(skip bool) {
 // MemHookSet implements the MemBuffer interface.
 func (db *MemDB) MemHookSet() bool {
 	return db.allocator.memChangeHook.Load() != nil
-}
-
-func (db *MemDB) EnableCache() {
-	db.enableCache = true
-}
-
-func (db *MemDB) DisableCache() {
-	db.enableCache = false
 }

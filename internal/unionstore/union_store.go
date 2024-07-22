@@ -241,10 +241,6 @@ type MemBuffer interface {
 	FlushWait() error
 	// GetFlushDetails returns the metrics related to flushing
 	GetFlushMetrics() FlushMetrics
-	// EnableCache enables the cache for `Get`. Never enable it if there may be concurrent `get`s.
-	EnableCache()
-	// DisableCache disables the cache for `Get`
-	DisableCache()
 }
 
 type FlushMetrics struct {

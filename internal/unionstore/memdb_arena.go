@@ -54,8 +54,9 @@ const (
 )
 
 var (
-	nullAddr = memdbArenaAddr{math.MaxUint32, math.MaxUint32}
-	endian   = binary.LittleEndian
+	nullAddr     = memdbArenaAddr{math.MaxUint32, math.MaxUint32}
+	nullNodeAddr = memdbNodeAddr{nil, nullAddr}
+	endian       = binary.LittleEndian
 )
 
 type memdbArenaAddr struct {
