@@ -313,7 +313,7 @@ func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time
 		return time.Now(), 0
 	}
 	headRecvTime = time.Now()
-	if headEntry.start.After(lastReqStartTime) {
+	if headEntry.start.After(lastReqStartTime) && !lastReqStartTime.IsZero() {
 		headArrivalInterval = headEntry.start.Sub(lastReqStartTime)
 	}
 	a.reqBuilder.push(headEntry)
@@ -495,7 +495,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		if batchSize := a.reqBuilder.len(); batchSize < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
 			if cfg.OverloadThreshold == 0 {
 				// If the overload threshold is zero, do aggressive batching according to head arrival interval.
-				if trigger.needFetchMore(headArrivalInterval, cfg.MaxBatchWaitTime) {
+				if headArrivalInterval > 0 && trigger.needFetchMore(headArrivalInterval, cfg.MaxBatchWaitTime) {
 					batchWaitSize := int(bestBatchWaitSize) + 1
 					if trigger.opts.V == 0 {
 						batchWaitSize = int(cfg.MaxBatchSize)
