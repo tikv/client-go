@@ -434,11 +434,16 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 
 	// walk x down the tree
 	for !x.isNull() && !found {
-		y = x
 		cmp := bytes.Compare(key, x.getKey())
 		if cmp < 0 {
+			if insert && x.left.isNull() {
+				y = x
+			}
 			x = x.getLeft(db)
 		} else if cmp > 0 {
+			if insert && x.right.isNull() {
+				y = x
+			}
 			x = x.getRight(db)
 		} else {
 			found = true
