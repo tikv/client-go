@@ -529,8 +529,8 @@ func (p *PipelinedMemDB) GetMetrics() Metrics {
 	hitCount := p.hitCount
 	missCount := p.missCount
 	if p.memDB != nil {
-		hitCount = p.memDB.hitCount.Load()
-		missCount = p.memDB.missCount.Load()
+		hitCount += p.memDB.hitCount.Load()
+		missCount += p.memDB.missCount.Load()
 	}
 	return Metrics{
 		WaitDuration:   p.flushWaitDuration,
