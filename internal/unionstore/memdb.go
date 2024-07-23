@@ -92,6 +92,8 @@ type MemDB struct {
 
 	// The lastTraversedNode must exist
 	lastTraversedNode atomic.Pointer[memdbNodeAddr]
+	hitCount          atomic.Uint64
+	missCount         atomic.Uint64
 }
 
 func newMemDB() *MemDB {
@@ -421,8 +423,10 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 // Returns a pointer to the new node, or the node found.
 func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	if node, found := db.checkKeyInCache(key); found {
+		db.hitCount.Add(1)
 		return node
 	}
+	db.missCount.Add(1)
 
 	x := db.getRoot()
 	y := memdbNodeAddr{nil, nullAddr}

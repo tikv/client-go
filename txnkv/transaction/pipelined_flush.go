@@ -304,7 +304,9 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 	logutil.Logger(bo.GetCtx()).Info(
 		"[pipelined dml] start to commit transaction",
 		zap.Int("keys", c.txn.GetMemBuffer().Len()),
-		zap.Duration("flush_wait_duration", c.txn.GetMemBuffer().GetFlushMetrics().WaitDuration),
+		zap.Duration("flush_wait_duration", c.txn.GetMemBuffer().GetMetrics().WaitDuration),
+		zap.Uint64("memdb cache hit count", c.txn.GetMemBuffer().GetMetrics().MemDBHitCount),
+		zap.Uint64("memdb cache miss count", c.txn.GetMemBuffer().GetMetrics().MemDBMissCount),
 		zap.String("size", units.HumanSize(float64(c.txn.GetMemBuffer().Size()))),
 		zap.Uint64("startTS", c.startTS),
 	)

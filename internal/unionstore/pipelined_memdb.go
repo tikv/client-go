@@ -58,6 +58,8 @@ type PipelinedMemDB struct {
 
 	// metrics
 	flushWaitDuration time.Duration
+	hitCount          uint64
+	missCount         uint64
 }
 
 const (
@@ -305,6 +307,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.flushingMemDB = p.memDB
 	p.len += p.flushingMemDB.Len()
 	p.size += p.flushingMemDB.Size()
+	p.missCount += p.memDB.missCount.Load()
+	p.hitCount += p.memDB.hitCount.Load()
 	p.memDB = newMemDB()
 	p.memDB.SetEntrySizeLimit(p.entryLimit, p.bufferLimit)
 	p.memDB.setSkipMutex(true)
@@ -519,10 +523,19 @@ func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
 	panic("RevertToCheckpoint is not supported for PipelinedMemDB")
 }
 
-// GetFlushMetrics implements MemBuffer interface.
-func (p *PipelinedMemDB) GetFlushMetrics() FlushMetrics {
-	return FlushMetrics{
-		WaitDuration: p.flushWaitDuration,
+// GetMetrics implements MemBuffer interface.
+// DO NOT call it during execution, otherwise data race may occur
+func (p *PipelinedMemDB) GetMetrics() Metrics {
+	hitCount := p.hitCount
+	missCount := p.missCount
+	if p.memDB != nil {
+		hitCount = p.memDB.hitCount.Load()
+		missCount = p.memDB.missCount.Load()
+	}
+	return Metrics{
+		WaitDuration:   p.flushWaitDuration,
+		MemDBHitCount:  hitCount,
+		MemDBMissCount: missCount,
 	}
 }
 
