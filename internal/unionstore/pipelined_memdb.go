@@ -17,7 +17,6 @@ package unionstore
 import (
 	"context"
 	stderrors "errors"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -307,7 +306,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.size += p.flushingMemDB.Size()
 	p.memDB = newMemDB()
 	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit
-	p.memDB.SetEntrySizeLimit(p.entryLimit, math.MaxUint64)
+	p.memDB.SetEntrySizeLimit(p.entryLimit, unlimitedSize)
 	p.memDB.setSkipMutex(true)
 	p.generation++
 	go func(generation uint64) {
@@ -408,7 +407,7 @@ func (p *PipelinedMemDB) IterReverse([]byte, []byte) (Iterator, error) {
 func (p *PipelinedMemDB) SetEntrySizeLimit(entryLimit, _ uint64) {
 	p.entryLimit = entryLimit
 	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit.
-	p.memDB.SetEntrySizeLimit(entryLimit, math.MaxUint64)
+	p.memDB.SetEntrySizeLimit(entryLimit, unlimitedSize)
 }
 
 func (p *PipelinedMemDB) Len() int {
