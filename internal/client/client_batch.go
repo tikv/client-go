@@ -390,8 +390,9 @@ const idleTimeout = 3 * time.Minute
 type expBatchOptions struct {
 	V int     `json:"v"`
 	N int     `json:"n,omitempty"`
-	P float64 `json:"p,omitempty"`
 	W float64 `json:"w,omitempty"`
+	P float64 `json:"p,omitempty"`
+	Q float64 `json:"q,omitempty"`
 }
 
 type expBatchTrigger struct {
@@ -496,9 +497,12 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			if cfg.OverloadThreshold == 0 {
 				// If the overload threshold is zero, do aggressive batching according to head arrival interval.
 				if headArrivalInterval > 0 && trigger.needFetchMore(headArrivalInterval, cfg.MaxBatchWaitTime) {
-					batchWaitSize := int(bestBatchWaitSize) + 1
+					n, m := math.Modf(bestBatchWaitSize)
+					batchWaitSize := int(n)
 					if trigger.opts.V == 0 {
 						batchWaitSize = int(cfg.MaxBatchSize)
+					} else if m >= trigger.opts.Q {
+						batchWaitSize++
 					}
 					a.fetchMorePendingRequests(int(cfg.MaxBatchSize), batchWaitSize, cfg.MaxBatchWaitTime)
 					a.metrics.batchMoreRequests.Observe(float64(a.reqBuilder.len() - batchSize))
