@@ -500,7 +500,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 					n, m := math.Modf(bestBatchWaitSize)
 					batchWaitSize := int(n)
 					if trigger.opts.V == 0 {
-						batchWaitSize = int(cfg.MaxBatchSize)
+						batchWaitSize = int(cfg.BatchWaitSize)
 					} else if m >= trigger.opts.Q {
 						batchWaitSize++
 					}
@@ -510,7 +510,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			} else if atomic.LoadUint64(&a.tikvTransportLayerLoad) > uint64(cfg.OverloadThreshold) {
 				// If the target TiKV is overload, wait a while to collect more requests.
 				metrics.TiKVBatchWaitOverLoad.Inc()
-				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.MaxBatchSize), cfg.MaxBatchWaitTime)
+				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.BatchWaitSize), cfg.MaxBatchWaitTime)
 			}
 		}
 		length := a.reqBuilder.len()
@@ -934,7 +934,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		}
 
 		transportLayerLoad := resp.GetTransportLayerLoad()
-		if transportLayerLoad > 0 && cfg.MaxBatchWaitTime > 0 {
+		if cfg.OverloadThreshold > 0 && cfg.MaxBatchWaitTime > 0 && transportLayerLoad > 0 {
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(tikvTransportLayerLoad, transportLayerLoad)
 		}
