@@ -244,9 +244,10 @@ type MemBuffer interface {
 }
 
 type Metrics struct {
-	WaitDuration   time.Duration
-	MemDBHitCount  uint64
-	MemDBMissCount uint64
+	WaitDuration     time.Duration
+	MemDBHitCount    uint64
+	MemDBMissCount   uint64
+	TraverseDuration time.Duration
 }
 
 var (

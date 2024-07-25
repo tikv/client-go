@@ -63,8 +63,8 @@ type memdbArenaAddr struct {
 }
 
 func (addr memdbArenaAddr) isNull() bool {
-    // Combine all checks into a single condition
-    return addr == nullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
+	// Combine all checks into a single condition
+	return addr == nullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
 }
 
 // store and load is used by vlog, due to pointer in vlog is not aligned.

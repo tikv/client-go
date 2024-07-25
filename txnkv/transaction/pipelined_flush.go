@@ -307,6 +307,7 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 		zap.Duration("flush_wait_duration", c.txn.GetMemBuffer().GetMetrics().WaitDuration),
 		zap.Uint64("memdb cache hit count", c.txn.GetMemBuffer().GetMetrics().MemDBHitCount),
 		zap.Uint64("memdb cache miss count", c.txn.GetMemBuffer().GetMetrics().MemDBMissCount),
+		zap.Duration("approximate memdb traverse time", time.Duration(c.txn.GetMemBuffer().GetMetrics().TraverseDuration)),
 		zap.String("size", units.HumanSize(float64(c.txn.GetMemBuffer().Size()))),
 		zap.Uint64("startTS", c.startTS),
 	)
