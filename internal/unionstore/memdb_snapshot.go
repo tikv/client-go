@@ -95,7 +95,7 @@ func (snap *memdbSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error
 		return nil, tikverr.ErrNotExist
 	}
 	if x.vptr.isNull() {
-		// A flags only key, act as value not exists
+		// A flag only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
 	v, ok := snap.db.vlog.getSnapshotValue(x.vptr, &snap.cp)

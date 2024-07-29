@@ -1,11 +1,12 @@
 package unionstore
 
 import (
+	"math"
+	"sync"
+
 	art "github.com/plar/go-adaptive-radix-tree"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
-	"math"
-	"sync"
 )
 
 type ArtMemDB struct {
@@ -151,8 +152,6 @@ func (a *ArtMemDB) UpdateFlags(key []byte, ops ...kv.FlagsOp) {
 	if !found {
 		return
 	}
-	//flagVal := val.(*)
-	//flagVal.flags = kv.ApplyFlagsOps(flagVal.flags, ops...)
 }
 
 func (a *ArtMemDB) Get(key []byte) ([]byte, error) {
