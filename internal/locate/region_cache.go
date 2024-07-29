@@ -2455,12 +2455,20 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
-		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
 		newStore.unreachableSince = s.unreachableSince
 		c.storeMu.Lock()
+		// set new store liveness state in mutex to avoid problem in https://github.com/tikv/client-go/issues/1401
+		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
 		s.setResolveState(deleted)
+		logutil.BgLogger().Info("store address or labels changed, add new store and mark old store deleted",
+			zap.Uint64("store", s.storeID),
+			zap.String("old-addr", s.addr),
+			zap.Any("old-labels", s.labels),
+			zap.String("new-addr", newStore.addr),
+			zap.Any("new-labels", newStore.labels),
+			zap.String("liveness", newStore.getLivenessState().String()))
 		return false, nil
 	}
 	s.changeResolveStateTo(needCheck, resolved)
@@ -2665,6 +2673,13 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 			liveness = s.requestLiveness(bo, c)
 			atomic.StoreUint32(&s.livenessState, uint32(liveness))
 			if liveness == reachable {
+				c.storeMu.RLock()
+				newStore := c.storeMu.stores[s.storeID]
+				if newStore != nil && newStore.addr == s.addr {
+					// set new store liveness state in mutex to avoid problem in https://github.com/tikv/client-go/issues/1401
+					atomic.StoreUint32(&newStore.livenessState, uint32(liveness))
+				}
+				c.storeMu.RUnlock()
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
 				return
 			}
