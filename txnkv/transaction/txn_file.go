@@ -69,7 +69,8 @@ type chunkBatch struct {
 }
 
 func (b chunkBatch) String() string {
-	return fmt.Sprintf("chunkBatch{region: %s, isPrimary: %t, txnChunkSlice: %s}", b.region.String(), b.isPrimary, b.txnChunkSlice.String())
+	return fmt.Sprintf("chunkBatch{region: %d, isPrimary: %t, txnChunkSlice: %v}",
+		b.region.Region.GetID(), b.isPrimary, b.txnChunkSlice.chunkIDs)
 }
 
 // chunkBatch.txnChunkSlice should be sorted by smallest.
