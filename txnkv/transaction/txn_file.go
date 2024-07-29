@@ -214,7 +214,7 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
 			return nil, errors.Wrap(err, "locate key failed")
 		}
-		if !IsMutationsEmptyInRange(mutations, loc.StartKey, loc.EndKey) {
+		if MutationsHasDataInRange(mutations, loc.StartKey, loc.EndKey) {
 			regions = append(regions, loc)
 		}
 		if len(loc.EndKey) == 0 {
