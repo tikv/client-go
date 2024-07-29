@@ -41,6 +41,7 @@ import (
 	errors2 "errors"
 	"math"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -329,6 +330,13 @@ type CommitterMutations interface {
 	IsAssertExists(i int) bool
 	IsAssertNotExist(i int) bool
 	NeedConstraintCheckInPrewrite(i int) bool
+}
+
+func IsMutationsEmptyInRange(mutations CommitterMutations, start []byte, end []byte) bool {
+	pos := sort.Search(mutations.Len(), func(i int) bool {
+		return bytes.Compare(mutations.GetKey(i), start) >= 0
+	})
+	return pos == mutations.Len() || bytes.Compare(mutations.GetKey(pos), end) >= 0
 }
 
 // PlainMutations contains transaction operations.

@@ -145,7 +145,7 @@ func (cs *txnChunkSlice) len() int {
 
 // []chunkBatch is sorted by region.StartKey.
 // Note: regions may be overlapping.
-func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer) ([]chunkBatch, error) {
+func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]chunkBatch, error) {
 	// Do not use `locate.RegionVerID` as map key to avoid grouping chunks to different batches when `confVer` changes.
 	type batchMapKey struct {
 		regionID  uint64
@@ -153,7 +153,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 	}
 	batchMap := make(map[batchMapKey]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
-		regions, err := chunkRange.getOverlapRegions(c, bo)
+		regions, err := chunkRange.getOverlapRegions(c, bo, mutations)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -204,7 +204,7 @@ func newTxnChunkRange(smallest []byte, biggest []byte) txnChunkRange {
 	}
 }
 
-func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer) ([]*locate.KeyLocation, error) {
+func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, error) {
 	regions := make([]*locate.KeyLocation, 0)
 	startKey := r.smallest
 	for bytes.Compare(startKey, r.biggest) <= 0 {
@@ -213,7 +213,9 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
 			return nil, errors.Wrap(err, "locate key failed")
 		}
-		regions = append(regions, loc)
+		if !IsMutationsEmptyInRange(mutations, loc.StartKey, loc.EndKey) {
+			regions = append(regions, loc)
+		}
 		if len(loc.EndKey) == 0 {
 			break
 		}
@@ -588,7 +590,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	var regionErrChunks txnChunkSlice
 
 	if batches == nil {
-		batches, err = chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
+		batches, err = chunkSlice.groupToBatches(c.store.GetRegionCache(), bo, c.mutations)
 		if err != nil {
 			return regionErrChunks, errors.Wrap(err, "txn file: group to batches failed")
 		}
@@ -690,7 +692,7 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 
 func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice txnChunkSlice, action txnFileAction) error {
 	for {
-		batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo)
+		batches, err := chunkSlice.groupToBatches(c.store.GetRegionCache(), bo, c.mutations)
 		if err != nil {
 			return errors.Wrap(err, "txn file: group to batches failed")
 		}
@@ -848,7 +850,7 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
-	batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo)
+	batches, err := c.txnFileCtx.slice.groupToBatches(c.store.GetRegionCache(), bo, c.mutations)
 	if err != nil {
 		return errors.Wrap(err, "group to batches failed")
 	}
