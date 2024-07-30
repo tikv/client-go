@@ -1,15 +1,18 @@
+//go:build !race
+// +build !race
+
 package unionstore
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/tikv/client-go/v2/internal/unionstore/art"
-	"github.com/tikv/client-go/v2/kv"
 	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/internal/unionstore/art"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 func randNumKey(rd rand.Source) []byte {
