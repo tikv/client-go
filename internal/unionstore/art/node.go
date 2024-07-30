@@ -369,13 +369,17 @@ func (an artNode) matchDeep(a *artAllocator, key Key, depth uint32) uint32 /* mi
 	leafArtNode := minimum(a, an)
 	leaf := leafArtNode.leaf(a)
 	lKey := leaf.getKey()
-	limit := min(uint32(len(lKey)), uint32(len(key))) - depth
-	for ; mismatchIdx < limit; mismatchIdx++ {
-		if lKey[mismatchIdx+depth] != key[mismatchIdx+depth] {
-			break
+	return longestCommonPrefix(lKey, key, depth)
+}
+
+func longestCommonPrefix(l1Key, l2Key Key, depth uint32) uint32 {
+	idx, limit := depth, min(uint32(len(l1Key)), uint32(len(l2Key)))
+	for ; idx < limit; idx++ {
+		if l1Key[idx] != l2Key[idx] {
+			return idx - depth
 		}
 	}
-	return mismatchIdx
+	return idx - depth
 }
 
 // Find the minimum leaf under an artNode
@@ -494,15 +498,20 @@ func (an artNode) _findChild4(a *artAllocator, c byte) (int, artNode) {
 			return idx, n4.children[idx]
 		}
 	}
+
 	return -2, nullArtNode
 }
 
 func (an artNode) _findChild16(a *artAllocator, c byte) (int, artNode) {
 	n16 := an.node16(a)
 	for idx := 0; idx < int(n16.nodeNum); idx++ {
+		if n16.keys[idx] < c {
+			continue
+		}
 		if n16.keys[idx] == c {
 			return idx, n16.children[idx]
 		}
+		break
 	}
 	return -2, nullArtNode
 }

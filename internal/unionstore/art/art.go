@@ -132,7 +132,7 @@ func (t *Art) recursiveInsert(key Key) (nodeAddr, *leaf) {
 			}
 			newLeafAddr, leaf2 := t.newLeaf(key)
 			l1Key, l2Key := leaf1.getKey(), leaf2.getKey()
-			lcp := t.longestCommonPrefix(l1Key, l2Key, depth)
+			lcp := longestCommonPrefix(l1Key, l2Key, depth)
 
 			an, n4 := t.newNode4()
 			n4.setPrefix(key[depth:], lcp)
@@ -269,17 +269,6 @@ func (t *Art) newNode4() (artNode, *node4) {
 func (t *Art) newLeaf(key Key) (artNode, *leaf) {
 	addr, lf := t.allocator.allocLeaf(key)
 	return artNode{kind: typeLeaf, addr: addr}, lf
-}
-
-func (t *Art) longestCommonPrefix(l1Key, l2Key Key, depth uint32) uint32 {
-	idx, limit := depth, min(uint32(len(l1Key)), uint32(len(l2Key)))
-	for ; idx < limit; idx++ {
-		if l1Key[idx] != l2Key[idx] {
-			break
-		}
-	}
-
-	return idx - depth
 }
 
 func (t *Art) setValue(addr nodeAddr, l *leaf, value []byte, ops []kv.FlagsOp) {
