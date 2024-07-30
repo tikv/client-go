@@ -2651,7 +2651,7 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 			return
 		case <-ticker.C:
 			if s.getResolveState() == deleted {
-				logutil.BgLogger().Info("[health check] store has been deleted", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+				logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
 				return
 			}
 			if time.Since(lastCheckPDTime) > reResolveInterval {
