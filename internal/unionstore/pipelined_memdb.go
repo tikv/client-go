@@ -295,13 +295,16 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 		return false, nil
 	}
 	if p.flushingMemDB != nil {
+		startTime := time.Now()
 		if err := <-p.errCh; err != nil {
 			if err != nil {
 				err = p.handleAlreadyExistErr(err)
 			}
 			p.flushingMemDB = nil
+			p.flushWaitDuration += time.Since(startTime)
 			return false, err
 		}
+		p.flushWaitDuration += time.Since(startTime)
 	}
 	p.onFlushing.Store(true)
 	p.flushingMemDB = p.memDB
