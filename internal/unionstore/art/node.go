@@ -405,11 +405,8 @@ func minimum(a *artAllocator, an artNode) artNode {
 			return n48.inplaceLeaf
 		}
 
-		idx := uint8(0)
-		for n48.present[idx>>n48s]&(1<<uint8(idx%n48m)) == 0 {
-			idx++
-		}
-		if !n48.children[n48.keys[idx]].addr.isNull() {
+		idx := n48.nextPresentIdx(0)
+		if idx < 256 && !n48.children[n48.keys[idx]].addr.isNull() {
 			return minimum(a, n48.children[n48.keys[idx]])
 		}
 	case typeNode256:
@@ -417,7 +414,8 @@ func minimum(a *artAllocator, an artNode) artNode {
 		if !n256.inplaceLeaf.addr.isNull() {
 			return n256.inplaceLeaf
 		} else {
-			for idx := 0; idx < 256; idx++ {
+			idx := n256.nextPresentIdx(0)
+			for idx < 256 {
 				if !n256.children[idx].addr.isNull() {
 					return minimum(a, n256.children[idx])
 				}
