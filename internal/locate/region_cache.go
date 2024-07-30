@@ -2650,6 +2650,10 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
+			if s.getResolveState() == deleted {
+				logutil.BgLogger().Info("[health check] store has been deleted", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+				return
+			}
 			if time.Since(lastCheckPDTime) > reResolveInterval {
 				lastCheckPDTime = time.Now()
 
@@ -2667,10 +2671,6 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 			atomic.StoreUint32(&s.livenessState, uint32(liveness))
 			if liveness == reachable {
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
-				return
-			}
-			if s.getResolveState() == deleted {
-				logutil.BgLogger().Info("[health check] store has been deleted", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
 				return
 			}
 		}
