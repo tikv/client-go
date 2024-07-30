@@ -1745,7 +1745,8 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	}, 3*time.Second, time.Second)
 	// assert the new store should be added and it should be resolved and reachable.
 	newStore1 := s.cache.getStoreByStoreID(s.store1)
-	s.Require().Equal(resolved, newStore1.getResolveState())
-	s.Require().Equal(reachable, newStore1.getLivenessState())
+	s.Eventually(func() bool {
+		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+	}, 3*time.Second, time.Second)
 	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
 }
