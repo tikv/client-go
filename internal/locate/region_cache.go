@@ -2455,10 +2455,12 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	addr = store.GetAddress()
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
-		newStore.unreachableSince = s.unreachableSince
-		c.storeMu.Lock()
-		// set new store liveness state in mutex to avoid problem in https://github.com/tikv/client-go/issues/1401
 		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
+		if newStore.getLivenessState() != reachable {
+			newStore.unreachableSince = s.unreachableSince
+			go newStore.checkUntilHealth(c, newStore.getLivenessState(), storeReResolveInterval)
+		}
+		c.storeMu.Lock()
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
 		s.setResolveState(deleted)
@@ -2466,9 +2468,10 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 			zap.Uint64("store", s.storeID),
 			zap.String("old-addr", s.addr),
 			zap.Any("old-labels", s.labels),
+			zap.String("old-liveness", s.getLivenessState().String()),
 			zap.String("new-addr", newStore.addr),
 			zap.Any("new-labels", newStore.labels),
-			zap.String("liveness", newStore.getLivenessState().String()))
+			zap.String("new-liveness", newStore.getLivenessState().String()))
 		return false, nil
 	}
 	s.changeResolveStateTo(needCheck, resolved)
@@ -2606,6 +2609,8 @@ func (s livenessState) String() string {
 	}
 }
 
+var storeReResolveInterval = 30 * time.Second
+
 func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
 	// This mechanism doesn't support non-TiKV stores currently.
 	if s.storeType != tikvrpc.TiKV {
@@ -2617,7 +2622,7 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessSt
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		reResolveInterval := 30 * time.Second
+		reResolveInterval := storeReResolveInterval
 		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
 			if dur, err := time.ParseDuration(val.(string)); err == nil {
 				reResolveInterval = dur
@@ -2673,13 +2678,6 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 			liveness = s.requestLiveness(bo, c)
 			atomic.StoreUint32(&s.livenessState, uint32(liveness))
 			if liveness == reachable {
-				c.storeMu.RLock()
-				newStore := c.storeMu.stores[s.storeID]
-				if newStore != nil && newStore.addr == s.addr {
-					// set new store liveness state in mutex to avoid problem in https://github.com/tikv/client-go/issues/1401
-					atomic.StoreUint32(&newStore.livenessState, uint32(liveness))
-				}
-				c.storeMu.RUnlock()
 				logutil.BgLogger().Info("[health check] store became reachable", zap.Uint64("storeID", s.storeID))
 				return
 			}
