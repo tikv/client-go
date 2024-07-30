@@ -60,7 +60,6 @@ type PipelinedMemDB struct {
 	flushWaitDuration time.Duration
 	hitCount          uint64
 	missCount         uint64
-	traverseTimeNs    uint64
 }
 
 const (
@@ -310,7 +309,6 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.size += p.flushingMemDB.Size()
 	p.missCount += p.memDB.missCount.Load()
 	p.hitCount += p.memDB.hitCount.Load()
-	p.traverseTimeNs += p.memDB.sampledTraverseTimeNs.Load()
 	p.memDB = newMemDB()
 	p.memDB.SetEntrySizeLimit(p.entryLimit, p.bufferLimit)
 	p.memDB.setSkipMutex(true)
@@ -530,17 +528,14 @@ func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
 func (p *PipelinedMemDB) GetMetrics() Metrics {
 	hitCount := p.hitCount
 	missCount := p.missCount
-	sampledTraverseTimeNs := p.traverseTimeNs
 	if p.memDB != nil {
 		hitCount += p.memDB.hitCount.Load()
 		missCount += p.memDB.missCount.Load()
-		sampledTraverseTimeNs += p.memDB.sampledTraverseTimeNs.Load()
 	}
 	return Metrics{
-		WaitDuration:     p.flushWaitDuration,
-		MemDBHitCount:    hitCount,
-		MemDBMissCount:   missCount,
-		TraverseDuration: time.Duration(sampledTraverseTimeNs * (1 << sampleIntervalBits)),
+		WaitDuration:   p.flushWaitDuration,
+		MemDBHitCount:  hitCount,
+		MemDBMissCount: missCount,
 	}
 }
 

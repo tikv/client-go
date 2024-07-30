@@ -40,7 +40,6 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -48,9 +47,6 @@ import (
 )
 
 var tombstone = []byte{}
-
-const sampleIntervalBits = 5 // sample every 2^5 = 32 times
-const sampleIntervalMask = (1 << sampleIntervalBits) - 1
 
 // IsTombstone returns whether the value is a tombstone.
 func IsTombstone(val []byte) bool { return len(val) == 0 }
@@ -96,12 +92,8 @@ type MemDB struct {
 
 	// The lastTraversedNode must exist
 	lastTraversedNode atomic.Pointer[memdbNodeAddr]
-	cacheEnabled      bool
 	hitCount          atomic.Uint64
 	missCount         atomic.Uint64
-
-	sampleCounter         atomic.Uint32
-	sampledTraverseTimeNs atomic.Uint64
 }
 
 func newMemDB() *MemDB {
@@ -114,15 +106,12 @@ func newMemDB() *MemDB {
 	db.vlog.memdb = db
 	db.skipMutex = false
 	db.lastTraversedNode.Store(&nullNodeAddr)
-	db.cacheEnabled = true
 	return db
 }
 
 // updateLastTraversed updates the last traversed node atomically
 func (db *MemDB) updateLastTraversed(node memdbNodeAddr) {
-	if db.cacheEnabled {
-		db.lastTraversedNode.Store(&node)
-	}
+	db.lastTraversedNode.Store(&node)
 }
 
 // checkKeyInCache retrieves the last traversed node if the key matches
@@ -433,20 +422,11 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
 func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
-	counter := db.sampleCounter.Add(1)
-	if counter&sampleIntervalMask == 0 {
-		start := time.Now()
-		defer func() {
-			db.sampledTraverseTimeNs.Add(uint64(time.Since(start).Nanoseconds()))
-		}()
+	if node, found := db.checkKeyInCache(key); found {
+		db.hitCount.Add(1)
+		return node
 	}
-	if db.cacheEnabled {
-		if node, found := db.checkKeyInCache(key); found {
-			db.hitCount.Add(1)
-			return node
-		}
-		db.missCount.Add(1)
-	}
+	db.missCount.Add(1)
 
 	x := db.getRoot()
 	y := memdbNodeAddr{nil, nullAddr}
