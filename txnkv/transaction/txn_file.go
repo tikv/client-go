@@ -56,7 +56,12 @@ var (
 	buildChunkErrMsg string = "txn file: build chunk failed"
 )
 
-const PreSplitRegionChunks = 4
+const (
+	PreSplitRegionChunks = 4
+
+	// MaxTxnChunkSizeInParallel is the max parallel size when prewrite/commit txn chunks.
+	MaxTxnChunkSizeInParallel uint64 = 4 << 30 // 4GB
+)
 
 type txnFileCtx struct {
 	slice txnChunkSlice
@@ -597,45 +602,99 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 		}
 	}
 
+	if len(batches) == 1 {
+		regionErrSlice, err := c.executeTxnFileSliceSingleBatch(bo, batches[0], action)
+		if err != nil {
+			return regionErrChunks, err
+		} else if regionErrSlice != nil {
+			regionErrChunks.appendSlice(regionErrSlice)
+		}
+		return regionErrChunks, nil
+	}
+
+	type result struct {
+		regionErrSlice *txnChunkSlice
+		err            error
+	}
+	ch := make(chan result, len(batches))
+
+	exitCh := make(chan struct{})
+	defer close(exitCh)
+
+	bo, cancel := bo.Fork()
+	defer cancel()
+
+	rateLim := len(batches)
+	cnf := config.GetGlobalConfig()
+	if rateLim > cnf.CommitterConcurrency {
+		rateLim = cnf.CommitterConcurrency
+	}
+	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
+	if rateLim > maxChunksInParallel {
+		rateLim = maxChunksInParallel
+	}
+	rateLimiter := util.NewRateLimit(rateLim)
+
 	for _, batch := range batches {
-		resp, err1 := action.executeBatch(c, bo, batch)
-		logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
-			zap.Uint64("startTS", c.startTS),
-			zap.Any("batch", batch),
-			zap.Stringer("action", action),
-			zap.Error(err1))
-		if err1 != nil {
-			return regionErrChunks, err1
+		batch := batch
+		bo := bo.Clone()
+		if exit := rateLimiter.GetToken(exitCh); !exit {
+			go func() {
+				defer rateLimiter.PutToken()
+				regionErrSlice, err := c.executeTxnFileSliceSingleBatch(bo, batch, action)
+				ch <- result{regionErrSlice, err}
+			}()
 		}
-		if keyErr := action.extractKeyError(resp); keyErr != nil {
-			if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
-				e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
-				return regionErrChunks, c.extractKeyExistsErr(e)
-			}
-			lock, err2 := txnlock.ExtractLockFromKeyErr(keyErr)
-			if err2 != nil {
-				return regionErrChunks, err2
-			}
-			if lock.TxnID > c.startTS {
-				return regionErrChunks, tikverr.NewErrWriteConflictWithArgs(
-					c.startTS,
-					lock.TxnID,
-					0,
-					lock.Key,
-					kvrpcpb.WriteConflict_Optimistic,
-				)
-			}
-		}
-		regionErr, err1 := resp.GetRegionError()
-		if err1 != nil {
-			return regionErrChunks, err1
-		}
-		if regionErr != nil {
-			regionErrChunks.appendSlice(&batch.txnChunkSlice)
-			continue
+	}
+
+	for i := 0; i < len(batches); i++ {
+		r := <-ch
+		if r.err != nil {
+			return regionErrChunks, r.err
+		} else if r.regionErrSlice != nil {
+			regionErrChunks.appendSlice(r.regionErrSlice)
 		}
 	}
 	return regionErrChunks, nil
+}
+
+func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
+	resp, err1 := action.executeBatch(c, bo, batch)
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
+		zap.Uint64("startTS", c.startTS),
+		zap.Any("batch", batch),
+		zap.Stringer("action", action),
+		zap.Error(err1))
+	if err1 != nil {
+		return nil, err1
+	}
+	if keyErr := action.extractKeyError(resp); keyErr != nil {
+		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
+			e := &tikverr.ErrKeyExist{AlreadyExist: alreadyExist}
+			return nil, c.extractKeyExistsErr(e)
+		}
+		lock, err2 := txnlock.ExtractLockFromKeyErr(keyErr)
+		if err2 != nil {
+			return nil, err2
+		}
+		if lock.TxnID > c.startTS {
+			return nil, tikverr.NewErrWriteConflictWithArgs(
+				c.startTS,
+				lock.TxnID,
+				0,
+				lock.Key,
+				kvrpcpb.WriteConflict_Optimistic,
+			)
+		}
+	}
+	regionErr, err1 := resp.GetRegionError()
+	if err1 != nil {
+		return nil, err1
+	}
+	if regionErr != nil {
+		return &batch.txnChunkSlice, nil
+	}
+	return nil, nil
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, chunkSlice txnChunkSlice, batches []chunkBatch, action txnFileAction) error {
