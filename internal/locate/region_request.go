@@ -1606,7 +1606,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
 			if s.replicaSelector != nil {
-				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
+				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
 					s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 				}
 			}
@@ -1644,7 +1644,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		req.IsRetryRequest = true
 		if err != nil {
-			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
+			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
 				msg := fmt.Sprintf("send request failed, err: %v", err.Error())
 				s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 			}
@@ -1680,7 +1680,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		if regionErr != nil {
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
-				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
+				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
 					msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
 					s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 				}
@@ -1690,7 +1690,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				retryTimes++
 				continue
 			}
-			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout {
+			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
 				s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
 			}
 		} else {
