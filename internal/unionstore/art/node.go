@@ -29,14 +29,11 @@ const (
 )
 
 const (
-	// if we use 16-bit idx for nodeAddr, and break nodeAddr into embed fields, the artNodeSize can be 8 bits.
-	// By reducing 4 bits for nodeAddr, we can save about 1/4-1/3 memories for node.
-	artNodeSize = 12
-	node4size   = 80
-	node16size  = 236
-	node48size  = 888
-	node256size = 3096
-	leafSize    = 12
+	node4size   = int(unsafe.Sizeof(node4{}))
+	node16size  = int(unsafe.Sizeof(node16{}))
+	node48size  = int(unsafe.Sizeof(node48{}))
+	node256size = int(unsafe.Sizeof(node256{}))
+	leafSize    = int(unsafe.Sizeof(leaf{}))
 )
 
 var (
@@ -715,13 +712,11 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 
 		var numChildren uint8
 		for i := uint8(0); i < n16.node.nodeNum; i++ {
-			if n16.present&(1<<i) != 0 {
-				ch := n16.keys[i]
-				n48.keys[ch] = numChildren
-				n48.present[ch>>n48s] |= 1 << uint8(ch%n48m)
-				n48.children[numChildren] = n16.children[i]
-				numChildren++
-			}
+			ch := n16.keys[i]
+			n48.keys[ch] = numChildren
+			n48.present[ch>>n48s] |= 1 << uint8(ch%n48m)
+			n48.children[numChildren] = n16.children[i]
+			numChildren++
 		}
 
 		// replace addr and free node16

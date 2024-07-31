@@ -120,9 +120,6 @@ func (f *artAllocator) freeNode4(addr nodeAddr) {
 }
 
 func (f *artAllocator) getNode4(addr nodeAddr) *node4 {
-	if addr.isNull() {
-		return nil
-	}
 	data := f.nodeAllocator.getData(addr)
 	return (*node4)(unsafe.Pointer(&data[0]))
 }
@@ -149,9 +146,6 @@ func (f *artAllocator) freeNode16(addr nodeAddr) {
 }
 
 func (f *artAllocator) getNode16(addr nodeAddr) *node16 {
-	if addr.isNull() {
-		return nil
-	}
 	data := f.nodeAllocator.getData(addr)
 	return (*node16)(unsafe.Pointer(&data[0]))
 }
@@ -178,9 +172,6 @@ func (f *artAllocator) freeNode48(addr nodeAddr) {
 }
 
 func (f *artAllocator) getNode48(addr nodeAddr) *node48 {
-	if addr.isNull() {
-		return nil
-	}
 	data := f.nodeAllocator.getData(addr)
 	return (*node48)(unsafe.Pointer(&data[0]))
 }
@@ -207,9 +198,6 @@ func (f *artAllocator) freeNode256(addr nodeAddr) {
 }
 
 func (f *artAllocator) getNode256(addr nodeAddr) *node256 {
-	if addr.isNull() {
-		return nil
-	}
 	data := f.nodeAllocator.getData(addr)
 	return (*node256)(unsafe.Pointer(&data[0]))
 }

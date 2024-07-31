@@ -3,29 +3,10 @@ package art
 import (
 	"strconv"
 	"testing"
-	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNodeSize(t *testing.T) {
-	var (
-		an    artNode
-		n4    node4
-		n16   node16
-		n48   node48
-		n256  node256
-		nLeaf leaf
-	)
-
-	require.Equal(t, int(unsafe.Sizeof(an)), artNodeSize)
-	require.Equal(t, int(unsafe.Sizeof(n4)), node4size)
-	require.Equal(t, int(unsafe.Sizeof(n16)), node16size)
-	require.Equal(t, int(unsafe.Sizeof(n48)), node48size)
-	require.Equal(t, int(unsafe.Sizeof(n256)), node256size)
-	require.Equal(t, int(unsafe.Sizeof(nLeaf)), leafSize)
-}
 
 func checkNodeInitialization(t *testing.T, n any) {
 	var node *node
