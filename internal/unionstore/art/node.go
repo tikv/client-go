@@ -389,17 +389,13 @@ func minimum(a *artAllocator, an artNode) artNode {
 		if !n4.inplaceLeaf.addr.isNull() {
 			return n4.inplaceLeaf
 		}
-		if !n4.children[0].addr.isNull() {
-			return minimum(a, n4.children[0])
-		}
+		return minimum(a, n4.children[0])
 	case typeNode16:
 		n16 := an.node16(a)
 		if !n16.inplaceLeaf.addr.isNull() {
 			return n16.inplaceLeaf
 		}
-		if !n16.children[0].addr.isNull() {
-			return minimum(a, n16.children[0])
-		}
+		return minimum(a, n16.children[0])
 	case typeNode48:
 		n48 := an.node48(a)
 		if !n48.inplaceLeaf.addr.isNull() {
@@ -407,21 +403,14 @@ func minimum(a *artAllocator, an artNode) artNode {
 		}
 
 		idx := n48.nextPresentIdx(0)
-		if idx < 256 && !n48.children[n48.keys[idx]].addr.isNull() {
-			return minimum(a, n48.children[n48.keys[idx]])
-		}
+		return minimum(a, n48.children[n48.keys[idx]])
 	case typeNode256:
 		n256 := an.node256(a)
 		if !n256.inplaceLeaf.addr.isNull() {
 			return n256.inplaceLeaf
-		} else {
-			idx := n256.nextPresentIdx(0)
-			for idx < 256 {
-				if !n256.children[idx].addr.isNull() {
-					return minimum(a, n256.children[idx])
-				}
-			}
 		}
+		idx := n256.nextPresentIdx(0)
+		return minimum(a, n256.children[idx])
 	}
 	return nullArtNode
 }
