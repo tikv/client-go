@@ -56,7 +56,12 @@ var (
 	buildChunkErrMsg string = "txn file: build chunk failed"
 )
 
-const PreSplitRegionChunks = 4
+const (
+	PreSplitRegionChunks = 4
+
+	// MaxTxnChunkSizeInParallel is the max parallel size when prewrite/commit txn chunks.
+	MaxTxnChunkSizeInParallel uint64 = 4 << 30 // 4GB
+)
 
 type txnFileCtx struct {
 	slice txnChunkSlice
@@ -623,6 +628,10 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	cnf := config.GetGlobalConfig()
 	if rateLim > cnf.CommitterConcurrency {
 		rateLim = cnf.CommitterConcurrency
+	}
+	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
+	if rateLim > maxChunksInParallel {
+		rateLim = maxChunksInParallel
 	}
 	rateLimiter := util.NewRateLimit(rateLim)
 
