@@ -245,6 +245,7 @@ type MemBuffer interface {
 
 type Metrics struct {
 	WaitDuration   time.Duration
+	TotalDuration  time.Duration
 	MemDBHitCount  uint64
 	MemDBMissCount uint64
 }

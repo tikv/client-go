@@ -60,6 +60,7 @@ type PipelinedMemDB struct {
 	flushWaitDuration time.Duration
 	hitCount          uint64
 	missCount         uint64
+	startTime         time.Time
 }
 
 const (
@@ -114,6 +115,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		entryLimit:  memdb.entrySizeLimit,
 		bufferLimit: memdb.bufferSizeLimit,
 		flushOption: flushOpt,
+		startTime:   time.Now(),
 	}
 }
 
@@ -295,16 +297,14 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 		return false, nil
 	}
 	if p.flushingMemDB != nil {
-		startTime := time.Now()
-		if err := <-p.errCh; err != nil {
-			if err != nil {
-				err = p.handleAlreadyExistErr(err)
-			}
+		waitStartTime := time.Now()
+		err := <-p.errCh
+		p.flushWaitDuration += time.Since(waitStartTime)
+		if err != nil {
+			err = p.handleAlreadyExistErr(err)
 			p.flushingMemDB = nil
-			p.flushWaitDuration += time.Since(startTime)
 			return false, err
 		}
-		p.flushWaitDuration += time.Since(startTime)
 	}
 	p.onFlushing.Store(true)
 	p.flushingMemDB = p.memDB
@@ -537,6 +537,7 @@ func (p *PipelinedMemDB) GetMetrics() Metrics {
 	}
 	return Metrics{
 		WaitDuration:   p.flushWaitDuration,
+		TotalDuration:  time.Since(p.startTime),
 		MemDBHitCount:  hitCount,
 		MemDBMissCount: missCount,
 	}
