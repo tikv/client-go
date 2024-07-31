@@ -36,6 +36,7 @@ package locate
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/google/btree"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -79,12 +80,21 @@ func (s *SortedRegions) SearchByKey(key []byte, isEndKey bool) (r *Region) {
 }
 
 // AscendGreaterOrEqual returns all items that are greater than or equal to the key.
+// The first region's startKey is `startKey`, all regions returned are continuous and have no hole.
 func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int) (regions []*Region) {
+	lastStartKey := startKey
 	s.b.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item *btreeItem) bool {
 		region := item.cachedRegion
 		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
 			return false
 		}
+		if !region.checkRegionCacheTTL(time.Now().Unix()) {
+			return false
+		}
+		if !region.Contains(lastStartKey) { // uncached hole
+			return false
+		}
+		lastStartKey = region.EndKey()
 		regions = append(regions, region)
 		return len(regions) < limit
 	})

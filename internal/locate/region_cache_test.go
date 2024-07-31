@@ -37,6 +37,7 @@ package locate
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -2873,4 +2874,41 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
 	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
+}
+
+func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
+	t.StopTimer()
+	s := new(testRegionCacheSuite)
+	s.SetT(&testing.T{})
+	s.SetupTest()
+
+	regionNum := 10000
+	regions := s.cluster.AllocIDs(regionNum)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < regionNum-1; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < regionNum-1; i++ {
+		b := make([]byte, 8)
+		binary.BigEndian.PutUint64(b, uint64(i*2))
+		s.cluster.Split(regions[i], regions[i+1], b, peers[i+1], peers[i+1][0])
+	}
+
+	// cache all regions
+	keyLocation, err := s.cache.BatchLocateKeyRanges(s.bo, []kv.KeyRange{{StartKey: []byte(""), EndKey: []byte("")}})
+	if err != nil || len(keyLocation) != regionNum {
+		t.FailNow()
+	}
+
+	t.StartTimer()
+	for i := 0; i < t.N; i++ {
+		keyLocation, err := s.cache.BatchLocateKeyRanges(s.bo, []kv.KeyRange{{StartKey: []byte(""), EndKey: []byte("")}})
+		if err != nil || len(keyLocation) != regionNum {
+			t.FailNow()
+		}
+	}
+	s.TearDownTest()
 }
