@@ -2456,11 +2456,22 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
-		newStore.unreachableSince = s.unreachableSince
+		if newStore.getLivenessState() != reachable {
+			newStore.unreachableSince = s.unreachableSince
+			go newStore.checkUntilHealth(c, newStore.getLivenessState(), storeReResolveInterval)
+		}
 		c.storeMu.Lock()
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
 		s.setResolveState(deleted)
+		logutil.BgLogger().Info("store address or labels changed, add new store and mark old store deleted",
+			zap.Uint64("store", s.storeID),
+			zap.String("old-addr", s.addr),
+			zap.Any("old-labels", s.labels),
+			zap.String("old-liveness", s.getLivenessState().String()),
+			zap.String("new-addr", newStore.addr),
+			zap.Any("new-labels", newStore.labels),
+			zap.String("new-liveness", newStore.getLivenessState().String()))
 		return false, nil
 	}
 	s.changeResolveStateTo(needCheck, resolved)
@@ -2598,6 +2609,8 @@ func (s livenessState) String() string {
 	}
 }
 
+var storeReResolveInterval = 30 * time.Second
+
 func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
 	// This mechanism doesn't support non-TiKV stores currently.
 	if s.storeType != tikvrpc.TiKV {
@@ -2609,7 +2622,7 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessSt
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		reResolveInterval := 30 * time.Second
+		reResolveInterval := storeReResolveInterval
 		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
 			if dur, err := time.ParseDuration(val.(string)); err == nil {
 				reResolveInterval = dur
@@ -2637,6 +2650,10 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
+			if s.getResolveState() == deleted {
+				logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+				return
+			}
 			if time.Since(lastCheckPDTime) > reResolveInterval {
 				lastCheckPDTime = time.Now()
 
@@ -2644,19 +2661,7 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 				if err != nil {
 					logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 				} else if !valid {
-					if s.getResolveState() == deleted {
-						// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
-						c.storeMu.RLock()
-						newStore := c.storeMu.stores[s.storeID]
-						c.storeMu.RUnlock()
-						logutil.BgLogger().Info("[health check] store meta changed",
-							zap.Uint64("storeID", s.storeID),
-							zap.String("oldAddr", s.addr),
-							zap.String("oldLabels", fmt.Sprintf("%v", s.labels)),
-							zap.String("newAddr", newStore.addr),
-							zap.String("newLabels", fmt.Sprintf("%v", newStore.labels)))
-						go newStore.checkUntilHealth(c, liveness, reResolveInterval)
-					}
+					logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
 					return
 				}
 			}
