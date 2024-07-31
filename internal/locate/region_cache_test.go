@@ -2856,7 +2856,7 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	})
 
 	// start health check loop
-	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, livenessState(unreachable), time.Second*30)
+	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, unreachable, time.Second*30)
 
 	// mock asyncCheckAndResolveLoop worker to check and resolve store.
 	s.cache.checkAndResolve(nil, func(s *Store) bool {
