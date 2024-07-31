@@ -36,7 +36,6 @@ package unionstore
 
 import (
 	"context"
-	"math"
 	"time"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -155,10 +154,10 @@ func (us *KVUnionStore) UnmarkPresumeKeyNotExists(k []byte) {
 // SetEntrySizeLimit sets the size limit for each entry and total buffer.
 func (us *KVUnionStore) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 	if entryLimit == 0 {
-		entryLimit = math.MaxUint64
+		entryLimit = unlimitedSize
 	}
 	if bufferLimit == 0 {
-		bufferLimit = math.MaxUint64
+		bufferLimit = unlimitedSize
 	}
 	us.memBuffer.SetEntrySizeLimit(entryLimit, bufferLimit)
 }

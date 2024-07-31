@@ -96,13 +96,15 @@ type MemDB struct {
 	missCount         atomic.Uint64
 }
 
+const unlimitedSize = math.MaxUint64
+
 func newMemDB() *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr
 	db.stages = make([]MemDBCheckpoint, 0, 2)
-	db.entrySizeLimit = math.MaxUint64
-	db.bufferSizeLimit = math.MaxUint64
+	db.entrySizeLimit = unlimitedSize
+	db.bufferSizeLimit = unlimitedSize
 	db.vlog.memdb = db
 	db.skipMutex = false
 	db.lastTraversedNode.Store(&nullNodeAddr)
