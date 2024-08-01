@@ -381,38 +381,40 @@ func longestCommonPrefix(l1Key, l2Key Key, depth uint32) uint32 {
 
 // Find the minimum leaf under an artNode
 func minimum(a *artAllocator, an artNode) artNode {
-	switch an.kind {
-	case typeLeaf:
-		return an
-	case typeNode4:
-		n4 := an.node4(a)
-		if !n4.inplaceLeaf.addr.isNull() {
-			return n4.inplaceLeaf
+	for {
+		switch an.kind {
+		case typeLeaf:
+			return an
+		case typeNode4:
+			n4 := an.node4(a)
+			if !n4.inplaceLeaf.addr.isNull() {
+				return n4.inplaceLeaf
+			}
+			an = n4.children[0]
+		case typeNode16:
+			n16 := an.node16(a)
+			if !n16.inplaceLeaf.addr.isNull() {
+				return n16.inplaceLeaf
+			}
+			an = n16.children[0]
+		case typeNode48:
+			n48 := an.node48(a)
+			if !n48.inplaceLeaf.addr.isNull() {
+				return n48.inplaceLeaf
+			}
+			idx := n48.nextPresentIdx(0)
+			an = n48.children[n48.keys[idx]]
+		case typeNode256:
+			n256 := an.node256(a)
+			if !n256.inplaceLeaf.addr.isNull() {
+				return n256.inplaceLeaf
+			}
+			idx := n256.nextPresentIdx(0)
+			an = n256.children[idx]
+		case typeInvalid:
+			return nullArtNode
 		}
-		return minimum(a, n4.children[0])
-	case typeNode16:
-		n16 := an.node16(a)
-		if !n16.inplaceLeaf.addr.isNull() {
-			return n16.inplaceLeaf
-		}
-		return minimum(a, n16.children[0])
-	case typeNode48:
-		n48 := an.node48(a)
-		if !n48.inplaceLeaf.addr.isNull() {
-			return n48.inplaceLeaf
-		}
-
-		idx := n48.nextPresentIdx(0)
-		return minimum(a, n48.children[n48.keys[idx]])
-	case typeNode256:
-		n256 := an.node256(a)
-		if !n256.inplaceLeaf.addr.isNull() {
-			return n256.inplaceLeaf
-		}
-		idx := n256.nextPresentIdx(0)
-		return minimum(a, n256.children[idx])
 	}
-	return nullArtNode
 }
 
 // Find the minimum leaf under an artNode
