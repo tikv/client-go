@@ -318,7 +318,6 @@ func (it *baseIter) next() artNode {
 		} else if idx == node4cap {
 			break
 		}
-		idx = n4.nextPresentIdx(idx)
 		if idx < int(n4.nodeNum) {
 			it.idxes[depth] = idx
 			child := n4.children[idx]
@@ -341,7 +340,6 @@ func (it *baseIter) next() artNode {
 		} else if idx == node16cap {
 			break
 		}
-		idx = n16.nextPresentIdx(idx)
 		if idx < int(n16.nodeNum) {
 			it.idxes[depth] = idx
 			child := n16.children[idx]
@@ -417,11 +415,7 @@ func (it *baseIter) prev() artNode {
 	switch curr.kind {
 	case typeNode4:
 		n4 := it.allocator.getNode4(curr.addr)
-
-		if idx >= 0 {
-			idx = n4.prevPresentIdx(idx)
-		}
-
+		idx = min(idx, int(n4.nodeNum)-1)
 		if idx >= 0 {
 			it.idxes[depth] = idx
 			child := n4.children[idx]
@@ -441,11 +435,7 @@ func (it *baseIter) prev() artNode {
 		}
 	case typeNode16:
 		n16 := it.allocator.getNode16(curr.addr)
-
-		if idx >= 0 {
-			idx = n16.prevPresentIdx(idx)
-		}
-
+		idx = min(idx, int(n16.nodeNum)-1)
 		if idx >= 0 {
 			it.idxes[depth] = idx
 			child := n16.children[idx]

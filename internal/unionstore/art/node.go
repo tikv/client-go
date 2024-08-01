@@ -21,7 +21,7 @@ const (
 )
 
 const (
-	maxPrefixLen = 10
+	maxPrefixLen = 20
 	node4cap     = 4
 	node16cap    = 16
 	node48cap    = 48
@@ -62,20 +62,18 @@ type artNode struct {
 
 type node struct {
 	nodeNum     uint8
-	prefixLen   uint8
+	prefixLen   uint32
 	prefix      [maxPrefixLen]byte
 	inplaceLeaf artNode
 }
 
 type node4 struct {
 	node
-	present  uint8 // bitmap, only lower 4-bit is used
 	keys     [node4cap]byte
 	children [node4cap]artNode
 }
 
 type node16 struct {
-	present uint16 // bitmap
 	node
 	keys     [node16cap]byte
 	children [node16cap]artNode
@@ -149,22 +147,17 @@ func (n4 *node4) init() {
 	n4.nodeNum = 0
 	n4.prefixLen = 0
 	n4.inplaceLeaf = nullArtNode
-	// initialize node4
-	n4.present = 0
 }
 
 func (n4 *node4) nextPresentIdx(start int) int {
-	mask := math.MaxUint8 - (uint8(1) << start) + 1 // e.g. offset=3 => 0b11111000
-	present := n4.present & mask
-	present |= 0xf0
-	return bits.TrailingZeros8(present)
+	if start < int(n4.nodeNum) {
+		return start
+	}
+	return node4cap
 }
 
 func (n4 *node4) prevPresentIdx(start int) int {
-	mask := uint8(1<<(start+1) - 1) // e.g. start=3 => 0b000...0001111
-	present := n4.present & mask
-	zeros := bits.LeadingZeros8(present)
-	return 8 - zeros - 1
+	return min(start, int(n4.nodeNum)-1)
 }
 
 func (n16 *node16) init() {
@@ -172,21 +165,6 @@ func (n16 *node16) init() {
 	n16.nodeNum = 0
 	n16.prefixLen = 0
 	n16.inplaceLeaf = nullArtNode
-	// initialize node16
-	n16.present = 0
-}
-
-func (n16 *node16) nextPresentIdx(start int) int {
-	mask := math.MaxUint16 - (uint16(1) << start) + 1 // e.g. offset=3 => 0b111...111000
-	present := n16.present & mask
-	return bits.TrailingZeros16(present)
-}
-
-func (n16 *node16) prevPresentIdx(start int) int {
-	mask := uint16(1<<(start+1) - 1) // e.g. start=3 => 0b000...0001111
-	present := n16.present & mask
-	zeros := bits.LeadingZeros16(present)
-	return 16 - zeros - 1
 }
 
 func (n48 *node48) init() {
@@ -215,7 +193,7 @@ func (n48 *node48) nextPresentIdx(start int) int {
 			return presentOffset*n48m + zeros
 		}
 	}
-	return 256
+	return node256cap
 }
 
 func (n48 *node48) prevPresentIdx(start int) int {
@@ -320,7 +298,7 @@ func (l *leaf) isDeleted() bool {
 
 // Node methods
 func (n *node) setPrefix(key Key, prefixLen uint32) {
-	n.prefixLen = uint8(prefixLen)
+	n.prefixLen = prefixLen
 	copy(n.prefix[:], key[:min(prefixLen, maxPrefixLen)])
 }
 
@@ -359,7 +337,7 @@ func (n *artNode) node256(a *artAllocator) *node256 {
 func (an artNode) matchDeep(a *artAllocator, key Key, depth uint32) uint32 /* mismatch index*/ {
 	n := an.node(a)
 	mismatchIdx := n.match(key, depth)
-	if mismatchIdx < maxPrefixLen {
+	if mismatchIdx < min(n.prefixLen, maxPrefixLen) {
 		return mismatchIdx
 	}
 
@@ -589,7 +567,6 @@ func (an *artNode) _addChild4(a *artAllocator, c byte, inplace bool, child artNo
 			node.children[j] = node.children[j-1]
 		}
 	}
-	node.present = (node.present << 1) + 1
 	node.keys[i] = c
 	node.children[i] = child
 	node.nodeNum++
@@ -626,7 +603,6 @@ func (an *artNode) _addChild16(a *artAllocator, c byte, inplace bool, child artN
 			node.children[j] = node.children[j-1]
 		}
 	}
-	node.present = (node.present << 1) + 1
 	node.keys[i] = c
 	node.children[i] = child
 	node.nodeNum++
@@ -688,7 +664,6 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 		newAddr, n16 := a.allocNode16()
 		n16.copyMeta(&n4.node)
 
-		n16.present = uint16(n4.present)
 		copy(n16.keys[:], n4.keys[:])
 		copy(n16.children[:], n4.children[:])
 
@@ -719,10 +694,8 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 		newAddr, n256 := a.allocNode256()
 		n256.copyMeta(&n48.node)
 
-		for i := uint16(0); i < node256cap; i++ {
-			if n48.present[i>>n48s]&(1<<(i%n48m)) != 0 {
-				n256.children[i] = n48.children[n48.keys[i]]
-			}
+		for i := n48.nextPresentIdx(0); i < node256cap; i = n48.nextPresentIdx(i + 1) {
+			n256.children[i] = n48.children[n48.keys[i]]
 		}
 
 		// replace addr and free node48

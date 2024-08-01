@@ -13,10 +13,8 @@ func checkNodeInitialization(t *testing.T, n any) {
 	switch n := n.(type) {
 	case *node4:
 		node = &n.node
-		require.Equal(t, uint8(0), n.present)
 	case *node16:
 		node = &n.node
-		require.Equal(t, uint16(0), n.present)
 	case *node48:
 		node = &n.node
 		require.Equal(t, [4]uint64{0, 0, 0, 0}, n.present)
@@ -29,7 +27,7 @@ func checkNodeInitialization(t *testing.T, n any) {
 		require.Fail(t, "unknown node type")
 	}
 	require.Equal(t, uint8(0), node.nodeNum)
-	require.Equal(t, uint8(0), node.prefixLen)
+	require.Equal(t, uint32(0), node.prefixLen)
 	require.Equal(t, node.inplaceLeaf, nullArtNode)
 }
 
@@ -152,34 +150,28 @@ func TestOrderChild(t *testing.T) {
 	grow := aNode.addChild(&allocator, 1, false, artNode{kind: typeLeaf, addr: leaf1})
 	require.False(t, grow)
 	require.Equal(t, [4]byte{1, 0, 0, 0}, n4.keys)
-	require.Equal(t, n4.present, uint8(0b0001))
 
 	grow = aNode.addChild(&allocator, 3, false, artNode{kind: typeLeaf, addr: leaf3})
 	require.False(t, grow)
 	require.Equal(t, [4]byte{1, 3, 0, 0}, n4.keys)
-	require.Equal(t, n4.present, uint8(0b0011))
 
 	grow = aNode.addChild(&allocator, 2, false, artNode{kind: typeLeaf, addr: leaf2})
 	require.False(t, grow)
 	require.Equal(t, [4]byte{1, 2, 3, 0}, n4.keys)
-	require.Equal(t, n4.present, uint8(0b0111))
 
 	grow = aNode.addChild(&allocator, 6, false, artNode{kind: typeLeaf, addr: leaf6})
 	require.False(t, grow)
 	require.Equal(t, [4]byte{1, 2, 3, 6}, n4.keys)
-	require.Equal(t, n4.present, uint8(0b1111))
 
 	grow = aNode.addChild(&allocator, 4, false, artNode{kind: typeLeaf, addr: leaf4})
 	require.True(t, grow)
 	require.Equal(t, aNode.kind, typeNode16)
 	n16 := aNode.node16(&allocator)
 	require.Equal(t, [16]byte{1, 2, 3, 4, 6}, n16.keys)
-	require.Equal(t, n16.present, uint16(0b11111))
 
 	grow = aNode.addChild(&allocator, 5, false, artNode{kind: typeLeaf, addr: leaf5})
 	require.False(t, grow)
 	require.Equal(t, [16]byte{1, 2, 3, 4, 5, 6}, n16.keys)
-	require.Equal(t, n16.present, uint16(0b111111))
 
 	node48bits := 0b1111110
 	// insert 8-17
@@ -188,8 +180,7 @@ func TestOrderChild(t *testing.T) {
 		leaf, _ := allocator.allocLeaf([]byte{b})
 		grow := aNode.addChild(&allocator, b, false, artNode{kind: typeLeaf, addr: leaf})
 		require.False(t, grow)
-		require.Equal(t, n16.present, uint16((1<<(i+6+1))-1))
-		node48bits |= (1 << b)
+		node48bits |= 1 << b
 	}
 
 	leaf7, _ := allocator.allocLeaf([]byte{7})
@@ -241,39 +232,6 @@ func TestN4NextPrevPresentIdx(t *testing.T) {
 				require.Equal(t, 4, nextIdx, j)
 			}
 			prevIdx := n4.prevPresentIdx(j)
-			if j >= i {
-				require.Equal(t, i, prevIdx, j)
-			} else {
-				require.Equal(t, j, prevIdx, j)
-			}
-		}
-	}
-}
-
-func TestN16NextPrevPresentIdx(t *testing.T) {
-	var allocator artAllocator
-	allocator.init()
-
-	n16Addr, n16 := allocator.allocNode16()
-	for i := 0; i < node256cap; i++ {
-		nextIdx := n16.nextPresentIdx(i)
-		require.Equal(t, 16, nextIdx, i)
-		prevIdx := n16.prevPresentIdx(i)
-		require.Equal(t, -1, prevIdx, i)
-	}
-
-	an := artNode{kind: typeNode16, addr: n16Addr}
-	for i := 0; i < node256cap; i++ {
-		n4Addr, _ := allocator.allocNode4()
-		an.addChild(&allocator, byte(i), false, artNode{kind: typeNode4, addr: n4Addr})
-		for j := 0; j < 16; j++ {
-			nextIdx := n16.nextPresentIdx(j)
-			if j <= i {
-				require.Equal(t, j, nextIdx, j)
-			} else {
-				require.Equal(t, 16, nextIdx, j)
-			}
-			prevIdx := n16.prevPresentIdx(j)
 			if j >= i {
 				require.Equal(t, i, prevIdx, j)
 			} else {

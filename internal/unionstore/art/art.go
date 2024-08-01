@@ -151,9 +151,9 @@ func (t *Art) recursiveInsert(key Key) (nodeAddr, *leaf) {
 		node := current.node(&t.allocator)
 		if node.prefixLen > 0 {
 			mismatchIdx := current.matchDeep(&t.allocator, key, depth)
-			if mismatchIdx >= uint32(node.prefixLen) {
+			if mismatchIdx >= node.prefixLen {
 				// all the prefix match, go deeper.
-				depth += uint32(node.prefixLen)
+				depth += node.prefixLen
 				_, next := current.findChild(&t.allocator, key.charAt(int(depth)), key.valid(int(depth)))
 
 				if next == nullArtNode {
@@ -175,17 +175,17 @@ func (t *Art) recursiveInsert(key Key) (nodeAddr, *leaf) {
 			}
 			// instead, we split the node into different prefixes.
 			newArtNode, newN4 := t.newNode4()
-			newN4.prefixLen = uint8(mismatchIdx)
+			newN4.prefixLen = mismatchIdx
 			copy(newN4.prefix[:], key[depth:depth+mismatchIdx])
 
 			// move the current node as the children of the new node.
 			if node.prefixLen <= maxPrefixLen {
 				nodeKey := node.prefix[mismatchIdx]
-				node.prefixLen -= uint8(mismatchIdx + 1)
+				node.prefixLen -= mismatchIdx + 1
 				copy(node.prefix[:], node.prefix[mismatchIdx+1:])
 				newArtNode.addChild(&t.allocator, nodeKey, false, current)
 			} else {
-				node.prefixLen -= uint8(mismatchIdx + 1)
+				node.prefixLen -= mismatchIdx + 1
 				leafArtNode := minimum(&t.allocator, current)
 				leaf := leafArtNode.leaf(&t.allocator)
 				leafKey := leaf.getKey()
