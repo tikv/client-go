@@ -48,6 +48,14 @@ const (
 	DefGrpcInitialWindowSize      = 1 << 27 // 128MiB
 	DefGrpcInitialConnWindowSize  = 1 << 27 // 128MiB
 	DefMaxConcurrencyRequestLimit = math.MaxInt64
+	DefBatchPolicy                = BatchPolicyStandard
+)
+
+const (
+	BatchPolicyBasic    = "basic"
+	BatchPolicyStandard = "standard"
+	BatchPolicyPositive = "positive"
+	BatchPolicyCustom   = "custom"
 )
 
 // TiKVClient is the config for tikv client.
@@ -73,7 +81,8 @@ type TiKVClient struct {
 	CommitTimeout string      `toml:"commit-timeout" json:"commit-timeout"`
 	AsyncCommit   AsyncCommit `toml:"async-commit" json:"async-commit"`
 
-	ExperimentalBatchOptions string `toml:"experimental-batch-options" json:"experimental-batch-options"`
+	// BatchPolicy is the policy for batching requests.
+	BatchPolicy string `toml:"batch-policy" json:"batch-policy"`
 	// MaxBatchSize is the max batch size when calling batch commands API.
 	MaxBatchSize uint `toml:"max-batch-size" json:"max-batch-size"`
 	// If TiKV load is greater than this, TiDB will wait for a while to avoid little batch.
@@ -155,6 +164,7 @@ func DefaultTiKVClient() TiKVClient {
 			AllowedClockDrift: 500 * time.Millisecond,
 		},
 
+		BatchPolicy:       DefBatchPolicy,
 		MaxBatchSize:      128,
 		OverloadThreshold: 200,
 		MaxBatchWaitTime:  0,
