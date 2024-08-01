@@ -81,12 +81,12 @@ func (b chunkBatch) String() string {
 // chunkBatch.txnChunkSlice should be sorted by smallest.
 func (b *chunkBatch) getSampleKeys() [][]byte {
 	keys := make([][]byte, 0)
-	start := sort.Search(b.txnChunkSlice.len(), func(i int) bool {
+	start := sort.Search(b.txnChunkSlice.Len(), func(i int) bool {
 		return bytes.Compare(b.region.StartKey, b.txnChunkSlice.chunkRanges[i].smallest) <= 0
 	})
-	end := b.txnChunkSlice.len()
+	end := b.txnChunkSlice.Len()
 	if len(b.region.EndKey) > 0 {
-		end = sort.Search(b.txnChunkSlice.len(), func(i int) bool {
+		end = sort.Search(b.txnChunkSlice.Len(), func(i int) bool {
 			return bytes.Compare(b.txnChunkSlice.chunkRanges[i].smallest, b.region.EndKey) >= 0
 		})
 	}
@@ -125,19 +125,8 @@ func (s *txnChunkSlice) Biggest() []byte {
 }
 
 func (cs *txnChunkSlice) appendSlice(other *txnChunkSlice) {
-	if cs.len() == 0 {
-		cs.chunkIDs = append(cs.chunkIDs, other.chunkIDs...)
-		cs.chunkRanges = append(cs.chunkRanges, other.chunkRanges...)
-		return
-	}
-	lastChunkRange := cs.chunkRanges[len(cs.chunkIDs)-1]
-	for i, chunkRange := range other.chunkRanges {
-		if bytes.Compare(lastChunkRange.smallest, chunkRange.smallest) < 0 {
-			cs.chunkIDs = append(cs.chunkIDs, other.chunkIDs[i:]...)
-			cs.chunkRanges = append(cs.chunkRanges, other.chunkRanges[i:]...)
-			break
-		}
-	}
+	cs.chunkIDs = append(cs.chunkIDs, other.chunkIDs...)
+	cs.chunkRanges = append(cs.chunkRanges, other.chunkRanges...)
 }
 
 func (cs *txnChunkSlice) append(chunkID uint64, chunkRange txnChunkRange) {
@@ -145,8 +134,39 @@ func (cs *txnChunkSlice) append(chunkID uint64, chunkRange txnChunkRange) {
 	cs.chunkRanges = append(cs.chunkRanges, chunkRange)
 }
 
-func (cs *txnChunkSlice) len() int {
+func (cs *txnChunkSlice) Len() int {
 	return len(cs.chunkIDs)
+}
+
+func (cs *txnChunkSlice) Swap(i, j int) {
+	cs.chunkIDs[i], cs.chunkIDs[j] = cs.chunkIDs[j], cs.chunkIDs[i]
+	cs.chunkRanges[i], cs.chunkRanges[j] = cs.chunkRanges[j], cs.chunkRanges[i]
+}
+
+func (cs *txnChunkSlice) Less(i, j int) bool {
+	return bytes.Compare(cs.chunkRanges[i].smallest, cs.chunkRanges[j].smallest) < 0
+}
+
+func (cs *txnChunkSlice) dedup() {
+	if len(cs.chunkIDs) == 0 {
+		return
+	}
+
+	sort.Sort(cs)
+
+	newIDs := make([]uint64, 0, len(cs.chunkIDs))
+	newRanges := make([]txnChunkRange, 0, len(cs.chunkRanges))
+	newIDs = append(newIDs, cs.chunkIDs[0])
+	newRanges = append(newRanges, cs.chunkRanges[0])
+	for i := 1; i < len(cs.chunkIDs); i++ {
+		if cs.chunkIDs[i] == cs.chunkIDs[i-1] {
+			continue
+		}
+		newIDs = append(newIDs, cs.chunkIDs[i])
+		newRanges = append(newRanges, cs.chunkRanges[i])
+	}
+	cs.chunkIDs = newIDs
+	cs.chunkRanges = newRanges
 }
 
 // []chunkBatch is sorted by region.StartKey.
@@ -190,7 +210,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		return cmp < 0
 	})
 
-	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
+	logutil.Logger(bo.GetCtx()).Info("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
 
@@ -527,7 +547,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 		undetermined := c.mu.undeterminedErr != nil
 		c.mu.RUnlock()
 		if !committed && !undetermined {
-			if c.txnFileCtx.slice.len() > 0 {
+			if c.txnFileCtx.slice.Len() > 0 {
 				err1 := c.executeTxnFileAction(retry.NewBackofferWithVars(ctx, int(CommitMaxBackoff), c.txn.vars), c.txnFileCtx.slice, txnFileRollbackAction{})
 				if err1 != nil {
 					logutil.Logger(ctx).Error("txn file: rollback on error failed", zap.Error(err1))
@@ -655,15 +675,17 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 			regionErrChunks.appendSlice(r.regionErrSlice)
 		}
 	}
+	regionErrChunks.dedup()
 	return regionErrChunks, nil
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
 	resp, err1 := action.executeBatch(c, bo, batch)
-	logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
+	logutil.Logger(bo.GetCtx()).Info("txn file: execute batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.Any("batch", batch),
 		zap.Stringer("action", action),
+		zap.Any("resp", resp),
 		zap.Error(err1))
 	if err1 != nil {
 		return nil, err1
@@ -692,6 +714,11 @@ func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, 
 		return nil, err1
 	}
 	if regionErr != nil {
+		logutil.Logger(bo.GetCtx()).Info("txn file: execute batch failed, region error",
+			zap.Uint64("startTS", c.startTS),
+			zap.Stringer("action", action),
+			zap.Any("batch", batch),
+			zap.Stringer("regionErr", regionErr))
 		return &batch.txnChunkSlice, nil
 	}
 	return nil, nil
@@ -706,7 +733,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, ch
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		if regionErrChunks.len() == 0 {
+		if regionErrChunks.Len() == 0 {
 			return nil
 		}
 		currentChunks = regionErrChunks
@@ -916,8 +943,8 @@ func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
 	}
 	var splitKeys [][]byte
 	for _, batch := range batches {
-		if batch.len() > PreSplitRegionChunks {
-			for i := PreSplitRegionChunks; i < batch.len(); i += PreSplitRegionChunks {
+		if batch.Len() > PreSplitRegionChunks {
+			for i := PreSplitRegionChunks; i < batch.Len(); i += PreSplitRegionChunks {
 				splitKeys = append(splitKeys, batch.chunkRanges[i].smallest)
 			}
 		}

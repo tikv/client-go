@@ -744,7 +744,7 @@ func (c *twoPhaseCommitter) primary() []byte {
 		if c.mutations != nil {
 			return c.mutations.GetKey(0)
 		}
-		if c.txnFileCtx.slice.len() > 0 {
+		if c.txnFileCtx.slice.Len() > 0 {
 			return c.txnFileCtx.slice.chunkRanges[0].smallest
 		}
 		return nil
@@ -1228,7 +1228,7 @@ func keepAlive(c *twoPhaseCommitter, closeCh chan struct{}, primaryKey []byte, l
 			logutil.Logger(bo.GetCtx()).Info("send TxnHeartBeat",
 				zap.Uint64("startTS", c.startTS), zap.Uint64("newTTL", newTTL))
 			startTime := time.Now()
-			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL, c.txnFileCtx.slice.len() > 0)
+			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL, c.txnFileCtx.slice.Len() > 0)
 			if err != nil {
 				keepFail++
 				metrics.TxnHeartBeatHistogramError.Observe(time.Since(startTime).Seconds())
