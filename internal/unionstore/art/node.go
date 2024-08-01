@@ -94,6 +94,7 @@ type node48 struct {
 
 type node256 struct {
 	node
+	present  [4]uint64
 	children [node256cap]artNode
 }
 
@@ -177,10 +178,6 @@ func (n48 *node48) init() {
 	copy(n48.children[:], nullNode48.children[:])
 }
 
-func (n48 *node48) isPresent(idx int) bool {
-	return n48.present[idx>>n48s]&(1<<uint8(idx%n48m)) != 0
-}
-
 func (n48 *node48) nextPresentIdx(start int) int {
 	for presentOffset := start >> n48s; presentOffset < 4; presentOffset++ {
 		present := n48.present[presentOffset]
@@ -221,21 +218,33 @@ func (n256 *node256) init() {
 }
 
 func (n256 *node256) nextPresentIdx(start int) int {
-	for ; start < node256cap; start++ {
-		if !n256.children[start].addr.isNull() {
-			return start
+	for presentOffset := start >> n48s; presentOffset < 4; presentOffset++ {
+		present := n256.present[presentOffset]
+		offset := start % n48m
+		start = 0
+		mask := math.MaxUint64 - (uint64(1) << offset) + 1 // e.g. offset=3 => 0b111...111000
+		curr := present & mask
+		zeros := bits.TrailingZeros64(curr)
+		if zeros < n48m {
+			return presentOffset*n48m + zeros
 		}
 	}
-	return start
+	return node256cap
 }
 
 func (n256 *node256) prevPresentIdx(start int) int {
-	for ; start > -1; start-- {
-		if !n256.children[start].addr.isNull() {
-			return start
+	for presentOffset := start >> n48s; presentOffset >= 0; presentOffset-- {
+		present := n256.present[presentOffset]
+		offset := start % n48m
+		start = n48m - 1
+		mask := uint64(1)<<(offset+1) - 1 // e.g. offset=3 => 0b000...0001111
+		curr := present & mask
+		zeros := bits.LeadingZeros64(curr)
+		if zeros < n48m {
+			return presentOffset*n48m + n48m - (zeros + 1)
 		}
 	}
-	return start
+	return -1
 }
 
 // key methods
@@ -643,10 +652,12 @@ func (an *artNode) _addChild256(a *artAllocator, c byte, inplace bool, child art
 
 	if inplace {
 		node.inplaceLeaf = child
-	} else {
-		node.children[c] = child
-		node.nodeNum++
+		return false
 	}
+
+	node.present[c>>n48s] |= 1 << (c % n48m)
+	node.children[c] = child
+	node.nodeNum++
 	return false
 }
 
@@ -697,6 +708,7 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 		for i := n48.nextPresentIdx(0); i < node256cap; i = n48.nextPresentIdx(i + 1) {
 			n256.children[i] = n48.children[n48.keys[i]]
 		}
+		copy(n256.present[:], n48.present[:])
 
 		// replace addr and free node48
 		a.freeNode48(an.addr)
