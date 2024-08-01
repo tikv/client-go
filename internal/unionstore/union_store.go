@@ -243,7 +243,8 @@ type MemBuffer interface {
 }
 
 type FlushMetrics struct {
-	WaitDuration time.Duration
+	WaitDuration  time.Duration
+	TotalDuration time.Duration
 }
 
 var (
