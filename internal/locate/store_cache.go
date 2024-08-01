@@ -436,7 +436,7 @@ func (s *Store) initResolve(bo *retry.Backoffer, c storeCache) (addr string, err
 
 // reResolve try to resolve addr for store that need check. Returns false if the region is in tombstone state or is
 // deleted.
-func (s *Store) reResolve(c storeCache) (bool, error) {
+func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 	var addr string
 	store, err := c.fetchStore(context.Background(), s.storeID)
 	if err != nil {
@@ -475,12 +475,23 @@ func (s *Store) reResolve(c storeCache) (bool, error) {
 			store.GetLabels(),
 		)
 		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
-		newStore.unreachableSince = s.unreachableSince
+		if newStore.getLivenessState() != reachable {
+			newStore.unreachableSince = s.unreachableSince
+			startHealthCheckLoop(scheduler, c, newStore, newStore.getLivenessState(), storeReResolveInterval)
+		}
 		if s.addr == addr {
 			newStore.healthStatus = s.healthStatus
 		}
 		c.put(newStore)
 		s.setResolveState(deleted)
+		logutil.BgLogger().Info("store address or labels changed, add new store and mark old store deleted",
+			zap.Uint64("store", s.storeID),
+			zap.String("old-addr", s.addr),
+			zap.Any("old-labels", s.labels),
+			zap.String("old-liveness", s.getLivenessState().String()),
+			zap.String("new-addr", newStore.addr),
+			zap.Any("new-labels", newStore.labels),
+			zap.String("new-liveness", newStore.getLivenessState().String()))
 		return false, nil
 	}
 	s.changeResolveStateTo(needCheck, resolved)
@@ -580,6 +591,8 @@ func (s *Store) getLivenessState() livenessState {
 	return livenessState(atomic.LoadUint32(&s.livenessState))
 }
 
+var storeReResolveInterval = 30 * time.Second
+
 func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoffer, scheduler *bgRunner, c storeCache) (liveness livenessState) {
 	liveness = requestLiveness(bo.GetCtx(), s, c)
 	if liveness == reachable {
@@ -595,7 +608,7 @@ func (s *Store) requestLivenessAndStartHealthCheckLoopIfNeeded(bo *retry.Backoff
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		reResolveInterval := 30 * time.Second
+		reResolveInterval := storeReResolveInterval
 		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
 			if dur, err := time.ParseDuration(val.(string)); err == nil {
 				reResolveInterval = dur
@@ -613,29 +626,19 @@ func startHealthCheckLoop(scheduler *bgRunner, c storeCache, s *Store, liveness 
 	lastCheckPDTime := time.Now()
 
 	scheduler.schedule(func(ctx context.Context, t time.Time) bool {
+		if s.getResolveState() == deleted {
+			logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+			return true
+		}
 		if t.Sub(lastCheckPDTime) > reResolveInterval {
 			lastCheckPDTime = t
 
-			valid, err := s.reResolve(c)
+			valid, err := s.reResolve(c, scheduler)
 			if err != nil {
 				logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 			} else if !valid {
-				if s.getResolveState() != deleted {
-					logutil.BgLogger().Warn("[health check] store was still unhealthy at the end of health check loop",
-						zap.Uint64("storeID", s.storeID),
-						zap.String("state", s.getResolveState().String()),
-						zap.String("liveness", s.getLivenessState().String()))
-					return true
-				}
-				// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
-				newStore, _ := c.get(s.storeID)
-				logutil.BgLogger().Info("[health check] store meta changed",
-					zap.Uint64("storeID", s.storeID),
-					zap.String("oldAddr", s.addr),
-					zap.String("oldLabels", fmt.Sprintf("%v", s.labels)),
-					zap.String("newAddr", newStore.addr),
-					zap.String("newLabels", fmt.Sprintf("%v", newStore.labels)))
-				s = newStore
+				logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+				return true
 			}
 		}
 
