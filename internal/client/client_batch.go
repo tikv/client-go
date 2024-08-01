@@ -506,7 +506,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			}
 		}
 
-		if batchSize := a.reqBuilder.len(); batchSize < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
+		if batchSize := a.reqBuilder.len(); batchSize < int(cfg.MaxBatchSize) {
 			if cfg.MaxBatchWaitTime > 0 && atomic.LoadUint64(&a.tikvTransportLayerLoad) > uint64(cfg.OverloadThreshold) {
 				// If the target TiKV is overload, wait a while to collect more requests.
 				metrics.TiKVBatchWaitOverLoad.Inc()
