@@ -147,8 +147,8 @@ func (cs *txnChunkSlice) Less(i, j int) bool {
 	return bytes.Compare(cs.chunkRanges[i].smallest, cs.chunkRanges[j].smallest) < 0
 }
 
-func (cs *txnChunkSlice) dedup() {
-	if len(cs.chunkIDs) == 0 {
+func (cs *txnChunkSlice) sortAndDedup() {
+	if len(cs.chunkIDs) <= 1 {
 		return
 	}
 
@@ -210,7 +210,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		return cmp < 0
 	})
 
-	logutil.Logger(bo.GetCtx()).Info("txn file group to batches", zap.Stringers("batches", batches))
+	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
 
@@ -678,17 +678,16 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 			regionErrChunks.appendSlice(r.regionErrSlice)
 		}
 	}
-	regionErrChunks.dedup()
+	regionErrChunks.sortAndDedup()
 	return regionErrChunks, nil
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
 	resp, err1 := action.executeBatch(c, bo, batch)
-	logutil.Logger(bo.GetCtx()).Info("txn file: execute batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.Any("batch", batch),
 		zap.Stringer("action", action),
-		zap.Any("resp", resp),
 		zap.Error(err1))
 	if err1 != nil {
 		return nil, err1
@@ -717,7 +716,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, 
 		return nil, err1
 	}
 	if regionErr != nil {
-		logutil.Logger(bo.GetCtx()).Info("txn file: execute batch failed, region error",
+		logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch failed, region error",
 			zap.Uint64("startTS", c.startTS),
 			zap.Stringer("action", action),
 			zap.Any("batch", batch),
@@ -760,12 +759,11 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 
 	firstBatch.isPrimary = true
 	resp, err := action.executeBatch(c, bo, firstBatch)
-	logutil.Logger(bo.GetCtx()).Info("txn file: execute primary batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute primary batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.String("primary", kv.StrKey(c.primary())),
 		zap.Stringer("action", action),
 		zap.Stringer("batch", firstBatch),
-		zap.Any("resp", resp),
 		zap.Error(err))
 	if err != nil {
 		return nil, errors.WithStack(err)
