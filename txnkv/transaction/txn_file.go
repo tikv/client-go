@@ -148,7 +148,7 @@ func (cs *txnChunkSlice) Less(i, j int) bool {
 }
 
 func (cs *txnChunkSlice) dedup() {
-	if len(cs.chunkIDs) == 0 {
+	if len(cs.chunkIDs) <= 1 {
 		return
 	}
 
@@ -210,7 +210,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		return cmp < 0
 	})
 
-	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
+	logutil.Logger(bo.GetCtx()).Info("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
 
@@ -685,7 +685,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
 	resp, err1 := action.executeBatch(c, bo, batch)
-	logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
+	logutil.Logger(bo.GetCtx()).Info("txn file: execute batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.Any("batch", batch),
 		zap.Stringer("action", action),
@@ -718,7 +718,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, 
 		return nil, err1
 	}
 	if regionErr != nil {
-		logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch failed, region error",
+		logutil.Logger(bo.GetCtx()).Info("txn file: execute batch failed, region error",
 			zap.Uint64("startTS", c.startTS),
 			zap.Stringer("action", action),
 			zap.Any("batch", batch),
@@ -740,6 +740,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, ch
 		if regionErrChunks.Len() == 0 {
 			return nil
 		}
+		logutil.Logger(bo.GetCtx()).Info("txn file meet region errors", zap.Stringer("regionErrChunks", regionErrChunks))
 		currentChunks = regionErrChunks
 		currentBatches = nil
 		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file: execute failed, region miss"))
@@ -761,7 +762,7 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 
 	firstBatch.isPrimary = true
 	resp, err := action.executeBatch(c, bo, firstBatch)
-	logutil.Logger(bo.GetCtx()).Debug("txn file: execute primary batch finished",
+	logutil.Logger(bo.GetCtx()).Info("txn file: execute primary batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.String("primary", kv.StrKey(c.primary())),
 		zap.Stringer("action", action),
