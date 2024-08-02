@@ -147,23 +147,20 @@ func (cs *txnChunkSlice) Less(i, j int) bool {
 	return bytes.Compare(cs.chunkRanges[i].smallest, cs.chunkRanges[j].smallest) < 0
 }
 
-func (cs *txnChunkSlice) dedup() {
+func (cs *txnChunkSlice) sortAndDedup() {
 	if len(cs.chunkIDs) <= 1 {
 		return
 	}
 
 	sort.Sort(cs)
 
-	newIDs := make([]uint64, 0, len(cs.chunkIDs))
-	newRanges := make([]txnChunkRange, 0, len(cs.chunkRanges))
-	newIDs = append(newIDs, cs.chunkIDs[0])
-	newRanges = append(newRanges, cs.chunkRanges[0])
+	newIDs := cs.chunkIDs[:1]
+	newRanges := cs.chunkRanges[:1]
 	for i := 1; i < len(cs.chunkIDs); i++ {
-		if cs.chunkIDs[i] == cs.chunkIDs[i-1] {
-			continue
+		if cs.chunkIDs[i] != newIDs[len(newIDs)-1] {
+			newIDs = append(newIDs, cs.chunkIDs[i])
+			newRanges = append(newRanges, cs.chunkRanges[i])
 		}
-		newIDs = append(newIDs, cs.chunkIDs[i])
-		newRanges = append(newRanges, cs.chunkRanges[i])
 	}
 	cs.chunkIDs = newIDs
 	cs.chunkRanges = newRanges
@@ -210,7 +207,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		return cmp < 0
 	})
 
-	logutil.Logger(bo.GetCtx()).Info("txn file group to batches", zap.Stringers("batches", batches))
+	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
 
@@ -679,17 +676,16 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 			regionErrChunks.appendSlice(r.regionErrSlice)
 		}
 	}
-	regionErrChunks.dedup()
+	regionErrChunks.sortAndDedup()
 	return regionErrChunks, nil
 }
 
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
 	resp, err1 := action.executeBatch(c, bo, batch)
-	logutil.Logger(bo.GetCtx()).Info("txn file: execute batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.Any("batch", batch),
 		zap.Stringer("action", action),
-		zap.Any("resp", resp),
 		zap.Error(err1))
 	if err1 != nil {
 		return nil, err1
@@ -718,7 +714,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, 
 		return nil, err1
 	}
 	if regionErr != nil {
-		logutil.Logger(bo.GetCtx()).Info("txn file: execute batch failed, region error",
+		logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch failed, region error",
 			zap.Uint64("startTS", c.startTS),
 			zap.Stringer("action", action),
 			zap.Any("batch", batch),
@@ -740,7 +736,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, ch
 		if regionErrChunks.Len() == 0 {
 			return nil
 		}
-		logutil.Logger(bo.GetCtx()).Info("txn file meet region errors", zap.Stringer("regionErrChunks", regionErrChunks))
+		logutil.Logger(bo.GetCtx()).Debug("txn file meet region errors", zap.Stringer("regionErrChunks", regionErrChunks))
 		currentChunks = regionErrChunks
 		currentBatches = nil
 		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file: execute failed, region miss"))
@@ -762,12 +758,11 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 
 	firstBatch.isPrimary = true
 	resp, err := action.executeBatch(c, bo, firstBatch)
-	logutil.Logger(bo.GetCtx()).Info("txn file: execute primary batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute primary batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.String("primary", kv.StrKey(c.primary())),
 		zap.Stringer("action", action),
 		zap.Stringer("batch", firstBatch),
-		zap.Any("resp", resp),
 		zap.Error(err))
 	if err != nil {
 		return nil, errors.WithStack(err)
