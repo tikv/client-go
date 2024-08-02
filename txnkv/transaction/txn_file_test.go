@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/locate"
 )
 
@@ -77,5 +78,32 @@ func TestTxnFileChunkBatch(t *testing.T) {
 			strKeys = append(strKeys, string(key))
 		}
 		assert.Equal(c.expected, strKeys)
+	}
+}
+
+func TestTxnFileCalcRateLimit(t *testing.T) {
+	assert := assert.New(t)
+
+	cnf := config.DefaultConfig()
+	cnf.CommitterConcurrency = 128
+	cnf.TiKVClient.TxnChunkMaxSize = 128 * 1024 * 1024
+
+	cases := []struct {
+		ChunksCount  int
+		BatchesCount int
+		Expected     int
+	}{
+		{100, 100, 32},
+		{100, 200, 64},
+		{200, 100, 16},
+		{100, 400, 128},
+		{100, 401, 128},
+		{100, 1, 1},
+		{10, 10, 32}, // Rate limit is OK to be larger than batch count.
+	}
+
+	for _, c := range cases {
+		rateLim := calcRateLimit(c.ChunksCount, c.BatchesCount, &cnf)
+		assert.Equal(c.Expected, rateLim, "case: %v", c)
 	}
 }

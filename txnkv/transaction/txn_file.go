@@ -618,6 +618,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	var err error
 	var regionErrChunks txnChunkSlice
 
+	chunksCount := chunkSlice.Len()
 	if batches == nil {
 		batches, err = chunkSlice.groupToBatches(c.store.GetRegionCache(), bo, c.mutations)
 		if err != nil {
@@ -647,15 +648,8 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	bo, cancel := bo.Fork()
 	defer cancel()
 
-	rateLim := len(batches)
 	cnf := config.GetGlobalConfig()
-	if rateLim > cnf.CommitterConcurrency {
-		rateLim = cnf.CommitterConcurrency
-	}
-	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
-	if rateLim > maxChunksInParallel {
-		rateLim = maxChunksInParallel
-	}
+	rateLim := calcRateLimit(chunksCount, len(batches), cnf)
 	rateLimiter := util.NewRateLimit(rateLim)
 
 	for _, batch := range batches {
@@ -804,15 +798,14 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 		if len(secondaries) == 0 {
 			return nil
 		}
-		var emptySlice txnChunkSlice
 		if !action.asyncExecuteSecondaries() {
-			return c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action)
+			return c.executeTxnFileSliceWithRetry(bo, chunkSlice, secondaries, action)
 		}
 
 		c.store.WaitGroup().Add(1)
 		errGo := c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
-			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action)
+			err := c.executeTxnFileSliceWithRetry(bo, chunkSlice, secondaries, action)
 			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
@@ -1142,4 +1135,18 @@ func (w *chunkWriterClient) asyncBuildChunk(bo *retry.Backoffer, buf []byte, chu
 		chunkId, err := w.buildChunk(bo.Clone(), buf)
 		resultCh <- buildChunkResult{chunkId, chunkRange, err}
 	}()
+}
+
+// RateLimit := BatchesInParallel := MaxChunks / ChunksPerBatch
+// ChunksPerBatch := ChunksCount / BatchesCount
+func calcRateLimit(chunksCount, batchesCount int, cnf *config.Config) int {
+	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
+	rateLim := maxChunksInParallel * batchesCount / chunksCount
+	if rateLim > cnf.CommitterConcurrency {
+		rateLim = cnf.CommitterConcurrency
+	}
+	if rateLim < 1 {
+		rateLim = 1
+	}
+	return rateLim
 }
