@@ -154,16 +154,13 @@ func (cs *txnChunkSlice) sortAndDedup() {
 
 	sort.Sort(cs)
 
-	newIDs := make([]uint64, 0, len(cs.chunkIDs))
-	newRanges := make([]txnChunkRange, 0, len(cs.chunkRanges))
-	newIDs = append(newIDs, cs.chunkIDs[0])
-	newRanges = append(newRanges, cs.chunkRanges[0])
+	newIDs := cs.chunkIDs[:1]
+	newRanges := cs.chunkRanges[:1]
 	for i := 1; i < len(cs.chunkIDs); i++ {
-		if cs.chunkIDs[i] == cs.chunkIDs[i-1] {
-			continue
+		if cs.chunkIDs[i] != newIDs[len(newIDs)-1] {
+			newIDs = append(newIDs, cs.chunkIDs[i])
+			newRanges = append(newRanges, cs.chunkRanges[i])
 		}
-		newIDs = append(newIDs, cs.chunkIDs[i])
-		newRanges = append(newRanges, cs.chunkRanges[i])
 	}
 	cs.chunkIDs = newIDs
 	cs.chunkRanges = newRanges
