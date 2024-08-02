@@ -735,6 +735,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceWithRetry(bo *retry.Backoffer, ch
 		if regionErrChunks.Len() == 0 {
 			return nil
 		}
+		logutil.Logger(bo.GetCtx()).Debug("txn file meet region errors", zap.Stringer("regionErrChunks", regionErrChunks))
 		currentChunks = regionErrChunks
 		currentBatches = nil
 		err = bo.Backoff(retry.BoRegionMiss, errors.Errorf("txn file: execute failed, region miss"))
