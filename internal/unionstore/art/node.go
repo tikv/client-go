@@ -37,9 +37,9 @@ const (
 )
 
 var (
-	// nullNode48 is used to initialize the node 256
+	// nullNode48 is used to initialize the node48
 	nullNode48 = node48{}
-	// nullNode256 is used to initialize the node 256
+	// nullNode256 is used to initialize the node256
 	nullNode256 = node256{}
 )
 
@@ -402,50 +402,6 @@ func minimum(a *artAllocator, an artNode) artNode {
 			return nullArtNode
 		}
 	}
-}
-
-// Find the minimum leaf under an artNode
-func maximum(a *artAllocator, an artNode) artNode {
-	switch an.kind {
-	case typeLeaf:
-		return an
-	case typeNode4:
-		n4 := an.node4(a)
-		if n4.nodeNum > 0 {
-			return maximum(a, n4.children[n4.nodeNum-1])
-		}
-		if !n4.inplaceLeaf.addr.isNull() {
-			return n4.inplaceLeaf
-		}
-	case typeNode16:
-		n16 := an.node16(a)
-		if n16.nodeNum > 0 {
-			return maximum(a, n16.children[n16.nodeNum-1])
-		}
-		if !n16.inplaceLeaf.addr.isNull() {
-			return n16.inplaceLeaf
-		}
-	case typeNode48:
-		n48 := an.node48(a)
-
-		idx := n48.prevPresentIdx(node256cap - 1)
-		if idx >= 0 {
-			return maximum(a, n48.children[n48.keys[idx]])
-		}
-		if !n48.inplaceLeaf.addr.isNull() {
-			return n48.inplaceLeaf
-		}
-	case typeNode256:
-		n256 := an.node256(a)
-		idx := n256.prevPresentIdx(node256cap - 1)
-		if idx >= 0 {
-			return maximum(a, n256.children[idx])
-		}
-		if !n256.inplaceLeaf.addr.isNull() {
-			return n256.inplaceLeaf
-		}
-	}
-	return nullArtNode
 }
 
 func (an artNode) findChild(a *artAllocator, c byte, valid bool) (int, artNode) {

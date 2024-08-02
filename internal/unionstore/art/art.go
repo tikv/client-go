@@ -35,7 +35,6 @@ func New() *Art {
 	t.allocator.nodeAllocator.freeNode4 = make([]nodeAddr, 0, 1<<4)
 	t.allocator.nodeAllocator.freeNode16 = make([]nodeAddr, 0, 1<<3)
 	t.allocator.nodeAllocator.freeNode48 = make([]nodeAddr, 0, 1<<2)
-	t.allocator.nodeAllocator.freeNode256 = make([]nodeAddr, 0, 1)
 	return &t
 }
 
@@ -536,7 +535,7 @@ func (t *Art) inspectKVInLog(head, tail *ARTCheckpoint, f func([]byte, kv.KeyFla
 	cursor := *tail
 	for !head.isSamePosition(&cursor) {
 		cursorAddr := nodeAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
-		hdrOff := cursorAddr.off - memdbVlogHdrSize
+		hdrOff := cursorAddr.off - uint32(memdbVlogHdrSize)
 		block := t.allocator.vlogAllocator.blocks[cursorAddr.idx].buf
 		var hdr vlogHdr
 		hdr.load(block[hdrOff:])
@@ -576,7 +575,7 @@ func (t *Art) selectValueHistory(addr nodeAddr, predicate func(nodeAddr) bool) n
 			return addr
 		}
 		var hdr vlogHdr
-		hdr.load(t.allocator.vlogAllocator.blocks[addr.idx].buf[addr.off-memdbVlogHdrSize:])
+		hdr.load(t.allocator.vlogAllocator.blocks[addr.idx].buf[addr.off-uint32(memdbVlogHdrSize):])
 		addr = hdr.oldValue
 	}
 	return nullAddr

@@ -5,13 +5,10 @@ import (
 	"math"
 	"sync/atomic"
 	"unsafe"
-
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"go.uber.org/zap"
 )
 
 const (
-	alignMask = 1<<32 - 8 // 29 bit 1 and 3 bit 0.
+	alignMask = 0xFFFFFFF8 // 29 bits of 1 and 3 bits of 0
 
 	nullBlockOffset = math.MaxUint32
 	maxBlockSize    = 128 << 20
@@ -29,17 +26,7 @@ type nodeAddr struct {
 }
 
 func (addr nodeAddr) isNull() bool {
-	if addr == nullAddr {
-		return true
-	}
-	if addr.idx == math.MaxUint32 || addr.off == math.MaxUint32 {
-		// defensive programming, the code should never run to here.
-		// it always means something wrong... (maybe caused by data race?)
-		// because we never set part of idx/off to math.MaxUint64
-		logutil.BgLogger().Warn("Invalid nodeAddr", zap.Uint32("idx", addr.idx), zap.Uint32("off", addr.off))
-		return true
-	}
-	return false
+	return addr == nullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
 }
 
 // store and load is used by vlog, due to pointer in vlog is not aligned.
@@ -72,10 +59,9 @@ type memArena struct {
 // reusing blocks reduces the memory pieces.
 type nodeArena struct {
 	memArena
-	freeNode4   []nodeAddr
-	freeNode16  []nodeAddr
-	freeNode48  []nodeAddr
-	freeNode256 []nodeAddr
+	freeNode4  []nodeAddr
+	freeNode16 []nodeAddr
+	freeNode48 []nodeAddr
 }
 
 type vlogArena struct {
@@ -95,7 +81,6 @@ func (allocator *artAllocator) init() {
 	allocator.nodeAllocator.freeNode4 = make([]nodeAddr, 0, 1<<4)
 	allocator.nodeAllocator.freeNode16 = make([]nodeAddr, 0, 1<<3)
 	allocator.nodeAllocator.freeNode48 = make([]nodeAddr, 0, 1<<2)
-	allocator.nodeAllocator.freeNode256 = make([]nodeAddr, 0, 1)
 }
 
 func (f *artAllocator) allocNode4() (nodeAddr, *node4) {
@@ -181,20 +166,10 @@ func (f *artAllocator) allocNode256() (nodeAddr, *node256) {
 		addr nodeAddr
 		data []byte
 	)
-	if len(f.nodeAllocator.freeNode256) > 0 {
-		addr = f.nodeAllocator.freeNode256[len(f.nodeAllocator.freeNode256)-1]
-		f.nodeAllocator.freeNode256 = f.nodeAllocator.freeNode256[:len(f.nodeAllocator.freeNode256)-1]
-		data = f.nodeAllocator.getData(addr)
-	} else {
-		addr, data = f.nodeAllocator.alloc(node256size, true)
-	}
+	addr, data = f.nodeAllocator.alloc(node256size, true)
 	n256 := (*node256)(unsafe.Pointer(&data[0]))
 	n256.init()
 	return addr, n256
-}
-
-func (f *artAllocator) freeNode256(addr nodeAddr) {
-	f.nodeAllocator.freeNode256 = append(f.nodeAllocator.freeNode256, addr)
 }
 
 func (f *artAllocator) getNode256(addr nodeAddr) *node256 {
@@ -310,7 +285,9 @@ func (a *memArenaBlock) reset() {
 	a.length = 0
 }
 
-const memdbVlogHdrSize = 8 + 8 + 4
+// We calculate the memdbVlogHdrSize by hand, because we manually store and load every fields.
+// If the compiler rearranges the fields in some future change, the size of the struct may be different from the actual size we used.
+const memdbVlogHdrSize = int(2*unsafe.Sizeof(nodeAddr{}) + unsafe.Sizeof(uint32(0)))
 
 type vlogHdr struct {
 	nodeAddr nodeAddr
@@ -347,7 +324,7 @@ func (f *artAllocator) allocValue(leafAddr nodeAddr, oldAddr nodeAddr, value []b
 }
 
 func (f *artAllocator) getValue(valAddr nodeAddr) []byte {
-	hdrOff := valAddr.off - memdbVlogHdrSize
+	hdrOff := valAddr.off - uint32(memdbVlogHdrSize)
 	block := f.vlogAllocator.blocks[valAddr.idx].buf
 	valLen := endian.Uint32(block[hdrOff:])
 	if valLen == 0 {
