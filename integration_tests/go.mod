@@ -70,6 +70,7 @@ require (
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5 // indirect
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20240703042657-230bbc2ef5ef // indirect
 	github.com/pingcap/tipb v0.0.0-20240318032315-55a7867ddd50 // indirect
+	github.com/plar/go-adaptive-radix-tree v1.0.5 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
 	github.com/prometheus/client_golang v1.19.1 // indirect
@@ -122,3 +123,5 @@ replace (
 
 	github.com/tikv/client-go/v2 => ../
 )
+
+replace github.com/plar/go-adaptive-radix-tree => github.com/you06/go-adaptive-radix-tree v0.0.0-20240523051018-0278e8bfcd2b

@@ -2466,10 +2466,10 @@ func (s *testCommitterSuite) TestFlagsInMemBufferMutations() {
 	})
 
 	// Create memBufferMutations object and add keys with flags to it.
-	mutations := transaction.NewMemBufferMutationsProbe(db.Len(), db.GetMemDB())
+	mutations := transaction.NewMemBufferMutationsProbe(db.Len(), transaction.ToArenaArt(db))
 
 	forEachCase(func(op kvrpcpb.Op, key []byte, value []byte, i int, isPessimisticLock, assertExist, assertNotExist bool) {
-		handle := db.GetMemDB().IterWithFlags(key, nil).Handle()
+		handle := transaction.ToArenaArt(db).IterWithFlags(key, nil).Handle()
 		mutations.Push(op, isPessimisticLock, assertExist, assertNotExist, false, handle)
 	})
 
@@ -2499,8 +2499,8 @@ func (s *testCommitterSuite) TestExtractKeyExistsErr() {
 	txn.GetMemBuffer().UpdateFlags([]byte("de"), kv.DelPresumeKeyNotExists)
 	err = committer.PrewriteAllMutations(context.Background())
 	s.ErrorContains(err, "existErr")
-	s.True(txn.GetMemBuffer().GetMemDB().TryLock())
-	txn.GetMemBuffer().GetMemDB().Unlock()
+	s.True(transaction.ToArenaArt(txn.GetMemBuffer()).TryLock())
+	transaction.ToArenaArt(txn.GetMemBuffer()).Unlock()
 }
 
 func (s *testCommitterSuite) TestKillSignal() {

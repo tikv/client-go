@@ -353,7 +353,7 @@ func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint)
 	if result.isNull() {
 		return nil, false
 	}
-	return l.getValue(addr), true
+	return l.getValue(result), true
 }
 
 func (l *memdbVlog) selectValueHistory(addr memdbArenaAddr, predicate func(memdbArenaAddr) bool) memdbArenaAddr {
