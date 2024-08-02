@@ -210,7 +210,7 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 		return cmp < 0
 	})
 
-	logutil.Logger(bo.GetCtx()).Info("txn file group to batches", zap.Stringers("batches", batches))
+	logutil.Logger(bo.GetCtx()).Debug("txn file group to batches", zap.Stringers("batches", batches))
 	return batches, nil
 }
 
@@ -648,8 +648,15 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	bo, cancel := bo.Fork()
 	defer cancel()
 
+	rateLim := len(batches)
 	cnf := config.GetGlobalConfig()
-	rateLim := calcRateLimit(chunksCount, len(batches), cnf)
+	if rateLim > cnf.CommitterConcurrency {
+		rateLim = cnf.CommitterConcurrency
+	}
+	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
+	if chunksCount > maxChunksInParallel {
+		rateLim = maxChunksInParallel
+	}
 	rateLimiter := util.NewRateLimit(rateLim)
 
 	for _, batch := range batches {
@@ -678,7 +685,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 
 func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, batch chunkBatch, action txnFileAction) (*txnChunkSlice, error) {
 	resp, err1 := action.executeBatch(c, bo, batch)
-	logutil.Logger(bo.GetCtx()).Info("txn file: execute batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.Any("batch", batch),
 		zap.Stringer("action", action),
@@ -711,7 +718,7 @@ func (c *twoPhaseCommitter) executeTxnFileSliceSingleBatch(bo *retry.Backoffer, 
 		return nil, err1
 	}
 	if regionErr != nil {
-		logutil.Logger(bo.GetCtx()).Info("txn file: execute batch failed, region error",
+		logutil.Logger(bo.GetCtx()).Debug("txn file: execute batch failed, region error",
 			zap.Uint64("startTS", c.startTS),
 			zap.Stringer("action", action),
 			zap.Any("batch", batch),
@@ -754,7 +761,7 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 
 	firstBatch.isPrimary = true
 	resp, err := action.executeBatch(c, bo, firstBatch)
-	logutil.Logger(bo.GetCtx()).Info("txn file: execute primary batch finished",
+	logutil.Logger(bo.GetCtx()).Debug("txn file: execute primary batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.String("primary", kv.StrKey(c.primary())),
 		zap.Stringer("action", action),
@@ -1135,18 +1142,4 @@ func (w *chunkWriterClient) asyncBuildChunk(bo *retry.Backoffer, buf []byte, chu
 		chunkId, err := w.buildChunk(bo.Clone(), buf)
 		resultCh <- buildChunkResult{chunkId, chunkRange, err}
 	}()
-}
-
-// RateLimit := BatchesInParallel := MaxChunks / ChunksPerBatch
-// ChunksPerBatch := ChunksCount / BatchesCount
-func calcRateLimit(chunksCount, batchesCount int, cnf *config.Config) int {
-	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
-	rateLim := maxChunksInParallel * batchesCount / chunksCount
-	if rateLim > cnf.CommitterConcurrency {
-		rateLim = cnf.CommitterConcurrency
-	}
-	if rateLim < 1 {
-		rateLim = 1
-	}
-	return rateLim
 }
