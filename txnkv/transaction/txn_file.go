@@ -606,6 +606,9 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	}
 	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
 	stepDone("commit")
+	if err != nil {
+		return
+	}
 
 	err = c.afterExecuteTxnFile(rcInterceptor, reqInfo, ruDetails)
 	return
@@ -757,11 +760,12 @@ func (c *twoPhaseCommitter) executeTxnFilePrimaryBatch(bo *retry.Backoffer, firs
 
 	firstBatch.isPrimary = true
 	resp, err := action.executeBatch(c, bo, firstBatch)
-	logutil.Logger(bo.GetCtx()).Debug("txn file: execute primary batch finished",
+	logutil.Logger(bo.GetCtx()).Info("txn file: execute primary batch finished",
 		zap.Uint64("startTS", c.startTS),
 		zap.String("primary", kv.StrKey(c.primary())),
 		zap.Stringer("action", action),
 		zap.Stringer("batch", firstBatch),
+		zap.Any("resp", resp),
 		zap.Error(err))
 	if err != nil {
 		return nil, errors.WithStack(err)
