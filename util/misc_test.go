@@ -88,3 +88,12 @@ func TestCompatibleParseGCTime(t *testing.T) {
 		assert.NotNil(err)
 	}
 }
+
+func TestBytesToString(t *testing.T) {
+	assert := assert.New(t)
+
+	for _, str := range []string{"", "hello"} {
+		bytes := []byte(str)
+		assert.Equal(str, String(bytes))
+	}
+}
