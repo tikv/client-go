@@ -1259,6 +1259,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		keyRange.StartKey = r.EndKey()
 		// Batch load rest regions from Cache.
 		batchSize := 100
+		containsAll := false
 	outer:
 		for {
 			batchRegionInCache, err := c.scanRegionsFromCache(bo, keyRange.StartKey, keyRange.EndKey, batchSize)
@@ -1267,21 +1268,23 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 			}
 			for _, r = range batchRegionInCache {
 				if !r.Contains(keyRange.StartKey) { // uncached hole, load the rest regions
-					uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
 					break outer
 				}
 				cachedRegions = append(cachedRegions, r)
 				lastRegion = r
 				if r.ContainsByEnd(keyRange.EndKey) {
 					// the range is fully hit in the region cache.
+					containsAll = true
 					break outer
 				}
 				keyRange.StartKey = r.EndKey()
 			}
 			if len(batchRegionInCache) < batchSize { // region cache miss, load the rest regions
-				uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
 				break outer
 			}
+		}
+		if !containsAll {
+			uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
 		}
 	}
 
