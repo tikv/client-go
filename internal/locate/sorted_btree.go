@@ -82,13 +82,14 @@ func (s *SortedRegions) SearchByKey(key []byte, isEndKey bool) (r *Region) {
 // AscendGreaterOrEqual returns all items that are greater than or equal to the key.
 // The first region's startKey is `startKey`, all regions returned are continuous and have no hole.
 func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int) (regions []*Region) {
+	now := time.Now().Unix()
 	lastStartKey := startKey
 	s.b.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item *btreeItem) bool {
 		region := item.cachedRegion
 		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
 			return false
 		}
-		if !region.checkRegionCacheTTL(time.Now().Unix()) {
+		if !region.checkRegionCacheTTL(now) {
 			return false
 		}
 		if !region.Contains(lastStartKey) { // uncached hole
