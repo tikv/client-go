@@ -80,7 +80,7 @@ func (s *SortedRegions) SearchByKey(key []byte, isEndKey bool) (r *Region) {
 }
 
 // AscendGreaterOrEqual returns all items that are greater than or equal to the key.
-// The first region's startKey is `startKey`, all regions returned are continuous and have no hole.
+// It is the caller's responsibility to make sure that startKey is a node in the B-tree, otherwise, the startKey will not be included in the return regions.
 func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int) (regions []*Region) {
 	now := time.Now().Unix()
 	lastStartKey := startKey

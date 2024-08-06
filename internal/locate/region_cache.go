@@ -1258,11 +1258,10 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		}
 		keyRange.StartKey = r.EndKey()
 		// Batch load rest regions from Cache.
-		batchSize := 100
 		containsAll := false
 	outer:
 		for {
-			batchRegionInCache, err := c.scanRegionsFromCache(bo, keyRange.StartKey, keyRange.EndKey, batchSize)
+			batchRegionInCache, err := c.scanRegionsFromCache(bo, keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
 			if err != nil {
 				return nil, err
 			}
@@ -1279,8 +1278,8 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 				}
 				keyRange.StartKey = r.EndKey()
 			}
-			if len(batchRegionInCache) < batchSize { // region cache miss, load the rest regions
-				break outer
+			if len(batchRegionInCache) < defaultRegionsPerBatch { // region cache miss, load the rest regions
+				break
 			}
 		}
 		if !containsAll {
@@ -2106,7 +2105,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 }
 
 // For optimizing BatchLocateKeyRanges, scanRegionsFromCache scans at most `limit` regions from cache.
-// The first region's startKey is `startKey`, all regions returned are continuous and have no hole.
+// It is the caller's responsibility to make sure that startKey is a node in the B-tree, otherwise, the startKey will not be included in the return regions.
 func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
 	if limit == 0 {
 		return nil, nil
