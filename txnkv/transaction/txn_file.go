@@ -615,6 +615,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 	var err error
 	var regionErrChunks txnChunkSlice
 
+	chunksCount := chunkSlice.Len()
 	if batches == nil {
 		batches, err = chunkSlice.groupToBatches(c.store.GetRegionCache(), bo, c.mutations)
 		if err != nil {
@@ -650,7 +651,7 @@ func (c *twoPhaseCommitter) executeTxnFileSlice(bo *retry.Backoffer, chunkSlice 
 		rateLim = cnf.CommitterConcurrency
 	}
 	maxChunksInParallel := int(MaxTxnChunkSizeInParallel / cnf.TiKVClient.TxnChunkMaxSize) // 32 by default
-	if rateLim > maxChunksInParallel {
+	if chunksCount > maxChunksInParallel {
 		rateLim = maxChunksInParallel
 	}
 	rateLimiter := util.NewRateLimit(rateLim)
@@ -800,15 +801,14 @@ func (c *twoPhaseCommitter) executeTxnFileAction(bo *retry.Backoffer, chunkSlice
 		if len(secondaries) == 0 {
 			return nil
 		}
-		var emptySlice txnChunkSlice
 		if !action.asyncExecuteSecondaries() {
-			return c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action)
+			return c.executeTxnFileSliceWithRetry(bo, chunkSlice, secondaries, action)
 		}
 
 		c.store.WaitGroup().Add(1)
 		errGo := c.store.Go(func() {
 			defer c.store.WaitGroup().Done()
-			err := c.executeTxnFileSliceWithRetry(bo, emptySlice, secondaries, action)
+			err := c.executeTxnFileSliceWithRetry(bo, chunkSlice, secondaries, action)
 			logutil.Logger(bo.GetCtx()).Debug("txn file: async execute secondaries finished",
 				zap.Uint64("startTS", c.startTS),
 				zap.Stringer("action", action),
