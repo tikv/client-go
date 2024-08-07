@@ -1987,7 +1987,7 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	// init region cache
 	s.cache.LocateKey(s.bo, []byte("a"))
 
-	store1, _ := s.cache.stores.get(s.store1)
+	store1 := s.cache.getStoreByStoreID(s.store1)
 	s.Require().NotNil(store1)
 	s.Require().Equal(resolved, store1.getResolveState())
 	// change store1 label.
@@ -2000,12 +2000,13 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 	store1.setResolveState(needCheck)
 
 	// setup mock liveness func
-	s.cache.stores.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
 		return reachable
-	})
+	}
+	s.cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 
 	// start health check loop
-	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, unreachable, time.Second*30)
+	go store1.checkUntilHealth(s.cache, unreachable, time.Second*30)
 
 	// mock asyncCheckAndResolveLoop worker to check and resolve store.
 	s.cache.checkAndResolve(nil, func(s *Store) bool {
@@ -2017,7 +2018,7 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 		return store1.getResolveState() == deleted
 	}, 3*time.Second, time.Second)
 	// assert the new store should be added and it should be resolved and reachable.
-	newStore1, _ := s.cache.stores.get(s.store1)
+	newStore1 := s.cache.getStoreByStoreID(s.store1)
 	s.Eventually(func() bool {
 		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
