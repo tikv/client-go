@@ -16,8 +16,10 @@ package patterns
 
 import (
 	"benchtool/config"
+	"benchtool/utils"
 	"benchtool/utils/statistics"
 	"benchtool/workloads"
+	"benchtool/workloads/rawkv"
 	"context"
 	"fmt"
 	"sync"
@@ -28,6 +30,49 @@ import (
 	clientRawKV "github.com/tikv/client-go/v2/rawkv"
 	clientTxnKV "github.com/tikv/client-go/v2/txnkv"
 )
+
+func getPatternsConfig(ctx context.Context) *config.PatternsConfig {
+	c := ctx.Value(config.WorkloadTypeHybrid).(*config.PatternsConfig)
+	return c
+}
+
+// Assistants for TxnKV workload
+func prepareLockKeyWithTimeout(ctx context.Context, txn *clientTxnKV.KVTxn, key []byte, timeout int64) error {
+	if timeout > 0 {
+		return txn.LockKeysWithWaitTime(ctx, timeout, key)
+	}
+	return nil
+}
+
+func execPatternsWorkloads(cmd string) {
+	if cmd == "" {
+		return
+	}
+	patternsConfig := getPatternsConfig(workloads.GlobalContext)
+
+	var workload *WorkloadImpl
+	var err error
+	if workload, err = NewPatternWorkload(patternsConfig); err != nil {
+		fmt.Printf("create Patterns workload failed: %v\n", err)
+		return
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, patternsConfig.Global.TotalTime)
+	workloads.GlobalContext = timeoutCtx
+	defer cancel()
+
+	for {
+		if !workload.ContinueToExecute() {
+			break
+		}
+		if err = workload.BeforeExecute(); err != nil {
+			fmt.Println("BeforeExecute failed:", err)
+			break
+		}
+		workload.Execute(cmd)
+		workload.AfterExecute()
+	}
+}
 
 // Register registers the workload to the command line parser
 func Register(command *config.CommandLineParser) *config.PatternsConfig {
@@ -44,34 +89,34 @@ func Register(command *config.CommandLineParser) *config.PatternsConfig {
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, config.WorkloadTypeHybrid, patternsConfig)
 		},
 	}
-	cmd.PersistentFlags().StringVar(&patternsConfig.FilePath, "file-path", "", "The path of the patterns file")
+	cmd.PersistentFlags().StringVar(&patternsConfig.FilePath, "file-path", "", "The path of the pattern file")
 
 	var cmdPrepare = &cobra.Command{
 		Use:   "prepare",
-		Short: "Prepare data for TxnKV workload",
+		Short: "Prepare data for workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execTxnKV("prepare")
+			execPatternsWorkloads("prepare")
 		},
 	}
 	var cmdRun = &cobra.Command{
 		Use:   "run",
 		Short: "Run workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execTxnKV("run")
+			execPatternsWorkloads("run")
 		},
 	}
 	var cmdCleanup = &cobra.Command{
 		Use:   "cleanup",
 		Short: "Cleanup data for the workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execTxnKV("cleanup")
+			execPatternsWorkloads("cleanup")
 		},
 	}
 	var cmdCheck = &cobra.Command{
 		Use:   "check",
 		Short: "Check data consistency for the workload",
 		Run: func(cmd *cobra.Command, _ []string) {
-			execTxnKV("check")
+			execPatternsWorkloads("check")
 		},
 	}
 	cmd.AddCommand(cmdRun, cmdPrepare, cmdCleanup, cmdCheck)
@@ -79,19 +124,6 @@ func Register(command *config.CommandLineParser) *config.PatternsConfig {
 	command.GetCommand().AddCommand(cmd)
 
 	return patternsConfig
-}
-
-func getPatternsConfig(ctx context.Context) *config.PatternsConfig {
-	c := ctx.Value(config.WorkloadTypeHybrid).(*config.PatternsConfig)
-	return c
-}
-
-// Assistants for TxnKV workload
-func prepareLockKeyWithTimeout(ctx context.Context, txn *clientTxnKV.KVTxn, key []byte, timeout int64) error {
-	if timeout > 0 {
-		return txn.LockKeysWithWaitTime(ctx, timeout, key)
-	}
-	return nil
 }
 
 // Workload is the implementation of WorkloadInterface
@@ -111,6 +143,9 @@ type WorkloadImpl struct {
 
 func NewPatternWorkload(cfg *config.PatternsConfig) (*WorkloadImpl, error) {
 	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Parse(); err != nil {
 		return nil, err
 	}
 	w := &WorkloadImpl{
@@ -159,7 +194,7 @@ func (w *WorkloadImpl) CleanupThread(ctx context.Context, threadID int) {
 // Prepare implements WorkloadInterface
 func (w *WorkloadImpl) Prepare(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
-		return fmt.Errorf("no valid TxnKV clients")
+		return fmt.Errorf("no valid clients for patterns workloads")
 	}
 
 	// return prepareWorkloadImpl(ctx, w, w.cfg.Threads, w.cfg.Warehouses, threadID)
@@ -174,7 +209,118 @@ func (w *WorkloadImpl) CheckPrepare(ctx context.Context, threadID int) error {
 
 func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
+		return fmt.Errorf("no valid clients for pattern workload")
+	}
+
+	if len(w.rawClients) > 0 {
+		return w.RunRawkKvWorkloads(ctx, threadID)
+	} else if len(w.txnClients) > 0 {
+		return w.RunTxnKvWorkloads(ctx, threadID)
+	}
+	return fmt.Errorf("invalid pattern workload")
+}
+
+// RunRawkKvWorkloads implements the executing details on RawKV part.
+func (w *WorkloadImpl) RunRawkKvWorkloads(ctx context.Context, threadID int) error {
+	if !w.isValidThread(threadID) {
+		return fmt.Errorf("no valid RawKV clients")
+	}
+
+	plan := w.config.Plans[w.patternIdx]
+	rawConfig := plan.GetRawKVConfig()
+
+	for _, workload := range plan.GetWorkloads() {
+		rawkv.RunRawKVCommand(ctx, w.rawClients[threadID], workload, rawConfig.KeySize, rawConfig.ValueSize, rawConfig.BatchSize, rawConfig.Randomize, w.stats, w.config.Global.IgnoreError)
+	}
+	return nil
+}
+
+// RunTxnKvWorkloads implements the executing details on TxnKV part.
+func (w *WorkloadImpl) RunTxnKvWorkloads(ctx context.Context, threadID int) error {
+	if !w.isValidThread(threadID) {
 		return fmt.Errorf("no valid TxnKV clients")
+	}
+
+	plan := w.config.Plans[w.patternIdx]
+	{
+		// Check the current plan is valid or not
+		workloads := plan.GetWorkloads()
+		if len(workloads) < 2 || workloads[0] != config.TxnKVCommandTypeBegin {
+			return fmt.Errorf("invalid plan, idx %d", w.patternIdx)
+		}
+	}
+	txnConfig := plan.GetTxnKVConfig()
+	// Prepare the key value pairs
+	key := config.TxnKVCommandDefaultKey
+	val := utils.GenRandomStr(config.TxnKVCommandDefaultValue, txnConfig.ValueSize)
+	lockTimeout := int64(txnConfig.LockTimeout)
+	// Constructs the txn client and sets the txn mode
+	client := w.txnClients[threadID]
+	txn, err := client.Begin()
+	if err != nil {
+		return fmt.Errorf("txn begin failed, err %v", err)
+	}
+	switch txnConfig.TxnMode {
+	case config.TxnKVMode1PC:
+		txn.SetEnable1PC(true)
+	case config.TxnKVModeAsyncCommit:
+		txn.SetEnableAsyncCommit(true)
+	}
+	// Default is optimistic lock mode.
+	txn.SetPessimistic(lockTimeout > 0)
+	// Tranverse each command
+	hasUncommitted := true // mark the previous txn has been committed or not
+	for idx, workload := range plan.GetWorkloads() {
+		if (workload == config.TxnKVCommandTypeCommit) || (workload == config.TxnKVCommandTypeBegin && idx > 0) {
+			hasUncommitted = false
+			start := time.Now()
+			if txnErr := txn.Commit(ctx); txnErr != nil {
+				return fmt.Errorf("txn commit failed, err %v", txnErr)
+			}
+			w.stats.Record(txnConfig.TxnMode, time.Since(start))
+			// Create a new txn.
+			txn, err = client.Begin()
+			if err != nil {
+				return fmt.Errorf("txn begin failed, err %v", err)
+			}
+			continue
+		} else if workload == config.TxnKVCommandTypeRollback {
+			hasUncommitted = true
+			if err = txn.Rollback(); err != nil {
+				return fmt.Errorf("txn rollback failed, err %v", err)
+			}
+			continue
+		}
+		hasUncommitted = true
+		for row := 0; row < txnConfig.TxnSize; row++ {
+			key = fmt.Sprintf("%s@col_", utils.GenRandomStr(key, txnConfig.KeySize))
+			// Lock the key with timeout if necessary.
+			if err = prepareLockKeyWithTimeout(ctx, txn, []byte(key), lockTimeout); err != nil {
+				fmt.Printf("txn lock key failed, err %v", err)
+				continue
+			}
+			for col := 0; col < txnConfig.ColumnSize; col++ {
+				colKey := fmt.Sprintf("%s%d", key, col)
+				if workload == config.TxnKVCommandTypeRead {
+					_, err = txn.Get(ctx, []byte(colKey))
+				} else if workload == config.TxnKVCommandTypeWrite || workload == config.TxnKVCommandTypeSet {
+					err = txn.Set([]byte(colKey), []byte(val))
+				} else if workload == config.TxnKVCommandTypeDel {
+					err = txn.Delete([]byte(colKey))
+				}
+				if err != nil {
+					return fmt.Errorf("txn set / get failed, err %v", err)
+				}
+			}
+		}
+	}
+	// If the previous txn is not committed, commit it.
+	if hasUncommitted {
+		start := time.Now()
+		if txnErr := txn.Commit(ctx); txnErr != nil {
+			return fmt.Errorf("txn commit failed, err %v", txnErr)
+		}
+		w.stats.Record(txnConfig.TxnMode, time.Since(start))
 	}
 	return nil
 }
@@ -187,7 +333,7 @@ func (w *WorkloadImpl) Check(ctx context.Context, threadID int) error {
 // Cleanup implements WorkloadInterface
 func (w *WorkloadImpl) Cleanup(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
-		return fmt.Errorf("no valid TxnKV clients")
+		return fmt.Errorf("no valid clients for pattern workload")
 	}
 	// delete all keys
 	if threadID == 0 {
@@ -300,34 +446,4 @@ func (w *WorkloadImpl) Execute(cmd string) {
 	w.wait.Wait()
 	cancel()
 	<-ch
-}
-
-func execTxnKV(cmd string) {
-	if cmd == "" {
-		return
-	}
-	patternsConfig := getPatternsConfig(workloads.GlobalContext)
-
-	var workload *WorkloadImpl
-	var err error
-	if workload, err = NewPatternWorkload(patternsConfig); err != nil {
-		fmt.Printf("create Patterns workload failed: %v\n", err)
-		return
-	}
-
-	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, patternsConfig.Global.TotalTime)
-	workloads.GlobalContext = timeoutCtx
-	defer cancel()
-
-	for {
-		if !workload.ContinueToExecute() {
-			break
-		}
-		if err = workload.BeforeExecute(); err != nil {
-			fmt.Println("BeforeExecute failed:", err)
-			break
-		}
-		workload.Execute(cmd)
-		workload.AfterExecute()
-	}
 }

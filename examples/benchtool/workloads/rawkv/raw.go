@@ -32,6 +32,33 @@ func isReadCommand(cmd string) bool {
 	return cmd == config.RawKVCommandTypeGet || cmd == config.RawKVCommandTypeBatchGet
 }
 
+func getRawKvConfig(ctx context.Context) *config.RawKVConfig {
+	c := ctx.Value(config.WorkloadTypeRawKV).(*config.RawKVConfig)
+	return c
+}
+
+func execRawKV(cmd string) {
+	if cmd == "" {
+		return
+	}
+	rawKVConfig := getRawKvConfig(workloads.GlobalContext)
+
+	var workload *WorkloadImpl
+	var err error
+	if workload, err = NewRawKVWorkload(rawKVConfig); err != nil {
+		fmt.Printf("create RawKV workload failed: %v\n", err)
+		return
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, rawKVConfig.Global.TotalTime)
+	workloads.GlobalContext = timeoutCtx
+	defer cancel()
+
+	workload.Execute(cmd)
+	fmt.Println("RawKV workload finished")
+	workload.OutputStats(true)
+}
+
 // Register registers the workload to the command line parser
 func Register(command *config.CommandLineParser) *config.RawKVConfig {
 	if command == nil {
@@ -95,9 +122,62 @@ func Register(command *config.CommandLineParser) *config.RawKVConfig {
 	return rawKVConfig
 }
 
-func getRawKvConfig(ctx context.Context) *config.RawKVConfig {
-	c := ctx.Value(config.WorkloadTypeRawKV).(*config.RawKVConfig)
-	return c
+func RunRawKVCommand(ctx context.Context, client *rawkv.Client, commandType string, keySize int, valueSize int, batchSize int, randomize bool, stats *statistics.PerfProfile, ignoreErr bool) error {
+	// For unary operations.
+	key := config.RawKVCommandDefaultKey
+	val := config.RawKVCommandDefaultValue
+
+	// For batch operations.
+	var (
+		keys [][]byte
+		vals [][]byte
+		err  error
+	)
+	switch commandType {
+	case config.RawKVCommandTypePut, config.RawKVCommandTypeGet, config.RawKVCommandTypeDel, config.RawKVCommandTypeCAS, config.RawKVCommandTypeScan, config.RawKVCommandTypeReverseScan:
+		if randomize {
+			key = utils.GenRandomStr(config.RawKVCommandDefaultKey, keySize)
+			if !isReadCommand(commandType) {
+				val = utils.GenRandomStr(config.RawKVCommandDefaultValue, valueSize)
+			}
+		}
+	case config.RawKVCommandTypeBatchPut, config.RawKVCommandTypeBatchGet, config.RawKVCommandTypeBatchDel:
+		if randomize {
+			keys = utils.GenRandomByteArrs(config.RawKVCommandDefaultKey, keySize, batchSize)
+			if !isReadCommand(commandType) {
+				vals = utils.GenRandomByteArrs(config.RawKVCommandDefaultValue, valueSize, batchSize)
+			}
+		}
+	}
+
+	start := time.Now()
+	switch commandType {
+	case config.RawKVCommandTypePut:
+		err = client.Put(ctx, []byte(key), []byte(val))
+	case config.RawKVCommandTypeGet:
+		_, err = client.Get(ctx, []byte(key))
+	case config.RawKVCommandTypeDel:
+		err = client.Delete(ctx, []byte(key))
+	case config.RawKVCommandTypeBatchPut:
+		err = client.BatchPut(ctx, keys, vals)
+	case config.RawKVCommandTypeBatchGet:
+		_, err = client.BatchGet(ctx, keys)
+	case config.RawKVCommandTypeBatchDel:
+		err = client.BatchDelete(ctx, keys)
+	case config.RawKVCommandTypeCAS:
+		var oldVal []byte
+		oldVal, _ = client.Get(ctx, []byte(key))
+		_, _, err = client.CompareAndSwap(ctx, []byte(key), []byte(oldVal), []byte(val)) // Experimental
+	case config.RawKVCommandTypeScan:
+		_, _, err = client.Scan(ctx, []byte(key), []byte(config.RawKVCommandDefaultEndKey), batchSize)
+	case config.RawKVCommandTypeReverseScan:
+		_, _, err = client.ReverseScan(ctx, []byte(key), []byte(config.RawKVCommandDefaultKey), batchSize)
+	}
+	if err != nil && !ignoreErr {
+		return fmt.Errorf("execute %s failed: %v", commandType, err)
+	}
+	stats.Record(commandType, time.Since(start))
+	return nil
 }
 
 type WorkloadImpl struct {
@@ -183,64 +263,7 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	if !w.isValidThread(threadID) {
 		return fmt.Errorf("no valid RawKV clients")
 	}
-
-	client := w.clients[threadID]
-
-	// For unary operations.
-	key := config.RawKVCommandDefaultKey
-	val := config.RawKVCommandDefaultValue
-
-	// For batch operations.
-	var (
-		keys [][]byte
-		vals [][]byte
-		err  error
-	)
-	switch w.cfg.CommandType {
-	case config.RawKVCommandTypePut, config.RawKVCommandTypeGet, config.RawKVCommandTypeDel, config.RawKVCommandTypeCAS, config.RawKVCommandTypeScan, config.RawKVCommandTypeReverseScan:
-		if w.cfg.Randomize {
-			key = utils.GenRandomStr(config.RawKVCommandDefaultKey, w.cfg.KeySize)
-			if !isReadCommand(w.cfg.CommandType) {
-				val = utils.GenRandomStr(config.RawKVCommandDefaultValue, w.cfg.ValueSize)
-			}
-		}
-	case config.RawKVCommandTypeBatchPut, config.RawKVCommandTypeBatchGet, config.RawKVCommandTypeBatchDel:
-		if w.cfg.Randomize {
-			keys = utils.GenRandomByteArrs(config.RawKVCommandDefaultKey, w.cfg.KeySize, w.cfg.BatchSize)
-			if !isReadCommand(w.cfg.CommandType) {
-				vals = utils.GenRandomByteArrs(config.RawKVCommandDefaultValue, w.cfg.ValueSize, w.cfg.BatchSize)
-			}
-		}
-	}
-
-	start := time.Now()
-	switch w.cfg.CommandType {
-	case config.RawKVCommandTypePut:
-		err = client.Put(ctx, []byte(key), []byte(val))
-	case config.RawKVCommandTypeGet:
-		_, err = client.Get(ctx, []byte(key))
-	case config.RawKVCommandTypeDel:
-		err = client.Delete(ctx, []byte(key))
-	case config.RawKVCommandTypeBatchPut:
-		err = client.BatchPut(ctx, keys, vals)
-	case config.RawKVCommandTypeBatchGet:
-		_, err = client.BatchGet(ctx, keys)
-	case config.RawKVCommandTypeBatchDel:
-		err = client.BatchDelete(ctx, keys)
-	case config.RawKVCommandTypeCAS:
-		var oldVal []byte
-		oldVal, _ = client.Get(ctx, []byte(key))
-		_, _, err = client.CompareAndSwap(ctx, []byte(key), []byte(oldVal), []byte(val)) // Experimental
-	case config.RawKVCommandTypeScan:
-		_, _, err = client.Scan(ctx, []byte(key), []byte(config.RawKVCommandDefaultEndKey), w.cfg.BatchSize)
-	case config.RawKVCommandTypeReverseScan:
-		_, _, err = client.ReverseScan(ctx, []byte(key), []byte(config.RawKVCommandDefaultKey), w.cfg.BatchSize)
-	}
-	if err != nil && !w.cfg.Global.IgnoreError {
-		return fmt.Errorf("execute %s failed: %v", w.cfg.CommandType, err)
-	}
-	w.stats.Record(w.cfg.CommandType, time.Since(start))
-	return nil
+	return RunRawKVCommand(ctx, w.clients[threadID], w.cfg.CommandType, w.cfg.KeySize, w.cfg.ValueSize, w.cfg.BatchSize, w.cfg.Randomize, w.stats, w.cfg.Global.IgnoreError)
 }
 
 // Check implements WorkloadInterface
@@ -310,26 +333,4 @@ func (w *WorkloadImpl) Execute(cmd string) {
 	w.wait.Wait()
 	cancel()
 	<-ch
-}
-
-func execRawKV(cmd string) {
-	if cmd == "" {
-		return
-	}
-	rawKVConfig := getRawKvConfig(workloads.GlobalContext)
-
-	var workload *WorkloadImpl
-	var err error
-	if workload, err = NewRawKVWorkload(rawKVConfig); err != nil {
-		fmt.Printf("create RawKV workload failed: %v\n", err)
-		return
-	}
-
-	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, rawKVConfig.Global.TotalTime)
-	workloads.GlobalContext = timeoutCtx
-	defer cancel()
-
-	workload.Execute(cmd)
-	fmt.Println("RawKV workload finished")
-	workload.OutputStats(true)
 }

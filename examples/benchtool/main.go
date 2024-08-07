@@ -36,8 +36,7 @@ func main() {
 	commandLineParser := config.NewCommandLineParser()
 	commandLineParser.Initialize()
 
-	// register all workloads
-	// TODO: add more workloads
+	// Register all workloads
 	rawkv.Register(commandLineParser)
 	txnkv.Register(commandLineParser)
 	patterns.Register(commandLineParser)

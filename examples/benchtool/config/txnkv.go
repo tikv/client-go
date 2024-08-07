@@ -11,8 +11,13 @@ const (
 )
 
 const (
-	TxnKVCommandTypeWrite = "write"
-	TxnKVCommandTypeRead  = "read"
+	TxnKVCommandTypeBegin    = "begin"
+	TxnKVCommandTypeCommit   = "commit"
+	TxnKVCommandTypeRollback = "rollback"
+	TxnKVCommandTypeWrite    = "write"
+	TxnKVCommandTypeSet      = "set"
+	TxnKVCommandTypeDel      = "delete"
+	TxnKVCommandTypeRead     = "read"
 
 	TxnKVCommandDefaultKey    = "txnkv_key"
 	TxnKVCommandDefaultEndKey = "txnkv_key`"

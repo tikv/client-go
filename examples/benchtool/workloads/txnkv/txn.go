@@ -31,6 +31,41 @@ import (
 	clientTxnKV "github.com/tikv/client-go/v2/txnkv"
 )
 
+func getTxnKVConfig(ctx context.Context) *config.TxnKVConfig {
+	c := ctx.Value(config.WorkloadTypeTxnKV).(*config.TxnKVConfig)
+	return c
+}
+
+// Assistants for TxnKV workload
+func prepareLockKeyWithTimeout(ctx context.Context, txn *clientTxnKV.KVTxn, key []byte, timeout int64) error {
+	if timeout > 0 {
+		return txn.LockKeysWithWaitTime(ctx, timeout, key)
+	}
+	return nil
+}
+
+func execTxnKV(cmd string) {
+	if cmd == "" {
+		return
+	}
+	TxnKVConfig := getTxnKVConfig(workloads.GlobalContext)
+
+	var workload *WorkloadImpl
+	var err error
+	if workload, err = NewTxnKVWorkload(TxnKVConfig); err != nil {
+		fmt.Printf("create TxnKV workload failed: %v\n", err)
+		return
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, TxnKVConfig.Global.TotalTime)
+	workloads.GlobalContext = timeoutCtx
+	defer cancel()
+
+	workload.Execute(cmd)
+	fmt.Println("TxnKV workload finished")
+	workload.OutputStats(true)
+}
+
 // Register registers the workload to the command line parser
 func Register(command *config.CommandLineParser) *config.TxnKVConfig {
 	if command == nil {
@@ -95,19 +130,6 @@ func Register(command *config.CommandLineParser) *config.TxnKVConfig {
 	command.GetCommand().AddCommand(cmd)
 
 	return txnKVConfig
-}
-
-func getTxnKVConfig(ctx context.Context) *config.TxnKVConfig {
-	c := ctx.Value(config.WorkloadTypeTxnKV).(*config.TxnKVConfig)
-	return c
-}
-
-// Assistants for TxnKV workload
-func prepareLockKeyWithTimeout(ctx context.Context, txn *clientTxnKV.KVTxn, key []byte, timeout int64) error {
-	if timeout > 0 {
-		return txn.LockKeysWithWaitTime(ctx, timeout, key)
-	}
-	return nil
 }
 
 // Workload is the implementation of WorkloadInterface
@@ -214,8 +236,8 @@ func (w *WorkloadImpl) Run(ctx context.Context, threadID int) error {
 	case config.TxnKVModeAsyncCommit:
 		txn.SetEnableAsyncCommit(true)
 	}
-	// Default is optimistic lock mode.
 
+	// Default is optimistic lock mode.
 	txn.SetPessimistic(lockTimeout > 0)
 
 	sum := w.cfg.TxnSize * w.cfg.ColumnSize
@@ -314,26 +336,4 @@ func (w *WorkloadImpl) Execute(cmd string) {
 	w.wait.Wait()
 	cancel()
 	<-ch
-}
-
-func execTxnKV(cmd string) {
-	if cmd == "" {
-		return
-	}
-	TxnKVConfig := getTxnKVConfig(workloads.GlobalContext)
-
-	var workload *WorkloadImpl
-	var err error
-	if workload, err = NewTxnKVWorkload(TxnKVConfig); err != nil {
-		fmt.Printf("create TxnKV workload failed: %v\n", err)
-		return
-	}
-
-	timeoutCtx, cancel := context.WithTimeout(workloads.GlobalContext, TxnKVConfig.Global.TotalTime)
-	workloads.GlobalContext = timeoutCtx
-	defer cancel()
-
-	workload.Execute(cmd)
-	fmt.Println("TxnKV workload finished")
-	workload.OutputStats(true)
 }
