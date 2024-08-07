@@ -92,7 +92,7 @@ func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int)
 		if !region.checkRegionCacheTTL(now) {
 			return false
 		}
-		if len(lastStartKey) > 0 && !region.Contains(lastStartKey) { // uncached hole
+		if !region.Contains(lastStartKey) { // uncached hole
 			return false
 		}
 		lastStartKey = region.EndKey()

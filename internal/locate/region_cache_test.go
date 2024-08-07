@@ -2260,11 +2260,33 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
-	s.Equal(len(r), 2)
+	s.Equal(len(r), 1)
 
 	_ = s.cache.refreshRegionIndex(s.bo)
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 1)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRegionCacheStartNonEmpty() {
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+
+	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
+	v2 := region.Region.confVer + 1
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	st := newUninitializedStore(s.store)
+
+	s.cache.mu.Lock()
+	s.cache.mu.sorted.Clear()
+	s.cache.mu.Unlock()
+	// region cache after clear: []
+
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	// region cache after insert: [[1, +inf)]
+
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 0) // fail in current implementation
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
