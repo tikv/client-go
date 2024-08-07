@@ -1982,3 +1982,45 @@ func (s *testRegionCacheSuite) TestScanRegionsWithGaps() {
 	})
 	s.Equal(scanRegionRes, regions)
 }
+
+func (s *testRegionCacheSuite) TestIssue1401() {
+	// init region cache
+	s.cache.LocateKey(s.bo, []byte("a"))
+
+	store1 := s.cache.getStoreByStoreID(s.store1)
+	s.Require().NotNil(store1)
+	s.Require().Equal(resolved, store1.getResolveState())
+	// change store1 label.
+	labels := store1.labels
+	labels = append(labels, &metapb.StoreLabel{Key: "host", Value: "0.0.0.0:20161"})
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr, labels...)
+
+	// mark the store is unreachable and need check.
+	atomic.StoreUint32(&store1.livenessState, uint32(unreachable))
+	store1.setResolveState(needCheck)
+
+	// setup mock liveness func
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+	s.cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+
+	// start health check loop
+	go store1.checkUntilHealth(s.cache, unreachable, time.Second*30)
+
+	// mock asyncCheckAndResolveLoop worker to check and resolve store.
+	s.cache.checkAndResolve(nil, func(s *Store) bool {
+		return s.getResolveState() == needCheck
+	})
+
+	// assert that the old store should be deleted.
+	s.Eventually(func() bool {
+		return store1.getResolveState() == deleted
+	}, 3*time.Second, time.Second)
+	// assert the new store should be added and it should be resolved and reachable.
+	newStore1 := s.cache.getStoreByStoreID(s.store1)
+	s.Eventually(func() bool {
+		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+	}, 3*time.Second, time.Second)
+	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
+}
