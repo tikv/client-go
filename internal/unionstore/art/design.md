@@ -34,9 +34,39 @@ The insert case is much more complex, we may meet one of the following cases:
 
 ### Node
 
+If a node4 is full and it's grown to node16, the old node4 can be put into a recycle list, we will reuse it when a new allocation of node4 reached, so the size of every node is fixed.
+
+Each node has an embeded base node, which contains the children number, prefix length, prefix array and an inplace leaf address.
+
+The lookup process of each node is showed in below figures.
+
+#### Node4 lookup
+
+![node4 lookup](./img/node4_lookup.png)
+
+#### Node16 lookup
+
+![node16 lookup](./img/node16_lookup.png)
+
+#### Node48 lookup
+
+![node48 lookup](./img/node48_lookup.png)
+
+#### Node256 lookup
+
+![node256 lookup](./img/node256_lookup.png)
+
 
 ### Memory Arena
 
+In GC language, every allocated memory piece is tracked by runtime, to optimize high frequency small writes, we need a memory arena to reduce the number of allocation.
+
+The arena allocates a long buffer each time, and cast it to the type we need.
+
+The side effect of memory arena is the pointer should be replaced with arena's address. And the dereference need to involve memory arena, which makes the code much more complex.
+
 ### Value Log
+
+
 
 [ART_Paper]: https://db.in.tum.de/~leis/papers/ART.pdf
