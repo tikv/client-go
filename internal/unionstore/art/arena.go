@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	alignMask = 0xFFFFFFF8 // 29 bits of 1 and 3 bits of 0
+	alignMask uint32 = 0xFFFFFFF8 // 29 bits of 1 and 3 bits of 0
 
 	nullBlockOffset = math.MaxUint32
 	maxBlockSize    = 128 << 20
@@ -25,12 +25,12 @@ type nodeAddr struct {
 	off uint32
 }
 
-func (addr nodeAddr) isNull() bool {
-	return addr == nullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
+func (addr *nodeAddr) isNull() bool {
+	return *addr == nullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
 }
 
 // store and load is used by vlog, due to pointer in vlog is not aligned.
-func (addr nodeAddr) store(dst []byte) {
+func (addr *nodeAddr) store(dst []byte) {
 	endian.PutUint32(dst, addr.idx)
 	endian.PutUint32(dst[4:], addr.off)
 }
@@ -42,11 +42,11 @@ func (addr *nodeAddr) load(src []byte) {
 
 type memArenaBlock struct {
 	buf    []byte
-	length int
+	length uint32
 }
 
 type memArena struct {
-	blockSize int
+	blockSize uint32
 	blocks    []memArenaBlock
 	// the total size of all blocks, also the approximate memory footprint of the arena.
 	capacity uint64
@@ -65,10 +65,6 @@ type nodeArena struct {
 }
 
 type vlogArena struct {
-	memArena
-}
-
-type leafArena struct {
 	memArena
 }
 
@@ -178,7 +174,7 @@ func (f *artAllocator) getNode256(addr nodeAddr) *node256 {
 }
 
 func (f *artAllocator) allocLeaf(key Key) (nodeAddr, *leaf) {
-	size := leafSize + len(key)
+	size := leafSize + uint32(len(key))
 	addr, data := f.nodeAllocator.alloc(size, true)
 	lf := (*leaf)(unsafe.Pointer(&data[0]))
 	lf.klen = uint16(len(key))
@@ -201,7 +197,7 @@ func (a *memArena) getData(addr nodeAddr) []byte {
 	return a.blocks[addr.idx].buf[addr.off:]
 }
 
-func (a *memArena) alloc(size int, align bool) (nodeAddr, []byte) {
+func (a *memArena) alloc(size uint32, align bool) (nodeAddr, []byte) {
 	if size > maxBlockSize {
 		panic("alloc size is larger than max block size")
 	}
@@ -222,7 +218,7 @@ func (a *memArena) alloc(size int, align bool) (nodeAddr, []byte) {
 	return addr, data
 }
 
-func (a *memArena) enlarge(allocSize, blockSize int) {
+func (a *memArena) enlarge(allocSize, blockSize uint32) {
 	a.blockSize = blockSize
 	for a.blockSize <= allocSize {
 		a.blockSize <<= 1
@@ -239,7 +235,7 @@ func (a *memArena) enlarge(allocSize, blockSize int) {
 	// for some operations (e.g. revertToCheckpoint)
 }
 
-func (a *memArena) allocInLastBlock(size int, align bool) (nodeAddr, []byte) {
+func (a *memArena) allocInLastBlock(size uint32, align bool) (nodeAddr, []byte) {
 	idx := len(a.blocks) - 1
 	offset, data := a.blocks[idx].alloc(size, align)
 	if offset == nullBlockOffset {
@@ -265,7 +261,7 @@ func (a *memArena) reset() {
 	a.onMemChange()
 }
 
-func (a *memArenaBlock) alloc(size int, align bool) (uint32, []byte) {
+func (a *memArenaBlock) alloc(size uint32, align bool) (uint32, []byte) {
 	offset := a.length
 	if align {
 		// We must align the allocated address for node
@@ -273,11 +269,11 @@ func (a *memArenaBlock) alloc(size int, align bool) (uint32, []byte) {
 		offset = (a.length + 7) & alignMask
 	}
 	newLen := offset + size
-	if newLen > len(a.buf) {
+	if newLen > uint32(len(a.buf)) {
 		return nullBlockOffset, nil
 	}
 	a.length = newLen
-	return uint32(offset), a.buf[offset:newLen]
+	return offset, a.buf[offset:newLen]
 }
 
 func (a *memArenaBlock) reset() {
@@ -285,9 +281,9 @@ func (a *memArenaBlock) reset() {
 	a.length = 0
 }
 
-// We calculate the memdbVlogHdrSize by hand, because we manually store and load every fields.
+// We calculate the memdbVlogHdrSize by hand, because we manually store and load every field.
 // If the compiler rearranges the fields in some future change, the size of the struct may be different from the actual size we used.
-const memdbVlogHdrSize = int(2*unsafe.Sizeof(nodeAddr{}) + unsafe.Sizeof(uint32(0)))
+const memdbVlogHdrSize = uint32(5 * unsafe.Sizeof(uint32(0)))
 
 type vlogHdr struct {
 	nodeAddr nodeAddr
@@ -314,7 +310,7 @@ func (hdr *vlogHdr) load(src []byte) {
 }
 
 func (f *artAllocator) allocValue(leafAddr nodeAddr, oldAddr nodeAddr, value []byte) nodeAddr {
-	size := memdbVlogHdrSize + len(value)
+	size := memdbVlogHdrSize + uint32(len(value))
 	addr, data := f.vlogAllocator.alloc(size, false)
 	copy(data, value)
 	hdr := vlogHdr{leafAddr, oldAddr, uint32(len(value))}

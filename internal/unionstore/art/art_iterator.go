@@ -72,7 +72,7 @@ func (it *ArtIterator) init(lowerBound, upperBound []byte) {
 	if it.reverse {
 		it.inner.idxes, it.inner.nodes = it.seek(upperBound)
 		if len(lowerBound) == 0 {
-			it.endAddr = nullAddr // minimum(&it.tree.allocator, it.tree.root).addr
+			it.endAddr = nullAddr
 		} else {
 			helper := new(baseIter)
 			helper.allocator = &it.tree.allocator
@@ -165,7 +165,7 @@ func (it *ArtIterator) seek(key Key) ([]int, []artNode) {
 		node := curr.node(&it.tree.allocator)
 		if node.prefixLen > 0 {
 			mismatchIdx := curr.matchDeep(&it.tree.allocator, key, depth)
-			if mismatchIdx < uint32(node.prefixLen) {
+			if mismatchIdx < node.prefixLen {
 				leafNode := minimum(&it.tree.allocator, curr)
 				leafKey := leafNode.leaf(&it.tree.allocator).getKey()
 				if mismatchIdx+depth == uint32(len(key)) || key[depth+mismatchIdx] < leafKey[depth+mismatchIdx] {

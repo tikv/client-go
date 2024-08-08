@@ -9,26 +9,26 @@ import (
 )
 
 func checkNodeInitialization(t *testing.T, n any) {
-	var node *node
+	var base *nodeBase
 	switch n := n.(type) {
 	case *node4:
-		node = &n.node
+		base = &n.nodeBase
 	case *node16:
-		node = &n.node
+		base = &n.nodeBase
 	case *node48:
-		node = &n.node
+		base = &n.nodeBase
 		require.Equal(t, [4]uint64{0, 0, 0, 0}, n.present)
 	case *node256:
-		node = &n.node
+		base = &n.nodeBase
 		for i := 0; i < node256cap; i++ {
 			require.Equal(t, n.children[i], nullArtNode)
 		}
 	default:
 		require.Fail(t, "unknown node type")
 	}
-	require.Equal(t, uint8(0), node.nodeNum)
-	require.Equal(t, uint32(0), node.prefixLen)
-	require.Equal(t, node.inplaceLeaf, nullArtNode)
+	require.Equal(t, uint8(0), base.nodeNum)
+	require.Equal(t, uint32(0), base.prefixLen)
+	require.Equal(t, base.inplaceLeaf, nullArtNode)
 }
 
 func TestAllocNode(t *testing.T) {
@@ -44,11 +44,8 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n4)
 		checkNodeInitialization(t, n4)
 		n4.nodeNum = uint8(i % 4)
+		n4.prefixLen = uint32(i % maxPrefixLen)
 		n4s = append(n4s, addr)
-	}
-	for i, addr := range n4s {
-		n4 := allocator.getNode4(addr)
-		require.Equal(t, uint8(i%4), n4.nodeNum, i)
 	}
 
 	// alloc node16
@@ -59,11 +56,8 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n16)
 		checkNodeInitialization(t, n16)
 		n16.nodeNum = uint8(i % 16)
+		n16.prefixLen = uint32(i % maxPrefixLen)
 		n16s = append(n16s, addr)
-	}
-	for i, addr := range n16s {
-		n16 := allocator.getNode16(addr)
-		require.Equal(t, uint8(i%16), n16.nodeNum)
 	}
 
 	// alloc node48
@@ -74,11 +68,8 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n48)
 		checkNodeInitialization(t, n48)
 		n48.nodeNum = uint8(i % 48)
+		n48.prefixLen = uint32(i % maxPrefixLen)
 		n48s = append(n48s, addr)
-	}
-	for i, addr := range n48s {
-		n48 := allocator.getNode48(addr)
-		require.Equal(t, uint8(i%48), n48.nodeNum)
 	}
 
 	// alloc node256
@@ -89,11 +80,8 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n256)
 		checkNodeInitialization(t, n256)
 		n256.nodeNum = uint8(i % 256)
+		n256.prefixLen = uint32(i % maxPrefixLen)
 		n256s = append(n256s, addr)
-	}
-	for i, addr := range n256s {
-		n256 := allocator.getNode256(addr)
-		require.Equal(t, uint8(i%256), n256.nodeNum)
 	}
 
 	// alloc leaf
@@ -105,6 +93,28 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.Equal(t, key, []byte(leaf.getKey()))
 		leafs = append(leafs, addr)
+	}
+
+	// test memory safety by checking the assign value
+	for i, addr := range n4s {
+		n4 := allocator.getNode4(addr)
+		require.Equal(t, uint8(i%4), n4.nodeNum, i)
+		require.Equal(t, uint32(i%maxPrefixLen), n4.prefixLen, i)
+	}
+	for i, addr := range n16s {
+		n16 := allocator.getNode16(addr)
+		require.Equal(t, uint8(i%16), n16.nodeNum)
+		require.Equal(t, uint32(i%maxPrefixLen), n16.prefixLen, i)
+	}
+	for i, addr := range n48s {
+		n48 := allocator.getNode48(addr)
+		require.Equal(t, uint8(i%48), n48.nodeNum)
+		require.Equal(t, uint32(i%maxPrefixLen), n48.prefixLen, i)
+	}
+	for i, addr := range n256s {
+		n256 := allocator.getNode256(addr)
+		require.Equal(t, uint8(i%256), n256.nodeNum)
+		require.Equal(t, uint32(i%maxPrefixLen), n256.prefixLen, i)
 	}
 	for i, addr := range leafs {
 		key := []byte(strconv.Itoa(i))

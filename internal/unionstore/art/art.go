@@ -321,10 +321,10 @@ func (t *Art) canSwapValue(cp *ARTCheckpoint, addr nodeAddr) bool {
 	if cp == nil {
 		return true
 	}
-	if int(addr.idx) >= cp.blocks {
+	if addr.idx >= cp.blocks {
 		return true
 	}
-	if int(addr.idx) == cp.blocks-1 && int(addr.off) > cp.offsetInBlock {
+	if addr.idx == cp.blocks-1 && addr.off > cp.offsetInBlock {
 		return true
 	}
 	return false
@@ -358,21 +358,9 @@ func (t *Art) Size() int {
 
 // ARTCheckpoint is the checkpoint of memory DB.
 type ARTCheckpoint struct {
-	blockSize     int
-	blocks        int
-	offsetInBlock int
-}
-
-func (cp *ARTCheckpoint) BlockSize() int {
-	return cp.blockSize
-}
-
-func (cp *ARTCheckpoint) Blocks() int {
-	return cp.blocks
-}
-
-func (cp *ARTCheckpoint) OffsetInBlock() int {
-	return cp.offsetInBlock
+	blockSize     uint32
+	blocks        uint32
+	offsetInBlock uint32
 }
 
 func (cp *ARTCheckpoint) isSamePosition(other *ARTCheckpoint) bool {
@@ -382,7 +370,7 @@ func (cp *ARTCheckpoint) isSamePosition(other *ARTCheckpoint) bool {
 func (t *Art) checkpoint() ARTCheckpoint {
 	snap := ARTCheckpoint{
 		blockSize: t.allocator.vlogAllocator.blockSize,
-		blocks:    len(t.allocator.vlogAllocator.blocks),
+		blocks:    uint32(len(t.allocator.vlogAllocator.blocks)),
 	}
 	if snap.blocks > 0 {
 		snap.offsetInBlock = t.allocator.vlogAllocator.blocks[snap.blocks-1].length
@@ -393,15 +381,15 @@ func (t *Art) checkpoint() ARTCheckpoint {
 // Checkpoint returns a checkpoint of MemDB.
 func (t *Art) Checkpoint() (int, int, int) {
 	cp := t.checkpoint()
-	return cp.blockSize, cp.blocks, cp.offsetInBlock
+	return int(cp.blockSize), int(cp.blocks), int(cp.offsetInBlock)
 }
 
 // RevertToCheckpoint reverts the MemDB to the checkpoint.
 func (t *Art) RevertToCheckpoint(blockSize, blocks, offsetInBlock int) {
 	cp := &ARTCheckpoint{
-		blockSize:     blockSize,
-		blocks:        blocks,
-		offsetInBlock: offsetInBlock,
+		blockSize:     uint32(blockSize),
+		blocks:        uint32(blocks),
+		offsetInBlock: uint32(offsetInBlock),
 	}
 	t.revertToCheckpoint(cp)
 	t.truncate(cp)
@@ -489,7 +477,7 @@ func (t *Art) revertToCheckpoint(cp *ARTCheckpoint) {
 }
 
 func (t *Art) moveBackCursor(cursor *ARTCheckpoint, hdr *vlogHdr) {
-	cursor.offsetInBlock -= (memdbVlogHdrSize + int(hdr.valueLen))
+	cursor.offsetInBlock -= (memdbVlogHdrSize + hdr.valueLen)
 	if cursor.offsetInBlock == 0 {
 		cursor.blocks--
 		if cursor.blocks > 0 {
@@ -500,7 +488,7 @@ func (t *Art) moveBackCursor(cursor *ARTCheckpoint, hdr *vlogHdr) {
 
 func (t *Art) truncate(snap *ARTCheckpoint) {
 	vlogAllocator := &t.allocator.vlogAllocator
-	for i := snap.blocks; i < len(vlogAllocator.blocks); i++ {
+	for i := snap.blocks; i < uint32(len(vlogAllocator.blocks)); i++ {
 		vlogAllocator.blocks[i] = memArenaBlock{}
 	}
 	vlogAllocator.blocks = vlogAllocator.blocks[:snap.blocks]

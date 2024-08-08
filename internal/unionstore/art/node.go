@@ -29,11 +29,11 @@ const (
 )
 
 const (
-	node4size   = int(unsafe.Sizeof(node4{}))
-	node16size  = int(unsafe.Sizeof(node16{}))
-	node48size  = int(unsafe.Sizeof(node48{}))
-	node256size = int(unsafe.Sizeof(node256{}))
-	leafSize    = int(unsafe.Sizeof(leaf{}))
+	node4size   = uint32(unsafe.Sizeof(node4{}))
+	node16size  = uint32(unsafe.Sizeof(node16{}))
+	node48size  = uint32(unsafe.Sizeof(node48{}))
+	node256size = uint32(unsafe.Sizeof(node256{}))
+	leafSize    = uint32(unsafe.Sizeof(leaf{}))
 )
 
 var (
@@ -60,21 +60,28 @@ type artNode struct {
 	addr nodeAddr
 }
 
-type node struct {
+type nodeBase struct {
 	nodeNum     uint8
 	prefixLen   uint32
 	prefix      [maxPrefixLen]byte
 	inplaceLeaf artNode
 }
 
+func (n *nodeBase) init() {
+	// initialize basic nodeBase
+	n.nodeNum = 0
+	n.prefixLen = 0
+	n.inplaceLeaf = nullArtNode
+}
+
 type node4 struct {
-	node
+	nodeBase
 	keys     [node4cap]byte
 	children [node4cap]artNode
 }
 
 type node16 struct {
-	node
+	nodeBase
 	keys     [node16cap]byte
 	children [node16cap]artNode
 }
@@ -86,14 +93,14 @@ const (
 )
 
 type node48 struct {
-	node
+	nodeBase
 	present  [4]uint64
 	keys     [node256cap]uint8 // map byte to index
 	children [node48cap]artNode
 }
 
 type node256 struct {
-	node
+	nodeBase
 	present  [4]uint64
 	children [node256cap]artNode
 }
@@ -112,18 +119,18 @@ func (n *artNode) leaf(a *artAllocator) *leaf {
 	return a.getLeaf(n.addr)
 }
 
-func (n *artNode) node(a *artAllocator) *node {
+func (n *artNode) node(a *artAllocator) *nodeBase {
 	switch n.kind {
 	case typeNode4:
-		return &n.node4(a).node
+		return &n.node4(a).nodeBase
 	case typeNode16:
-		return &n.node16(a).node
+		return &n.node16(a).nodeBase
 	case typeNode48:
-		return &n.node48(a).node
+		return &n.node48(a).nodeBase
 	case typeNode256:
-		return &n.node256(a).node
+		return &n.node256(a).nodeBase
 	default:
-		panic("invalid node kind")
+		panic("invalid nodeBase kind")
 	}
 }
 
@@ -139,15 +146,12 @@ func (n *artNode) at(a *artAllocator, idx int) artNode {
 	case typeNode256:
 		return n.node256(a).children[idx]
 	default:
-		panic("invalid node kind")
+		panic("invalid nodeBase kind")
 	}
 }
 
-func (n4 *node4) init() {
-	// initialize basic node
-	n4.nodeNum = 0
-	n4.prefixLen = 0
-	n4.inplaceLeaf = nullArtNode
+func (n4 *node4) size() uint32 {
+	return node4size
 }
 
 func (n4 *node4) nextPresentIdx(start int) int {
@@ -161,18 +165,9 @@ func (n4 *node4) prevPresentIdx(start int) int {
 	return min(start, int(n4.nodeNum)-1)
 }
 
-func (n16 *node16) init() {
-	// initialize basic node
-	n16.nodeNum = 0
-	n16.prefixLen = 0
-	n16.inplaceLeaf = nullArtNode
-}
-
 func (n48 *node48) init() {
-	// initialize basic node
-	n48.nodeNum = 0
-	n48.prefixLen = 0
-	n48.inplaceLeaf = nullArtNode
+	// initialize nodeBase
+	n48.nodeBase.init()
 	// initialize node48
 	n48.present[0], n48.present[1], n48.present[2], n48.present[3] = 0, 0, 0, 0
 	copy(n48.children[:], nullNode48.children[:])
@@ -209,10 +204,8 @@ func (n48 *node48) prevPresentIdx(start int) int {
 }
 
 func (n256 *node256) init() {
-	// initialize basic node
-	n256.nodeNum = 0
-	n256.prefixLen = 0
-	n256.inplaceLeaf = nullArtNode
+	// initialize nodeBase
+	n256.nodeBase.init()
 	// initialize node256
 	copy(n256.children[:], nullNode256.children[:])
 }
@@ -306,12 +299,12 @@ func (l *leaf) isDeleted() bool {
 }
 
 // Node methods
-func (n *node) setPrefix(key Key, prefixLen uint32) {
+func (n *nodeBase) setPrefix(key Key, prefixLen uint32) {
 	n.prefixLen = prefixLen
 	copy(n.prefix[:], key[:min(prefixLen, maxPrefixLen)])
 }
 
-func (n *node) match(key Key, depth uint32) uint32 {
+func (n *nodeBase) match(key Key, depth uint32) uint32 {
 	idx := uint32(0)
 	if len(key)-int(depth) < 0 {
 		return idx
@@ -617,7 +610,7 @@ func (an *artNode) _addChild256(a *artAllocator, c byte, inplace bool, child art
 	return false
 }
 
-func (n *node) copyMeta(src *node) {
+func (n *nodeBase) copyMeta(src *nodeBase) {
 	n.nodeNum = src.nodeNum
 	n.prefixLen = src.prefixLen
 	n.inplaceLeaf = src.inplaceLeaf
@@ -629,7 +622,7 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 	case typeNode4:
 		n4 := an.node4(a)
 		newAddr, n16 := a.allocNode16()
-		n16.copyMeta(&n4.node)
+		n16.copyMeta(&n4.nodeBase)
 
 		copy(n16.keys[:], n4.keys[:])
 		copy(n16.children[:], n4.children[:])
@@ -641,10 +634,10 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 	case typeNode16:
 		n16 := an.node16(a)
 		newAddr, n48 := a.allocNode48()
-		n48.copyMeta(&n16.node)
+		n48.copyMeta(&n16.nodeBase)
 
 		var numChildren uint8
-		for i := uint8(0); i < n16.node.nodeNum; i++ {
+		for i := uint8(0); i < n16.nodeBase.nodeNum; i++ {
 			ch := n16.keys[i]
 			n48.keys[ch] = numChildren
 			n48.present[ch>>n48s] |= 1 << uint8(ch%n48m)
@@ -659,7 +652,7 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 	case typeNode48:
 		n48 := an.node48(a)
 		newAddr, n256 := a.allocNode256()
-		n256.copyMeta(&n48.node)
+		n256.copyMeta(&n48.nodeBase)
 
 		for i := n48.nextPresentIdx(0); i < node256cap; i = n48.nextPresentIdx(i + 1) {
 			n256.children[i] = n48.children[n48.keys[i]]
