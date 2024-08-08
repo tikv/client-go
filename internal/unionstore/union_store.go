@@ -238,13 +238,15 @@ type MemBuffer interface {
 	Flush(force bool) (bool, error)
 	// FlushWait waits for the flushing task done and return error.
 	FlushWait() error
-	// GetFlushDetails returns the metrics related to flushing
-	GetFlushMetrics() FlushMetrics
+	// GetMetrics returns the metrics related to flushing
+	GetMetrics() Metrics
 }
 
-type FlushMetrics struct {
-	WaitDuration  time.Duration
-	TotalDuration time.Duration
+type Metrics struct {
+	WaitDuration   time.Duration
+	TotalDuration  time.Duration
+	MemDBHitCount  uint64
+	MemDBMissCount uint64
 }
 
 var (
@@ -298,4 +300,4 @@ func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[st
 }
 
 // GetFlushMetrisc implements the MemBuffer interface.
-func (db *MemDBWithContext) GetFlushMetrics() FlushMetrics { return FlushMetrics{} }
+func (db *MemDBWithContext) GetMetrics() Metrics { return Metrics{} }
