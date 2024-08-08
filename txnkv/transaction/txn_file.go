@@ -996,8 +996,14 @@ func (c *twoPhaseCommitter) beforeExecuteTxnFile(
 		}
 	}
 
+	writeBytes := int64(c.txn.Size())
+	discountRatio := config.GetGlobalConfig().TiKVClient.TxnFileRUDiscountRatio
+	if discountRatio > 0.0 && discountRatio < 1.0 {
+		writeBytes = int64(float64(writeBytes) * discountRatio)
+	}
+
 	reqInfo := resourcecontrol.NewRequestInfo(
-		int64(c.txn.Size()),
+		writeBytes,
 		region.GetLeaderStoreID(),
 		replicaNumber,
 		false,

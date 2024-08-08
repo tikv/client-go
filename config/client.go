@@ -105,6 +105,9 @@ type TiKVClient struct {
 	TxnChunkMaxSize uint64 `toml:"txn-chunk-max-size" json:"txn-chunk-max-size"`
 	// TxnFileMinMutationSize is the minimum size of mutations to use file-based txn.
 	TxnFileMinMutationSize uint64 `toml:"txn-file-min-mutation-size" json:"txn-file-min-mutation-size"`
+	// TxnFileRUDiscountRatio is the discount ratio of resource unit for file-based txn.
+	// Will be ignored if it's <= 0 or >= 1.
+	TxnFileRUDiscountRatio float64
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -180,6 +183,7 @@ func DefaultTiKVClient() TiKVClient {
 		TxnChunkWriterConcurrency: 4,
 		TxnChunkMaxSize:           128 * 1024 * 1024,
 		TxnFileMinMutationSize:    16 * 1024 * 1024,
+		TxnFileRUDiscountRatio:    0.125, // filed-based txn costs 1/8 RU of normal txn.
 	}
 }
 
