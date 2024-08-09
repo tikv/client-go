@@ -1,0 +1,29 @@
+patterns:
+  - name: codecov
+    workload_type: rawkv
+    workloads:
+      - batch_get
+      - batch_write
+      - get
+      - put
+      - scan
+      - update
+    key_prefix: "codecov" # default is ${name}
+    count: 10000
+    key_size: 1024
+    value_size: 1024
+    threads: 10
+    random: true # default is false
+  - name: txn
+    workload_type: txnkv
+    workloads:
+      - begin
+      - commit
+      - rollback
+    mode: 2PC # (async_commit | 1PC | 2PC)
+    lock: pessimistic # (optimistic | pessimistic)
+    count: 10000
+    key_size: 1024
+    value_size: 1024
+    threads: 10
+    random: true # default is false
