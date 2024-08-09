@@ -37,6 +37,7 @@ package locate
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -2254,16 +2255,55 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
 	v2 := region.Region.confVer + 1
-	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{2}}
 	st := newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
+	// Since region cache doesn't remove the first intersected region(it scan intersected region by AscendGreaterOrEqual), the outdated region (-inf, inf) is still alive.
+	// The new inserted valid region [{2}, inf) is ignored because the first seen region (-inf, inf) contains all the required ranges.
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+	s.Equal(r[0].StartKey(), []byte(nil))
+
+	// regions: (-inf,2), [2, +inf).  Get all regions.
+	v3 := region.Region.confVer + 2
+	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v3}, StartKey: []byte{}, EndKey: []byte{2}}
+	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 2)
+
+	// regions: (-inf,1), [2, +inf).  Get region (-inf, 1).
+	v4 := region.Region.confVer + 3
+	r4 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v4}, StartKey: []byte{}, EndKey: []byte{1}}
+	s.cache.insertRegionToCache(&Region{meta: &r4, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
 
 	_ = s.cache.refreshRegionIndex(s.bo)
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 1)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRegionCacheStartNonEmpty() {
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+
+	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
+	v2 := region.Region.confVer + 1
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	st := newUninitializedStore(s.store)
+
+	s.cache.mu.Lock()
+	s.cache.mu.sorted.Clear()
+	s.cache.mu.Unlock()
+	// region cache after clear: []
+
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	// region cache after insert: [[1, +inf)]
+
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 0)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
@@ -2873,4 +2913,41 @@ func (s *testRegionCacheSuite) TestIssue1401() {
 		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
 	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
+}
+
+func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
+	t.StopTimer()
+	s := new(testRegionCacheSuite)
+	s.SetT(&testing.T{})
+	s.SetupTest()
+
+	regionNum := 10000
+	regions := s.cluster.AllocIDs(regionNum)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < regionNum-1; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < regionNum-1; i++ {
+		b := make([]byte, 8)
+		binary.BigEndian.PutUint64(b, uint64(i*2))
+		s.cluster.Split(regions[i], regions[i+1], b, peers[i+1], peers[i+1][0])
+	}
+
+	// cache all regions
+	keyLocation, err := s.cache.BatchLocateKeyRanges(s.bo, []kv.KeyRange{{StartKey: []byte(""), EndKey: []byte("")}})
+	if err != nil || len(keyLocation) != regionNum {
+		t.FailNow()
+	}
+
+	t.StartTimer()
+	for i := 0; i < t.N; i++ {
+		keyLocation, err := s.cache.BatchLocateKeyRanges(s.bo, []kv.KeyRange{{StartKey: []byte(""), EndKey: []byte("")}})
+		if err != nil || len(keyLocation) != regionNum {
+			t.FailNow()
+		}
+	}
+	s.TearDownTest()
 }
