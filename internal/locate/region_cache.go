@@ -39,7 +39,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
 	"slices"
 	"sort"
@@ -55,7 +54,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
@@ -631,6 +629,8 @@ type RegionCache struct {
 	codec            apicodec.Codec
 	enableForwarding bool
 
+	requestHealthFeedbackCallback func(ctx context.Context, addr string) error
+
 	mu regionIndexMu
 
 	stores storeCache
@@ -642,13 +642,20 @@ type RegionCache struct {
 }
 
 type regionCacheOptions struct {
-	noHealthTick bool
+	noHealthTick                  bool
+	requestHealthFeedbackCallback func(ctx context.Context, addr string) error
 }
 
 type RegionCacheOpt func(*regionCacheOptions)
 
 func RegionCacheNoHealthTick(o *regionCacheOptions) {
 	o.noHealthTick = true
+}
+
+func WithRequestHealthFeedbackCallback(callback func(ctx context.Context, addr string) error) RegionCacheOpt {
+	return func(options *regionCacheOptions) {
+		options.requestHealthFeedbackCallback = callback
+	}
 }
 
 // NewRegionCache creates a RegionCache.
@@ -659,7 +666,8 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	}
 
 	c := &RegionCache{
-		pdClient: pdClient,
+		pdClient:                      pdClient,
+		requestHealthFeedbackCallback: options.requestHealthFeedbackCallback,
 	}
 
 	c.codec = apicodec.NewCodecV1(apicodec.ModeRaw)
@@ -704,7 +712,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 		return false
 	}, time.Duration(refreshStoreInterval/4)*time.Second, c.stores.getCheckStoreEvents())
 	if !options.noHealthTick {
-		c.bg.schedule(repeat(c.checkAndUpdateStoreHealthStatus), time.Duration(refreshStoreInterval/4)*time.Second)
+		c.bg.schedule(c.checkAndUpdateStoreHealthStatus, time.Duration(refreshStoreInterval/4)*time.Second)
 	}
 	c.bg.schedule(repeat(c.reportStoreReplicaFlows), time.Duration(refreshStoreInterval/2)*time.Second)
 	if refreshCacheInterval := config.GetGlobalConfig().RegionsRefreshInterval; refreshCacheInterval > 0 {
@@ -759,7 +767,7 @@ func (c *RegionCache) checkAndResolve(needCheckStores []*Store, needCheck func(*
 
 	needCheckStores = c.stores.filter(needCheckStores, needCheck)
 	for _, store := range needCheckStores {
-		_, err := store.reResolve(c.stores)
+		_, err := store.reResolve(c.stores, c.bg)
 		tikverr.Log(err)
 	}
 	return needCheckStores
@@ -790,8 +798,6 @@ type RPCContext struct {
 	ProxyAddr     string // valid when ProxyStore is not nil
 	TiKVNum       int    // Number of TiKV nodes among the region's peers. Assuming non-TiKV peers are all TiFlash peers.
 	BucketVersion uint64
-
-	contextPatcher contextPatcher // kvrpcpb.Context fields that need to be overridden
 }
 
 func (c *RPCContext) String() string {
@@ -805,29 +811,6 @@ func (c *RPCContext) String() string {
 		res += fmt.Sprintf(", proxy store id: %d, proxy addr: %s", c.ProxyStore.storeID, c.ProxyStore.addr)
 	}
 	return res
-}
-
-type contextPatcher struct {
-	replicaRead   *bool
-	busyThreshold *time.Duration
-	staleRead     *bool
-}
-
-func (patcher *contextPatcher) applyTo(pbCtx *kvrpcpb.Context) {
-	if patcher.replicaRead != nil {
-		pbCtx.ReplicaRead = *patcher.replicaRead
-	}
-	if patcher.staleRead != nil {
-		pbCtx.StaleRead = *patcher.staleRead
-	}
-	if patcher.busyThreshold != nil {
-		millis := patcher.busyThreshold.Milliseconds()
-		if millis > 0 && millis <= math.MaxUint32 {
-			pbCtx.BusyThresholdMs = uint32(millis)
-		} else {
-			pbCtx.BusyThresholdMs = 0
-		}
-	}
 }
 
 type storeSelectorOp struct {
@@ -1037,7 +1020,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 			return nil, nil
 		}
 		if store.getResolveState() == needCheck {
-			_, err := store.reResolve(c.stores)
+			_, err := store.reResolve(c.stores, c.bg)
 			tikverr.Log(err)
 		}
 		regionStore.workTiFlashIdx.Store(int32(accessIdx))
@@ -1172,7 +1155,8 @@ func (b *Bucket) Contains(key []byte) bool {
 	return contains(b.StartKey, b.EndKey, key)
 }
 
-// LocateKeyRange lists region and range that key in [start_key,end_key].
+// LocateKeyRange lists region and range that key in [start_key,end_key).
+// Regions without leader won't be returned.
 func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byte) ([]*KeyLocation, error) {
 	var res []*KeyLocation
 	for {
@@ -1194,7 +1178,7 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 			startKey = r.EndKey()
 		}
 		// 2. load remaining regions from pd client
-		batchRegions, err := c.BatchLoadRegionsWithKeyRange(bo, startKey, endKey, defaultRegionsPerBatch)
+		batchRegions, err := c.BatchLoadRegionsWithKeyRanges(bo, []pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, defaultRegionsPerBatch, WithNeedRegionHasLeaderPeer())
 		if err != nil {
 			return nil, err
 		}
@@ -1218,6 +1202,205 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 		startKey = endRegion.EndKey()
 	}
 	return res, nil
+}
+
+type batchLocateKeyRangesOption struct {
+	// whether load leader only, if it's set to true, regions without leader will be skipped.
+	// Note there is leader even the leader is invalid or outdated.
+	needRegionHasLeaderPeer bool
+	// whether load buckets, if it's set to true, more traffic will be consumed.
+	needBuckets bool
+}
+
+type BatchLocateKeyRangesOpt func(*batchLocateKeyRangesOption)
+
+func WithNeedBuckets() BatchLocateKeyRangesOpt {
+	return func(opt *batchLocateKeyRangesOption) {
+		opt.needBuckets = true
+	}
+}
+
+func WithNeedRegionHasLeaderPeer() BatchLocateKeyRangesOpt {
+	return func(opt *batchLocateKeyRangesOption) {
+		opt.needRegionHasLeaderPeer = true
+	}
+}
+
+// BatchLocateKeyRanges lists regions in the given ranges.
+func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.KeyRange, opts ...BatchLocateKeyRangesOpt) ([]*KeyLocation, error) {
+	uncachedRanges := make([]pd.KeyRange, 0, len(keyRanges))
+	cachedRegions := make([]*Region, 0, len(keyRanges))
+	// 1. find regions from cache
+	var lastRegion *Region
+	for _, keyRange := range keyRanges {
+		if lastRegion != nil {
+			if lastRegion.ContainsByEnd(keyRange.EndKey) {
+				continue
+			} else if lastRegion.Contains(keyRange.StartKey) {
+				keyRange.StartKey = lastRegion.EndKey()
+			}
+		}
+		// TODO: find all the cached regions in the range.
+		// now we only check if the region is cached from the lower bound, if there is a uncached hole in the middle,
+		// we will load the rest regions even they are cached.
+		r := c.tryFindRegionByKey(keyRange.StartKey, false)
+		lastRegion = r
+		if r == nil {
+			// region cache miss, add the cut range to uncachedRanges, load from PD later.
+			uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
+			continue
+		}
+		// region cache hit, add the region to cachedRegions.
+		cachedRegions = append(cachedRegions, r)
+		if r.ContainsByEnd(keyRange.EndKey) {
+			// the range is fully hit in the region cache.
+			continue
+		}
+		keyRange.StartKey = r.EndKey()
+		// Batch load rest regions from Cache.
+		containsAll := false
+	outer:
+		for {
+			batchRegionInCache, err := c.scanRegionsFromCache(bo, keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
+			if err != nil {
+				return nil, err
+			}
+			for _, r = range batchRegionInCache {
+				if !r.Contains(keyRange.StartKey) { // uncached hole, load the rest regions
+					break outer
+				}
+				cachedRegions = append(cachedRegions, r)
+				lastRegion = r
+				if r.ContainsByEnd(keyRange.EndKey) {
+					// the range is fully hit in the region cache.
+					containsAll = true
+					break outer
+				}
+				keyRange.StartKey = r.EndKey()
+			}
+			if len(batchRegionInCache) < defaultRegionsPerBatch { // region cache miss, load the rest regions
+				break
+			}
+		}
+		if !containsAll {
+			uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
+		}
+	}
+
+	merger := newBatchLocateRegionMerger(cachedRegions, len(cachedRegions)+len(uncachedRanges))
+
+	// 2. load remaining regions from pd client
+	for len(uncachedRanges) > 0 {
+		regions, err := c.BatchLoadRegionsWithKeyRanges(bo, uncachedRanges, defaultRegionsPerBatch, opts...)
+		if err != nil {
+			return nil, err
+		}
+		if len(regions) == 0 {
+			return nil, errors.Errorf("BatchLoadRegionsWithKeyRanges return empty batchedRegions without err")
+		}
+
+		for _, r := range regions {
+			merger.appendRegion(r)
+		}
+		// if the regions are not loaded completely, split uncachedRanges and load the rest.
+		uncachedRanges = rangesAfterKey(uncachedRanges, regions[len(regions)-1].EndKey())
+	}
+	return merger.build(), nil
+}
+
+type batchLocateRangesMerger struct {
+	lastEndKey      *[]byte
+	cachedIdx       int
+	cachedRegions   []*Region
+	mergedLocations []*KeyLocation
+}
+
+func newBatchLocateRegionMerger(cachedRegions []*Region, sizeHint int) *batchLocateRangesMerger {
+	return &batchLocateRangesMerger{
+		lastEndKey:      nil,
+		cachedRegions:   cachedRegions,
+		mergedLocations: make([]*KeyLocation, 0, sizeHint),
+	}
+}
+
+func (m *batchLocateRangesMerger) appendKeyLocation(r *Region) {
+	m.mergedLocations = append(m.mergedLocations, &KeyLocation{
+		Region:   r.VerID(),
+		StartKey: r.StartKey(),
+		EndKey:   r.EndKey(),
+		Buckets:  r.getStore().buckets,
+	})
+}
+
+func (m *batchLocateRangesMerger) appendRegion(uncachedRegion *Region) {
+	defer func() {
+		endKey := uncachedRegion.EndKey()
+		if len(endKey) == 0 {
+			// len(end_key) == 0 means region end to +inf, it should be the last region.
+			// discard the rest cached regions by moving the cachedIdx to the end of cachedRegions.
+			m.cachedIdx = len(m.cachedRegions)
+		} else {
+			lastEndKey := uncachedRegion.EndKey()
+			m.lastEndKey = &lastEndKey
+		}
+	}()
+	if len(uncachedRegion.StartKey()) == 0 {
+		// len(start_key) == 0 means region start from -inf, it should be the first region.
+		m.appendKeyLocation(uncachedRegion)
+		return
+	}
+	if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, uncachedRegion.StartKey()) >= 0 {
+		// the uncached regions are continued, do not consider cached region by now.
+		m.appendKeyLocation(uncachedRegion)
+		return
+	}
+	for ; m.cachedIdx < len(m.cachedRegions); m.cachedIdx++ {
+		if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
+			// skip the cached region that is covered by the uncached region.
+			continue
+		}
+		if bytes.Compare(m.cachedRegions[m.cachedIdx].StartKey(), uncachedRegion.StartKey()) >= 0 {
+			break
+		}
+		// append the cached regions that are before the uncached region.
+		m.appendKeyLocation(m.cachedRegions[m.cachedIdx])
+	}
+	m.appendKeyLocation(uncachedRegion)
+}
+
+func (m *batchLocateRangesMerger) build() []*KeyLocation {
+	// append the rest cache hit regions
+	for ; m.cachedIdx < len(m.cachedRegions); m.cachedIdx++ {
+		if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
+			// skip the cached region that is covered by the uncached region.
+			continue
+		}
+		m.appendKeyLocation(m.cachedRegions[m.cachedIdx])
+	}
+	return m.mergedLocations
+}
+
+// rangesAfterKey split the key ranges and return the rest ranges after splitKey.
+// the returned ranges are referenced to the input keyRanges, and the key range may be changed in place,
+// the input keyRanges should not be used after calling this function.
+func rangesAfterKey(keyRanges []pd.KeyRange, splitKey []byte) []pd.KeyRange {
+	if len(keyRanges) == 0 {
+		return nil
+	}
+	if len(splitKey) == 0 || len(keyRanges[len(keyRanges)-1].EndKey) > 0 && bytes.Compare(splitKey, keyRanges[len(keyRanges)-1].EndKey) >= 0 {
+		// fast check, if all ranges are loaded from PD, quit the loop.
+		return nil
+	}
+
+	n := sort.Search(len(keyRanges), func(i int) bool {
+		return len(keyRanges[i].EndKey) == 0 || bytes.Compare(keyRanges[i].EndKey, splitKey) > 0
+	})
+
+	keyRanges = keyRanges[n:]
+	if bytes.Compare(splitKey, keyRanges[0].StartKey) > 0 {
+		keyRanges[0].StartKey = splitKey
+	}
+	return keyRanges
 }
 
 // LocateKey searches for the region and range that the key is located.
@@ -1576,6 +1759,30 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	return
 }
 
+// BatchLoadRegionsWithKeyRanges loads at most given numbers of regions to the RegionCache,
+// within the given key range from the key ranges. Returns the loaded regions.
+func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRanges []pd.KeyRange, count int, opts ...BatchLocateKeyRangesOpt) (regions []*Region, err error) {
+	if len(keyRanges) == 0 {
+		return nil, nil
+	}
+	regions, err = c.batchScanRegions(bo, keyRanges, count, opts...)
+	if err != nil {
+		return
+	}
+	if len(regions) == 0 {
+		err = errors.Errorf("PD returned no region, range num: %d, count: %d", len(keyRanges), count)
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, region := range regions {
+		c.insertRegionToCache(region, true, false)
+	}
+	return
+}
+
 // BatchLoadRegionsFromKey loads at most given numbers of regions to the RegionCache, from the given startKey. Returns
 // the endKey of the last loaded region. If some of the regions has no leader, their entries in RegionCache will not be
 // updated.
@@ -1897,7 +2104,8 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 	}
 }
 
-// TODO(youjiali1995): for optimizing BatchLoadRegionsWithKeyRange, not used now.
+// For optimizing BatchLocateKeyRanges, scanRegionsFromCache scans at most `limit` regions from cache.
+// It is the caller's responsibility to make sure that startKey is a node in the B-tree, otherwise, the startKey will not be included in the return regions.
 func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
 	if limit == 0 {
 		return nil, nil
@@ -1908,9 +2116,6 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 	defer c.mu.RUnlock()
 	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
 
-	if len(regions) == 0 {
-		return nil, errors.New("no regions in the cache")
-	}
 	return regions, nil
 }
 
@@ -1954,17 +2159,17 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 		}
 		start := time.Now()
+		//nolint:staticcheck
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pd.WithAllowFollowerHandle())
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
-				return nil, errors.Errorf("failed to decode region range key, startKey: %q, limit: %d, err: %v, encode_start_key: %q",
-					util.HexRegionKeyStr(startKey), limit, err, util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)))
+				return nil, errors.Errorf("failed to decode region range key, limit: %d, err: %v",
+					limit, err)
 			}
 			metrics.RegionCacheCounterWithScanRegionsError.Inc()
 			backoffErr = errors.Errorf(
-				"scanRegion from PD failed, startKey: %q, limit: %d, err: %v",
-				util.HexRegionKeyStr(startKey),
+				"scanRegion from PD failed, limit: %d, err: %v",
 				limit,
 				err)
 			continue
@@ -1973,33 +2178,194 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		metrics.RegionCacheCounterWithScanRegionsOK.Inc()
 
 		if len(regionsInfo) == 0 {
-			return nil, errors.Errorf(
-				"PD returned no region, startKey: %q, endKey: %q, limit: %d, encode_start_key: %q, encode_end_key: %q",
-				util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey), limit,
-				util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)),
-			)
+			backoffErr = errors.Errorf("PD returned no region, limit: %d", limit)
+			continue
 		}
-		regions := make([]*Region, 0, len(regionsInfo))
-		for _, r := range regionsInfo {
-			// Leader id = 0 indicates no leader.
-			if r.Leader == nil || r.Leader.GetId() == 0 {
+		if regionsHaveGapInRanges([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo, limit) {
+			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
+			continue
+		}
+		return c.handleRegionInfos(bo, regionsInfo, true)
+	}
+}
+
+// batchScanRegions scans at most `limit` regions from PD, starts from the region containing `startKey` and in key order.
+func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
+	if limit == 0 || len(keyRanges) == 0 {
+		return nil, nil
+	}
+	ctx := bo.GetCtx()
+	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
+		span1 := span.Tracer().StartSpan("batchScanRegions", opentracing.ChildOf(span.Context()))
+		defer span1.Finish()
+		ctx = opentracing.ContextWithSpan(ctx, span1)
+	}
+	var opt batchLocateKeyRangesOption
+	for _, op := range opts {
+		op(&opt)
+	}
+	// TODO: return start key and end key after redact is introduced.
+	var backoffErr error
+	for {
+		if backoffErr != nil {
+			err := bo.Backoff(retry.BoPDRPC, backoffErr)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+		}
+		start := time.Now()
+		pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
+		if opt.needBuckets {
+			pdOpts = append(pdOpts, pd.WithBuckets())
+		}
+		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
+		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
+		if err != nil {
+			if st, ok := status.FromError(err); ok && st.Code() == codes.Unimplemented {
+				return c.batchScanRegionsFallback(bo, keyRanges, limit, opts...)
+			}
+			if apicodec.IsDecodeError(err) {
+				return nil, errors.Errorf("failed to decode region range key, range num: %d, limit: %d, err: %v",
+					len(keyRanges), limit, err)
+			}
+			metrics.RegionCacheCounterWithBatchScanRegionsError.Inc()
+			backoffErr = errors.Errorf(
+				"batchScanRegion from PD failed, range num: %d, limit: %d, err: %v",
+				len(keyRanges),
+				limit,
+				err)
+			continue
+		}
+
+		metrics.RegionCacheCounterWithBatchScanRegionsOK.Inc()
+		if len(regionsInfo) == 0 {
+			backoffErr = errors.Errorf(
+				"PD returned no region, range num: %d, limit: %d",
+				len(keyRanges), limit,
+			)
+			continue
+		}
+		if regionsHaveGapInRanges(keyRanges, regionsInfo, limit) {
+			backoffErr = errors.Errorf(
+				"PD returned regions have gaps, range num: %d, limit: %d",
+				len(keyRanges), limit,
+			)
+			continue
+		}
+		return c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
+	}
+}
+
+// regionsHaveGapInRanges checks if the loaded regions can fully cover the key ranges.
+// If there are any gaps between the regions, it returns true, then the requests might be retried.
+// TODO: remove this function after PD client supports gap detection and handling it.
+func regionsHaveGapInRanges(ranges []pd.KeyRange, regionsInfo []*pd.Region, limit int) bool {
+	if len(ranges) == 0 {
+		return false
+	}
+	if len(regionsInfo) == 0 {
+		return true
+	}
+	checkIdx := 0                  // checked index of ranges
+	checkKey := ranges[0].StartKey // checked key of ranges
+	for _, r := range regionsInfo {
+		if r.Meta == nil {
+			return true
+		}
+		if bytes.Compare(r.Meta.StartKey, checkKey) > 0 {
+			// there is a gap between returned region's start_key and current check key
+			return true
+		}
+		if len(r.Meta.EndKey) == 0 {
+			// the current region contains all the rest ranges.
+			return false
+		}
+		checkKey = r.Meta.EndKey
+		for len(ranges[checkIdx].EndKey) > 0 && bytes.Compare(checkKey, ranges[checkIdx].EndKey) >= 0 {
+			// the end_key of returned region can cover multi ranges.
+			checkIdx++
+			if checkIdx == len(ranges) {
+				// all ranges are covered.
+				return false
+			}
+		}
+		if bytes.Compare(checkKey, ranges[checkIdx].StartKey) < 0 {
+			// if check_key < start_key, move it forward to start_key.
+			checkKey = ranges[checkIdx].StartKey
+		}
+	}
+	if limit > 0 && len(regionsInfo) == limit {
+		// the regionsInfo is limited by the limit, so there may be some ranges not covered.
+		// But the previous regions are continuous, so we just need to check the rest ranges.
+		return false
+	}
+	if checkIdx < len(ranges)-1 {
+		// there are still some ranges not covered.
+		return true
+	}
+	if len(checkKey) == 0 {
+		return false
+	} else if len(ranges[checkIdx].EndKey) == 0 {
+		return true
+	}
+	return bytes.Compare(checkKey, ranges[checkIdx].EndKey) < 0
+}
+
+func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []pd.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
+	logutil.BgLogger().Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
+	res := make([]*Region, 0, len(keyRanges))
+	var lastRegion *Region
+	for _, keyRange := range keyRanges {
+		if lastRegion != nil {
+			endKey := lastRegion.EndKey()
+			if len(endKey) == 0 {
+				// end_key is empty means the last region is the last region of the store, which certainly contains all the rest ranges.
+				break
+			}
+			if bytes.Compare(endKey, keyRange.EndKey) >= 0 {
 				continue
 			}
-			region, err := newRegion(bo, c, r)
-			if err != nil {
-				return nil, err
+			if bytes.Compare(endKey, keyRange.StartKey) > 0 {
+				keyRange.StartKey = endKey
 			}
-			regions = append(regions, region)
 		}
-		if len(regions) == 0 {
-			return nil, errors.New("receive Regions with no peer")
+		regions, err := c.scanRegions(bo, keyRange.StartKey, keyRange.EndKey, limit)
+		if err != nil {
+			return nil, err
 		}
-		if len(regions) < len(regionsInfo) {
-			logutil.Logger(context.Background()).Debug(
-				"regionCache: scanRegion finished but some regions has no leader.")
+		if len(regions) > 0 {
+			lastRegion = regions[len(regions)-1]
 		}
-		return regions, nil
+		res = append(res, regions...)
+		if len(regions) >= limit {
+			return res, nil
+		}
+		limit -= len(regions)
 	}
+	return res, nil
+}
+
+func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.Region, needLeader bool) ([]*Region, error) {
+	regions := make([]*Region, 0, len(regionsInfo))
+	for _, r := range regionsInfo {
+		// Leader id = 0 indicates no leader.
+		if needLeader && (r.Leader == nil || r.Leader.GetId() == 0) {
+			continue
+		}
+		region, err := newRegion(bo, c, r)
+		if err != nil {
+			return nil, err
+		}
+		regions = append(regions, region)
+	}
+	if len(regions) == 0 {
+		return nil, errors.New("receive Regions with no peer")
+	}
+	if len(regions) < len(regionsInfo) {
+		logutil.Logger(context.Background()).Debug(
+			"regionCache: scanRegion finished but some regions has no leader.")
+	}
+	return regions, nil
 }
 
 // GetCachedRegionWithRLock returns region with lock.
@@ -2618,7 +2984,7 @@ func (r *Region) ContainsByEnd(key []byte) bool {
 }
 
 // checkAndUpdateStoreHealthStatus checks and updates health stats on each store.
-func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
+func (c *RegionCache) checkAndUpdateStoreHealthStatus(ctx context.Context, now time.Time) bool {
 	defer func() {
 		r := recover()
 		if r != nil {
@@ -2630,16 +2996,18 @@ func (c *RegionCache) checkAndUpdateStoreHealthStatus() {
 			}
 		}
 	}()
-	healthDetails := make(map[uint64]HealthStatusDetail)
-	now := time.Now()
+	var stores []*Store
 	c.stores.forEach(func(store *Store) {
-		store.healthStatus.tick(now)
-		healthDetails[store.storeID] = store.healthStatus.GetHealthStatusDetail()
+		stores = append(stores, store)
 	})
-	for store, details := range healthDetails {
-		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.ClientSideSlowScore))
-		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store, 10)).Set(float64(details.TiKVSideSlowScore))
+	for _, store := range stores {
+		store.healthStatus.tick(ctx, now, store, c.requestHealthFeedbackCallback)
+		healthDetails := store.healthStatus.GetHealthStatusDetail()
+		metrics.TiKVStoreSlowScoreGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(healthDetails.ClientSideSlowScore))
+		metrics.TiKVFeedbackSlowScoreGauge.WithLabelValues(strconv.FormatUint(store.storeID, 10)).Set(float64(healthDetails.TiKVSideSlowScore))
 	}
+
+	return false
 }
 
 // reportStoreReplicaFlows reports the statistics on the related replicaFlowsType.
@@ -2662,7 +3030,7 @@ func contains(startKey, endKey, key []byte) bool {
 		(bytes.Compare(key, endKey) < 0 || len(endKey) == 0)
 }
 
-func (c *RegionCache) onHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (c *RegionCache) onHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	store, ok := c.stores.get(feedback.GetStoreId())
 	if !ok {
 		logutil.BgLogger().Info("dropped health feedback info due to unknown store id", zap.Uint64("storeID", feedback.GetStoreId()))
@@ -2683,6 +3051,6 @@ type regionCacheClientEventListener struct {
 }
 
 // OnHealthFeedback implements the `client.ClientEventListener` interface.
-func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *tikvpb.HealthFeedback) {
+func (l *regionCacheClientEventListener) OnHealthFeedback(feedback *kvrpcpb.HealthFeedback) {
 	l.c.onHealthFeedback(feedback)
 }

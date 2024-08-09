@@ -35,7 +35,9 @@
 package locate
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -49,14 +51,15 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 	uatomic "go.uber.org/atomic"
 )
@@ -2088,10 +2091,14 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 }
 
 func (s *testRegionCacheSuite) TestTiKVSideSlowScore() {
+	store := newStore(1, "", "", "", tikvrpc.TiKV, resolved, nil)
+	store.livenessState = uint32(reachable)
+	ctx := context.Background()
+
 	stats := newStoreHealthStatus(1)
 	s.LessOrEqual(stats.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
 	now := time.Now()
-	stats.tick(now)
+	stats.tick(ctx, now, store, nil)
 	s.LessOrEqual(stats.GetHealthStatusDetail().TiKVSideSlowScore, int64(1))
 	s.False(stats.tikvSideSlowScore.hasTiKVFeedback.Load())
 	s.False(stats.IsSlow())
@@ -2108,22 +2115,26 @@ func (s *testRegionCacheSuite) TestTiKVSideSlowScore() {
 	s.True(stats.IsSlow())
 
 	now = now.Add(time.Minute * 2)
-	stats.tick(now)
+	stats.tick(ctx, now, store, nil)
 	s.Equal(int64(60), stats.GetHealthStatusDetail().TiKVSideSlowScore)
 	s.False(stats.IsSlow())
 
 	now = now.Add(time.Minute * 3)
-	stats.tick(now)
+	stats.tick(ctx, now, store, nil)
 	s.Equal(int64(1), stats.GetHealthStatusDetail().TiKVSideSlowScore)
 	s.False(stats.IsSlow())
 
 	now = now.Add(time.Minute)
-	stats.tick(now)
+	stats.tick(ctx, now, store, nil)
 	s.Equal(int64(1), stats.GetHealthStatusDetail().TiKVSideSlowScore)
 	s.False(stats.IsSlow())
 }
 
 func (s *testRegionCacheSuite) TestStoreHealthStatus() {
+	store := newStore(1, "", "", "", tikvrpc.TiKV, resolved, nil)
+	store.livenessState = uint32(reachable)
+	ctx := context.Background()
+
 	stats := newStoreHealthStatus(1)
 	now := time.Now()
 	s.False(stats.IsSlow())
@@ -2131,7 +2142,7 @@ func (s *testRegionCacheSuite) TestStoreHealthStatus() {
 	for !stats.clientSideSlowScore.isSlow() {
 		stats.clientSideSlowScore.recordSlowScoreStat(time.Minute)
 	}
-	stats.tick(now)
+	stats.tick(ctx, now, store, nil)
 	s.True(stats.IsSlow())
 	s.Equal(int64(stats.clientSideSlowScore.getSlowScore()), stats.GetHealthStatusDetail().ClientSideSlowScore)
 
@@ -2142,7 +2153,7 @@ func (s *testRegionCacheSuite) TestStoreHealthStatus() {
 
 	for stats.clientSideSlowScore.isSlow() {
 		stats.clientSideSlowScore.recordSlowScoreStat(time.Millisecond)
-		stats.tick(now)
+		stats.tick(ctx, now, store, nil)
 	}
 	s.True(stats.IsSlow())
 	s.Equal(int64(stats.clientSideSlowScore.getSlowScore()), stats.GetHealthStatusDetail().ClientSideSlowScore)
@@ -2160,7 +2171,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.True(exists)
 	s.False(store1.healthStatus.IsSlow())
 
-	feedbackMsg := &tikvpb.HealthFeedback{
+	feedbackMsg := &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 1,
 		SlowScore:     100,
@@ -2169,7 +2180,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.True(store1.healthStatus.IsSlow())
 	s.Equal(int64(100), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
 
-	feedbackMsg = &tikvpb.HealthFeedback{
+	feedbackMsg = &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 2,
 		SlowScore:     90,
@@ -2178,7 +2189,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.cache.onHealthFeedback(feedbackMsg)
 	s.Equal(int64(100), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
 
-	feedbackMsg = &tikvpb.HealthFeedback{
+	feedbackMsg = &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 3,
 		SlowScore:     90,
@@ -2187,7 +2198,7 @@ func (s *testRegionCacheSuite) TestRegionCacheHandleHealthStatus() {
 	s.cache.onHealthFeedback(feedbackMsg)
 	s.Equal(int64(90), store1.healthStatus.GetHealthStatusDetail().TiKVSideSlowScore)
 
-	feedbackMsg = &tikvpb.HealthFeedback{
+	feedbackMsg = &kvrpcpb.HealthFeedback{
 		StoreId:       s.store1,
 		FeedbackSeqNo: 4,
 		SlowScore:     50,
@@ -2244,16 +2255,55 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
 	v2 := region.Region.confVer + 1
-	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{2}}
 	st := newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
+	// Since region cache doesn't remove the first intersected region(it scan intersected region by AscendGreaterOrEqual), the outdated region (-inf, inf) is still alive.
+	// The new inserted valid region [{2}, inf) is ignored because the first seen region (-inf, inf) contains all the required ranges.
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+	s.Equal(r[0].StartKey(), []byte(nil))
+
+	// regions: (-inf,2), [2, +inf).  Get all regions.
+	v3 := region.Region.confVer + 2
+	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v3}, StartKey: []byte{}, EndKey: []byte{2}}
+	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 2)
+
+	// regions: (-inf,1), [2, +inf).  Get region (-inf, 1).
+	v4 := region.Region.confVer + 3
+	r4 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v4}, StartKey: []byte{}, EndKey: []byte{1}}
+	s.cache.insertRegionToCache(&Region{meta: &r4, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
 
 	_ = s.cache.refreshRegionIndex(s.bo)
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 1)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRegionCacheStartNonEmpty() {
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 1)
+
+	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
+	v2 := region.Region.confVer + 1
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	st := newUninitializedStore(s.store)
+
+	s.cache.mu.Lock()
+	s.cache.mu.sorted.Clear()
+	s.cache.mu.Unlock()
+	// region cache after clear: []
+
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	// region cache after insert: [[1, +inf)]
+
+	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	s.Equal(len(r), 0)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
@@ -2509,4 +2559,395 @@ func BenchmarkInsertRegionToCache2(b *testing.B) {
 		region.setStore(r.getStore())
 		cache.insertRegionToCache(region, true, true)
 	}
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegionsMerger() {
+	check := func(uncachedRegionKeys, cachedRegionKeys, expects []string) {
+		toRegions := func(keys []string) []*Region {
+			ranges := make([]*Region, 0, len(keys)/2)
+			rs := &regionStore{}
+			for i := 0; i < len(keys); i += 2 {
+				ranges = append(ranges, &Region{
+					meta:  &metapb.Region{StartKey: []byte(keys[i]), EndKey: []byte(keys[i+1])},
+					store: unsafe.Pointer(rs),
+				})
+			}
+			return ranges
+		}
+		merger := newBatchLocateRegionMerger(toRegions(cachedRegionKeys), 0)
+		for _, uncachedRegion := range toRegions(uncachedRegionKeys) {
+			merger.appendRegion(uncachedRegion)
+		}
+		locs := merger.build()
+		resultKeys := make([]string, 0, 2*len(locs))
+		for i := 0; i < len(locs); i++ {
+			resultKeys = append(resultKeys, string(locs[i].StartKey), string(locs[i].EndKey))
+		}
+		s.Equal(expects, resultKeys)
+	}
+
+	check([]string{"b", "c", "c", "d"}, []string{"a", "b"}, []string{"a", "b", "b", "c", "c", "d"})
+	check([]string{"a", "b", "c", "d"}, []string{"b", "c"}, []string{"a", "b", "b", "c", "c", "d"})
+	check([]string{"a", "b", "b", "c"}, []string{"c", "d"}, []string{"a", "b", "b", "c", "c", "d"})
+	check([]string{"", ""}, []string{"a", "b", "b", "c"}, []string{"", ""})
+	check([]string{"", "b"}, []string{"a", "b", "b", "c"}, []string{"", "b", "b", "c"})
+	check([]string{"b", ""}, []string{"a", "b", "b", "c"}, []string{"a", "b", "b", ""})
+	// when loaded region covers the cached region, the cached region can be skipped.
+	check([]string{"b", ""}, []string{"a", "b", "c", "d"}, []string{"a", "b", "b", ""})
+	check([]string{"b", "e"}, []string{"a", "b", "c", "d"}, []string{"a", "b", "b", "e"})
+	check([]string{"b", "i"}, []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}, []string{"a", "b", "b", "i", "i", "j"})
+	// when loaded region and the cached region are overlapped, both regions are required.
+	check([]string{"b", "d"}, []string{"a", "b", "c", "e"}, []string{"a", "b", "b", "d", "c", "e"})
+	// cached region are covered by multi loaded regions, can also be skipped.
+	check([]string{"b", "d", "d", "f"}, []string{"a", "b", "c", "e"}, []string{"a", "b", "b", "d", "d", "f"})
+	check([]string{"b", "d", "d", "e", "e", "g"}, []string{"a", "b", "c", "f"}, []string{"a", "b", "b", "d", "d", "e", "e", "g"})
+	// loaded regions have hole and cannot fully cover the cached region, the cached region is required.
+	check([]string{"b", "d", "d", "e", "f", "h"}, []string{"a", "b", "c", "g"}, []string{"a", "b", "b", "d", "d", "e", "c", "g", "f", "h"})
+}
+
+func (s *testRegionCacheSuite) TestSplitKeyRanges() {
+	check := func(keyRangeKeys []string, splitKey string, expects []string) {
+		keyRanges := make([]pd.KeyRange, 0, len(keyRangeKeys)/2)
+		for i := 0; i < len(keyRangeKeys); i += 2 {
+			keyRanges = append(keyRanges, pd.KeyRange{StartKey: []byte(keyRangeKeys[i]), EndKey: []byte(keyRangeKeys[i+1])})
+		}
+		splitKeyRanges := rangesAfterKey(keyRanges, []byte(splitKey))
+		splitKeys := make([]string, 0, 2*len(splitKeyRanges))
+		for _, r := range splitKeyRanges {
+			splitKeys = append(splitKeys, string(r.StartKey), string(r.EndKey))
+		}
+		s.Equal(expects, splitKeys)
+	}
+
+	check([]string{"a", "c"}, "a", []string{"a", "c"})
+	check([]string{"b", "c"}, "a", []string{"b", "c"})
+	check([]string{"a", "c"}, "b", []string{"b", "c"})
+	check([]string{"a", "c"}, "c", []string{})
+	check([]string{"a", "c"}, "", []string{})
+	check([]string{"a", ""}, "b", []string{"b", ""})
+	check([]string{"a", ""}, "", []string{})
+	check([]string{"a", "b", "c", "f"}, "a1", []string{"a1", "b", "c", "f"})
+	check([]string{"a", "b", "c", "f"}, "b", []string{"c", "f"})
+	check([]string{"a", "b", "c", "f"}, "b1", []string{"c", "f"})
+	check([]string{"a", "b", "c", "f"}, "c", []string{"c", "f"})
+	check([]string{"a", "b", "c", "f"}, "d", []string{"d", "f"})
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegions() {
+	s.testBatchScanRegions()
+}
+
+func (s *testRegionCacheSuite) TestBatchScanRegionsFallback() {
+	s.Nil(failpoint.Enable("tikvclient/mockBatchScanRegionsUnimplemented", `return`))
+	s.testBatchScanRegions()
+	s.Nil(failpoint.Disable("tikvclient/mockBatchScanRegionsUnimplemented"))
+}
+
+func (s *testRegionCacheSuite) testBatchScanRegions() {
+	// Split at "a", "b", "c", "d", "e", "f", "g"
+	// nil --- 'a' --- 'b' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 2 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
+	regions := s.cluster.AllocIDs(7)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 7; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 7; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'a' + byte(i)}, peers[i+1], peers[i+1][0])
+	}
+
+	check := func(scanRanges, cachedRanges []kv.KeyRange, afterCacheLoad func(), expected []uint64) {
+		s.cache.clear()
+		// fill in the cache
+		for _, r := range cachedRanges {
+			for {
+				loc, err := s.cache.LocateKey(s.bo, r.StartKey)
+				s.Nil(err)
+				if loc.Contains(r.EndKey) || bytes.Equal(r.EndKey, loc.EndKey) {
+					break
+				}
+				r.StartKey = loc.EndKey
+			}
+		}
+		if afterCacheLoad != nil {
+			afterCacheLoad()
+		}
+		scannedRegions, err := s.cache.BatchLocateKeyRanges(s.bo, scanRanges)
+		s.Nil(err)
+		s.Equal(len(expected), len(scannedRegions))
+		actual := make([]uint64, 0, len(scannedRegions))
+		for _, r := range scannedRegions {
+			actual = append(actual, r.Region.GetID())
+		}
+		s.Equal(expected, actual)
+	}
+
+	toRanges := func(keys ...string) []kv.KeyRange {
+		ranges := make([]kv.KeyRange, 0, len(keys)/2)
+		for i := 0; i < len(keys); i += 2 {
+			ranges = append(ranges, kv.KeyRange{StartKey: []byte(keys[i]), EndKey: []byte(keys[i+1])})
+		}
+		return ranges
+	}
+
+	// nil --- 'a' --- 'b' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 2 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
+	check(toRanges("A", "B", "C", "D", "E", "F"), toRanges("", "a"), nil, regions[:1])
+	check(toRanges("A", "B", "C", "D", "E", "F", "G", "c"), toRanges("", "c"), nil, regions[:3])
+	check(toRanges("a", "g"), nil, nil, regions[1:7])
+	check(toRanges("a", "g"), toRanges("a", "d"), nil, regions[1:7])
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "d"), nil, []uint64{regions[1], regions[2], regions[3], regions[5], regions[6]})
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "b", "e", "f"), nil, []uint64{regions[1], regions[2], regions[3], regions[5], regions[6]})
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "b", "e", "f"), nil, []uint64{regions[1], regions[2], regions[3], regions[5], regions[6]})
+
+	// after merge, the latest fetched regions from PD overwrites the cached regions.
+	// nil --- 'a' --- 'c' --- 'd' --- 'e' --- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 3 -> <- 4 -> <- 5 -> <- 6 -> <-  7  ->
+	check(toRanges("a", "d", "e", "g"), toRanges("a", "b", "e", "f"), func() {
+		s.cluster.Merge(regions[1], regions[2])
+	}, []uint64{regions[1], regions[3], regions[5], regions[6]})
+
+	// if the latest fetched regions from PD cannot cover the range, the cached region still need to be returned.
+	// before:
+	// nil --- 'a' --- 'c' --- 'd' --- 'e' --------- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 3 -> <- 4 -> <-    5    -> <- 6 -> <-  7  ->
+	// after:
+	// nil --- 'a' --- 'c' --- 'd' -- 'd2' ----- 'e1' ---- 'f' --- 'g' --- nil
+	// <-  0  -> <- 1 -> <- 3 -> <- 4 -> <- new1 -> <-new2 -> <- 6 -> <-  7  ->
+	// cached ranges [a-c, e-f], cached regions: [1, 5]
+	// scan ranges [c-d3, f-g], scanned regions: [3, 4, new1, 6]
+	newID1 := s.cluster.AllocID()
+	newID2 := s.cluster.AllocID()
+	check(toRanges("a", "d3", "e", "g"), toRanges("a", "c", "e", "f"), func() {
+		s.cluster.Merge(regions[4], regions[5])
+		newPeers := s.cluster.AllocIDs(2)
+		s.cluster.Split(regions[4], newID1, []byte("d2"), newPeers, newPeers[0])
+		newPeers = s.cluster.AllocIDs(2)
+		s.cluster.Split(newID1, newID2, []byte("e1"), newPeers, newPeers[0])
+	}, []uint64{regions[1], regions[3], regions[4], newID1, regions[5], regions[6]})
+}
+
+func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
+	check := func(ranges []string, regions []string, limit int, expect bool) {
+		rs := make([]pd.KeyRange, 0, len(ranges)/2)
+		for i := 0; i < len(ranges); i += 2 {
+			rs = append(rs, pd.KeyRange{StartKey: []byte(ranges[i]), EndKey: []byte(ranges[i+1])})
+		}
+		rgs := make([]*pd.Region, 0, len(regions))
+		for i := 0; i < len(regions); i += 2 {
+			rgs = append(rgs, &pd.Region{Meta: &metapb.Region{
+				StartKey: []byte(regions[i]),
+				EndKey:   []byte(regions[i+1]),
+			}})
+		}
+		s.Equal(expect, regionsHaveGapInRanges(rs, rgs, limit))
+	}
+	boundCases := [][]string{
+		{"a", "c"},
+		{"a", "b", "b", "c"},
+		{"a", "a1", "a1", "b", "b", "b1", "b1", "c"},
+	}
+	for _, boundCase := range boundCases {
+		// positive
+		check(boundCase, []string{"a", "c"}, -1, false)
+		check(boundCase, []string{"a", ""}, -1, false)
+		check(boundCase, []string{"", "c"}, -1, false)
+		// negative
+		check(boundCase, []string{"a", "b"}, -1, true)
+		check(boundCase, []string{"b", "c"}, -1, true)
+		check(boundCase, []string{"b", ""}, -1, true)
+		check(boundCase, []string{"", "b"}, -1, true)
+		// positive
+		check(boundCase, []string{"a", "b", "b", "c"}, -1, false)
+		check(boundCase, []string{"", "b", "b", "c"}, -1, false)
+		check(boundCase, []string{"a", "b", "b", ""}, -1, false)
+		check(boundCase, []string{"", "b", "b", ""}, -1, false)
+		// negative
+		check(boundCase, []string{"a", "b", "b1", "c"}, -1, true)
+		check(boundCase, []string{"", "b", "b1", "c"}, -1, true)
+		check(boundCase, []string{"a", "b", "b1", ""}, -1, true)
+		check(boundCase, []string{"", "b", "b1", ""}, -1, true)
+		check(boundCase, []string{}, -1, true)
+	}
+
+	nonContinuousCases := [][]string{
+		{"a", "b", "c", "d"},
+		{"a", "b1", "b1", "b", "c", "d"},
+		{"a", "b", "c", "c1", "c1", "d"},
+		{"a", "b1", "b1", "b", "c", "c1", "c1", "d"},
+	}
+	for _, nonContinuousCase := range nonContinuousCases {
+		// positive
+		check(nonContinuousCase, []string{"a", "d"}, -1, false)
+		check(nonContinuousCase, []string{"", "d"}, -1, false)
+		check(nonContinuousCase, []string{"a", ""}, -1, false)
+		check(nonContinuousCase, []string{"", ""}, -1, false)
+		// negative
+		check(nonContinuousCase, []string{"a", "b"}, -1, true)
+		check(nonContinuousCase, []string{"b", "c"}, -1, true)
+		check(nonContinuousCase, []string{"c", "d"}, -1, true)
+		check(nonContinuousCase, []string{"", "b"}, -1, true)
+		check(nonContinuousCase, []string{"c", ""}, -1, true)
+	}
+
+	unboundCases := [][]string{
+		{"", ""},
+		{"", "b", "b", ""},
+		{"", "a1", "a1", "b", "b", "b1", "b1", ""},
+	}
+	for _, unboundCase := range unboundCases {
+		// positive
+		check(unboundCase, []string{"", ""}, -1, false)
+		// negative
+		check(unboundCase, []string{"a", "c"}, -1, true)
+		check(unboundCase, []string{"a", ""}, -1, true)
+		check(unboundCase, []string{"", "c"}, -1, true)
+		// positive
+		check(unboundCase, []string{"", "b", "b", ""}, -1, false)
+		// negative
+		check(unboundCase, []string{"", "b", "b1", ""}, -1, true)
+		check(unboundCase, []string{"a", "b", "b", ""}, -1, true)
+		check(unboundCase, []string{"", "b", "b", "c"}, -1, true)
+		check(unboundCase, []string{}, -1, true)
+	}
+
+	// test half bounded ranges
+	check([]string{"", "b"}, []string{"", "a"}, -1, true)
+	check([]string{"", "b"}, []string{"", "a"}, 1, false) // it's just limitation reached
+	check([]string{"", "b"}, []string{"", "a"}, 2, true)
+	check([]string{"a", ""}, []string{"b", ""}, -1, true)
+	check([]string{"a", ""}, []string{"b", ""}, 1, true)
+	check([]string{"a", ""}, []string{"b", "c"}, 1, true)
+	check([]string{"a", ""}, []string{"a", ""}, -1, false)
+}
+
+func (s *testRegionCacheSuite) TestScanRegionsWithGaps() {
+	// Split at "a", "c", "e"
+	// nil --- 'a' --- 'c' --- 'e' --- nil
+	// <-  0  -> <- 1 -> <- 2 -> <- 3 -->
+	regions := s.cluster.AllocIDs(3)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 3; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 3; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'a' + 2*byte(i)}, peers[i+1], peers[i+1][0])
+	}
+
+	// the last region is not reported to PD yet
+	getRegionIDsWithInject := func(fn func() ([]*Region, error)) []uint64 {
+		s.cache.clear()
+		err := failpoint.Enable("tikvclient/mockSplitRegionNotReportToPD", fmt.Sprintf(`return(%d)`, regions[2]))
+		s.Nil(err)
+		resCh := make(chan []*Region)
+		errCh := make(chan error)
+		go func() {
+			rs, err := fn()
+			errCh <- err
+			resCh <- rs
+		}()
+		time.Sleep(time.Second)
+		failpoint.Disable("tikvclient/mockSplitRegionNotReportToPD")
+		s.Nil(<-errCh)
+		rs := <-resCh
+		regionIDs := make([]uint64, 0, len(rs))
+		for _, r := range rs {
+			regionIDs = append(regionIDs, r.GetID())
+		}
+		return regionIDs
+	}
+
+	scanRegionRes := getRegionIDsWithInject(func() ([]*Region, error) {
+		return s.cache.BatchLoadRegionsWithKeyRange(s.bo, []byte(""), []byte(""), 10)
+	})
+	s.Equal(scanRegionRes, regions)
+
+	batchScanRegionRes := getRegionIDsWithInject(func() ([]*Region, error) {
+		return s.cache.BatchLoadRegionsWithKeyRanges(s.bo, []pd.KeyRange{{StartKey: []byte{}, EndKey: []byte{}}}, 10)
+	})
+	s.Equal(batchScanRegionRes, regions)
+}
+
+func (s *testRegionCacheSuite) TestIssue1401() {
+	// init region cache
+	s.cache.LocateKey(s.bo, []byte("a"))
+
+	store1, _ := s.cache.stores.get(s.store1)
+	s.Require().NotNil(store1)
+	s.Require().Equal(resolved, store1.getResolveState())
+	// change store1 label.
+	labels := store1.labels
+	labels = append(labels, &metapb.StoreLabel{Key: "host", Value: "0.0.0.0:20161"})
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr, labels...)
+
+	// mark the store is unreachable and need check.
+	atomic.StoreUint32(&store1.livenessState, uint32(unreachable))
+	store1.setResolveState(needCheck)
+
+	// setup mock liveness func
+	s.cache.stores.setMockRequestLiveness(func(ctx context.Context, s *Store) livenessState {
+		return reachable
+	})
+
+	// start health check loop
+	startHealthCheckLoop(s.cache.bg, s.cache.stores, store1, unreachable, time.Second*30)
+
+	// mock asyncCheckAndResolveLoop worker to check and resolve store.
+	s.cache.checkAndResolve(nil, func(s *Store) bool {
+		return s.getResolveState() == needCheck
+	})
+
+	// assert that the old store should be deleted.
+	s.Eventually(func() bool {
+		return store1.getResolveState() == deleted
+	}, 3*time.Second, time.Second)
+	// assert the new store should be added and it should be resolved and reachable.
+	newStore1, _ := s.cache.stores.get(s.store1)
+	s.Eventually(func() bool {
+		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+	}, 3*time.Second, time.Second)
+	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
+}
+
+func BenchmarkBatchLocateKeyRangesFromCache(t *testing.B) {
+	t.StopTimer()
+	s := new(testRegionCacheSuite)
+	s.SetT(&testing.T{})
+	s.SetupTest()
+
+	regionNum := 10000
+	regions := s.cluster.AllocIDs(regionNum)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < regionNum-1; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < regionNum-1; i++ {
+		b := make([]byte, 8)
+		binary.BigEndian.PutUint64(b, uint64(i*2))
+		s.cluster.Split(regions[i], regions[i+1], b, peers[i+1], peers[i+1][0])
+	}
+
+	// cache all regions
+	keyLocation, err := s.cache.BatchLocateKeyRanges(s.bo, []kv.KeyRange{{StartKey: []byte(""), EndKey: []byte("")}})
+	if err != nil || len(keyLocation) != regionNum {
+		t.FailNow()
+	}
+
+	t.StartTimer()
+	for i := 0; i < t.N; i++ {
+		keyLocation, err := s.cache.BatchLocateKeyRanges(s.bo, []kv.KeyRange{{StartKey: []byte(""), EndKey: []byte("")}})
+		if err != nil || len(keyLocation) != regionNum {
+			t.FailNow()
+		}
+	}
+	s.TearDownTest()
 }

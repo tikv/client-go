@@ -44,9 +44,10 @@ import (
 
 const (
 	// DefStoreLivenessTimeout is the default value for store liveness timeout.
-	DefStoreLivenessTimeout      = "1s"
-	DefGrpcInitialWindowSize     = 1 << 27 // 128MiB
-	DefGrpcInitialConnWindowSize = 1 << 27 // 128MiB
+	DefStoreLivenessTimeout       = "1s"
+	DefGrpcInitialWindowSize      = 1 << 27 // 128MiB
+	DefGrpcInitialConnWindowSize  = 1 << 27 // 128MiB
+	DefMaxConcurrencyRequestLimit = math.MaxInt64
 )
 
 // TiKVClient is the config for tikv client.
@@ -99,8 +100,8 @@ type TiKVClient struct {
 	// MaxConcurrencyRequestLimit is the max concurrency number of request to be sent the tikv
 	// 0 means auto adjust by feedback.
 	MaxConcurrencyRequestLimit int64 `toml:"max-concurrency-request-limit" json:"max-concurrency-request-limit"`
-	// EnableReplicaSelectorV2 indicate whether to use the new replica-selector-v2.
-	// TODO(crazycs520): remove this config after the new replica-selector-v2 is stable.
+	// EnableReplicaSelectorV2 was deprecated.
+	// TODO(crazycs520): remove this config in 8.6 LTS version.
 	EnableReplicaSelectorV2 bool `toml:"enable-replica-selector-v2" json:"enable-replica-selector-v2"`
 }
 
@@ -174,7 +175,7 @@ func DefaultTiKVClient() TiKVClient {
 		CoprReqTimeout: 60 * time.Second,
 
 		ResolveLockLiteThreshold:   16,
-		MaxConcurrencyRequestLimit: math.MaxInt64,
+		MaxConcurrencyRequestLimit: DefMaxConcurrencyRequestLimit,
 		EnableReplicaSelectorV2:    true,
 	}
 }

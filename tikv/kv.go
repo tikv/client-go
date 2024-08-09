@@ -235,6 +235,28 @@ func loadOption(store *KVStore, opt ...Option) {
 	}
 }
 
+const getHealthFeedbackTimeout = time.Second * 2
+
+func requestHealthFeedbackFromKVClient(ctx context.Context, addr string, tikvClient Client) error {
+	// When batch RPC is enabled (`MaxBatchSize` > 0), a `GetHealthFeedback` RPC call will cause TiKV also sending the
+	// health feedback information in via the `BatchCommandsResponse`, which will be handled by the batch client.
+	// Therefore the same information carried in the response don't need to be handled in this case. And as we're
+	// currently not supporting health feedback mechanism without enabling batch RPC, we do not use the information
+	// carried in the `resp` here.
+	resp, err := tikvClient.SendRequest(ctx, addr, tikvrpc.NewRequest(tikvrpc.CmdGetHealthFeedback, &kvrpcpb.GetHealthFeedbackRequest{}), getHealthFeedbackTimeout)
+	if err != nil {
+		return err
+	}
+	regionErr, err := resp.GetRegionError()
+	if err != nil {
+		return err
+	}
+	if regionErr != nil {
+		return errors.Errorf("requested health feedback from store but received region error: %s", regionErr.String())
+	}
+	return nil
+}
+
 // NewKVStore creates a new TiKV store instance.
 func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
 	o, err := oracles.NewPdOracle(pdClient, defaultOracleUpdateInterval)
@@ -242,7 +264,9 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	regionCache := locate.NewRegionCache(pdClient)
+	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
+		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
+	}))
 	store := &KVStore{
 		clusterID:       pdClient.GetClusterID(context.TODO()),
 		uuid:            uuid,

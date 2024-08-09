@@ -39,10 +39,8 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 )
 
 const (
@@ -54,8 +52,9 @@ const (
 )
 
 var (
-	nullAddr = memdbArenaAddr{math.MaxUint32, math.MaxUint32}
-	endian   = binary.LittleEndian
+	nullAddr     = memdbArenaAddr{math.MaxUint32, math.MaxUint32}
+	nullNodeAddr = memdbNodeAddr{nil, nullAddr}
+	endian       = binary.LittleEndian
 )
 
 type memdbArenaAddr struct {
@@ -64,17 +63,8 @@ type memdbArenaAddr struct {
 }
 
 func (addr memdbArenaAddr) isNull() bool {
-	if addr == nullAddr {
-		return true
-	}
-	if addr.idx == math.MaxUint32 || addr.off == math.MaxUint32 {
-		// defensive programming, the code should never run to here.
-		// it always means something wrong... (maybe caused by data race?)
-		// because we never set part of idx/off to math.MaxUint64
-		logutil.BgLogger().Warn("Invalid memdbArenaAddr", zap.Uint32("idx", addr.idx), zap.Uint32("off", addr.off))
-		return true
-	}
-	return false
+	// Combine all checks into a single condition
+	return addr == nullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
 }
 
 // store and load is used by vlog, due to pointer in vlog is not aligned.
@@ -279,7 +269,7 @@ func (a *nodeAllocator) freeNode(addr memdbArenaAddr) {
 		n.vptr = badAddr
 		return
 	}
-	// TODO: reuse freed nodes.
+	// TODO: reuse freed nodes. Need to fix lastTraversedNode when implementing this.
 }
 
 func (a *nodeAllocator) reset() {

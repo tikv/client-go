@@ -36,7 +36,7 @@ package unionstore
 
 import (
 	"context"
-	"math"
+	"time"
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
@@ -154,10 +154,10 @@ func (us *KVUnionStore) UnmarkPresumeKeyNotExists(k []byte) {
 // SetEntrySizeLimit sets the size limit for each entry and total buffer.
 func (us *KVUnionStore) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 	if entryLimit == 0 {
-		entryLimit = math.MaxUint64
+		entryLimit = unlimitedSize
 	}
 	if bufferLimit == 0 {
-		bufferLimit = math.MaxUint64
+		bufferLimit = unlimitedSize
 	}
 	us.memBuffer.SetEntrySizeLimit(entryLimit, bufferLimit)
 }
@@ -211,6 +211,8 @@ type MemBuffer interface {
 	Dirty() bool
 	// SetMemoryFootprintChangeHook sets the hook for memory footprint change.
 	SetMemoryFootprintChangeHook(hook func(uint64))
+	// MemHookSet returns whether the memory footprint change hook is set.
+	MemHookSet() bool
 	// Mem returns the memory usage of MemBuffer.
 	Mem() uint64
 	// Len returns the count of entries in the MemBuffer.
@@ -236,6 +238,15 @@ type MemBuffer interface {
 	Flush(force bool) (bool, error)
 	// FlushWait waits for the flushing task done and return error.
 	FlushWait() error
+	// GetMetrics returns the metrics related to flushing
+	GetMetrics() Metrics
+}
+
+type Metrics struct {
+	WaitDuration   time.Duration
+	TotalDuration  time.Duration
+	MemDBHitCount  uint64
+	MemDBMissCount uint64
 }
 
 var (
@@ -287,3 +298,6 @@ func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[st
 	}
 	return m, nil
 }
+
+// GetFlushMetrisc implements the MemBuffer interface.
+func (db *MemDBWithContext) GetMetrics() Metrics { return Metrics{} }

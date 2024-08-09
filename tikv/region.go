@@ -41,6 +41,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )
@@ -226,3 +227,18 @@ var LabelFilterAllTiFlashNode = locate.LabelFilterAllTiFlashNode
 
 // LabelFilterAllNode will select all stores.
 var LabelFilterAllNode = locate.LabelFilterAllNode
+
+// KeyRange represents a range where StartKey <= key < EndKey.
+type KeyRange = kv.KeyRange
+
+// BatchLocateKeyRangesOpt is the option for BatchLocateKeyRanges.
+type BatchLocateKeyRangesOpt = locate.BatchLocateKeyRangesOpt
+
+var (
+	// WithNeedBuckets indicates that the request needs to contain bucket info.
+	WithNeedBuckets = locate.WithNeedBuckets
+	// WithNeedRegionHasLeaderPeer indicates that the regions returned must contain leader peer, unless it's skipped.
+	// Note the leader peer existence is not guaranteed is not related to the election status,
+	// the region info contains old leader during the election, this variable affects nothing in most time.
+	WithNeedRegionHasLeaderPeer = locate.WithNeedRegionHasLeaderPeer
+)

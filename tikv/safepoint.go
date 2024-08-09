@@ -78,7 +78,7 @@ type MockSafePointKV struct {
 }
 
 // NewMockSafePointKV creates an instance of MockSafePointKV
-func NewMockSafePointKV() *MockSafePointKV {
+func NewMockSafePointKV(opts ...SafePointKVOpt) *MockSafePointKV {
 	return &MockSafePointKV{
 		store: make(map[string]string),
 	}

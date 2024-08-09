@@ -121,6 +121,7 @@ func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64,
 // ScanRegions implements pd.Client#ScanRegions.
 func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
 	start := time.Now()
+	//nolint:staticcheck
 	r, err := m.Client.ScanRegions(ctx, key, endKey, limit, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err

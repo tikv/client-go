@@ -35,6 +35,7 @@
 package mocktikv
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -48,8 +49,11 @@ import (
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Use global variables to prevent pdClients from creating duplicate timestamps.
@@ -249,6 +253,34 @@ func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...p
 
 func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
 	regions := c.cluster.ScanRegions(startKey, endKey, limit, opts...)
+	return regions, nil
+}
+
+func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+	if _, err := util.EvalFailpoint("mockBatchScanRegionsUnimplemented"); err == nil {
+		return nil, status.Errorf(codes.Unimplemented, "mock BatchScanRegions is not implemented")
+	}
+	regions := make([]*pd.Region, 0, len(keyRanges))
+	var lastRegion *pd.Region
+	for _, keyRange := range keyRanges {
+		if lastRegion != nil && lastRegion.Meta != nil {
+			if lastRegion.Meta.EndKey == nil || bytes.Compare(lastRegion.Meta.EndKey, keyRange.EndKey) >= 0 {
+				continue
+			}
+			if bytes.Compare(lastRegion.Meta.EndKey, keyRange.StartKey) > 0 {
+				keyRange.StartKey = lastRegion.Meta.EndKey
+			}
+		}
+		rangeRegions := c.cluster.ScanRegions(keyRange.StartKey, keyRange.EndKey, limit, opts...)
+		if len(rangeRegions) > 0 {
+			lastRegion = rangeRegions[len(rangeRegions)-1]
+		}
+		regions = append(regions, rangeRegions...)
+		limit -= len(regions)
+		if limit <= 0 {
+			break
+		}
+	}
 	return regions, nil
 }
 

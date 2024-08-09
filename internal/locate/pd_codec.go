@@ -126,7 +126,31 @@ func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
 	startKey, endKey = c.codec.EncodeRegionRange(startKey, endKey)
+	//nolint:staticcheck
 	regions, err := c.Client.ScanRegions(ctx, startKey, endKey, limit, opts...)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	for _, region := range regions {
+		if region != nil {
+			err = c.decodeRegionKeyInPlace(region)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return regions, nil
+}
+
+// BatchScanRegions encodes the key before send requests to pd-server and decodes the
+// returned StartKey && EndKey from pd-server.
+// if limit > 0, it limits the maximum number of returned regions, should check if the result regions fully contain the given key ranges.
+func (c *CodecPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+	encodedRanges := make([]pd.KeyRange, len(keyRanges))
+	for i, keyRange := range keyRanges {
+		encodedRanges[i].StartKey, encodedRanges[i].EndKey = c.codec.EncodeRegionRange(keyRange.StartKey, keyRange.EndKey)
+	}
+	regions, err := c.Client.BatchScanRegions(ctx, encodedRanges, limit, opts...)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
