@@ -174,7 +174,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			for _, m := range mutations {
 				keys = append(keys, hex.EncodeToString(m.Key))
 			}
-			logutil.BgLogger().Info(
+			logutil.BgLogger().Debug(
 				"[failpoint] injected lock ttl = 1 on pessimistic lock",
 				zap.Uint64("txnStartTS", c.startTS), zap.Strings("keys", keys),
 			)
