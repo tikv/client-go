@@ -107,7 +107,7 @@ type batchCommandsBuilder struct {
 	// In most cases, there isn't any forwardingReq.
 	forwardingReqs map[string]*tikvpb.BatchCommandsRequest
 
-	maxReqStartTime time.Time
+	latestReqStartTime time.Time
 }
 
 func (b *batchCommandsBuilder) len() int {
@@ -116,8 +116,8 @@ func (b *batchCommandsBuilder) len() int {
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries.Push(entry)
-	if entry.start.After(b.maxReqStartTime) {
-		b.maxReqStartTime = entry.start
+	if entry.start.After(b.latestReqStartTime) {
+		b.latestReqStartTime = entry.start
 	}
 }
 
@@ -294,7 +294,7 @@ func (a *batchConn) isIdle() bool {
 // fetchAllPendingRequests fetches all pending requests from the channel.
 func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time.Time, headArrivalInterval time.Duration) {
 	// Block on the first element.
-	lastReqStartTime := a.reqBuilder.maxReqStartTime
+	latestReqStartTime := a.reqBuilder.latestReqStartTime
 	var headEntry *batchCommandsEntry
 	select {
 	case headEntry = <-a.batchCommandsCh:
@@ -315,8 +315,8 @@ func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time
 		return time.Now(), 0
 	}
 	headRecvTime = time.Now()
-	if headEntry.start.After(lastReqStartTime) && !lastReqStartTime.IsZero() {
-		headArrivalInterval = headEntry.start.Sub(lastReqStartTime)
+	if headEntry.start.After(latestReqStartTime) && !latestReqStartTime.IsZero() {
+		headArrivalInterval = headEntry.start.Sub(latestReqStartTime)
 	}
 	a.reqBuilder.push(headEntry)
 
@@ -368,7 +368,7 @@ func (a *batchConn) fetchMorePendingRequests(
 	// Do an additional non-block try. Here we test the length with `maxBatchSize` instead
 	// of `batchWaitSize` because trying best to fetch more requests is necessary so that
 	// we can adjust the `batchWaitSize` dynamically.
-	yield := false
+	yielded := false
 	for a.reqBuilder.len() < maxBatchSize {
 		select {
 		case entry := <-a.batchCommandsCh:
@@ -377,12 +377,12 @@ func (a *batchConn) fetchMorePendingRequests(
 			}
 			a.reqBuilder.push(entry)
 		default:
-			if yield {
+			if yielded {
 				return
 			}
 			// yield once to batch more requests.
 			runtime.Gosched()
-			yield = true
+			yielded = true
 		}
 	}
 }
