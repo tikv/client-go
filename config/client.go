@@ -52,10 +52,14 @@ const (
 )
 
 const (
-	BatchPolicyBasic    = "basic"
+	// BatchPolicyBasic is the basic batch policy whose behavior is consistent with versions before v8.3.0.
+	BatchPolicyBasic = "basic"
+	// BatchPolicyStandard dynamically batches requests based the arrival time intervals of recent requests.
 	BatchPolicyStandard = "standard"
+	// BatchPolicyPositive always performs additional batching.
 	BatchPolicyPositive = "positive"
-	BatchPolicyCustom   = "custom"
+	// BatchPolicyCustom allows users to customize the internal batch options.
+	BatchPolicyCustom = "custom"
 )
 
 // TiKVClient is the config for tikv client.

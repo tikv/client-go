@@ -406,11 +406,21 @@ const (
 
 // turboBatchOptions defines internal options for the [turboBatchTrigger].
 type turboBatchOptions struct {
-	V int     `json:"v"`
-	N int     `json:"n,omitempty"`
+	// V determines the batch strategy: always(v=0), time-based(v=1), prob-based(v=2).
+	V int `json:"v"`
+	// N currently is used to determine the max arrival interval (n * t).
+	N int `json:"n,omitempty"`
+	// T is the max wait time for the batch.
 	T float64 `json:"t,omitempty"`
+	// W is used to adjust the `estArrivalInterval` or `estFetchMoreProb` dynamically.
+	//   - time-based(v=1): estArrivalInterval = w*reqArrivalInterval + (1-w)*estArrivalInterval
+	//   - prob-based(v=2): estFetchMoreProb = w*thisProb + (1-w)*estFetchMoreProb
 	W float64 `json:"w,omitempty"`
+	// P is used to determine whether to fetch more requests:
+	//   - time-based(v=1): estArrivalInterval < p * t
+	//   - prob-based(v=2): estFetchMoreProb > p
 	P float64 `json:"p,omitempty"`
+	// Q is used to adjust the `batchWaitSize` dynamically.
 	Q float64 `json:"q,omitempty"`
 }
 
