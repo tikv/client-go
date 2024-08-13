@@ -484,6 +484,18 @@ func (t *turboBatchTrigger) needFetchMore(reqArrivalInterval time.Duration) bool
 	}
 }
 
+func (t *turboBatchTrigger) preferredBatchWaitSize(avgBatchWaitSize float64, defBatchWaitSize int) int {
+	if t.opts.V == turboBatchAlways {
+		return defBatchWaitSize
+	}
+	n, m := math.Modf(avgBatchWaitSize)
+	batchWaitSize := int(n)
+	if m >= t.opts.Q {
+		batchWaitSize++
+	}
+	return batchWaitSize
+}
+
 // BatchSendLoopPanicCounter is only used for testing.
 var BatchSendLoopPanicCounter int64 = 0
 
@@ -530,13 +542,7 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 				metrics.TiKVBatchWaitOverLoad.Inc()
 				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.BatchWaitSize), cfg.MaxBatchWaitTime)
 			} else if turboBatchWaitTime > 0 && headArrivalInterval > 0 && trigger.needFetchMore(headArrivalInterval) {
-				n, m := math.Modf(avgBatchWaitSize)
-				batchWaitSize := int(n)
-				if trigger.opts.V == 0 {
-					batchWaitSize = int(cfg.BatchWaitSize)
-				} else if m >= trigger.opts.Q {
-					batchWaitSize++
-				}
+				batchWaitSize := trigger.preferredBatchWaitSize(avgBatchWaitSize, int(cfg.BatchWaitSize))
 				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), batchWaitSize, turboBatchWaitTime)
 				a.metrics.batchMoreRequests.Observe(float64(a.reqBuilder.len() - batchSize))
 			}
