@@ -189,7 +189,7 @@ func (t *Art) recursiveInsert(key Key) (nodeAddr, *leaf) {
 				leaf := leafArtNode.leaf(&t.allocator)
 				leafKey := leaf.getKey()
 				kMin := depth + mismatchIdx + 1
-				kMax := depth + mismatchIdx + 1 + min(uint32(node.prefixLen), maxPrefixLen)
+				kMax := depth + mismatchIdx + 1 + min(node.prefixLen, maxPrefixLen)
 				copy(node.prefix[:], leafKey[kMin:kMax])
 				newArtNode.addChild(&t.allocator, leafKey.charAt(int(depth+mismatchIdx)), !leafKey.valid(int(depth)), current)
 			}
@@ -246,10 +246,10 @@ func (t *Art) search(key Key) (nodeAddr, *leaf) {
 		node := current.node(&t.allocator)
 		if node.prefixLen > 0 {
 			prefixLen := node.match(key, depth)
-			if prefixLen < min(uint32(node.prefixLen), maxPrefixLen) {
+			if prefixLen < min(node.prefixLen, maxPrefixLen) {
 				return nullAddr, nil
 			}
-			depth += uint32(node.prefixLen)
+			depth += node.prefixLen
 		}
 
 		_, current = current.findChild(&t.allocator, key.charAt(int(depth)), key.valid(int(depth)))
@@ -522,8 +522,8 @@ func (t *Art) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte)) {
 func (t *Art) inspectKVInLog(head, tail *ARTCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
 	cursor := *tail
 	for !head.isSamePosition(&cursor) {
-		cursorAddr := nodeAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
-		hdrOff := cursorAddr.off - uint32(memdbVlogHdrSize)
+		cursorAddr := nodeAddr{idx: cursor.blocks - 1, off: cursor.offsetInBlock}
+		hdrOff := cursorAddr.off - memdbVlogHdrSize
 		block := t.allocator.vlogAllocator.blocks[cursorAddr.idx].buf
 		var hdr vlogHdr
 		hdr.load(block[hdrOff:])
@@ -563,7 +563,7 @@ func (t *Art) selectValueHistory(addr nodeAddr, predicate func(nodeAddr) bool) n
 			return addr
 		}
 		var hdr vlogHdr
-		hdr.load(t.allocator.vlogAllocator.blocks[addr.idx].buf[addr.off-uint32(memdbVlogHdrSize):])
+		hdr.load(t.allocator.vlogAllocator.blocks[addr.idx].buf[addr.off-memdbVlogHdrSize:])
 		addr = hdr.oldValue
 	}
 	return nullAddr

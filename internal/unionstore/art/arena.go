@@ -315,12 +315,12 @@ func (f *artAllocator) allocValue(leafAddr nodeAddr, oldAddr nodeAddr, value []b
 	copy(data, value)
 	hdr := vlogHdr{leafAddr, oldAddr, uint32(len(value))}
 	hdr.store(data[len(value):])
-	addr.off += uint32(size)
+	addr.off += size
 	return addr
 }
 
 func (f *artAllocator) getValue(valAddr nodeAddr) []byte {
-	hdrOff := valAddr.off - uint32(memdbVlogHdrSize)
+	hdrOff := valAddr.off - memdbVlogHdrSize
 	block := f.vlogAllocator.blocks[valAddr.idx].buf
 	valLen := endian.Uint32(block[hdrOff:])
 	if valLen == 0 {

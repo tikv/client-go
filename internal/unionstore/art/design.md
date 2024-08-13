@@ -10,7 +10,7 @@ The membuffer stores the temporary data of transaction, which is an in-mem index
 - Snapshot Get/Iterate
 - Memory Tracking
 
-[ART][ART_Paper] is an in-mem index data structure, which has better performance when the keys have long common perfix. In our test, it's a fitting solution for TiDB's usage.
+[ART][ART_Paper] is an in-mem index data structure, with performance surpasses search trees, as well as surpress the memory space amplification issue of radix tree. It's a fitting solution for TiDB's usage in our test.
 
 ## Design
 
@@ -44,9 +44,13 @@ The lookup process of each node is showed in below figures.
 
 ![node4 lookup](./img/node4_lookup.png)
 
+The keys slice stores the indexed char in ordered, so it just simply iterates the keys array when searching. If the key is matched, return the child with same index.
+
 #### Node16 lookup
 
 ![node16 lookup](./img/node16_lookup.png)
+
+The node16 is almost same as node4, but we performs lookup with a binary search.
 
 #### Node48 lookup
 
@@ -61,7 +65,9 @@ The lookup process of each node is showed in below figures.
 
 In GC language, every allocated memory piece is tracked by runtime, to optimize high frequency small writes, we need a memory arena to reduce the number of allocation.
 
-The arena allocates a long buffer each time, and cast it to the type we need.
+The figure shows how the memory arena works. The arena allocates a long buffer each time, and cast it to the type we need.
+
+![memory arena](./img/memory_arena.png)
 
 The side effect of memory arena is the pointer should be replaced with arena's address. And the dereference need to involve memory arena, which makes the code much more complex.
 

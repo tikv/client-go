@@ -1,8 +1,9 @@
 package art
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestIterateNodeCapacity(t *testing.T) {

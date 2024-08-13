@@ -177,7 +177,7 @@ func (it *ArtIterator) seek(key Key) ([]int, []artNode) {
 				}
 				return idxes, nodes
 			}
-			depth += min(mismatchIdx, uint32(node.prefixLen))
+			depth += min(mismatchIdx, node.prefixLen)
 		}
 
 		nodes = append(nodes, curr)

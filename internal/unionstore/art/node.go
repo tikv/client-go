@@ -55,6 +55,7 @@ func init() {
 }
 
 type Key []byte
+
 type artNode struct {
 	kind nodeKind
 	addr nodeAddr
@@ -111,47 +112,44 @@ type leaf struct {
 	flags uint16
 }
 
-func (n *artNode) isLeaf() bool {
-	return n.kind == typeLeaf
+func (an *artNode) isLeaf() bool {
+	return an.kind == typeLeaf
 }
 
-func (n *artNode) leaf(a *artAllocator) *leaf {
-	return a.getLeaf(n.addr)
+func (an *artNode) leaf(a *artAllocator) *leaf {
+	return a.getLeaf(an.addr)
 }
 
-func (n *artNode) node(a *artAllocator) *nodeBase {
-	switch n.kind {
+func (an *artNode) node(a *artAllocator) *nodeBase {
+	switch an.kind {
 	case typeNode4:
-		return &n.node4(a).nodeBase
+		return &an.node4(a).nodeBase
 	case typeNode16:
-		return &n.node16(a).nodeBase
+		return &an.node16(a).nodeBase
 	case typeNode48:
-		return &n.node48(a).nodeBase
+		return &an.node48(a).nodeBase
 	case typeNode256:
-		return &n.node256(a).nodeBase
+		return &an.node256(a).nodeBase
 	default:
 		panic("invalid nodeBase kind")
 	}
 }
 
-func (n *artNode) at(a *artAllocator, idx int) artNode {
-	switch n.kind {
+// at returns the nth child of the node.
+func (an *artNode) at(a *artAllocator, idx int) artNode {
+	switch an.kind {
 	case typeNode4:
-		return n.node4(a).children[idx]
+		return an.node4(a).children[idx]
 	case typeNode16:
-		return n.node16(a).children[idx]
+		return an.node16(a).children[idx]
 	case typeNode48:
-		n48 := n.node48(a)
+		n48 := an.node48(a)
 		return n48.children[n48.keys[idx]]
 	case typeNode256:
-		return n.node256(a).children[idx]
+		return an.node256(a).children[idx]
 	default:
 		panic("invalid nodeBase kind")
 	}
-}
-
-func (n4 *node4) size() uint32 {
-	return node4size
 }
 
 func (n4 *node4) nextPresentIdx(start int) int {
@@ -173,6 +171,8 @@ func (n48 *node48) init() {
 	copy(n48.children[:], nullNode48.children[:])
 }
 
+// nextPresentIdx returns the next present index starting from the given index.
+// Finding from present bitmap is faster than from keys.
 func (n48 *node48) nextPresentIdx(start int) int {
 	for presentOffset := start >> n48s; presentOffset < 4; presentOffset++ {
 		present := n48.present[presentOffset]
@@ -188,6 +188,8 @@ func (n48 *node48) nextPresentIdx(start int) int {
 	return node256cap
 }
 
+// prevPresentIdx returns the next present index starting from the given index.
+// Finding from present bitmap is faster than from keys.
 func (n48 *node48) prevPresentIdx(start int) int {
 	for presentOffset := start >> n48s; presentOffset >= 0; presentOffset-- {
 		present := n48.present[presentOffset]
@@ -249,11 +251,10 @@ func (k Key) charAt(pos int) byte {
 }
 
 func (k Key) valid(pos int) bool {
-	return pos >= 0 && pos < len(k)
+	return pos < len(k)
 }
 
 // leaf methods
-
 func (l *leaf) getKey() Key {
 	base := unsafe.Add(unsafe.Pointer(l), leafSize)
 	return unsafe.Slice((*byte)(base), int(l.klen))
@@ -264,11 +265,10 @@ func (l *leaf) match(key Key) bool {
 	if len(key) == 0 && len(lKey) == 0 {
 		return true
 	}
-
 	if key == nil || len(lKey) != len(key) {
 		return false
 	}
-	return bytes.Compare(lKey[:len(key)], key) == 0
+	return bytes.Equal(lKey[:len(key)], key)
 }
 
 func (l *leaf) setKeyFlags(flags kv.KeyFlags) nodeAddr {
@@ -290,6 +290,7 @@ func (l *leaf) markDelete() {
 	l.flags = deleteFlag
 }
 
+//nolint:unused
 func (l *leaf) unmarkDelete() {
 	l.flags &= flagMask
 }
@@ -310,7 +311,7 @@ func (n *nodeBase) match(key Key, depth uint32) uint32 {
 		return idx
 	}
 
-	limit := min(uint32(min(n.prefixLen, maxPrefixLen)), uint32(len(key))-depth)
+	limit := min(min(n.prefixLen, maxPrefixLen), uint32(len(key))-depth)
 	for ; idx < limit; idx++ {
 		if n.prefix[idx] != key[idx+depth] {
 			return idx
@@ -320,32 +321,31 @@ func (n *nodeBase) match(key Key, depth uint32) uint32 {
 	return idx
 }
 
-func (n *artNode) node4(a *artAllocator) *node4 {
-	return a.getNode4(n.addr)
+func (an *artNode) node4(a *artAllocator) *node4 {
+	return a.getNode4(an.addr)
 }
 
-func (n *artNode) node16(a *artAllocator) *node16 {
-	return a.getNode16(n.addr)
+func (an *artNode) node16(a *artAllocator) *node16 {
+	return a.getNode16(an.addr)
 }
 
-func (n *artNode) node48(a *artAllocator) *node48 {
-	return a.getNode48(n.addr)
+func (an *artNode) node48(a *artAllocator) *node48 {
+	return a.getNode48(an.addr)
 }
 
-func (n *artNode) node256(a *artAllocator) *node256 {
-	return a.getNode256(n.addr)
+func (an *artNode) node256(a *artAllocator) *node256 {
+	return a.getNode256(an.addr)
 }
 
-func (an artNode) matchDeep(a *artAllocator, key Key, depth uint32) uint32 /* mismatch index*/ {
+func (an *artNode) matchDeep(a *artAllocator, key Key, depth uint32) uint32 /* mismatch index*/ {
 	n := an.node(a)
 	mismatchIdx := n.match(key, depth)
 	if mismatchIdx < min(n.prefixLen, maxPrefixLen) {
 		return mismatchIdx
 	}
 
-	leafArtNode := minimum(a, an)
-	leaf := leafArtNode.leaf(a)
-	lKey := leaf.getKey()
+	leafArtNode := minimum(a, *an)
+	lKey := leafArtNode.leaf(a).getKey()
 	return longestCommonPrefix(lKey, key, depth)
 }
 
@@ -353,7 +353,7 @@ func longestCommonPrefix(l1Key, l2Key Key, depth uint32) uint32 {
 	idx, limit := depth, min(uint32(len(l1Key)), uint32(len(l2Key)))
 	for ; idx < limit; idx++ {
 		if l1Key[idx] != l2Key[idx] {
-			return idx - depth
+			break
 		}
 	}
 	return idx - depth
@@ -556,11 +556,15 @@ func (an *artNode) _addChild16(a *artAllocator, c byte, inplace bool, child artN
 	}
 
 	if i < node.nodeNum {
-		for j := node.nodeNum; j > i; j-- {
-			node.keys[j] = node.keys[j-1]
-			node.children[j] = node.children[j-1]
-		}
+		//for j := node.nodeNum; j > i; j-- {
+		//	node.keys[j] = node.keys[j-1]
+		//	node.children[j] = node.children[j-1]
+		//}
+		//src := node.keys[i:node.nodeNum]
+		copy(node.keys[i+1:node.nodeNum+1], node.keys[i:node.nodeNum])
+		copy(node.children[i+1:node.nodeNum+1], node.children[i:node.nodeNum])
 	}
+
 	node.keys[i] = c
 	node.children[i] = child
 	node.nodeNum++
@@ -580,18 +584,9 @@ func (an *artNode) _addChild48(a *artAllocator, c byte, inplace bool, child artN
 		return false
 	}
 
-	lower, upper := 0, node48cap-1
-	for lower < upper {
-		middle := (lower + upper) / 2
-		if node.children[middle].addr.isNull() {
-			upper = middle
-		} else {
-			lower = middle + 1
-		}
-	}
-	node.keys[c] = uint8(lower)
+	node.keys[c] = node.nodeNum
 	node.present[c>>n48s] |= 1 << (c % n48m)
-	node.children[lower] = child
+	node.children[node.nodeNum] = child
 	node.nodeNum++
 	return false
 }
@@ -640,7 +635,7 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 		for i := uint8(0); i < n16.nodeBase.nodeNum; i++ {
 			ch := n16.keys[i]
 			n48.keys[ch] = numChildren
-			n48.present[ch>>n48s] |= 1 << uint8(ch%n48m)
+			n48.present[ch>>n48s] |= 1 << (ch % n48m)
 			n48.children[numChildren] = n16.children[i]
 			numChildren++
 		}
