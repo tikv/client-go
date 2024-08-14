@@ -1075,9 +1075,17 @@ func (c *twoPhaseCommitter) doActionOnBatches(
 					status,
 				),
 			)
-			// TODO: There might be various signals besides a query interruption,
-			// but we are unable to differentiate them, because the definition is in TiDB.
-			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: status})
+
+			// TODO: at least provide a way to force kill the action.
+			// The cleanup action is explicitly not killed to avoid leaking stale locks.
+			_, isCleanUp := action.(actionCleanup)
+			_, isCommit := action.(actionCommit)
+			if !isCleanUp && !isCommit {
+				// TODO: There might be various signals besides a query interruption,
+				// but we are unable to differentiate them, because the definition is in TiDB.
+				return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: status})
+			}
+			logutil.BgLogger().Info("allow commit and cleanup in shutdown stage", zap.String("action", action.String()))
 		}
 	}
 	if len(batches) == 0 {
@@ -1638,6 +1646,10 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		return err
 	}
 
+	if c.txn.resourceGroupName == "testslowcommit" {
+		time.Sleep(5 * time.Second)
+	}
+
 	// return assertion error found in TiDB after prewrite succeeds to prevent false positive. Note this is only visible
 	// when async commit or 1PC is disabled.
 	if c.stashedAssertionError != nil {
@@ -1761,11 +1773,26 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		c.store.WaitGroup().Add(1)
 		go func() {
 			defer c.store.WaitGroup().Done()
-			if _, err := util.EvalFailpoint("asyncCommitDoNothing"); err == nil {
+
+			var err error
+			defer func() {
+				// The error means the async commit should not succeed.
+				if err != nil {
+					if c.getUndeterminedErr() == nil {
+						c.cleanup(ctx)
+					}
+					metrics.AsyncCommitTxnCounterError.Inc()
+				} else {
+					metrics.AsyncCommitTxnCounterOk.Inc()
+				}
+			}()
+
+			_, err = util.EvalFailpoint("asyncCommitDoNothing")
+			if err == nil {
 				return
 			}
 			commitBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
-			err := c.commitMutations(commitBo, c.mutations)
+			err = c.commitMutations(commitBo, c.mutations)
 			if err != nil {
 				logutil.Logger(ctx).Warn("2PC async commit failed", zap.Uint64("sessionID", c.sessionID),
 					zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS), zap.Error(err))
