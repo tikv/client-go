@@ -148,7 +148,7 @@ func TestSendWhenReconnect(t *testing.T) {
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
 	_, err = rpcClient.SendRequest(context.Background(), addr, req, 5*time.Second)
-	require.Regexp(t, "wait recvLoop timeout, timeout:5s, wait_send_duration:.*, wait_recv_duration:.*: context deadline exceeded", err.Error())
+	require.Regexp(t, "wait recvLoop timeout, timeout:5s: context deadline exceeded", err.Error())
 	server.Stop()
 }
 
@@ -1066,4 +1066,77 @@ func TestConcurrentCloseConnPanic(t *testing.T) {
 		assert.Nil(t, err)
 	}()
 	wg.Wait()
+}
+
+func TestBatchPolicy(t *testing.T) {
+	t.Run(config.BatchPolicyBasic, func(t *testing.T) {
+		trigger, ok := newTurboBatchTriggerFromPolicy(config.BatchPolicyBasic)
+		require.True(t, ok)
+		require.False(t, trigger.turboWaitTime() > 0)
+	})
+	t.Run(config.BatchPolicyPositive, func(t *testing.T) {
+		trigger, ok := newTurboBatchTriggerFromPolicy(config.BatchPolicyPositive)
+		require.True(t, ok)
+		require.Equal(t, trigger.turboWaitTime(), 100*time.Microsecond)
+		require.True(t, trigger.needFetchMore(time.Hour))
+		require.True(t, trigger.needFetchMore(time.Millisecond))
+		require.Equal(t, 8, trigger.preferredBatchWaitSize(1, 8))
+		require.Equal(t, 8, trigger.preferredBatchWaitSize(1.2, 8))
+		require.Equal(t, 8, trigger.preferredBatchWaitSize(1.8, 8))
+	})
+	t.Run(config.BatchPolicyStandard, func(t *testing.T) {
+		trigger, ok := newTurboBatchTriggerFromPolicy(config.BatchPolicyStandard)
+		require.True(t, ok)
+		require.Equal(t, 1, trigger.preferredBatchWaitSize(1, 8))
+		require.Equal(t, 1, trigger.preferredBatchWaitSize(1.2, 8))
+		require.Equal(t, 2, trigger.preferredBatchWaitSize(1.8, 8))
+		require.Equal(t, trigger.turboWaitTime(), 100*time.Microsecond)
+		require.False(t, trigger.needFetchMore(100*time.Microsecond))
+		require.False(t, trigger.needFetchMore(80*time.Microsecond))
+		require.True(t, trigger.needFetchMore(10*time.Microsecond))
+		require.True(t, trigger.needFetchMore(80*time.Microsecond))
+		require.False(t, trigger.needFetchMore(90*time.Microsecond))
+
+		for i := 0; i < 50; i++ {
+			trigger.needFetchMore(time.Hour)
+		}
+		require.Less(t, trigger.estArrivalInterval, trigger.maxArrivalInterval)
+		for i := 0; i < 8; i++ {
+			require.False(t, trigger.needFetchMore(10*time.Microsecond))
+		}
+		require.True(t, trigger.needFetchMore(10*time.Microsecond))
+	})
+	t.Run(config.BatchPolicyCustom, func(t *testing.T) {
+		trigger, ok := newTurboBatchTriggerFromPolicy(config.BatchPolicyCustom + " {} ")
+		require.True(t, ok)
+		require.Equal(t, trigger.opts, presetBatchPolicies[config.BatchPolicyBasic])
+
+		trigger, ok = newTurboBatchTriggerFromPolicy(`{"t":0.0001}`)
+		require.True(t, ok)
+		require.Equal(t, trigger.opts, presetBatchPolicies[config.BatchPolicyPositive])
+
+		trigger, ok = newTurboBatchTriggerFromPolicy(`{"v":1,"t":0.0001,"n":5,"w":0.2,"p":0.8,"q":0.8}`)
+		require.True(t, ok)
+		require.Equal(t, trigger.opts, presetBatchPolicies[config.BatchPolicyStandard])
+
+		trigger, ok = newTurboBatchTriggerFromPolicy(`{"v":2,"t":0.001,"w":0.2,"p":0.5}`)
+		require.True(t, ok)
+		require.Equal(t, 2, trigger.preferredBatchWaitSize(1, 8))
+		require.Equal(t, 2, trigger.preferredBatchWaitSize(1.2, 8))
+		require.Equal(t, trigger.turboWaitTime(), time.Millisecond)
+		require.False(t, trigger.needFetchMore(time.Millisecond-time.Microsecond))
+		require.False(t, trigger.needFetchMore(time.Millisecond-time.Microsecond))
+		require.False(t, trigger.needFetchMore(time.Millisecond-time.Microsecond))
+		require.True(t, trigger.needFetchMore(time.Millisecond-time.Microsecond))
+		require.False(t, trigger.needFetchMore(time.Millisecond))
+	})
+	t.Run("invalid", func(t *testing.T) {
+		for _, val := range []string{
+			"", "invalid", "custom", "custom {x:1}",
+		} {
+			trigger, ok := newTurboBatchTriggerFromPolicy(val)
+			require.False(t, ok)
+			require.Equal(t, trigger.opts, presetBatchPolicies[config.DefBatchPolicy])
+		}
+	})
 }

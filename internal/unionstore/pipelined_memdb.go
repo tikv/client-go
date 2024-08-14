@@ -58,6 +58,9 @@ type PipelinedMemDB struct {
 
 	// metrics
 	flushWaitDuration time.Duration
+	hitCount          uint64
+	missCount         uint64
+	startTime         time.Time
 }
 
 const (
@@ -111,6 +114,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		// keep entryLimit and bufferLimit same with the memdb's default values.
 		entryLimit:  memdb.entrySizeLimit,
 		flushOption: flushOpt,
+		startTime:   time.Now(),
 	}
 }
 
@@ -292,10 +296,11 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 		return false, nil
 	}
 	if p.flushingMemDB != nil {
-		if err := <-p.errCh; err != nil {
-			if err != nil {
-				err = p.handleAlreadyExistErr(err)
-			}
+		waitStartTime := time.Now()
+		err := <-p.errCh
+		p.flushWaitDuration += time.Since(waitStartTime)
+		if err != nil {
+			err = p.handleAlreadyExistErr(err)
 			p.flushingMemDB = nil
 			return false, err
 		}
@@ -304,6 +309,8 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.flushingMemDB = p.memDB
 	p.len += p.flushingMemDB.Len()
 	p.size += p.flushingMemDB.Size()
+	p.missCount += p.memDB.missCount.Load()
+	p.hitCount += p.memDB.hitCount.Load()
 	p.memDB = newMemDB()
 	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit
 	p.memDB.SetEntrySizeLimit(p.entryLimit, unlimitedSize)
@@ -520,10 +527,20 @@ func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
 	panic("RevertToCheckpoint is not supported for PipelinedMemDB")
 }
 
-// GetFlushMetrics implements MemBuffer interface.
-func (p *PipelinedMemDB) GetFlushMetrics() FlushMetrics {
-	return FlushMetrics{
-		WaitDuration: p.flushWaitDuration,
+// GetMetrics implements MemBuffer interface.
+// DO NOT call it during execution, otherwise data race may occur
+func (p *PipelinedMemDB) GetMetrics() Metrics {
+	hitCount := p.hitCount
+	missCount := p.missCount
+	if p.memDB != nil {
+		hitCount += p.memDB.hitCount.Load()
+		missCount += p.memDB.missCount.Load()
+	}
+	return Metrics{
+		WaitDuration:   p.flushWaitDuration,
+		TotalDuration:  time.Since(p.startTime),
+		MemDBHitCount:  hitCount,
+		MemDBMissCount: missCount,
 	}
 }
 
