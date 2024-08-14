@@ -1216,7 +1216,7 @@ func (rs *SnapshotRuntimeStats) String() string {
 	return buf.String()
 }
 
-// GetTimeDetail returns the timeDetail 
+// GetTimeDetail returns the timeDetail
 func (rs *SnapshotRuntimeStats) GetTimeDetail() *util.TimeDetail {
 	return rs.timeDetail
 }
