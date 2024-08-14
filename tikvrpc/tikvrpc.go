@@ -36,7 +36,6 @@ package tikvrpc
 
 import (
 	"context"
-	"github.com/tikv/client-go/v2/oracle"
 	"sync/atomic"
 	"time"
 
@@ -49,6 +48,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.
