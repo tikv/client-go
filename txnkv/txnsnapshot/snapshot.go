@@ -1216,6 +1216,11 @@ func (rs *SnapshotRuntimeStats) String() string {
 	return buf.String()
 }
 
+// GetTimeDetail returns the timeDetail 
+func (rs *SnapshotRuntimeStats) GetTimeDetail() *util.TimeDetail {
+	return rs.timeDetail
+}
+
 // GetCmdRPCCount returns the count of the corresponding kind of rpc requests
 func (rs *SnapshotRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) int64 {
 	if rs.rpcStats == nil || len(rs.rpcStats.RPCStats) == 0 {
