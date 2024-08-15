@@ -18,7 +18,6 @@ require (
 	github.com/pingcap/kvproto v0.0.0-20240620063548-118a4cab53e4
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
-	github.com/plar/go-adaptive-radix-tree v1.0.5
 	github.com/prometheus/client_golang v1.18.0
 	github.com/prometheus/client_model v0.5.0
 	github.com/stretchr/testify v1.8.2
@@ -60,5 +59,3 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/plar/go-adaptive-radix-tree => github.com/you06/go-adaptive-radix-tree v0.0.0-20240523051018-0278e8bfcd2b

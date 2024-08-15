@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"math/bits"
+	"sort"
 	"unsafe"
 
 	"github.com/tikv/client-go/v2/kv"
@@ -311,9 +312,6 @@ func (n *nodeBase) setPrefix(key Key, prefixLen uint32) {
 
 func (n *nodeBase) match(key Key, depth uint32) uint32 {
 	idx := uint32(0)
-	if len(key)-int(depth) < 0 {
-		return idx
-	}
 
 	limit := min(min(n.prefixLen, maxPrefixLen), uint32(len(key))-depth)
 	for ; idx < limit; idx++ {
@@ -434,14 +432,18 @@ func (an *artNode) findChild4(a *artAllocator, c byte) (int, artNode) {
 
 func (an *artNode) findChild16(a *artAllocator, c byte) (int, artNode) {
 	n16 := an.node16(a)
-	for idx := 0; idx < int(n16.nodeNum); idx++ {
-		if n16.keys[idx] < c {
-			continue
+
+	idx, found := sort.Find(int(n16.nodeNum), func(i int) int {
+		if n16.keys[i] < c {
+			return 1
 		}
-		if n16.keys[idx] == c {
-			return idx, n16.children[idx]
+		if n16.keys[i] == c {
+			return 0
 		}
-		break
+		return -1
+	})
+	if found {
+		return idx, n16.children[idx]
 	}
 	return -2, nullArtNode
 }
@@ -491,6 +493,8 @@ func (an *artNode) swapChild(a *artAllocator, c byte, child artNode) {
 	}
 }
 
+// addChild adds a child to the node.
+// the added index `c` should not exist.
 func (an *artNode) addChild(a *artAllocator, c byte, inplace bool, child artNode) bool {
 	switch an.kind {
 	case typeNode4:
@@ -554,14 +558,17 @@ func (an *artNode) addChild16(a *artAllocator, c byte, inplace bool, child artNo
 		return false
 	}
 
-	i := uint8(0)
-	for ; i < node.nodeNum; i++ {
-		if c < node.keys[i] {
-			break
+	i, _ := sort.Find(int(node.nodeNum), func(i int) int {
+		if node.keys[i] < c {
+			return 1
 		}
-	}
+		if node.keys[i] == c {
+			return 0
+		}
+		return -1
+	})
 
-	if i < node.nodeNum {
+	if i < int(node.nodeNum) {
 		copy(node.keys[i+1:node.nodeNum+1], node.keys[i:node.nodeNum])
 		copy(node.children[i+1:node.nodeNum+1], node.children[i:node.nodeNum])
 	}

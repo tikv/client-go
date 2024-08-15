@@ -63,19 +63,6 @@ func BenchmarkLargeIndex(b *testing.B) {
 	}
 }
 
-func BenchmarkLargeIndexArt(b *testing.B) {
-	buf := make([][valueSize]byte, 10000000)
-	for i := range buf {
-		binary.LittleEndian.PutUint32(buf[i][:], uint32(i))
-	}
-	db := newArtMemDB()
-	b.ResetTimer()
-
-	for i := range buf {
-		db.Set(buf[i][:keySize], buf[i][:])
-	}
-}
-
 func BenchmarkLargeIndexArenaArt(b *testing.B) {
 	buf := make([][valueSize]byte, 10000000)
 	for i := range buf {
@@ -109,20 +96,6 @@ func BenchmarkPut(b *testing.B) {
 	}
 
 	p := newMemDB()
-	b.ResetTimer()
-
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
-}
-
-func BenchmarkPutArt(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.BigEndian.PutUint32(buf[i][:], uint32(i))
-	}
-
-	p := newArtMemDB()
 	b.ResetTimer()
 
 	for i := range buf {
@@ -165,20 +138,6 @@ func BenchmarkPutRandom(b *testing.B) {
 	}
 
 	p := newMemDB()
-	b.ResetTimer()
-
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
-}
-
-func BenchmarkPutRandomArt(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
-	}
-
-	p := newArtMemDB()
 	b.ResetTimer()
 
 	for i := range buf {
@@ -231,23 +190,6 @@ func BenchmarkGet(b *testing.B) {
 	}
 }
 
-func BenchmarkGetArt(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.BigEndian.PutUint32(buf[i][:], uint32(i))
-	}
-
-	p := newArtMemDB()
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
-
-	b.ResetTimer()
-	for i := range buf {
-		p.Get(buf[i][:keySize])
-	}
-}
-
 func BenchmarkGetArenaArt(b *testing.B) {
 	buf := make([][valueSize]byte, b.N)
 	for i := range buf {
@@ -274,23 +216,6 @@ func BenchmarkGetRandom(b *testing.B) {
 	}
 
 	p := newMemDB()
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		p.Get(buf[i][:keySize])
-	}
-}
-
-func BenchmarkGetRandomArt(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
-	}
-
-	p := newArtMemDB()
 	for i := range buf {
 		p.Set(buf[i][:keySize], buf[i][:])
 	}
@@ -334,16 +259,6 @@ func BenchmarkMemDbBufferSequential(b *testing.B) {
 		data[i] = encodeInt(i)
 	}
 	buffer := newMemDB()
-	benchmarkSetGet(b, buffer, data)
-	b.ReportAllocs()
-}
-
-func BenchmarkMemDbBufferSequentialArt(b *testing.B) {
-	data := make([][]byte, opCnt)
-	for i := 0; i < opCnt; i++ {
-		data[i] = encodeInt(i)
-	}
-	buffer := newArtMemDB()
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
@@ -404,17 +319,6 @@ func BenchmarkMemDbBufferRandom(b *testing.B) {
 	b.ReportAllocs()
 }
 
-func BenchmarkMemDbBufferRandomArt(b *testing.B) {
-	data := make([][]byte, opCnt)
-	for i := 0; i < opCnt; i++ {
-		data[i] = encodeInt(i)
-	}
-	shuffle(data)
-	buffer := newArtMemDB()
-	benchmarkSetGet(b, buffer, data)
-	b.ReportAllocs()
-}
-
 func BenchmarkMemDbBufferRandomArenaArt(b *testing.B) {
 	data := make([][]byte, opCnt)
 	for i := 0; i < opCnt; i++ {
@@ -443,16 +347,6 @@ func BenchmarkMemDbBufferLongKeySequential(b *testing.B) {
 		data[i] = encodeIntLong(i)
 	}
 	buffer := newMemDB()
-	benchmarkSetGet(b, buffer, data)
-	b.ReportAllocs()
-}
-
-func BenchmarkMemDbBufferLongKeySequentialArt(b *testing.B) {
-	data := make([][]byte, opCnt)
-	for i := 0; i < opCnt; i++ {
-		data[i] = encodeIntLong(i)
-	}
-	buffer := newArtMemDB()
 	benchmarkSetGet(b, buffer, data)
 	b.ReportAllocs()
 }
@@ -488,17 +382,6 @@ func BenchmarkMemDbBufferLongKeyRandom(b *testing.B) {
 	b.ReportAllocs()
 }
 
-func BenchmarkMemDbBufferLongKeyRandomArt(b *testing.B) {
-	data := make([][]byte, opCnt)
-	for i := 0; i < opCnt; i++ {
-		data[i] = encodeIntLong(i)
-	}
-	shuffle(data)
-	buffer := newArtMemDB()
-	benchmarkSetGet(b, buffer, data)
-	b.ReportAllocs()
-}
-
 func BenchmarkMemDbBufferLongKeyRandomArenaArt(b *testing.B) {
 	data := make([][]byte, opCnt)
 	for i := 0; i < opCnt; i++ {
@@ -527,12 +410,6 @@ func BenchmarkMemDbIter(b *testing.B) {
 	b.ReportAllocs()
 }
 
-func BenchmarkMemDbIterArt(b *testing.B) {
-	buffer := newArtMemDB()
-	benchIterator(b, buffer)
-	b.ReportAllocs()
-}
-
 func BenchmarkMemDbIterArenaArt(b *testing.B) {
 	buffer := &artWrapper{art.New()}
 	benchIterator(b, buffer)
@@ -541,13 +418,6 @@ func BenchmarkMemDbIterArenaArt(b *testing.B) {
 
 func BenchmarkMemDbIterSeek(b *testing.B) {
 	buffer := newMemDB()
-	benchIteratorSeek(b, buffer)
-	b.ReportAllocs()
-}
-
-func BenchmarkMemDbIterSeekArt(b *testing.B) {
-	b.Skip("too slow")
-	buffer := newArtMemDB()
 	benchIteratorSeek(b, buffer)
 	b.ReportAllocs()
 }
@@ -561,13 +431,6 @@ func BenchmarkMemDbIterSeekArenaArt(b *testing.B) {
 func BenchmarkMemDbCreation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		newMemDB()
-	}
-	b.ReportAllocs()
-}
-
-func BenchmarkMemDbCreationArt(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		newArtMemDB()
 	}
 	b.ReportAllocs()
 }
@@ -661,21 +524,6 @@ func BenchmarkReadAfterWriteRBT(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		tree.set(buf[i], buf[i])
-		v, _ := tree.Get(buf[i])
-		assert.Equal(b, v, buf[i])
-	}
-}
-
-func BenchmarkReadAfterWriteArt(b *testing.B) {
-	buf := make([][]byte, b.N)
-	for i := 0; i < b.N; i++ {
-		key := []byte{byte(i)}
-		buf[i] = key
-	}
-	tree := newArtMemDB()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		tree.Set(buf[i], buf[i])
 		v, _ := tree.Get(buf[i])
 		assert.Equal(b, v, buf[i])
 	}

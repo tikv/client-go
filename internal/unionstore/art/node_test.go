@@ -4,34 +4,33 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func checkNodeInitialization(t *testing.T, n any) {
-	var base *nodeBase
-	switch n := n.(type) {
-	case *node4:
-		base = &n.nodeBase
-	case *node16:
-		base = &n.nodeBase
-	case *node48:
-		base = &n.nodeBase
-		require.Equal(t, [4]uint64{0, 0, 0, 0}, n.present)
-	case *node256:
-		base = &n.nodeBase
-		for i := 0; i < node256cap; i++ {
-			require.Equal(t, n.children[i], nullArtNode)
-		}
-	default:
-		require.Fail(t, "unknown node type")
-	}
-	require.Equal(t, uint8(0), base.nodeNum)
-	require.Equal(t, uint32(0), base.prefixLen)
-	require.Equal(t, base.inplaceLeaf, nullArtNode)
-}
-
 func TestAllocNode(t *testing.T) {
+	checkNodeInitialization := func(t *testing.T, n any) {
+		var base *nodeBase
+		switch n := n.(type) {
+		case *node4:
+			base = &n.nodeBase
+		case *node16:
+			base = &n.nodeBase
+		case *node48:
+			base = &n.nodeBase
+			require.Equal(t, [4]uint64{0, 0, 0, 0}, n.present)
+		case *node256:
+			base = &n.nodeBase
+			for i := 0; i < node256cap; i++ {
+				require.Equal(t, n.children[i], nullArtNode)
+			}
+		default:
+			require.Fail(t, "unknown node type")
+		}
+		require.Equal(t, uint8(0), base.nodeNum)
+		require.Equal(t, uint32(0), base.prefixLen)
+		require.Equal(t, base.inplaceLeaf, nullArtNode)
+	}
+
 	var allocator artAllocator
 	allocator.init()
 	cnt := 10_000
@@ -123,25 +122,56 @@ func TestAllocNode(t *testing.T) {
 	}
 }
 
-func TestNodeMatchWithKey(t *testing.T) {
+func TestNodePrefix(t *testing.T) {
 	var allocator artAllocator
 	allocator.init()
 
-	key := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	_, n16 := allocator.allocNode16()
+	testFn := func(an *artNode, n *nodeBase) {
+		// simple match
+		key := []byte{1, 2, 3, 4, 5, 6, 1, 2, 3, 1}
+		n.setPrefix([]byte{1, 2, 3, 4, 5, 66, 77, 88, 99}, 5)
 
-	n16.setPrefix([]byte{1, 2, 3, 4, 5, 66, 77, 88, 99}, 5)
+		idx := n.match(key, 0) // return mismatch index
+		require.Equal(t, uint32(5), idx)
+		idx = n.match(key[:4], 0) // key is shorter than prefix
+		require.Equal(t, uint32(4), idx)
+		idx = n.match(key, 1) // key[0+depth] != prefix[0]
+		require.Equal(t, uint32(0), idx)
+		idx = n.match(key, 6) // key[3+depth] != prefix[3]
+		require.Equal(t, uint32(3), idx)
+		idx = n.match(append([]byte{1}, key...), 1)
+		require.Equal(t, uint32(5), idx)
 
-	idx := n16.match(key, 0)
-	assert.Equal(t, uint32(5), idx)
-	idx = n16.match(key[:4], 0)
-	assert.Equal(t, uint32(4), idx)
-	idx = n16.match(key, 1)
-	assert.Equal(t, uint32(0), idx)
-	idx = n16.match(append([]byte{1}, key...), 1)
-	assert.Equal(t, uint32(5), idx)
-	idx = n16.match(key, 100)
-	assert.Equal(t, uint32(0), idx)
+		// deep match
+		leafKey := append(make([]byte, maxPrefixLen), []byte{1, 2, 3, 4, 5}...)
+		leafAddr, _ := allocator.allocLeaf(leafKey)
+		an.addChild(&allocator, 2, false, artNode{kind: typeLeaf, addr: leafAddr})
+		// the real prefix is [0, ..., 0, 1], but the node.prefix only store [0, ..., 0]
+		n.setPrefix(leafKey, maxPrefixLen+1)
+		matchKey := append(make([]byte, maxPrefixLen), []byte{1, 22, 33, 44, 55}...)
+		mismatchKey := append(make([]byte, maxPrefixLen), []byte{11, 22, 33, 44, 55}...)
+		require.Equal(t, uint32(maxPrefixLen+1), an.matchDeep(&allocator, matchKey, 0))
+		require.Equal(t, uint32(maxPrefixLen), an.matchDeep(&allocator, mismatchKey, 0))
+
+		// deep match with depth
+		leafKey = append(make([]byte, 10), leafKey...)
+		matchKey = append(make([]byte, 10), matchKey...)
+		mismatchKey = append(make([]byte, 10), mismatchKey...)
+		leafAddr, _ = allocator.allocLeaf(leafKey)
+		an.swapChild(&allocator, 2, artNode{kind: typeLeaf, addr: leafAddr})
+		n.setPrefix(leafKey[10:], maxPrefixLen+1)
+		require.Equal(t, uint32(maxPrefixLen+1), an.matchDeep(&allocator, matchKey, 10))
+		require.Equal(t, uint32(maxPrefixLen), an.matchDeep(&allocator, mismatchKey, 10))
+	}
+
+	addr, n4 := allocator.allocNode4()
+	testFn(&artNode{kind: typeNode4, addr: addr}, &n4.nodeBase)
+	addr, n16 := allocator.allocNode16()
+	testFn(&artNode{kind: typeNode16, addr: addr}, &n16.nodeBase)
+	addr, n48 := allocator.allocNode48()
+	testFn(&artNode{kind: typeNode48, addr: addr}, &n48.nodeBase)
+	addr, n256 := allocator.allocNode256()
+	testFn(&artNode{kind: typeNode256, addr: addr}, &n256.nodeBase)
 }
 
 func TestOrderChild(t *testing.T) {
