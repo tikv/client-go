@@ -123,7 +123,6 @@ var (
 	BoTxnNotFound              = NewConfig("txnNotFound", &metrics.BackoffHistogramEmpty, NewBackoffFnCfg(2, 500, NoJitter), tikverr.ErrResolveLockTimeout)
 	BoStaleCmd                 = NewConfig("staleCommand", &metrics.BackoffHistogramStaleCmd, NewBackoffFnCfg(2, 1000, NoJitter), tikverr.ErrTiKVStaleCommand)
 	BoMaxTsNotSynced           = NewConfig("maxTsNotSynced", &metrics.BackoffHistogramEmpty, NewBackoffFnCfg(2, 500, NoJitter), tikverr.ErrTiKVMaxTimestampNotSynced)
-	BoMaxDataNotReady          = NewConfig("dataNotReady", &metrics.BackoffHistogramDataNotReady, NewBackoffFnCfg(2, 2000, NoJitter), tikverr.ErrRegionDataNotReady)
 	BoMaxRegionNotInitialized  = NewConfig("regionNotInitialized", &metrics.BackoffHistogramEmpty, NewBackoffFnCfg(2, 1000, NoJitter), tikverr.ErrRegionNotInitialized)
 	BoIsWitness                = NewConfig("isWitness", &metrics.BackoffHistogramIsWitness, NewBackoffFnCfg(1000, 10000, EqualJitter), tikverr.ErrIsWitness)
 	// TxnLockFast's `base` load from vars.BackoffLockFast when create BackoffFn.
