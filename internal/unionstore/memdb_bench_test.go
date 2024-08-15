@@ -260,8 +260,10 @@ func BenchmarkGetArenaArt(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := range buf {
-		p.Art.Get(buf[i][:keySize])
+	for round := 0; round < 10000; round++ {
+		for i := range buf {
+			p.Art.Get(buf[i][:keySize])
+		}
 	}
 }
 

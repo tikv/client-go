@@ -146,7 +146,7 @@ func (it *ArtIterator) seek(key Key) ([]int, []artNode) {
 		if it.reverse {
 			idxes = append(idxes, node256cap)
 		} else {
-			idxes = append(idxes, -1)
+			idxes = append(idxes, inplaceIndex)
 		}
 		return idxes, nodes
 	}
@@ -163,7 +163,7 @@ func (it *ArtIterator) seek(key Key) ([]int, []artNode) {
 			break
 		}
 
-		curr.node(&node, &it.tree.allocator)
+		node = curr.node(&it.tree.allocator)
 		if node.prefixLen > 0 {
 			mismatchIdx := curr.matchDeep(&it.tree.allocator, key, depth)
 			if mismatchIdx < node.prefixLen {
@@ -310,7 +310,7 @@ func (it *baseIter) next() artNode {
 	switch curr.kind {
 	case typeNode4:
 		n4 := it.allocator.getNode4(curr.addr)
-		if idx == -1 {
+		if idx == inplaceIndex {
 			idx = 0 // mark in-place leaf is visited
 			it.idxes[depth] = idx
 			if n4.inplaceLeaf.addr != nullAddr {
@@ -327,12 +327,12 @@ func (it *baseIter) next() artNode {
 				return child
 			}
 			it.nodes = append(it.nodes, child)
-			it.idxes = append(it.idxes, -1)
+			it.idxes = append(it.idxes, inplaceIndex)
 			return it.next()
 		}
 	case typeNode16:
 		n16 := it.allocator.getNode16(curr.addr)
-		if idx == -1 {
+		if idx == inplaceIndex {
 			idx = 0 // mark in-place leaf is visited
 			it.idxes[depth] = idx
 			if n16.inplaceLeaf.addr != nullAddr {
@@ -349,12 +349,12 @@ func (it *baseIter) next() artNode {
 				return child
 			}
 			it.nodes = append(it.nodes, child)
-			it.idxes = append(it.idxes, -1)
+			it.idxes = append(it.idxes, inplaceIndex)
 			return it.next()
 		}
 	case typeNode48:
 		n48 := it.allocator.getNode48(curr.addr)
-		if idx == -1 {
+		if idx == inplaceIndex {
 			idx = 0 // mark in-place leaf is visited
 			it.idxes[depth] = idx
 			if n48.inplaceLeaf.addr != nullAddr {
@@ -372,12 +372,12 @@ func (it *baseIter) next() artNode {
 				return child
 			}
 			it.nodes = append(it.nodes, child)
-			it.idxes = append(it.idxes, -1)
+			it.idxes = append(it.idxes, inplaceIndex)
 			return it.next()
 		}
 	case typeNode256:
 		n256 := it.allocator.getNode256(curr.addr)
-		if idx == -1 {
+		if idx == inplaceIndex {
 			idx = 0 // mark in-place leaf is visited
 			it.idxes[depth] = idx
 			if n256.inplaceLeaf.addr != nullAddr {
@@ -395,7 +395,7 @@ func (it *baseIter) next() artNode {
 				return child
 			}
 			it.nodes = append(it.nodes, child)
-			it.idxes = append(it.idxes, -1)
+			it.idxes = append(it.idxes, inplaceIndex)
 			return it.next()
 		}
 	}
@@ -426,13 +426,11 @@ func (it *baseIter) prev() artNode {
 			it.nodes = append(it.nodes, child)
 			it.idxes = append(it.idxes, node256cap)
 			return it.prev()
-		} else if idx == -1 {
+		} else if idx == inplaceIndex {
 			it.idxes[depth] = idx
 			if n4.inplaceLeaf.addr != nullAddr {
 				return n4.inplaceLeaf
 			}
-		} else if idx == -2 {
-			break
 		}
 	case typeNode16:
 		n16 := it.allocator.getNode16(curr.addr)
@@ -446,21 +444,17 @@ func (it *baseIter) prev() artNode {
 			it.nodes = append(it.nodes, child)
 			it.idxes = append(it.idxes, node256cap)
 			return it.prev()
-		} else if idx == -1 {
+		} else if idx == inplaceIndex {
 			it.idxes[depth] = idx
 			if n16.inplaceLeaf.addr != nullAddr {
 				return n16.inplaceLeaf
 			}
-		} else if idx == -2 {
-			break
 		}
 	case typeNode48:
 		n48 := it.allocator.getNode48(curr.addr)
-
 		if idx >= 0 {
 			idx = n48.prevPresentIdx(idx)
 		}
-
 		if idx >= 0 {
 			it.idxes[depth] = idx
 			child := n48.children[n48.keys[idx]]
@@ -470,21 +464,17 @@ func (it *baseIter) prev() artNode {
 			it.nodes = append(it.nodes, child)
 			it.idxes = append(it.idxes, node256cap)
 			return it.prev()
-		} else if idx == -1 {
+		} else if idx == inplaceIndex {
 			it.idxes[depth] = idx
 			if n48.inplaceLeaf.addr != nullAddr {
 				return n48.inplaceLeaf
 			}
-		} else if idx == -2 {
-			break
 		}
 	case typeNode256:
 		n256 := it.allocator.getNode256(curr.addr)
-
 		if idx >= 0 {
 			idx = n256.prevPresentIdx(idx)
 		}
-
 		if idx >= 0 {
 			it.idxes[depth] = idx
 			child := n256.children[idx]
@@ -499,8 +489,6 @@ func (it *baseIter) prev() artNode {
 			if n256.inplaceLeaf.addr != nullAddr {
 				return n256.inplaceLeaf
 			}
-		} else if idx == -2 {
-			break
 		}
 	}
 	it.nodes = it.nodes[:depth]

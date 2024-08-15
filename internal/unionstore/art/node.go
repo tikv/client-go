@@ -21,11 +21,13 @@ const (
 )
 
 const (
-	maxPrefixLen = 20
-	node4cap     = 4
-	node16cap    = 16
-	node48cap    = 48
-	node256cap   = 256
+	maxPrefixLen  = 20
+	node4cap      = 4
+	node16cap     = 16
+	node48cap     = 48
+	node256cap    = 256
+	inplaceIndex  = -1
+	notExistIndex = -2
 )
 
 const (
@@ -120,16 +122,16 @@ func (an *artNode) leaf(a *artAllocator) *leaf {
 	return a.getLeaf(an.addr)
 }
 
-func (an *artNode) node(base **nodeBase, a *artAllocator) {
+func (an *artNode) node(a *artAllocator) *nodeBase {
 	switch an.kind {
 	case typeNode4:
-		*base = &an.node4(a).nodeBase
+		return &an.node4(a).nodeBase
 	case typeNode16:
-		*base = &an.node16(a).nodeBase
+		return &an.node16(a).nodeBase
 	case typeNode48:
-		*base = &an.node48(a).nodeBase
+		return &an.node48(a).nodeBase
 	case typeNode256:
-		*base = &an.node256(a).nodeBase
+		return &an.node256(a).nodeBase
 	default:
 		panic("invalid nodeBase kind")
 	}
@@ -202,7 +204,7 @@ func (n48 *node48) prevPresentIdx(start int) int {
 			return presentOffset*n48m + n48m - (zeros + 1)
 		}
 	}
-	return -1
+	return inplaceIndex
 }
 
 func (n256 *node256) init() {
@@ -239,7 +241,7 @@ func (n256 *node256) prevPresentIdx(start int) int {
 			return presentOffset*n48m + n48m - (zeros + 1)
 		}
 	}
-	return -1
+	return inplaceIndex
 }
 
 // key methods
@@ -340,8 +342,7 @@ func (an *artNode) node256(a *artAllocator) *node256 {
 }
 
 func (an *artNode) matchDeep(a *artAllocator, key Key, depth uint32) uint32 /* mismatch index*/ {
-	var n *nodeBase
-	an.node(&n, a)
+	n := an.node(a)
 	mismatchIdx := n.match(key, depth)
 	if mismatchIdx < min(n.prefixLen, maxPrefixLen) {
 		return mismatchIdx
@@ -403,26 +404,24 @@ func minimum(a *artAllocator, an artNode) artNode {
 	}
 }
 
-func (an artNode) findChild(a *artAllocator, c byte, valid bool) (int, artNode) {
+func (an *artNode) findChild(a *artAllocator, c byte, valid bool) (int, artNode) {
 	if !valid {
-		var n *nodeBase
-		an.node(&n, a)
-		return -1, n.inplaceLeaf
+		return inplaceIndex, an.node(a).inplaceLeaf
 	}
 	switch an.kind {
 	case typeNode4:
-		return an._findChild4(a, c)
+		return an.findChild4(a, c)
 	case typeNode16:
-		return an._findChild16(a, c)
+		return an.findChild16(a, c)
 	case typeNode48:
-		return an._findChild48(a, c)
+		return an.findChild48(a, c)
 	case typeNode256:
-		return an._findChild256(a, c)
+		return an.findChild256(a, c)
 	}
-	return -2, nullArtNode
+	return notExistIndex, nullArtNode
 }
 
-func (an artNode) _findChild4(a *artAllocator, c byte) (int, artNode) {
+func (an *artNode) findChild4(a *artAllocator, c byte) (int, artNode) {
 	n4 := an.node4(a)
 	for idx := 0; idx < int(n4.nodeNum); idx++ {
 		if n4.keys[idx] == c {
@@ -433,7 +432,7 @@ func (an artNode) _findChild4(a *artAllocator, c byte) (int, artNode) {
 	return -2, nullArtNode
 }
 
-func (an artNode) _findChild16(a *artAllocator, c byte) (int, artNode) {
+func (an *artNode) findChild16(a *artAllocator, c byte) (int, artNode) {
 	n16 := an.node16(a)
 	for idx := 0; idx < int(n16.nodeNum); idx++ {
 		if n16.keys[idx] < c {
@@ -447,7 +446,7 @@ func (an artNode) _findChild16(a *artAllocator, c byte) (int, artNode) {
 	return -2, nullArtNode
 }
 
-func (an artNode) _findChild48(a *artAllocator, c byte) (int, artNode) {
+func (an *artNode) findChild48(a *artAllocator, c byte) (int, artNode) {
 	n48 := an.node48(a)
 	if n48.present[c>>n48s]&(1<<(c%n48m)) != 0 {
 		return int(c), n48.children[n48.keys[c]]
@@ -455,7 +454,7 @@ func (an artNode) _findChild48(a *artAllocator, c byte) (int, artNode) {
 	return -2, nullArtNode
 }
 
-func (an artNode) _findChild256(a *artAllocator, c byte) (int, artNode) {
+func (an *artNode) findChild256(a *artAllocator, c byte) (int, artNode) {
 	n256 := an.node256(a)
 	return int(c), n256.children[c]
 }
@@ -488,25 +487,25 @@ func (an *artNode) swapChild(a *artAllocator, c byte, child artNode) {
 		}
 		panic("swap child failed")
 	case typeNode256:
-		an._addChild256(a, c, false, child)
+		an.addChild256(a, c, false, child)
 	}
 }
 
 func (an *artNode) addChild(a *artAllocator, c byte, inplace bool, child artNode) bool {
 	switch an.kind {
 	case typeNode4:
-		return an._addChild4(a, c, inplace, child)
+		return an.addChild4(a, c, inplace, child)
 	case typeNode16:
-		return an._addChild16(a, c, inplace, child)
+		return an.addChild16(a, c, inplace, child)
 	case typeNode48:
-		return an._addChild48(a, c, inplace, child)
+		return an.addChild48(a, c, inplace, child)
 	case typeNode256:
-		return an._addChild256(a, c, inplace, child)
+		return an.addChild256(a, c, inplace, child)
 	}
 	return false
 }
 
-func (an *artNode) _addChild4(a *artAllocator, c byte, inplace bool, child artNode) bool {
+func (an *artNode) addChild4(a *artAllocator, c byte, inplace bool, child artNode) bool {
 	node := an.node4(a)
 	if node.nodeNum >= node4cap {
 		an.grow(a)
@@ -542,7 +541,7 @@ func (an *artNode) _addChild4(a *artAllocator, c byte, inplace bool, child artNo
 	return false
 }
 
-func (an *artNode) _addChild16(a *artAllocator, c byte, inplace bool, child artNode) bool {
+func (an *artNode) addChild16(a *artAllocator, c byte, inplace bool, child artNode) bool {
 	node := an.node16(a)
 	if node.nodeNum >= node16cap {
 		an.grow(a)
@@ -563,11 +562,6 @@ func (an *artNode) _addChild16(a *artAllocator, c byte, inplace bool, child artN
 	}
 
 	if i < node.nodeNum {
-		//for j := node.nodeNum; j > i; j-- {
-		//	node.keys[j] = node.keys[j-1]
-		//	node.children[j] = node.children[j-1]
-		//}
-		//src := node.keys[i:node.nodeNum]
 		copy(node.keys[i+1:node.nodeNum+1], node.keys[i:node.nodeNum])
 		copy(node.children[i+1:node.nodeNum+1], node.children[i:node.nodeNum])
 	}
@@ -578,7 +572,7 @@ func (an *artNode) _addChild16(a *artAllocator, c byte, inplace bool, child artN
 	return false
 }
 
-func (an *artNode) _addChild48(a *artAllocator, c byte, inplace bool, child artNode) bool {
+func (an *artNode) addChild48(a *artAllocator, c byte, inplace bool, child artNode) bool {
 	node := an.node48(a)
 	if node.nodeNum >= node48cap {
 		an.grow(a)
@@ -598,7 +592,7 @@ func (an *artNode) _addChild48(a *artAllocator, c byte, inplace bool, child artN
 	return false
 }
 
-func (an *artNode) _addChild256(a *artAllocator, c byte, inplace bool, child artNode) bool {
+func (an *artNode) addChild256(a *artAllocator, c byte, inplace bool, child artNode) bool {
 	node := an.node256(a)
 
 	if inplace {
@@ -619,7 +613,7 @@ func (n *nodeBase) copyMeta(src *nodeBase) {
 	copy(n.prefix[:], src.prefix[:])
 }
 
-func (an *artNode) grow(a *artAllocator) *artNode {
+func (an *artNode) grow(a *artAllocator) {
 	switch an.kind {
 	case typeNode4:
 		n4 := an.node4(a)
@@ -666,5 +660,4 @@ func (an *artNode) grow(a *artAllocator) *artNode {
 		an.kind = typeNode256
 		an.addr = newAddr
 	}
-	return nil
 }
