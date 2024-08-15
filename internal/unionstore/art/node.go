@@ -120,16 +120,16 @@ func (an *artNode) leaf(a *artAllocator) *leaf {
 	return a.getLeaf(an.addr)
 }
 
-func (an *artNode) node(a *artAllocator) *nodeBase {
+func (an *artNode) node(base **nodeBase, a *artAllocator) {
 	switch an.kind {
 	case typeNode4:
-		return &an.node4(a).nodeBase
+		*base = &an.node4(a).nodeBase
 	case typeNode16:
-		return &an.node16(a).nodeBase
+		*base = &an.node16(a).nodeBase
 	case typeNode48:
-		return &an.node48(a).nodeBase
+		*base = &an.node48(a).nodeBase
 	case typeNode256:
-		return &an.node256(a).nodeBase
+		*base = &an.node256(a).nodeBase
 	default:
 		panic("invalid nodeBase kind")
 	}
@@ -255,20 +255,22 @@ func (k Key) valid(pos int) bool {
 }
 
 // leaf methods
+
+// getKey gets the full key of the leaf
 func (l *leaf) getKey() Key {
 	base := unsafe.Add(unsafe.Pointer(l), leafSize)
 	return unsafe.Slice((*byte)(base), int(l.klen))
 }
 
-func (l *leaf) match(key Key) bool {
-	lKey := l.getKey()
-	if len(key) == 0 && len(lKey) == 0 {
-		return true
-	}
-	if key == nil || len(lKey) != len(key) {
-		return false
-	}
-	return bytes.Equal(lKey[:len(key)], key)
+// getKeyDepth gets the partial key start from depth of the leaf
+func (l *leaf) getKeyDepth(depth uint32) Key {
+	base := unsafe.Add(unsafe.Pointer(l), leafSize+depth)
+	return unsafe.Slice((*byte)(base), int(l.klen)-int(depth))
+}
+
+func (l *leaf) match(depth uint32, key Key) bool {
+	//return bytes.Equal(l.getKey(), key)
+	return bytes.Equal(l.getKeyDepth(depth), key[depth:])
 }
 
 func (l *leaf) setKeyFlags(flags kv.KeyFlags) nodeAddr {
@@ -338,7 +340,8 @@ func (an *artNode) node256(a *artAllocator) *node256 {
 }
 
 func (an *artNode) matchDeep(a *artAllocator, key Key, depth uint32) uint32 /* mismatch index*/ {
-	n := an.node(a)
+	var n *nodeBase
+	an.node(&n, a)
 	mismatchIdx := n.match(key, depth)
 	if mismatchIdx < min(n.prefixLen, maxPrefixLen) {
 		return mismatchIdx
@@ -351,6 +354,9 @@ func (an *artNode) matchDeep(a *artAllocator, key Key, depth uint32) uint32 /* m
 
 func longestCommonPrefix(l1Key, l2Key Key, depth uint32) uint32 {
 	idx, limit := depth, min(uint32(len(l1Key)), uint32(len(l2Key)))
+	// TODO: possible optimization
+	// Compare the key by loop can be very slow if the final LCP is large.
+	// Maybe optimize it by comparing the key in chunks if the limit exceeds certain threshold.
 	for ; idx < limit; idx++ {
 		if l1Key[idx] != l2Key[idx] {
 			break
@@ -398,9 +404,10 @@ func minimum(a *artAllocator, an artNode) artNode {
 }
 
 func (an artNode) findChild(a *artAllocator, c byte, valid bool) (int, artNode) {
-	node := an.node(a)
 	if !valid {
-		return -1, node.inplaceLeaf
+		var n *nodeBase
+		an.node(&n, a)
+		return -1, n.inplaceLeaf
 	}
 	switch an.kind {
 	case typeNode4:

@@ -31,7 +31,6 @@ func New() *Art {
 	t.stages = make([]ARTCheckpoint, 0, 2)
 	t.entrySizeLimit = math.MaxUint64
 	t.bufferSizeLimit = math.MaxUint64
-	//t.allocator.init()
 	t.allocator.nodeAllocator.freeNode4 = make([]nodeAddr, 0, 1<<4)
 	t.allocator.nodeAllocator.freeNode16 = make([]nodeAddr, 0, 1<<3)
 	t.allocator.nodeAllocator.freeNode48 = make([]nodeAddr, 0, 1<<2)
@@ -122,13 +121,27 @@ func (t *Art) recursiveInsert(key Key) (nodeAddr, *leaf) {
 	depth := uint32(0)
 	prev := nullArtNode
 	current := t.root
+	var node *nodeBase
 	for {
 		prevDepth := int(depth - 1)
 		if current.isLeaf() {
 			leaf1 := current.leaf(&t.allocator)
-			if leaf1.match(key) {
+			if leaf1.match(depth-1, key) {
+				// same key, return the leaf and overwrite the value.
 				return current.addr, leaf1
 			}
+			// expand the leaf to a node4.
+			//        ┌─────────┐
+			//        │   new   │
+			//        │  node4  │
+			//        └────┬────┘
+			//             │
+			//      ┌──────┴──────┐
+			//      │             │
+			// ┌────▼────┐   ┌────▼────┐
+			// │   old   │   │   new   │
+			// │  leaf1  │   │  leaf2  │
+			// └─────────┘   └─────────┘
 			newLeafAddr, leaf2 := t.newLeaf(key)
 			l1Key, l2Key := leaf1.getKey(), leaf2.getKey()
 			lcp := longestCommonPrefix(l1Key, l2Key, depth)
@@ -147,7 +160,21 @@ func (t *Art) recursiveInsert(key Key) (nodeAddr, *leaf) {
 			return newLeafAddr.addr, leaf2
 		}
 
-		node := current.node(&t.allocator)
+		// inline: performance critical path
+		// get the basic node information.
+		switch current.kind {
+		case typeNode4:
+			node = &current.node4(&t.allocator).nodeBase
+		case typeNode16:
+			node = &current.node16(&t.allocator).nodeBase
+		case typeNode48:
+			node = &current.node48(&t.allocator).nodeBase
+		case typeNode256:
+			node = &current.node256(&t.allocator).nodeBase
+		default:
+			panic("invalid nodeBase kind")
+		}
+
 		if node.prefixLen > 0 {
 			mismatchIdx := current.matchDeep(&t.allocator, key, depth)
 			if mismatchIdx >= node.prefixLen {
@@ -234,16 +261,31 @@ func (t *Art) search(key Key) (nodeAddr, *leaf) {
 		return nullAddr, nil
 	}
 	depth := uint32(0)
+	var node *nodeBase
 	for {
 		if current.isLeaf() {
 			lf := current.leaf(&t.allocator)
-			if lf.match(key) {
+			if lf.match(depth-1, key) {
 				return current.addr, lf
 			}
 			return nullAddr, nil
 		}
 
-		node := current.node(&t.allocator)
+		// inline: performance critical path
+		// get the basic node information.
+		switch current.kind {
+		case typeNode4:
+			node = &current.node4(&t.allocator).nodeBase
+		case typeNode16:
+			node = &current.node16(&t.allocator).nodeBase
+		case typeNode48:
+			node = &current.node48(&t.allocator).nodeBase
+		case typeNode256:
+			node = &current.node256(&t.allocator).nodeBase
+		default:
+			panic("invalid nodeBase kind")
+		}
+
 		if node.prefixLen > 0 {
 			prefixLen := node.match(key, depth)
 			if prefixLen < min(node.prefixLen, maxPrefixLen) {

@@ -150,6 +150,7 @@ func (it *ArtIterator) seek(key Key) ([]int, []artNode) {
 		}
 		return idxes, nodes
 	}
+	var node *nodeBase
 	for {
 		if curr.isLeaf() {
 			if key.valid(int(depth)) {
@@ -162,7 +163,7 @@ func (it *ArtIterator) seek(key Key) ([]int, []artNode) {
 			break
 		}
 
-		node := curr.node(&it.tree.allocator)
+		curr.node(&node, &it.tree.allocator)
 		if node.prefixLen > 0 {
 			mismatchIdx := curr.matchDeep(&it.tree.allocator, key, depth)
 			if mismatchIdx < node.prefixLen {
