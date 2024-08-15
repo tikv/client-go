@@ -2239,13 +2239,6 @@ func (s *RegionRequestSender) onRegionError(
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx),
 		)
-		if !req.IsGlobalStaleRead() {
-			// only backoff local stale reads as global should retry immediately against the leader as a normal read
-			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
-			if err != nil {
-				return false, err
-			}
-		}
 		return true, nil
 	}
 
