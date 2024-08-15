@@ -1715,13 +1715,7 @@ func (s *RegionRequestSender) onRegionError(
 		if s.replicaSelector != nil {
 			s.replicaSelector.onDataIsNotReady()
 		}
-		if !req.IsGlobalStaleRead() {
-			// only backoff local stale reads as global should retry immediately against the leader as a normal read
-			err = bo.Backoff(retry.BoMaxDataNotReady, errors.New("data is not ready"))
-			if err != nil {
-				return false, err
-			}
-		}
+		// do not backoff data-is-not-ready as we always retry with normal snapshot read.
 		return true, nil
 	}
 
