@@ -89,6 +89,7 @@ func (db *RBT) checkKeyInCache(key []byte) (memdbNodeAddr, bool) {
 	return nullNodeAddr, false
 }
 
+//nolint:unused
 func (db *RBT) revertNode(hdr *memdbVlogHdr) {
 	node := db.getNode(hdr.nodeAddr)
 	node.vptr = hdr.oldValue
@@ -108,6 +109,7 @@ func (db *RBT) revertNode(hdr *memdbVlogHdr) {
 	}
 }
 
+//nolint:unused
 func (db *RBT) inspectNode(addr memdbArenaAddr) (*memdbNode, memdbArenaAddr) {
 	node := db.allocator.getNode(addr)
 	return node, node.vptr

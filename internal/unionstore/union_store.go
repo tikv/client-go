@@ -310,6 +310,7 @@ type rbtDBWithContext struct {
 	*RBT
 }
 
+//nolint:unused
 func newRbtDBWithContext() *rbtDBWithContext {
 	return &rbtDBWithContext{RBT: newRBT()}
 }
@@ -359,6 +360,7 @@ type artDBWithContext struct {
 	*ART
 }
 
+//nolint:unused
 func newArtDBWithContext() *artDBWithContext {
 	return &artDBWithContext{ART: newART()}
 }

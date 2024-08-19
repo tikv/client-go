@@ -32,12 +32,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//nolint:unused
 package unionstore
 
 import (
+	"encoding/binary"
 	"math"
 
-	"encoding/binary"
 	"github.com/tikv/client-go/v2/kv"
 	"go.uber.org/atomic"
 )
