@@ -35,16 +35,15 @@
 package unionstore
 
 import (
-	"encoding/binary"
 	"math"
-	"unsafe"
 
+	"encoding/binary"
 	"github.com/tikv/client-go/v2/kv"
 	"go.uber.org/atomic"
 )
 
 const (
-	alignMask = 1<<32 - 8 // 29 bit 1 and 3 bit 0.
+	alignMask = 0xFFFFFFF8 // 29 bits of 1 and 3 bits of 0
 
 	nullBlockOffset = math.MaxUint32
 	maxBlockSize    = 128 << 20
@@ -141,6 +140,11 @@ func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []b
 	return memdbArenaAddr{uint32(idx), offset}, data
 }
 
+// memArena get all the data, DO NOT access others data.
+func (a *memdbArena) getData(addr memdbArenaAddr) []byte {
+	return a.blocks[addr.idx].buf[addr.off:]
+}
+
 func (a *memdbArena) reset() {
 	for i := range a.blocks {
 		a.blocks[i].reset()
@@ -215,71 +219,18 @@ func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 	// We shall not call a.onMemChange() here, since it may cause a panic and leave memdb in an inconsistent state
 }
 
-type nodeAllocator struct {
+type keyFlagsGetter interface {
+	getKey() []byte
+	getKeyFlags() kv.KeyFlags
+}
+
+type VlogMemDB[G keyFlagsGetter] interface {
+	revertNode(hdr *memdbVlogHdr)
+	inspectNode(addr memdbArenaAddr) (G, memdbArenaAddr)
+}
+
+type memdbVlog[G keyFlagsGetter, M VlogMemDB[G]] struct {
 	memdbArena
-
-	// Dummy node, so that we can make X.left.up = X.
-	// We then use this instead of NULL to mean the top or bottom
-	// end of the rb tree. It is a black node.
-	nullNode memdbNode
-}
-
-func (a *nodeAllocator) init() {
-	a.nullNode = memdbNode{
-		up:    nullAddr,
-		left:  nullAddr,
-		right: nullAddr,
-		vptr:  nullAddr,
-	}
-}
-
-func (a *nodeAllocator) getNode(addr memdbArenaAddr) *memdbNode {
-	if addr.isNull() {
-		return &a.nullNode
-	}
-
-	return (*memdbNode)(unsafe.Pointer(&a.blocks[addr.idx].buf[addr.off]))
-}
-
-func (a *nodeAllocator) allocNode(key []byte) (memdbArenaAddr, *memdbNode) {
-	nodeSize := 8*4 + 2 + kv.FlagBytes + len(key)
-	prevBlocks := len(a.blocks)
-	addr, mem := a.alloc(nodeSize, true)
-	n := (*memdbNode)(unsafe.Pointer(&mem[0]))
-	n.vptr = nullAddr
-	n.klen = uint16(len(key))
-	copy(n.getKey(), key)
-	if prevBlocks != len(a.blocks) {
-		a.onMemChange()
-	}
-	return addr, n
-}
-
-var testMode = false
-
-func (a *nodeAllocator) freeNode(addr memdbArenaAddr) {
-	if testMode {
-		// Make it easier for debug.
-		n := a.getNode(addr)
-		badAddr := nullAddr
-		badAddr.idx--
-		n.left = badAddr
-		n.right = badAddr
-		n.up = badAddr
-		n.vptr = badAddr
-		return
-	}
-	// TODO: reuse freed nodes. Need to fix lastTraversedNode when implementing this.
-}
-
-func (a *nodeAllocator) reset() {
-	a.memdbArena.reset()
-	a.init()
-}
-
-type memdbVlog struct {
-	memdbArena
-	memdb *MemDB
 }
 
 const memdbVlogHdrSize = 8 + 8 + 4
@@ -308,7 +259,7 @@ func (hdr *memdbVlogHdr) load(src []byte) {
 	hdr.nodeAddr.load(src[cursor:])
 }
 
-func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr, value []byte) memdbArenaAddr {
+func (l *memdbVlog[G, M]) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr, value []byte) memdbArenaAddr {
 	size := memdbVlogHdrSize + len(value)
 	prevBlocks := len(l.blocks)
 	addr, mem := l.alloc(size, false)
@@ -325,7 +276,7 @@ func (l *memdbVlog) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr
 }
 
 // A pure function that gets a value.
-func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
+func (l *memdbVlog[G, M]) getValue(addr memdbArenaAddr) []byte {
 	lenOff := addr.off - memdbVlogHdrSize
 	block := l.blocks[addr.idx].buf
 	valueLen := endian.Uint32(block[lenOff:])
@@ -336,7 +287,7 @@ func (l *memdbVlog) getValue(addr memdbArenaAddr) []byte {
 	return block[valueOff:lenOff:lenOff]
 }
 
-func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint) ([]byte, bool) {
+func (l *memdbVlog[G, M]) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint) ([]byte, bool) {
 	result := l.selectValueHistory(addr, func(addr memdbArenaAddr) bool {
 		return !l.canModify(snap, addr)
 	})
@@ -346,7 +297,7 @@ func (l *memdbVlog) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint)
 	return l.getValue(addr), true
 }
 
-func (l *memdbVlog) selectValueHistory(addr memdbArenaAddr, predicate func(memdbArenaAddr) bool) memdbArenaAddr {
+func (l *memdbVlog[G, M]) selectValueHistory(addr memdbArenaAddr, predicate func(memdbArenaAddr) bool) memdbArenaAddr {
 	for !addr.isNull() {
 		if predicate(addr) {
 			return addr
@@ -358,36 +309,19 @@ func (l *memdbVlog) selectValueHistory(addr memdbArenaAddr, predicate func(memdb
 	return nullAddr
 }
 
-func (l *memdbVlog) revertToCheckpoint(db *MemDB, cp *MemDBCheckpoint) {
+func (l *memdbVlog[G, M]) revertToCheckpoint(m M, cp *MemDBCheckpoint) {
 	cursor := l.checkpoint()
 	for !cp.isSamePosition(&cursor) {
 		hdrOff := cursor.offsetInBlock - memdbVlogHdrSize
 		block := l.blocks[cursor.blocks-1].buf
 		var hdr memdbVlogHdr
 		hdr.load(block[hdrOff:])
-		node := db.getNode(hdr.nodeAddr)
-
-		node.vptr = hdr.oldValue
-		db.size -= int(hdr.valueLen)
-		// oldValue.isNull() == true means this is a newly added value.
-		if hdr.oldValue.isNull() {
-			// If there are no flags associated with this key, we need to delete this node.
-			keptFlags := node.getKeyFlags().AndPersistent()
-			if keptFlags == 0 {
-				db.deleteNode(node)
-			} else {
-				node.setKeyFlags(keptFlags)
-				db.dirty = true
-			}
-		} else {
-			db.size += len(l.getValue(hdr.oldValue))
-		}
-
+		m.revertNode(&hdr)
 		l.moveBackCursor(&cursor, &hdr)
 	}
 }
 
-func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *MemDBCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
+func (l *memdbVlog[G, M]) inspectKVInLog(m M, head, tail *MemDBCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
 	cursor := *tail
 	for !head.isSamePosition(&cursor) {
 		cursorAddr := memdbArenaAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
@@ -395,10 +329,11 @@ func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *MemDBCheckpoint, f fun
 		block := l.blocks[cursorAddr.idx].buf
 		var hdr memdbVlogHdr
 		hdr.load(block[hdrOff:])
-		node := db.allocator.getNode(hdr.nodeAddr)
+
+		node, vptr := m.inspectNode(hdr.nodeAddr)
 
 		// Skip older versions.
-		if node.vptr == cursorAddr {
+		if vptr == cursorAddr {
 			value := block[hdrOff-hdr.valueLen : hdrOff]
 			f(node.getKey(), node.getKeyFlags(), value)
 		}
@@ -407,7 +342,7 @@ func (l *memdbVlog) inspectKVInLog(db *MemDB, head, tail *MemDBCheckpoint, f fun
 	}
 }
 
-func (l *memdbVlog) moveBackCursor(cursor *MemDBCheckpoint, hdr *memdbVlogHdr) {
+func (l *memdbVlog[G, M]) moveBackCursor(cursor *MemDBCheckpoint, hdr *memdbVlogHdr) {
 	cursor.offsetInBlock -= (memdbVlogHdrSize + int(hdr.valueLen))
 	if cursor.offsetInBlock == 0 {
 		cursor.blocks--
@@ -417,7 +352,7 @@ func (l *memdbVlog) moveBackCursor(cursor *MemDBCheckpoint, hdr *memdbVlogHdr) {
 	}
 }
 
-func (l *memdbVlog) canModify(cp *MemDBCheckpoint, addr memdbArenaAddr) bool {
+func (l *memdbVlog[G, M]) canModify(cp *MemDBCheckpoint, addr memdbArenaAddr) bool {
 	if cp == nil {
 		return true
 	}

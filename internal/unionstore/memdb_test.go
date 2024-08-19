@@ -174,7 +174,7 @@ func TestDiscard(t *testing.T) {
 		assert.NotNil(err)
 	}
 	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
+	it := it1.(*RBTIterator)
 	it.seekToFirst()
 	assert.False(it.Valid())
 	it.seekToLast()
@@ -389,7 +389,7 @@ func TestEmptyDB(t *testing.T) {
 	_, err := db.Get([]byte{0})
 	assert.NotNil(err)
 	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
+	it := it1.(*RBTIterator)
 	it.seekToFirst()
 	assert.False(it.Valid())
 	it.seekToLast()
@@ -405,7 +405,7 @@ func TestReset(t *testing.T) {
 	_, err := db.Get([]byte{0, 0, 0, 0})
 	assert.NotNil(err)
 	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
+	it := it1.(*RBTIterator)
 	it.seekToFirst()
 	assert.False(it.Valid())
 	it.seekToLast()
@@ -537,7 +537,7 @@ func TestFlags(t *testing.T) {
 	assert.Equal(db.Size(), 20000)
 
 	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
+	it := it1.(*RBTIterator)
 	assert.False(it.Valid())
 
 	it.includeFlags = true

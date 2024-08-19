@@ -41,17 +41,17 @@ import (
 )
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *MemDB) SnapshotGetter() Getter {
-	return &memdbSnapGetter{
+func (db *RBT) SnapshotGetter() Getter {
+	return &rbtSnapGetter{
 		db: db,
 		cp: db.getSnapshot(),
 	}
 }
 
 // SnapshotIter returns a Iterator for a snapshot of MemBuffer.
-func (db *MemDB) SnapshotIter(start, end []byte) Iterator {
-	it := &memdbSnapIter{
-		MemdbIterator: &MemdbIterator{
+func (db *RBT) SnapshotIter(start, end []byte) Iterator {
+	it := &rbtSnapIter{
+		RBTIterator: &RBTIterator{
 			db:    db,
 			start: start,
 			end:   end,
@@ -63,9 +63,9 @@ func (db *MemDB) SnapshotIter(start, end []byte) Iterator {
 }
 
 // SnapshotIterReverse returns a reverse Iterator for a snapshot of MemBuffer.
-func (db *MemDB) SnapshotIterReverse(k, lowerBound []byte) Iterator {
-	it := &memdbSnapIter{
-		MemdbIterator: &MemdbIterator{
+func (db *RBT) SnapshotIterReverse(k, lowerBound []byte) Iterator {
+	it := &rbtSnapIter{
+		RBTIterator: &RBTIterator{
 			db:      db,
 			start:   lowerBound,
 			end:     k,
@@ -77,19 +77,19 @@ func (db *MemDB) SnapshotIterReverse(k, lowerBound []byte) Iterator {
 	return it
 }
 
-func (db *MemDB) getSnapshot() MemDBCheckpoint {
+func (db *RBT) getSnapshot() MemDBCheckpoint {
 	if len(db.stages) > 0 {
 		return db.stages[0]
 	}
 	return db.vlog.checkpoint()
 }
 
-type memdbSnapGetter struct {
-	db *MemDB
+type rbtSnapGetter struct {
+	db *RBT
 	cp MemDBCheckpoint
 }
 
-func (snap *memdbSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (snap *rbtSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
 	x := snap.db.traverse(key, false)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
@@ -105,20 +105,20 @@ func (snap *memdbSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error
 	return v, nil
 }
 
-type memdbSnapIter struct {
-	*MemdbIterator
+type rbtSnapIter struct {
+	*RBTIterator
 	value []byte
 	cp    MemDBCheckpoint
 }
 
-func (i *memdbSnapIter) Value() []byte {
+func (i *rbtSnapIter) Value() []byte {
 	return i.value
 }
 
-func (i *memdbSnapIter) Next() error {
+func (i *rbtSnapIter) Next() error {
 	i.value = nil
 	for i.Valid() {
-		if err := i.MemdbIterator.Next(); err != nil {
+		if err := i.RBTIterator.Next(); err != nil {
 			return err
 		}
 		if i.setValue() {
@@ -128,7 +128,7 @@ func (i *memdbSnapIter) Next() error {
 	return nil
 }
 
-func (i *memdbSnapIter) setValue() bool {
+func (i *rbtSnapIter) setValue() bool {
 	if !i.Valid() {
 		return false
 	}
@@ -139,7 +139,7 @@ func (i *memdbSnapIter) setValue() bool {
 	return false
 }
 
-func (i *memdbSnapIter) init() {
+func (i *rbtSnapIter) init() {
 	if i.reverse {
 		if len(i.end) == 0 {
 			i.seekToLast()

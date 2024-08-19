@@ -35,7 +35,7 @@ import (
 //   - an immutable onflushing buffer for read
 //   - like MemDB, PipelinedMemDB also CANNOT be used concurrently
 type PipelinedMemDB struct {
-	// Like MemDB, this RWMutex only used to ensure memdbSnapGetter.Get will not race with
+	// Like MemDB, this RWMutex only used to ensure rbtSnapGetter.Get will not race with
 	// concurrent memdb.Set, memdb.SetWithFlags, memdb.Delete and memdb.UpdateFlags.
 	sync.RWMutex
 	onFlushing        atomic.Bool
