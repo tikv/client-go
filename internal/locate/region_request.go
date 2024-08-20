@@ -1843,6 +1843,7 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			zap.Uint64("safe-ts", regionErr.GetDataIsNotReady().GetSafeTs()),
 			zap.Stringer("ctx", ctx),
 		)
+		// do not backoff data-is-not-ready as we always retry with normal snapshot read.
 		return true, nil
 	}
 
