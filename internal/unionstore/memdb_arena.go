@@ -32,7 +32,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:unused
 package unionstore
 
 import (
@@ -142,6 +141,8 @@ func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []b
 }
 
 // memArena get all the data, DO NOT access others data.
+//
+//nolint:unused
 func (a *memdbArena) getData(addr memdbArenaAddr) []byte {
 	return a.blocks[addr.idx].buf[addr.off:]
 }
@@ -220,11 +221,13 @@ func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 	// We shall not call a.onMemChange() here, since it may cause a panic and leave memdb in an inconsistent state
 }
 
+// keyFlagsGetter is an interface to get key and key flags, usually a leaf or node.
 type keyFlagsGetter interface {
 	getKey() []byte
 	getKeyFlags() kv.KeyFlags
 }
 
+// VlogMemDB is the interface of the memory buffer which supports vlog to revert node and inspect node.
 type VlogMemDB[G keyFlagsGetter] interface {
 	revertNode(hdr *memdbVlogHdr)
 	inspectNode(addr memdbArenaAddr) (G, memdbArenaAddr)
