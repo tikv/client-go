@@ -640,3 +640,23 @@ func TestTraceExecDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestConcurrentCloseConnPanic(t *testing.T) {
+	client := NewRPCClient()
+	addr := "127.0.0.1:6379"
+	_, err := client.getConnArray(addr, true)
+	assert.Nil(t, err)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		err := client.Close()
+		assert.Nil(t, err)
+	}()
+	go func() {
+		defer wg.Done()
+		err := client.CloseAddr(addr)
+		assert.Nil(t, err)
+	}()
+	wg.Wait()
+}
