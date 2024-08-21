@@ -57,3 +57,6 @@ type MemBuffer = unionstore.MemBuffer
 
 // MemDBCheckpoint is the checkpoint of memory DB.
 type MemDBCheckpoint = unionstore.MemDBCheckpoint
+
+// Metrics is the metrics of unionstore.
+type Metrics = unionstore.Metrics

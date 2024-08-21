@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -88,18 +89,45 @@ type MemDB struct {
 	stages      []MemDBCheckpoint
 	// when the MemDB is wrapper by upper RWMutex, we can skip the internal mutex.
 	skipMutex bool
+
+	// The lastTraversedNode must exist
+	lastTraversedNode atomic.Pointer[memdbNodeAddr]
+	hitCount          atomic.Uint64
+	missCount         atomic.Uint64
 }
+
+const unlimitedSize = math.MaxUint64
 
 func newMemDB() *MemDB {
 	db := new(MemDB)
 	db.allocator.init()
 	db.root = nullAddr
 	db.stages = make([]MemDBCheckpoint, 0, 2)
-	db.entrySizeLimit = math.MaxUint64
-	db.bufferSizeLimit = math.MaxUint64
+	db.entrySizeLimit = unlimitedSize
+	db.bufferSizeLimit = unlimitedSize
 	db.vlog.memdb = db
 	db.skipMutex = false
+	db.lastTraversedNode.Store(&nullNodeAddr)
 	return db
+}
+
+// updateLastTraversed updates the last traversed node atomically
+func (db *MemDB) updateLastTraversed(node memdbNodeAddr) {
+	db.lastTraversedNode.Store(&node)
+}
+
+// checkKeyInCache retrieves the last traversed node if the key matches
+func (db *MemDB) checkKeyInCache(key []byte) (memdbNodeAddr, bool) {
+	nodePtr := db.lastTraversedNode.Load()
+	if nodePtr == nil || nodePtr.isNull() {
+		return nullNodeAddr, false
+	}
+
+	if bytes.Equal(key, nodePtr.memdbNode.getKey()) {
+		return *nodePtr, true
+	}
+
+	return nullNodeAddr, false
 }
 
 // Staging create a new staging buffer inside the MemBuffer.
@@ -327,7 +355,7 @@ func (db *MemDB) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 
 	if db.vlogInvalid {
 		// panic for easier debugging.
-		panic("vlog is resetted")
+		panic("vlog is reset")
 	}
 
 	if value != nil {
@@ -396,21 +424,36 @@ func (db *MemDB) setValue(x memdbNodeAddr, value []byte) {
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
 func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
+	if node, found := db.checkKeyInCache(key); found {
+		db.hitCount.Add(1)
+		return node
+	}
+	db.missCount.Add(1)
+
 	x := db.getRoot()
 	y := memdbNodeAddr{nil, nullAddr}
 	found := false
 
 	// walk x down the tree
 	for !x.isNull() && !found {
-		y = x
 		cmp := bytes.Compare(key, x.getKey())
 		if cmp < 0 {
+			if insert && x.left.isNull() {
+				y = x
+			}
 			x = x.getLeft(db)
 		} else if cmp > 0 {
+			if insert && x.right.isNull() {
+				y = x
+			}
 			x = x.getRight(db)
 		} else {
 			found = true
 		}
+	}
+
+	if found {
+		db.updateLastTraversed(x)
 	}
 
 	if found || !insert {
@@ -506,6 +549,8 @@ func (db *MemDB) traverse(key []byte, insert bool) memdbNodeAddr {
 	// Set the root node black
 	db.getRoot().setBlack()
 
+	db.updateLastTraversed(z)
+
 	return z
 }
 
@@ -593,6 +638,9 @@ func (db *MemDB) rightRotate(y memdbNodeAddr) {
 
 func (db *MemDB) deleteNode(z memdbNodeAddr) {
 	var x, y memdbNodeAddr
+	if db.lastTraversedNode.Load().addr == z.addr {
+		db.lastTraversedNode.Store(&nullNodeAddr)
+	}
 
 	db.count--
 	db.size -= int(z.klen)
