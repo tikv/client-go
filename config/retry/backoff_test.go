@@ -57,7 +57,7 @@ func TestBackoffErrorType(t *testing.T) {
 	assert.Nil(t, err)
 	// 6ms sleep at most in total
 	for i := 0; i < 2; i++ {
-		err = b.Backoff(BoMaxDataNotReady, errors.New("data not ready"))
+		err = b.Backoff(BoMaxRegionNotInitialized, errors.New("region not initialized"))
 		assert.Nil(t, err)
 	}
 	// 100ms sleep at most in total
@@ -88,7 +88,7 @@ func TestBackoffDeepCopy(t *testing.T) {
 	b := NewBackofferWithVars(context.TODO(), 4, nil)
 	// 700 ms sleep in total and the backoffer will return an error next time.
 	for i := 0; i < 3; i++ {
-		err = b.Backoff(BoMaxDataNotReady, errors.New("data not ready"))
+		err = b.Backoff(BoMaxRegionNotInitialized, errors.New("region not initialized"))
 		assert.Nil(t, err)
 	}
 	bForked, cancel := b.Fork()
@@ -96,7 +96,7 @@ func TestBackoffDeepCopy(t *testing.T) {
 	bCloned := b.Clone()
 	for _, b := range []*Backoffer{bForked, bCloned} {
 		err = b.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
-		assert.ErrorIs(t, err, BoMaxDataNotReady.err)
+		assert.ErrorIs(t, err, BoMaxRegionNotInitialized.err)
 	}
 }
 
