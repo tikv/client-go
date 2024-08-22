@@ -19,7 +19,6 @@ patterns:
     workloads:
       - begin
       - commit
-      - rollback
     mode: 2PC # (async_commit | 1PC | 2PC)
     lock: pessimistic # (optimistic | pessimistic)
     count: 10000
