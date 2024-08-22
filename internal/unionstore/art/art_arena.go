@@ -13,19 +13,23 @@
 // limitations under the License.
 
 //nolint:unused
-package unionstore
+package art
+
+import (
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+)
 
 // fixedSizeArena is a fixed size arena allocator.
 // because the size of each type of node is fixed, the discarded nodes can be reused.
 // reusing blocks reduces the memory pieces.
 type nodeArena struct {
-	memdbArena
-	freeNode4  []memdbArenaAddr
-	freeNode16 []memdbArenaAddr
-	freeNode48 []memdbArenaAddr
+	arena.MemdbArena
+	freeNode4  []arena.MemdbArenaAddr
+	freeNode16 []arena.MemdbArenaAddr
+	freeNode48 []arena.MemdbArenaAddr
 }
 
 type artAllocator struct {
-	vlogAllocator memdbVlog[*artLeaf, *ART]
+	vlogAllocator arena.MemdbVlog[*artLeaf, *ART]
 	nodeAllocator nodeArena
 }

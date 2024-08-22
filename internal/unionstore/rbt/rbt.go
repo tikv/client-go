@@ -1,4 +1,4 @@
-// Copyright 2024 TiKV Authors
+// Copyright 2021 TiKV Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unionstore
+// NOTE: The code in this file is based on code from the
+// TiDB project, licensed under the Apache License v 2.0
+//
+// https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/unionstore/memdb.go
+//
+
+// Copyright 2020 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package rbt
 
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
 )
+
+const unlimitedSize = math.MaxUint64
+
+var testMode = false
 
 // RBT is rollbackable Red-Black Tree optimized for TiDB's transaction states buffer use scenario.
 // You can think RBT is a combination of two separate tree map, one for key => value and another for key => keyFlags.
@@ -37,9 +63,9 @@ type RBT struct {
 	// This RWMutex only used to ensure rbtSnapGetter.Get will not race with
 	// concurrent memdb.Set, memdb.SetWithFlags, memdb.Delete and memdb.UpdateFlags.
 	sync.RWMutex
-	root      memdbArenaAddr
+	root      arena.MemdbArenaAddr
 	allocator nodeAllocator
-	vlog      memdbVlog[*memdbNode, *RBT]
+	vlog      arena.MemdbVlog[*memdbNode, *RBT]
 
 	entrySizeLimit  uint64
 	bufferSizeLimit uint64
@@ -48,21 +74,21 @@ type RBT struct {
 
 	vlogInvalid bool
 	dirty       bool
-	stages      []MemDBCheckpoint
+	stages      []arena.MemDBCheckpoint
 	// when the RBT is wrapper by upper RWMutex, we can skip the internal mutex.
 	skipMutex bool
 
 	// The lastTraversedNode must exist
-	lastTraversedNode atomic.Pointer[memdbNodeAddr]
+	lastTraversedNode atomic.Pointer[MemdbNodeAddr]
 	hitCount          atomic.Uint64
 	missCount         atomic.Uint64
 }
 
-func newRBT() *RBT {
+func New() *RBT {
 	db := new(RBT)
 	db.allocator.init()
-	db.root = nullAddr
-	db.stages = make([]MemDBCheckpoint, 0, 2)
+	db.root = arena.NullAddr
+	db.stages = make([]arena.MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = unlimitedSize
 	db.bufferSizeLimit = unlimitedSize
 	db.skipMutex = false
@@ -71,12 +97,12 @@ func newRBT() *RBT {
 }
 
 // updateLastTraversed updates the last traversed node atomically
-func (db *RBT) updateLastTraversed(node memdbNodeAddr) {
+func (db *RBT) updateLastTraversed(node MemdbNodeAddr) {
 	db.lastTraversedNode.Store(&node)
 }
 
 // checkKeyInCache retrieves the last traversed node if the key matches
-func (db *RBT) checkKeyInCache(key []byte) (memdbNodeAddr, bool) {
+func (db *RBT) checkKeyInCache(key []byte) (MemdbNodeAddr, bool) {
 	nodePtr := db.lastTraversedNode.Load()
 	if nodePtr == nil || nodePtr.isNull() {
 		return nullNodeAddr, false
@@ -89,13 +115,12 @@ func (db *RBT) checkKeyInCache(key []byte) (memdbNodeAddr, bool) {
 	return nullNodeAddr, false
 }
 
-//nolint:unused
-func (db *RBT) revertNode(hdr *memdbVlogHdr) {
-	node := db.getNode(hdr.nodeAddr)
-	node.vptr = hdr.oldValue
-	db.size -= int(hdr.valueLen)
+func (db *RBT) RevertNode(hdr *arena.MemdbVlogHdr) {
+	node := db.getNode(hdr.NodeAddr)
+	node.vptr = hdr.OldValue
+	db.size -= int(hdr.ValueLen)
 	// oldValue.isNull() == true means this is a newly added value.
-	if hdr.oldValue.isNull() {
+	if hdr.OldValue.IsNull() {
 		// If there are no flags associated with this key, we need to delete this node.
 		keptFlags := node.getKeyFlags().AndPersistent()
 		if keptFlags == 0 {
@@ -105,14 +130,18 @@ func (db *RBT) revertNode(hdr *memdbVlogHdr) {
 			db.dirty = true
 		}
 	} else {
-		db.size += len(db.vlog.getValue(hdr.oldValue))
+		db.size += len(db.vlog.GetValue(hdr.OldValue))
 	}
 }
 
-//nolint:unused
-func (db *RBT) inspectNode(addr memdbArenaAddr) (*memdbNode, memdbArenaAddr) {
+func (db *RBT) InspectNode(addr arena.MemdbArenaAddr) (*memdbNode, arena.MemdbArenaAddr) {
 	node := db.allocator.getNode(addr)
 	return node, node.vptr
+}
+
+// IsStaging returns whether the MemBuffer is in staging status.
+func (db *RBT) IsStaging() bool {
+	return len(db.stages) > 0
 }
 
 // Staging create a new staging buffer inside the MemBuffer.
@@ -124,7 +153,7 @@ func (db *RBT) Staging() int {
 		defer db.Unlock()
 	}
 
-	db.stages = append(db.stages, db.vlog.checkpoint())
+	db.stages = append(db.stages, db.vlog.Checkpoint())
 	return len(db.stages)
 }
 
@@ -142,8 +171,8 @@ func (db *RBT) Release(h int) {
 	}
 
 	if h == 1 {
-		tail := db.vlog.checkpoint()
-		if !db.stages[0].isSamePosition(&tail) {
+		tail := db.vlog.Checkpoint()
+		if !db.stages[0].IsSamePosition(&tail) {
 			db.dirty = true
 		}
 	}
@@ -169,38 +198,38 @@ func (db *RBT) Cleanup(h int) {
 
 	cp := &db.stages[h-1]
 	if !db.vlogInvalid {
-		curr := db.vlog.checkpoint()
-		if !curr.isSamePosition(cp) {
-			db.vlog.revertToCheckpoint(db, cp)
-			db.vlog.truncate(cp)
+		curr := db.vlog.Checkpoint()
+		if !curr.IsSamePosition(cp) {
+			db.vlog.RevertToCheckpoint(db, cp)
+			db.vlog.Truncate(cp)
 		}
 	}
 	db.stages = db.stages[:h-1]
-	db.vlog.onMemChange()
+	db.vlog.OnMemChange()
 }
 
 // Checkpoint returns a checkpoint of RBT.
-func (db *RBT) Checkpoint() *MemDBCheckpoint {
-	cp := db.vlog.checkpoint()
+func (db *RBT) Checkpoint() *arena.MemDBCheckpoint {
+	cp := db.vlog.Checkpoint()
 	return &cp
 }
 
 // RevertToCheckpoint reverts the RBT to the checkpoint.
-func (db *RBT) RevertToCheckpoint(cp *MemDBCheckpoint) {
-	db.vlog.revertToCheckpoint(db, cp)
-	db.vlog.truncate(cp)
-	db.vlog.onMemChange()
+func (db *RBT) RevertToCheckpoint(cp *arena.MemDBCheckpoint) {
+	db.vlog.RevertToCheckpoint(db, cp)
+	db.vlog.Truncate(cp)
+	db.vlog.OnMemChange()
 }
 
 // Reset resets the MemBuffer to initial states.
 func (db *RBT) Reset() {
-	db.root = nullAddr
+	db.root = arena.NullAddr
 	db.stages = db.stages[:0]
 	db.dirty = false
 	db.vlogInvalid = false
 	db.size = 0
 	db.count = 0
-	db.vlog.reset()
+	db.vlog.Reset()
 	db.allocator.reset()
 }
 
@@ -208,15 +237,15 @@ func (db *RBT) Reset() {
 // NOTE: any operation need value will panic after this function.
 func (db *RBT) DiscardValues() {
 	db.vlogInvalid = true
-	db.vlog.reset()
+	db.vlog.Reset()
 }
 
 // InspectStage used to inspect the value updates in the given stage.
 func (db *RBT) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte)) {
 	idx := handle - 1
-	tail := db.vlog.checkpoint()
+	tail := db.vlog.Checkpoint()
 	head := db.stages[idx]
-	db.vlog.inspectKVInLog(db, &head, &tail, f)
+	db.vlog.InspectKVInLog(db, &head, &tail, f)
 }
 
 // Get gets the value for key k from kv store.
@@ -231,11 +260,11 @@ func (db *RBT) Get(key []byte) ([]byte, error) {
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
 	}
-	if x.vptr.isNull() {
+	if x.vptr.IsNull() {
 		// A flag only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
-	return db.vlog.getValue(x.vptr), nil
+	return db.vlog.GetValue(x.vptr), nil
 }
 
 // SelectValueHistory select the latest value which makes `predicate` returns true from the modification history.
@@ -244,17 +273,17 @@ func (db *RBT) SelectValueHistory(key []byte, predicate func(value []byte) bool)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
 	}
-	if x.vptr.isNull() {
+	if x.vptr.IsNull() {
 		// A flag only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
-	result := db.vlog.selectValueHistory(x.vptr, func(addr memdbArenaAddr) bool {
-		return predicate(db.vlog.getValue(addr))
+	result := db.vlog.SelectValueHistory(x.vptr, func(addr arena.MemdbArenaAddr) bool {
+		return predicate(db.vlog.GetValue(addr))
 	})
-	if result.isNull() {
+	if result.IsNull() {
 		return nil, nil
 	}
-	return db.vlog.getValue(result), nil
+	return db.vlog.GetValue(result), nil
 }
 
 // GetFlags returns the latest flags associated with key.
@@ -291,30 +320,30 @@ func (db *RBT) SetWithFlags(key []byte, value []byte, ops ...kv.FlagsOp) error {
 
 // Delete removes the entry for key k from kv store.
 func (db *RBT) Delete(key []byte) error {
-	return db.set(key, tombstone)
+	return db.set(key, arena.Tombstone)
 }
 
 // DeleteWithFlags delete key with the given KeyFlags
 func (db *RBT) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
-	return db.set(key, tombstone, ops...)
+	return db.set(key, arena.Tombstone, ops...)
 }
 
 // GetKeyByHandle returns key by handle.
-func (db *RBT) GetKeyByHandle(handle MemKeyHandle) []byte {
-	x := db.getNode(handle.toAddr())
+func (db *RBT) GetKeyByHandle(handle arena.MemKeyHandle) []byte {
+	x := db.getNode(handle.ToAddr())
 	return x.getKey()
 }
 
 // GetValueByHandle returns value by handle.
-func (db *RBT) GetValueByHandle(handle MemKeyHandle) ([]byte, bool) {
+func (db *RBT) GetValueByHandle(handle arena.MemKeyHandle) ([]byte, bool) {
 	if db.vlogInvalid {
 		return nil, false
 	}
-	x := db.getNode(handle.toAddr())
-	if x.vptr.isNull() {
+	x := db.getNode(handle.ToAddr())
+	if x.vptr.IsNull() {
 		return nil, false
 	}
-	return db.vlog.getValue(x.vptr), true
+	return db.vlog.GetValue(x.vptr), true
 }
 
 // Len returns the number of entries in the DB.
@@ -383,18 +412,18 @@ func (db *RBT) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	return nil
 }
 
-func (db *RBT) setValue(x memdbNodeAddr, value []byte) {
-	var activeCp *MemDBCheckpoint
+func (db *RBT) setValue(x MemdbNodeAddr, value []byte) {
+	var activeCp *arena.MemDBCheckpoint
 	if len(db.stages) > 0 {
 		activeCp = &db.stages[len(db.stages)-1]
 	}
 
 	var oldVal []byte
-	if !x.vptr.isNull() {
-		oldVal = db.vlog.getValue(x.vptr)
+	if !x.vptr.IsNull() {
+		oldVal = db.vlog.GetValue(x.vptr)
 	}
 
-	if len(oldVal) > 0 && db.vlog.canModify(activeCp, x.vptr) {
+	if len(oldVal) > 0 && db.vlog.CanModify(activeCp, x.vptr) {
 		// For easier to implement, we only consider this case.
 		// It is the most common usage in TiDB's transaction buffers.
 		if len(oldVal) == len(value) {
@@ -402,13 +431,13 @@ func (db *RBT) setValue(x memdbNodeAddr, value []byte) {
 			return
 		}
 	}
-	x.vptr = db.vlog.appendValue(x.addr, x.vptr, value)
+	x.vptr = db.vlog.AppendValue(x.addr, x.vptr, value)
 	db.size = db.size - len(oldVal) + len(value)
 }
 
 // traverse search for and if not found and insert is true, will add a new node in.
 // Returns a pointer to the new node, or the node found.
-func (db *RBT) traverse(key []byte, insert bool) memdbNodeAddr {
+func (db *RBT) traverse(key []byte, insert bool) MemdbNodeAddr {
 	if node, found := db.checkKeyInCache(key); found {
 		db.hitCount.Add(1)
 		return node
@@ -416,19 +445,19 @@ func (db *RBT) traverse(key []byte, insert bool) memdbNodeAddr {
 	db.missCount.Add(1)
 
 	x := db.getRoot()
-	y := memdbNodeAddr{nil, nullAddr}
+	y := MemdbNodeAddr{nil, arena.NullAddr}
 	found := false
 
 	// walk x down the tree
 	for !x.isNull() && !found {
 		cmp := bytes.Compare(key, x.getKey())
 		if cmp < 0 {
-			if insert && x.left.isNull() {
+			if insert && x.left.IsNull() {
 				y = x
 			}
 			x = x.getLeft(db)
 		} else if cmp > 0 {
-			if insert && x.right.isNull() {
+			if insert && x.right.IsNull() {
 				y = x
 			}
 			x = x.getRight(db)
@@ -459,8 +488,8 @@ func (db *RBT) traverse(key []byte, insert bool) memdbNodeAddr {
 		}
 	}
 
-	z.left = nullAddr
-	z.right = nullAddr
+	z.left = arena.NullAddr
+	z.right = arena.NullAddr
 
 	// colour this new node red
 	z.setRed()
@@ -553,14 +582,14 @@ func (db *RBT) traverse(key []byte, insert bool) memdbNodeAddr {
 // We assume that neither X nor Y is NULL
 //
 
-func (db *RBT) leftRotate(x memdbNodeAddr) {
+func (db *RBT) leftRotate(x MemdbNodeAddr) {
 	y := x.getRight(db)
 
 	// Turn Y's left subtree into X's right subtree (move B)
 	x.right = y.left
 
 	// If B is not null, set it's parent to be X
-	if !y.left.isNull() {
+	if !y.left.IsNull() {
 		left := y.getLeft(db)
 		left.up = x.addr
 	}
@@ -569,7 +598,7 @@ func (db *RBT) leftRotate(x memdbNodeAddr) {
 	y.up = x.up
 
 	// if X was the root
-	if x.up.isNull() {
+	if x.up.IsNull() {
 		db.root = y.addr
 	} else {
 		xUp := x.getUp(db)
@@ -587,14 +616,14 @@ func (db *RBT) leftRotate(x memdbNodeAddr) {
 	x.up = y.addr
 }
 
-func (db *RBT) rightRotate(y memdbNodeAddr) {
+func (db *RBT) rightRotate(y MemdbNodeAddr) {
 	x := y.getLeft(db)
 
 	// Turn X's right subtree into Y's left subtree (move B)
 	y.left = x.right
 
 	// If B is not null, set it's parent to be Y
-	if !x.right.isNull() {
+	if !x.right.IsNull() {
 		right := x.getRight(db)
 		right.up = y.addr
 	}
@@ -603,7 +632,7 @@ func (db *RBT) rightRotate(y memdbNodeAddr) {
 	x.up = y.up
 
 	// if Y was the root
-	if y.up.isNull() {
+	if y.up.IsNull() {
 		db.root = x.addr
 	} else {
 		yUp := y.getUp(db)
@@ -621,8 +650,8 @@ func (db *RBT) rightRotate(y memdbNodeAddr) {
 	y.up = x.addr
 }
 
-func (db *RBT) deleteNode(z memdbNodeAddr) {
-	var x, y memdbNodeAddr
+func (db *RBT) deleteNode(z MemdbNodeAddr) {
+	var x, y MemdbNodeAddr
 	if db.lastTraversedNode.Load().addr == z.addr {
 		db.lastTraversedNode.Store(&nullNodeAddr)
 	}
@@ -630,20 +659,20 @@ func (db *RBT) deleteNode(z memdbNodeAddr) {
 	db.count--
 	db.size -= int(z.klen)
 
-	if z.left.isNull() || z.right.isNull() {
+	if z.left.IsNull() || z.right.IsNull() {
 		y = z
 	} else {
 		y = db.successor(z)
 	}
 
-	if !y.left.isNull() {
+	if !y.left.IsNull() {
 		x = y.getLeft(db)
 	} else {
 		x = y.getRight(db)
 	}
 	x.up = y.up
 
-	if y.up.isNull() {
+	if y.up.IsNull() {
 		db.root = x.addr
 	} else {
 		yUp := y.getUp(db)
@@ -670,8 +699,8 @@ func (db *RBT) deleteNode(z memdbNodeAddr) {
 	db.allocator.freeNode(z.addr)
 }
 
-func (db *RBT) replaceNode(old memdbNodeAddr, new memdbNodeAddr) {
-	if !old.up.isNull() {
+func (db *RBT) replaceNode(old MemdbNodeAddr, new MemdbNodeAddr) {
+	if !old.up.IsNull() {
 		oldUp := old.getUp(db)
 		if old.addr == oldUp.left {
 			oldUp.left = new.addr
@@ -698,7 +727,7 @@ func (db *RBT) replaceNode(old memdbNodeAddr, new memdbNodeAddr) {
 	}
 }
 
-func (db *RBT) deleteNodeFix(x memdbNodeAddr) {
+func (db *RBT) deleteNodeFix(x MemdbNodeAddr) {
 	for x.addr != db.root && x.isBlack() {
 		xUp := x.getUp(db)
 		if x.addr == xUp.left {
@@ -768,14 +797,14 @@ func (db *RBT) deleteNodeFix(x memdbNodeAddr) {
 	x.setBlack()
 }
 
-func (db *RBT) successor(x memdbNodeAddr) (y memdbNodeAddr) {
-	if !x.right.isNull() {
+func (db *RBT) successor(x MemdbNodeAddr) (y MemdbNodeAddr) {
+	if !x.right.IsNull() {
 		// If right is not NULL then go right one and
 		// then keep going left until we find a node with
 		// no left pointer.
 
 		y = x.getRight(db)
-		for !y.left.isNull() {
+		for !y.left.IsNull() {
 			y = y.getLeft(db)
 		}
 		return
@@ -793,14 +822,14 @@ func (db *RBT) successor(x memdbNodeAddr) (y memdbNodeAddr) {
 	return y
 }
 
-func (db *RBT) predecessor(x memdbNodeAddr) (y memdbNodeAddr) {
-	if !x.left.isNull() {
+func (db *RBT) predecessor(x MemdbNodeAddr) (y MemdbNodeAddr) {
+	if !x.left.IsNull() {
 		// If left is not NULL then go left one and
 		// then keep going right until we find a node with
 		// no right pointer.
 
 		y = x.getLeft(db)
-		for !y.right.isNull() {
+		for !y.right.IsNull() {
 			y = y.getRight(db)
 		}
 		return
@@ -818,47 +847,49 @@ func (db *RBT) predecessor(x memdbNodeAddr) (y memdbNodeAddr) {
 	return y
 }
 
-func (db *RBT) getNode(x memdbArenaAddr) memdbNodeAddr {
-	return memdbNodeAddr{db.allocator.getNode(x), x}
+func (db *RBT) getNode(x arena.MemdbArenaAddr) MemdbNodeAddr {
+	return MemdbNodeAddr{db.allocator.getNode(x), x}
 }
 
-func (db *RBT) getRoot() memdbNodeAddr {
+func (db *RBT) getRoot() MemdbNodeAddr {
 	return db.getNode(db.root)
 }
 
-func (db *RBT) allocNode(key []byte) memdbNodeAddr {
+func (db *RBT) allocNode(key []byte) MemdbNodeAddr {
 	db.size += len(key)
 	db.count++
 	x, xn := db.allocator.allocNode(key)
-	return memdbNodeAddr{xn, x}
+	return MemdbNodeAddr{xn, x}
 }
 
-type memdbNodeAddr struct {
+var nullNodeAddr = MemdbNodeAddr{nil, arena.NullAddr}
+
+type MemdbNodeAddr struct {
 	*memdbNode
-	addr memdbArenaAddr
+	addr arena.MemdbArenaAddr
 }
 
-func (a *memdbNodeAddr) isNull() bool {
-	return a.addr.isNull()
+func (a *MemdbNodeAddr) isNull() bool {
+	return a.addr.IsNull()
 }
 
-func (a memdbNodeAddr) getUp(db *RBT) memdbNodeAddr {
+func (a MemdbNodeAddr) getUp(db *RBT) MemdbNodeAddr {
 	return db.getNode(a.up)
 }
 
-func (a memdbNodeAddr) getLeft(db *RBT) memdbNodeAddr {
+func (a MemdbNodeAddr) getLeft(db *RBT) MemdbNodeAddr {
 	return db.getNode(a.left)
 }
 
-func (a memdbNodeAddr) getRight(db *RBT) memdbNodeAddr {
+func (a MemdbNodeAddr) getRight(db *RBT) MemdbNodeAddr {
 	return db.getNode(a.right)
 }
 
 type memdbNode struct {
-	up    memdbArenaAddr
-	left  memdbArenaAddr
-	right memdbArenaAddr
-	vptr  memdbArenaAddr
+	up    arena.MemdbArenaAddr
+	left  arena.MemdbArenaAddr
+	right arena.MemdbArenaAddr
+	vptr  arena.MemdbArenaAddr
 	klen  uint16
 	flags uint16
 }
@@ -879,6 +910,10 @@ func (n *memdbNode) setBlack() {
 	n.flags &= ^nodeColorBit
 }
 
+func (n *memdbNode) GetKey() []byte {
+	return n.getKey()
+}
+
 func (n *memdbNode) getKey() []byte {
 	base := unsafe.Add(unsafe.Pointer(&n.flags), kv.FlagBytes)
 	return unsafe.Slice((*byte)(base), int(n.klen))
@@ -889,6 +924,10 @@ const (
 	nodeColorBit  uint16 = 0x8000
 	nodeFlagsMask        = ^nodeColorBit
 )
+
+func (n *memdbNode) GetKeyFlags() kv.KeyFlags {
+	return n.getKeyFlags()
+}
 
 func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 	return kv.KeyFlags(n.flags & nodeFlagsMask)
@@ -904,22 +943,27 @@ func (db *RBT) RemoveFromBuffer(key []byte) {
 	if x.isNull() {
 		return
 	}
-	db.size -= len(db.vlog.getValue(x.vptr))
+	db.size -= len(db.vlog.GetValue(x.vptr))
 	db.deleteNode(x)
 }
 
 // SetMemoryFootprintChangeHook sets the hook function that is triggered when memdb grows.
 func (db *RBT) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
-		hook(db.allocator.capacity + db.vlog.capacity)
+		hook(db.allocator.Capacity() + db.vlog.Capacity())
 	}
-	db.allocator.memChangeHook.Store(&innerHook)
-	db.vlog.memChangeHook.Store(&innerHook)
+	db.allocator.SetMemChangeHook(innerHook)
+	db.vlog.SetMemChangeHook(innerHook)
 }
 
 // Mem returns the current memory footprint
 func (db *RBT) Mem() uint64 {
-	return db.allocator.capacity + db.vlog.capacity
+	return db.allocator.Capacity() + db.vlog.Capacity()
+}
+
+// GetEntrySizeLimit gets the size limit for each entry and total buffer.
+func (db *RBT) GetEntrySizeLimit() (uint64, uint64) {
+	return db.entrySizeLimit, db.bufferSizeLimit
 }
 
 // SetEntrySizeLimit sets the size limit for each entry and total buffer.
@@ -928,11 +972,19 @@ func (db *RBT) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 	db.bufferSizeLimit = bufferLimit
 }
 
-func (db *RBT) setSkipMutex(skip bool) {
+// MemHookSet implements the MemBuffer interface.
+func (db *RBT) MemHookSet() bool {
+	return db.allocator.MemHookSet()
+}
+
+func (db *RBT) SetSkipMutex(skip bool) {
 	db.skipMutex = skip
 }
 
-// MemHookSet implements the MemBuffer interface.
-func (db *RBT) MemHookSet() bool {
-	return db.allocator.memChangeHook.Load() != nil
+func (db *RBT) GetCacheHitCount() uint64 {
+	return db.hitCount.Load()
+}
+
+func (db *RBT) GetCacheMissCount() uint64 {
+	return db.missCount.Load()
 }

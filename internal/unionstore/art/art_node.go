@@ -13,9 +13,12 @@
 // limitations under the License.
 
 //nolint:unused
-package unionstore
+package art
 
-import "github.com/tikv/client-go/v2/kv"
+import (
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+	"github.com/tikv/client-go/v2/kv"
+)
 
 type artNodeKind uint16
 
@@ -29,26 +32,27 @@ const (
 	typeARTLeaf    artNodeKind = 5
 )
 
-var nullArtNode = artNode{kind: typeARTInvalid, addr: nullAddr}
+var nullArtNode = artNode{kind: typeARTInvalid, addr: arena.NullAddr}
 
 type artKey []byte
 
 type artNode struct {
 	kind artNodeKind
-	addr memdbArenaAddr
+	addr arena.MemdbArenaAddr
 }
 
 type artLeaf struct {
-	vAddr memdbArenaAddr
+	vAddr arena.MemdbArenaAddr
 	klen  uint16
 	flags uint16
 }
 
-// getKey gets the full key of the leaf
-func (l *artLeaf) getKey() []byte {
+// GetKey gets the full key of the leaf
+func (l *artLeaf) GetKey() []byte {
 	panic("unimplemented")
 }
 
-func (l *artLeaf) getKeyFlags() kv.KeyFlags {
+// GetKeyFlags gets the flags of the leaf
+func (l *artLeaf) GetKeyFlags() kv.KeyFlags {
 	panic("unimplemented")
 }

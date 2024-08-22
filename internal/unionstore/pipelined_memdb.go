@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/util"
@@ -103,7 +104,8 @@ type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]by
 
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
 	memdb := newMemDB()
-	memdb.setSkipMutex(true)
+	memdb.SetSkipMutex(true)
+	entryLimit, _ := memdb.GetEntrySizeLimit()
 	flushOpt := newFlushOption()
 	return &PipelinedMemDB{
 		memDB:             memdb,
@@ -112,7 +114,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		bufferBatchGetter: bufferBatchGetter,
 		generation:        0,
 		// keep entryLimit and bufferLimit same with the memdb's default values.
-		entryLimit:  memdb.entrySizeLimit,
+		entryLimit:  entryLimit,
 		flushOption: flushOpt,
 		startTime:   time.Now(),
 	}
@@ -288,7 +290,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	// invalidate the batch get cache whether the flush is really triggered.
 	p.batchGetCache = nil
 
-	if len(p.memDB.stages) > 0 {
+	if p.memDB.IsStaging() {
 		return false, errors.New("there are stages unreleased when Flush is called")
 	}
 
@@ -309,12 +311,12 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.flushingMemDB = p.memDB
 	p.len += p.flushingMemDB.Len()
 	p.size += p.flushingMemDB.Size()
-	p.missCount += p.memDB.missCount.Load()
-	p.hitCount += p.memDB.hitCount.Load()
+	p.missCount += p.memDB.GetCacheMissCount()
+	p.hitCount += p.memDB.GetCacheHitCount()
 	p.memDB = newMemDB()
 	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit
 	p.memDB.SetEntrySizeLimit(p.entryLimit, unlimitedSize)
-	p.memDB.setSkipMutex(true)
+	p.memDB.SetSkipMutex(true)
 	p.generation++
 	go func(generation uint64) {
 		util.EvalFailpoint("beforePipelinedFlush")
@@ -518,12 +520,12 @@ func (p *PipelinedMemDB) Release(h int) {
 }
 
 // Checkpoint implements MemBuffer interface.
-func (p *PipelinedMemDB) Checkpoint() *MemDBCheckpoint {
+func (p *PipelinedMemDB) Checkpoint() *arena.MemDBCheckpoint {
 	panic("Checkpoint is not supported for PipelinedMemDB")
 }
 
 // RevertToCheckpoint implements MemBuffer interface.
-func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
+func (p *PipelinedMemDB) RevertToCheckpoint(*arena.MemDBCheckpoint) {
 	panic("RevertToCheckpoint is not supported for PipelinedMemDB")
 }
 
@@ -533,8 +535,8 @@ func (p *PipelinedMemDB) GetMetrics() Metrics {
 	hitCount := p.hitCount
 	missCount := p.missCount
 	if p.memDB != nil {
-		hitCount += p.memDB.hitCount.Load()
-		missCount += p.memDB.missCount.Load()
+		hitCount += p.memDB.GetCacheHitCount()
+		missCount += p.memDB.GetCacheMissCount()
 	}
 	return Metrics{
 		WaitDuration:   p.flushWaitDuration,

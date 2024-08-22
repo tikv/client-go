@@ -32,7 +32,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unionstore
+package arena
 
 import (
 	"encoding/binary"
@@ -51,34 +51,39 @@ const (
 )
 
 var (
-	nullAddr     = memdbArenaAddr{math.MaxUint32, math.MaxUint32}
-	nullNodeAddr = memdbNodeAddr{nil, nullAddr}
-	endian       = binary.LittleEndian
+	Tombstone = []byte{}
+	NullAddr  = MemdbArenaAddr{math.MaxUint32, math.MaxUint32}
+	BadAddr   = MemdbArenaAddr{math.MaxUint32 - 1, math.MaxUint32}
+	endian    = binary.LittleEndian
 )
 
-type memdbArenaAddr struct {
+type MemdbArenaAddr struct {
 	idx uint32
 	off uint32
 }
 
-func (addr memdbArenaAddr) isNull() bool {
+func (addr MemdbArenaAddr) IsNull() bool {
 	// Combine all checks into a single condition
-	return addr == nullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
+	return addr == NullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
+}
+
+func (addr MemdbArenaAddr) ToHandle() MemKeyHandle {
+	return MemKeyHandle{idx: uint16(addr.idx), off: addr.off}
 }
 
 // store and load is used by vlog, due to pointer in vlog is not aligned.
 
-func (addr memdbArenaAddr) store(dst []byte) {
+func (addr MemdbArenaAddr) store(dst []byte) {
 	endian.PutUint32(dst, addr.idx)
 	endian.PutUint32(dst[4:], addr.off)
 }
 
-func (addr *memdbArenaAddr) load(src []byte) {
+func (addr *MemdbArenaAddr) load(src []byte) {
 	addr.idx = endian.Uint32(src)
 	addr.off = endian.Uint32(src[4:])
 }
 
-type memdbArena struct {
+type MemdbArena struct {
 	blockSize int
 	blocks    []memdbArenaBlock
 	// the total size of all blocks, also the approximate memory footprint of the arena.
@@ -87,7 +92,7 @@ type memdbArena struct {
 	memChangeHook atomic.Pointer[func()]
 }
 
-func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
+func (a *MemdbArena) Alloc(size int, align bool) (MemdbArenaAddr, []byte) {
 	if size > maxBlockSize {
 		panic("alloc size is larger than max block size")
 	}
@@ -97,7 +102,7 @@ func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
 	}
 
 	addr, data := a.allocInLastBlock(size, align)
-	if !addr.isNull() {
+	if !addr.IsNull() {
 		return addr, data
 	}
 
@@ -105,7 +110,7 @@ func (a *memdbArena) alloc(size int, align bool) (memdbArenaAddr, []byte) {
 	return a.allocInLastBlock(size, align)
 }
 
-func (a *memdbArena) enlarge(allocSize, blockSize int) {
+func (a *MemdbArena) enlarge(allocSize, blockSize int) {
 	a.blockSize = blockSize
 	for a.blockSize <= allocSize {
 		a.blockSize <<= 1
@@ -118,43 +123,59 @@ func (a *memdbArena) enlarge(allocSize, blockSize int) {
 		buf: make([]byte, a.blockSize),
 	})
 	a.capacity += uint64(a.blockSize)
-	// We shall not call a.onMemChange() here, since it will make the latest block empty, which breaks a precondition
-	// for some operations (e.g. revertToCheckpoint)
+	// We shall not call a.OnMemChange() here, since it will make the latest block empty, which breaks a precondition
+	// for some operations (e.g. RevertToCheckpoint)
 }
 
-// onMemChange should only be called right before exiting memdb.
+func (a *MemdbArena) Blocks() int {
+	return len(a.blocks)
+}
+
+func (a *MemdbArena) Capacity() uint64 {
+	return a.capacity
+}
+
+// SetMemChangeHook sets the hook function that will be called when the memory footprint of the arena changes.
+func (a *MemdbArena) SetMemChangeHook(hook func()) {
+	a.memChangeHook.Store(&hook)
+}
+
+// MemHookSet returns whether the memory change hook is set.
+func (a *MemdbArena) MemHookSet() bool {
+	return a.memChangeHook.Load() != nil
+}
+
+// OnMemChange should only be called right before exiting memdb.
 // This is because the hook can lead to a panic, and leave memdb in an inconsistent state.
-func (a *memdbArena) onMemChange() {
+func (a *MemdbArena) OnMemChange() {
 	hook := a.memChangeHook.Load()
 	if hook != nil {
 		(*hook)()
 	}
 }
 
-func (a *memdbArena) allocInLastBlock(size int, align bool) (memdbArenaAddr, []byte) {
+func (a *MemdbArena) allocInLastBlock(size int, align bool) (MemdbArenaAddr, []byte) {
 	idx := len(a.blocks) - 1
 	offset, data := a.blocks[idx].alloc(size, align)
 	if offset == nullBlockOffset {
-		return nullAddr, nil
+		return NullAddr, nil
 	}
-	return memdbArenaAddr{uint32(idx), offset}, data
+	return MemdbArenaAddr{uint32(idx), offset}, data
 }
 
-// memArena get all the data, DO NOT access others data.
-//
-//nolint:unused
-func (a *memdbArena) getData(addr memdbArenaAddr) []byte {
+// GetData gets data slice of given addr, DO NOT access others data.
+func (a *MemdbArena) GetData(addr MemdbArenaAddr) []byte {
 	return a.blocks[addr.idx].buf[addr.off:]
 }
 
-func (a *memdbArena) reset() {
+func (a *MemdbArena) Reset() {
 	for i := range a.blocks {
 		a.blocks[i].reset()
 	}
 	a.blocks = a.blocks[:0]
 	a.blockSize = 0
 	a.capacity = 0
-	a.onMemChange()
+	a.OnMemChange()
 }
 
 type memdbArenaBlock struct {
@@ -182,18 +203,18 @@ func (a *memdbArenaBlock) reset() {
 	a.length = 0
 }
 
-// MemDBCheckpoint is the checkpoint of memory DB.
+// MemDBCheckpoint is the Checkpoint of memory DB.
 type MemDBCheckpoint struct {
 	blockSize     int
 	blocks        int
 	offsetInBlock int
 }
 
-func (cp *MemDBCheckpoint) isSamePosition(other *MemDBCheckpoint) bool {
+func (cp *MemDBCheckpoint) IsSamePosition(other *MemDBCheckpoint) bool {
 	return cp.blocks == other.blocks && cp.offsetInBlock == other.offsetInBlock
 }
 
-func (a *memdbArena) checkpoint() MemDBCheckpoint {
+func (a *MemdbArena) Checkpoint() MemDBCheckpoint {
 	snap := MemDBCheckpoint{
 		blockSize: a.blockSize,
 		blocks:    len(a.blocks),
@@ -204,7 +225,7 @@ func (a *memdbArena) checkpoint() MemDBCheckpoint {
 	return snap
 }
 
-func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
+func (a *MemdbArena) Truncate(snap *MemDBCheckpoint) {
 	for i := snap.blocks; i < len(a.blocks); i++ {
 		a.blocks[i] = memdbArenaBlock{}
 	}
@@ -218,136 +239,137 @@ func (a *memdbArena) truncate(snap *MemDBCheckpoint) {
 	for _, block := range a.blocks {
 		a.capacity += uint64(block.length)
 	}
-	// We shall not call a.onMemChange() here, since it may cause a panic and leave memdb in an inconsistent state
+	// We shall not call a.OnMemChange() here, since it may cause a panic and leave memdb in an inconsistent state
 }
 
-// keyFlagsGetter is an interface to get key and key flags, usually a leaf or node.
-type keyFlagsGetter interface {
-	getKey() []byte
-	getKeyFlags() kv.KeyFlags
+// KeyFlagsGetter is an interface to get key and key flags, usually a leaf or node.
+type KeyFlagsGetter interface {
+	GetKey() []byte
+	GetKeyFlags() kv.KeyFlags
 }
 
 // VlogMemDB is the interface of the memory buffer which supports vlog to revert node and inspect node.
-type VlogMemDB[G keyFlagsGetter] interface {
-	revertNode(hdr *memdbVlogHdr)
-	inspectNode(addr memdbArenaAddr) (G, memdbArenaAddr)
+type VlogMemDB[G KeyFlagsGetter] interface {
+	RevertNode(hdr *MemdbVlogHdr)
+	InspectNode(addr MemdbArenaAddr) (G, MemdbArenaAddr)
 }
 
-type memdbVlog[G keyFlagsGetter, M VlogMemDB[G]] struct {
-	memdbArena
+type MemdbVlog[G KeyFlagsGetter, M VlogMemDB[G]] struct {
+	MemdbArena
 }
 
 const memdbVlogHdrSize = 8 + 8 + 4
 
-type memdbVlogHdr struct {
-	nodeAddr memdbArenaAddr
-	oldValue memdbArenaAddr
-	valueLen uint32
+type MemdbVlogHdr struct {
+	NodeAddr MemdbArenaAddr
+	OldValue MemdbArenaAddr
+	ValueLen uint32
 }
 
-func (hdr *memdbVlogHdr) store(dst []byte) {
+func (hdr *MemdbVlogHdr) store(dst []byte) {
 	cursor := 0
-	endian.PutUint32(dst[cursor:], hdr.valueLen)
+	endian.PutUint32(dst[cursor:], hdr.ValueLen)
 	cursor += 4
-	hdr.oldValue.store(dst[cursor:])
+	hdr.OldValue.store(dst[cursor:])
 	cursor += 8
-	hdr.nodeAddr.store(dst[cursor:])
+	hdr.NodeAddr.store(dst[cursor:])
 }
 
-func (hdr *memdbVlogHdr) load(src []byte) {
+func (hdr *MemdbVlogHdr) load(src []byte) {
 	cursor := 0
-	hdr.valueLen = endian.Uint32(src[cursor:])
+	hdr.ValueLen = endian.Uint32(src[cursor:])
 	cursor += 4
-	hdr.oldValue.load(src[cursor:])
+	hdr.OldValue.load(src[cursor:])
 	cursor += 8
-	hdr.nodeAddr.load(src[cursor:])
+	hdr.NodeAddr.load(src[cursor:])
 }
 
-func (l *memdbVlog[G, M]) appendValue(nodeAddr memdbArenaAddr, oldValue memdbArenaAddr, value []byte) memdbArenaAddr {
+// AppendValue appends a value and it's vlog header to the vlog.
+func (l *MemdbVlog[G, M]) AppendValue(nodeAddr MemdbArenaAddr, oldValue MemdbArenaAddr, value []byte) MemdbArenaAddr {
 	size := memdbVlogHdrSize + len(value)
 	prevBlocks := len(l.blocks)
-	addr, mem := l.alloc(size, false)
+	addr, mem := l.Alloc(size, false)
 
 	copy(mem, value)
-	hdr := memdbVlogHdr{nodeAddr, oldValue, uint32(len(value))}
+	hdr := MemdbVlogHdr{nodeAddr, oldValue, uint32(len(value))}
 	hdr.store(mem[len(value):])
 
 	addr.off += uint32(size)
 	if prevBlocks != len(l.blocks) {
-		l.onMemChange()
+		l.OnMemChange()
 	}
 	return addr
 }
 
-// A pure function that gets a value.
-func (l *memdbVlog[G, M]) getValue(addr memdbArenaAddr) []byte {
+// GetValue is a pure function that gets a value.
+func (l *MemdbVlog[G, M]) GetValue(addr MemdbArenaAddr) []byte {
 	lenOff := addr.off - memdbVlogHdrSize
 	block := l.blocks[addr.idx].buf
 	valueLen := endian.Uint32(block[lenOff:])
 	if valueLen == 0 {
-		return tombstone
+		return Tombstone
 	}
 	valueOff := lenOff - valueLen
 	return block[valueOff:lenOff:lenOff]
 }
 
-func (l *memdbVlog[G, M]) getSnapshotValue(addr memdbArenaAddr, snap *MemDBCheckpoint) ([]byte, bool) {
-	result := l.selectValueHistory(addr, func(addr memdbArenaAddr) bool {
-		return !l.canModify(snap, addr)
+func (l *MemdbVlog[G, M]) GetSnapshotValue(addr MemdbArenaAddr, snap *MemDBCheckpoint) ([]byte, bool) {
+	result := l.SelectValueHistory(addr, func(addr MemdbArenaAddr) bool {
+		return !l.CanModify(snap, addr)
 	})
-	if result.isNull() {
+	if result.IsNull() {
 		return nil, false
 	}
-	return l.getValue(result), true
+	return l.GetValue(result), true
 }
 
-func (l *memdbVlog[G, M]) selectValueHistory(addr memdbArenaAddr, predicate func(memdbArenaAddr) bool) memdbArenaAddr {
-	for !addr.isNull() {
+func (l *MemdbVlog[G, M]) SelectValueHistory(addr MemdbArenaAddr, predicate func(MemdbArenaAddr) bool) MemdbArenaAddr {
+	for !addr.IsNull() {
 		if predicate(addr) {
 			return addr
 		}
-		var hdr memdbVlogHdr
+		var hdr MemdbVlogHdr
 		hdr.load(l.blocks[addr.idx].buf[addr.off-memdbVlogHdrSize:])
-		addr = hdr.oldValue
+		addr = hdr.OldValue
 	}
-	return nullAddr
+	return NullAddr
 }
 
-func (l *memdbVlog[G, M]) revertToCheckpoint(m M, cp *MemDBCheckpoint) {
-	cursor := l.checkpoint()
-	for !cp.isSamePosition(&cursor) {
+func (l *MemdbVlog[G, M]) RevertToCheckpoint(m M, cp *MemDBCheckpoint) {
+	cursor := l.Checkpoint()
+	for !cp.IsSamePosition(&cursor) {
 		hdrOff := cursor.offsetInBlock - memdbVlogHdrSize
 		block := l.blocks[cursor.blocks-1].buf
-		var hdr memdbVlogHdr
+		var hdr MemdbVlogHdr
 		hdr.load(block[hdrOff:])
-		m.revertNode(&hdr)
+		m.RevertNode(&hdr)
 		l.moveBackCursor(&cursor, &hdr)
 	}
 }
 
-func (l *memdbVlog[G, M]) inspectKVInLog(m M, head, tail *MemDBCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
+func (l *MemdbVlog[G, M]) InspectKVInLog(m M, head, tail *MemDBCheckpoint, f func([]byte, kv.KeyFlags, []byte)) {
 	cursor := *tail
-	for !head.isSamePosition(&cursor) {
-		cursorAddr := memdbArenaAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
+	for !head.IsSamePosition(&cursor) {
+		cursorAddr := MemdbArenaAddr{idx: uint32(cursor.blocks - 1), off: uint32(cursor.offsetInBlock)}
 		hdrOff := cursorAddr.off - memdbVlogHdrSize
 		block := l.blocks[cursorAddr.idx].buf
-		var hdr memdbVlogHdr
+		var hdr MemdbVlogHdr
 		hdr.load(block[hdrOff:])
 
-		node, vptr := m.inspectNode(hdr.nodeAddr)
+		node, vptr := m.InspectNode(hdr.NodeAddr)
 
 		// Skip older versions.
 		if vptr == cursorAddr {
-			value := block[hdrOff-hdr.valueLen : hdrOff]
-			f(node.getKey(), node.getKeyFlags(), value)
+			value := block[hdrOff-hdr.ValueLen : hdrOff]
+			f(node.GetKey(), node.GetKeyFlags(), value)
 		}
 
 		l.moveBackCursor(&cursor, &hdr)
 	}
 }
 
-func (l *memdbVlog[G, M]) moveBackCursor(cursor *MemDBCheckpoint, hdr *memdbVlogHdr) {
-	cursor.offsetInBlock -= (memdbVlogHdrSize + int(hdr.valueLen))
+func (l *MemdbVlog[G, M]) moveBackCursor(cursor *MemDBCheckpoint, hdr *MemdbVlogHdr) {
+	cursor.offsetInBlock -= (memdbVlogHdrSize + int(hdr.ValueLen))
 	if cursor.offsetInBlock == 0 {
 		cursor.blocks--
 		if cursor.blocks > 0 {
@@ -356,7 +378,7 @@ func (l *memdbVlog[G, M]) moveBackCursor(cursor *MemDBCheckpoint, hdr *memdbVlog
 	}
 }
 
-func (l *memdbVlog[G, M]) canModify(cp *MemDBCheckpoint, addr memdbArenaAddr) bool {
+func (l *MemdbVlog[G, M]) CanModify(cp *MemDBCheckpoint, addr MemdbArenaAddr) bool {
 	if cp == nil {
 		return true
 	}
@@ -367,4 +389,16 @@ func (l *memdbVlog[G, M]) canModify(cp *MemDBCheckpoint, addr memdbArenaAddr) bo
 		return true
 	}
 	return false
+}
+
+// MemKeyHandle represents a pointer for key in MemBuffer.
+type MemKeyHandle struct {
+	// Opaque user data
+	UserData uint16
+	idx      uint16
+	off      uint32
+}
+
+func (h MemKeyHandle) ToAddr() MemdbArenaAddr {
+	return MemdbArenaAddr{idx: uint32(h.idx), off: h.off}
 }

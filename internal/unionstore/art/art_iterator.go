@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unionstore
+package art
 
-func (*ART) SnapshotGetter() Getter {
+func (*ART) Iter([]byte, []byte) (*Iterator, error) {
 	panic("unimplemented")
 }
 
-func (*ART) SnapshotIter([]byte, []byte) Iterator {
+func (*ART) IterReverse([]byte, []byte) (*Iterator, error) {
 	panic("unimplemented")
 }
 
-func (*ART) SnapshotIterReverse([]byte, []byte) Iterator {
-	panic("unimplemented")
-}
+type Iterator struct{}
+
+func (i *Iterator) Valid() bool   { panic("unimplemented") }
+func (i *Iterator) Key() []byte   { panic("unimplemented") }
+func (i *Iterator) Value() []byte { panic("unimplemented") }
+func (i *Iterator) Next() error   { panic("unimplemented") }
+func (i *Iterator) Close()        { panic("unimplemented") }

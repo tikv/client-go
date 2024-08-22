@@ -36,29 +36,24 @@ package unionstore
 
 import (
 	"math"
+
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+	"github.com/tikv/client-go/v2/internal/unionstore/rbt"
 )
 
 const unlimitedSize = math.MaxUint64
 
-var tombstone = []byte{}
-
 // IsTombstone returns whether the value is a tombstone.
 func IsTombstone(val []byte) bool { return len(val) == 0 }
 
-// MemKeyHandle represents a pointer for key in MemBuffer.
-type MemKeyHandle struct {
-	// Opaque user data
-	UserData uint16
-	idx      uint16
-	off      uint32
-}
+type MemDB = rbt.RBT
 
-func (h MemKeyHandle) toAddr() memdbArenaAddr {
-	return memdbArenaAddr{idx: uint32(h.idx), off: h.off}
-}
+var newMemDB = rbt.New
 
-type MemDB = RBT
+type MemDBCheckpoint = arena.MemDBCheckpoint
 
-var newMemDB = newRBT
+type MemKeyHandle = arena.MemKeyHandle
 
-var testMode = false
+type MemDBWithContext = rbtDBWithContext
+
+var NewMemDBWithContext = newRbtDBWithContext

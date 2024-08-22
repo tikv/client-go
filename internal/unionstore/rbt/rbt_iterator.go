@@ -32,18 +32,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package unionstore
+package rbt
 
 import (
 	"bytes"
 
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
 )
 
 // RBTIterator is an Iterator with KeyFlags related functions.
 type RBTIterator struct {
 	db           *RBT
-	curr         memdbNodeAddr
+	curr         MemdbNodeAddr
 	start        []byte
 	end          []byte
 	reverse      bool
@@ -54,7 +55,7 @@ type RBTIterator struct {
 // If such entry is not found, it returns an invalid Iterator with no error.
 // It yields only keys that < upperBound. If upperBound is nil, it means the upperBound is unbounded.
 // The Iterator must be Closed after use.
-func (db *RBT) Iter(k []byte, upperBound []byte) (Iterator, error) {
+func (db *RBT) Iter(k []byte, upperBound []byte) (*RBTIterator, error) {
 	i := &RBTIterator{
 		db:    db,
 		start: k,
@@ -68,7 +69,7 @@ func (db *RBT) Iter(k []byte, upperBound []byte) (Iterator, error) {
 // The returned iterator will iterate from greater key to smaller key.
 // If k is nil, the returned iterator will be positioned at the last key.
 // It yields only keys that >= lowerBound. If lowerBound is nil, it means the lowerBound is unbounded.
-func (db *RBT) IterReverse(k []byte, lowerBound []byte) (Iterator, error) {
+func (db *RBT) IterReverse(k []byte, lowerBound []byte) (*RBTIterator, error) {
 	i := &RBTIterator{
 		db:      db,
 		start:   lowerBound,
@@ -149,22 +150,19 @@ func (i *RBTIterator) HasValue() bool {
 	return !i.isFlagsOnly()
 }
 
-// artKey returns current key.
+// Key returns current key.
 func (i *RBTIterator) Key() []byte {
 	return i.curr.getKey()
 }
 
 // Handle returns MemKeyHandle with the current position.
-func (i *RBTIterator) Handle() MemKeyHandle {
-	return MemKeyHandle{
-		idx: uint16(i.curr.addr.idx),
-		off: i.curr.addr.off,
-	}
+func (i *RBTIterator) Handle() arena.MemKeyHandle {
+	return i.curr.addr.ToHandle()
 }
 
 // Value returns the value.
 func (i *RBTIterator) Value() []byte {
-	return i.db.vlog.getValue(i.curr.vptr)
+	return i.db.vlog.GetValue(i.curr.vptr)
 }
 
 // Next goes the next position.
@@ -188,7 +186,7 @@ func (i *RBTIterator) Next() error {
 func (i *RBTIterator) Close() {}
 
 func (i *RBTIterator) seekToFirst() {
-	y := memdbNodeAddr{nil, nullAddr}
+	y := MemdbNodeAddr{nil, arena.NullAddr}
 	x := i.db.getNode(i.db.root)
 
 	for !x.isNull() {
@@ -200,7 +198,7 @@ func (i *RBTIterator) seekToFirst() {
 }
 
 func (i *RBTIterator) seekToLast() {
-	y := memdbNodeAddr{nil, nullAddr}
+	y := MemdbNodeAddr{nil, arena.NullAddr}
 	x := i.db.getNode(i.db.root)
 
 	for !x.isNull() {
@@ -212,7 +210,7 @@ func (i *RBTIterator) seekToLast() {
 }
 
 func (i *RBTIterator) seek(key []byte) {
-	y := memdbNodeAddr{nil, nullAddr}
+	y := MemdbNodeAddr{nil, arena.NullAddr}
 	x := i.db.getNode(i.db.root)
 
 	var cmp int
@@ -247,5 +245,5 @@ func (i *RBTIterator) seek(key []byte) {
 }
 
 func (i *RBTIterator) isFlagsOnly() bool {
-	return !i.curr.isNull() && i.curr.vptr.isNull()
+	return !i.curr.isNull() && i.curr.vptr.IsNull()
 }

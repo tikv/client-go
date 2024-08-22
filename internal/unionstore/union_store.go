@@ -39,6 +39,7 @@ import (
 	"time"
 
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
 )
 
@@ -226,9 +227,9 @@ type MemBuffer interface {
 	// Release publish all modifications in the latest staging buffer to upper level.
 	Release(int)
 	// Checkpoint returns the checkpoint of the MemBuffer.
-	Checkpoint() *MemDBCheckpoint
+	Checkpoint() *arena.MemDBCheckpoint
 	// RevertToCheckpoint reverts the MemBuffer to the specified checkpoint.
-	RevertToCheckpoint(*MemDBCheckpoint)
+	RevertToCheckpoint(*arena.MemDBCheckpoint)
 	// GetMemDB returns the MemDB binding to this MemBuffer.
 	// This method can also be used for bypassing the wrapper of MemDB.
 	GetMemDB() *MemDB
@@ -251,155 +252,61 @@ type Metrics struct {
 
 var (
 	_ MemBuffer = &MemDBWithContext{}
+	_ MemBuffer = &PipelinedMemDB{}
 	_ MemBuffer = &rbtDBWithContext{}
 	_ MemBuffer = &artDBWithContext{}
-	_ MemBuffer = &PipelinedMemDB{}
 )
 
-// MemDBWithContext wraps MemDB to satisfy the MemBuffer interface.
-type MemDBWithContext struct {
-	*MemDB
-}
-
-func NewMemDBWithContext() *MemDBWithContext {
-	return &MemDBWithContext{MemDB: newMemDB()}
-}
-
-func (db *MemDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
-	return db.MemDB.Get(k)
-}
-
-func (db *MemDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
-	return db.MemDB.Get(k)
-}
-
-func (db *MemDBWithContext) Flush(bool) (bool, error) { return false, nil }
-
-func (db *MemDBWithContext) FlushWait() error { return nil }
-
-// GetMemDB returns the inner RBT
-func (db *MemDBWithContext) GetMemDB() *MemDB {
-	return db.MemDB
-}
-
-// BatchGet returns the values for given keys from the MemBuffer.
-func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	if db.Len() == 0 {
-		return map[string][]byte{}, nil
-	}
-	m := make(map[string][]byte, len(keys))
-	for _, k := range keys {
-		v, err := db.Get(ctx, k)
-		if err != nil {
-			if tikverr.IsErrNotFound(err) {
-				continue
-			}
-			return nil, err
-		}
-		m[string(k)] = v
-	}
-	return m, nil
-}
-
-// GetMetrics implements the MemBuffer interface.
-func (db *MemDBWithContext) GetMetrics() Metrics { return Metrics{} }
-
-// rbtDBWithContext wraps RBT to satisfy the MemBuffer interface.
-// It is used for testing.
-type rbtDBWithContext struct {
-	*RBT
-}
-
-//nolint:unused
-func newRbtDBWithContext() *rbtDBWithContext {
-	return &rbtDBWithContext{RBT: newRBT()}
-}
-
-func (db *rbtDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
-	return db.RBT.Get(k)
-}
-
-func (db *rbtDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
-	return db.RBT.Get(k)
-}
-
-func (db *rbtDBWithContext) Flush(bool) (bool, error) { return false, nil }
-
-func (db *rbtDBWithContext) FlushWait() error { return nil }
-
-// GetMemDB implements the MemBuffer interface.
-func (db *rbtDBWithContext) GetMemDB() *MemDB {
-	panic("unimplemented")
-}
-
-// BatchGet returns the values for given keys from the MemBuffer.
-func (db *rbtDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	if db.Len() == 0 {
-		return map[string][]byte{}, nil
-	}
-	m := make(map[string][]byte, len(keys))
-	for _, k := range keys {
-		v, err := db.Get(ctx, k)
-		if err != nil {
-			if tikverr.IsErrNotFound(err) {
-				continue
-			}
-			return nil, err
-		}
-		m[string(k)] = v
-	}
-	return m, nil
-}
-
-// GetMetrics implements the MemBuffer interface.
-func (db *rbtDBWithContext) GetMetrics() Metrics { return Metrics{} }
-
-// artDBWithContext wraps ART to satisfy the MemBuffer interface.
-// It is used for testing.
-type artDBWithContext struct {
-	*ART
-}
-
-//nolint:unused
-func newArtDBWithContext() *artDBWithContext {
-	return &artDBWithContext{ART: newART()}
-}
-
-func (db *artDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
-	return db.ART.Get(k)
-}
-
-func (db *artDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
-	return db.ART.Get(k)
-}
-
-func (db *artDBWithContext) Flush(bool) (bool, error) { return false, nil }
-
-func (db *artDBWithContext) FlushWait() error { return nil }
-
-// GetMemDB implements the MemBuffer interface.
-func (db *artDBWithContext) GetMemDB() *MemDB {
-	panic("unimplemented")
-}
-
-// BatchGet returns the values for given keys from the MemBuffer.
-func (db *artDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	if db.Len() == 0 {
-		return map[string][]byte{}, nil
-	}
-	m := make(map[string][]byte, len(keys))
-	for _, k := range keys {
-		v, err := db.Get(ctx, k)
-		if err != nil {
-			if tikverr.IsErrNotFound(err) {
-				continue
-			}
-			return nil, err
-		}
-		m[string(k)] = v
-	}
-	return m, nil
-}
-
-// GetMetrics implements the MemBuffer interface.
-func (db *artDBWithContext) GetMetrics() Metrics { return Metrics{} }
+//var (
+//	_ MemBuffer = &MemDBWithContext{}
+//	_ MemBuffer = &artDBWithContext{}
+//	_ MemBuffer = &PipelinedMemDB{}
+//)
+//
+//// MemDBWithContext wraps MemDB to satisfy the MemBuffer interface.
+//type MemDBWithContext struct {
+//	*MemDB
+//}
+//
+//func NewMemDBWithContext() *MemDBWithContext {
+//	return &MemDBWithContext{MemDB: newMemDB()}
+//}
+//
+//func (db *MemDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
+//	return db.MemDB.Get(k)
+//}
+//
+//func (db *MemDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
+//	return db.MemDB.Get(k)
+//}
+//
+//func (db *MemDBWithContext) Flush(bool) (bool, error) { return false, nil }
+//
+//func (db *MemDBWithContext) FlushWait() error { return nil }
+//
+//// GetMemDB returns the inner RBT
+//func (db *MemDBWithContext) GetMemDB() *MemDB {
+//	return db.MemDB
+//}
+//
+//// BatchGet returns the values for given keys from the MemBuffer.
+//func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+//	if db.Len() == 0 {
+//		return map[string][]byte{}, nil
+//	}
+//	m := make(map[string][]byte, len(keys))
+//	for _, k := range keys {
+//		v, err := db.Get(ctx, k)
+//		if err != nil {
+//			if tikverr.IsErrNotFound(err) {
+//				continue
+//			}
+//			return nil, err
+//		}
+//		m[string(k)] = v
+//	}
+//	return m, nil
+//}
+//
+//// GetMetrics implements the MemBuffer interface.
+//func (db *MemDBWithContext) GetMetrics() Metrics { return Metrics{} }
