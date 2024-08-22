@@ -18,6 +18,7 @@ patterns:
     workload_type: txnkv
     workloads:
       - begin
+      - write
       - commit
     mode: 2PC # (async_commit | 1PC | 2PC)
     lock: pessimistic # (optimistic | pessimistic)
