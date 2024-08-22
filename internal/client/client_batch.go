@@ -37,9 +37,12 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"runtime"
 	"runtime/trace"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +75,11 @@ type batchCommandsEntry struct {
 	canceled int32
 	err      error
 	pri      uint64
+
+	// start indicates when the batch commands entry is generated and sent to the batch conn channel.
+	start   time.Time
+	sendLat int64
+	recvLat int64
 }
 
 func (b *batchCommandsEntry) isCanceled() bool {
@@ -98,6 +106,8 @@ type batchCommandsBuilder struct {
 	requestIDs []uint64
 	// In most cases, there isn't any forwardingReq.
 	forwardingReqs map[string]*tikvpb.BatchCommandsRequest
+
+	latestReqStartTime time.Time
 }
 
 func (b *batchCommandsBuilder) len() int {
@@ -106,6 +116,9 @@ func (b *batchCommandsBuilder) len() int {
 
 func (b *batchCommandsBuilder) push(entry *batchCommandsEntry) {
 	b.entries.Push(entry)
+	if entry.start.After(b.latestReqStartTime) {
+		b.latestReqStartTime = entry.start
+	}
 }
 
 const highTaskPriority = 10
@@ -208,6 +221,23 @@ func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
 	}
 }
 
+type batchConnMetrics struct {
+	pendingRequests prometheus.Observer
+	batchSize       prometheus.Observer
+
+	sendLoopWaitHeadDur prometheus.Observer
+	sendLoopWaitMoreDur prometheus.Observer
+	sendLoopSendDur     prometheus.Observer
+
+	recvLoopRecvDur    prometheus.Observer
+	recvLoopProcessDur prometheus.Observer
+
+	headArrivalInterval prometheus.Observer
+	batchMoreRequests   prometheus.Observer
+
+	bestBatchSize prometheus.Observer
+}
+
 type batchConn struct {
 	// An atomic flag indicates whether the batch is idle or not.
 	// 0 for busy, others for idle.
@@ -225,10 +255,11 @@ type batchConn struct {
 	idleNotify *uint32
 	idleDetect *time.Timer
 
-	pendingRequests prometheus.Observer
-	batchSize       prometheus.Observer
+	fetchMoreTimer *time.Timer
 
 	index uint32
+
+	metrics batchConnMetrics
 }
 
 func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
@@ -243,15 +274,27 @@ func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 	}
 }
 
+func (a *batchConn) initMetrics(target string) {
+	a.metrics.pendingRequests = metrics.TiKVBatchPendingRequests.WithLabelValues(target)
+	a.metrics.batchSize = metrics.TiKVBatchRequests.WithLabelValues(target)
+	a.metrics.sendLoopWaitHeadDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-head")
+	a.metrics.sendLoopWaitMoreDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "wait-more")
+	a.metrics.sendLoopSendDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "send")
+	a.metrics.recvLoopRecvDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "recv")
+	a.metrics.recvLoopProcessDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "process")
+	a.metrics.headArrivalInterval = metrics.TiKVBatchHeadArrivalInterval.WithLabelValues(target)
+	a.metrics.batchMoreRequests = metrics.TiKVBatchMoreRequests.WithLabelValues(target)
+	a.metrics.bestBatchSize = metrics.TiKVBatchBestSize.WithLabelValues(target)
+}
+
 func (a *batchConn) isIdle() bool {
 	return atomic.LoadUint32(&a.idle) != 0
 }
 
 // fetchAllPendingRequests fetches all pending requests from the channel.
-func (a *batchConn) fetchAllPendingRequests(
-	maxBatchSize int,
-) time.Time {
+func (a *batchConn) fetchAllPendingRequests(maxBatchSize int) (headRecvTime time.Time, headArrivalInterval time.Duration) {
 	// Block on the first element.
+	latestReqStartTime := a.reqBuilder.latestReqStartTime
 	var headEntry *batchCommandsEntry
 	select {
 	case headEntry = <-a.batchCommandsCh:
@@ -264,14 +307,17 @@ func (a *batchConn) fetchAllPendingRequests(
 		atomic.AddUint32(&a.idle, 1)
 		atomic.CompareAndSwapUint32(a.idleNotify, 0, 1)
 		// This batchConn to be recycled
-		return time.Now()
+		return time.Now(), 0
 	case <-a.closed:
-		return time.Now()
+		return time.Now(), 0
 	}
 	if headEntry == nil {
-		return time.Now()
+		return time.Now(), 0
 	}
-	ts := time.Now()
+	headRecvTime = time.Now()
+	if headEntry.start.After(latestReqStartTime) && !latestReqStartTime.IsZero() {
+		headArrivalInterval = headEntry.start.Sub(latestReqStartTime)
+	}
 	a.reqBuilder.push(headEntry)
 
 	// This loop is for trying best to collect more requests.
@@ -279,14 +325,14 @@ func (a *batchConn) fetchAllPendingRequests(
 		select {
 		case entry := <-a.batchCommandsCh:
 			if entry == nil {
-				return ts
+				return
 			}
 			a.reqBuilder.push(entry)
 		default:
-			return ts
+			return
 		}
 	}
-	return ts
+	return
 }
 
 // fetchMorePendingRequests fetches more pending requests from the channel.
@@ -296,23 +342,33 @@ func (a *batchConn) fetchMorePendingRequests(
 	maxWaitTime time.Duration,
 ) {
 	// Try to collect `batchWaitSize` requests, or wait `maxWaitTime`.
-	after := time.NewTimer(maxWaitTime)
+	if a.fetchMoreTimer == nil {
+		a.fetchMoreTimer = time.NewTimer(maxWaitTime)
+	} else {
+		a.fetchMoreTimer.Reset(maxWaitTime)
+	}
 	for a.reqBuilder.len() < batchWaitSize {
 		select {
 		case entry := <-a.batchCommandsCh:
 			if entry == nil {
+				if !a.fetchMoreTimer.Stop() {
+					<-a.fetchMoreTimer.C
+				}
 				return
 			}
 			a.reqBuilder.push(entry)
-		case <-after.C:
+		case <-a.fetchMoreTimer.C:
 			return
 		}
 	}
-	after.Stop()
+	if !a.fetchMoreTimer.Stop() {
+		<-a.fetchMoreTimer.C
+	}
 
 	// Do an additional non-block try. Here we test the length with `maxBatchSize` instead
 	// of `batchWaitSize` because trying best to fetch more requests is necessary so that
 	// we can adjust the `batchWaitSize` dynamically.
+	yielded := false
 	for a.reqBuilder.len() < maxBatchSize {
 		select {
 		case entry := <-a.batchCommandsCh:
@@ -321,15 +377,139 @@ func (a *batchConn) fetchMorePendingRequests(
 			}
 			a.reqBuilder.push(entry)
 		default:
-			return
+			if yielded {
+				return
+			}
+			// yield once to batch more requests.
+			runtime.Gosched()
+			yielded = true
 		}
 	}
 }
 
 const idleTimeout = 3 * time.Minute
 
+var (
+	// presetBatchPolicies defines a set of [turboBatchOptions] as batch policies.
+	presetBatchPolicies = map[string]turboBatchOptions{
+		config.BatchPolicyBasic:    {},
+		config.BatchPolicyStandard: {V: turboBatchTimeBased, T: 0.0001, N: 5, W: 0.2, P: 0.8, Q: 0.8},
+		config.BatchPolicyPositive: {V: turboBatchAlways, T: 0.0001},
+	}
+)
+
+const (
+	turboBatchAlways = iota
+	turboBatchTimeBased
+	turboBatchProbBased
+)
+
+// turboBatchOptions defines internal options for the [turboBatchTrigger].
+type turboBatchOptions struct {
+	// V determines the batch strategy: always(v=0), time-based(v=1), prob-based(v=2).
+	V int `json:"v"`
+	// N currently is used to determine the max arrival interval (n * t).
+	N int `json:"n,omitempty"`
+	// T is the max wait time for the batch.
+	T float64 `json:"t,omitempty"`
+	// W is used to adjust the `estArrivalInterval` or `estFetchMoreProb` dynamically.
+	//   - time-based(v=1): estArrivalInterval = w*reqArrivalInterval + (1-w)*estArrivalInterval
+	//   - prob-based(v=2): estFetchMoreProb = w*thisProb + (1-w)*estFetchMoreProb
+	W float64 `json:"w,omitempty"`
+	// P is used to determine whether to fetch more requests:
+	//   - time-based(v=1): estArrivalInterval < p * t
+	//   - prob-based(v=2): estFetchMoreProb > p
+	P float64 `json:"p,omitempty"`
+	// Q is used to adjust the `batchWaitSize` dynamically.
+	Q float64 `json:"q,omitempty"`
+}
+
+// turboBatchTrigger is used to trigger the `fetchMorePendingRequests` dynamically according to the request arrival
+// intervals. The option `v` indicates the strategy of triggering:
+//
+//   - turboBatchAlways: always fetch more requests.
+//
+//   - turboBatchTimeBased: fetch more requests if estArrivalInterval < p * t
+//     where estArrivalInterval = w*reqArrivalInterval + (1-w)*estArrivalInterval
+//     and reqArrivalInterval = min(reqArrivalInterval, n * t)
+//
+//   - turboBatchProbBased: fetch more requests if estFetchMoreProb > p
+//     where estFetchMoreProb = w*thisProb + (1-w)*estFetchMoreProb
+//     and thisProb = reqArrivalInterval < t ? 1 : 0
+//
+// The option `q` is used to adjust the `batchWaitSize` dynamically. If the fractional part of the `avgBatchWaitSize` is
+// greater or equal to `q`, the `batchWaitSize` will be increased by 1.
+type turboBatchTrigger struct {
+	opts turboBatchOptions
+
+	estFetchMoreProb   float64
+	estArrivalInterval float64
+	maxArrivalInterval float64
+}
+
+func newTurboBatchTriggerFromPolicy(policy string) (trigger turboBatchTrigger, ok bool) {
+	if opts, found := presetBatchPolicies[policy]; found {
+		return turboBatchTrigger{opts: opts}, true
+	}
+	rawOpts, _ := strings.CutPrefix(policy, config.BatchPolicyCustom)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(rawOpts)), &trigger.opts); err != nil {
+		return turboBatchTrigger{opts: presetBatchPolicies[config.DefBatchPolicy]}, false
+	}
+	ok = true
+	return
+}
+
+func (t *turboBatchTrigger) turboWaitSeconds() float64 {
+	return t.opts.T
+}
+
+func (t *turboBatchTrigger) turboWaitTime() time.Duration {
+	return time.Duration(t.opts.T * float64(time.Second))
+}
+
+func (t *turboBatchTrigger) needFetchMore(reqArrivalInterval time.Duration) bool {
+	if t.opts.V == turboBatchTimeBased {
+		thisArrivalInterval := reqArrivalInterval.Seconds()
+		if t.maxArrivalInterval == 0 {
+			t.maxArrivalInterval = t.turboWaitSeconds() * float64(t.opts.N)
+		}
+		if thisArrivalInterval > t.maxArrivalInterval {
+			thisArrivalInterval = t.maxArrivalInterval
+		}
+		if t.estArrivalInterval == 0 {
+			t.estArrivalInterval = thisArrivalInterval
+		} else {
+			t.estArrivalInterval = t.opts.W*thisArrivalInterval + (1-t.opts.W)*t.estArrivalInterval
+		}
+		return t.estArrivalInterval < t.turboWaitSeconds()*t.opts.P
+	} else if t.opts.V == turboBatchProbBased {
+		thisProb := .0
+		if reqArrivalInterval.Seconds() < t.turboWaitSeconds() {
+			thisProb = 1
+		}
+		t.estFetchMoreProb = t.opts.W*thisProb + (1-t.opts.W)*t.estFetchMoreProb
+		return t.estFetchMoreProb > t.opts.P
+	} else {
+		return true
+	}
+}
+
+func (t *turboBatchTrigger) preferredBatchWaitSize(avgBatchWaitSize float64, defBatchWaitSize int) int {
+	if t.opts.V == turboBatchAlways {
+		return defBatchWaitSize
+	}
+	n, m := math.Modf(avgBatchWaitSize)
+	batchWaitSize := int(n)
+	if m >= t.opts.Q {
+		batchWaitSize++
+	}
+	return batchWaitSize
+}
+
 // BatchSendLoopPanicCounter is only used for testing.
 var BatchSendLoopPanicCounter int64 = 0
+
+var initBatchPolicyWarn sync.Once
 
 func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 	defer func() {
@@ -344,11 +524,20 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		}
 	}()
 
-	bestBatchWaitSize := cfg.BatchWaitSize
+	trigger, ok := newTurboBatchTriggerFromPolicy(cfg.BatchPolicy)
+	if !ok {
+		initBatchPolicyWarn.Do(func() {
+			logutil.BgLogger().Warn("fallback to default batch policy due to invalid value", zap.String("value", cfg.BatchPolicy))
+		})
+	}
+	turboBatchWaitTime := trigger.turboWaitTime()
+
+	avgBatchWaitSize := float64(cfg.BatchWaitSize)
 	for {
+		sendLoopStartTime := time.Now()
 		a.reqBuilder.reset()
 
-		start := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
+		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
 
 		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/tikvclient/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
@@ -357,27 +546,37 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			}
 		}
 
-		if a.reqBuilder.len() < int(cfg.MaxBatchSize) && cfg.MaxBatchWaitTime > 0 {
-			// If the target TiKV is overload, wait a while to collect more requests.
-			if atomic.LoadUint64(&a.tikvTransportLayerLoad) >= uint64(cfg.OverloadThreshold) {
+		if batchSize := a.reqBuilder.len(); batchSize < int(cfg.MaxBatchSize) {
+			if cfg.MaxBatchWaitTime > 0 && atomic.LoadUint64(&a.tikvTransportLayerLoad) > uint64(cfg.OverloadThreshold) {
+				// If the target TiKV is overload, wait a while to collect more requests.
 				metrics.TiKVBatchWaitOverLoad.Inc()
-				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(bestBatchWaitSize), cfg.MaxBatchWaitTime)
+				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), int(cfg.BatchWaitSize), cfg.MaxBatchWaitTime)
+			} else if turboBatchWaitTime > 0 && headArrivalInterval > 0 && trigger.needFetchMore(headArrivalInterval) {
+				batchWaitSize := trigger.preferredBatchWaitSize(avgBatchWaitSize, int(cfg.BatchWaitSize))
+				a.fetchMorePendingRequests(int(cfg.MaxBatchSize), batchWaitSize, turboBatchWaitTime)
+				a.metrics.batchMoreRequests.Observe(float64(a.reqBuilder.len() - batchSize))
 			}
 		}
-		a.pendingRequests.Observe(float64(len(a.batchCommandsCh) + a.reqBuilder.len()))
 		length := a.reqBuilder.len()
+		a.metrics.pendingRequests.Observe(float64(len(a.batchCommandsCh) + length))
 		if uint(length) == 0 {
 			// The batch command channel is closed.
 			return
-		} else if uint(length) < bestBatchWaitSize && bestBatchWaitSize > 1 {
-			// Waits too long to collect requests, reduce the target batch size.
-			bestBatchWaitSize--
-		} else if uint(length) > bestBatchWaitSize+4 && bestBatchWaitSize < cfg.MaxBatchSize {
-			bestBatchWaitSize++
+		} else {
+			avgBatchWaitSize = 0.2*float64(length) + 0.8*avgBatchWaitSize
 		}
+		a.metrics.bestBatchSize.Observe(avgBatchWaitSize)
+		a.metrics.headArrivalInterval.Observe(headArrivalInterval.Seconds())
+		a.metrics.sendLoopWaitHeadDur.Observe(headRecvTime.Sub(sendLoopStartTime).Seconds())
+		a.metrics.sendLoopWaitMoreDur.Observe(time.Since(sendLoopStartTime).Seconds())
 
 		a.getClientAndSend()
-		metrics.TiKVBatchSendLatency.Observe(float64(time.Since(start)))
+
+		sendLoopEndTime := time.Now()
+		a.metrics.sendLoopSendDur.Observe(sendLoopEndTime.Sub(sendLoopStartTime).Seconds())
+		if dur := sendLoopEndTime.Sub(headRecvTime); dur > 5*time.Millisecond {
+			metrics.TiKVBatchSendTailLatency.Observe(dur.Seconds())
+		}
 	}
 }
 
@@ -429,10 +628,12 @@ func (a *batchConn) getClientAndSend() {
 	}
 	defer cli.unlockForSend()
 	available := cli.available()
+	reqSendTime := time.Now()
 	batch := 0
 	req, forwardingReqs := a.reqBuilder.buildWithLimit(available, func(id uint64, e *batchCommandsEntry) {
 		cli.batched.Store(id, e)
 		cli.sent.Add(1)
+		atomic.StoreInt64(&e.sendLat, int64(reqSendTime.Sub(e.start)))
 		if trace.IsEnabled() {
 			trace.Log(e.ctx, "rpc", "send")
 		}
@@ -446,7 +647,7 @@ func (a *batchConn) getClientAndSend() {
 		cli.send(forwardedHost, req)
 	}
 	if batch > 0 {
-		a.batchSize.Observe(float64(batch))
+		a.metrics.batchSize.Observe(float64(batch))
 	}
 }
 
@@ -490,7 +691,6 @@ type batchCommandsStream struct {
 }
 
 func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err error) {
-	now := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
@@ -498,11 +698,6 @@ func (s *batchCommandsStream) recv() (resp *tikvpb.BatchCommandsResponse, err er
 				zap.Any("r", r),
 				zap.Stack("stack"))
 			err = errors.New("batch conn recv paniced")
-		}
-		if err == nil {
-			metrics.BatchRecvHistogramOK.Observe(float64(time.Since(now)))
-		} else {
-			metrics.BatchRecvHistogramError.Observe(float64(time.Since(now)))
 		}
 	}()
 	if _, err := util.EvalFailpoint("gotErrorInRecvLoop"); err == nil {
@@ -567,6 +762,8 @@ type batchCommandsClient struct {
 	// eventListener is the listener set by external code to observe some events in the client. It's stored in a atomic
 	// pointer to make setting thread-safe.
 	eventListener *atomic.Pointer[ClientEventListener]
+
+	metrics *batchConnMetrics
 }
 
 func (c *batchCommandsClient) isStopped() bool {
@@ -708,7 +905,7 @@ func (c *batchCommandsClient) recreateStreamingClientOnce(streamClient *batchCom
 	return err
 }
 
-func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransportLayerLoad *uint64, streamClient *batchCommandsStream) {
+func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransportLayerLoad *uint64, connMetrics *batchConnMetrics, streamClient *batchCommandsStream) {
 	defer func() {
 		if r := recover(); r != nil {
 			metrics.TiKVPanicCounter.WithLabelValues(metrics.LabelBatchRecvLoop).Inc()
@@ -716,13 +913,16 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 				zap.Any("r", r),
 				zap.Stack("stack"))
 			logutil.BgLogger().Info("restart batchRecvLoop")
-			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, streamClient)
+			go c.batchRecvLoop(cfg, tikvTransportLayerLoad, connMetrics, streamClient)
 		}
 	}()
 
 	epoch := atomic.LoadUint64(&c.epoch)
 	for {
+		recvLoopStartTime := time.Now()
 		resp, err := streamClient.recv()
+		respRecvTime := time.Now()
+		connMetrics.recvLoopRecvDur.Observe(respRecvTime.Sub(recvLoopStartTime).Seconds())
 		if err != nil {
 			if c.isStopped() {
 				return
@@ -764,6 +964,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			}
 			entry := value.(*batchCommandsEntry)
 
+			atomic.StoreInt64(&entry.recvLat, int64(respRecvTime.Sub(entry.start)))
 			if trace.IsEnabled() {
 				trace.Log(entry.ctx, "rpc", "received")
 			}
@@ -781,6 +982,7 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 			// We need to consider TiKV load only if batch-wait strategy is enabled.
 			atomic.StoreUint64(tikvTransportLayerLoad, transportLayerLoad)
 		}
+		connMetrics.recvLoopProcessDur.Observe(time.Since(recvLoopStartTime).Seconds())
 	}
 }
 
@@ -875,7 +1077,7 @@ func (c *batchCommandsClient) initBatchClient(forwardedHost string) error {
 	} else {
 		c.forwardedClients[forwardedHost] = streamClient
 	}
-	go c.batchRecvLoop(c.tikvClientCfg, c.tikvLoad, streamClient)
+	go c.batchRecvLoop(c.tikvClientCfg, c.tikvLoad, c.metrics, streamClient)
 	return nil
 }
 
@@ -908,11 +1110,20 @@ func sendBatchRequest(
 		canceled:      0,
 		err:           nil,
 		pri:           priority,
+		start:         time.Now(),
 	}
 	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	defer func() {
+		timer.Stop()
+		if sendLat := atomic.LoadInt64(&entry.sendLat); sendLat > 0 {
+			metrics.BatchRequestDurationSend.Observe(time.Duration(sendLat).Seconds())
+		}
+		if recvLat := atomic.LoadInt64(&entry.recvLat); recvLat > 0 {
+			metrics.BatchRequestDurationRecv.Observe(time.Duration(recvLat).Seconds())
+		}
+		metrics.BatchRequestDurationDone.Observe(time.Since(entry.start).Seconds())
+	}()
 
-	start := time.Now()
 	select {
 	case batchConn.batchCommandsCh <- entry:
 	case <-ctx.Done():
@@ -925,8 +1136,6 @@ func sendBatchRequest(
 	case <-timer.C:
 		return nil, errors.WithMessage(context.DeadlineExceeded, "wait sendLoop")
 	}
-	waitSendDuration := time.Since(start)
-	metrics.TiKVBatchWaitDuration.Observe(float64(waitSendDuration))
 
 	select {
 	case res, ok := <-entry.res:
@@ -945,8 +1154,13 @@ func sendBatchRequest(
 		return nil, errors.New("batchConn closed")
 	case <-timer.C:
 		atomic.StoreInt32(&entry.canceled, 1)
-		reason := fmt.Sprintf("wait recvLoop timeout, timeout:%s, wait_send_duration:%s, wait_recv_duration:%s",
-			timeout, util.FormatDuration(waitSendDuration), util.FormatDuration(time.Since(start)-waitSendDuration))
+		reason := fmt.Sprintf("wait recvLoop timeout, timeout:%s", timeout)
+		if sendLat := atomic.LoadInt64(&entry.sendLat); sendLat > 0 {
+			reason += fmt.Sprintf(", send:%s", util.FormatDuration(time.Duration(sendLat)))
+			if recvLat := atomic.LoadInt64(&entry.recvLat); recvLat > 0 {
+				reason += fmt.Sprintf(", recv:%s", util.FormatDuration(time.Duration(recvLat-sendLat)))
+			}
+		}
 		return nil, errors.WithMessage(context.DeadlineExceeded, reason)
 	}
 }
