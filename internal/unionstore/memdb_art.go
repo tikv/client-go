@@ -23,7 +23,6 @@ import (
 )
 
 // artDBWithContext wraps ART to satisfy the MemBuffer interface.
-// It is used for testing.
 type artDBWithContext struct {
 	*art.ART
 }

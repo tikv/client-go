@@ -21,10 +21,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore/rbt"
 )
 
-var _ MemBuffer = &rbtDBWithContext{}
-
 // rbtDBWithContext wraps RBT to satisfy the MemBuffer interface.
-// It is used for testing.
 type rbtDBWithContext struct {
 	*rbt.RBT
 }
