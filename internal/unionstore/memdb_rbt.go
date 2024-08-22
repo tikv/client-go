@@ -44,7 +44,7 @@ func (db *rbtDBWithContext) FlushWait() error { return nil }
 
 // GetMemDB implements the MemBuffer interface.
 func (db *rbtDBWithContext) GetMemDB() *MemDB {
-	panic("unimplemented")
+	return db.RBT
 }
 
 // BatchGet returns the values for given keys from the MemBuffer.
