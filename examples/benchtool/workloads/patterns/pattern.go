@@ -25,10 +25,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/spf13/cobra"
 	clientConfig "github.com/tikv/client-go/v2/config"
 	clientRawKV "github.com/tikv/client-go/v2/rawkv"
 	clientTxnKV "github.com/tikv/client-go/v2/txnkv"
+	"go.uber.org/zap"
 )
 
 func getPatternsConfig(ctx context.Context) *config.PatternsConfig {
@@ -86,6 +88,9 @@ func Register(command *config.CommandLineParser) *config.PatternsConfig {
 	cmd := &cobra.Command{
 		Use: config.WorkloadTypeHybrid,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if err := patternsConfig.Global.InitLogger(); err != nil {
+				log.Error("InitLogger failed", zap.Error(err))
+			}
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, config.WorkloadTypeHybrid, patternsConfig)
 		},
 	}

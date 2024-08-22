@@ -24,8 +24,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/rawkv"
+	"go.uber.org/zap"
 )
 
 func isReadCommand(cmd string) bool {
@@ -84,6 +86,9 @@ func Register(command *config.CommandLineParser) *config.RawKVConfig {
 	cmd := &cobra.Command{
 		Use: config.WorkloadTypeRawKV,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if err := rawKVConfig.Global.InitLogger(); err != nil {
+				log.Error("InitLogger failed", zap.Error(err))
+			}
 			rawKVConfig.ColumnFamily = convertCfName(rawKVConfig.ColumnFamily)
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, config.WorkloadTypeRawKV, rawKVConfig)
 		},

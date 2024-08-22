@@ -25,10 +25,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/spf13/cobra"
 	clientConfig "github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	clientTxnKV "github.com/tikv/client-go/v2/txnkv"
+	"go.uber.org/zap"
 )
 
 func getTxnKVConfig(ctx context.Context) *config.TxnKVConfig {
@@ -79,6 +81,9 @@ func Register(command *config.CommandLineParser) *config.TxnKVConfig {
 	cmd := &cobra.Command{
 		Use: config.WorkloadTypeTxnKV,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if err := txnKVConfig.Global.InitLogger(); err != nil {
+				log.Error("InitLogger failed", zap.Error(err))
+			}
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, config.WorkloadTypeTxnKV, txnKVConfig)
 		},
 	}

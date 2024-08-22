@@ -16,17 +16,24 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/config"
+	"go.uber.org/zap"
 )
 
+var initOnce = sync.Once{}
+
 const (
-	WorkloadColumnFamilyDefault = "CF_DEFAULT"
-	WorkloadColumnFamilyWrite   = "CF_WRITE"
-	WorkloadColumnFamilyLock    = "CF_LOCK"
+	WorkloadColumnFamilyDefault = "default"
+	WorkloadColumnFamilyWrite   = "write"
+	WorkloadColumnFamilyLock    = "lock"
 )
 
 type GlobalConfig struct {
@@ -45,6 +52,10 @@ type GlobalConfig struct {
 
 	Targets  []string
 	Security config.Security
+
+	// for log
+	LogLevel string
+	LogFile  string
 }
 
 func (c *GlobalConfig) ParsePdAddrs() error {
@@ -64,6 +75,26 @@ func (c *GlobalConfig) Format() string {
 		c.hosts, c.port, c.StatusPort, c.Threads, c.TotalTime, c.TotalCount, c.DropData, c.IgnoreError, c.OutputInterval, c.Silence, c.OutputStyle)
 }
 
+func (c *GlobalConfig) InitLogger() (err error) {
+	initOnce.Do(func() {
+		// Initialize the logger.
+		conf := &log.Config{
+			Level: c.LogLevel,
+			File: log.FileLogConfig{
+				Filename: c.LogFile,
+				MaxSize:  256,
+			},
+		}
+		lg, p, e := log.InitLogger(conf)
+		if e != nil {
+			err = e
+			return
+		}
+		log.ReplaceGlobals(lg, p)
+	})
+	return errors.Trace(err)
+}
+
 type CommandLineParser struct {
 	command *cobra.Command
 	config  *GlobalConfig
@@ -78,7 +109,13 @@ func (p *CommandLineParser) Initialize() {
 	var rootCmd = &cobra.Command{
 		Use:   "bench-tool",
 		Short: "Benchmark tikv with different workloads",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if err := globalCfg.InitLogger(); err != nil {
+				log.Error("InitLogger failed", zap.Error(err))
+			}
+		},
 	}
+
 	rootCmd.PersistentFlags().StringSliceVarP(&globalCfg.hosts, "host", "H", []string{"127.0.0.1"}, "PD host")
 	rootCmd.PersistentFlags().IntVarP(&globalCfg.port, "port", "P", 4000, "PD port")
 	rootCmd.PersistentFlags().IntVarP(&globalCfg.StatusPort, "statusPort", "S", 10080, "PD status port")
@@ -91,6 +128,11 @@ func (p *CommandLineParser) Initialize() {
 	rootCmd.PersistentFlags().BoolVar(&globalCfg.Silence, "silence", false, "Don't print error when running workload")
 	rootCmd.PersistentFlags().DurationVar(&globalCfg.OutputInterval, "interval", 10*time.Second, "Output interval time")
 	rootCmd.PersistentFlags().StringVar(&globalCfg.OutputStyle, "output", "plain", "output style, valid values can be { plain | table | json }")
+
+	rootCmd.PersistentFlags().StringVar(&globalCfg.LogFile, "log-file", "record.log", "filename of the log file")
+	rootCmd.PersistentFlags().StringVar(&globalCfg.LogLevel, "log-level", "info", "log level { debug | info | warn | error | fatal }")
+
+	rootCmd.SetOut(os.Stdout)
 
 	cobra.EnablePrefixMatching = true
 
