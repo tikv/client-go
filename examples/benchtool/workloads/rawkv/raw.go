@@ -37,6 +37,19 @@ func getRawKvConfig(ctx context.Context) *config.RawKVConfig {
 	return c
 }
 
+func convertCfName(cf string) string {
+	switch cf {
+	case "default":
+		return config.WorkloadColumnFamilyDefault
+	case "write":
+		return config.WorkloadColumnFamilyWrite
+	case "lock":
+		return config.WorkloadColumnFamilyLock
+	default:
+		return "default"
+	}
+}
+
 func execRawKV(cmd string) {
 	if cmd == "" {
 		return
@@ -71,6 +84,7 @@ func Register(command *config.CommandLineParser) *config.RawKVConfig {
 	cmd := &cobra.Command{
 		Use: config.WorkloadTypeRawKV,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			rawKVConfig.ColumnFamily = convertCfName(rawKVConfig.ColumnFamily)
 			workloads.GlobalContext = context.WithValue(workloads.GlobalContext, config.WorkloadTypeRawKV, rawKVConfig)
 		},
 	}

@@ -31,6 +31,9 @@ func TestPatterns(t *testing.T) {
 	err := patternsConfig.Parse()
 	assert.Equal(t, err == nil, true)
 
+	err = patternsConfig.Validate()
+	assert.Equal(t, err != nil, true) // PdAddrs is empty
+
 	for _, pattern := range patternsConfig.Plans {
 		if pattern.GetRawKVConfig() == nil {
 			assert.Equal(t, pattern.GetTxnKVConfig() == nil, false)

@@ -142,10 +142,10 @@ type WorkloadImpl struct {
 }
 
 func NewPatternWorkload(cfg *config.PatternsConfig) (*WorkloadImpl, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.Parse(); err != nil {
 		return nil, err
 	}
-	if err := cfg.Parse(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	w := &WorkloadImpl{
@@ -379,7 +379,7 @@ func (w *WorkloadImpl) BeforeExecute() error {
 		}
 	} else if rawConfig != nil {
 		w.rawClients = make([]*clientRawKV.Client, 0, rawConfig.Global.Threads)
-		for i := 0; i < txnConfig.Global.Threads; i++ {
+		for i := 0; i < rawConfig.Global.Threads; i++ {
 			client, err := clientRawKV.NewClient(workloads.GlobalContext, rawConfig.Global.Targets, rawConfig.Global.Security)
 			if err != nil {
 				return err
