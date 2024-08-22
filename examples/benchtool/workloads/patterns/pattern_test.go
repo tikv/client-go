@@ -24,7 +24,7 @@ import (
 
 func TestPatterns(t *testing.T) {
 	// Read the YAML file
-	filePath := "/Users/lucasliang/Workspace/client-go/examples/benchtool/test.yaml"
+	filePath := "./test.yaml"
 	patternsConfig := &config.PatternsConfig{
 		FilePath: filePath,
 	}
