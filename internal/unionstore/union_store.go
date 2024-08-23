@@ -250,54 +250,7 @@ type Metrics struct {
 }
 
 var (
-	_ MemBuffer = &MemDBWithContext{}
 	_ MemBuffer = &PipelinedMemDB{}
+	_ MemBuffer = &rbtDBWithContext{}
+	_ MemBuffer = &artDBWithContext{}
 )
-
-// MemDBWithContext wraps MemDB to satisfy the MemBuffer interface.
-type MemDBWithContext struct {
-	*MemDB
-}
-
-func NewMemDBWithContext() *MemDBWithContext {
-	return &MemDBWithContext{MemDB: newMemDB()}
-}
-
-func (db *MemDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
-	return db.MemDB.Get(k)
-}
-
-func (db *MemDBWithContext) GetLocal(_ context.Context, k []byte) ([]byte, error) {
-	return db.MemDB.Get(k)
-}
-
-func (db *MemDBWithContext) Flush(bool) (bool, error) { return false, nil }
-
-func (db *MemDBWithContext) FlushWait() error { return nil }
-
-// GetMemDB returns the inner MemDB
-func (db *MemDBWithContext) GetMemDB() *MemDB {
-	return db.MemDB
-}
-
-// BatchGet returns the values for given keys from the MemBuffer.
-func (db *MemDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
-	if db.Len() == 0 {
-		return map[string][]byte{}, nil
-	}
-	m := make(map[string][]byte, len(keys))
-	for _, k := range keys {
-		v, err := db.Get(ctx, k)
-		if err != nil {
-			if tikverr.IsErrNotFound(err) {
-				continue
-			}
-			return nil, err
-		}
-		m[string(k)] = v
-	}
-	return m, nil
-}
-
-// GetFlushMetrisc implements the MemBuffer interface.
-func (db *MemDBWithContext) GetMetrics() Metrics { return Metrics{} }

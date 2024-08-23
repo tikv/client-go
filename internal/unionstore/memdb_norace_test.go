@@ -59,7 +59,7 @@ func TestRandom(t *testing.T) {
 		rand2.Read(keys[i])
 	}
 
-	p1 := newMemDB()
+	p1 := NewMemDB()
 	p2 := leveldb.New(comparer.DefaultComparer, 4*1024)
 	for _, k := range keys {
 		p1.Set(k, k)
@@ -88,7 +88,7 @@ func TestRandom(t *testing.T) {
 
 // The test takes too long under the race detector.
 func TestRandomDerive(t *testing.T) {
-	db := newMemDB()
+	db := NewMemDB()
 	golden := leveldb.New(comparer.DefaultComparer, 4*1024)
 	testRandomDeriveRecur(t, db, golden, 0)
 }
