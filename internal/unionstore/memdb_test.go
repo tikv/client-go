@@ -37,7 +37,6 @@
 package unionstore
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -848,18 +847,22 @@ func TestSnapshotGetIter(t *testing.T) {
 	var getters []Getter
 	var iters []Iterator
 	for i := 0; i < 100; i++ {
+		expectValue := i
+		if expectValue > 50 {
+			expectValue = 50
+		}
 		assert.Nil(buffer.Set([]byte{byte(0)}, []byte{byte(i)}))
 		// getter
 		getter := buffer.SnapshotGetter()
-		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		val, err := getter.Get([]byte{byte(0)})
 		assert.Nil(err)
-		assert.Equal(val, []byte{byte(min(i, 50))})
+		assert.Equal(val, []byte{byte(expectValue)})
 		getters = append(getters, getter)
 		// iter
 		iter := buffer.SnapshotIter(nil, nil)
 		assert.Nil(err)
 		assert.Equal(iter.Key(), []byte{byte(0)})
-		assert.Equal(iter.Value(), []byte{byte(min(i, 50))})
+		assert.Equal(iter.Value(), []byte{byte(expectValue)})
 		iter.Close()
 		iters = append(iters, buffer.SnapshotIter(nil, nil))
 		if i == 50 {
@@ -867,7 +870,7 @@ func TestSnapshotGetIter(t *testing.T) {
 		}
 	}
 	for _, getter := range getters {
-		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		val, err := getter.Get([]byte{byte(0)})
 		assert.Nil(err)
 		assert.Equal(val, []byte{byte(50)})
 	}
