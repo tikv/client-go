@@ -138,6 +138,23 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
+	// The following three lifecycle hooks are used to track the start / end of the background
+	// goroutines which are usually not stopped after finishing the `execute` function. With
+	// this hook, we can track whether all background goroutines have finished to avoid leaking
+	// locks (which may happen if a transaction is not finished properly).
+	//
+	// TODO: provide an unified way to track the lifecycle of all background goroutines during
+	// a transaction. Adding hooks for each background goroutine is dirty and easy to forget.
+	// Now, we have a `c.store.WaitGroup` to track background goroutines globally, but
+	// it's not suitable for this case.
+
+	// asyncCommitLifecycleHooks is used to hook the start / stop of async commit goroutines
+	asyncCommitLifecycleHooks LifecycleHooks
+	// secondaryLockCleanupLifecycleHooks is used to hook the cleanup of secondary locks
+	secondaryLockCleanupLifecycleHooks LifecycleHooks
+	// cleanupLifecycleHooks is used to hook the cleanup action
+	cleanupLifecycleHooks LifecycleHooks
+
 	binlog                  BinlogExecutor
 	schemaLeaseChecker      SchemaLeaseChecker
 	syncLog                 bool
@@ -348,6 +365,21 @@ func (txn *KVTxn) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 // is finished.
 func (txn *KVTxn) SetCommitCallback(f func(string, error)) {
 	txn.commitCallback = f
+}
+
+// SetAsyncCommitHooks sets up the hooks to track the lifecycle of async commit goroutines.
+func (txn *KVTxn) SetAsyncCommitLifecycleHooks(hooks LifecycleHooks) {
+	txn.asyncCommitLifecycleHooks = hooks
+}
+
+// SetSecondaryLockCleanupHooks sets up the hooks to track the lifecycle of secondary keys cleanup goroutines.
+func (txn *KVTxn) SetSecondaryLockCleanupLifecycleHooks(hook LifecycleHooks) {
+	txn.secondaryLockCleanupLifecycleHooks = hook
+}
+
+// SetCleanupLifecycleHooks sets up
+func (txn *KVTxn) SetCleanupLifecycleHooks(hook LifecycleHooks) {
+	txn.cleanupLifecycleHooks = hook
 }
 
 // SetEnableAsyncCommit indicates if the transaction will try to use async commit.
@@ -1707,4 +1739,11 @@ func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 // MemHookSet returns whether the mem buffer has a memory footprint change hook set.
 func (txn *KVTxn) MemHookSet() bool {
 	return txn.us.GetMemBuffer().MemHookSet()
+}
+
+// LifecycleHooks is a struct that contains hooks for a background goroutine.
+// The `Pre` is called before the goroutine starts, and the `Post` is called after the goroutine finishes.
+type LifecycleHooks struct {
+	Pre  func()
+	Post func()
 }

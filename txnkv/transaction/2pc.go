@@ -1019,7 +1019,13 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
+		if c.txn.secondaryLockCleanupLifecycleHooks.Pre != nil {
+			c.txn.secondaryLockCleanupLifecycleHooks.Pre()
+		}
 		err = c.store.Go(func() {
+			if c.txn.secondaryLockCleanupLifecycleHooks.Post != nil {
+				defer c.txn.secondaryLockCleanupLifecycleHooks.Post()
+			}
 			defer c.store.WaitGroup().Done()
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
@@ -1415,7 +1421,13 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 	}
 	c.cleanWg.Add(1)
 	c.store.WaitGroup().Add(1)
+	if c.txn.cleanupLifecycleHooks.Pre != nil {
+		c.txn.cleanupLifecycleHooks.Pre()
+	}
 	go func() {
+		if c.txn.cleanupLifecycleHooks.Post != nil {
+			defer c.txn.cleanupLifecycleHooks.Post()
+		}
 		defer c.store.WaitGroup().Done()
 		if _, err := util.EvalFailpoint("commitFailedSkipCleanup"); err == nil {
 			logutil.Logger(ctx).Info("[failpoint] injected skip cleanup secondaries on failure",
@@ -1759,7 +1771,13 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return nil
 		}
 		c.store.WaitGroup().Add(1)
+		if c.txn.asyncCommitLifecycleHooks.Pre != nil {
+			c.txn.asyncCommitLifecycleHooks.Pre()
+		}
 		go func() {
+			if c.txn.asyncCommitLifecycleHooks.Post != nil {
+				defer c.txn.asyncCommitLifecycleHooks.Post()
+			}
 			defer c.store.WaitGroup().Done()
 			if _, err := util.EvalFailpoint("asyncCommitDoNothing"); err == nil {
 				return

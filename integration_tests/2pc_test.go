@@ -2512,3 +2512,66 @@ func (s *testCommitterSuite) TestKillSignal() {
 	err = txn.Commit(context.Background())
 	s.ErrorContains(err, "query interrupted")
 }
+
+func (s *testCommitterSuite) Test2PCLifecycleHooks() {
+	reachedPre := atomic.Bool{}
+	reachedPost := atomic.Bool{}
+
+	var wg sync.WaitGroup
+
+	t1 := s.begin()
+	t1.SetSecondaryLockCleanupLifecycleHooks(transaction.LifecycleHooks{
+		Pre: func() {
+			wg.Add(1)
+
+			reachedPre.Store(true)
+		},
+		Post: func() {
+			s.Equal(reachedPre.Load(), true)
+			reachedPost.Store(true)
+
+			wg.Done()
+		},
+	})
+	t1.Set([]byte("a"), []byte("a"))
+	t1.Set([]byte("z"), []byte("z"))
+	s.Nil(t1.Commit(context.Background()))
+
+	s.Equal(reachedPre.Load(), true)
+	s.Equal(reachedPost.Load(), false)
+	wg.Wait()
+	s.Equal(reachedPost.Load(), true)
+}
+
+func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
+	reachedPre := atomic.Bool{}
+	reachedPost := atomic.Bool{}
+
+	var wg sync.WaitGroup
+
+	t1 := s.begin()
+	t1.SetCleanupLifecycleHooks(transaction.LifecycleHooks{
+		Pre: func() {
+			wg.Add(1)
+
+			reachedPre.Store(true)
+		},
+		Post: func() {
+			s.Equal(reachedPre.Load(), true)
+			reachedPost.Store(true)
+
+			wg.Done()
+		},
+	})
+	t1.Set([]byte("a"), []byte("a"))
+	t1.Set([]byte("z"), []byte("z"))
+	committer, err := t1.NewCommitter(0)
+	s.Nil(err)
+
+	committer.CleanupWithoutWait(context.Background())
+
+	s.Equal(reachedPre.Load(), true)
+	s.Equal(reachedPost.Load(), false)
+	wg.Wait()
+	s.Equal(reachedPost.Load(), true)
+}
