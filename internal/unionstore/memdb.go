@@ -38,7 +38,6 @@ import (
 	"math"
 
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
-	"github.com/tikv/client-go/v2/internal/unionstore/rbt"
 )
 
 const unlimitedSize = math.MaxUint64
@@ -46,14 +45,11 @@ const unlimitedSize = math.MaxUint64
 // IsTombstone returns whether the value is a tombstone.
 func IsTombstone(val []byte) bool { return len(val) == 0 }
 
-type MemDB = rbt.RBT
-
-var newMemDB = rbt.New
-
 type MemDBCheckpoint = arena.MemDBCheckpoint
 
 type MemKeyHandle = arena.MemKeyHandle
 
-type MemDBWithContext = rbtDBWithContext
+type MemDB = rbtDBWithContext
 
+var NewMemDB = newRbtDBWithContext
 var NewMemDBWithContext = newRbtDBWithContext

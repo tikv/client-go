@@ -38,7 +38,6 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -60,9 +59,6 @@ var testMode = false
 // When discarding a newly added KV in `Cleanup`, the non-persistent flags will be cleared.
 // If there are persistent flags associated with key, we will keep this key in node without value.
 type RBT struct {
-	// This RWMutex only used to ensure rbtSnapGetter.Get will not race with
-	// concurrent memdb.Set, memdb.SetWithFlags, memdb.Delete and memdb.UpdateFlags.
-	sync.RWMutex
 	root      arena.MemdbArenaAddr
 	allocator nodeAllocator
 	vlog      arena.MemdbVlog[*memdbNode, *RBT]
@@ -75,8 +71,6 @@ type RBT struct {
 	vlogInvalid bool
 	dirty       bool
 	stages      []arena.MemDBCheckpoint
-	// when the RBT is wrapper by upper RWMutex, we can skip the internal mutex.
-	skipMutex bool
 
 	// The lastTraversedNode must exist
 	lastTraversedNode atomic.Pointer[MemdbNodeAddr]
@@ -91,7 +85,6 @@ func New() *RBT {
 	db.stages = make([]arena.MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = unlimitedSize
 	db.bufferSizeLimit = unlimitedSize
-	db.skipMutex = false
 	db.lastTraversedNode.Store(&nullNodeAddr)
 	return db
 }
@@ -148,22 +141,12 @@ func (db *RBT) IsStaging() bool {
 // Subsequent writes will be temporarily stored in this new staging buffer.
 // When you think all modifications looks good, you can call `Release` to public all of them to the upper level buffer.
 func (db *RBT) Staging() int {
-	if !db.skipMutex {
-		db.Lock()
-		defer db.Unlock()
-	}
-
 	db.stages = append(db.stages, db.vlog.Checkpoint())
 	return len(db.stages)
 }
 
 // Release publish all modifications in the latest staging buffer to upper level.
 func (db *RBT) Release(h int) {
-	if !db.skipMutex {
-		db.Lock()
-		defer db.Unlock()
-	}
-
 	if h != len(db.stages) {
 		// This should never happens in production environment.
 		// Use panic to make debug easier.
@@ -182,11 +165,6 @@ func (db *RBT) Release(h int) {
 // Cleanup cleanup the resources referenced by the StagingHandle.
 // If the changes are not published by `Release`, they will be discarded.
 func (db *RBT) Cleanup(h int) {
-	if !db.skipMutex {
-		db.Lock()
-		defer db.Unlock()
-	}
-
 	if h > len(db.stages) {
 		return
 	}
@@ -295,39 +273,6 @@ func (db *RBT) GetFlags(key []byte) (kv.KeyFlags, error) {
 	return x.getKeyFlags(), nil
 }
 
-// UpdateFlags update the flags associated with key.
-func (db *RBT) UpdateFlags(key []byte, ops ...kv.FlagsOp) {
-	err := db.set(key, nil, ops...)
-	_ = err // set without value will never fail
-}
-
-// Set sets the value for key k as v into kv store.
-// v must NOT be nil or empty, otherwise it returns ErrCannotSetNilValue.
-func (db *RBT) Set(key []byte, value []byte) error {
-	if len(value) == 0 {
-		return tikverr.ErrCannotSetNilValue
-	}
-	return db.set(key, value)
-}
-
-// SetWithFlags put key-value into the last active staging buffer with the given KeyFlags.
-func (db *RBT) SetWithFlags(key []byte, value []byte, ops ...kv.FlagsOp) error {
-	if len(value) == 0 {
-		return tikverr.ErrCannotSetNilValue
-	}
-	return db.set(key, value, ops...)
-}
-
-// Delete removes the entry for key k from kv store.
-func (db *RBT) Delete(key []byte) error {
-	return db.set(key, arena.Tombstone)
-}
-
-// DeleteWithFlags delete key with the given KeyFlags
-func (db *RBT) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
-	return db.set(key, arena.Tombstone, ops...)
-}
-
 // GetKeyByHandle returns key by handle.
 func (db *RBT) GetKeyByHandle(handle arena.MemKeyHandle) []byte {
 	x := db.getNode(handle.ToAddr())
@@ -361,12 +306,7 @@ func (db *RBT) Dirty() bool {
 	return db.dirty
 }
 
-func (db *RBT) set(key []byte, value []byte, ops ...kv.FlagsOp) error {
-	if !db.skipMutex {
-		db.Lock()
-		defer db.Unlock()
-	}
-
+func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	if db.vlogInvalid {
 		// panic for easier debugging.
 		panic("vlog is reset")
@@ -975,10 +915,6 @@ func (db *RBT) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 // MemHookSet implements the MemBuffer interface.
 func (db *RBT) MemHookSet() bool {
 	return db.allocator.MemHookSet()
-}
-
-func (db *RBT) SetSkipMutex(skip bool) {
-	db.skipMutex = skip
 }
 
 func (db *RBT) GetCacheHitCount() uint64 {

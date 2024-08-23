@@ -558,7 +558,7 @@ func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
 
 	var prevKey, prevVal []byte
 	for it2.First(); it2.Valid(); it2.Next() {
-		v, err := p1.Get(it2.Key())
+		v, err := p1.Get(context.Background(), it2.Key())
 		assert.Nil(err)
 		assert.Equal(v, it2.Value())
 
@@ -682,21 +682,21 @@ func checkNewIterator(t *testing.T, buffer *MemDB) {
 func mustGet(t *testing.T, buffer *MemDB) {
 	for i := startIndex; i < testCount; i++ {
 		s := encodeInt(i * indexStep)
-		val, err := buffer.Get(s)
+		val, err := buffer.Get(context.Background(), s)
 		assert.Nil(t, err)
 		assert.Equal(t, string(val), string(s))
 	}
 }
 
 func TestKVGetSet(t *testing.T) {
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	insertData(t, buffer)
 	mustGet(t, buffer)
 }
 
 func TestNewIterator(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	// should be invalid
 	iter, err := buffer.Iter(nil, nil)
 	assert.Nil(err)
@@ -724,7 +724,7 @@ func NextUntil(it Iterator, fn FnKeyCmp) error {
 
 func TestIterNextUntil(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	insertData(t, buffer)
 
 	iter, err := buffer.Iter(nil, nil)
@@ -739,7 +739,7 @@ func TestIterNextUntil(t *testing.T) {
 
 func TestBasicNewIterator(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	it, err := buffer.Iter([]byte("2"), nil)
 	assert.Nil(err)
 	assert.False(it.Valid())
@@ -758,7 +758,7 @@ func TestNewIteratorMin(t *testing.T) {
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0002", "2"},
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0003", "hello"},
 	}
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	for _, kv := range kvs {
 		err := buffer.Set([]byte(kv.key), []byte(kv.value))
 		assert.Nil(err)
@@ -781,7 +781,7 @@ func TestNewIteratorMin(t *testing.T) {
 
 func TestMemDBStaging(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	err := buffer.Set([]byte("x"), make([]byte, 2))
 	assert.Nil(err)
 
@@ -793,17 +793,17 @@ func TestMemDBStaging(t *testing.T) {
 	err = buffer.Set([]byte("yz"), make([]byte, 1))
 	assert.Nil(err)
 
-	v, _ := buffer.Get([]byte("x"))
+	v, _ := buffer.Get(context.Background(), []byte("x"))
 	assert.Equal(len(v), 3)
 
 	buffer.Release(h2)
 
-	v, _ = buffer.Get([]byte("yz"))
+	v, _ = buffer.Get(context.Background(), []byte("yz"))
 	assert.Equal(len(v), 1)
 
 	buffer.Cleanup(h1)
 
-	v, _ = buffer.Get([]byte("x"))
+	v, _ = buffer.Get(context.Background(), []byte("x"))
 	assert.Equal(len(v), 2)
 }
 
@@ -832,7 +832,7 @@ func testBufferLimit(t *testing.T, buffer MemBuffer) {
 
 func TestUnsetTemporaryFlag(t *testing.T) {
 	require := require.New(t)
-	db := newMemDB()
+	db := NewMemDB()
 	key := []byte{1}
 	value := []byte{2}
 	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
@@ -844,7 +844,7 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 
 func TestSnapshotGetIter(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	var getters []Getter
 	var iters []Iterator
 	for i := 0; i < 100; i++ {

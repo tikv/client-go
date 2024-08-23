@@ -17,16 +17,12 @@ package art
 
 import (
 	"math"
-	"sync"
 
-	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
 )
 
 type ART struct {
-	sync.RWMutex
-	skipMutex       bool
 	allocator       artAllocator
 	root            artNode
 	stages          []arena.MemDBCheckpoint
@@ -50,33 +46,6 @@ func New() *ART {
 	return &t
 }
 
-func (t *ART) Set(key, value []byte) error {
-	if len(value) == 0 {
-		return tikverr.ErrCannotSetNilValue
-	}
-	return t.set(key, value, nil)
-}
-
-// SetWithFlags put key-value into the last active staging buffer with the given KeyFlags.
-func (t *ART) SetWithFlags(key []byte, value []byte, ops ...kv.FlagsOp) error {
-	if len(value) == 0 {
-		return tikverr.ErrCannotSetNilValue
-	}
-	return t.set(key, value, ops)
-}
-
-func (t *ART) UpdateFlags(key []byte, ops ...kv.FlagsOp) {
-	_ = t.set(key, nil, ops)
-}
-
-func (t *ART) Delete(key []byte) error {
-	return t.set(key, arena.Tombstone, nil)
-}
-
-func (t *ART) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
-	return t.set(key, arena.Tombstone, ops)
-}
-
 func (t *ART) Get(key []byte) ([]byte, error) {
 	panic("unimplemented")
 }
@@ -86,7 +55,7 @@ func (t *ART) GetFlags(key []byte) (kv.KeyFlags, error) {
 	panic("unimplemented")
 }
 
-func (t *ART) set(key artKey, value []byte, ops []kv.FlagsOp) error {
+func (t *ART) Set(key artKey, value []byte, ops []kv.FlagsOp) error {
 	panic("unimplemented")
 }
 
@@ -199,10 +168,6 @@ func (t *ART) GetValueByHandle(handle arena.MemKeyHandle) ([]byte, bool) {
 }
 
 func (t *ART) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
-	panic("unimplemented")
-}
-
-func (t *ART) SetSkipMutex(skip bool) {
 	panic("unimplemented")
 }
 

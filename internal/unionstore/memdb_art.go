@@ -17,19 +17,91 @@ package unionstore
 
 import (
 	"context"
+	"sync"
 
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/internal/unionstore/art"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // artDBWithContext wraps ART to satisfy the MemBuffer interface.
 type artDBWithContext struct {
+	// This RWMutex only used to ensure rbtSnapGetter.Get will not race with
+	// concurrent MemBuffer.Set, MemBuffer.SetWithFlags, MemBuffer.Delete and MemBuffer.UpdateFlags.
+	sync.RWMutex
 	*art.ART
+
+	// when the ART is wrapper by upper RWMutex, we can skip the internal mutex.
+	skipMutex bool
 }
 
 //nolint:unused
 func newArtDBWithContext() *artDBWithContext {
 	return &artDBWithContext{ART: art.New()}
+}
+
+func (db *artDBWithContext) setSkipMutex(skip bool) {
+	db.skipMutex = skip
+}
+
+func (db *artDBWithContext) set(key, value []byte, ops []kv.FlagsOp) error {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	return db.ART.Set(key, value, ops)
+}
+
+func (db *artDBWithContext) Set(key, value []byte) error {
+	if len(value) == 0 {
+		return tikverr.ErrCannotSetNilValue
+	}
+	return db.set(key, value, nil)
+}
+
+// SetWithFlags put key-value into the last active staging buffer with the given KeyFlags.
+func (db *artDBWithContext) SetWithFlags(key []byte, value []byte, ops ...kv.FlagsOp) error {
+	if len(value) == 0 {
+		return tikverr.ErrCannotSetNilValue
+	}
+	return db.set(key, value, ops)
+}
+
+func (db *artDBWithContext) UpdateFlags(key []byte, ops ...kv.FlagsOp) {
+	_ = db.set(key, nil, ops)
+}
+
+func (db *artDBWithContext) Delete(key []byte) error {
+	return db.set(key, arena.Tombstone, nil)
+}
+
+func (db *artDBWithContext) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
+	return db.set(key, arena.Tombstone, ops)
+}
+
+func (db *artDBWithContext) Staging() int {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	return db.ART.Staging()
+}
+
+func (db *artDBWithContext) Cleanup(handle int) {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	db.ART.Cleanup(handle)
+}
+
+func (db *artDBWithContext) Release(handle int) {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	db.ART.Release(handle)
 }
 
 func (db *artDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {

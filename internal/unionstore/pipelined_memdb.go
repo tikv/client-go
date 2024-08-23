@@ -103,8 +103,8 @@ type FlushFunc func(uint64, *MemDB) error
 type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]byte, error)
 
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
-	memdb := newMemDB()
-	memdb.SetSkipMutex(true)
+	memdb := NewMemDB()
+	memdb.setSkipMutex(true)
 	entryLimit, _ := memdb.GetEntrySizeLimit()
 	flushOpt := newFlushOption()
 	return &PipelinedMemDB{
@@ -131,7 +131,7 @@ func (p *PipelinedMemDB) GetMemDB() *MemDB {
 }
 
 func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer bool) ([]byte, error) {
-	v, err := p.memDB.Get(k)
+	v, err := p.memDB.Get(ctx, k)
 	if err == nil {
 		return v, nil
 	}
@@ -139,7 +139,7 @@ func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer boo
 		return nil, err
 	}
 	if p.flushingMemDB != nil {
-		v, err = p.flushingMemDB.Get(k)
+		v, err = p.flushingMemDB.Get(ctx, k)
 		if err == nil {
 			return v, nil
 		}
@@ -313,10 +313,10 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.size += p.flushingMemDB.Size()
 	p.missCount += p.memDB.GetCacheMissCount()
 	p.hitCount += p.memDB.GetCacheHitCount()
-	p.memDB = newMemDB()
+	p.memDB = NewMemDB()
 	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit
 	p.memDB.SetEntrySizeLimit(p.entryLimit, unlimitedSize)
-	p.memDB.SetSkipMutex(true)
+	p.memDB.setSkipMutex(true)
 	p.generation++
 	go func(generation uint64) {
 		util.EvalFailpoint("beforePipelinedFlush")
@@ -386,7 +386,7 @@ func (p *PipelinedMemDB) FlushWait() error {
 func (p *PipelinedMemDB) handleAlreadyExistErr(err error) error {
 	var existErr *tikverr.ErrKeyExist
 	if stderrors.As(err, &existErr) {
-		v, err2 := p.flushingMemDB.Get(existErr.GetKey())
+		v, err2 := p.flushingMemDB.Get(context.Background(), existErr.GetKey())
 		if err2 != nil {
 			// TODO: log more info like start_ts, also for other logs
 			logutil.BgLogger().Warn(

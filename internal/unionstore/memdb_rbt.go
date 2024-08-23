@@ -16,18 +16,99 @@ package unionstore
 
 import (
 	"context"
+	"sync"
 
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/internal/unionstore/rbt"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 // rbtDBWithContext wraps RBT to satisfy the MemBuffer interface.
 type rbtDBWithContext struct {
+	// This RWMutex only used to ensure rbtSnapGetter.Get will not race with
+	// concurrent MemBuffer.Set, MemBuffer.SetWithFlags, MemBuffer.Delete and MemBuffer.UpdateFlags.
+	sync.RWMutex
 	*rbt.RBT
+
+	// when the RBT is wrapper by upper RWMutex, we can skip the internal mutex.
+	skipMutex bool
 }
 
 func newRbtDBWithContext() *rbtDBWithContext {
-	return &rbtDBWithContext{RBT: rbt.New()}
+	return &rbtDBWithContext{
+		skipMutex: false,
+		RBT:       rbt.New(),
+	}
+}
+
+func (db *rbtDBWithContext) setSkipMutex(skip bool) {
+	db.skipMutex = skip
+}
+
+func (db *rbtDBWithContext) set(key, value []byte, ops ...kv.FlagsOp) error {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	return db.RBT.Set(key, value, ops...)
+}
+
+// UpdateFlags update the flags associated with key.
+func (db *rbtDBWithContext) UpdateFlags(key []byte, ops ...kv.FlagsOp) {
+	err := db.set(key, nil, ops...)
+	_ = err // set without value will never fail
+}
+
+// Set sets the value for key k as v into kv store.
+// v must NOT be nil or empty, otherwise it returns ErrCannotSetNilValue.
+func (db *rbtDBWithContext) Set(key []byte, value []byte) error {
+	if len(value) == 0 {
+		return tikverr.ErrCannotSetNilValue
+	}
+	return db.set(key, value)
+}
+
+// SetWithFlags put key-value into the last active staging buffer with the given KeyFlags.
+func (db *rbtDBWithContext) SetWithFlags(key []byte, value []byte, ops ...kv.FlagsOp) error {
+	if len(value) == 0 {
+		return tikverr.ErrCannotSetNilValue
+	}
+	return db.set(key, value, ops...)
+}
+
+// Delete removes the entry for key k from kv store.
+func (db *rbtDBWithContext) Delete(key []byte) error {
+	return db.set(key, arena.Tombstone)
+}
+
+// DeleteWithFlags delete key with the given KeyFlags
+func (db *rbtDBWithContext) DeleteWithFlags(key []byte, ops ...kv.FlagsOp) error {
+	return db.set(key, arena.Tombstone, ops...)
+}
+
+func (db *rbtDBWithContext) Staging() int {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	return db.RBT.Staging()
+}
+
+func (db *rbtDBWithContext) Cleanup(handle int) {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	db.RBT.Cleanup(handle)
+}
+
+func (db *rbtDBWithContext) Release(handle int) {
+	if !db.skipMutex {
+		db.Lock()
+		defer db.Unlock()
+	}
+	db.RBT.Release(handle)
 }
 
 func (db *rbtDBWithContext) Get(_ context.Context, k []byte) ([]byte, error) {
@@ -44,7 +125,7 @@ func (db *rbtDBWithContext) FlushWait() error { return nil }
 
 // GetMemDB implements the MemBuffer interface.
 func (db *rbtDBWithContext) GetMemDB() *MemDB {
-	return db.RBT
+	return db
 }
 
 // BatchGet returns the values for given keys from the MemBuffer.

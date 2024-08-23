@@ -250,7 +250,6 @@ type Metrics struct {
 }
 
 var (
-	_ MemBuffer = &MemDBWithContext{}
 	_ MemBuffer = &PipelinedMemDB{}
 	_ MemBuffer = &rbtDBWithContext{}
 	_ MemBuffer = &artDBWithContext{}

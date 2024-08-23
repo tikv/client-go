@@ -115,9 +115,9 @@ func TestFlags(t *testing.T) {
 		var buf [4]byte
 		binary.BigEndian.PutUint32(buf[:], i)
 		if i%2 == 0 {
-			db.SetWithFlags(buf[:], buf[:], kv.SetPresumeKeyNotExists, kv.SetKeyLocked)
+			db.Set(buf[:], buf[:], kv.SetPresumeKeyNotExists, kv.SetKeyLocked)
 		} else {
-			db.SetWithFlags(buf[:], buf[:], kv.SetPresumeKeyNotExists)
+			db.Set(buf[:], buf[:], kv.SetPresumeKeyNotExists)
 		}
 	}
 	db.Cleanup(h)
@@ -154,7 +154,7 @@ func TestFlags(t *testing.T) {
 	for i := uint32(0); i < cnt; i++ {
 		var buf [4]byte
 		binary.BigEndian.PutUint32(buf[:], i)
-		db.UpdateFlags(buf[:], kv.DelKeyLocked)
+		db.Set(buf[:], nil, kv.DelKeyLocked)
 	}
 	for i := uint32(0); i < cnt; i++ {
 		var buf [4]byte

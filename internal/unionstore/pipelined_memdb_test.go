@@ -208,7 +208,7 @@ func TestPipelinedFlushGet(t *testing.T) {
 	require.True(t, memdb.OnFlushing())
 
 	// The key is in flushingMemDB memdb instead of current mutable memdb.
-	_, err = memdb.memDB.Get([]byte("key"))
+	_, err = memdb.memDB.Get(context.Background(), []byte("key"))
 	require.True(t, tikverr.IsErrNotFound(err))
 	// But we still can get the value by PipelinedMemDB.Get.
 	value, err = memdb.Get(context.Background(), []byte("key"))

@@ -186,7 +186,7 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		RequestSource:     snapshot.RequestSource,
 	}
 	if !options.PipelinedMemDB {
-		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDBWithContext(), snapshot)
+		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
 		return newTiKVTxn, nil
 	}
 	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
