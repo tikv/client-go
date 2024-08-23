@@ -37,7 +37,6 @@
 package unionstore
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -871,7 +870,7 @@ func TestSnapshotGetIter(t *testing.T) {
 		assert.Nil(buffer.Set([]byte{byte(0)}, []byte{byte(i)}))
 		// getter
 		getter := buffer.SnapshotGetter()
-		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		val, err := getter.Get([]byte{byte(0)})
 		assert.Nil(err)
 		assert.Equal(val, []byte{byte(min(i, 50))})
 		getters = append(getters, getter)
@@ -887,7 +886,7 @@ func TestSnapshotGetIter(t *testing.T) {
 		}
 	}
 	for _, getter := range getters {
-		val, err := getter.Get(context.Background(), []byte{byte(0)})
+		val, err := getter.Get([]byte{byte(0)})
 		assert.Nil(err)
 		assert.Equal(val, []byte{byte(50)})
 	}
