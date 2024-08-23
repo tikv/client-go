@@ -50,43 +50,33 @@ import (
 
 type KeyFlags = kv.KeyFlags
 
-func init() {
-	testMode = true
+func TestGetSet(t *testing.T) {
+	testGetSet(t, newRbtDBWithContext())
 }
 
-func TestGetSet(t *testing.T) {
+func testGetSet(t *testing.T, db MemBuffer) {
 	require := require.New(t)
 
 	const cnt = 10000
-	p := fillDB(cnt)
+	fillDB(db, cnt)
 
 	var buf [4]byte
 	for i := 0; i < cnt; i++ {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
-		v, err := p.Get(buf[:])
+		v, err := db.Get(context.Background(), buf[:])
 		require.Nil(err)
 		require.Equal(v, buf[:])
 	}
 }
 
-func TestBigKV(t *testing.T) {
-	assert := assert.New(t)
-	db := newMemDB()
-	db.Set([]byte{1}, make([]byte, 80<<20))
-	assert.Equal(db.vlog.blockSize, maxBlockSize)
-	assert.Equal(len(db.vlog.blocks), 1)
-	h := db.Staging()
-	db.Set([]byte{2}, make([]byte, 127<<20))
-	db.Release(h)
-	assert.Equal(db.vlog.blockSize, maxBlockSize)
-	assert.Equal(len(db.vlog.blocks), 2)
-	assert.PanicsWithValue("alloc size is larger than max block size", func() { db.Set([]byte{3}, make([]byte, maxBlockSize+1)) })
+func TestIterator(t *testing.T) {
+	testIterator(t, newRbtDBWithContext())
 }
 
-func TestIterator(t *testing.T) {
+func testIterator(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
 	const cnt = 10000
-	db := fillDB(cnt)
+	fillDB(db, cnt)
 
 	var buf [4]byte
 	var i int
@@ -130,14 +120,17 @@ func TestIterator(t *testing.T) {
 }
 
 func TestDiscard(t *testing.T) {
+	testDiscard(t, newRbtDBWithContext())
+}
+
+func testDiscard(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
 
 	const cnt = 10000
-	db := newMemDB()
-	base := deriveAndFill(0, cnt, 0, db)
+	base := deriveAndFill(db, 0, cnt, 0)
 	sz := db.Size()
 
-	db.Cleanup(deriveAndFill(0, cnt, 1, db))
+	db.Cleanup(deriveAndFill(db, 0, cnt, 1))
 	assert.Equal(db.Len(), cnt)
 	assert.Equal(db.Size(), sz)
 
@@ -145,7 +138,7 @@ func TestDiscard(t *testing.T) {
 
 	for i := 0; i < cnt; i++ {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
-		v, err := db.Get(buf[:])
+		v, err := db.Get(context.Background(), buf[:])
 		assert.Nil(err)
 		assert.Equal(v, buf[:])
 	}
@@ -171,28 +164,25 @@ func TestDiscard(t *testing.T) {
 	db.Cleanup(base)
 	for i := 0; i < cnt; i++ {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
-		_, err := db.Get(buf[:])
+		_, err := db.Get(context.Background(), buf[:])
 		assert.NotNil(err)
 	}
-	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
-	it.seekToFirst()
-	assert.False(it.Valid())
-	it.seekToLast()
-	assert.False(it.Valid())
-	it.seek([]byte{0xff})
+	it, _ := db.Iter(nil, nil)
 	assert.False(it.Valid())
 }
 
 func TestFlushOverwrite(t *testing.T) {
+	testFlushOverwrite(t, newRbtDBWithContext())
+}
+
+func testFlushOverwrite(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
 
 	const cnt = 10000
-	db := newMemDB()
-	db.Release(deriveAndFill(0, cnt, 0, db))
+	db.Release(deriveAndFill(db, 0, cnt, 0))
 	sz := db.Size()
 
-	db.Release(deriveAndFill(0, cnt, 1, db))
+	db.Release(deriveAndFill(db, 0, cnt, 1))
 
 	assert.Equal(db.Len(), cnt)
 	assert.Equal(db.Size(), sz)
@@ -202,7 +192,7 @@ func TestFlushOverwrite(t *testing.T) {
 	for i := 0; i < cnt; i++ {
 		binary.BigEndian.PutUint32(kbuf[:], uint32(i))
 		binary.BigEndian.PutUint32(vbuf[:], uint32(i+1))
-		v, err := db.Get(kbuf[:])
+		v, err := db.Get(context.Background(), kbuf[:])
 		assert.Nil(err)
 		assert.Equal(v, vbuf[:])
 	}
@@ -229,6 +219,10 @@ func TestFlushOverwrite(t *testing.T) {
 }
 
 func TestComplexUpdate(t *testing.T) {
+	testComplexUpdate(t, newRbtDBWithContext())
+}
+
+func testComplexUpdate(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
 
 	const (
@@ -237,10 +231,9 @@ func TestComplexUpdate(t *testing.T) {
 		insert    = 9000
 	)
 
-	db := newMemDB()
-	db.Release(deriveAndFill(0, overwrite, 0, db))
+	db.Release(deriveAndFill(db, 0, overwrite, 0))
 	assert.Equal(db.Len(), overwrite)
-	db.Release(deriveAndFill(keep, insert, 1, db))
+	db.Release(deriveAndFill(db, keep, insert, 1))
 	assert.Equal(db.Len(), insert)
 
 	var kbuf, vbuf [4]byte
@@ -251,20 +244,23 @@ func TestComplexUpdate(t *testing.T) {
 		if i >= keep {
 			binary.BigEndian.PutUint32(vbuf[:], uint32(i+1))
 		}
-		v, err := db.Get(kbuf[:])
+		v, err := db.Get(context.Background(), kbuf[:])
 		assert.Nil(err)
 		assert.Equal(v, vbuf[:])
 	}
 }
 
 func TestNestedSandbox(t *testing.T) {
+	testNestedSandbox(t, newRbtDBWithContext())
+}
+
+func testNestedSandbox(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
-	db := newMemDB()
-	h0 := deriveAndFill(0, 200, 0, db)
-	h1 := deriveAndFill(0, 100, 1, db)
-	h2 := deriveAndFill(50, 150, 2, db)
-	h3 := deriveAndFill(100, 120, 3, db)
-	h4 := deriveAndFill(0, 150, 4, db)
+	h0 := deriveAndFill(db, 0, 200, 0)
+	h1 := deriveAndFill(db, 0, 100, 1)
+	h2 := deriveAndFill(db, 50, 150, 2)
+	h3 := deriveAndFill(db, 100, 120, 3)
+	h4 := deriveAndFill(db, 0, 150, 4)
 	db.Cleanup(h4) // Discard (0..150 -> 4)
 	db.Release(h3) // Flush (100..120 -> 3)
 	db.Cleanup(h2) // Discard (100..120 -> 3) & (50..150 -> 2)
@@ -280,7 +276,7 @@ func TestNestedSandbox(t *testing.T) {
 		if i < 100 {
 			binary.BigEndian.PutUint32(vbuf[:], uint32(i+1))
 		}
-		v, err := db.Get(kbuf[:])
+		v, err := db.Get(context.Background(), kbuf[:])
 		assert.Nil(err)
 		assert.Equal(v, vbuf[:])
 	}
@@ -314,10 +310,14 @@ func TestNestedSandbox(t *testing.T) {
 }
 
 func TestOverwrite(t *testing.T) {
+	testOverwrite(t, newRbtDBWithContext())
+}
+
+func testOverwrite(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
 
 	const cnt = 10000
-	db := fillDB(cnt)
+	fillDB(db, cnt)
 	var buf [4]byte
 
 	sz := db.Size()
@@ -332,7 +332,7 @@ func TestOverwrite(t *testing.T) {
 
 	for i := 0; i < cnt; i++ {
 		binary.BigEndian.PutUint32(buf[:], uint32(i))
-		val, _ := db.Get(buf[:])
+		val, _ := db.Get(context.Background(), buf[:])
 		v := binary.BigEndian.Uint32(val)
 		if i%3 == 0 {
 			assert.Equal(v, uint32(i*10))
@@ -371,56 +371,32 @@ func TestOverwrite(t *testing.T) {
 	assert.Equal(i, -1)
 }
 
-func TestKVLargeThanBlock(t *testing.T) {
-	assert := assert.New(t)
-	db := newMemDB()
-	db.Set([]byte{1}, make([]byte, 1))
-	db.Set([]byte{2}, make([]byte, 4096))
-	assert.Equal(len(db.vlog.blocks), 2)
-	db.Set([]byte{3}, make([]byte, 3000))
-	assert.Equal(len(db.vlog.blocks), 2)
-	val, err := db.Get([]byte{3})
-	assert.Nil(err)
-	assert.Equal(len(val), 3000)
-}
-
-func TestEmptyDB(t *testing.T) {
-	assert := assert.New(t)
-	db := newMemDB()
-	_, err := db.Get([]byte{0})
-	assert.NotNil(err)
-	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
-	it.seekToFirst()
-	assert.False(it.Valid())
-	it.seekToLast()
-	assert.False(it.Valid())
-	it.seek([]byte{0xff})
-	assert.False(it.Valid())
-}
-
 func TestReset(t *testing.T) {
+	testReset(t, newRbtDBWithContext())
+}
+
+func testReset(t *testing.T, db interface {
+	MemBuffer
+	Reset()
+}) {
 	assert := assert.New(t)
-	db := fillDB(1000)
+	fillDB(db, 1000)
 	db.Reset()
-	_, err := db.Get([]byte{0, 0, 0, 0})
+	_, err := db.Get(context.Background(), []byte{0, 0, 0, 0})
 	assert.NotNil(err)
-	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
-	it.seekToFirst()
-	assert.False(it.Valid())
-	it.seekToLast()
-	assert.False(it.Valid())
-	it.seek([]byte{0xff})
+	it, _ := db.Iter(nil, nil)
 	assert.False(it.Valid())
 }
 
 func TestInspectStage(t *testing.T) {
+	testInspectStage(t, newRbtDBWithContext())
+}
+
+func testInspectStage(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
 
-	db := newMemDB()
-	h1 := deriveAndFill(0, 1000, 0, db)
-	h2 := deriveAndFill(500, 1000, 1, db)
+	h1 := deriveAndFill(db, 0, 1000, 0)
+	h2 := deriveAndFill(db, 500, 1000, 1)
 	for i := 500; i < 1500; i++ {
 		var kbuf [4]byte
 		// don't update in place
@@ -429,7 +405,7 @@ func TestInspectStage(t *testing.T) {
 		binary.BigEndian.PutUint32(vbuf[:], uint32(i+2))
 		db.Set(kbuf[:], vbuf[:])
 	}
-	h3 := deriveAndFill(1000, 2000, 3, db)
+	h3 := deriveAndFill(db, 1000, 2000, 3)
 
 	db.InspectStage(h3, func(key []byte, _ KeyFlags, val []byte) {
 		k := int(binary.BigEndian.Uint32(key))
@@ -470,13 +446,17 @@ func TestInspectStage(t *testing.T) {
 }
 
 func TestDirty(t *testing.T) {
+	testDirty(t, func() MemBuffer { return newRbtDBWithContext() })
+}
+
+func testDirty(t *testing.T, createDb func() MemBuffer) {
 	assert := assert.New(t)
 
-	db := newMemDB()
+	db := createDb()
 	db.Set([]byte{1}, []byte{1})
 	assert.True(db.Dirty())
 
-	db = newMemDB()
+	db = createDb()
 	h := db.Staging()
 	db.Set([]byte{1}, []byte{1})
 	db.Cleanup(h)
@@ -488,14 +468,14 @@ func TestDirty(t *testing.T) {
 	assert.True(db.Dirty())
 
 	// persistent flags will make memdb dirty.
-	db = newMemDB()
+	db = createDb()
 	h = db.Staging()
 	db.SetWithFlags([]byte{1}, []byte{1}, kv.SetKeyLocked)
 	db.Cleanup(h)
 	assert.True(db.Dirty())
 
 	// non-persistent flags will not make memdb dirty.
-	db = newMemDB()
+	db = createDb()
 	h = db.Staging()
 	db.SetWithFlags([]byte{1}, []byte{1}, kv.SetPresumeKeyNotExists)
 	db.Cleanup(h)
@@ -503,10 +483,13 @@ func TestDirty(t *testing.T) {
 }
 
 func TestFlags(t *testing.T) {
+	testFlags(t, newRbtDBWithContext(), func(db MemBuffer) Iterator { return db.(*rbtDBWithContext).IterWithFlags(nil, nil) })
+}
+
+func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iterator) {
 	assert := assert.New(t)
 
 	const cnt = 10000
-	db := newMemDB()
 	h := db.Staging()
 	for i := uint32(0); i < cnt; i++ {
 		var buf [4]byte
@@ -522,7 +505,7 @@ func TestFlags(t *testing.T) {
 	for i := uint32(0); i < cnt; i++ {
 		var buf [4]byte
 		binary.BigEndian.PutUint32(buf[:], i)
-		_, err := db.Get(buf[:])
+		_, err := db.Get(context.Background(), buf[:])
 		assert.NotNil(err)
 		flags, err := db.GetFlags(buf[:])
 		if i%2 == 0 {
@@ -537,13 +520,10 @@ func TestFlags(t *testing.T) {
 	assert.Equal(db.Len(), 5000)
 	assert.Equal(db.Size(), 20000)
 
-	it1, _ := db.Iter(nil, nil)
-	it := it1.(*MemdbIterator)
+	it, _ := db.Iter(nil, nil)
 	assert.False(it.Valid())
 
-	it.includeFlags = true
-	it.init()
-
+	it = iterWithFlags(db)
 	for ; it.Valid(); it.Next() {
 		k := binary.BigEndian.Uint32(it.Key())
 		assert.True(k%2 == 0)
@@ -557,7 +537,7 @@ func TestFlags(t *testing.T) {
 	for i := uint32(0); i < cnt; i++ {
 		var buf [4]byte
 		binary.BigEndian.PutUint32(buf[:], i)
-		_, err := db.Get(buf[:])
+		_, err := db.Get(context.Background(), buf[:])
 		assert.NotNil(err)
 
 		// UpdateFlags will create missing node.
@@ -578,7 +558,7 @@ func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
 
 	var prevKey, prevVal []byte
 	for it2.First(); it2.Valid(); it2.Next() {
-		v, err := p1.Get(it2.Key())
+		v, err := p1.Get(context.Background(), it2.Key())
 		assert.Nil(err)
 		assert.Equal(v, it2.Value())
 
@@ -608,14 +588,12 @@ func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
 	}
 }
 
-func fillDB(cnt int) *MemDB {
-	db := newMemDB()
-	h := deriveAndFill(0, cnt, 0, db)
+func fillDB(db MemBuffer, cnt int) {
+	h := deriveAndFill(db, 0, cnt, 0)
 	db.Release(h)
-	return db
 }
 
-func deriveAndFill(start, end, valueBase int, db *MemDB) int {
+func deriveAndFill(db MemBuffer, start, end, valueBase int) int {
 	h := db.Staging()
 	var kbuf, vbuf [4]byte
 	for i := start; i < end; i++ {
@@ -704,21 +682,21 @@ func checkNewIterator(t *testing.T, buffer *MemDB) {
 func mustGet(t *testing.T, buffer *MemDB) {
 	for i := startIndex; i < testCount; i++ {
 		s := encodeInt(i * indexStep)
-		val, err := buffer.Get(s)
+		val, err := buffer.Get(context.Background(), s)
 		assert.Nil(t, err)
 		assert.Equal(t, string(val), string(s))
 	}
 }
 
 func TestKVGetSet(t *testing.T) {
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	insertData(t, buffer)
 	mustGet(t, buffer)
 }
 
 func TestNewIterator(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	// should be invalid
 	iter, err := buffer.Iter(nil, nil)
 	assert.Nil(err)
@@ -746,7 +724,7 @@ func NextUntil(it Iterator, fn FnKeyCmp) error {
 
 func TestIterNextUntil(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	insertData(t, buffer)
 
 	iter, err := buffer.Iter(nil, nil)
@@ -761,7 +739,7 @@ func TestIterNextUntil(t *testing.T) {
 
 func TestBasicNewIterator(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	it, err := buffer.Iter([]byte("2"), nil)
 	assert.Nil(err)
 	assert.False(it.Valid())
@@ -780,7 +758,7 @@ func TestNewIteratorMin(t *testing.T) {
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0002", "2"},
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0003", "hello"},
 	}
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	for _, kv := range kvs {
 		err := buffer.Set([]byte(kv.key), []byte(kv.value))
 		assert.Nil(err)
@@ -803,7 +781,7 @@ func TestNewIteratorMin(t *testing.T) {
 
 func TestMemDBStaging(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	err := buffer.Set([]byte("x"), make([]byte, 2))
 	assert.Nil(err)
 
@@ -815,25 +793,27 @@ func TestMemDBStaging(t *testing.T) {
 	err = buffer.Set([]byte("yz"), make([]byte, 1))
 	assert.Nil(err)
 
-	v, _ := buffer.Get([]byte("x"))
+	v, _ := buffer.Get(context.Background(), []byte("x"))
 	assert.Equal(len(v), 3)
 
 	buffer.Release(h2)
 
-	v, _ = buffer.Get([]byte("yz"))
+	v, _ = buffer.Get(context.Background(), []byte("yz"))
 	assert.Equal(len(v), 1)
 
 	buffer.Cleanup(h1)
 
-	v, _ = buffer.Get([]byte("x"))
+	v, _ = buffer.Get(context.Background(), []byte("x"))
 	assert.Equal(len(v), 2)
 }
 
 func TestBufferLimit(t *testing.T) {
+	testBufferLimit(t, newRbtDBWithContext())
+}
+
+func testBufferLimit(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
-	buffer := newMemDB()
-	buffer.bufferSizeLimit = 1000
-	buffer.entrySizeLimit = 500
+	buffer.SetEntrySizeLimit(500, 1000)
 
 	err := buffer.Set([]byte("x"), make([]byte, 500))
 	assert.NotNil(err) // entry size limit
@@ -852,7 +832,7 @@ func TestBufferLimit(t *testing.T) {
 
 func TestUnsetTemporaryFlag(t *testing.T) {
 	require := require.New(t)
-	db := newMemDB()
+	db := NewMemDB()
 	key := []byte{1}
 	value := []byte{2}
 	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
@@ -864,7 +844,7 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 
 func TestSnapshotGetIter(t *testing.T) {
 	assert := assert.New(t)
-	buffer := newMemDB()
+	buffer := NewMemDB()
 	var getters []Getter
 	var iters []Iterator
 	for i := 0; i < 100; i++ {

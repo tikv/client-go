@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/util"
@@ -35,7 +36,7 @@ import (
 //   - an immutable onflushing buffer for read
 //   - like MemDB, PipelinedMemDB also CANNOT be used concurrently
 type PipelinedMemDB struct {
-	// Like MemDB, this RWMutex only used to ensure memdbSnapGetter.Get will not race with
+	// Like MemDB, this RWMutex only used to ensure rbtSnapGetter.Get will not race with
 	// concurrent memdb.Set, memdb.SetWithFlags, memdb.Delete and memdb.UpdateFlags.
 	sync.RWMutex
 	onFlushing        atomic.Bool
@@ -102,8 +103,9 @@ type FlushFunc func(uint64, *MemDB) error
 type BufferBatchGetter func(ctx context.Context, keys [][]byte) (map[string][]byte, error)
 
 func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc) *PipelinedMemDB {
-	memdb := newMemDB()
+	memdb := NewMemDB()
 	memdb.setSkipMutex(true)
+	entryLimit, _ := memdb.GetEntrySizeLimit()
 	flushOpt := newFlushOption()
 	return &PipelinedMemDB{
 		memDB:             memdb,
@@ -112,7 +114,7 @@ func NewPipelinedMemDB(bufferBatchGetter BufferBatchGetter, flushFunc FlushFunc)
 		bufferBatchGetter: bufferBatchGetter,
 		generation:        0,
 		// keep entryLimit and bufferLimit same with the memdb's default values.
-		entryLimit:  memdb.entrySizeLimit,
+		entryLimit:  entryLimit,
 		flushOption: flushOpt,
 		startTime:   time.Now(),
 	}
@@ -129,7 +131,7 @@ func (p *PipelinedMemDB) GetMemDB() *MemDB {
 }
 
 func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer bool) ([]byte, error) {
-	v, err := p.memDB.Get(k)
+	v, err := p.memDB.Get(ctx, k)
 	if err == nil {
 		return v, nil
 	}
@@ -137,7 +139,7 @@ func (p *PipelinedMemDB) get(ctx context.Context, k []byte, skipRemoteBuffer boo
 		return nil, err
 	}
 	if p.flushingMemDB != nil {
-		v, err = p.flushingMemDB.Get(k)
+		v, err = p.flushingMemDB.Get(ctx, k)
 		if err == nil {
 			return v, nil
 		}
@@ -288,7 +290,7 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	// invalidate the batch get cache whether the flush is really triggered.
 	p.batchGetCache = nil
 
-	if len(p.memDB.stages) > 0 {
+	if p.memDB.IsStaging() {
 		return false, errors.New("there are stages unreleased when Flush is called")
 	}
 
@@ -309,9 +311,9 @@ func (p *PipelinedMemDB) Flush(force bool) (bool, error) {
 	p.flushingMemDB = p.memDB
 	p.len += p.flushingMemDB.Len()
 	p.size += p.flushingMemDB.Size()
-	p.missCount += p.memDB.missCount.Load()
-	p.hitCount += p.memDB.hitCount.Load()
-	p.memDB = newMemDB()
+	p.missCount += p.memDB.GetCacheMissCount()
+	p.hitCount += p.memDB.GetCacheHitCount()
+	p.memDB = NewMemDB()
 	// buffer size is limited by ForceFlushMemSizeThreshold. Do not set bufferLimit
 	p.memDB.SetEntrySizeLimit(p.entryLimit, unlimitedSize)
 	p.memDB.setSkipMutex(true)
@@ -384,7 +386,7 @@ func (p *PipelinedMemDB) FlushWait() error {
 func (p *PipelinedMemDB) handleAlreadyExistErr(err error) error {
 	var existErr *tikverr.ErrKeyExist
 	if stderrors.As(err, &existErr) {
-		v, err2 := p.flushingMemDB.Get(existErr.GetKey())
+		v, err2 := p.flushingMemDB.Get(context.Background(), existErr.GetKey())
 		if err2 != nil {
 			// TODO: log more info like start_ts, also for other logs
 			logutil.BgLogger().Warn(
@@ -518,12 +520,12 @@ func (p *PipelinedMemDB) Release(h int) {
 }
 
 // Checkpoint implements MemBuffer interface.
-func (p *PipelinedMemDB) Checkpoint() *MemDBCheckpoint {
+func (p *PipelinedMemDB) Checkpoint() *arena.MemDBCheckpoint {
 	panic("Checkpoint is not supported for PipelinedMemDB")
 }
 
 // RevertToCheckpoint implements MemBuffer interface.
-func (p *PipelinedMemDB) RevertToCheckpoint(*MemDBCheckpoint) {
+func (p *PipelinedMemDB) RevertToCheckpoint(*arena.MemDBCheckpoint) {
 	panic("RevertToCheckpoint is not supported for PipelinedMemDB")
 }
 
@@ -533,8 +535,8 @@ func (p *PipelinedMemDB) GetMetrics() Metrics {
 	hitCount := p.hitCount
 	missCount := p.missCount
 	if p.memDB != nil {
-		hitCount += p.memDB.hitCount.Load()
-		missCount += p.memDB.missCount.Load()
+		hitCount += p.memDB.GetCacheHitCount()
+		missCount += p.memDB.GetCacheMissCount()
 	}
 	return Metrics{
 		WaitDuration:   p.flushWaitDuration,
