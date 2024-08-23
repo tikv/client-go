@@ -862,7 +862,7 @@ func TestSnapshotGetIter(t *testing.T) {
 		iter := buffer.SnapshotIter(nil, nil)
 		assert.Nil(err)
 		assert.Equal(iter.Key(), []byte{byte(0)})
-		assert.Equal(iter.Value(), []byte{byte(expectValuet)})
+		assert.Equal(iter.Value(), []byte{byte(expectValue)})
 		iter.Close()
 		iters = append(iters, buffer.SnapshotIter(nil, nil))
 		if i == 50 {
