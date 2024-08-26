@@ -50,7 +50,7 @@ func (db *artDBWithContext) set(key, value []byte, ops []kv.FlagsOp) error {
 		db.Lock()
 		defer db.Unlock()
 	}
-	return db.ART.Set(key, value, ops)
+	return db.ART.Set(key, value, ops...)
 }
 
 func (db *artDBWithContext) Set(key, value []byte) error {
