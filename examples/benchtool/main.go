@@ -51,7 +51,7 @@ func main() {
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	// Capture signals to cancel the context.
+	// Capture signals to cancel the context
 	go func() {
 		sig := <-sc
 		fmt.Printf("\nGot signal [%v] to exit.\n", sig)
