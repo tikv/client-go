@@ -47,116 +47,152 @@ const (
 )
 
 func BenchmarkLargeIndex(b *testing.B) {
-	buf := make([][valueSize]byte, 10000000)
-	for i := range buf {
-		binary.LittleEndian.PutUint32(buf[i][:], uint32(i))
-	}
-	db := NewMemDB()
-	b.ResetTimer()
+	fn := func(b *testing.B, p MemBuffer) {
+		buf := make([][valueSize]byte, 10000000)
+		for i := range buf {
+			binary.LittleEndian.PutUint32(buf[i][:], uint32(i))
+		}
+		b.ResetTimer()
 
-	for i := range buf {
-		db.Set(buf[i][:keySize], buf[i][:])
+		for i := range buf {
+			p.Set(buf[i][:keySize], buf[i][:])
+		}
 	}
+
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 func BenchmarkPut(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.BigEndian.PutUint32(buf[i][:], uint32(i))
+	fn := func(b *testing.B, p MemBuffer) {
+		buf := make([][valueSize]byte, b.N)
+		for i := range buf {
+			binary.BigEndian.PutUint32(buf[i][:], uint32(i))
+		}
+		b.ResetTimer()
+		for i := range buf {
+			p.Set(buf[i][:keySize], buf[i][:])
+		}
 	}
 
-	p := NewMemDB()
-	b.ResetTimer()
-
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 func BenchmarkPutRandom(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
+	fn := func(b *testing.B, p MemBuffer) {
+		buf := make([][valueSize]byte, b.N)
+		for i := range buf {
+			binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
+		}
+		b.ResetTimer()
+		for i := range buf {
+			p.Set(buf[i][:keySize], buf[i][:])
+		}
 	}
 
-	p := NewMemDB()
-	b.ResetTimer()
-
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 func BenchmarkGet(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.BigEndian.PutUint32(buf[i][:], uint32(i))
+	fn := func(b *testing.B, p MemBuffer) {
+		buf := make([][valueSize]byte, b.N)
+		for i := range buf {
+			binary.BigEndian.PutUint32(buf[i][:], uint32(i))
+		}
+
+		for i := range buf {
+			p.Set(buf[i][:keySize], buf[i][:])
+		}
+
+		ctx := context.Background()
+		b.ResetTimer()
+		for i := range buf {
+			p.Get(ctx, buf[i][:keySize])
+		}
 	}
 
-	p := NewMemDB()
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
-
-	ctx := context.Background()
-	b.ResetTimer()
-	for i := range buf {
-		p.Get(ctx, buf[i][:keySize])
-	}
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 func BenchmarkGetRandom(b *testing.B) {
-	buf := make([][valueSize]byte, b.N)
-	for i := range buf {
-		binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
+	fn := func(b *testing.B, p MemBuffer) {
+		buf := make([][valueSize]byte, b.N)
+		for i := range buf {
+			binary.LittleEndian.PutUint32(buf[i][:], uint32(rand.Int()))
+		}
+
+		for i := range buf {
+			p.Set(buf[i][:keySize], buf[i][:])
+		}
+
+		ctx := context.Background()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			p.Get(ctx, buf[i][:keySize])
+		}
 	}
 
-	p := NewMemDB()
-	for i := range buf {
-		p.Set(buf[i][:keySize], buf[i][:])
-	}
-
-	ctx := context.Background()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		p.Get(ctx, buf[i][:keySize])
-	}
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 var opCnt = 100000
 
 func BenchmarkMemDbBufferSequential(b *testing.B) {
-	data := make([][]byte, opCnt)
-	for i := 0; i < opCnt; i++ {
-		data[i] = encodeInt(i)
+	fn := func(b *testing.B, buffer MemBuffer) {
+		data := make([][]byte, opCnt)
+		for i := 0; i < opCnt; i++ {
+			data[i] = encodeInt(i)
+		}
+		benchmarkSetGet(b, buffer, data)
+		b.ReportAllocs()
 	}
-	buffer := NewMemDB()
-	benchmarkSetGet(b, buffer, data)
-	b.ReportAllocs()
+
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 func BenchmarkMemDbBufferRandom(b *testing.B) {
-	data := make([][]byte, opCnt)
-	for i := 0; i < opCnt; i++ {
-		data[i] = encodeInt(i)
+	fn := func(b *testing.B, buffer MemBuffer) {
+		data := make([][]byte, opCnt)
+		for i := 0; i < opCnt; i++ {
+			data[i] = encodeInt(i)
+		}
+		shuffle(data)
+		benchmarkSetGet(b, buffer, data)
+		b.ReportAllocs()
 	}
-	shuffle(data)
-	buffer := NewMemDB()
-	benchmarkSetGet(b, buffer, data)
-	b.ReportAllocs()
+
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 func BenchmarkMemDbIter(b *testing.B) {
-	buffer := NewMemDB()
-	benchIterator(b, buffer)
-	b.ReportAllocs()
+	fn := func(b *testing.B, buffer MemBuffer) {
+		benchIterator(b, buffer)
+		b.ReportAllocs()
+	}
+
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) {
+		b.Skip("unimplemented")
+		fn(b, newArtDBWithContext())
+	})
 }
 
 func BenchmarkMemDbCreation(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		NewMemDB()
+	fn := func(b *testing.B, createFn func() MemBuffer) {
+		for i := 0; i < b.N; i++ {
+			createFn()
+		}
+		b.ReportAllocs()
 	}
-	b.ReportAllocs()
+
+	b.Run("RBT", func(b *testing.B) { fn(b, func() MemBuffer { return newRbtDBWithContext() }) })
+	b.Run("ART", func(b *testing.B) { fn(b, func() MemBuffer { return newArtDBWithContext() }) })
 }
 
 func shuffle(slc [][]byte) {
@@ -167,7 +203,7 @@ func shuffle(slc [][]byte) {
 		slc[r], slc[i] = slc[i], slc[r]
 	}
 }
-func benchmarkSetGet(b *testing.B, buffer *MemDB, data [][]byte) {
+func benchmarkSetGet(b *testing.B, buffer MemBuffer, data [][]byte) {
 	ctx := context.Background()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -180,7 +216,7 @@ func benchmarkSetGet(b *testing.B, buffer *MemDB, data [][]byte) {
 	}
 }
 
-func benchIterator(b *testing.B, buffer *MemDB) {
+func benchIterator(b *testing.B, buffer MemBuffer) {
 	for k := 0; k < opCnt; k++ {
 		buffer.Set(encodeInt(k), encodeInt(k))
 	}

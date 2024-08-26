@@ -549,7 +549,7 @@ func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iter
 	}
 }
 
-func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
+func checkConsist(t *testing.T, p1 MemBuffer, p2 *leveldb.DB) {
 	assert := assert.New(t)
 
 	assert.Equal(p1.Len(), p2.Len())
