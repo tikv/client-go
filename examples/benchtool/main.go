@@ -51,7 +51,7 @@ func main() {
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	closeDone := make(chan struct{}, 1)
+	// Capture signals to cancel the context.
 	go func() {
 		sig := <-sc
 		fmt.Printf("\nGot signal [%v] to exit.\n", sig)
@@ -65,7 +65,7 @@ func main() {
 		case <-time.After(10 * time.Second):
 			fmt.Print("\nWait 10s for closed, force exit\n")
 			os.Exit(1)
-		case <-closeDone:
+		default:
 			return
 		}
 	}()
