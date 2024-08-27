@@ -51,10 +51,11 @@ const (
 )
 
 var (
-	Tombstone = []byte{}
-	NullAddr  = MemdbArenaAddr{math.MaxUint32, math.MaxUint32}
-	BadAddr   = MemdbArenaAddr{math.MaxUint32 - 1, math.MaxUint32}
-	endian    = binary.LittleEndian
+	Tombstone          = []byte{}
+	NullAddr           = MemdbArenaAddr{math.MaxUint32, math.MaxUint32}
+	NullU64Addr uint64 = math.MaxUint64
+	BadAddr            = MemdbArenaAddr{math.MaxUint32 - 1, math.MaxUint32}
+	endian             = binary.LittleEndian
 )
 
 type MemdbArenaAddr struct {

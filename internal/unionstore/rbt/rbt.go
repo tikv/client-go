@@ -86,7 +86,7 @@ func New() *RBT {
 	db.stages = make([]arena.MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = unlimitedSize
 	db.bufferSizeLimit = unlimitedSize
-	db.lastTraversedNode.Store(math.MaxUint64)
+	db.lastTraversedNode.Store(arena.NullU64Addr)
 	return db
 }
 
@@ -98,7 +98,7 @@ func (db *RBT) updateLastTraversed(node MemdbNodeAddr) {
 // checkKeyInCache retrieves the last traversed node if the key matches
 func (db *RBT) checkKeyInCache(key []byte) (MemdbNodeAddr, bool) {
 	addrU64 := db.lastTraversedNode.Load()
-	if addrU64 == math.MaxUint64 {
+	if addrU64 == arena.NullU64Addr {
 		return nullNodeAddr, false
 	}
 	addr := arena.U64ToAddr(addrU64)
@@ -212,7 +212,7 @@ func (db *RBT) Reset() {
 	db.count = 0
 	db.vlog.Reset()
 	db.allocator.reset()
-	db.lastTraversedNode.Store(math.MaxUint64)
+	db.lastTraversedNode.Store(arena.NullU64Addr)
 }
 
 // DiscardValues releases the memory used by all values.
@@ -597,7 +597,7 @@ func (db *RBT) rightRotate(y MemdbNodeAddr) {
 func (db *RBT) deleteNode(z MemdbNodeAddr) {
 	var x, y MemdbNodeAddr
 	if db.lastTraversedNode.Load() == z.addr.AsU64() {
-		db.lastTraversedNode.Store(math.MaxUint64)
+		db.lastTraversedNode.Store(arena.NullU64Addr)
 	}
 
 	db.count--
