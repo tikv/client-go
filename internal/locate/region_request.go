@@ -524,8 +524,8 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		replicaRead := true
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
-	staleRead := false
-	rpcCtx.contextPatcher.staleRead = &staleRead
+
+	rpcCtx.contextPatcher.staleRead = &state.isStaleRead
 	return rpcCtx, nil
 }
 
