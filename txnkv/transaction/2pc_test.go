@@ -39,28 +39,32 @@ func TestMutationsHasDataInRange(t *testing.T) {
 	}
 
 	type Case struct {
-		start   int
-		end     int
-		expectd bool
+		start    int
+		end      int
+		expectd  bool
+		firstKey int
 	}
 	cases := []Case{
-		{-1, -1, true},
-		{-1, 5, false},
-		{0, 10, false},
-		{0, 11, true},
-		{0, 30, true},
-		{0, -1, true},
-		{10, 20, true},
-		{15, 16, false},
-		{15, 17, true},
-		{15, -1, true},
-		{20, 30, false},
-		{21, 30, false},
-		{21, -1, false},
+		{-1, -1, true, 10},
+		{-1, 5, false, -1},
+		{0, 10, false, -1},
+		{0, 11, true, 10},
+		{0, 30, true, 10},
+		{0, -1, true, 10},
+		{10, 20, true, 10},
+		{15, 16, false, 16},
+		{15, 17, true, 16},
+		{15, -1, true, 16},
+		{20, 30, false, -1},
+		{21, 30, false, -1},
+		{21, -1, false, -1},
 	}
 
 	for _, c := range cases {
-		got := MutationsHasDataInRange(&muts, iToKey(c.start), iToKey(c.end))
+		firstKey, got := MutationsHasDataInRange(&muts, iToKey(c.start), iToKey(c.end))
 		assert.Equal(c.expectd, got)
+		if got {
+			assert.Equal(iToKey(c.firstKey), firstKey)
+		}
 	}
 }

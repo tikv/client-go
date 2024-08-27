@@ -332,11 +332,15 @@ type CommitterMutations interface {
 	NeedConstraintCheckInPrewrite(i int) bool
 }
 
-func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) bool {
+func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) ([]byte, bool) {
 	pos := sort.Search(mutations.Len(), func(i int) bool {
 		return bytes.Compare(mutations.GetKey(i), start) >= 0
 	})
-	return pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)
+	ok := pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)
+	if ok {
+		return mutations.GetKey(pos), true
+	}
+	return nil, false
 }
 
 // PlainMutations contains transaction operations.
