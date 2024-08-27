@@ -160,7 +160,7 @@ func (db *artDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
 
 // SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
-	return db.ART.SnapshotIter(upper, lower)
+	return db.ART.SnapshotIterReverse(upper, lower)
 }
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
