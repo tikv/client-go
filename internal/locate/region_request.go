@@ -526,6 +526,10 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 	}
 
 	rpcCtx.contextPatcher.staleRead = &state.isStaleRead
+	if state.isStaleRead {
+		// reset the state so that next replica read is not stale
+		state.isStaleRead = false
+	}
 	return rpcCtx, nil
 }
 
