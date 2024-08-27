@@ -48,14 +48,14 @@ const (
 
 func BenchmarkLargeIndex(b *testing.B) {
 	fn := func(b *testing.B, p MemBuffer) {
-		buf := make([][valueSize]byte, 10000000)
+		buf := make([][valueSize]byte, b.N)
 		for i := range buf {
 			binary.LittleEndian.PutUint32(buf[i][:], uint32(i))
 		}
 		b.ResetTimer()
 
 		for i := range buf {
-			p.Set(buf[i][:keySize], buf[i][:])
+			p.Set(buf[i][:], buf[i][:])
 		}
 	}
 
