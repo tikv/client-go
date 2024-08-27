@@ -72,8 +72,9 @@ type RBT struct {
 	dirty       bool
 	stages      []arena.MemDBCheckpoint
 
-	// The lastTraversedNode must exist
-	lastTraversedNode atomic.Pointer[MemdbNodeAddr]
+	// The lastTraversedNode stores addr in uint64 of the last traversed node.
+	// Compare to atomic.Pointer, atomic.Uint64 can avoid allocation so it's more efficient.
+	lastTraversedNode atomic.Uint64
 	hitCount          atomic.Uint64
 	missCount         atomic.Uint64
 }
@@ -85,24 +86,26 @@ func New() *RBT {
 	db.stages = make([]arena.MemDBCheckpoint, 0, 2)
 	db.entrySizeLimit = unlimitedSize
 	db.bufferSizeLimit = unlimitedSize
-	db.lastTraversedNode.Store(&nullNodeAddr)
+	db.lastTraversedNode.Store(math.MaxUint64)
 	return db
 }
 
 // updateLastTraversed updates the last traversed node atomically
 func (db *RBT) updateLastTraversed(node MemdbNodeAddr) {
-	db.lastTraversedNode.Store(&node)
+	db.lastTraversedNode.Store(node.addr.AsU64())
 }
 
 // checkKeyInCache retrieves the last traversed node if the key matches
 func (db *RBT) checkKeyInCache(key []byte) (MemdbNodeAddr, bool) {
-	nodePtr := db.lastTraversedNode.Load()
-	if nodePtr == nil || nodePtr.isNull() {
+	addrU64 := db.lastTraversedNode.Load()
+	if addrU64 == math.MaxUint64 {
 		return nullNodeAddr, false
 	}
+	addr := arena.U64ToAddr(addrU64)
+	node := db.getNode(addr)
 
-	if bytes.Equal(key, nodePtr.memdbNode.getKey()) {
-		return *nodePtr, true
+	if bytes.Equal(key, node.memdbNode.getKey()) {
+		return node, true
 	}
 
 	return nullNodeAddr, false
@@ -209,6 +212,7 @@ func (db *RBT) Reset() {
 	db.count = 0
 	db.vlog.Reset()
 	db.allocator.reset()
+	db.lastTraversedNode.Store(math.MaxUint64)
 }
 
 // DiscardValues releases the memory used by all values.
@@ -592,8 +596,8 @@ func (db *RBT) rightRotate(y MemdbNodeAddr) {
 
 func (db *RBT) deleteNode(z MemdbNodeAddr) {
 	var x, y MemdbNodeAddr
-	if db.lastTraversedNode.Load().addr == z.addr {
-		db.lastTraversedNode.Store(&nullNodeAddr)
+	if db.lastTraversedNode.Load() == z.addr.AsU64() {
+		db.lastTraversedNode.Store(math.MaxUint64)
 	}
 
 	db.count--

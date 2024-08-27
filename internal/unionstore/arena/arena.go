@@ -62,6 +62,14 @@ type MemdbArenaAddr struct {
 	off uint32
 }
 
+func U64ToAddr(u64 uint64) MemdbArenaAddr {
+	return MemdbArenaAddr{uint32(u64 >> 32), uint32(u64)}
+}
+
+func (addr MemdbArenaAddr) AsU64() uint64 {
+	return uint64(addr.idx)<<32 | uint64(addr.off)
+}
+
 func (addr MemdbArenaAddr) IsNull() bool {
 	// Combine all checks into a single condition
 	return addr == NullAddr || addr.idx == math.MaxUint32 || addr.off == math.MaxUint32
