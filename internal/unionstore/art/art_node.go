@@ -16,12 +16,13 @@ package art
 
 import (
 	"bytes"
-	"github.com/tikv/client-go/v2/internal/unionstore/arena"
-	"github.com/tikv/client-go/v2/kv"
 	"math"
 	"math/bits"
 	"sort"
 	"unsafe"
+
+	"github.com/tikv/client-go/v2/internal/unionstore/arena"
+	"github.com/tikv/client-go/v2/kv"
 )
 
 type nodeKind uint16
@@ -54,22 +55,6 @@ const (
 )
 
 var nullArtNode = artNode{kind: typeInvalid, addr: arena.NullAddr}
-
-var (
-	// nullNode48 is used to initialize the node48
-	nullNode48 = node48{}
-	// nullNode256 is used to initialize the node256
-	nullNode256 = node256{}
-)
-
-func init() {
-	for i := 0; i < node48cap; i++ {
-		nullNode48.children[i] = artNode{kind: typeInvalid, addr: arena.NullAddr}
-	}
-	for i := 0; i < node256cap; i++ {
-		nullNode256.children[i] = artNode{kind: typeInvalid, addr: arena.NullAddr}
-	}
-}
 
 type artKey []byte
 
@@ -161,7 +146,9 @@ func (an *artNode) node(a *artAllocator) *nodeBase {
 	}
 }
 
-// at returns the nth child of the node.
+// at returns the nth child of the node, used for test.
+//
+//nolint:unused
 func (an *artNode) at(a *artAllocator, idx int) artNode {
 	switch an.kind {
 	case typeNode4:
@@ -183,7 +170,6 @@ func (n48 *node48) init() {
 	n48.nodeBase.init()
 	// initialize node48
 	n48.present[0], n48.present[1], n48.present[2], n48.present[3] = 0, 0, 0, 0
-	copy(n48.children[:], nullNode48.children[:])
 }
 
 // nextPresentIdx returns the next present index starting from the given index.
@@ -222,7 +208,7 @@ func (n256 *node256) init() {
 	// initialize nodeBase
 	n256.nodeBase.init()
 	// initialize node256
-	copy(n256.children[:], nullNode256.children[:])
+	n256.present[0], n256.present[1], n256.present[2], n256.present[3] = 0, 0, 0, 0
 }
 
 func (n256 *node256) nextPresentIdx(start int) int {
@@ -302,6 +288,8 @@ const (
 )
 
 // markDelete marks the artLeaf as deleted
+//
+//nolint:unused
 func (l *artLeaf) markDelete() {
 	l.flags = deleteFlag
 }
@@ -470,7 +458,10 @@ func (an *artNode) findChild48(a *artAllocator, c byte) (int, artNode) {
 
 func (an *artNode) findChild256(a *artAllocator, c byte) (int, artNode) {
 	n256 := an.node256(a)
-	return int(c), n256.children[c]
+	if n256.present[c>>n48s]&(1<<(c%n48m)) != 0 {
+		return int(c), n256.children[c]
+	}
+	return -2, nullArtNode
 }
 
 func (an *artNode) swapChild(a *artAllocator, c byte, child artNode) {

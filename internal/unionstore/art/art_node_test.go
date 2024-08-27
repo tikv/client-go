@@ -21,9 +21,7 @@ func TestAllocNode(t *testing.T) {
 			require.Equal(t, [4]uint64{0, 0, 0, 0}, n.present)
 		case *node256:
 			base = &n.nodeBase
-			for i := 0; i < node256cap; i++ {
-				require.Equal(t, n.children[i], nullArtNode)
-			}
+			require.Equal(t, [4]uint64{0, 0, 0, 0}, n.present)
 		default:
 			require.Fail(t, "unknown node type")
 		}

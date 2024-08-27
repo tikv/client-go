@@ -48,10 +48,12 @@ func New() *ART {
 }
 
 func (t *ART) Get(key []byte) ([]byte, error) {
+	// 1. search the leaf node.
 	_, leaf := t.search(key)
 	if leaf == nil || leaf.vAddr.IsNull() {
 		return nil, tikverr.ErrNotExist
 	}
+	// 2. get the value from the vlog.
 	return t.allocator.vlogAllocator.GetValue(leaf.vAddr), nil
 }
 
@@ -79,7 +81,9 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	if len(t.stages) == 0 {
 		t.dirty = true
 	}
+	// 1. create or search the exist leaf in the tree.
 	addr, leaf := t.recursiveInsert(key)
+	// 2. set the value and flags.
 	t.setValue(addr, leaf, value, ops)
 	if uint64(t.Size()) > t.bufferSizeLimit {
 		return &tikverr.ErrTxnTooLarge{Size: t.Size()}
