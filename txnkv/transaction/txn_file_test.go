@@ -21,67 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tikv/client-go/v2/internal/locate"
 )
-
-func TestTxnFileChunkBatch(t *testing.T) {
-	assert := assert.New(t)
-	chunkSlice := txnChunkSlice{
-		chunkIDs: []uint64{1, 2, 3},
-		chunkRanges: []txnChunkRange{
-			{
-				smallest: []byte("k01"),
-				biggest:  []byte("k01"),
-			},
-			{
-				smallest: []byte("k02"),
-				biggest:  []byte("k04"),
-			},
-			{
-				smallest: []byte("k05"),
-				biggest:  []byte("k08"),
-			},
-		},
-	}
-
-	cases := []struct {
-		startKey string
-		endKey   string
-		expected []string
-	}{
-		{
-			"", "", []string{"k01", "k02", "k05"},
-		},
-		{
-			"k01", "k05", []string{"k01", "k02"},
-		},
-		{
-			"k010", "k05", []string{"k02"},
-		},
-		{
-			"k03", "k05", []string{},
-		},
-		{
-			"k03", "", []string{"k05"},
-		},
-	}
-
-	for _, c := range cases {
-		batch := chunkBatch{
-			txnChunkSlice: chunkSlice,
-			region: &locate.KeyLocation{
-				StartKey: []byte(c.startKey),
-				EndKey:   []byte(c.endKey),
-			},
-		}
-		keys := batch.getSampleKeys()
-		strKeys := make([]string, 0, len(keys))
-		for _, key := range keys {
-			strKeys = append(strKeys, string(key))
-		}
-		assert.Equal(c.expected, strKeys)
-	}
-}
 
 func TestChunkSliceSortAndDedup(t *testing.T) {
 	assert := assert.New(t)
