@@ -69,8 +69,9 @@ type txnFileCtx struct {
 
 type chunkBatch struct {
 	txnChunkSlice
-	region    *locate.KeyLocation
-	isPrimary bool
+	region     *locate.KeyLocation
+	sampleKeys [][]byte
+	isPrimary  bool
 }
 
 func (b chunkBatch) String() string {
@@ -78,22 +79,8 @@ func (b chunkBatch) String() string {
 		b.region.Region.GetID(), b.isPrimary, b.txnChunkSlice.chunkIDs)
 }
 
-// chunkBatch.txnChunkSlice should be sorted by smallest.
 func (b *chunkBatch) getSampleKeys() [][]byte {
-	keys := make([][]byte, 0)
-	start := sort.Search(b.txnChunkSlice.Len(), func(i int) bool {
-		return bytes.Compare(b.region.StartKey, b.txnChunkSlice.chunkRanges[i].smallest) <= 0
-	})
-	end := b.txnChunkSlice.Len()
-	if len(b.region.EndKey) > 0 {
-		end = sort.Search(b.txnChunkSlice.Len(), func(i int) bool {
-			return bytes.Compare(b.txnChunkSlice.chunkRanges[i].smallest, b.region.EndKey) >= 0
-		})
-	}
-	for i := start; i < end; i++ {
-		keys = append(keys, b.txnChunkSlice.chunkRanges[i].smallest)
-	}
-	return keys
+	return b.sampleKeys
 }
 
 // txnChunkSlice should be sorted by txnChunkRange.smallest and no overlapping.
@@ -176,19 +163,29 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 	}
 	batchMap := make(map[batchMapKey]*chunkBatch)
 	for i, chunkRange := range cs.chunkRanges {
-		regions, err := chunkRange.getOverlapRegions(c, bo, mutations)
+		chunkID := cs.chunkIDs[i]
+
+		regions, firstKeys, err := chunkRange.getOverlapRegions(c, bo, mutations)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 
-		for _, r := range regions {
-			key := batchMapKey{regionID: r.Region.GetID(), regionVer: r.Region.GetVer()}
-			if batchMap[key] == nil {
-				batchMap[key] = &chunkBatch{
-					region: r,
+		for j, r := range regions {
+			firstKey := firstKeys[j]
+
+			bk := batchMapKey{regionID: r.Region.GetID(), regionVer: r.Region.GetVer()}
+			if batchMap[bk] == nil {
+				batchMap[bk] = &chunkBatch{
+					region:     r,
+					sampleKeys: make([][]byte, 0, 1),
 				}
 			}
-			batchMap[key].append(cs.chunkIDs[i], chunkRange)
+
+			batch := batchMap[bk]
+			batch.append(chunkID, chunkRange)
+			if len(firstKey) > 0 {
+				batch.sampleKeys = append(batch.sampleKeys, firstKey)
+			}
 		}
 	}
 
@@ -227,24 +224,27 @@ func newTxnChunkRange(smallest []byte, biggest []byte) txnChunkRange {
 	}
 }
 
-func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, error) {
+func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backoffer, mutations CommitterMutations) ([]*locate.KeyLocation, [][]byte, error) {
 	regions := make([]*locate.KeyLocation, 0)
+	firstKeys := make([][]byte, 0)
 	startKey := r.smallest
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
 			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
-			return nil, errors.Wrap(err, "locate key failed")
+			return nil, nil, errors.Wrap(err, "locate key failed")
 		}
-		if MutationsHasDataInRange(mutations, loc.StartKey, loc.EndKey) {
+		firstKey, ok := MutationsHasDataInRange(mutations, loc.StartKey, loc.EndKey)
+		if ok {
 			regions = append(regions, loc)
+			firstKeys = append(firstKeys, firstKey)
 		}
 		if len(loc.EndKey) == 0 {
 			break
 		}
 		startKey = loc.EndKey
 	}
-	return regions, nil
+	return regions, firstKeys, nil
 }
 
 type txnFileAction interface {
