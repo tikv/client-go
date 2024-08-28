@@ -51,15 +51,24 @@ const (
 )
 
 var (
-	Tombstone = []byte{}
-	NullAddr  = MemdbArenaAddr{math.MaxUint32, math.MaxUint32}
-	BadAddr   = MemdbArenaAddr{math.MaxUint32 - 1, math.MaxUint32}
-	endian    = binary.LittleEndian
+	Tombstone          = []byte{}
+	NullAddr           = MemdbArenaAddr{math.MaxUint32, math.MaxUint32}
+	NullU64Addr uint64 = math.MaxUint64
+	BadAddr            = MemdbArenaAddr{math.MaxUint32 - 1, math.MaxUint32}
+	endian             = binary.LittleEndian
 )
 
 type MemdbArenaAddr struct {
 	idx uint32
 	off uint32
+}
+
+func U64ToAddr(u64 uint64) MemdbArenaAddr {
+	return MemdbArenaAddr{uint32(u64 >> 32), uint32(u64)}
+}
+
+func (addr MemdbArenaAddr) AsU64() uint64 {
+	return uint64(addr.idx)<<32 | uint64(addr.off)
 }
 
 func (addr MemdbArenaAddr) IsNull() bool {

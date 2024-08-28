@@ -844,26 +844,38 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 
 func TestSnapshotGetIter(t *testing.T) {
 	assert := assert.New(t)
-	buffer := NewMemDB()
+	db := NewMemDB()
 	var getters []Getter
 	var iters []Iterator
+	var reverseIters []Iterator
 	for i := 0; i < 100; i++ {
-		assert.Nil(buffer.Set([]byte{byte(0)}, []byte{byte(i)}))
+		assert.Nil(db.Set([]byte{byte(0)}, []byte{byte(i)}))
+		assert.Nil(db.Set([]byte{byte(1)}, []byte{byte(i)}))
+
 		// getter
-		getter := buffer.SnapshotGetter()
+		getter := db.SnapshotGetter()
 		val, err := getter.Get(context.Background(), []byte{byte(0)})
 		assert.Nil(err)
 		assert.Equal(val, []byte{byte(min(i, 50))})
 		getters = append(getters, getter)
+
 		// iter
-		iter := buffer.SnapshotIter(nil, nil)
-		assert.Nil(err)
+		iter := db.SnapshotIter(nil, nil)
 		assert.Equal(iter.Key(), []byte{byte(0)})
 		assert.Equal(iter.Value(), []byte{byte(min(i, 50))})
 		iter.Close()
-		iters = append(iters, buffer.SnapshotIter(nil, nil))
+		iters = append(iters, db.SnapshotIter(nil, nil))
+
+		// reverse iter
+		reverseIter := db.SnapshotIterReverse(nil, nil)
+		assert.Equal(reverseIter.Key(), []byte{byte(1)})
+		assert.Equal(reverseIter.Value(), []byte{byte(min(i, 50))})
+		reverseIter.Close()
+		reverseIters = append(reverseIters, db.SnapshotIterReverse(nil, nil))
+
+		// writes after staging should be bypassed in snapshot read.
 		if i == 50 {
-			_ = buffer.Staging()
+			_ = db.Staging()
 		}
 	}
 	for _, getter := range getters {
@@ -874,5 +886,9 @@ func TestSnapshotGetIter(t *testing.T) {
 	for _, iter := range iters {
 		assert.Equal(iter.Key(), []byte{byte(0)})
 		assert.Equal(iter.Value(), []byte{byte(50)})
+	}
+	for _, reverseIter := range reverseIters {
+		assert.Equal(reverseIter.Key(), []byte{byte(1)})
+		assert.Equal(reverseIter.Value(), []byte{byte(50)})
 	}
 }
