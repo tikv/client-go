@@ -35,9 +35,9 @@
 package locate
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand"
 	"strconv"
@@ -109,7 +109,8 @@ type RegionRequestSender struct {
 	replicaSelector   *replicaSelector
 	failStoreIDs      map[uint64]struct{}
 	failProxyStoreIDs map[uint64]struct{}
-	RegionRequestRuntimeStats
+	Stats             *RegionRequestRuntimeStats
+	AccessStats       *ReplicaAccessStats
 }
 
 func (s *RegionRequestSender) String() string {
@@ -118,13 +119,22 @@ func (s *RegionRequestSender) String() string {
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
-	Stats map[tikvrpc.CmdType]*RPCRuntimeStats
+	RPCStats map[tikvrpc.CmdType]*RPCRuntimeStats
+	RequestErrorStats
+}
+
+// RequestErrorStats records the request error(region error and rpc error) count.
+type RequestErrorStats struct {
+	// ErrStats record the region error and rpc error, and their count.
+	// Attention: avoid too many error types, ErrStats only record the first 16 different errors.
+	ErrStats    map[string]int
+	OtherErrCnt int
 }
 
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
-func NewRegionRequestRuntimeStats() RegionRequestRuntimeStats {
-	return RegionRequestRuntimeStats{
-		Stats: make(map[tikvrpc.CmdType]*RPCRuntimeStats),
+func NewRegionRequestRuntimeStats() *RegionRequestRuntimeStats {
+	return &RegionRequestRuntimeStats{
+		RPCStats: make(map[tikvrpc.CmdType]*RPCRuntimeStats),
 	}
 }
 
@@ -135,14 +145,44 @@ type RPCRuntimeStats struct {
 	Consume int64
 }
 
+// RecordRPCRuntimeStats uses to record the rpc count and duration stats.
+func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d time.Duration) {
+	stat, ok := r.RPCStats[cmd]
+	if !ok {
+		r.RPCStats[cmd] = &RPCRuntimeStats{
+			Count:   1,
+			Consume: int64(d),
+		}
+		return
+	}
+	stat.Count++
+	stat.Consume += int64(d)
+}
+
+// RecordRPCErrorStats uses to record the request error(region error label and rpc error) info and count.
+func (r *RequestErrorStats) RecordRPCErrorStats(errLabel string) {
+	if r.ErrStats == nil {
+		// lazy init to avoid unnecessary allocation.
+		r.ErrStats = make(map[string]int)
+	}
+	if len(r.ErrStats) < 16 {
+		// Avoid too many error.
+		r.ErrStats[errLabel]++
+	} else {
+		r.OtherErrCnt++
+	}
+}
+
 // String implements fmt.Stringer interface.
 func (r *RegionRequestRuntimeStats) String() string {
+	if r == nil {
+		return ""
+	}
 	var builder strings.Builder
-	for k, v := range r.Stats {
+	for k, v := range r.RPCStats {
 		if builder.Len() > 0 {
 			builder.WriteByte(',')
 		}
-		// append string: fmt.Sprintf("%s:{num_rpc:%v, total_time:%s}", k.String(), v.Count, util.FormatDuration(time.Duration(v.Consume))")
 		builder.WriteString(k.String())
 		builder.WriteString(":{num_rpc:")
 		builder.WriteString(strconv.FormatInt(v.Count, 10))
@@ -150,27 +190,57 @@ func (r *RegionRequestRuntimeStats) String() string {
 		builder.WriteString(util.FormatDuration(time.Duration(v.Consume)))
 		builder.WriteString("}")
 	}
+	if errStatsStr := r.RequestErrorStats.String(); errStatsStr != "" {
+		builder.WriteString(", rpc_errors:")
+		builder.WriteString(errStatsStr)
+	}
+	return builder.String()
+}
+
+// String implements fmt.Stringer interface.
+func (r *RequestErrorStats) String() string {
+	if len(r.ErrStats) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("{")
+	for err, cnt := range r.ErrStats {
+		if builder.Len() > 2 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(err)
+		builder.WriteString(":")
+		builder.WriteString(strconv.Itoa(cnt))
+	}
+	if r.OtherErrCnt > 0 {
+		builder.WriteString(", other_error:")
+		builder.WriteString(strconv.Itoa(r.OtherErrCnt))
+	}
+	builder.WriteString("}")
 	return builder.String()
 }
 
 // Clone returns a copy of itself.
-func (r *RegionRequestRuntimeStats) Clone() RegionRequestRuntimeStats {
+func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
-	for cmd, v := range r.Stats {
-		newRs.Stats[cmd] = &RPCRuntimeStats{
-			Count:   v.Count,
-			Consume: v.Consume,
-		}
+	maps.Copy(newRs.RPCStats, r.RPCStats)
+	if len(r.ErrStats) > 0 {
+		newRs.ErrStats = make(map[string]int)
+		maps.Copy(newRs.ErrStats, r.ErrStats)
+		newRs.OtherErrCnt = r.OtherErrCnt
 	}
 	return newRs
 }
 
 // Merge merges other RegionRequestRuntimeStats.
-func (r *RegionRequestRuntimeStats) Merge(rs RegionRequestRuntimeStats) {
-	for cmd, v := range rs.Stats {
-		stat, ok := r.Stats[cmd]
+func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
+	if rs == nil {
+		return
+	}
+	for cmd, v := range rs.RPCStats {
+		stat, ok := r.RPCStats[cmd]
 		if !ok {
-			r.Stats[cmd] = &RPCRuntimeStats{
+			r.RPCStats[cmd] = &RPCRuntimeStats{
 				Count:   v.Count,
 				Consume: v.Consume,
 			}
@@ -179,20 +249,114 @@ func (r *RegionRequestRuntimeStats) Merge(rs RegionRequestRuntimeStats) {
 		stat.Count += v.Count
 		stat.Consume += v.Consume
 	}
+	if len(rs.ErrStats) > 0 {
+		if r.ErrStats == nil {
+			r.ErrStats = make(map[string]int)
+		}
+		for err, cnt := range rs.ErrStats {
+			r.ErrStats[err] += cnt
+		}
+		r.OtherErrCnt += rs.OtherErrCnt
+	}
 }
 
-// RecordRegionRequestRuntimeStats records request runtime stats.
-func RecordRegionRequestRuntimeStats(stats map[tikvrpc.CmdType]*RPCRuntimeStats, cmd tikvrpc.CmdType, d time.Duration) {
-	stat, ok := stats[cmd]
-	if !ok {
-		stats[cmd] = &RPCRuntimeStats{
-			Count:   1,
-			Consume: int64(d),
+// ReplicaAccessStats records the replica access info.
+type ReplicaAccessStats struct {
+	// AccessInfos records the access info
+	AccessInfos []ReplicaAccessInfo
+	// avoid to consume too much memory, after more than 5 records, count them by peerID in `OverflowAccessStat` map.
+	OverflowAccessStat map[uint64]*RequestErrorStats
+}
+
+// ReplicaAccessInfo indicates the access path detail info of a request.
+type ReplicaAccessInfo struct {
+	Peer      uint64
+	Store     uint64
+	ReqReadTp ReqReadType
+	Err       string
+}
+
+type ReqReadType byte
+
+const (
+	ReqLeader ReqReadType = iota
+	ReqReplicaRead
+	ReqStaleRead
+)
+
+func (s *ReplicaAccessStats) recordReplicaAccessInfo(staleRead, replicaRead bool, peerID, storeID uint64, err string) {
+	if len(s.AccessInfos) < 5 {
+		tp := ReqLeader
+		if replicaRead {
+			tp = ReqReplicaRead
+		} else if staleRead {
+			tp = ReqStaleRead
 		}
+		s.AccessInfos = append(s.AccessInfos, ReplicaAccessInfo{
+			Peer:      peerID,
+			Store:     storeID,
+			ReqReadTp: tp,
+			Err:       err,
+		})
 		return
 	}
-	stat.Count++
-	stat.Consume += int64(d)
+	if s.OverflowAccessStat == nil {
+		s.OverflowAccessStat = make(map[uint64]*RequestErrorStats)
+	}
+	stat, ok := s.OverflowAccessStat[peerID]
+	if !ok {
+		stat = &RequestErrorStats{}
+		s.OverflowAccessStat[peerID] = stat
+	}
+	stat.RecordRPCErrorStats(err)
+}
+
+// String implements fmt.Stringer interface.
+func (s *ReplicaAccessStats) String() string {
+	if s == nil {
+		return ""
+	}
+	var builder strings.Builder
+	for i, info := range s.AccessInfos {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		switch info.ReqReadTp {
+		case ReqLeader:
+			builder.WriteString("{")
+		case ReqReplicaRead:
+			builder.WriteString("{replica_read, ")
+		case ReqStaleRead:
+			builder.WriteString("{stale_read, ")
+		}
+		builder.WriteString("peer:")
+		builder.WriteString(strconv.FormatUint(info.Peer, 10))
+		builder.WriteString(", store:")
+		builder.WriteString(strconv.FormatUint(info.Store, 10))
+		builder.WriteString(", err:")
+		builder.WriteString(info.Err)
+		builder.WriteString("}")
+	}
+	if len(s.OverflowAccessStat) > 0 {
+		builder.WriteString(", overflow_count:{")
+		cnt := 0
+		for peerID, stat := range s.OverflowAccessStat {
+			if stat == nil {
+				continue
+			}
+			if cnt > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString("{peer:")
+			builder.WriteString(strconv.FormatUint(peerID, 10))
+			builder.WriteString(", error_stats:")
+			builder.WriteString(stat.String())
+			builder.WriteString("}")
+			cnt++
+		}
+		builder.WriteString("}")
+	}
+	return builder.String()
 }
 
 // NewRegionRequestSender creates a new sender.
@@ -244,11 +408,22 @@ func (s *RegionRequestSender) SendReq(
 	return resp, retryTimes, err
 }
 
+func (s *RegionRequestSender) recordRPCAccessInfo(req *tikvrpc.Request, rpcCtx *RPCContext, err string) {
+	if req == nil || rpcCtx == nil || rpcCtx.Peer == nil || rpcCtx.Store == nil {
+		return
+	}
+	if s.AccessStats == nil {
+		s.AccessStats = &ReplicaAccessStats{}
+	}
+	s.AccessStats.recordReplicaAccessInfo(req.StaleRead, req.ReplicaRead, rpcCtx.Peer.GetId(), rpcCtx.Store.storeID, err)
+}
+
 type replica struct {
-	store    *Store
-	peer     *metapb.Peer
-	epoch    uint32
-	attempts int
+	store         *Store
+	peer          *metapb.Peer
+	epoch         uint32
+	attempts      int
+	attemptedTime time.Duration
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
 }
@@ -323,11 +498,12 @@ func (s *replicaSelector) String() string {
 		}
 		for _, replica := range s.replicas {
 			replicaStatus = append(replicaStatus, fmt.Sprintf("peer: %v, store: %v, isEpochStale: %v, "+
-				"attempts: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
+				"attempts: %v, attempts_time: %v, replica-epoch: %v, store-epoch: %v, store-state: %v, store-liveness-state: %v",
 				replica.peer.GetId(),
 				replica.store.storeID,
 				replica.isEpochStale(),
 				replica.attempts,
+				util.FormatDuration(replica.attemptedTime),
 				replica.getEpoch(),
 				atomic.LoadUint32(&replica.store.epoch),
 				replica.store.getResolveState(),
@@ -1309,6 +1485,8 @@ func IsFakeRegionError(err *errorpb.Error) bool {
 	return err != nil && err.GetEpochNotMatch() != nil && len(err.GetEpochNotMatch().CurrentRegions) == 0
 }
 
+const slowLogSendReqTime = 100 * time.Millisecond
+
 // SendReqCtx sends a request to tikv server and return response and RPCCtx of this RPC.
 func (s *RegionRequestSender) SendReqCtx(
 	bo *retry.Backoffer,
@@ -1375,6 +1553,8 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 
 	s.reset()
+	startTime := time.Now()
+	startBackOff := bo.GetTotalSleep()
 	retryTimes = 0
 	defer func() {
 		if retryTimes > 0 {
@@ -1394,7 +1574,6 @@ func (s *RegionRequestSender) SendReqCtx(
 		}()
 	}
 
-	totalErrors := make(map[string]int)
 	for {
 		if retryTimes > 0 {
 			if retryTimes%100 == 0 {
@@ -1426,7 +1605,11 @@ func (s *RegionRequestSender) SendReqCtx(
 
 			// TODO: Change the returned error to something like "region missing in cache",
 			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
-			s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, totalErrors)
+			if s.replicaSelector != nil {
+				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
+					s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
+				}
+			}
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
 		}
@@ -1461,8 +1644,10 @@ func (s *RegionRequestSender) SendReqCtx(
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
 		req.IsRetryRequest = true
 		if err != nil {
-			msg := fmt.Sprintf("send request failed, err: %v", err.Error())
-			s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
+			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
+				msg := fmt.Sprintf("send request failed, err: %v", err.Error())
+				s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
+			}
 			return nil, nil, retryTimes, err
 		}
 
@@ -1493,19 +1678,21 @@ func (s *RegionRequestSender) SendReqCtx(
 			return nil, nil, retryTimes, err
 		}
 		if regionErr != nil {
-			regionErrLogging := regionErrorToLogging(rpcCtx.Peer.GetId(), regionErr)
-			totalErrors[regionErrLogging]++
 			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
 			if err != nil {
-				msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
-				s.logSendReqError(bo, msg, regionID, retryTimes, req, totalErrors)
+				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
+					msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
+					s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
+				}
 				return nil, nil, retryTimes, err
 			}
 			if retry {
 				retryTimes++
 				continue
 			}
-			s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, totalErrors)
+			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
+				s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
+			}
 		} else {
 			if s.replicaSelector != nil {
 				s.replicaSelector.onSendSuccess()
@@ -1518,16 +1705,40 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 }
 
-func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, totalErrors map[string]int) {
-	var totalErrorStr bytes.Buffer
-	for err, cnt := range totalErrors {
-		if totalErrorStr.Len() > 0 {
-			totalErrorStr.WriteString(", ")
-		}
-		totalErrorStr.WriteString(err)
-		totalErrorStr.WriteString(":")
-		totalErrorStr.WriteString(strconv.Itoa(cnt))
+func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, cost time.Duration, currentBackoffMs int, timeout time.Duration) {
+	var builder strings.Builder
+	// build the total round stats string.
+	builder.WriteString("{total-backoff: ")
+	builder.WriteString(util.FormatDuration(time.Duration(bo.GetTotalSleep() * int(time.Millisecond))))
+	builder.WriteString(", total-backoff-times: ")
+	builder.WriteString(strconv.Itoa(bo.GetTotalBackoffTimes()))
+	if s.Stats != nil {
+		builder.WriteString(", total-rpc: {")
+		builder.WriteString(s.Stats.String())
+		builder.WriteString("}")
 	}
+	builder.WriteString("}")
+	totalRoundStats := builder.String()
+
+	// build the current round stats string.
+	builder.Reset()
+	builder.WriteString("{time: ")
+	builder.WriteString(util.FormatDuration(cost))
+	builder.WriteString(", backoff: ")
+	builder.WriteString(util.FormatDuration(time.Duration(currentBackoffMs * int(time.Millisecond))))
+	builder.WriteString(", timeout: ")
+	builder.WriteString(util.FormatDuration(timeout))
+	builder.WriteString(", req-max-exec-timeout: ")
+	builder.WriteString(util.FormatDuration(time.Duration(int64(req.Context.MaxExecutionDurationMs) * int64(time.Millisecond))))
+	builder.WriteString(", retry-times: ")
+	builder.WriteString(strconv.Itoa(retryTimes))
+	if s.AccessStats != nil {
+		builder.WriteString(", replica-access: {")
+		builder.WriteString(s.AccessStats.String())
+		builder.WriteString("}")
+	}
+	builder.WriteString("}")
+	currentRoundStats := builder.String()
 	logutil.Logger(bo.GetCtx()).Info(msg,
 		zap.Uint64("req-ts", req.GetStartTS()),
 		zap.String("req-type", req.Type.String()),
@@ -1535,11 +1746,8 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 		zap.String("replica-read-type", req.ReplicaReadType.String()),
 		zap.Bool("stale-read", req.StaleRead),
 		zap.Stringer("request-sender", s),
-		zap.Int("retry-times", retryTimes),
-		zap.Int("total-backoff-ms", bo.GetTotalSleep()),
-		zap.Int("total-backoff-times", bo.GetTotalBackoffTimes()),
-		zap.Uint64("max-exec-timeout-ms", req.Context.MaxExecutionDurationMs),
-		zap.String("total-region-errors", totalErrorStr.String()))
+		zap.String("total-round-stats", totalRoundStats),
+		zap.String("current-round-stats", currentRoundStats))
 }
 
 // RPCCancellerCtxKey is context key attach rpc send cancelFunc collector to ctx.
@@ -1678,12 +1886,16 @@ func (s *RegionRequestSender) sendReqToRegion(
 	if !injectFailOnSend {
 		start := time.Now()
 		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
+		rpcDuration := time.Since(start)
+		if s.replicaSelector != nil {
+			recordAttemptedTime(s.replicaSelector, rpcDuration)
+		}
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
-			rpcCtx.Store.recordSlowScoreStat(time.Since(start))
+			rpcCtx.Store.recordSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
-			RecordRegionRequestRuntimeStats(s.Stats, req.Type, time.Since(start))
+			s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
 			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
 				if val.(bool) {
 					if req.Type == tikvrpc.CmdCop && bo.GetTotalSleep() == 0 {
@@ -1743,11 +1955,16 @@ func (s *RegionRequestSender) sendReqToRegion(
 
 	if err != nil {
 		s.rpcError = err
-
+		if s.Stats != nil {
+			errStr := errors.Cause(err).Error()
+			s.Stats.RecordRPCErrorStats(errStr)
+			s.recordRPCAccessInfo(req, rpcCtx, errStr)
+		}
 		// Because in rpc logic, context.Cancel() will be transferred to rpcContext.Cancel error. For rpcContext cancel,
 		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
 		// we shouldn't retry the request, it will go to backoff and hang in retry logic.
 		if ctx.Err() != nil && errors.Cause(ctx.Err()) == context.Canceled {
+			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(rpcCtx)).Inc()
 			return nil, false, errors.WithStack(ctx.Err())
 		}
 
@@ -1762,6 +1979,13 @@ func (s *RegionRequestSender) sendReqToRegion(
 		return nil, true, nil
 	}
 	return
+}
+
+func storeIDLabel(rpcCtx *RPCContext) string {
+	if rpcCtx != nil && rpcCtx.Store != nil {
+		return strconv.FormatUint(rpcCtx.Store.storeID, 10)
+	}
+	return "nil"
 }
 
 func (s *RegionRequestSender) getStoreToken(st *Store, limit int64) error {
@@ -1792,19 +2016,25 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		defer span1.Finish()
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
+	storeLabel := storeIDLabel(ctx)
 	// If it failed because the context is cancelled by ourself, don't retry.
 	if errors.Cause(err) == context.Canceled {
+		metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeLabel).Inc()
 		return errors.WithStack(err)
 	} else if LoadShuttingDown() > 0 {
+		metrics.TiKVRPCErrorCounter.WithLabelValues("shutting-down", storeLabel).Inc()
 		return errors.WithStack(tikverr.ErrTiDBShuttingDown)
 	} else if isCauseByDeadlineExceeded(err) {
 		if s.replicaSelector != nil && s.replicaSelector.onReadReqConfigurableTimeout(req) {
+			errLabel := "read-timeout-" + strconv.FormatUint(req.MaxExecutionDurationMs, 10) + "ms"
+			metrics.TiKVRPCErrorCounter.WithLabelValues(errLabel, storeLabel).Inc()
 			return nil
 		}
 	}
 	if status.Code(errors.Cause(err)) == codes.Canceled {
 		select {
 		case <-bo.GetCtx().Done():
+			metrics.TiKVRPCErrorCounter.WithLabelValues("grpc-canceled", storeLabel).Inc()
 			return errors.WithStack(err)
 		default:
 			// If we don't cancel, but the error code is Canceled, it must be from grpc remote.
@@ -1813,6 +2043,7 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal from remote", zap.Error(err))
 		}
 	}
+	metrics.TiKVRPCErrorCounter.WithLabelValues(errors.Cause(err).Error(), storeLabel).Inc()
 
 	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
 		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
@@ -1889,17 +2120,17 @@ func (s *RegionRequestSender) NeedReloadRegion(ctx *RPCContext) (need bool) {
 }
 
 // regionErrorToLogging constructs the logging content with extra information like returned leader peer id.
-func regionErrorToLogging(peerID uint64, e *errorpb.Error) string {
-	str := regionErrorToLabel(e)
+func regionErrorToLogging(e *errorpb.Error, errLabel string) string {
+	str := errLabel
 	if e.GetNotLeader() != nil {
 		notLeader := e.GetNotLeader()
 		if notLeader.GetLeader() != nil {
-			str = fmt.Sprintf("%v-%v", str, notLeader.GetLeader().GetId())
+			str = fmt.Sprintf("%v_with_leader_%v", str, notLeader.GetLeader().GetId())
 		} else {
-			str = fmt.Sprintf("%v-nil", str)
+			str = fmt.Sprintf("%v_with_no_leader", str)
 		}
 	}
-	return fmt.Sprintf("%v-%v", peerID, str)
+	return str
 }
 
 func regionErrorToLabel(e *errorpb.Error) string {
@@ -1965,13 +2196,14 @@ func (s *RegionRequestSender) onRegionError(
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
-	// NOTE: Please add the region error handler in the same order of errorpb.Error.
-	isInternal := false
-	if req != nil {
-		isInternal = util.IsInternalRequest(req.GetRequestSource())
+	regionErrLabel := regionErrorToLabel(regionErr)
+	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrLabel, storeIDLabel(ctx)).Inc()
+	if s.Stats != nil {
+		s.Stats.RecordRPCErrorStats(regionErrLabel)
+		s.recordRPCAccessInfo(req, ctx, regionErrorToLogging(regionErr, regionErrLabel))
 	}
-	metrics.TiKVRegionErrorCounter.WithLabelValues(regionErrorToLabel(regionErr), strconv.FormatBool(isInternal)).Inc()
 
+	// NOTE: Please add the region error handler in the same order of errorpb.Error.
 	if notLeader := regionErr.GetNotLeader(); notLeader != nil {
 		// Retry if error is `NotLeader`.
 		logutil.Logger(bo.GetCtx()).Debug(
@@ -2379,4 +2611,13 @@ func (s *replicaSelector) patchRequestSource(req *tikvrpc.Request, rpcCtx *RPCCo
 		req.ReadType = replicaType
 	}
 	sb.WriteString(req.ReadType)
+}
+
+func recordAttemptedTime(s *replicaSelector, duration time.Duration) {
+	if target := s.targetReplica(); target != nil {
+		target.attemptedTime += duration
+	}
+	if proxy := s.proxyReplica(); proxy != nil {
+		proxy.attemptedTime += duration
+	}
 }
