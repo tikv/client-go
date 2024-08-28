@@ -332,13 +332,30 @@ type CommitterMutations interface {
 	NeedConstraintCheckInPrewrite(i int) bool
 }
 
-func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) ([]byte, bool) {
+func MutationsHasDataInRange(mutations CommitterMutations, start []byte, end []byte) ([]byte /* firstDataKey */, bool) {
 	pos := sort.Search(mutations.Len(), func(i int) bool {
 		return bytes.Compare(mutations.GetKey(i), start) >= 0
 	})
-	ok := pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)
-	if ok {
-		return mutations.GetKey(pos), true
+	isInRange := func(pos int) bool {
+		return pos < mutations.Len() && (len(end) == 0 || bytes.Compare(mutations.GetKey(pos), end) < 0)
+	}
+	if isInRange(pos) {
+		var firstDataKey []byte
+		for {
+			op := mutations.GetOp(pos)
+			if op != kvrpcpb.Op_CheckNotExists &&
+				op != kvrpcpb.Op_Lock &&
+				op != kvrpcpb.Op_PessimisticLock {
+				firstDataKey = mutations.GetKey(pos)
+				break
+			}
+
+			pos++
+			if !isInRange(pos) {
+				break
+			}
+		}
+		return firstDataKey, true
 	}
 	return nil, false
 }

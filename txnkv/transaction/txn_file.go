@@ -183,7 +183,9 @@ func (cs *txnChunkSlice) groupToBatches(c *locate.RegionCache, bo *retry.Backoff
 
 			batch := batchMap[bk]
 			batch.append(chunkID, chunkRange)
-			batch.sampleKeys = append(batch.sampleKeys, firstKey)
+			if len(firstKey) > 0 {
+				batch.sampleKeys = append(batch.sampleKeys, firstKey)
+			}
 		}
 	}
 

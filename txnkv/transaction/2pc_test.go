@@ -27,7 +27,7 @@ func TestMutationsHasDataInRange(t *testing.T) {
 
 	iToKey := func(i int) []byte {
 		if i < 0 {
-			return []byte{}
+			return nil
 		}
 		return []byte(fmt.Sprintf("%04d", i))
 	}
@@ -35,7 +35,13 @@ func TestMutationsHasDataInRange(t *testing.T) {
 	muts := NewPlainMutations(10)
 	for i := 10; i < 20; i += 2 {
 		key := iToKey(i)
-		muts.Push(kvrpcpb.Op_Put, key, key, false, false, false, false)
+		var op kvrpcpb.Op
+		if i%4 == 0 {
+			op = kvrpcpb.Op_CheckNotExists
+		} else {
+			op = kvrpcpb.Op_Put
+		}
+		muts.Push(op, key, key, false, false, false, false)
 	}
 
 	type Case struct {
@@ -52,9 +58,9 @@ func TestMutationsHasDataInRange(t *testing.T) {
 		{0, 30, true, 10},
 		{0, -1, true, 10},
 		{10, 20, true, 10},
-		{15, 16, false, 16},
-		{15, 17, true, 16},
-		{15, -1, true, 16},
+		{15, 16, false, -1},
+		{15, 17, true, -1},
+		{15, -1, true, 18},
 		{20, 30, false, -1},
 		{21, 30, false, -1},
 		{21, -1, false, -1},
