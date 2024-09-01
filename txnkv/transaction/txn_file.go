@@ -228,13 +228,18 @@ func (r *txnChunkRange) getOverlapRegions(c *locate.RegionCache, bo *retry.Backo
 	regions := make([]*locate.KeyLocation, 0)
 	firstKeys := make([][]byte, 0)
 	startKey := r.smallest
+	exclusiveBiggest := kv.NextKey(r.biggest)
 	for bytes.Compare(startKey, r.biggest) <= 0 {
 		loc, err := c.LocateKey(bo, startKey)
 		if err != nil {
 			logutil.Logger(bo.GetCtx()).Error("locate key failed", zap.Error(err), zap.String("startKey", kv.StrKey(startKey)))
 			return nil, nil, errors.Wrap(err, "locate key failed")
 		}
-		firstKey, ok := MutationsHasDataInRange(mutations, loc.StartKey, loc.EndKey)
+		firstKey, ok := MutationsHasDataInRange(
+			mutations,
+			util.GetMaxStartKey(r.smallest, loc.StartKey),
+			util.GetMinEndKey(exclusiveBiggest, loc.EndKey),
+		)
 		if ok {
 			regions = append(regions, loc)
 			firstKeys = append(firstKeys, firstKey)
