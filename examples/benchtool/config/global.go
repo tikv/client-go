@@ -37,9 +37,9 @@ const (
 )
 
 type GlobalConfig struct {
-	hosts      []string
-	port       int
-	StatusPort int
+	ips  []string
+	port int
+	host string
 
 	Threads        int
 	TotalTime      time.Duration
@@ -59,20 +59,23 @@ type GlobalConfig struct {
 }
 
 func (c *GlobalConfig) ParsePdAddrs() error {
-	if len(c.hosts) == 0 {
+	if len(c.ips) == 0 && c.host == "" {
 		return fmt.Errorf("PD address is empty")
 	}
-	targets := make([]string, 0, len(c.hosts))
-	for _, host := range c.hosts {
+	targets := make([]string, 0, len(c.ips))
+	for _, host := range c.ips {
 		targets = append(targets, host+":"+strconv.Itoa(c.port))
+	}
+	if c.host != "" {
+		targets = append(targets, c.host)
 	}
 	c.Targets = targets
 	return nil
 }
 
 func (c *GlobalConfig) Format() string {
-	return fmt.Sprintf("Hosts: %v, Port: %d, StatusPort: %d, Threads: %d, TotalTime: %v, TotalCount: %d, DropData: %t, IgnoreError: %t, OutputInterval: %v, Silence: %t, OutputStyle: %s",
-		c.hosts, c.port, c.StatusPort, c.Threads, c.TotalTime, c.TotalCount, c.DropData, c.IgnoreError, c.OutputInterval, c.Silence, c.OutputStyle)
+	return fmt.Sprintf("Host: %s, IPs: %v, Port: %d, Threads: %d, TotalTime: %v, TotalCount: %d, DropData: %t, IgnoreError: %t, OutputInterval: %v, Silence: %t, OutputStyle: %s",
+		c.host, c.ips, c.port, c.Threads, c.TotalTime, c.TotalCount, c.DropData, c.IgnoreError, c.OutputInterval, c.Silence, c.OutputStyle)
 }
 
 func (c *GlobalConfig) InitLogger() (err error) {
@@ -116,9 +119,9 @@ func (p *CommandLineParser) Initialize() {
 		},
 	}
 
-	rootCmd.PersistentFlags().StringSliceVarP(&globalCfg.hosts, "host", "H", []string{"127.0.0.1"}, "PD host")
-	rootCmd.PersistentFlags().IntVarP(&globalCfg.port, "port", "P", 4000, "PD port")
-	rootCmd.PersistentFlags().IntVarP(&globalCfg.StatusPort, "statusPort", "S", 10080, "PD status port")
+	rootCmd.PersistentFlags().StringSliceVarP(&globalCfg.ips, "ip", "I", []string{"127.0.0.1"}, "PD ips")
+	rootCmd.PersistentFlags().IntVarP(&globalCfg.port, "port", "P", 2379, "PD port")
+	rootCmd.PersistentFlags().StringVar(&globalCfg.host, "host", "127.0.0.1:2379", "PD address")
 
 	rootCmd.PersistentFlags().IntVarP(&globalCfg.Threads, "threads", "T", 1, "Thread concurrency")
 	rootCmd.PersistentFlags().DurationVar(&globalCfg.TotalTime, "time", 1<<63-1, "Total execution time")
