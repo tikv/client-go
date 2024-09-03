@@ -89,6 +89,8 @@ func (h *PerfHistogram) Empty() bool {
 func (h *PerfHistogram) Format() []string {
 	res := h.GetRuntimeStatistics()
 
+	// Define the regular expression pattern
+	// pattern => `([\w\s]+)\s+-\sElapsed\(s\):\s([\d.]+),\sSum:\s([\d.]+),\sCount:\s(\d+),\sOps:\s([\d.]+),\sAvg\(ms\):\s([\d.]+),\s50th\(ms\):\s([\d.]+),\s90th\(ms\):\s([\d.]+),\s95th\(ms\):\s([\d.]+),\s99th\(ms\):\s([\d.]+),\s99.9th\(ms\):\s([\d.]+),\s99.99th\(ms\):\s([\d.]+),\sMin\(ms\):\s([\d.]+),\sMax\(ms\):\s([\d.]+)`
 	// Format: "Elapsed(s)" - "Sum" - "Count" - "Ops" - "Avg" - "P50" - "P90" - "P95" - "P99" - "P999" - "P9999" - "Min" - "Max
 	return []string{
 		utils.FloatToString(res.elapsed),
