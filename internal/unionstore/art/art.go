@@ -48,7 +48,7 @@ func New() *ART {
 }
 
 func (t *ART) Get(key []byte) ([]byte, error) {
-	// 1. search the leaf node.
+	// 1. search the asLeaf node.
 	_, leaf := t.search(key)
 	if leaf == nil || leaf.vAddr.IsNull() {
 		return nil, tikverr.ErrNotExist
@@ -81,7 +81,7 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	if len(t.stages) == 0 {
 		t.dirty = true
 	}
-	// 1. create or search the exist leaf in the tree.
+	// 1. create or search the exist asLeaf in the tree.
 	addr, leaf := t.recursiveInsert(key)
 	// 2. set the value and flags.
 	t.setValue(addr, leaf, value, ops)
@@ -91,6 +91,9 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	return nil
 }
 
+// search looks up the asLeaf with the given key.
+// It returns the address of asLeaf and asLeaf itself it there is a match asLeaf,
+// returns arena.NullAddr and nil if the key is not found.
 func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	current := t.root
 	if current == nullArtNode {
@@ -100,7 +103,7 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	var node *nodeBase
 	for {
 		if current.isLeaf() {
-			lf := current.leaf(&t.allocator)
+			lf := current.asLeaf(&t.allocator)
 			if lf.match(0, key) {
 				return current.addr, lf
 			}
@@ -141,7 +144,7 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 }
 
 // recursiveInsert returns the node address of the key.
-// if insert is true, it will insert the key if not exists, unless nullAddr is returned.
+// It will insert the key if not exists, returns the newly inserted or exist leaf.
 func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	// lazy init root node and allocator.
 	// this saves memory for read only txns.
@@ -175,7 +178,7 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 		}
 
 		if node.prefixLen > 0 {
-			mismatchIdx := current.matchDeep(&t.allocator, key, depth)
+			mismatchIdx := node.matchDeep(&t.allocator, &current, key, depth)
 			if mismatchIdx < node.prefixLen {
 				// if the prefix doesn't match, we split the node into different prefixes.
 				return t.expandNode(key, depth, mismatchIdx, prev, current, node)
@@ -187,7 +190,7 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 		valid := key.valid(int(depth))
 		_, next := current.findChild(&t.allocator, key.charAt(int(depth)), valid)
 		if next == nullArtNode {
-			// insert as leaf if there is no child.
+			// insert as asLeaf if there is no child.
 			newLeaf, lf := t.newLeaf(key)
 			if current.addChild(&t.allocator, key.charAt(int(depth)), !key.valid(int(depth)), newLeaf) {
 				if prev == nullArtNode {
@@ -199,8 +202,8 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 			return newLeaf.addr, lf
 		}
 		if !valid && next.kind == typeLeaf {
-			// key is drained, return the leaf.
-			return next.addr, next.leaf(&t.allocator)
+			// key is drained, return the asLeaf.
+			return next.addr, next.asLeaf(&t.allocator)
 		}
 		prev = current
 		current = next
@@ -210,14 +213,14 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	}
 }
 
-// expandLeaf expands the exist artLeaf to a node4 if the keys are different.
-// it returns the addr and leaf of the given key.
+// expandLeaf expands the existing artLeaf to a node4 if the keys are different.
+// it returns the addr and asLeaf of the given key.
 func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena.MemdbArenaAddr, *artLeaf) {
 	// Expand the artLeaf to a node4.
 	//
 	//                            ┌────────────┐
 	//                            │     new    │
-	//                            │  node4  │
+	//                            │    node4   │
 	//  ┌─────────┐               └──────┬─────┘
 	//  │   old   │   --->               │
 	//  │  leaf1  │             ┌────────┴────────┐
@@ -226,7 +229,7 @@ func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena
 	//                     │   old   │       │   new   │
 	//                     │  leaf1  │       │  leaf2  │
 	//                     └─────────┘       └─────────┘
-	leaf1 := current.leaf(&t.allocator)
+	leaf1 := current.asLeaf(&t.allocator)
 	if leaf1.match(depth-1, key) {
 		// same key, return the artLeaf and overwrite the value.
 		return current.addr, leaf1
@@ -244,7 +247,7 @@ func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena
 	an.addChild(&t.allocator, l1Key.charAt(int(depth)), !l1Key.valid(int(depth)), current)
 	an.addChild(&t.allocator, l2Key.charAt(int(depth)), !l2Key.valid(int(depth)), leaf2Addr)
 
-	// swap the old leaf with the new node4.
+	// swap the old asLeaf with the new node4.
 	if prev == nullArtNode {
 		t.root = an
 	} else {
@@ -263,7 +266,7 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 	//  ┌─────────────┐                 ┌── b ───┴── c ───┐
 	//  │    node4    │   --->          │                 │
 	//  │ prefix: abc │          ┌──────▼─────┐    ┌──────▼─────┐
-	//  └─────────────┘          │ old node4  │    │  new leaf  │
+	//  └─────────────┘          │ old node4  │    │ new asLeaf │
 	//                           │ prefix: c  │    │  key: acc  │
 	//                           └────────────┘    └────────────┘
 	prevDepth := int(depth - 1)
@@ -281,7 +284,7 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 	} else {
 		currNode.prefixLen -= mismatchIdx + 1
 		leafArtNode := minimum(&t.allocator, current)
-		leaf := leafArtNode.leaf(&t.allocator)
+		leaf := leafArtNode.asLeaf(&t.allocator)
 		leafKey := artKey(leaf.GetKey())
 		kMin := depth + mismatchIdx + 1
 		kMax := depth + mismatchIdx + 1 + min(currNode.prefixLen, maxPrefixLen)
@@ -330,32 +333,33 @@ func (t *ART) setValue(addr arena.MemdbArenaAddr, l *artLeaf, value []byte, ops 
 		// value == nil means it updates flags only.
 		return
 	}
-	if t.trySwapValue(l.vAddr, value) {
+	oldSize, swapper := t.trySwapValue(l.vAddr, value)
+	if swapper {
 		return
 	}
-	t.size += len(value)
+	t.size += len(value) - oldSize
 	vAddr := t.allocator.vlogAllocator.AppendValue(addr, l.vAddr, value)
 	l.vAddr = vAddr
 }
 
-// trySwapValue checks if the value can be updated in place, return true if it's updated.
-func (t *ART) trySwapValue(addr arena.MemdbArenaAddr, value []byte) bool {
+// trySwapValue checks if the value can be updated in place.
+// It returns 0 and true if it's updated, returns the size of old value and false if it cannot be updated in place.
+func (t *ART) trySwapValue(addr arena.MemdbArenaAddr, value []byte) (int, bool) {
 	if addr.IsNull() {
-		return false
+		return 0, false
 	}
+	oldVal := t.allocator.vlogAllocator.GetValue(addr)
 	if len(t.stages) > 0 {
 		cp := t.stages[len(t.stages)-1]
 		if !t.allocator.vlogAllocator.CanModify(&cp, addr) {
-			return false
+			return len(oldVal), false
 		}
 	}
-	oldVal := t.allocator.vlogAllocator.GetValue(addr)
 	if len(oldVal) > 0 && len(oldVal) == len(value) {
 		copy(oldVal, value)
-		return true
+		return 0, true
 	}
-	t.size -= len(oldVal)
-	return false
+	return len(oldVal), false
 }
 
 func (t *ART) Dirty() bool {

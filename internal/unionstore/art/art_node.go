@@ -126,7 +126,7 @@ func (an *artNode) isLeaf() bool {
 	return an.kind == typeLeaf
 }
 
-func (an *artNode) leaf(a *artAllocator) *artLeaf {
+func (an *artNode) asLeaf(a *artAllocator) *artLeaf {
 	return a.getLeaf(an.addr)
 }
 
@@ -252,7 +252,7 @@ func (k artKey) valid(pos int) bool {
 	return pos < len(k)
 }
 
-// GetKey gets the full key of the leaf
+// GetKey gets the full key of the asLeaf
 func (l *artLeaf) GetKey() []byte {
 	base := unsafe.Add(unsafe.Pointer(l), leafSize)
 	return unsafe.Slice((*byte)(base), int(l.klen))
@@ -264,7 +264,7 @@ func (l *artLeaf) getKeyDepth(depth uint32) []byte {
 	return unsafe.Slice((*byte)(base), int(l.klen)-int(depth))
 }
 
-// GetKeyFlags gets the flags of the leaf
+// GetKeyFlags gets the flags of the asLeaf
 func (l *artLeaf) GetKeyFlags() kv.KeyFlags {
 	panic("unimplemented")
 }
@@ -273,9 +273,8 @@ func (l *artLeaf) match(depth uint32, key artKey) bool {
 	return bytes.Equal(l.getKeyDepth(depth), key[depth:])
 }
 
-func (l *artLeaf) setKeyFlags(flags kv.KeyFlags) arena.MemdbArenaAddr {
+func (l *artLeaf) setKeyFlags(flags kv.KeyFlags) {
 	l.flags = uint16(flags) & flagMask
-	return l.vAddr
 }
 
 func (l *artLeaf) getKeyFlags() kv.KeyFlags {
@@ -309,17 +308,34 @@ func (n *nodeBase) setPrefix(key artKey, prefixLen uint32) {
 	copy(n.prefix[:], key[:min(prefixLen, maxPrefixLen)])
 }
 
-func (n *nodeBase) match(key artKey, depth uint32) uint32 {
+// match returns the mismatch index of the key and the node's prefix within maxPrefixLen.
+// Node if the nodeBase.prefixLen > maxPrefixLen and the returned mismatch index equals to maxPrefixLen,
+// key[maxPrefixLen:] will not be checked by this function.
+func (n *nodeBase) match(key artKey, depth uint32) uint32 /* mismatch index */ {
 	idx := uint32(0)
-
 	limit := min(min(n.prefixLen, maxPrefixLen), uint32(len(key))-depth)
 	for ; idx < limit; idx++ {
 		if n.prefix[idx] != key[idx+depth] {
 			return idx
 		}
 	}
-
 	return idx
+}
+
+// matchDeep returns the mismatch index of the key and the node's prefix.
+// If the key is fully match, the mismatch index is equal to the nodeBase.prefixLen.
+// The nodeBase only stores prefix within maxPrefixLen, if it's not enough for matching,
+// the matchDeep func looks up and match by the leaf, this function always returns the actual mismatch index.
+func (n *nodeBase) matchDeep(a *artAllocator, an *artNode, key artKey, depth uint32) uint32 /* mismatch index */ {
+	// match in-node prefix
+	mismatchIdx := n.match(key, depth)
+	if mismatchIdx < maxPrefixLen || n.prefixLen <= maxPrefixLen {
+		return mismatchIdx
+	}
+	// if the prefixLen is longer maxPrefixLen and mismatchIdx == maxPrefixLen, we need to match deeper with any asLeaf.
+	leafArtNode := minimum(a, *an)
+	lKey := leafArtNode.asLeaf(a).GetKey()
+	return longestCommonPrefix(lKey, key, depth+maxPrefixLen) + maxPrefixLen
 }
 
 func (an *artNode) node4(a *artAllocator) *node4 {
@@ -336,19 +352,6 @@ func (an *artNode) node48(a *artAllocator) *node48 {
 
 func (an *artNode) node256(a *artAllocator) *node256 {
 	return a.getNode256(an.addr)
-}
-
-func (an *artNode) matchDeep(a *artAllocator, key artKey, depth uint32) uint32 /* mismatch index*/ {
-	n := an.node(a)
-	// match in-node prefix
-	mismatchIdx := n.match(key, depth)
-	if mismatchIdx < maxPrefixLen || n.prefixLen <= maxPrefixLen {
-		return mismatchIdx
-	}
-	// if the prefixLen is longer maxPrefixLen and mismatchIdx == maxPrefixLen, we need to match deeper with any leaf.
-	leafArtNode := minimum(a, *an)
-	lKey := leafArtNode.leaf(a).GetKey()
-	return longestCommonPrefix(lKey, key, depth+maxPrefixLen) + maxPrefixLen
 }
 
 func longestCommonPrefix(l1Key, l2Key artKey, depth uint32) uint32 {

@@ -82,7 +82,7 @@ func TestAllocNode(t *testing.T) {
 		n256s = append(n256s, addr)
 	}
 
-	// alloc leaf
+	// alloc asLeaf
 	leafs := make([]arena.MemdbArenaAddr, 0, cnt)
 	for i := 0; i < cnt; i++ {
 		key := []byte(strconv.Itoa(i))
@@ -149,8 +149,8 @@ func TestNodePrefix(t *testing.T) {
 		n.setPrefix(leafKey, maxPrefixLen+1)
 		matchKey := append(make([]byte, maxPrefixLen), []byte{1, 22, 33, 44, 55}...)
 		mismatchKey := append(make([]byte, maxPrefixLen), []byte{11, 22, 33, 44, 55}...)
-		require.Equal(t, uint32(maxPrefixLen+1), an.matchDeep(&allocator, matchKey, 0))
-		require.Equal(t, uint32(maxPrefixLen), an.matchDeep(&allocator, mismatchKey, 0))
+		require.Equal(t, uint32(maxPrefixLen+1), n.matchDeep(&allocator, an, matchKey, 0))
+		require.Equal(t, uint32(maxPrefixLen), n.matchDeep(&allocator, an, mismatchKey, 0))
 
 		// deep match with depth
 		leafKey = append(make([]byte, 10), leafKey...)
@@ -159,8 +159,8 @@ func TestNodePrefix(t *testing.T) {
 		leafAddr, _ = allocator.allocLeaf(leafKey)
 		an.swapChild(&allocator, 2, artNode{kind: typeLeaf, addr: leafAddr})
 		n.setPrefix(leafKey[10:], maxPrefixLen+1)
-		require.Equal(t, uint32(maxPrefixLen+1), an.matchDeep(&allocator, matchKey, 10))
-		require.Equal(t, uint32(maxPrefixLen), an.matchDeep(&allocator, mismatchKey, 10))
+		require.Equal(t, uint32(maxPrefixLen+1), n.matchDeep(&allocator, an, matchKey, 10))
+		require.Equal(t, uint32(maxPrefixLen), n.matchDeep(&allocator, an, mismatchKey, 10))
 	}
 
 	addr, n4 := allocator.allocNode4()
