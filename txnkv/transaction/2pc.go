@@ -1018,15 +1018,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 				zap.Uint64("sessionID", c.sessionID))
 			return nil
 		}
-		c.store.WaitGroup().Add(1)
-		if c.txn.secondaryLockCleanupLifecycleHooks.Pre != nil {
-			c.txn.secondaryLockCleanupLifecycleHooks.Pre()
-		}
-		err = c.store.Go(func() {
-			if c.txn.secondaryLockCleanupLifecycleHooks.Post != nil {
-				defer c.txn.secondaryLockCleanupLifecycleHooks.Post()
-			}
-			defer c.store.WaitGroup().Done()
+		err = c.txn.spawnWithStorePool(func() {
 			if c.sessionID > 0 {
 				if v, err := util.EvalFailpoint("beforeCommitSecondaries"); err == nil {
 					if s, ok := v.(string); !ok {
@@ -1051,7 +1043,6 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 			}
 		})
 		if err != nil {
-			c.store.WaitGroup().Done()
 			logutil.BgLogger().Error("fail to create goroutine",
 				zap.Uint64("session", c.sessionID),
 				zap.Stringer("action type", action),
@@ -1420,19 +1411,12 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 		return
 	}
 	c.cleanWg.Add(1)
-	c.store.WaitGroup().Add(1)
-	if c.txn.cleanupLifecycleHooks.Pre != nil {
-		c.txn.cleanupLifecycleHooks.Pre()
-	}
-	go func() {
-		if c.txn.cleanupLifecycleHooks.Post != nil {
-			defer c.txn.cleanupLifecycleHooks.Post()
-		}
-		defer c.store.WaitGroup().Done()
+	c.txn.spawn(func() {
+		defer c.cleanWg.Done()
+
 		if _, err := util.EvalFailpoint("commitFailedSkipCleanup"); err == nil {
 			logutil.Logger(ctx).Info("[failpoint] injected skip cleanup secondaries on failure",
 				zap.Uint64("txnStartTS", c.startTS))
-			c.cleanWg.Done()
 			return
 		}
 
@@ -1455,8 +1439,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 				zap.Uint64("txnStartTS", c.startTS), zap.Bool("isPessimistic", c.isPessimistic),
 				zap.Bool("isOnePC", c.isOnePC()))
 		}
-		c.cleanWg.Done()
-	}()
+	})
 }
 
 // execute executes the two-phase commit protocol.
@@ -1770,15 +1753,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				zap.Uint64("sessionID", c.sessionID))
 			return nil
 		}
-		c.store.WaitGroup().Add(1)
-		if c.txn.asyncCommitLifecycleHooks.Pre != nil {
-			c.txn.asyncCommitLifecycleHooks.Pre()
-		}
-		go func() {
-			if c.txn.asyncCommitLifecycleHooks.Post != nil {
-				defer c.txn.asyncCommitLifecycleHooks.Post()
-			}
-			defer c.store.WaitGroup().Done()
+		c.txn.spawn(func() {
 			if _, err := util.EvalFailpoint("asyncCommitDoNothing"); err == nil {
 				return
 			}
@@ -1788,7 +1763,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				logutil.Logger(ctx).Warn("2PC async commit failed", zap.Uint64("sessionID", c.sessionID),
 					zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS), zap.Error(err))
 			}
-		}()
+		})
 		return nil
 	}
 	return c.commitTxn(ctx, commitDetail)

@@ -2520,7 +2520,7 @@ func (s *testCommitterSuite) Test2PCLifecycleHooks() {
 	var wg sync.WaitGroup
 
 	t1 := s.begin()
-	t1.SetSecondaryLockCleanupLifecycleHooks(transaction.LifecycleHooks{
+	t1.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
 		Pre: func() {
 			wg.Add(1)
 
@@ -2550,7 +2550,7 @@ func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
 	var wg sync.WaitGroup
 
 	t1 := s.begin()
-	t1.SetCleanupLifecycleHooks(transaction.LifecycleHooks{
+	t1.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
 		Pre: func() {
 			wg.Add(1)
 

@@ -641,7 +641,7 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLifecycleHooks() {
 	var wg sync.WaitGroup
 
 	t1 := s.beginAsyncCommit()
-	t1.SetAsyncCommitLifecycleHooks(transaction.LifecycleHooks{
+	t1.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
 		Pre: func() {
 			wg.Add(1)
 

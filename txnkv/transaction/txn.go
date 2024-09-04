@@ -138,22 +138,10 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
-	// The following three lifecycle hooks are used to track the start / end of the background
-	// goroutines which are usually not stopped after finishing the `execute` function. With
-	// this hook, we can track whether all background goroutines have finished to avoid leaking
-	// locks (which may happen if a transaction is not finished properly).
-	//
-	// TODO: provide an unified way to track the lifecycle of all background goroutines during
-	// a transaction. Adding hooks for each background goroutine is dirty and easy to forget.
-	// Now, we have a `c.store.WaitGroup` to track background goroutines globally, but
-	// it's not suitable for this case.
-
-	// asyncCommitLifecycleHooks is used to hook the start / stop of async commit goroutines
-	asyncCommitLifecycleHooks LifecycleHooks
-	// secondaryLockCleanupLifecycleHooks is used to hook the cleanup of secondary locks
-	secondaryLockCleanupLifecycleHooks LifecycleHooks
-	// cleanupLifecycleHooks is used to hook the cleanup action
-	cleanupLifecycleHooks LifecycleHooks
+	// backgroundGoroutineLifecycleHooks tracks the lifecycle of background goroutines of a
+	// transaction. The `.Pre` will be executed before the start of each background goroutine,
+	// and the `.Post` will be called after the background goroutine exits.
+	backgroundGoroutineLifecycleHooks LifecycleHooks
 
 	binlog                  BinlogExecutor
 	schemaLeaseChecker      SchemaLeaseChecker
@@ -367,19 +355,45 @@ func (txn *KVTxn) SetCommitCallback(f func(string, error)) {
 	txn.commitCallback = f
 }
 
-// SetAsyncCommitHooks sets up the hooks to track the lifecycle of async commit goroutines.
-func (txn *KVTxn) SetAsyncCommitLifecycleHooks(hooks LifecycleHooks) {
-	txn.asyncCommitLifecycleHooks = hooks
+// SetBackgroundGoroutineLifecycleHooks sets up the hooks to track the lifecycle of the background goroutines of a transaction.
+func (txn *KVTxn) SetBackgroundGoroutineLifecycleHooks(hooks LifecycleHooks) {
+	txn.backgroundGoroutineLifecycleHooks = hooks
 }
 
-// SetSecondaryLockCleanupHooks sets up the hooks to track the lifecycle of secondary keys cleanup goroutines.
-func (txn *KVTxn) SetSecondaryLockCleanupLifecycleHooks(hook LifecycleHooks) {
-	txn.secondaryLockCleanupLifecycleHooks = hook
+// spawn starts a goroutine to run the given function.
+func (txn *KVTxn) spawn(f func()) {
+	if txn.backgroundGoroutineLifecycleHooks.Pre != nil {
+		txn.backgroundGoroutineLifecycleHooks.Pre()
+	}
+	txn.store.WaitGroup().Add(1)
+	go func() {
+		if txn.backgroundGoroutineLifecycleHooks.Post != nil {
+			defer txn.backgroundGoroutineLifecycleHooks.Post()
+		}
+		defer txn.store.WaitGroup().Done()
+
+		f()
+	}()
 }
 
-// SetCleanupLifecycleHooks sets up
-func (txn *KVTxn) SetCleanupLifecycleHooks(hook LifecycleHooks) {
-	txn.cleanupLifecycleHooks = hook
+// spawnWithStorePool starts a goroutine to run the given function with the store's goroutine pool.
+func (txn *KVTxn) spawnWithStorePool(f func()) error {
+	if txn.backgroundGoroutineLifecycleHooks.Pre != nil {
+		txn.backgroundGoroutineLifecycleHooks.Pre()
+	}
+	txn.store.WaitGroup().Add(1)
+	err := txn.store.Go(func() {
+		if txn.backgroundGoroutineLifecycleHooks.Post != nil {
+			defer txn.backgroundGoroutineLifecycleHooks.Post()
+		}
+		defer txn.store.WaitGroup().Done()
+
+		f()
+	})
+	if err != nil {
+		txn.store.WaitGroup().Done()
+	}
+	return err
 }
 
 // SetEnableAsyncCommit indicates if the transaction will try to use async commit.
