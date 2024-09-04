@@ -131,16 +131,16 @@ func (an *artNode) asLeaf(a *artAllocator) *artLeaf {
 }
 
 // node gets the inner baseNode of the artNode
-func (an *artNode) node(a *artAllocator) *nodeBase {
+func (an *artNode) asNode(a *artAllocator) *nodeBase {
 	switch an.kind {
 	case typeNode4:
-		return &an.node4(a).nodeBase
+		return &an.asNode4(a).nodeBase
 	case typeNode16:
-		return &an.node16(a).nodeBase
+		return &an.asNode16(a).nodeBase
 	case typeNode48:
-		return &an.node48(a).nodeBase
+		return &an.asNode48(a).nodeBase
 	case typeNode256:
-		return &an.node256(a).nodeBase
+		return &an.asNode256(a).nodeBase
 	default:
 		panic("invalid nodeBase kind")
 	}
@@ -152,14 +152,14 @@ func (an *artNode) node(a *artAllocator) *nodeBase {
 func (an *artNode) at(a *artAllocator, idx int) artNode {
 	switch an.kind {
 	case typeNode4:
-		return an.node4(a).children[idx]
+		return an.asNode4(a).children[idx]
 	case typeNode16:
-		return an.node16(a).children[idx]
+		return an.asNode16(a).children[idx]
 	case typeNode48:
-		n48 := an.node48(a)
+		n48 := an.asNode48(a)
 		return n48.children[n48.keys[idx]]
 	case typeNode256:
-		return an.node256(a).children[idx]
+		return an.asNode256(a).children[idx]
 	default:
 		panic("invalid nodeBase kind")
 	}
@@ -252,7 +252,7 @@ func (k artKey) valid(pos int) bool {
 	return pos < len(k)
 }
 
-// GetKey gets the full key of the asLeaf
+// GetKey gets the full key of the leaf
 func (l *artLeaf) GetKey() []byte {
 	base := unsafe.Add(unsafe.Pointer(l), leafSize)
 	return unsafe.Slice((*byte)(base), int(l.klen))
@@ -264,7 +264,7 @@ func (l *artLeaf) getKeyDepth(depth uint32) []byte {
 	return unsafe.Slice((*byte)(base), int(l.klen)-int(depth))
 }
 
-// GetKeyFlags gets the flags of the asLeaf
+// GetKeyFlags gets the flags of the leaf
 func (l *artLeaf) GetKeyFlags() kv.KeyFlags {
 	panic("unimplemented")
 }
@@ -332,25 +332,25 @@ func (n *nodeBase) matchDeep(a *artAllocator, an *artNode, key artKey, depth uin
 	if mismatchIdx < maxPrefixLen || n.prefixLen <= maxPrefixLen {
 		return mismatchIdx
 	}
-	// if the prefixLen is longer maxPrefixLen and mismatchIdx == maxPrefixLen, we need to match deeper with any asLeaf.
+	// if the prefixLen is longer maxPrefixLen and mismatchIdx == maxPrefixLen, we need to match deeper with any leaf.
 	leafArtNode := minimum(a, *an)
 	lKey := leafArtNode.asLeaf(a).GetKey()
 	return longestCommonPrefix(lKey, key, depth+maxPrefixLen) + maxPrefixLen
 }
 
-func (an *artNode) node4(a *artAllocator) *node4 {
+func (an *artNode) asNode4(a *artAllocator) *node4 {
 	return a.getNode4(an.addr)
 }
 
-func (an *artNode) node16(a *artAllocator) *node16 {
+func (an *artNode) asNode16(a *artAllocator) *node16 {
 	return a.getNode16(an.addr)
 }
 
-func (an *artNode) node48(a *artAllocator) *node48 {
+func (an *artNode) asNode48(a *artAllocator) *node48 {
 	return a.getNode48(an.addr)
 }
 
-func (an *artNode) node256(a *artAllocator) *node256 {
+func (an *artNode) asNode256(a *artAllocator) *node256 {
 	return a.getNode256(an.addr)
 }
 
@@ -374,26 +374,26 @@ func minimum(a *artAllocator, an artNode) artNode {
 		case typeLeaf:
 			return an
 		case typeNode4:
-			n4 := an.node4(a)
+			n4 := an.asNode4(a)
 			if !n4.inplaceLeaf.addr.IsNull() {
 				return n4.inplaceLeaf
 			}
 			an = n4.children[0]
 		case typeNode16:
-			n16 := an.node16(a)
+			n16 := an.asNode16(a)
 			if !n16.inplaceLeaf.addr.IsNull() {
 				return n16.inplaceLeaf
 			}
 			an = n16.children[0]
 		case typeNode48:
-			n48 := an.node48(a)
+			n48 := an.asNode48(a)
 			if !n48.inplaceLeaf.addr.IsNull() {
 				return n48.inplaceLeaf
 			}
 			idx := n48.nextPresentIdx(0)
 			an = n48.children[n48.keys[idx]]
 		case typeNode256:
-			n256 := an.node256(a)
+			n256 := an.asNode256(a)
 			if !n256.inplaceLeaf.addr.IsNull() {
 				return n256.inplaceLeaf
 			}
@@ -407,7 +407,7 @@ func minimum(a *artAllocator, an artNode) artNode {
 
 func (an *artNode) findChild(a *artAllocator, c byte, valid bool) (int, artNode) {
 	if !valid {
-		return inplaceIndex, an.node(a).inplaceLeaf
+		return inplaceIndex, an.asNode(a).inplaceLeaf
 	}
 	switch an.kind {
 	case typeNode4:
@@ -423,7 +423,7 @@ func (an *artNode) findChild(a *artAllocator, c byte, valid bool) (int, artNode)
 }
 
 func (an *artNode) findChild4(a *artAllocator, c byte) (int, artNode) {
-	n4 := an.node4(a)
+	n4 := an.asNode4(a)
 	for idx := 0; idx < int(n4.nodeNum); idx++ {
 		if n4.keys[idx] == c {
 			return idx, n4.children[idx]
@@ -434,7 +434,7 @@ func (an *artNode) findChild4(a *artAllocator, c byte) (int, artNode) {
 }
 
 func (an *artNode) findChild16(a *artAllocator, c byte) (int, artNode) {
-	n16 := an.node16(a)
+	n16 := an.asNode16(a)
 
 	idx, found := sort.Find(int(n16.nodeNum), func(i int) int {
 		if n16.keys[i] < c {
@@ -452,7 +452,7 @@ func (an *artNode) findChild16(a *artAllocator, c byte) (int, artNode) {
 }
 
 func (an *artNode) findChild48(a *artAllocator, c byte) (int, artNode) {
-	n48 := an.node48(a)
+	n48 := an.asNode48(a)
 	if n48.present[c>>n48s]&(1<<(c%n48m)) != 0 {
 		return int(c), n48.children[n48.keys[c]]
 	}
@@ -460,7 +460,7 @@ func (an *artNode) findChild48(a *artAllocator, c byte) (int, artNode) {
 }
 
 func (an *artNode) findChild256(a *artAllocator, c byte) (int, artNode) {
-	n256 := an.node256(a)
+	n256 := an.asNode256(a)
 	if n256.present[c>>n48s]&(1<<(c%n48m)) != 0 {
 		return int(c), n256.children[c]
 	}
@@ -470,7 +470,7 @@ func (an *artNode) findChild256(a *artAllocator, c byte) (int, artNode) {
 func (an *artNode) swapChild(a *artAllocator, c byte, child artNode) {
 	switch an.kind {
 	case typeNode4:
-		n4 := an.node4(a)
+		n4 := an.asNode4(a)
 		for idx := uint8(0); idx < n4.nodeNum; idx++ {
 			if n4.keys[idx] == c {
 				n4.children[idx] = child
@@ -479,7 +479,7 @@ func (an *artNode) swapChild(a *artAllocator, c byte, child artNode) {
 		}
 		panic("swap child failed")
 	case typeNode16:
-		n16 := an.node16(a)
+		n16 := an.asNode16(a)
 		for idx := uint8(0); idx < n16.nodeNum; idx++ {
 			if n16.keys[idx] == c {
 				n16.children[idx] = child
@@ -488,7 +488,7 @@ func (an *artNode) swapChild(a *artAllocator, c byte, child artNode) {
 		}
 		panic("swap child failed")
 	case typeNode48:
-		n48 := an.node48(a)
+		n48 := an.asNode48(a)
 		if n48.present[c>>n48s]&(1<<(c%n48m)) != 0 {
 			n48.children[n48.keys[c]] = child
 			return
@@ -517,7 +517,7 @@ func (an *artNode) addChild(a *artAllocator, c byte, inplace bool, child artNode
 }
 
 func (an *artNode) addChild4(a *artAllocator, c byte, inplace bool, child artNode) bool {
-	node := an.node4(a)
+	node := an.asNode4(a)
 
 	if inplace {
 		node.inplaceLeaf = child
@@ -550,7 +550,7 @@ func (an *artNode) addChild4(a *artAllocator, c byte, inplace bool, child artNod
 }
 
 func (an *artNode) addChild16(a *artAllocator, c byte, inplace bool, child artNode) bool {
-	node := an.node16(a)
+	node := an.asNode16(a)
 
 	if inplace {
 		node.inplaceLeaf = child
@@ -585,7 +585,7 @@ func (an *artNode) addChild16(a *artAllocator, c byte, inplace bool, child artNo
 }
 
 func (an *artNode) addChild48(a *artAllocator, c byte, inplace bool, child artNode) bool {
-	node := an.node48(a)
+	node := an.asNode48(a)
 
 	if inplace {
 		node.inplaceLeaf = child
@@ -606,7 +606,7 @@ func (an *artNode) addChild48(a *artAllocator, c byte, inplace bool, child artNo
 }
 
 func (an *artNode) addChild256(a *artAllocator, c byte, inplace bool, child artNode) bool {
-	node := an.node256(a)
+	node := an.asNode256(a)
 
 	if inplace {
 		node.inplaceLeaf = child
@@ -629,7 +629,7 @@ func (n *nodeBase) copyMeta(src *nodeBase) {
 func (an *artNode) grow(a *artAllocator) {
 	switch an.kind {
 	case typeNode4:
-		n4 := an.node4(a)
+		n4 := an.asNode4(a)
 		newAddr, n16 := a.allocNode16()
 		n16.copyMeta(&n4.nodeBase)
 
@@ -641,7 +641,7 @@ func (an *artNode) grow(a *artAllocator) {
 		an.kind = typeNode16
 		an.addr = newAddr
 	case typeNode16:
-		n16 := an.node16(a)
+		n16 := an.asNode16(a)
 		newAddr, n48 := a.allocNode48()
 		n48.copyMeta(&n16.nodeBase)
 
@@ -657,7 +657,7 @@ func (an *artNode) grow(a *artAllocator) {
 		an.kind = typeNode48
 		an.addr = newAddr
 	case typeNode48:
-		n48 := an.node48(a)
+		n48 := an.asNode48(a)
 		newAddr, n256 := a.allocNode256()
 		n256.copyMeta(&n48.nodeBase)
 

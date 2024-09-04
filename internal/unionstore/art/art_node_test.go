@@ -82,7 +82,7 @@ func TestAllocNode(t *testing.T) {
 		n256s = append(n256s, addr)
 	}
 
-	// alloc asLeaf
+	// alloc leaf
 	leafs := make([]arena.MemdbArenaAddr, 0, cnt)
 	for i := 0; i < cnt; i++ {
 		key := []byte(strconv.Itoa(i))
@@ -185,7 +185,7 @@ func TestOrderedChild(t *testing.T) {
 			addr, _ := allocator.allocNode4()
 			an.addChild(&allocator, byte(i), false, artNode{kind: typeNode4, addr: addr})
 
-			node := an.node(&allocator)
+			node := an.asNode(&allocator)
 			require.Equal(t, node.nodeNum, uint8(i+1))
 			keys := getKeys(an)
 			for j := 0; j <= i; j++ {
@@ -199,7 +199,7 @@ func TestOrderedChild(t *testing.T) {
 			addr, _ := allocator.allocNode4()
 			an.addChild(&allocator, byte(255-i), false, artNode{kind: typeNode4, addr: addr})
 
-			node := an.node(&allocator)
+			node := an.asNode(&allocator)
 			require.Equal(t, node.nodeNum, uint8(i+1))
 			keys := getKeys(an)
 			for j := 0; j <= i; j++ {
@@ -212,14 +212,14 @@ func TestOrderedChild(t *testing.T) {
 		addr, _ := allocator.allocNode4()
 		return &artNode{kind: typeNode4, addr: addr}
 	}, func(an *artNode) []byte {
-		return an.node4(&allocator).keys[:]
+		return an.asNode4(&allocator).keys[:]
 	}, 4)
 
 	testFn(func() *artNode {
 		addr, _ := allocator.allocNode16()
 		return &artNode{kind: typeNode16, addr: addr}
 	}, func(an *artNode) []byte {
-		return an.node16(&allocator).keys[:]
+		return an.asNode16(&allocator).keys[:]
 	}, 16)
 }
 

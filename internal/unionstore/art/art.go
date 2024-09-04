@@ -48,7 +48,7 @@ func New() *ART {
 }
 
 func (t *ART) Get(key []byte) ([]byte, error) {
-	// 1. search the asLeaf node.
+	// 1. search the leaf node.
 	_, leaf := t.search(key)
 	if leaf == nil || leaf.vAddr.IsNull() {
 		return nil, tikverr.ErrNotExist
@@ -81,7 +81,7 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	if len(t.stages) == 0 {
 		t.dirty = true
 	}
-	// 1. create or search the exist asLeaf in the tree.
+	// 1. create or search the existing leaf in the tree.
 	addr, leaf := t.recursiveInsert(key)
 	// 2. set the value and flags.
 	t.setValue(addr, leaf, value, ops)
@@ -91,8 +91,8 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	return nil
 }
 
-// search looks up the asLeaf with the given key.
-// It returns the address of asLeaf and asLeaf itself it there is a match asLeaf,
+// search looks up the leaf with the given key.
+// It returns the memory arena address and leaf itself it there is a match leaf,
 // returns arena.NullAddr and nil if the key is not found.
 func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	current := t.root
@@ -114,13 +114,13 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 		// get the basic node information.
 		switch current.kind {
 		case typeNode4:
-			node = &current.node4(&t.allocator).nodeBase
+			node = &current.asNode4(&t.allocator).nodeBase
 		case typeNode16:
-			node = &current.node16(&t.allocator).nodeBase
+			node = &current.asNode16(&t.allocator).nodeBase
 		case typeNode48:
-			node = &current.node48(&t.allocator).nodeBase
+			node = &current.asNode48(&t.allocator).nodeBase
 		case typeNode256:
-			node = &current.node256(&t.allocator).nodeBase
+			node = &current.asNode256(&t.allocator).nodeBase
 		default:
 			panic("invalid nodeBase kind")
 		}
@@ -144,7 +144,7 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 }
 
 // recursiveInsert returns the node address of the key.
-// It will insert the key if not exists, returns the newly inserted or exist leaf.
+// It will insert the key if not exists, returns the newly inserted or existing leaf.
 func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	// lazy init root node and allocator.
 	// this saves memory for read only txns.
@@ -166,13 +166,13 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 		// get the basic node information.
 		switch current.kind {
 		case typeNode4:
-			node = &current.node4(&t.allocator).nodeBase
+			node = &current.asNode4(&t.allocator).nodeBase
 		case typeNode16:
-			node = &current.node16(&t.allocator).nodeBase
+			node = &current.asNode16(&t.allocator).nodeBase
 		case typeNode48:
-			node = &current.node48(&t.allocator).nodeBase
+			node = &current.asNode48(&t.allocator).nodeBase
 		case typeNode256:
-			node = &current.node256(&t.allocator).nodeBase
+			node = &current.asNode256(&t.allocator).nodeBase
 		default:
 			panic("invalid nodeBase kind")
 		}
@@ -190,7 +190,7 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 		valid := key.valid(int(depth))
 		_, next := current.findChild(&t.allocator, key.charAt(int(depth)), valid)
 		if next == nullArtNode {
-			// insert as asLeaf if there is no child.
+			// insert as leaf if there is no child.
 			newLeaf, lf := t.newLeaf(key)
 			if current.addChild(&t.allocator, key.charAt(int(depth)), !key.valid(int(depth)), newLeaf) {
 				if prev == nullArtNode {
@@ -202,7 +202,7 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 			return newLeaf.addr, lf
 		}
 		if !valid && next.kind == typeLeaf {
-			// key is drained, return the asLeaf.
+			// key is drained, return the leaf.
 			return next.addr, next.asLeaf(&t.allocator)
 		}
 		prev = current
@@ -214,7 +214,7 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 }
 
 // expandLeaf expands the existing artLeaf to a node4 if the keys are different.
-// it returns the addr and asLeaf of the given key.
+// it returns the addr and leaf of the given key.
 func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena.MemdbArenaAddr, *artLeaf) {
 	// Expand the artLeaf to a node4.
 	//
@@ -247,7 +247,7 @@ func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena
 	an.addChild(&t.allocator, l1Key.charAt(int(depth)), !l1Key.valid(int(depth)), current)
 	an.addChild(&t.allocator, l2Key.charAt(int(depth)), !l2Key.valid(int(depth)), leaf2Addr)
 
-	// swap the old asLeaf with the new node4.
+	// swap the old leaf with the new node4.
 	if prev == nullArtNode {
 		t.root = an
 	} else {
@@ -266,7 +266,7 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 	//  ┌─────────────┐                 ┌── b ───┴── c ───┐
 	//  │    node4    │   --->          │                 │
 	//  │ prefix: abc │          ┌──────▼─────┐    ┌──────▼─────┐
-	//  └─────────────┘          │ old node4  │    │ new asLeaf │
+	//  └─────────────┘          │ old node4  │    │  new leaf  │
 	//                           │ prefix: c  │    │  key: acc  │
 	//                           └────────────┘    └────────────┘
 	prevDepth := int(depth - 1)
