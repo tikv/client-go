@@ -100,6 +100,7 @@ const (
 	CmdLockWaitInfo
 
 	CmdGetHealthFeedback
+	CmdBroadcastTxnStatus
 
 	CmdCop CmdType = 512 + iota
 	CmdCopStream
@@ -221,6 +222,8 @@ func (t CmdType) String() string {
 		return "LockWaitInfo"
 	case CmdGetHealthFeedback:
 		return "GetHealthFeedback"
+	case CmdBroadcastTxnStatus:
+		return "BroadcastTxnStatus"
 	case CmdFlashbackToVersion:
 		return "FlashbackToVersion"
 	case CmdPrepareFlashbackToVersion:
@@ -568,6 +571,10 @@ func (req *Request) GetHealthFeedback() *kvrpcpb.GetHealthFeedbackRequest {
 	return req.Req.(*kvrpcpb.GetHealthFeedbackRequest)
 }
 
+func (req *Request) BroadcastTxnStatus() *kvrpcpb.BroadcastTxnStatusRequest {
+	return req.Req.(*kvrpcpb.BroadcastTxnStatusRequest)
+}
+
 // FlashbackToVersion returns FlashbackToVersionRequest in request.
 func (req *Request) FlashbackToVersion() *kvrpcpb.FlashbackToVersionRequest {
 	return req.Req.(*kvrpcpb.FlashbackToVersionRequest)
@@ -653,6 +660,8 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_BufferBatchGet{BufferBatchGet: req.BufferBatchGet()}}
 	case CmdGetHealthFeedback:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_GetHealthFeedback{GetHealthFeedback: req.GetHealthFeedback()}}
+	case CmdBroadcastTxnStatus:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_BroadcastTxnStatus{BroadcastTxnStatus: req.BroadcastTxnStatus()}}
 	}
 	return nil
 }
@@ -1143,6 +1152,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.KvBufferBatchGet(ctx, req.BufferBatchGet())
 	case CmdGetHealthFeedback:
 		resp.Resp, err = client.GetHealthFeedback(ctx, req.GetHealthFeedback())
+	case CmdBroadcastTxnStatus:
+		resp.Resp, err = client.BroadcastTxnStatus(ctx, req.BroadcastTxnStatus())
 	default:
 		return nil, errors.Errorf("invalid request type: %v", req.Type)
 	}

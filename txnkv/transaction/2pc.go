@@ -164,7 +164,7 @@ type twoPhaseCommitter struct {
 	}
 
 	useAsyncCommit    uint32
-	minCommitTS       uint64
+	minCommitTS *minCommitTsManager
 	maxCommitTS       uint64
 	prewriteStarted   bool
 	prewriteCancelled uint32
@@ -477,6 +477,7 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		binlog:            txn.binlog,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		resourceGroupName: txn.resourceGroupName,
+		minCommitTS: newMinCommitTsManager(),
 	}
 	return committer, nil
 }
@@ -1140,6 +1141,78 @@ const (
 	stateClosed
 )
 
+// WriteAccessLevel represents the level of write access required to modify the value
+type WriteAccessLevel int
+
+const (
+	TTLAccess   WriteAccessLevel = 1
+	TwoPCAccess WriteAccessLevel = 2
+)
+
+// minCommitTsManager manages a minimum commit timestamp with different write access levels.
+type minCommitTsManager struct {
+	mutex               sync.Mutex
+	value               uint64
+	requiredWriteAccess WriteAccessLevel
+}
+
+// newMinCommitTsManager creates and returns a new minCommitTsManager.
+func newMinCommitTsManager() *minCommitTsManager {
+	return &minCommitTsManager{requiredWriteAccess: TTLAccess}
+}
+
+// tryUpdate update the value if the provided write access level is sufficient and
+// the new value is greater.
+func (m *minCommitTsManager) tryUpdate(newValue uint64, writeAccess WriteAccessLevel) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if writeAccess < m.requiredWriteAccess {
+		return
+	}
+
+	if newValue > m.value {
+		m.value = newValue
+	}
+}
+
+// elevateWriteAccess elevates the required write access level.
+// It returns the current value.
+func (m *minCommitTsManager) elevateWriteAccess(newLevel WriteAccessLevel) uint64 {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if newLevel > m.requiredWriteAccess {
+		m.requiredWriteAccess = newLevel
+	}
+	return m.value
+}
+
+// resetWriteAccess resets the required write access level to TTLAccess.
+func (m *minCommitTsManager) resetWriteAccess() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.requiredWriteAccess = TTLAccess
+}
+
+// get returns the current value. This is a read operation and doesn't require write access.
+func (m *minCommitTsManager) get() uint64 {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	return m.value
+}
+
+// getRequiredWriteAccess returns the current required write access level.
+func (m *minCommitTsManager) getRequiredWriteAccess() WriteAccessLevel {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	return m.requiredWriteAccess
+}
+
+
 type ttlManager struct {
 	state   ttlManagerState
 	ch      chan struct{}
@@ -1178,7 +1251,10 @@ func (tm *ttlManager) reset() {
 const keepAliveMaxBackoff = 20000
 const pessimisticLockMaxBackoff = 20000
 const maxConsecutiveFailure = 10
+const broadcastMaxBackoff = 10000
 
+// keepAlive keeps sending heartbeat to update the primary key's TTL
+// For pipelined transactions, it also updates min_commit_ts, and broadcasts it to all TiKVs.
 func keepAlive(
 	c *twoPhaseCommitter, closeCh chan struct{}, tm *ttlManager, primaryKey []byte,
 	lockCtx *kv.LockCtx, isPipelinedTxn bool,
@@ -1237,6 +1313,11 @@ func keepAlive(
 				return
 			}
 
+			// Update minCommitTS
+			if isPipelinedTxn && c.minCommitTS.requiredWriteAccess <= TTLAccess {
+				c.minCommitTS.tryUpdate(now, TTLAccess)
+			}
+
 			newTTL := uptime + atomic.LoadUint64(&ManagedLockTTL)
 			logutil.Logger(bo.GetCtx()).Info("send TxnHeartBeat",
 				zap.Uint64("startTS", c.startTS),
@@ -1244,7 +1325,9 @@ func keepAlive(
 				zap.Bool("isPipelinedTxn", isPipelinedTxn),
 			)
 			startTime := time.Now()
-			_, stopHeartBeat, err := sendTxnHeartBeat(bo, c.store, primaryKey, c.startTS, newTTL)
+			_, stopHeartBeat, err := sendTxnHeartBeat(
+				bo, c.store, primaryKey, c.startTS, newTTL, c.minCommitTS.get(),
+			)
 			if err != nil {
 				keepFail++
 				metrics.TxnHeartBeatHistogramError.Observe(time.Since(startTime).Seconds())
@@ -1268,19 +1351,95 @@ func keepAlive(
 					}
 					return
 				}
-				continue
+			} else {
+				keepFail = 0
+				metrics.TxnHeartBeatHistogramOK.Observe(time.Since(startTime).Seconds())
 			}
-			keepFail = 0
-			metrics.TxnHeartBeatHistogramOK.Observe(time.Since(startTime).Seconds())
+
+			// broadcast to all stores
+			if isPipelinedTxn {
+				broadcastToAllStores(
+					c.store,
+					c.store.GetRegionCache().GetStoresByType(tikvrpc.TiKV),
+					retry.NewBackofferWithVars(
+						context.Background(),
+						broadcastMaxBackoff,
+						c.txn.vars,
+					),
+					c.startTS,
+					c.minCommitTS.get(),
+				)
+			}
 		}
 	}
 }
 
-func sendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
+const broadcastRpcTimeout = time.Millisecond * 500
+const broadcastMaxConcurrency = 10
+
+// broadcasts to all stores to update the minCommitTS. Ignore errors.
+func broadcastToAllStores(store kvstore, stores []*locate.Store, bo *retry.Backoffer, startTs,
+	minCommitTs uint64) {
+	status := kvrpcpb.TxnStatus{
+		StartTs:     startTs,
+		MinCommitTs: minCommitTs,
+		CommitTs:    0,
+		RolledBack:  false,
+	}
+	req := tikvrpc.NewRequest(
+		tikvrpc.CmdBroadcastTxnStatus, &kvrpcpb.BroadcastTxnStatusRequest{
+			TxnStatus: []*kvrpcpb.TxnStatus{&status},
+		},
+	)
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(stores))
+	semaphore := make(chan struct{}, broadcastMaxConcurrency)
+
+	for _, s := range stores {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			_, err := store.GetTiKVClient().SendRequest(
+				bo.GetCtx(),
+				addr,
+				req,
+				broadcastRpcTimeout,
+			)
+			if err != nil {
+				errChan <- err
+			}
+		}(s.GetAddr())
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	for err := range errChan {
+		logutil.Logger(bo.GetCtx()).Info(
+			"broadcast txn status failed",
+			zap.Uint64("startTs", startTs),
+			zap.Uint64("minCommitTs", minCommitTs),
+			zap.Error(err),
+		)
+	}
+}
+
+func sendTxnHeartBeat(
+	bo *retry.Backoffer,
+	store kvstore,
+	primary []byte,
+	startTS, ttl uint64,
+	minCommitTS uint64,
+) (newTTL uint64, stopHeartBeat bool, err error) {
 	req := tikvrpc.NewRequest(tikvrpc.CmdTxnHeartBeat, &kvrpcpb.TxnHeartBeatRequest{
 		PrimaryLock:   primary,
 		StartVersion:  startTS,
 		AdviseLockTtl: ttl,
+		MinCommitTs: minCommitTS,
 	})
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, primary)
@@ -1449,6 +1608,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 
 // execute executes the two-phase commit protocol.
 func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
+	c.minCommitTS.elevateWriteAccess(TwoPCAccess)
 	var binlogSkipped bool
 	defer func() {
 		if c.isOnePC() {
@@ -1552,7 +1712,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 		commitDetail.GetLatestTsTime = time.Since(start)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
-		c.minCommitTS = latestTS + 1
+		c.minCommitTS.tryUpdate(latestTS+1, TwoPCAccess)
 	}
 	// Calculate maxCommitTS if necessary
 	if commitTSMayBeCalculated {
@@ -1671,10 +1831,10 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 
 	if c.isAsyncCommit() {
-		if c.minCommitTS == 0 {
+		if c.minCommitTS.get() == 0 {
 			return errors.Errorf("session %d invalid minCommitTS for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
 		}
-		commitTS = c.minCommitTS
+		commitTS = c.minCommitTS.get()
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
