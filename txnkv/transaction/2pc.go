@@ -1382,6 +1382,7 @@ func broadcastToAllStores(store kvstore, stores []*locate.Store, bo *retry.Backo
 			TxnStatus: []*kvrpcpb.TxnStatus{&status},
 		},
 	)
+	req.Context.ClusterId = store.GetClusterID()
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(stores))
