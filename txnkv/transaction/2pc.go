@@ -164,7 +164,7 @@ type twoPhaseCommitter struct {
 	}
 
 	useAsyncCommit    uint32
-	minCommitTS *minCommitTsManager
+	minCommitTS       *minCommitTsManager
 	maxCommitTS       uint64
 	prewriteStarted   bool
 	prewriteCancelled uint32
@@ -477,7 +477,7 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		binlog:            txn.binlog,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		resourceGroupName: txn.resourceGroupName,
-		minCommitTS: newMinCommitTsManager(),
+		minCommitTS:       newMinCommitTsManager(),
 	}
 	return committer, nil
 }
@@ -1212,7 +1212,6 @@ func (m *minCommitTsManager) getRequiredWriteAccess() WriteAccessLevel {
 	return m.requiredWriteAccess
 }
 
-
 type ttlManager struct {
 	state   ttlManagerState
 	ch      chan struct{}
@@ -1439,7 +1438,7 @@ func sendTxnHeartBeat(
 		PrimaryLock:   primary,
 		StartVersion:  startTS,
 		AdviseLockTtl: ttl,
-		MinCommitTs: minCommitTS,
+		MinCommitTs:   minCommitTS,
 	})
 	for {
 		loc, err := store.GetRegionCache().LocateKey(bo, primary)
