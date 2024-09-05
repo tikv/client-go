@@ -420,7 +420,7 @@ func (action actionPrewrite) handleSingleBatch(
 				} else {
 					c.mu.Lock()
 					if prewriteResp.MinCommitTs > c.minCommitTS.get() {
-						c.minCommitTS.tryUpdate(prewriteResp.MinCommitTs, TwoPCAccess)
+						c.minCommitTS.tryUpdate(prewriteResp.MinCommitTs, twoPCAccess)
 					}
 					c.mu.Unlock()
 				}

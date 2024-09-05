@@ -1145,8 +1145,8 @@ const (
 type WriteAccessLevel int
 
 const (
-	TTLAccess   WriteAccessLevel = 1
-	TwoPCAccess WriteAccessLevel = 2
+	ttlAccess   WriteAccessLevel = 1
+	twoPCAccess WriteAccessLevel = 2
 )
 
 // minCommitTsManager manages a minimum commit timestamp with different write access levels.
@@ -1158,7 +1158,7 @@ type minCommitTsManager struct {
 
 // newMinCommitTsManager creates and returns a new minCommitTsManager.
 func newMinCommitTsManager() *minCommitTsManager {
-	return &minCommitTsManager{requiredWriteAccess: TTLAccess}
+	return &minCommitTsManager{requiredWriteAccess: ttlAccess}
 }
 
 // tryUpdate update the value if the provided write access level is sufficient and
@@ -1186,14 +1186,6 @@ func (m *minCommitTsManager) elevateWriteAccess(newLevel WriteAccessLevel) uint6
 		m.requiredWriteAccess = newLevel
 	}
 	return m.value
-}
-
-// resetWriteAccess resets the required write access level to TTLAccess.
-func (m *minCommitTsManager) resetWriteAccess() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.requiredWriteAccess = TTLAccess
 }
 
 // get returns the current value. This is a read operation and doesn't require write access.
@@ -1313,8 +1305,8 @@ func keepAlive(
 			}
 
 			// Update minCommitTS
-			if isPipelinedTxn && c.minCommitTS.requiredWriteAccess <= TTLAccess {
-				c.minCommitTS.tryUpdate(now, TTLAccess)
+			if isPipelinedTxn && c.minCommitTS.getRequiredWriteAccess() <= ttlAccess {
+				c.minCommitTS.tryUpdate(now, ttlAccess)
 			}
 
 			newTTL := uptime + atomic.LoadUint64(&ManagedLockTTL)
@@ -1607,7 +1599,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 
 // execute executes the two-phase commit protocol.
 func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
-	c.minCommitTS.elevateWriteAccess(TwoPCAccess)
+	c.minCommitTS.elevateWriteAccess(twoPCAccess)
 	var binlogSkipped bool
 	defer func() {
 		if c.isOnePC() {
@@ -1711,7 +1703,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 		commitDetail.GetLatestTsTime = time.Since(start)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
-		c.minCommitTS.tryUpdate(latestTS+1, TwoPCAccess)
+		c.minCommitTS.tryUpdate(latestTS+1, twoPCAccess)
 	}
 	// Calculate maxCommitTS if necessary
 	if commitTSMayBeCalculated {

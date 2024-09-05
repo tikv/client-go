@@ -199,7 +199,7 @@ func (c CommitterProbe) GetMinCommitTS() uint64 {
 
 // SetMinCommitTS sets the minimal commit ts can be used.
 func (c CommitterProbe) SetMinCommitTS(ts uint64) {
-	c.minCommitTS.tryUpdate(ts, TwoPCAccess)
+	c.minCommitTS.tryUpdate(ts, twoPCAccess)
 }
 
 // SetMaxCommitTS sets the max commit ts can be used.
