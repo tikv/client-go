@@ -1359,6 +1359,8 @@ func keepAlive(
 					),
 					c.startTS,
 					c.minCommitTS.get(),
+					c.resourceGroupName,
+					c.resourceGroupTag,
 				)
 			}
 		}
@@ -1369,8 +1371,15 @@ const broadcastRpcTimeout = time.Millisecond * 500
 const broadcastMaxConcurrency = 10
 
 // broadcasts to all stores to update the minCommitTS. Ignore errors.
-func broadcastToAllStores(store kvstore, stores []*locate.Store, bo *retry.Backoffer, startTs,
-	minCommitTs uint64) {
+func broadcastToAllStores(
+	store kvstore,
+	stores []*locate.Store,
+	bo *retry.Backoffer,
+	startTs uint64,
+	minCommitTs uint64,
+	resourceGroupName string,
+	resourceGroupTag []byte,
+) {
 	status := kvrpcpb.TxnStatus{
 		StartTs:     startTs,
 		MinCommitTs: minCommitTs,
@@ -1383,6 +1392,10 @@ func broadcastToAllStores(store kvstore, stores []*locate.Store, bo *retry.Backo
 		},
 	)
 	req.Context.ClusterId = store.GetClusterID()
+	req.Context.ResourceControlContext = &kvrpcpb.ResourceControlContext{
+		ResourceGroupName: resourceGroupName,
+	}
+	req.Context.ResourceGroupTag = resourceGroupTag
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(stores))
