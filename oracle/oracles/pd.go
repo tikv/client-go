@@ -74,6 +74,8 @@ type lastTSOPointer struct {
 }
 
 // NewLastTSOPointer creates a lastTSOPointer.
+//
+//nolint:golint
 func NewLastTSOPointer(last *lastTSO) *lastTSOPointer {
 	return &lastTSOPointer{p: unsafe.Pointer(last)}
 }
