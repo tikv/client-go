@@ -47,5 +47,5 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v2.5.2
         with:
-          version: v1.52.2
+          version: v1.51.2
 
