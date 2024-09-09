@@ -629,6 +629,7 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 }
 
 type Option[T interface{}] struct {
+	//nolint: structcheck
 	inner *T
 }
 
@@ -645,9 +646,11 @@ func (o Option[T]) Inner() *T {
 }
 
 type RegionCacheTestCase struct {
-	debug       bool
-	do          func(s *testRegionCacheStaleReadSuite)
-	extra       []func(s *testRegionCacheStaleReadSuite)
+	//nolint: structcheck
+	debug bool
+	do    func(s *testRegionCacheStaleReadSuite)
+	extra []func(s *testRegionCacheStaleReadSuite)
+	//nolint: structcheck
 	recoverable bool
 	// local peer is leader
 	leaderRegionValid     bool
