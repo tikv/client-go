@@ -838,6 +838,7 @@ func (n *memdbNode) setBlack() {
 
 func (n *memdbNode) getKey() []byte {
 	var ret []byte
+	//nolint: staticcheck
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
 	hdr.Data = uintptr(unsafe.Pointer(&n.flags)) + kv.FlagBytes
 	hdr.Len = int(n.klen)
