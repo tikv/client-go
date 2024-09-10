@@ -43,8 +43,10 @@ import (
 
 const (
 	// DefStoreLivenessTimeout is the default value for store liveness timeout.
-	DefStoreLivenessTimeout      = "1s"
-	DefGrpcInitialWindowSize     = 1 << 27 // 128MiB
+	DefStoreLivenessTimeout = "1s"
+	// DefGrpcInitialWindowSize is the default value for initial window size on a stream.
+	DefGrpcInitialWindowSize = 1 << 27 // 128MiB
+	// DefGrpcInitialConnWindowSize is the default value for initial window size on a connection.
 	DefGrpcInitialConnWindowSize = 1 << 27 // 128MiB
 )
 

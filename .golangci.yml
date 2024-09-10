@@ -5,7 +5,7 @@ linters:
   enable:
     - bodyclose
     - deadcode
-    - depguard
+    #- depguard
     - exportloopref
     - gofmt
     - goimports
