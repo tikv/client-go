@@ -72,7 +72,7 @@ type TiKVClient struct {
 	GrpcKeepAliveTime uint `toml:"grpc-keepalive-time" json:"grpc-keepalive-time"`
 	// After having pinged for keepalive check, the client waits for a duration of Timeout in seconds
 	// and if no activity is seen even after that the connection is closed.
-	GrpcKeepAliveTimeout uint `toml:"grpc-keepalive-timeout" json:"grpc-keepalive-timeout"`
+	GrpcKeepAliveTimeout float64 `toml:"grpc-keepalive-timeout" json:"grpc-keepalive-timeout"`
 	// GrpcCompressionType is the compression type for gRPC channel: none or gzip.
 	GrpcCompressionType string `toml:"grpc-compression-type" json:"grpc-compression-type"`
 	// GrpcSharedBufferPool is the flag to control whether to share the buffer pool in the TiKV gRPC clients.
@@ -154,7 +154,7 @@ func DefaultTiKVClient() TiKVClient {
 	return TiKVClient{
 		GrpcConnectionCount:       4,
 		GrpcKeepAliveTime:         10,
-		GrpcKeepAliveTimeout:      3,
+		GrpcKeepAliveTimeout:      0.2,
 		GrpcCompressionType:       "none",
 		GrpcSharedBufferPool:      false,
 		GrpcInitialWindowSize:     DefGrpcInitialWindowSize,
@@ -204,5 +204,12 @@ func (config *TiKVClient) Valid() error {
 	if config.GrpcCompressionType != "none" && config.GrpcCompressionType != gzip.Name {
 		return fmt.Errorf("grpc-compression-type should be none or %s, but got %s", gzip.Name, config.GrpcCompressionType)
 	}
+	if config.GetGrpcKeepAliveTimeout() < time.Millisecond*50 {
+		return fmt.Errorf("grpc-keepalive-timeout should be at least 0.05, but got %f", config.GrpcKeepAliveTimeout)
+	}
 	return nil
+}
+
+func (config *TiKVClient) GetGrpcKeepAliveTimeout() time.Duration {
+	return time.Duration(config.GrpcKeepAliveTimeout * float64(time.Second))
 }
