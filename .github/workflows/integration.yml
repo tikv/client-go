@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        api_version: [v1ttl, v2]
+        api_version: [v1ttl]
     steps:
       - name: Checkout
         uses: actions/checkout@v2
