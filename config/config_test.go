@@ -81,7 +81,7 @@ func TestTxnScopeValue(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultTiKVClient()
 	assert.Nil(t, cfg.Valid())
-	assert.Equal(t, time.Millisecond*200, cfg.GetGrpcKeepAliveTimeout())
+	assert.Equal(t, time.Second*3, cfg.GetGrpcKeepAliveTimeout())
 	cfg.GrpcKeepAliveTimeout = 0.05
 	assert.Nil(t, cfg.Valid())
 	assert.Equal(t, time.Millisecond*50, cfg.GetGrpcKeepAliveTimeout())
