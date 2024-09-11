@@ -78,7 +78,7 @@ func TestTxnScopeValue(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestDefaultConfig(t *testing.T) {
+func TestValidateGRPCKeepAliveTimeout(t *testing.T) {
 	cfg := DefaultTiKVClient()
 	assert.Nil(t, cfg.Valid())
 	assert.Equal(t, time.Second*3, cfg.GetGrpcKeepAliveTimeout())
