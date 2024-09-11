@@ -91,7 +91,7 @@ func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, erro
 			DialTimeout:          5 * time.Second,
 			TLS:                  tlsConfig,
 			DialKeepAliveTime:    time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTime),
-			DialKeepAliveTimeout: time.Second * time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout),
+			DialKeepAliveTimeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 		},
 	)
 	if err != nil {
@@ -308,7 +308,7 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 			grpc.WithKeepaliveParams(
 				keepalive.ClientParameters{
 					Time:    time.Duration(cfg.TiKVClient.GrpcKeepAliveTime) * time.Second,
-					Timeout: time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout) * time.Second,
+					Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 				},
 			),
 		),
