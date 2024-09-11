@@ -1304,8 +1304,11 @@ func keepAlive(
 				return
 			}
 
-			// Update minCommitTS
-			if isPipelinedTxn && c.minCommitTS.getRequiredWriteAccess() <= ttlAccess {
+			// update minCommitTS, if it's a non-async-commit pipelined transaction
+			if isPipelinedTxn &&
+				!c.isOnePC() &&
+				!c.isAsyncCommit() &&
+				c.minCommitTS.getRequiredWriteAccess() <= ttlAccess {
 				c.minCommitTS.tryUpdate(now, ttlAccess)
 			}
 
