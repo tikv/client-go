@@ -23,6 +23,16 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 )
 
+var testMode = false
+
+// ART is rollbackable Adaptive Radix Tree optimized for TiDB's transaction states buffer use scenario.
+// You can think ART is a combination of two separate tree map, one for key => value and another for key => keyFlags.
+//
+// The value map is rollbackable, that means you can use the `Staging`, `Release` and `Cleanup` API to safely modify KVs.
+//
+// The flags map is not rollbackable. There are two types of flag, persistent and non-persistent.
+// When discarding a newly added KV in `Cleanup`, the non-persistent flags will be cleared.
+// If there are persistent flags associated with key, we will keep this key in node without value.
 type ART struct {
 	allocator       artAllocator
 	root            artNode
@@ -135,7 +145,7 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 			depth += node.prefixLen
 		}
 
-		_, current = current.findChild(&t.allocator, key.charAt(int(depth)), key.valid(int(depth)))
+		_, current = current.findChild(&t.allocator, key.charAt(int(depth)), !key.valid(int(depth)))
 		if current.addr.IsNull() {
 			return arena.NullAddr, nil
 		}
@@ -188,18 +198,18 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 
 		// search next node
 		valid := key.valid(int(depth))
-		_, next := current.findChild(&t.allocator, key.charAt(int(depth)), valid)
+		_, next := current.findChild(&t.allocator, key.charAt(int(depth)), !valid)
 		if next == nullArtNode {
 			// insert as leaf if there is no child.
-			newLeaf, lf := t.newLeaf(key)
-			if current.addChild(&t.allocator, key.charAt(int(depth)), !key.valid(int(depth)), newLeaf) {
+			newAn, newLeaf := t.newLeaf(key)
+			if current.addChild(&t.allocator, key.charAt(int(depth)), !valid, newAn) {
 				if prev == nullArtNode {
 					t.root = current
 				} else {
-					prev.swapChild(&t.allocator, key.charAt(prevDepth), current)
+					prev.replaceChild(&t.allocator, key.charAt(prevDepth), current)
 				}
 			}
-			return newLeaf.addr, lf
+			return newAn.addr, newLeaf
 		}
 		if !valid && next.kind == typeLeaf {
 			// key is drained, return the leaf.
@@ -241,17 +251,17 @@ func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena
 	lcp := longestCommonPrefix(l1Key, l2Key, depth)
 
 	// calculate the common prefix length of new node.
-	an, n4 := t.newNode4()
-	n4.setPrefix(key[depth:], lcp)
+	newAn, newN4 := t.newNode4()
+	newN4.setPrefix(key[depth:], lcp)
 	depth += lcp
-	an.addChild(&t.allocator, l1Key.charAt(int(depth)), !l1Key.valid(int(depth)), current)
-	an.addChild(&t.allocator, l2Key.charAt(int(depth)), !l2Key.valid(int(depth)), leaf2Addr)
+	newAn.addChild(&t.allocator, l1Key.charAt(int(depth)), !l1Key.valid(int(depth)), current)
+	newAn.addChild(&t.allocator, l2Key.charAt(int(depth)), !l2Key.valid(int(depth)), leaf2Addr)
 
 	// swap the old leaf with the new node4.
 	if prev == nullArtNode {
-		t.root = an
+		t.root = newAn
 	} else {
-		prev.swapChild(&t.allocator, key.charAt(prevDepth), an)
+		prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
 	}
 	return leaf2Addr.addr, leaf2
 }
@@ -272,7 +282,7 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 	prevDepth := int(depth - 1)
 
 	// set prefix for new node.
-	newArtNode, newN4 := t.newNode4()
+	newAn, newN4 := t.newNode4()
 	newN4.setPrefix(key[depth:], mismatchIdx)
 
 	// update prefix for old node and move it as a child of the new node.
@@ -280,7 +290,7 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 		nodeKey := currNode.prefix[mismatchIdx]
 		currNode.prefixLen -= mismatchIdx + 1
 		copy(currNode.prefix[:], currNode.prefix[mismatchIdx+1:])
-		newArtNode.addChild(&t.allocator, nodeKey, false, current)
+		newAn.addChild(&t.allocator, nodeKey, false, current)
 	} else {
 		currNode.prefixLen -= mismatchIdx + 1
 		leafArtNode := minimum(&t.allocator, current)
@@ -289,16 +299,16 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 		kMin := depth + mismatchIdx + 1
 		kMax := depth + mismatchIdx + 1 + min(currNode.prefixLen, maxPrefixLen)
 		copy(currNode.prefix[:], leafKey[kMin:kMax])
-		newArtNode.addChild(&t.allocator, leafKey.charAt(int(depth+mismatchIdx)), !leafKey.valid(int(depth)), current)
+		newAn.addChild(&t.allocator, leafKey.charAt(int(depth+mismatchIdx)), !leafKey.valid(int(depth)), current)
 	}
 
 	// insert the artLeaf into new node
 	newLeafAddr, newLeaf := t.newLeaf(key)
-	newArtNode.addChild(&t.allocator, key.charAt(int(depth+mismatchIdx)), !key.valid(int(depth+mismatchIdx)), newLeafAddr)
+	newAn.addChild(&t.allocator, key.charAt(int(depth+mismatchIdx)), !key.valid(int(depth+mismatchIdx)), newLeafAddr)
 	if prev == nullArtNode {
-		t.root = newArtNode
+		t.root = newAn
 	} else {
-		prev.swapChild(&t.allocator, key.charAt(prevDepth), newArtNode)
+		prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
 	}
 	return newLeafAddr.addr, newLeaf
 }

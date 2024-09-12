@@ -157,7 +157,7 @@ func TestNodePrefix(t *testing.T) {
 		matchKey = append(make([]byte, 10), matchKey...)
 		mismatchKey = append(make([]byte, 10), mismatchKey...)
 		leafAddr, _ = allocator.allocLeaf(leafKey)
-		an.swapChild(&allocator, 2, artNode{kind: typeLeaf, addr: leafAddr})
+		an.replaceChild(&allocator, 2, artNode{kind: typeLeaf, addr: leafAddr})
 		n.setPrefix(leafKey[10:], maxPrefixLen+1)
 		require.Equal(t, uint32(maxPrefixLen+1), n.matchDeep(&allocator, an, matchKey, 10))
 		require.Equal(t, uint32(maxPrefixLen), n.matchDeep(&allocator, an, mismatchKey, 10))
@@ -256,4 +256,12 @@ func TestNextPrevPresentIdx(t *testing.T) {
 	testFn(&artNode{kind: typeNode48, addr: addr}, n48)
 	addr, n256 := allocator.allocNode48()
 	testFn(&artNode{kind: typeNode48, addr: addr}, n256)
+}
+
+func TestLCP(t *testing.T) {
+	k1 := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	k2 := []byte{1, 2, 3, 4, 5, 7, 7, 8}
+	for i := 0; i < 6; i++ {
+		require.Equal(t, uint32(5-i), longestCommonPrefix(k1, k2, uint32(i)))
+	}
 }
