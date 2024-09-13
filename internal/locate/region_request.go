@@ -65,6 +65,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/pd/client/errs"
 	pderr "github.com/tikv/pd/client/errs"
 )
 
@@ -2124,7 +2125,9 @@ func (s *RegionRequestSender) sendReqToRegion(
 	}
 
 	if err != nil {
-		s.rpcError = err
+		if isRPCError(err) {
+			s.rpcError = err
+		}
 		if s.Stats != nil {
 			errStr := getErrMsg(err)
 			s.Stats.RecordRPCErrorStats(errStr)
@@ -2149,6 +2152,11 @@ func (s *RegionRequestSender) sendReqToRegion(
 		return nil, true, nil
 	}
 	return
+}
+
+func isRPCError(err error) bool {
+	// exclude ErrClientResourceGroupThrottled
+	return err != nil && errs.ErrClientResourceGroupThrottled.NotEqual(err)
 }
 
 func storeIDLabel(rpcCtx *RPCContext) string {
@@ -2228,16 +2236,6 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 		metrics.TiKVRPCErrorCounter.WithLabelValues("unknown", storeLabel).Inc()
 	}
 
-	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
-		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
-	} else if ctx.Meta != nil {
-		if s.replicaSelector != nil {
-			s.replicaSelector.onSendFailure(bo, err)
-		} else {
-			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
-		}
-	}
-
 	// don't need to retry for ResourceGroup error
 	if errors.Is(err, pderr.ErrClientResourceGroupThrottled) {
 		return err
@@ -2248,6 +2246,16 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 	var errGetResourceGroup *pderr.ErrClientGetResourceGroup
 	if errors.As(err, &errGetResourceGroup) {
 		return err
+	}
+
+	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
+		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
+	} else if ctx.Meta != nil {
+		if s.replicaSelector != nil {
+			s.replicaSelector.onSendFailure(bo, err)
+		} else {
+			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
+		}
 	}
 
 	// Retry on send request failure when it's not canceled.
