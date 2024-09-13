@@ -44,11 +44,11 @@ func convertCfName(cf string) string {
 	case "default":
 		return config.WorkloadColumnFamilyDefault
 	case "write":
-		return config.WorkloadColumnFamilyWrite
 	case "lock":
-		return config.WorkloadColumnFamilyLock
+		fmt.Printf("Column family %s is not supported, use default instead\n", cf)
+		return config.WorkloadColumnFamilyDefault
 	default:
-		return "default"
+		return cf
 	}
 }
 
