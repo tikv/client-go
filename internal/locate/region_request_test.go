@@ -161,7 +161,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrot
 		defer func() {
 			s.regionRequestSender.client = oc
 		}()
-		storeOld, _ := s.regionRequestSender.regionCache.stores.get(1)
+		s.regionRequestSender.regionCache.storeMu.Lock()
+		storeOld := s.regionRequestSender.regionCache.storeMu.stores[1]
+		s.regionRequestSender.regionCache.storeMu.Unlock()
 		epoch := storeOld.epoch
 		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
 			return nil, pderr.ErrClientResourceGroupThrottled
@@ -169,7 +171,9 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrot
 		bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
 		_, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
 		s.NotNil(err)
-		storeNew, _ := s.regionRequestSender.regionCache.stores.get(1)
+		s.regionRequestSender.regionCache.storeMu.Lock()
+		storeNew := s.regionRequestSender.regionCache.storeMu.stores[1]
+		s.regionRequestSender.regionCache.storeMu.Unlock()
 		//  not mark the store need be refill, then the epoch should not be changed.
 		s.Equal(epoch, storeNew.epoch)
 		// no rpc error if the error is ErrClientResourceGroupThrottled
