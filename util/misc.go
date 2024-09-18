@@ -168,7 +168,9 @@ func String(b []byte) (s string) {
 	if len(b) == 0 {
 		return ""
 	}
+	//nolint: staticcheck
 	pbytes := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	//nolint: staticcheck
 	pstring := (*reflect.StringHeader)(unsafe.Pointer(&s))
 	pstring.Data = pbytes.Data
 	pstring.Len = pbytes.Len
