@@ -39,7 +39,6 @@ import (
 	"testing"
 )
 
-
 func TestMinCommitTsManager(t *testing.T) {
 	t.Run("Initial state", func(t *testing.T) {
 		manager := newMinCommitTsManager()
@@ -99,6 +98,6 @@ func TestMinCommitTsManager(t *testing.T) {
 		<-done
 		<-done
 
-		assert.Equal(t, manager.get(), uint64(1999),)
+		assert.Equal(t, manager.get(), uint64(1999))
 	})
 }

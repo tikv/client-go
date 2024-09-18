@@ -795,7 +795,25 @@ func (txn *KVTxn) Rollback() error {
 		txn.committer.ttlManager.close()
 		// no need to clean up locks when no flush triggered.
 		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
-		if len(pipelinedStart) != 0 && len(pipelinedEnd) != 0 {
+		needCleanUpLocks := len(pipelinedStart) != 0 && len(pipelinedEnd) != 0
+		broadcastToAllStores(
+			txn.committer.store,
+			retry.NewBackofferWithVars(
+				txn.store.Ctx(),
+				broadcastMaxBackoff,
+				txn.committer.txn.vars,
+			),
+			&kvrpcpb.TxnStatus{
+				StartTs:     txn.startTS,
+				MinCommitTs: txn.committer.minCommitTS.get(),
+				CommitTs:    0,
+				RolledBack:  true,
+				IsCompleted: !needCleanUpLocks,
+			},
+			txn.resourceGroupName,
+			txn.resourceGroupTag,
+		)
+		if needCleanUpLocks {
 			rollbackBo := retry.NewBackofferWithVars(txn.store.Ctx(), CommitSecondaryMaxBackoff, txn.vars)
 			txn.committer.resolveFlushedLocks(rollbackBo, pipelinedStart, pipelinedEnd, false)
 		}

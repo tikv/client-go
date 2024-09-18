@@ -1242,6 +1242,7 @@ func (tm *ttlManager) reset() {
 const keepAliveMaxBackoff = 20000
 const pessimisticLockMaxBackoff = 20000
 const maxConsecutiveFailure = 10
+const broadcastGracePeriod = 5 * time.Second
 const broadcastMaxBackoff = 10000
 
 // keepAlive keeps sending heartbeat to update the primary key's TTL
@@ -1354,14 +1355,18 @@ func keepAlive(
 			if isPipelinedTxn {
 				broadcastToAllStores(
 					c.store,
-					c.store.GetRegionCache().GetStoresByType(tikvrpc.TiKV),
 					retry.NewBackofferWithVars(
 						context.Background(),
 						broadcastMaxBackoff,
 						c.txn.vars,
 					),
-					c.startTS,
-					c.minCommitTS.get(),
+					&kvrpcpb.TxnStatus{
+						StartTs:     c.startTS,
+						MinCommitTs: c.minCommitTS.get(),
+						CommitTs:    0,
+						RolledBack:  false,
+						IsCompleted: false,
+					},
 					c.resourceGroupName,
 					c.resourceGroupTag,
 				)
@@ -1376,22 +1381,15 @@ const broadcastMaxConcurrency = 10
 // broadcasts to all stores to update the minCommitTS. Ignore errors.
 func broadcastToAllStores(
 	store kvstore,
-	stores []*locate.Store,
 	bo *retry.Backoffer,
-	startTs uint64,
-	minCommitTs uint64,
+	status *kvrpcpb.TxnStatus,
 	resourceGroupName string,
 	resourceGroupTag []byte,
 ) {
-	status := kvrpcpb.TxnStatus{
-		StartTs:     startTs,
-		MinCommitTs: minCommitTs,
-		CommitTs:    0,
-		RolledBack:  false,
-	}
+	stores := store.GetRegionCache().GetStoresByType(tikvrpc.TiKV)
 	req := tikvrpc.NewRequest(
 		tikvrpc.CmdBroadcastTxnStatus, &kvrpcpb.BroadcastTxnStatusRequest{
-			TxnStatus: []*kvrpcpb.TxnStatus{&status},
+			TxnStatus: []*kvrpcpb.TxnStatus{status},
 		},
 	)
 	req.Context.ClusterId = store.GetClusterID()
@@ -1429,8 +1427,7 @@ func broadcastToAllStores(
 	for err := range errChan {
 		logutil.Logger(bo.GetCtx()).Info(
 			"broadcast txn status failed",
-			zap.Uint64("startTs", startTs),
-			zap.Uint64("minCommitTs", minCommitTs),
+			zap.Stringer("status", status),
 			zap.Error(err),
 		)
 	}
@@ -1595,6 +1592,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 		var err error
 		if c.txn.IsPipelined() {
 			// TODO: cleanup pipelined txn
+			// TODO: broadcast txn status
 		} else if !c.isOnePC() {
 			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
 		} else if c.isPessimistic {
