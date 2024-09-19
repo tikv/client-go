@@ -2686,7 +2686,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 
 const cleanCacheInterval = time.Second
 const cleanRegionNumPerRound = 50
-const refreshStoreListInterval = time.Second
+const refreshStoreListInterval = 10 * time.Second
 
 // gcScanItemHook is only used for testing
 var gcScanItemHook = new(atomic.Pointer[func(*btreeItem)])
