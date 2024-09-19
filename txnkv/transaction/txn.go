@@ -805,7 +805,7 @@ func (txn *KVTxn) Rollback() error {
 			),
 			&kvrpcpb.TxnStatus{
 				StartTs:     txn.startTS,
-				MinCommitTs: txn.committer.minCommitTS.get(),
+				MinCommitTs: txn.committer.minCommitTSMgr.get(),
 				CommitTs:    0,
 				RolledBack:  true,
 				IsCompleted: !needCleanUpLocks,

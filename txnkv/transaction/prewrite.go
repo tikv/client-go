@@ -116,7 +116,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 	}
 	c.mu.Lock()
-	minCommitTS := c.minCommitTS.get()
+	minCommitTS := c.minCommitTSMgr.get()
 	c.mu.Unlock()
 	if c.forUpdateTS > 0 && c.forUpdateTS >= minCommitTS {
 		minCommitTS = c.forUpdateTS + 1
@@ -413,14 +413,14 @@ func (action actionPrewrite) handleSingleBatch(
 						return nil
 					}
 					logutil.Logger(bo.GetCtx()).Warn(
-						"async commit cannot proceed since the returned minCommitTS is zero, "+
+						"async commit cannot proceed since the returned minCommitTSMgr is zero, "+
 							"fallback to normal path", zap.Uint64("startTS", c.startTS),
 					)
 					c.setAsyncCommit(false)
 				} else {
 					c.mu.Lock()
-					if prewriteResp.MinCommitTs > c.minCommitTS.get() {
-						c.minCommitTS.tryUpdate(prewriteResp.MinCommitTs, twoPCAccess)
+					if prewriteResp.MinCommitTs > c.minCommitTSMgr.get() {
+						c.minCommitTSMgr.tryUpdate(prewriteResp.MinCommitTs, twoPCAccess)
 					}
 					c.mu.Unlock()
 				}

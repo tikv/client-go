@@ -347,7 +347,7 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 		),
 		&kvrpcpb.TxnStatus{
 			StartTs:     c.startTS,
-			MinCommitTs: c.minCommitTS.get(),
+			MinCommitTs: c.minCommitTSMgr.get(),
 			CommitTs:    commitTS,
 			RolledBack:  false,
 			IsCompleted: false,

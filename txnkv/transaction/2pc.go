@@ -164,7 +164,7 @@ type twoPhaseCommitter struct {
 	}
 
 	useAsyncCommit    uint32
-	minCommitTS       *minCommitTsManager
+	minCommitTSMgr    *minCommitTsManager
 	maxCommitTS       uint64
 	prewriteStarted   bool
 	prewriteCancelled uint32
@@ -477,7 +477,7 @@ func newTwoPhaseCommitter(txn *KVTxn, sessionID uint64) (*twoPhaseCommitter, err
 		binlog:            txn.binlog,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		resourceGroupName: txn.resourceGroupName,
-		minCommitTS:       newMinCommitTsManager(),
+		minCommitTSMgr:    newMinCommitTsManager(),
 	}
 	return committer, nil
 }
@@ -1305,12 +1305,12 @@ func keepAlive(
 				return
 			}
 
-			// update minCommitTS, if it's a non-async-commit pipelined transaction
+			// update minCommitTSMgr, if it's a non-async-commit pipelined transaction
 			if isPipelinedTxn &&
 				!c.isOnePC() &&
 				!c.isAsyncCommit() &&
-				c.minCommitTS.getRequiredWriteAccess() <= ttlAccess {
-				c.minCommitTS.tryUpdate(now, ttlAccess)
+				c.minCommitTSMgr.getRequiredWriteAccess() <= ttlAccess {
+				c.minCommitTSMgr.tryUpdate(now, ttlAccess)
 			}
 
 			newTTL := uptime + atomic.LoadUint64(&ManagedLockTTL)
@@ -1321,7 +1321,7 @@ func keepAlive(
 			)
 			startTime := time.Now()
 			_, stopHeartBeat, err := sendTxnHeartBeat(
-				bo, c.store, primaryKey, c.startTS, newTTL, c.minCommitTS.get(),
+				bo, c.store, primaryKey, c.startTS, newTTL, c.minCommitTSMgr.get(),
 			)
 			if err != nil {
 				keepFail++
@@ -1362,7 +1362,7 @@ func keepAlive(
 					),
 					&kvrpcpb.TxnStatus{
 						StartTs:     c.startTS,
-						MinCommitTs: c.minCommitTS.get(),
+						MinCommitTs: c.minCommitTSMgr.get(),
 						CommitTs:    0,
 						RolledBack:  false,
 						IsCompleted: false,
@@ -1378,7 +1378,7 @@ func keepAlive(
 const broadcastRpcTimeout = time.Millisecond * 500
 const broadcastMaxConcurrency = 10
 
-// broadcasts to all stores to update the minCommitTS. Ignore errors.
+// broadcasts to all stores to update the minCommitTSMgr. Ignore errors.
 func broadcastToAllStores(
 	store kvstore,
 	bo *retry.Backoffer,
@@ -1400,27 +1400,31 @@ func broadcastToAllStores(
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(stores))
-	semaphore := make(chan struct{}, broadcastMaxConcurrency)
+	taskChan := make(chan *locate.Store, len(stores))
 
-	for _, s := range stores {
+	for i := 0; i < broadcastMaxConcurrency; i++ {
 		wg.Add(1)
-		go func(addr string) {
+		go func() {
 			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			_, err := store.GetTiKVClient().SendRequest(
-				bo.GetCtx(),
-				addr,
-				req,
-				broadcastRpcTimeout,
-			)
-			if err != nil {
-				errChan <- err
+			for s := range taskChan {
+				_, err := store.GetTiKVClient().SendRequest(
+					bo.GetCtx(),
+					s.GetAddr(),
+					req,
+					broadcastRpcTimeout,
+				)
+				if err != nil {
+					errChan <- err
+				}
 			}
-		}(s.GetAddr())
+		}()
 	}
 
+	for _, s := range stores {
+		taskChan <- s
+	}
+
+	close(taskChan)
 	wg.Wait()
 	close(errChan)
 
@@ -1614,7 +1618,7 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 
 // execute executes the two-phase commit protocol.
 func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
-	c.minCommitTS.elevateWriteAccess(twoPCAccess)
+	c.minCommitTSMgr.elevateWriteAccess(twoPCAccess)
 	var binlogSkipped bool
 	defer func() {
 		if c.isOnePC() {
@@ -1718,7 +1722,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 		commitDetail.GetLatestTsTime = time.Since(start)
 		// Plus 1 to avoid producing the same commit TS with previously committed transactions
-		c.minCommitTS.tryUpdate(latestTS+1, twoPCAccess)
+		c.minCommitTSMgr.tryUpdate(latestTS+1, twoPCAccess)
 	}
 	// Calculate maxCommitTS if necessary
 	if commitTSMayBeCalculated {
@@ -1837,10 +1841,10 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}
 
 	if c.isAsyncCommit() {
-		if c.minCommitTS.get() == 0 {
-			return errors.Errorf("session %d invalid minCommitTS for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
+		if c.minCommitTSMgr.get() == 0 {
+			return errors.Errorf("session %d invalid minCommitTSMgr for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
 		}
-		commitTS = c.minCommitTS.get()
+		commitTS = c.minCommitTSMgr.get()
 	} else {
 		start = time.Now()
 		logutil.Event(ctx, "start get commit ts")
