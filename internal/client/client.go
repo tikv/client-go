@@ -303,7 +303,6 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 		a.batchConn.initMetrics(a.target)
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
-	keepAliveTimeout := cfg.TiKVClient.GrpcKeepAliveTimeout
 	for i := range a.v {
 		ctx, cancel := context.WithTimeout(context.Background(), a.dialTimeout)
 		var callOptions []grpc.CallOption
@@ -330,7 +329,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 			}),
 			grpc.WithKeepaliveParams(keepalive.ClientParameters{
 				Time:    time.Duration(keepAlive) * time.Second,
-				Timeout: time.Duration(keepAliveTimeout) * time.Second,
+				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
 		if cfg.TiKVClient.GrpcSharedBufferPool {

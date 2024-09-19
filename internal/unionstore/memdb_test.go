@@ -52,6 +52,7 @@ type KeyFlags = kv.KeyFlags
 
 func TestGetSet(t *testing.T) {
 	testGetSet(t, newRbtDBWithContext())
+	testGetSet(t, newArtDBWithContext())
 }
 
 func testGetSet(t *testing.T, db MemBuffer) {
@@ -220,6 +221,7 @@ func testFlushOverwrite(t *testing.T, db MemBuffer) {
 
 func TestComplexUpdate(t *testing.T) {
 	testComplexUpdate(t, newRbtDBWithContext())
+	testComplexUpdate(t, newArtDBWithContext())
 }
 
 func testComplexUpdate(t *testing.T, db MemBuffer) {
@@ -547,7 +549,7 @@ func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iter
 	}
 }
 
-func checkConsist(t *testing.T, p1 *MemDB, p2 *leveldb.DB) {
+func checkConsist(t *testing.T, p1 MemBuffer, p2 *leveldb.DB) {
 	assert := assert.New(t)
 
 	assert.Equal(p1.Len(), p2.Len())
@@ -843,8 +845,11 @@ func TestUnsetTemporaryFlag(t *testing.T) {
 }
 
 func TestSnapshotGetIter(t *testing.T) {
+	testSnapshotGetIter(t, newRbtDBWithContext())
+}
+
+func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 	assert := assert.New(t)
-	db := NewMemDB()
 	var getters []Getter
 	var iters []Iterator
 	var reverseIters []Iterator

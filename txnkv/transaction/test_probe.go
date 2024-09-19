@@ -289,6 +289,11 @@ func (c CommitterProbe) Cleanup(ctx context.Context) {
 	c.cleanWg.Wait()
 }
 
+// CleanupWithoutWait cleans dirty data of a committer without waiting.
+func (c CommitterProbe) CleanupWithoutWait(ctx context.Context) {
+	c.cleanup(ctx)
+}
+
 // WaitCleanup waits for the committer to complete.
 func (c CommitterProbe) WaitCleanup() {
 	c.cleanWg.Wait()

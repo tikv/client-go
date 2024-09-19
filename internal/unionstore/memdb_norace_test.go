@@ -59,31 +59,36 @@ func TestRandom(t *testing.T) {
 		rand2.Read(keys[i])
 	}
 
-	p1 := NewMemDB()
+	rbtDB := newRbtDBWithContext()
+	artDB := newArtDBWithContext()
 	p2 := leveldb.New(comparer.DefaultComparer, 4*1024)
 	for _, k := range keys {
-		p1.Set(k, k)
+		rbtDB.Set(k, k)
+		artDB.Set(k, k)
 		_ = p2.Put(k, k)
 	}
 
-	require.Equal(p1.Len(), p2.Len())
-	require.Equal(p1.Size(), p2.Size())
+	require.Equal(rbtDB.Len(), p2.Len())
+	require.Equal(rbtDB.Size(), p2.Size())
+
+	require.Equal(artDB.Len(), p2.Len())
+	require.Equal(artDB.Size(), p2.Size())
 
 	rand.Shuffle(cnt, func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
 
 	for _, k := range keys {
 		op := rand.Float64()
 		if op < 0.35 {
-			p1.RemoveFromBuffer(k)
+			rbtDB.RemoveFromBuffer(k)
 			p2.Delete(k)
 		} else {
 			newValue := make([]byte, rand.Intn(19)+1)
 			rand2.Read(newValue)
-			p1.Set(k, newValue)
+			rbtDB.Set(k, newValue)
 			_ = p2.Put(k, newValue)
 		}
 	}
-	checkConsist(t, p1, p2)
+	checkConsist(t, rbtDB, p2)
 }
 
 // The test takes too long under the race detector.

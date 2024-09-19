@@ -138,6 +138,11 @@ type KVTxn struct {
 	// commitCallback is called after current transaction gets committed
 	commitCallback func(info string, err error)
 
+	// backgroundGoroutineLifecycleHooks tracks the lifecycle of background goroutines of a
+	// transaction. The `.Pre` will be executed before the start of each background goroutine,
+	// and the `.Post` will be called after the background goroutine exits.
+	backgroundGoroutineLifecycleHooks LifecycleHooks
+
 	binlog                  BinlogExecutor
 	schemaLeaseChecker      SchemaLeaseChecker
 	syncLog                 bool
@@ -348,6 +353,47 @@ func (txn *KVTxn) AddRPCInterceptor(it interceptor.RPCInterceptor) {
 // is finished.
 func (txn *KVTxn) SetCommitCallback(f func(string, error)) {
 	txn.commitCallback = f
+}
+
+// SetBackgroundGoroutineLifecycleHooks sets up the hooks to track the lifecycle of the background goroutines of a transaction.
+func (txn *KVTxn) SetBackgroundGoroutineLifecycleHooks(hooks LifecycleHooks) {
+	txn.backgroundGoroutineLifecycleHooks = hooks
+}
+
+// spawn starts a goroutine to run the given function.
+func (txn *KVTxn) spawn(f func()) {
+	if txn.backgroundGoroutineLifecycleHooks.Pre != nil {
+		txn.backgroundGoroutineLifecycleHooks.Pre()
+	}
+	txn.store.WaitGroup().Add(1)
+	go func() {
+		if txn.backgroundGoroutineLifecycleHooks.Post != nil {
+			defer txn.backgroundGoroutineLifecycleHooks.Post()
+		}
+		defer txn.store.WaitGroup().Done()
+
+		f()
+	}()
+}
+
+// spawnWithStorePool starts a goroutine to run the given function with the store's goroutine pool.
+func (txn *KVTxn) spawnWithStorePool(f func()) error {
+	if txn.backgroundGoroutineLifecycleHooks.Pre != nil {
+		txn.backgroundGoroutineLifecycleHooks.Pre()
+	}
+	txn.store.WaitGroup().Add(1)
+	err := txn.store.Go(func() {
+		if txn.backgroundGoroutineLifecycleHooks.Post != nil {
+			defer txn.backgroundGoroutineLifecycleHooks.Post()
+		}
+		defer txn.store.WaitGroup().Done()
+
+		f()
+	})
+	if err != nil {
+		txn.store.WaitGroup().Done()
+	}
+	return err
 }
 
 // SetEnableAsyncCommit indicates if the transaction will try to use async commit.
@@ -1725,4 +1771,11 @@ func (txn *KVTxn) SetExplicitRequestSourceType(tp string) {
 // MemHookSet returns whether the mem buffer has a memory footprint change hook set.
 func (txn *KVTxn) MemHookSet() bool {
 	return txn.us.GetMemBuffer().MemHookSet()
+}
+
+// LifecycleHooks is a struct that contains hooks for a background goroutine.
+// The `Pre` is called before the goroutine starts, and the `Post` is called after the goroutine finishes.
+type LifecycleHooks struct {
+	Pre  func()
+	Post func()
 }
