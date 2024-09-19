@@ -398,6 +398,9 @@ func (t *ART) checkpoint() arena.MemDBCheckpoint {
 
 func (t *ART) RevertNode(hdr *arena.MemdbVlogHdr) {
 	lf := t.allocator.getLeaf(hdr.NodeAddr)
+	if lf == nil {
+		panic("revert an invalid node")
+	}
 	lf.vAddr = hdr.OldValue
 	t.size -= int(hdr.ValueLen)
 	if hdr.OldValue.IsNull() {
