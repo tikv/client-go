@@ -195,6 +195,7 @@ func testRandomAB(t *testing.T, bufferA, bufferB MemBuffer) {
 			bufferB.Release(h)
 		}
 
+		require.Equal(bufferA.Dirty(), bufferB.Dirty())
 		require.Equal(bufferA.Len(), bufferB.Len())
 		require.Equal(bufferA.Size(), bufferB.Size(), i)
 		key := keys[rand.Intn(i+1)]

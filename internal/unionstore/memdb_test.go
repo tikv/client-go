@@ -815,6 +815,42 @@ func testMemDBStaging(t *testing.T, buffer MemBuffer) {
 	assert.Equal(len(v), 2)
 }
 
+func TestMemDBCheckpoint(t *testing.T) {
+	testMemDBCheckpoint(t, newRbtDBWithContext())
+	testMemDBCheckpoint(t, newArtDBWithContext())
+}
+
+func testMemDBCheckpoint(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+	cp1 := buffer.Checkpoint()
+
+	buffer.Set([]byte("x"), []byte("x"))
+
+	cp2 := buffer.Checkpoint()
+	buffer.Set([]byte("y"), []byte("y"))
+
+	h := buffer.Staging()
+	buffer.Set([]byte("z"), []byte("z"))
+	buffer.Release(h)
+
+	for _, k := range []string{"x", "y", "z"} {
+		v, _ := buffer.Get(context.Background(), []byte(k))
+		assert.Equal(v, []byte(k))
+	}
+
+	buffer.RevertToCheckpoint(cp2)
+	v, _ := buffer.Get(context.Background(), []byte("x"))
+	assert.Equal(v, []byte("x"))
+	for _, k := range []string{"y", "z"} {
+		_, err := buffer.Get(context.Background(), []byte(k))
+		assert.NotNil(err)
+	}
+
+	buffer.RevertToCheckpoint(cp1)
+	_, err := buffer.Get(context.Background(), []byte("x"))
+	assert.NotNil(err)
+}
+
 func TestBufferLimit(t *testing.T) {
 	testBufferLimit(t, newRbtDBWithContext())
 }

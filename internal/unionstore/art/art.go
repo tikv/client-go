@@ -422,12 +422,15 @@ func (t *ART) InspectNode(addr arena.MemdbArenaAddr) (*artLeaf, arena.MemdbArena
 
 // Checkpoint returns a checkpoint of ART.
 func (t *ART) Checkpoint() *arena.MemDBCheckpoint {
-	panic("unimplemented")
+	cp := t.allocator.vlogAllocator.Checkpoint()
+	return &cp
 }
 
 // RevertToCheckpoint reverts the ART to the checkpoint.
 func (t *ART) RevertToCheckpoint(cp *arena.MemDBCheckpoint) {
-	panic("unimplemented")
+	t.allocator.vlogAllocator.RevertToCheckpoint(t, cp)
+	t.allocator.vlogAllocator.Truncate(cp)
+	t.allocator.vlogAllocator.OnMemChange()
 }
 
 func (t *ART) Stages() []arena.MemDBCheckpoint {
