@@ -392,6 +392,7 @@ func testReset(t *testing.T, db interface {
 
 func TestInspectStage(t *testing.T) {
 	testInspectStage(t, newRbtDBWithContext())
+	testInspectStage(t, newArtDBWithContext())
 }
 
 func testInspectStage(t *testing.T, db MemBuffer) {
@@ -449,6 +450,7 @@ func testInspectStage(t *testing.T, db MemBuffer) {
 
 func TestDirty(t *testing.T) {
 	testDirty(t, func() MemBuffer { return newRbtDBWithContext() })
+	testDirty(t, func() MemBuffer { return newArtDBWithContext() })
 }
 
 func testDirty(t *testing.T, createDb func() MemBuffer) {
@@ -782,8 +784,12 @@ func TestNewIteratorMin(t *testing.T) {
 }
 
 func TestMemDBStaging(t *testing.T) {
+	testMemDBStaging(t, newRbtDBWithContext())
+	testMemDBStaging(t, newArtDBWithContext())
+}
+
+func testMemDBStaging(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
-	buffer := NewMemDB()
 	err := buffer.Set([]byte("x"), make([]byte, 2))
 	assert.Nil(err)
 
@@ -896,4 +902,37 @@ func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 		assert.Equal(reverseIter.Key(), []byte{byte(1)})
 		assert.Equal(reverseIter.Value(), []byte{byte(50)})
 	}
+}
+
+func TestCleanupKeepPersistentFlag(t *testing.T) {
+	testCleanupKeepPersistentFlag(t, newRbtDBWithContext())
+	testCleanupKeepPersistentFlag(t, newArtDBWithContext())
+}
+
+func testCleanupKeepPersistentFlag(t *testing.T, db MemBuffer) {
+	assert := assert.New(t)
+	persistentFlag := kv.SetKeyLocked
+	nonPersistentFlag := kv.SetPresumeKeyNotExists
+
+	h := db.Staging()
+	db.SetWithFlags([]byte{1}, []byte{1}, persistentFlag)
+	db.SetWithFlags([]byte{2}, []byte{2}, nonPersistentFlag)
+	db.SetWithFlags([]byte{3}, []byte{3}, persistentFlag, nonPersistentFlag)
+	db.Cleanup(h)
+
+	for _, key := range [][]byte{{1}, {2}, {3}} {
+		// the values are reverted by MemBuffer.Cleanup
+		_, err := db.Get(context.Background(), key)
+		assert.NotNil(err)
+	}
+
+	flag, err := db.GetFlags([]byte{1})
+	assert.Nil(err)
+	assert.True(flag.HasLocked())
+	_, err = db.GetFlags([]byte{2})
+	assert.NotNil(err)
+	flag, err = db.GetFlags([]byte{3})
+	assert.Nil(err)
+	assert.True(flag.HasLocked())
+	assert.False(flag.HasPresumeKeyNotExists())
 }

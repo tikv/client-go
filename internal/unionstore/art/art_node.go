@@ -265,11 +265,6 @@ func (l *artLeaf) getKeyDepth(depth uint32) []byte {
 	return unsafe.Slice((*byte)(base), int(l.klen)-int(depth))
 }
 
-// GetKeyFlags gets the flags of the leaf
-func (l *artLeaf) GetKeyFlags() kv.KeyFlags {
-	panic("unimplemented")
-}
-
 func (l *artLeaf) match(depth uint32, key artKey) bool {
 	return bytes.Equal(l.getKeyDepth(depth), key[depth:])
 }
@@ -278,7 +273,8 @@ func (l *artLeaf) setKeyFlags(flags kv.KeyFlags) {
 	l.flags = uint16(flags) & flagMask
 }
 
-func (l *artLeaf) getKeyFlags() kv.KeyFlags {
+// GetKeyFlags gets the flags of the leaf
+func (l *artLeaf) GetKeyFlags() kv.KeyFlags {
 	return kv.KeyFlags(l.flags & flagMask)
 }
 
@@ -288,8 +284,6 @@ const (
 )
 
 // markDelete marks the artLeaf as deleted
-//
-//nolint:unused
 func (l *artLeaf) markDelete() {
 	l.flags = deleteFlag
 }

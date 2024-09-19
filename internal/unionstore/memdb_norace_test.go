@@ -38,6 +38,7 @@
 package unionstore
 
 import (
+	"context"
 	rand2 "crypto/rand"
 	"encoding/binary"
 	"math/rand"
@@ -165,4 +166,41 @@ func testRandomDeriveRecur(t *testing.T, db *MemDB, golden *leveldb.DB, depth in
 	}
 
 	return opLog
+}
+
+func TestRandomAB(t *testing.T) {
+	testRandomAB(t, newRbtDBWithContext(), newArtDBWithContext())
+}
+
+func testRandomAB(t *testing.T, bufferA, bufferB MemBuffer) {
+	require := require.New(t)
+
+	const cnt = 50000
+	keys := make([][]byte, cnt)
+	for i := 0; i < cnt; i++ {
+		h := bufferA.Staging()
+		require.Equal(h, bufferB.Staging())
+
+		keys[i] = make([]byte, rand.Intn(19)+1)
+		rand2.Read(keys[i])
+
+		bufferA.Set(keys[i], keys[i])
+		bufferB.Set(keys[i], keys[i])
+
+		if i%2 == 0 {
+			bufferA.Cleanup(h)
+			bufferB.Cleanup(h)
+		} else {
+			bufferA.Release(h)
+			bufferB.Release(h)
+		}
+
+		require.Equal(bufferA.Len(), bufferB.Len())
+		require.Equal(bufferA.Size(), bufferB.Size(), i)
+		key := keys[rand.Intn(i+1)]
+		v1, err1 := bufferA.Get(context.Background(), key)
+		v2, err2 := bufferB.Get(context.Background(), key)
+		require.Equal(err1, err2)
+		require.Equal(v1, v2)
+	}
 }
