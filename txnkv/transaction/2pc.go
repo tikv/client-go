@@ -1397,9 +1397,10 @@ func broadcastToAllStores(
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(stores))
-	taskChan := make(chan *locate.Store, len(stores))
+	concurrency := min(broadcastMaxConcurrency, len(stores))
+	taskChan := make(chan *locate.Store, concurrency)
 
-	for i := 0; i < broadcastMaxConcurrency; i++ {
+	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
