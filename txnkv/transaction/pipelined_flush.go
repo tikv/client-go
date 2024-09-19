@@ -339,6 +339,7 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 		zap.Uint64("commitTS", commitTS),
 	)
 	broadcastToAllStores(
+		c.txn,
 		c.store,
 		retry.NewBackofferWithVars(
 			bo.GetCtx(),
@@ -512,6 +513,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 			time.Sleep(broadcastGracePeriod)
 
 			broadcastToAllStores(
+				c.txn,
 				c.store,
 				retry.NewBackofferWithVars(
 					bo.GetCtx(),

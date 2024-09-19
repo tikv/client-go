@@ -843,6 +843,7 @@ func (txn *KVTxn) Rollback() error {
 		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
 		needCleanUpLocks := len(pipelinedStart) != 0 && len(pipelinedEnd) != 0
 		broadcastToAllStores(
+			txn,
 			txn.committer.store,
 			retry.NewBackofferWithVars(
 				txn.store.Ctx(),

@@ -1351,6 +1351,7 @@ func keepAlive(
 			// broadcast to all stores
 			if isPipelinedTxn {
 				broadcastToAllStores(
+					c.txn,
 					c.store,
 					retry.NewBackofferWithVars(
 						context.Background(),
@@ -1372,66 +1373,74 @@ func keepAlive(
 	}
 }
 
-const broadcastRpcTimeout = time.Millisecond * 500
+const broadcastRpcTimeout = time.Second * 5
 const broadcastMaxConcurrency = 10
 
-// broadcasts to all stores to update the minCommitTSMgr. Ignore errors.
+// broadcastToAllStores asynchronously broadcasts the transaction status to all stores
+// errors are ignored.
 func broadcastToAllStores(
+	txn *KVTxn,
 	store kvstore,
 	bo *retry.Backoffer,
 	status *kvrpcpb.TxnStatus,
 	resourceGroupName string,
 	resourceGroupTag []byte,
 ) {
-	stores := store.GetRegionCache().GetStoresByType(tikvrpc.TiKV)
-	req := tikvrpc.NewRequest(
-		tikvrpc.CmdBroadcastTxnStatus, &kvrpcpb.BroadcastTxnStatusRequest{
-			TxnStatus: []*kvrpcpb.TxnStatus{status},
-		},
-	)
-	req.Context.ClusterId = store.GetClusterID()
-	req.Context.ResourceControlContext = &kvrpcpb.ResourceControlContext{
-		ResourceGroupName: resourceGroupName,
-	}
-	req.Context.ResourceGroupTag = resourceGroupTag
-
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(stores))
-	concurrency := min(broadcastMaxConcurrency, len(stores))
-	taskChan := make(chan *locate.Store, concurrency)
-
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for s := range taskChan {
-				_, err := store.GetTiKVClient().SendRequest(
-					bo.GetCtx(),
-					s.GetAddr(),
-					req,
-					broadcastRpcTimeout,
-				)
-				if err != nil {
-					errChan <- err
-				}
-			}
-		}()
-	}
-
-	for _, s := range stores {
-		taskChan <- s
-	}
-
-	close(taskChan)
-	wg.Wait()
-	close(errChan)
-
-	for err := range errChan {
-		logutil.Logger(bo.GetCtx()).Info(
-			"broadcast txn status failed",
-			zap.Stringer("status", status),
-			zap.Error(err),
+	broadcastFunc := func() {
+		stores := store.GetRegionCache().GetStoresByType(tikvrpc.TiKV)
+		req := tikvrpc.NewRequest(
+			tikvrpc.CmdBroadcastTxnStatus, &kvrpcpb.BroadcastTxnStatusRequest{
+				TxnStatus: []*kvrpcpb.TxnStatus{status},
+			},
 		)
+		req.Context.ClusterId = store.GetClusterID()
+		req.Context.ResourceControlContext = &kvrpcpb.ResourceControlContext{
+			ResourceGroupName: resourceGroupName,
+		}
+		req.Context.ResourceGroupTag = resourceGroupTag
+
+		var wg sync.WaitGroup
+		concurrency := min(broadcastMaxConcurrency, len(stores))
+		taskChan := make(chan *locate.Store, concurrency)
+
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			if err := txn.spawnWithStorePool(func() {
+				defer wg.Done()
+				for s := range taskChan {
+					_, err := store.GetTiKVClient().SendRequest(
+						bo.GetCtx(),
+						s.GetAddr(),
+						req,
+						broadcastRpcTimeout,
+					)
+					if err != nil {
+						logutil.Logger(store.Ctx()).Info(
+							"broadcast txn status failed",
+							zap.Uint64("storeID", s.StoreID()),
+							zap.String("storeAddr", s.GetAddr()),
+							zap.Stringer("status", status),
+							zap.Error(err),
+						)
+					}
+				}
+			}); err != nil {
+				wg.Done() // Ensure wg is decremented if spawning fails
+				logutil.Logger(store.Ctx()).Error("failed to spawn worker goroutine", zap.Error(err))
+			}
+		}
+
+		for _, s := range stores {
+			taskChan <- s
+		}
+
+		close(taskChan)
+		wg.Wait()
+	}
+
+	if err := txn.spawnWithStorePool(broadcastFunc); err != nil {
+		logutil.Logger(store.Ctx()).Error("failed to spawn goroutine for broadcasting txn status",
+			zap.Error(err))
 	}
 }
 

@@ -743,11 +743,11 @@ func refreshFullStoreList(ctx context.Context, pdClient pd.Client, stores storeC
 		return
 	}
 	for _, store := range storeList {
-		s, exist := stores.get(store.GetId())
+		_, exist := stores.get(store.GetId())
 		if exist {
 			continue
 		}
-		s = stores.getOrInsertDefault(store.GetId())
+		s := stores.getOrInsertDefault(store.GetId())
 		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 			s.setResolveState(tombstone)
 			return
