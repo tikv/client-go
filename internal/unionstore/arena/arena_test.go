@@ -42,7 +42,7 @@ import (
 
 type dummyMemDB struct{}
 
-func (m *dummyMemDB) RevertNode(hdr *MemdbVlogHdr) {}
+func (m *dummyMemDB) RevertVAddr(hdr *MemdbVlogHdr) {}
 func (m *dummyMemDB) InspectNode(addr MemdbArenaAddr) (KeyFlagsGetter, MemdbArenaAddr) {
 	return nil, NullAddr
 }
