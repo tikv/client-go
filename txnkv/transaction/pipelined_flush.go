@@ -330,9 +330,9 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 	if err = c.commitMutations(bo, &primaryMutation); err != nil {
 		return errors.Trace(err)
 	}
-	c.mu.RLock()
+	c.mu.Lock()
 	c.mu.committed = true
-	c.mu.RUnlock()
+	c.mu.Unlock()
 	logutil.Logger(bo.GetCtx()).Info(
 		"[pipelined dml] transaction is committed",
 		zap.Uint64("startTS", c.startTS),
