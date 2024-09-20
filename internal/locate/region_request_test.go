@@ -54,6 +54,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -62,6 +63,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
 )
 
@@ -142,6 +144,41 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 		s.NotNil(resp)
 		regionErr, _ := resp.GetRegionError()
 		s.NotNil(regionErr)
+	}()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrottled() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+
+	// test ErrClientResourceGroupThrottled handled by regionRequestSender
+	func() {
+		oc := s.regionRequestSender.client
+		defer func() {
+			s.regionRequestSender.client = oc
+		}()
+		s.regionRequestSender.regionCache.storeMu.Lock()
+		storeOld := s.regionRequestSender.regionCache.storeMu.stores[1]
+		s.regionRequestSender.regionCache.storeMu.Unlock()
+		epoch := storeOld.epoch
+		s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+			return nil, pderr.ErrClientResourceGroupThrottled
+		}}
+		bo := retry.NewBackofferWithVars(context.Background(), 5, nil)
+		_, _, err := s.regionRequestSender.SendReq(bo, req, region.Region, time.Second)
+		s.NotNil(err)
+		s.regionRequestSender.regionCache.storeMu.Lock()
+		storeNew := s.regionRequestSender.regionCache.storeMu.stores[1]
+		s.regionRequestSender.regionCache.storeMu.Unlock()
+		//  not mark the store need be refill, then the epoch should not be changed.
+		s.Equal(epoch, storeNew.epoch)
+		// no rpc error if the error is ErrClientResourceGroupThrottled
+		s.Nil(s.regionRequestSender.rpcError)
 	}()
 }
 
@@ -826,4 +863,21 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 		"{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}, {peer:5, store:6, err:server_is_Busy}, {peer:6, store:6, err:server_is_Busy}, overflow_count:{{peer:6, error_stats:{server_is_Busy:9}}, {peer:5, error_stats:{server_is_Busy:9}}}",
 	}
 	s.Contains(expecteds, access.String())
+}
+
+type noCauseError struct {
+	error
+}
+
+func (_ noCauseError) Cause() error {
+	return nil
+}
+
+func TestGetErrMsg(t *testing.T) {
+	err := noCauseError{error: errors.New("no cause err")}
+	require.Equal(t, nil, errors.Cause(err))
+	require.Panicsf(t, func() {
+		_ = errors.Cause(err).Error()
+	}, "should panic")
+	require.Equal(t, "no cause err", getErrMsg(err))
 }

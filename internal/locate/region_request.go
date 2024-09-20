@@ -64,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/pd/client/errs"
 	pderr "github.com/tikv/pd/client/errs"
 )
 
@@ -171,6 +172,17 @@ func (r *RequestErrorStats) RecordRPCErrorStats(errLabel string) {
 	} else {
 		r.OtherErrCnt++
 	}
+}
+
+// getErrMsg returns error message. if the error has cause error, then return cause error message.
+func getErrMsg(err error) string {
+	if err == nil {
+		return ""
+	}
+	if causeErr := errors.Cause(err); causeErr != nil {
+		return causeErr.Error()
+	}
+	return err.Error()
 }
 
 // String implements fmt.Stringer interface.
@@ -1954,9 +1966,11 @@ func (s *RegionRequestSender) sendReqToRegion(
 	}
 
 	if err != nil {
-		s.rpcError = err
+		if isRPCError(err) {
+			s.rpcError = err
+		}
 		if s.Stats != nil {
-			errStr := errors.Cause(err).Error()
+			errStr := getErrMsg(err)
 			s.Stats.RecordRPCErrorStats(errStr)
 			s.recordRPCAccessInfo(req, rpcCtx, errStr)
 		}
@@ -1979,6 +1993,11 @@ func (s *RegionRequestSender) sendReqToRegion(
 		return nil, true, nil
 	}
 	return
+}
+
+func isRPCError(err error) bool {
+	// exclude ErrClientResourceGroupThrottled
+	return err != nil && errs.ErrClientResourceGroupThrottled.NotEqual(err)
 }
 
 func storeIDLabel(rpcCtx *RPCContext) string {
@@ -2043,16 +2062,10 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 			logutil.Logger(bo.GetCtx()).Warn("receive a grpc cancel signal from remote", zap.Error(err))
 		}
 	}
-	metrics.TiKVRPCErrorCounter.WithLabelValues(errors.Cause(err).Error(), storeLabel).Inc()
-
-	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
-		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
-	} else if ctx.Meta != nil {
-		if s.replicaSelector != nil {
-			s.replicaSelector.onSendFailure(bo, err)
-		} else {
-			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
-		}
+	if errStr := getErrMsg(err); len(errStr) > 0 {
+		metrics.TiKVRPCErrorCounter.WithLabelValues(getErrMsg(err), storeLabel).Inc()
+	} else {
+		metrics.TiKVRPCErrorCounter.WithLabelValues("unknown", storeLabel).Inc()
 	}
 
 	// don't need to retry for ResourceGroup error
@@ -2065,6 +2078,16 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, r
 	var errGetResourceGroup *pderr.ErrClientGetResourceGroup
 	if errors.As(err, &errGetResourceGroup) {
 		return err
+	}
+
+	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
+		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
+	} else if ctx.Meta != nil {
+		if s.replicaSelector != nil {
+			s.replicaSelector.onSendFailure(bo, err)
+		} else {
+			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
+		}
 	}
 
 	// Retry on send request failure when it's not canceled.
