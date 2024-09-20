@@ -259,7 +259,7 @@ type KeyFlagsGetter interface {
 
 // VlogMemDB is the interface of the memory buffer which supports vlog to revert node and inspect node.
 type VlogMemDB[G KeyFlagsGetter] interface {
-	RevertNode(hdr *MemdbVlogHdr)
+	RevertVAddr(hdr *MemdbVlogHdr)
 	InspectNode(addr MemdbArenaAddr) (G, MemdbArenaAddr)
 }
 
@@ -351,7 +351,7 @@ func (l *MemdbVlog[G, M]) RevertToCheckpoint(m M, cp *MemDBCheckpoint) {
 		block := l.blocks[cursor.blocks-1].buf
 		var hdr MemdbVlogHdr
 		hdr.load(block[hdrOff:])
-		m.RevertNode(&hdr)
+		m.RevertVAddr(&hdr)
 		l.moveBackCursor(&cursor, &hdr)
 	}
 }

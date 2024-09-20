@@ -815,6 +815,81 @@ func testMemDBStaging(t *testing.T, buffer MemBuffer) {
 	assert.Equal(len(v), 2)
 }
 
+func TestMemDBMultiLevelStaging(t *testing.T) {
+	testMemDBMultiLevelStaging(t, newRbtDBWithContext())
+	testMemDBMultiLevelStaging(t, newArtDBWithContext())
+}
+
+func testMemDBMultiLevelStaging(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+
+	key := []byte{0}
+	for i := 0; i < 100; i++ {
+		assert.Equal(i+1, buffer.Staging())
+		buffer.Set(key, []byte{byte(i)})
+		v, err := buffer.Get(context.Background(), key)
+		assert.Nil(err)
+		assert.Equal(v, []byte{byte(i)})
+	}
+
+	for i := 99; i >= 0; i-- {
+		expect := i
+		if i%2 == 1 {
+			expect = i - 1
+			buffer.Cleanup(i + 1)
+		} else {
+			buffer.Release(i + 1)
+		}
+		v, err := buffer.Get(context.Background(), key)
+		assert.Nil(err)
+		assert.Equal(v, []byte{byte(expect)})
+	}
+}
+
+func TestInvalidStagingHandle(t *testing.T) {
+	testInvalidStagingHandle(t, newRbtDBWithContext())
+	testInvalidStagingHandle(t, newArtDBWithContext())
+}
+
+func testInvalidStagingHandle(t *testing.T, buffer MemBuffer) {
+	// handle == 0 takes no effect
+	// MemBuffer.Release only accept the latest handle
+	// MemBuffer.Cleanup accept handle large or equal than the latest handle, but only takes effect when handle is the latest handle.
+	assert := assert.New(t)
+
+	// test MemBuffer.Release
+	h1 := buffer.Staging()
+	assert.Positive(h1)
+	h2 := buffer.Staging()
+	assert.Positive(h2)
+	assert.Panics(func() {
+		buffer.Release(h2 + 1)
+	})
+	assert.Panics(func() {
+		buffer.Release(h2 - 1)
+	})
+	buffer.Release(0)
+	buffer.Release(h2)
+	buffer.Release(0)
+	buffer.Release(h1)
+	buffer.Release(0)
+
+	// test MemBuffer.Cleanup
+	h1 = buffer.Staging()
+	assert.Positive(h1)
+	h2 = buffer.Staging()
+	assert.Positive(h2)
+	buffer.Cleanup(h2 + 1) // Cleanup is ok even if the handle is greater than the existing handles.
+	assert.Panics(func() {
+		buffer.Cleanup(h2 - 1)
+	})
+	buffer.Cleanup(0)
+	buffer.Cleanup(h2)
+	buffer.Cleanup(0)
+	buffer.Cleanup(h1)
+	buffer.Cleanup(0)
+}
+
 func TestMemDBCheckpoint(t *testing.T) {
 	testMemDBCheckpoint(t, newRbtDBWithContext())
 	testMemDBCheckpoint(t, newArtDBWithContext())

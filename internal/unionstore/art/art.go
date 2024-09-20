@@ -396,7 +396,7 @@ func (t *ART) checkpoint() arena.MemDBCheckpoint {
 	return t.allocator.vlogAllocator.Checkpoint()
 }
 
-func (t *ART) RevertNode(hdr *arena.MemdbVlogHdr) {
+func (t *ART) RevertVAddr(hdr *arena.MemdbVlogHdr) {
 	lf := t.allocator.getLeaf(hdr.NodeAddr)
 	if lf == nil {
 		panic("revert an invalid node")
@@ -446,6 +446,10 @@ func (t *ART) Staging() int {
 }
 
 func (t *ART) Release(h int) {
+	if h == 0 {
+		// 0 is the invalid and no-effect handle.
+		return
+	}
 	if h != len(t.stages) {
 		panic("cannot release staging buffer")
 	}
@@ -459,6 +463,10 @@ func (t *ART) Release(h int) {
 }
 
 func (t *ART) Cleanup(h int) {
+	if h == 0 {
+		// 0 is the invalid and no-effect handle.
+		return
+	}
 	if h > len(t.stages) {
 		return
 	}

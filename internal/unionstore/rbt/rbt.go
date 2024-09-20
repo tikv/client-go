@@ -111,7 +111,7 @@ func (db *RBT) checkKeyInCache(key []byte) (MemdbNodeAddr, bool) {
 	return nullNodeAddr, false
 }
 
-func (db *RBT) RevertNode(hdr *arena.MemdbVlogHdr) {
+func (db *RBT) RevertVAddr(hdr *arena.MemdbVlogHdr) {
 	node := db.getNode(hdr.NodeAddr)
 	node.vptr = hdr.OldValue
 	db.size -= int(hdr.ValueLen)
@@ -150,6 +150,10 @@ func (db *RBT) Staging() int {
 
 // Release publish all modifications in the latest staging buffer to upper level.
 func (db *RBT) Release(h int) {
+	if h == 0 {
+		// 0 is the invalid and no-effect handle.
+		return
+	}
 	if h != len(db.stages) {
 		// This should never happens in production environment.
 		// Use panic to make debug easier.
@@ -168,6 +172,10 @@ func (db *RBT) Release(h int) {
 // Cleanup cleanup the resources referenced by the StagingHandle.
 // If the changes are not published by `Release`, they will be discarded.
 func (db *RBT) Cleanup(h int) {
+	if h == 0 {
+		// 0 is the invalid and no-effect handle.
+		return
+	}
 	if h > len(db.stages) {
 		return
 	}
