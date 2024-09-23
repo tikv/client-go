@@ -64,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/pd/client/errs"
 	pderr "github.com/tikv/pd/client/errs"
 )
 
@@ -1679,7 +1680,9 @@ func (s *RegionRequestSender) sendReqToRegion(
 	}
 
 	if err != nil {
-		s.rpcError = err
+		if isRPCError(err) {
+			s.rpcError = err
+		}
 
 		// Because in rpc logic, context.Cancel() will be transferred to rpcContext.Cancel error. For rpcContext cancel,
 		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
@@ -1699,6 +1702,11 @@ func (s *RegionRequestSender) sendReqToRegion(
 		return nil, true, nil
 	}
 	return
+}
+
+func isRPCError(err error) bool {
+	// exclude ErrClientResourceGroupThrottled
+	return err != nil && errs.ErrClientResourceGroupThrottled.NotEqual(err)
 }
 
 func (s *RegionRequestSender) getStoreToken(st *Store, limit int64) error {
@@ -1747,16 +1755,6 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 		}
 	}
 
-	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
-		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
-	} else if ctx.Meta != nil {
-		if s.replicaSelector != nil {
-			s.replicaSelector.onSendFailure(bo, err)
-		} else {
-			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
-		}
-	}
-
 	// don't need to retry for ResourceGroup error
 	if errors.Is(err, pderr.ErrClientResourceGroupThrottled) {
 		return err
@@ -1767,6 +1765,16 @@ func (s *RegionRequestSender) onSendFail(bo *retry.Backoffer, ctx *RPCContext, e
 	var errGetResourceGroup *pderr.ErrClientGetResourceGroup
 	if errors.As(err, &errGetResourceGroup) {
 		return err
+	}
+
+	if ctx.Store != nil && ctx.Store.storeType == tikvrpc.TiFlashCompute {
+		s.regionCache.InvalidateTiFlashComputeStoresIfGRPCError(err)
+	} else if ctx.Meta != nil {
+		if s.replicaSelector != nil {
+			s.replicaSelector.onSendFailure(bo, err)
+		} else {
+			s.regionCache.OnSendFail(bo, ctx, s.NeedReloadRegion(ctx), err)
+		}
 	}
 
 	// Retry on send request failure when it's not canceled.
