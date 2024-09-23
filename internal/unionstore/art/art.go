@@ -528,12 +528,20 @@ func (t *ART) MemHookSet() bool {
 
 // GetKeyByHandle returns key by handle.
 func (t *ART) GetKeyByHandle(handle arena.MemKeyHandle) []byte {
-	panic("unimplemented")
+	lf := t.allocator.getLeaf(handle.ToAddr())
+	return lf.GetKey()
 }
 
 // GetValueByHandle returns value by handle.
 func (t *ART) GetValueByHandle(handle arena.MemKeyHandle) ([]byte, bool) {
-	panic("unimplemented")
+	if t.vlogInvalid {
+		return nil, false
+	}
+	lf := t.allocator.getLeaf(handle.ToAddr())
+	if lf.vAddr.IsNull() {
+		return nil, false
+	}
+	return t.allocator.vlogAllocator.GetValue(lf.vAddr), true
 }
 
 func (t *ART) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {

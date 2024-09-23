@@ -494,6 +494,7 @@ func testDirty(t *testing.T, createDb func() MemBuffer) {
 
 func TestFlags(t *testing.T) {
 	testFlags(t, newRbtDBWithContext(), func(db MemBuffer) Iterator { return db.(*rbtDBWithContext).IterWithFlags(nil, nil) })
+	testFlags(t, newArtDBWithContext(), func(db MemBuffer) Iterator { return db.(*artDBWithContext).IterWithFlags(nil, nil) })
 }
 
 func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iterator) {

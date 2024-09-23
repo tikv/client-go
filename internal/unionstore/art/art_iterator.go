@@ -22,15 +22,25 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 )
 
-func (t *ART) Iter(lower, upper []byte) (*Iterator, error) {
-	return t.iter(lower, upper, false, false)
+func (t *ART) Iter(lowerBound, upperBound []byte) (*Iterator, error) {
+	return t.iter(lowerBound, upperBound, false, false)
 }
 
-func (t *ART) IterReverse(upper, lower []byte) (*Iterator, error) {
-	return t.iter(lower, upper, true, false)
+func (t *ART) IterReverse(upperBound, lowerBound []byte) (*Iterator, error) {
+	return t.iter(lowerBound, upperBound, true, false)
 }
 
-func (t *ART) iter(lower, upper []byte, reverse, includeFlags bool) (*Iterator, error) {
+func (t *ART) IterWithFlags(lowerBound, upperBound []byte) *Iterator {
+	it, _ := t.iter(lowerBound, upperBound, false, true)
+	return it
+}
+
+func (t *ART) IterReverseWithFlags(upperBound []byte) *Iterator {
+	it, _ := t.iter(nil, upperBound, true, true)
+	return it
+}
+
+func (t *ART) iter(lowerBound, upperBound []byte, reverse, includeFlags bool) (*Iterator, error) {
 	i := &Iterator{
 		tree:    t,
 		reverse: reverse,
@@ -41,7 +51,7 @@ func (t *ART) iter(lower, upper []byte, reverse, includeFlags bool) (*Iterator, 
 		endAddr:      arena.NullAddr,
 		includeFlags: includeFlags,
 	}
-	i.init(lower, upper)
+	i.init(lowerBound, upperBound)
 	if !i.valid {
 		return i, nil
 	}
@@ -71,13 +81,18 @@ func (it *Iterator) Value() []byte {
 	}
 	return it.tree.allocator.vlogAllocator.GetValue(it.currLeaf.vAddr)
 }
+
 func (it *Iterator) Next() error {
 	if !it.valid {
 		// iterate is finished
 		return errors.New("Art: iterator is finished")
 	}
-	// the default currAddr is (0, 0), which is root node(it's not a leaf in all time), so endAddr is never (0, 0).
+	// The default value of currAddr is (0, 0), which is node4 type(created by root node initialization, it's always not a leaf).
+	// Because endAddr can be the address of a leaf or arena.NullAddr, so endAddr is never (0, 0).
 	if it.currAddr == it.endAddr {
+		if it.endAddr.AsU64() == 0 {
+			panic("Art: invalid endAddr")
+		}
 		it.valid = false
 		return nil
 	}
