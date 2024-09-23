@@ -16,6 +16,7 @@ package art
 
 import (
 	"bytes"
+	"sort"
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
@@ -100,7 +101,7 @@ func (it *Iterator) Next() error {
 		} else {
 			nextLeaf = it.inner.next()
 		}
-		if nextLeaf == nullArtNode {
+		if nextLeaf.addr.IsNull() {
 			it.valid = false
 			return nil
 		}
@@ -152,6 +153,7 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 			helper.allocator = &it.tree.allocator
 			helper.idxes, helper.nodes = it.seek(lowerBound)
 			if it.inner.compare(helper) > 0 {
+				// lowerBound is inclusive, call next to find the smallest leaf node that >= lowerBound.
 				it.endAddr = helper.next().addr
 				if it.inner.compare(helper) < 0 || len(helper.idxes) == 0 {
 					it.valid = false
@@ -171,6 +173,7 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 		helper.allocator = &it.tree.allocator
 		helper.idxes, helper.nodes = it.seek(upperBound)
 		if it.inner.compare(helper) < 0 {
+			// upperBound is exclusive, so we move the helper cursor to the previous node, which is the true endAddr.
 			it.endAddr = helper.prev().addr
 			if it.inner.compare(helper) > 0 || len(helper.idxes) == 0 {
 				it.valid = false
@@ -248,17 +251,12 @@ func (it *Iterator) seek(key artKey) ([]int, []artNode) {
 				}
 			case typeNode16:
 				n16 := curr.asNode16(&it.tree.allocator)
-				//nextIdx, _ = sort.Find(int(n16.nodeNum), func(i int) int {
-				//	if n16.keys[i] < char {
-				//		return 1
-				//	}
-				//	return -1
-				//})
-				for ; nextIdx < int(n16.nodeNum); nextIdx++ {
-					if n16.keys[nextIdx] >= char {
-						break
+				nextIdx, _ = sort.Find(int(n16.nodeNum), func(i int) int {
+					if n16.keys[i] < char {
+						return 1
 					}
-				}
+					return -1
+				})
 			case typeNode48:
 				n48 := curr.asNode48(&it.tree.allocator)
 				nextIdx = n48.nextPresentIdx(int(char))
