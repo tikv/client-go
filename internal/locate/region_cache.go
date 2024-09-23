@@ -750,11 +750,11 @@ func refreshFullStoreList(ctx context.Context, pdClient pd.Client, stores storeC
 		s := stores.getOrInsertDefault(store.GetId())
 		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 			s.setResolveState(tombstone)
-			return
+			continue
 		}
 		addr := store.GetAddress()
 		if addr == "" {
-			return
+			continue
 		}
 		// TODO: maybe refactor this, together with other places initializing Store
 		s.addr = addr
