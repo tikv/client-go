@@ -16,6 +16,7 @@ package art
 
 import (
 	"bytes"
+
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
@@ -500,9 +501,4 @@ func (it *baseIter) prev() artNode {
 		return nullArtNode
 	}
 	return it.prev()
-}
-
-func (it *baseIter) close() {
-	it.nodes = it.nodes[:0]
-	it.idxes = it.idxes[:0]
 }

@@ -92,7 +92,7 @@ func TestIterSeekLeaf(t *testing.T) {
 			leafNode := nodes[len(nodes)-1].at(&tree.allocator, idxes[len(idxes)-1])
 			require.NotEqual(t, leafNode, nullArtNode)
 			leaf := leafNode.asLeaf(&tree.allocator)
-			require.Equal(t, []byte(leaf.GetKey()), key)
+			require.Equal(t, leaf.GetKey(), key)
 		}
 	}
 }

@@ -148,8 +148,6 @@ func (an *artNode) asNode(a *artAllocator) *nodeBase {
 }
 
 // at returns the nth child of the node, used for test.
-//
-//nolint:unused
 func (an *artNode) at(a *artAllocator, idx int) artNode {
 	switch an.kind {
 	case typeNode4:
