@@ -537,7 +537,7 @@ func (t *ART) GetValueByHandle(handle arena.MemKeyHandle) ([]byte, bool) {
 }
 
 func (t *ART) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
-	panic("unimplemented")
+	t.entrySizeLimit, t.bufferSizeLimit = entryLimit, bufferLimit
 }
 
 func (t *ART) RemoveFromBuffer(key []byte) {
