@@ -1302,7 +1302,7 @@ func keepAlive(
 				return
 			}
 
-			// update minCommitTSMgr, if it's a non-async-commit pipelined transaction
+			// update minCommitTS, if it's a non-async-commit pipelined transaction
 			if isPipelinedTxn &&
 				!c.isOnePC() &&
 				!c.isAsyncCommit() &&
@@ -1847,7 +1847,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 
 	if c.isAsyncCommit() {
 		if c.minCommitTSMgr.get() == 0 {
-			return errors.Errorf("session %d invalid minCommitTSMgr for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
+			return errors.Errorf("session %d invalid minCommitTS for async commit protocol after prewrite, startTS=%v", c.sessionID, c.startTS)
 		}
 		commitTS = c.minCommitTSMgr.get()
 	} else {

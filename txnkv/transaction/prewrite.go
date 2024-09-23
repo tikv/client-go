@@ -413,7 +413,7 @@ func (action actionPrewrite) handleSingleBatch(
 						return nil
 					}
 					logutil.Logger(bo.GetCtx()).Warn(
-						"async commit cannot proceed since the returned minCommitTSMgr is zero, "+
+						"async commit cannot proceed since the returned minCommitTS is zero, "+
 							"fallback to normal path", zap.Uint64("startTS", c.startTS),
 					)
 					c.setAsyncCommit(false)
