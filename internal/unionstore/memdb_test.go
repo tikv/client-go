@@ -392,6 +392,7 @@ func testReset(t *testing.T, db interface {
 
 func TestInspectStage(t *testing.T) {
 	testInspectStage(t, newRbtDBWithContext())
+	testInspectStage(t, newArtDBWithContext())
 }
 
 func testInspectStage(t *testing.T, db MemBuffer) {
@@ -449,6 +450,7 @@ func testInspectStage(t *testing.T, db MemBuffer) {
 
 func TestDirty(t *testing.T) {
 	testDirty(t, func() MemBuffer { return newRbtDBWithContext() })
+	testDirty(t, func() MemBuffer { return newArtDBWithContext() })
 }
 
 func testDirty(t *testing.T, createDb func() MemBuffer) {
@@ -782,8 +784,12 @@ func TestNewIteratorMin(t *testing.T) {
 }
 
 func TestMemDBStaging(t *testing.T) {
+	testMemDBStaging(t, newRbtDBWithContext())
+	testMemDBStaging(t, newArtDBWithContext())
+}
+
+func testMemDBStaging(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
-	buffer := NewMemDB()
 	err := buffer.Set([]byte("x"), make([]byte, 2))
 	assert.Nil(err)
 
@@ -807,6 +813,117 @@ func TestMemDBStaging(t *testing.T) {
 
 	v, _ = buffer.Get(context.Background(), []byte("x"))
 	assert.Equal(len(v), 2)
+}
+
+func TestMemDBMultiLevelStaging(t *testing.T) {
+	testMemDBMultiLevelStaging(t, newRbtDBWithContext())
+	testMemDBMultiLevelStaging(t, newArtDBWithContext())
+}
+
+func testMemDBMultiLevelStaging(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+
+	key := []byte{0}
+	for i := 0; i < 100; i++ {
+		assert.Equal(i+1, buffer.Staging())
+		buffer.Set(key, []byte{byte(i)})
+		v, err := buffer.Get(context.Background(), key)
+		assert.Nil(err)
+		assert.Equal(v, []byte{byte(i)})
+	}
+
+	for i := 99; i >= 0; i-- {
+		expect := i
+		if i%2 == 1 {
+			expect = i - 1
+			buffer.Cleanup(i + 1)
+		} else {
+			buffer.Release(i + 1)
+		}
+		v, err := buffer.Get(context.Background(), key)
+		assert.Nil(err)
+		assert.Equal(v, []byte{byte(expect)})
+	}
+}
+
+func TestInvalidStagingHandle(t *testing.T) {
+	testInvalidStagingHandle(t, newRbtDBWithContext())
+	testInvalidStagingHandle(t, newArtDBWithContext())
+}
+
+func testInvalidStagingHandle(t *testing.T, buffer MemBuffer) {
+	// handle == 0 takes no effect
+	// MemBuffer.Release only accept the latest handle
+	// MemBuffer.Cleanup accept handle large or equal than the latest handle, but only takes effect when handle is the latest handle.
+	assert := assert.New(t)
+
+	// test MemBuffer.Release
+	h1 := buffer.Staging()
+	assert.Positive(h1)
+	h2 := buffer.Staging()
+	assert.Positive(h2)
+	assert.Panics(func() {
+		buffer.Release(h2 + 1)
+	})
+	assert.Panics(func() {
+		buffer.Release(h2 - 1)
+	})
+	buffer.Release(0)
+	buffer.Release(h2)
+	buffer.Release(0)
+	buffer.Release(h1)
+	buffer.Release(0)
+
+	// test MemBuffer.Cleanup
+	h1 = buffer.Staging()
+	assert.Positive(h1)
+	h2 = buffer.Staging()
+	assert.Positive(h2)
+	buffer.Cleanup(h2 + 1) // Cleanup is ok even if the handle is greater than the existing handles.
+	assert.Panics(func() {
+		buffer.Cleanup(h2 - 1)
+	})
+	buffer.Cleanup(0)
+	buffer.Cleanup(h2)
+	buffer.Cleanup(0)
+	buffer.Cleanup(h1)
+	buffer.Cleanup(0)
+}
+
+func TestMemDBCheckpoint(t *testing.T) {
+	testMemDBCheckpoint(t, newRbtDBWithContext())
+	testMemDBCheckpoint(t, newArtDBWithContext())
+}
+
+func testMemDBCheckpoint(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+	cp1 := buffer.Checkpoint()
+
+	buffer.Set([]byte("x"), []byte("x"))
+
+	cp2 := buffer.Checkpoint()
+	buffer.Set([]byte("y"), []byte("y"))
+
+	h := buffer.Staging()
+	buffer.Set([]byte("z"), []byte("z"))
+	buffer.Release(h)
+
+	for _, k := range []string{"x", "y", "z"} {
+		v, _ := buffer.Get(context.Background(), []byte(k))
+		assert.Equal(v, []byte(k))
+	}
+
+	buffer.RevertToCheckpoint(cp2)
+	v, _ := buffer.Get(context.Background(), []byte("x"))
+	assert.Equal(v, []byte("x"))
+	for _, k := range []string{"y", "z"} {
+		_, err := buffer.Get(context.Background(), []byte(k))
+		assert.NotNil(err)
+	}
+
+	buffer.RevertToCheckpoint(cp1)
+	_, err := buffer.Get(context.Background(), []byte("x"))
+	assert.NotNil(err)
 }
 
 func TestBufferLimit(t *testing.T) {
@@ -896,4 +1013,37 @@ func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 		assert.Equal(reverseIter.Key(), []byte{byte(1)})
 		assert.Equal(reverseIter.Value(), []byte{byte(50)})
 	}
+}
+
+func TestCleanupKeepPersistentFlag(t *testing.T) {
+	testCleanupKeepPersistentFlag(t, newRbtDBWithContext())
+	testCleanupKeepPersistentFlag(t, newArtDBWithContext())
+}
+
+func testCleanupKeepPersistentFlag(t *testing.T, db MemBuffer) {
+	assert := assert.New(t)
+	persistentFlag := kv.SetKeyLocked
+	nonPersistentFlag := kv.SetPresumeKeyNotExists
+
+	h := db.Staging()
+	db.SetWithFlags([]byte{1}, []byte{1}, persistentFlag)
+	db.SetWithFlags([]byte{2}, []byte{2}, nonPersistentFlag)
+	db.SetWithFlags([]byte{3}, []byte{3}, persistentFlag, nonPersistentFlag)
+	db.Cleanup(h)
+
+	for _, key := range [][]byte{{1}, {2}, {3}} {
+		// the values are reverted by MemBuffer.Cleanup
+		_, err := db.Get(context.Background(), key)
+		assert.NotNil(err)
+	}
+
+	flag, err := db.GetFlags([]byte{1})
+	assert.Nil(err)
+	assert.True(flag.HasLocked())
+	_, err = db.GetFlags([]byte{2})
+	assert.NotNil(err)
+	flag, err = db.GetFlags([]byte{3})
+	assert.Nil(err)
+	assert.True(flag.HasLocked())
+	assert.False(flag.HasPresumeKeyNotExists())
 }
