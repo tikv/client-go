@@ -425,7 +425,7 @@ func (an *artNode) findChild(a *artAllocator, c byte, inplace bool) (int, artNod
 		n48 := an.asNode48(a)
 		idx := n48.findChild(c)
 		if idx != notExistIndex {
-			return idx, n48.children[idx]
+			return idx, n48.children[n48.keys[idx]]
 		}
 	case typeNode256:
 		n256 := an.asNode256(a)
@@ -465,7 +465,7 @@ func (n16 *node16) findChild(c byte) int {
 
 func (n48 *node48) findChild(c byte) int {
 	if n48.present[c>>n48s]&(1<<(c%n48m)) != 0 {
-		return int(n48.keys[c])
+		return int(c)
 	}
 	return notExistIndex
 }
@@ -497,7 +497,7 @@ func (an *artNode) replaceChild(a *artAllocator, c byte, child artNode) {
 		n48 := an.asNode48(a)
 		idx := n48.findChild(c)
 		if idx != notExistIndex {
-			n48.children[idx] = child
+			n48.children[n48.keys[idx]] = child
 			return
 		}
 	case typeNode256:

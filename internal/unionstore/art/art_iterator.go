@@ -16,7 +16,6 @@ package art
 
 import (
 	"bytes"
-
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
@@ -41,35 +40,36 @@ func (t *ART) IterReverseWithFlags(upperBound []byte) *Iterator {
 }
 
 func (t *ART) iter(lowerBound, upperBound []byte, reverse, includeFlags bool) (*Iterator, error) {
-	i := &Iterator{
-		tree:    t,
-		reverse: reverse,
-		valid:   true,
+	it := &Iterator{
+		tree:         t,
+		reverse:      reverse,
+		valid:        true,
+		includeFlags: includeFlags,
 		inner: &baseIter{
 			allocator: &t.allocator,
 		},
-		endAddr:      arena.NullAddr,
-		includeFlags: includeFlags,
+		currAddr: arena.BadAddr, // the default value of currAddr is not equal to any valid address
+		endAddr:  arena.NullAddr,
 	}
-	i.init(lowerBound, upperBound)
-	if !i.valid {
-		return i, nil
+	it.init(lowerBound, upperBound)
+	if !it.valid {
+		return it, nil
 	}
-	if err := i.Next(); err != nil {
+	if err := it.Next(); err != nil {
 		return nil, err
 	}
-	return i, nil
+	return it, nil
 }
 
 type Iterator struct {
 	tree         *ART
 	reverse      bool
 	valid        bool
+	includeFlags bool
 	inner        *baseIter
-	endAddr      arena.MemdbArenaAddr
 	currLeaf     *artLeaf
 	currAddr     arena.MemdbArenaAddr
-	includeFlags bool
+	endAddr      arena.MemdbArenaAddr
 }
 
 func (it *Iterator) Valid() bool        { return it.valid }
@@ -87,12 +87,7 @@ func (it *Iterator) Next() error {
 		// iterate is finished
 		return errors.New("Art: iterator is finished")
 	}
-	// The default value of currAddr is (0, 0), which is node4 type(created by root node initialization, it's always not a leaf).
-	// Because endAddr can be the address of a leaf or arena.NullAddr, so endAddr is never (0, 0).
 	if it.currAddr == it.endAddr {
-		if it.endAddr.AsU64() == 0 {
-			panic("Art: invalid endAddr")
-		}
 		it.valid = false
 		return nil
 	}
@@ -110,6 +105,7 @@ func (it *Iterator) Next() error {
 		}
 		it.setCurrLeaf(nextLeaf.addr)
 		if it.currLeaf.vAddr.IsNull() {
+			// if it.includeFlags is true, the iterator should return even the value is null.
 			if it.includeFlags && !it.currLeaf.isDeleted() {
 				return nil
 			}
@@ -128,10 +124,7 @@ func (it *Iterator) setCurrLeaf(node arena.MemdbArenaAddr) {
 	it.currLeaf = it.tree.allocator.getLeaf(node)
 }
 
-func (it *Iterator) Close() {
-	it.currLeaf = nil
-	it.inner.close()
-}
+func (it *Iterator) Close() {}
 
 func (it *Iterator) Handle() arena.MemKeyHandle {
 	return it.currAddr.ToHandle()
@@ -188,9 +181,8 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 	}
 }
 
-// seek the first node and index that >= key, return the indexes and nodes of the path
+// seek the first node and index that >= key, return the indexes and nodes of the lookup path
 // nodes[0] is the root node
-// nodes[len(nodes)-1][indexes[len(indexes)-1]] is the target node
 func (it *Iterator) seek(key artKey) ([]int, []artNode) {
 	curr := it.tree.root
 	depth := uint32(0)
@@ -224,15 +216,17 @@ func (it *Iterator) seek(key artKey) ([]int, []artNode) {
 		if node.prefixLen > 0 {
 			mismatchIdx := node.matchDeep(&it.tree.allocator, &curr, key, depth)
 			if mismatchIdx < node.prefixLen {
+				// no leaf node is match with the seek key
 				leafNode := minimum(&it.tree.allocator, curr)
 				leafKey := leafNode.asLeaf(&it.tree.allocator).GetKey()
 				if mismatchIdx+depth == uint32(len(key)) || key[depth+mismatchIdx] < leafKey[depth+mismatchIdx] {
+					// key < leafKey, set index to -1 means all the children are larger than the seek key
 					idxes = append(idxes, -1)
-					nodes = append(nodes, curr)
 				} else {
+					// key > leafKey, set index to 256 means all the children are less than the seek key
 					idxes = append(idxes, node256cap)
-					nodes = append(nodes, curr)
 				}
+				nodes = append(nodes, curr)
 				return idxes, nodes
 			}
 			depth += min(mismatchIdx, node.prefixLen)
@@ -253,6 +247,12 @@ func (it *Iterator) seek(key artKey) ([]int, []artNode) {
 				}
 			case typeNode16:
 				n16 := curr.asNode16(&it.tree.allocator)
+				//nextIdx, _ = sort.Find(int(n16.nodeNum), func(i int) int {
+				//	if n16.keys[i] < char {
+				//		return 1
+				//	}
+				//	return -1
+				//})
 				for ; nextIdx < int(n16.nodeNum); nextIdx++ {
 					if n16.keys[nextIdx] >= char {
 						break

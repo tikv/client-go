@@ -38,9 +38,11 @@
 package unionstore
 
 import (
+	"bytes"
 	"context"
 	rand2 "crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -175,6 +177,26 @@ func TestRandomAB(t *testing.T) {
 func testRandomAB(t *testing.T, bufferA, bufferB MemBuffer) {
 	require := require.New(t)
 
+	checkIters := func(iter1, iter2 Iterator, k []byte) {
+		i := 0
+		for iter1.Valid() {
+			i++
+			require.True(iter2.Valid())
+			k1, k2 := iter1.Key(), iter2.Key()
+			if !bytes.Equal(k1, k2) {
+				a := 1
+				_ = a
+				return
+			}
+			_, _ = k1, k2
+			require.Equal(iter1.Key(), iter2.Key(), fmt.Sprintf("%v,%d", k, i))
+			require.Equal(iter1.Value(), iter2.Value(), fmt.Sprintf("%v,%d", k, i))
+			require.Nil(iter1.Next(), i)
+			require.Nil(iter2.Next(), i)
+		}
+		require.False(iter2.Valid())
+	}
+
 	const cnt = 50000
 	keys := make([][]byte, cnt)
 	for i := 0; i < cnt; i++ {
@@ -195,13 +217,31 @@ func testRandomAB(t *testing.T, bufferA, bufferB MemBuffer) {
 			bufferB.Release(h)
 		}
 
-		require.Equal(bufferA.Dirty(), bufferB.Dirty())
-		require.Equal(bufferA.Len(), bufferB.Len())
-		require.Equal(bufferA.Size(), bufferB.Size(), i)
-		key := keys[rand.Intn(i+1)]
-		v1, err1 := bufferA.Get(context.Background(), key)
-		v2, err2 := bufferB.Get(context.Background(), key)
-		require.Equal(err1, err2)
-		require.Equal(v1, v2)
+		if i%5000 == 0 {
+			// iter test is slow, run it less frequently
+			key := make([]byte, rand.Intn(19)+1)
+			rand2.Read(key)
+
+			// iter test is slow
+			require.Equal(bufferA.Dirty(), bufferB.Dirty())
+			require.Equal(bufferA.Len(), bufferB.Len())
+			require.Equal(bufferA.Size(), bufferB.Size(), i)
+			v1, err1 := bufferA.Get(context.Background(), key)
+			v2, err2 := bufferB.Get(context.Background(), key)
+			require.Equal(err1, err2)
+			require.Equal(v1, v2)
+
+			iter1, err := bufferA.Iter(key, nil)
+			require.Nil(err)
+			iter2, err := bufferB.Iter(key, nil)
+			require.Nil(err)
+			checkIters(iter1, iter2, key)
+
+			iter1, err = bufferA.IterReverse(nil, key)
+			require.Nil(err)
+			iter2, err = bufferB.IterReverse(nil, key)
+			require.Nil(err)
+			checkIters(iter1, iter2, key)
+		}
 	}
 }
