@@ -457,11 +457,9 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 	const RESOLVE_CONCURRENCY = 8
 	var resolved atomic.Uint64
 	handler, err := c.buildPipelinedResolveHandler(commit, &resolved)
-	var commitTs uint64
+	commitTs := uint64(0)
 	if commit {
 		commitTs = atomic.LoadUint64(&c.commitTS)
-	} else {
-		commitTs = 0
 	}
 	if err != nil {
 		logutil.Logger(bo.GetCtx()).Error(
