@@ -978,13 +978,17 @@ func testBufferLimit(t *testing.T, buffer MemBuffer) {
 }
 
 func TestUnsetTemporaryFlag(t *testing.T) {
+	testUnsetTemporaryFlag(t, newRbtDBWithContext())
+	testUnsetTemporaryFlag(t, newArtDBWithContext())
+}
+
+func testUnsetTemporaryFlag(t *testing.T, buffer MemBuffer) {
 	require := require.New(t)
-	db := NewMemDB()
 	key := []byte{1}
 	value := []byte{2}
-	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
-	db.Set(key, value)
-	flags, err := db.GetFlags(key)
+	buffer.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
+	buffer.Set(key, value)
+	flags, err := buffer.GetFlags(key)
 	require.Nil(err)
 	require.False(flags.HasNeedConstraintCheckInPrewrite())
 }
