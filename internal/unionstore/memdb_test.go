@@ -72,6 +72,7 @@ func testGetSet(t *testing.T, db MemBuffer) {
 
 func TestIterator(t *testing.T) {
 	testIterator(t, newRbtDBWithContext())
+	testIterator(t, newArtDBWithContext())
 }
 
 func testIterator(t *testing.T, db MemBuffer) {
@@ -122,6 +123,7 @@ func testIterator(t *testing.T, db MemBuffer) {
 
 func TestDiscard(t *testing.T) {
 	testDiscard(t, newRbtDBWithContext())
+	testDiscard(t, newArtDBWithContext())
 }
 
 func testDiscard(t *testing.T, db MemBuffer) {
@@ -174,6 +176,7 @@ func testDiscard(t *testing.T, db MemBuffer) {
 
 func TestFlushOverwrite(t *testing.T) {
 	testFlushOverwrite(t, newRbtDBWithContext())
+	testFlushOverwrite(t, newArtDBWithContext())
 }
 
 func testFlushOverwrite(t *testing.T, db MemBuffer) {
@@ -254,6 +257,7 @@ func testComplexUpdate(t *testing.T, db MemBuffer) {
 
 func TestNestedSandbox(t *testing.T) {
 	testNestedSandbox(t, newRbtDBWithContext())
+	testNestedSandbox(t, newArtDBWithContext())
 }
 
 func testNestedSandbox(t *testing.T, db MemBuffer) {
@@ -313,6 +317,7 @@ func testNestedSandbox(t *testing.T, db MemBuffer) {
 
 func TestOverwrite(t *testing.T) {
 	testOverwrite(t, newRbtDBWithContext())
+	testOverwrite(t, newArtDBWithContext())
 }
 
 func testOverwrite(t *testing.T, db MemBuffer) {
@@ -375,6 +380,7 @@ func testOverwrite(t *testing.T, db MemBuffer) {
 
 func TestReset(t *testing.T) {
 	testReset(t, newRbtDBWithContext())
+	testReset(t, newArtDBWithContext())
 }
 
 func testReset(t *testing.T, db interface {
@@ -488,6 +494,7 @@ func testDirty(t *testing.T, createDb func() MemBuffer) {
 
 func TestFlags(t *testing.T) {
 	testFlags(t, newRbtDBWithContext(), func(db MemBuffer) Iterator { return db.(*rbtDBWithContext).IterWithFlags(nil, nil) })
+	testFlags(t, newArtDBWithContext(), func(db MemBuffer) Iterator { return db.(*artDBWithContext).IterWithFlags(nil, nil) })
 }
 
 func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iterator) {
@@ -614,7 +621,7 @@ const (
 	indexStep  = 2
 )
 
-func insertData(t *testing.T, buffer *MemDB) {
+func insertData(t *testing.T, buffer MemBuffer) {
 	for i := startIndex; i < testCount; i++ {
 		val := encodeInt(i * indexStep)
 		err := buffer.Set(val, val)
@@ -637,7 +644,7 @@ func valToStr(iter Iterator) string {
 	return string(val)
 }
 
-func checkNewIterator(t *testing.T, buffer *MemDB) {
+func checkNewIterator(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
 	for i := startIndex; i < testCount; i++ {
 		val := encodeInt(i * indexStep)
@@ -683,7 +690,7 @@ func checkNewIterator(t *testing.T, buffer *MemDB) {
 	iter.Close()
 }
 
-func mustGet(t *testing.T, buffer *MemDB) {
+func mustGet(t *testing.T, buffer MemBuffer) {
 	for i := startIndex; i < testCount; i++ {
 		s := encodeInt(i * indexStep)
 		val, err := buffer.Get(context.Background(), s)
@@ -693,14 +700,22 @@ func mustGet(t *testing.T, buffer *MemDB) {
 }
 
 func TestKVGetSet(t *testing.T) {
-	buffer := NewMemDB()
+	testKVGetSet(t, newRbtDBWithContext())
+	testKVGetSet(t, newArtDBWithContext())
+}
+
+func testKVGetSet(t *testing.T, buffer MemBuffer) {
 	insertData(t, buffer)
 	mustGet(t, buffer)
 }
 
 func TestNewIterator(t *testing.T) {
+	testNewIterator(t, newRbtDBWithContext())
+	testNewIterator(t, newArtDBWithContext())
+}
+
+func testNewIterator(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
-	buffer := NewMemDB()
 	// should be invalid
 	iter, err := buffer.Iter(nil, nil)
 	assert.Nil(err)
@@ -727,8 +742,12 @@ func NextUntil(it Iterator, fn FnKeyCmp) error {
 }
 
 func TestIterNextUntil(t *testing.T) {
+	testIterNextUntil(t, newRbtDBWithContext())
+	testIterNextUntil(t, newArtDBWithContext())
+}
+
+func testIterNextUntil(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
-	buffer := NewMemDB()
 	insertData(t, buffer)
 
 	iter, err := buffer.Iter(nil, nil)
@@ -742,14 +761,23 @@ func TestIterNextUntil(t *testing.T) {
 }
 
 func TestBasicNewIterator(t *testing.T) {
+	testBasicNewIterator(t, newRbtDBWithContext())
+	testBasicNewIterator(t, newArtDBWithContext())
+}
+
+func testBasicNewIterator(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
-	buffer := NewMemDB()
 	it, err := buffer.Iter([]byte("2"), nil)
 	assert.Nil(err)
 	assert.False(it.Valid())
 }
 
 func TestNewIteratorMin(t *testing.T) {
+	testNewIteratorMin(t, newRbtDBWithContext())
+	testNewIteratorMin(t, newArtDBWithContext())
+}
+
+func testNewIteratorMin(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
 	kvs := []struct {
 		key   string
@@ -762,7 +790,6 @@ func TestNewIteratorMin(t *testing.T) {
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0002", "2"},
 		{"DATA_test_main_db_tbl_tbl_test_record__00000000000000000002_0003", "hello"},
 	}
-	buffer := NewMemDB()
 	for _, kv := range kvs {
 		err := buffer.Set([]byte(kv.key), []byte(kv.value))
 		assert.Nil(err)
@@ -928,6 +955,7 @@ func testMemDBCheckpoint(t *testing.T, buffer MemBuffer) {
 
 func TestBufferLimit(t *testing.T) {
 	testBufferLimit(t, newRbtDBWithContext())
+	testBufferLimit(t, newArtDBWithContext())
 }
 
 func testBufferLimit(t *testing.T, buffer MemBuffer) {
@@ -950,13 +978,17 @@ func testBufferLimit(t *testing.T, buffer MemBuffer) {
 }
 
 func TestUnsetTemporaryFlag(t *testing.T) {
+	testUnsetTemporaryFlag(t, newRbtDBWithContext())
+	testUnsetTemporaryFlag(t, newArtDBWithContext())
+}
+
+func testUnsetTemporaryFlag(t *testing.T, buffer MemBuffer) {
 	require := require.New(t)
-	db := NewMemDB()
 	key := []byte{1}
 	value := []byte{2}
-	db.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
-	db.Set(key, value)
-	flags, err := db.GetFlags(key)
+	buffer.SetWithFlags(key, value, kv.SetNeedConstraintCheckInPrewrite)
+	buffer.Set(key, value)
+	flags, err := buffer.GetFlags(key)
 	require.Nil(err)
 	require.False(flags.HasNeedConstraintCheckInPrewrite())
 }
@@ -1046,4 +1078,32 @@ func testCleanupKeepPersistentFlag(t *testing.T, db MemBuffer) {
 	assert.Nil(err)
 	assert.True(flag.HasLocked())
 	assert.False(flag.HasPresumeKeyNotExists())
+}
+
+func TestIterNoResult(t *testing.T) {
+	testIterNoResult(t, newRbtDBWithContext())
+	testIterNoResult(t, newArtDBWithContext())
+}
+
+func testIterNoResult(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+
+	assert.Nil(buffer.Set([]byte{1, 1}, []byte{1, 1}))
+	// Test lower bound and upper bound seek same position
+	iter, err := buffer.Iter([]byte{1, 0, 0}, []byte{1, 0, 1})
+	assert.Nil(err)
+	assert.False(iter.Valid())
+	iter, err = buffer.IterReverse([]byte{1, 0, 1}, []byte{1, 0, 0})
+	assert.Nil(err)
+	assert.False(iter.Valid())
+	// Test lower bound >= upper bound
+	iter, err = buffer.Iter([]byte{1, 0, 1}, []byte{1, 0, 0})
+	assert.Nil(err)
+	assert.False(iter.Valid())
+	iter, err = buffer.IterReverse([]byte{1, 0, 0}, []byte{1, 0, 1})
+	assert.Nil(err)
+	assert.False(iter.Valid())
+	iter, err = buffer.Iter([]byte{1, 1}, []byte{1, 1})
+	assert.Nil(err)
+	assert.False(iter.Valid())
 }

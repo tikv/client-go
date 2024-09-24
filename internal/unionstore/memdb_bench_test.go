@@ -177,10 +177,7 @@ func BenchmarkMemDbIter(b *testing.B) {
 	}
 
 	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
-	b.Run("ART", func(b *testing.B) {
-		b.Skip("unimplemented")
-		fn(b, newArtDBWithContext())
-	})
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
 }
 
 func BenchmarkMemDbCreation(b *testing.B) {
