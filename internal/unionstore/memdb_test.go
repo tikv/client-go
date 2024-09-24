@@ -1089,21 +1089,19 @@ func testIterNoResult(t *testing.T, buffer MemBuffer) {
 	assert := assert.New(t)
 
 	assert.Nil(buffer.Set([]byte{1, 1}, []byte{1, 1}))
-	// Test lower bound and upper bound seek same position
-	iter, err := buffer.Iter([]byte{1, 0, 0}, []byte{1, 0, 1})
-	assert.Nil(err)
-	assert.False(iter.Valid())
-	iter, err = buffer.IterReverse([]byte{1, 0, 1}, []byte{1, 0, 0})
-	assert.Nil(err)
-	assert.False(iter.Valid())
-	// Test lower bound >= upper bound
-	iter, err = buffer.Iter([]byte{1, 0, 1}, []byte{1, 0, 0})
-	assert.Nil(err)
-	assert.False(iter.Valid())
-	iter, err = buffer.IterReverse([]byte{1, 0, 0}, []byte{1, 0, 1})
-	assert.Nil(err)
-	assert.False(iter.Valid())
-	iter, err = buffer.Iter([]byte{1, 1}, []byte{1, 1})
-	assert.Nil(err)
-	assert.False(iter.Valid())
+
+	checkFn := func(lowerBound, upperBound []byte) {
+		iter, err := buffer.Iter(lowerBound, upperBound)
+		assert.Nil(err)
+		assert.False(iter.Valid())
+		iter, err = buffer.IterReverse(upperBound, lowerBound)
+		assert.Nil(err)
+		assert.False(iter.Valid())
+	}
+
+	// Test lower bound and upper bound seek to the same position
+	checkFn([]byte{1, 1}, []byte{1, 1})
+	checkFn([]byte{1, 0, 0}, []byte{1, 0, 1})
+	// Test lower bound > upper bound
+	checkFn([]byte{1, 0, 1}, []byte{1, 0, 0})
 }

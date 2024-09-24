@@ -49,7 +49,7 @@ type MemDBCheckpoint = arena.MemDBCheckpoint
 
 type MemKeyHandle = arena.MemKeyHandle
 
-type MemDB = rbtDBWithContext
+type MemDB = artDBWithContext
 
-var NewMemDB = newRbtDBWithContext
-var NewMemDBWithContext = newRbtDBWithContext
+var NewMemDB = newArtDBWithContext
+var NewMemDBWithContext = newArtDBWithContext

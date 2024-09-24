@@ -84,6 +84,15 @@ func (it *Iterator) Value() []byte {
 	return it.tree.allocator.vlogAllocator.GetValue(it.currLeaf.vAddr)
 }
 
+// HasValue returns false if it is flags only.
+func (it *Iterator) HasValue() bool {
+	return !it.isFlagsOnly()
+}
+
+func (it *Iterator) isFlagsOnly() bool {
+	return it.currLeaf != nil && it.currLeaf.vAddr.IsNull()
+}
+
 func (it *Iterator) Next() error {
 	if !it.valid {
 		// iterate is finished

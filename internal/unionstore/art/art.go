@@ -423,6 +423,11 @@ func (t *ART) InspectNode(addr arena.MemdbArenaAddr) (*artLeaf, arena.MemdbArena
 	return lf, lf.vAddr
 }
 
+// IsStaging returns whether the MemBuffer is in staging status.
+func (t *ART) IsStaging() bool {
+	return len(t.stages) > 0
+}
+
 // Checkpoint returns a checkpoint of ART.
 func (t *ART) Checkpoint() *arena.MemDBCheckpoint {
 	cp := t.allocator.vlogAllocator.Checkpoint()
@@ -471,7 +476,7 @@ func (t *ART) Cleanup(h int) {
 		return
 	}
 	if h < len(t.stages) {
-		panic(fmt.Sprintf("cannot cleanup staging buffer, h=%v, len(db.stages)=%v", h, len(t.stages)))
+		panic(fmt.Sprintf("cannot cleanup staging buffer, h=%v, len(tree.stages)=%v", h, len(t.stages)))
 	}
 
 	cp := &t.stages[h-1]
@@ -501,7 +506,8 @@ func (t *ART) Reset() {
 // DiscardValues releases the memory used by all values.
 // NOTE: any operation need value will panic after this function.
 func (t *ART) DiscardValues() {
-	panic("unimplemented")
+	t.vlogInvalid = true
+	t.allocator.vlogAllocator.Reset()
 }
 
 // InspectStage used to inspect the value updates in the given stage.
@@ -514,16 +520,35 @@ func (t *ART) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte)) {
 
 // SelectValueHistory select the latest value which makes `predicate` returns true from the modification history.
 func (t *ART) SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error) {
-	panic("unimplemented")
+	_, x := t.search(key)
+	if x == nil {
+		return nil, tikverr.ErrNotExist
+	}
+	if x.vAddr.IsNull() {
+		// A flags only key, act as value not exists
+		return nil, tikverr.ErrNotExist
+	}
+	result := t.allocator.vlogAllocator.SelectValueHistory(x.vAddr, func(addr arena.MemdbArenaAddr) bool {
+		return predicate(t.allocator.vlogAllocator.GetValue(addr))
+	})
+	if result.IsNull() {
+		return nil, nil
+	}
+	return t.allocator.vlogAllocator.GetValue(result), nil
+
 }
 
-func (t *ART) SetMemoryFootprintChangeHook(fn func(uint64)) {
-	panic("unimplemented")
+func (t *ART) SetMemoryFootprintChangeHook(hook func(uint64)) {
+	innerHook := func() {
+		hook(t.allocator.nodeAllocator.Capacity() + t.allocator.vlogAllocator.Capacity())
+	}
+	t.allocator.nodeAllocator.SetMemChangeHook(innerHook)
+	t.allocator.vlogAllocator.SetMemChangeHook(innerHook)
 }
 
 // MemHookSet implements the MemBuffer interface.
 func (t *ART) MemHookSet() bool {
-	panic("unimplemented")
+	return t.allocator.nodeAllocator.MemHookSet()
 }
 
 // GetKeyByHandle returns key by handle.
@@ -544,10 +569,24 @@ func (t *ART) GetValueByHandle(handle arena.MemKeyHandle) ([]byte, bool) {
 	return t.allocator.vlogAllocator.GetValue(lf.vAddr), true
 }
 
+// GetEntrySizeLimit gets the size limit for each entry and total buffer.
+func (t *ART) GetEntrySizeLimit() (uint64, uint64) {
+	return t.entrySizeLimit, t.bufferSizeLimit
+}
+
 func (t *ART) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 	t.entrySizeLimit, t.bufferSizeLimit = entryLimit, bufferLimit
 }
 
+// RemoveFromBuffer is a test function, not support yet.
 func (t *ART) RemoveFromBuffer(key []byte) {
 	panic("unimplemented")
+}
+
+func (t *ART) GetCacheHitCount() uint64 {
+	return 0
+}
+
+func (t *ART) GetCacheMissCount() uint64 {
+	return 0
 }
