@@ -728,7 +728,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	}
 	c.bg.schedule(
 		func(ctx context.Context, _ time.Time) bool {
-			refreshFullStoreList(ctx, c.PDClient(), c.stores)
+			refreshFullStoreList(ctx, c.stores)
 			return false
 		}, refreshStoreListInterval,
 	)
@@ -736,8 +736,8 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 }
 
 // Try to refresh full store list. Errors are ignored.
-func refreshFullStoreList(ctx context.Context, pdClient pd.Client, stores storeCache) {
-	storeList, err := pdClient.GetAllStores(ctx)
+func refreshFullStoreList(ctx context.Context, stores storeCache) {
+	storeList, err := stores.fetchAllStores(ctx)
 	if err != nil {
 		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
 		return
@@ -747,17 +747,16 @@ func refreshFullStoreList(ctx context.Context, pdClient pd.Client, stores storeC
 		if exist {
 			continue
 		}
-		s := stores.getOrInsertDefault(store.GetId())
 		// GetAllStores is supposed to return only Up and Offline stores.
 		// This check is being defensive and to make it consistent with store resolve code.
 		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
-			s.setResolveState(tombstone)
 			continue
 		}
 		addr := store.GetAddress()
 		if addr == "" {
 			continue
 		}
+		s := stores.getOrInsertDefault(store.GetId())
 		// TODO: maybe refactor this, together with other places initializing Store
 		s.addr = addr
 		s.peerAddr = store.GetPeerAddress()
