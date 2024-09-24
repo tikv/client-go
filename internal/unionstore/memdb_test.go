@@ -995,6 +995,7 @@ func testUnsetTemporaryFlag(t *testing.T, buffer MemBuffer) {
 
 func TestSnapshotGetIter(t *testing.T) {
 	testSnapshotGetIter(t, newRbtDBWithContext())
+	testSnapshotGetIter(t, newArtDBWithContext())
 }
 
 func testSnapshotGetIter(t *testing.T, db MemBuffer) {

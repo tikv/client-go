@@ -42,6 +42,7 @@ func newRbtDBWithContext() *rbtDBWithContext {
 	}
 }
 
+//nolint:unused
 func (db *rbtDBWithContext) setSkipMutex(skip bool) {
 	db.skipMutex = skip
 }

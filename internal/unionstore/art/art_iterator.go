@@ -50,7 +50,10 @@ func (t *ART) iter(lowerBound, upperBound []byte, reverse, includeFlags bool) (*
 		inner: &baseIter{
 			allocator: &t.allocator,
 		},
-		currAddr: arena.BadAddr, // the default value of currAddr is not equal to any valid address
+		// the default value of currAddr is not equal to any valid address
+		// arena.BadAddr's idx is maxuint32 - 1, which is impossible in common cases,
+		// this avoids the initial value of currAddr equals to endAddr.
+		currAddr: arena.BadAddr,
 		endAddr:  arena.NullAddr,
 	}
 	it.init(lowerBound, upperBound)

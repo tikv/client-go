@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:unused
 package unionstore
 
 import (
@@ -36,7 +35,6 @@ type artDBWithContext struct {
 	skipMutex bool
 }
 
-//nolint:unused
 func newArtDBWithContext() *artDBWithContext {
 	return &artDBWithContext{ART: art.New()}
 }
