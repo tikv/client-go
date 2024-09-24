@@ -35,69 +35,90 @@
 package transaction
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMinCommitTsManager(t *testing.T) {
-	t.Run("Initial state", func(t *testing.T) {
-		manager := newMinCommitTsManager()
-		assert.Equal(t, uint64(0), manager.get(), "Initial value should be 0")
-		assert.Equal(t, ttlAccess, manager.getRequiredWriteAccess(), "Initial write access should be ttlAccess")
-	})
+	t.Run(
+		"Initial state", func(t *testing.T) {
+			manager := newMinCommitTsManager()
+			assert.Equal(t, uint64(0), manager.get(), "Initial value should be 0")
+			assert.Equal(
+				t,
+				ttlAccess,
+				manager.getRequiredWriteAccess(),
+				"Initial write access should be ttlAccess",
+			)
+		},
+	)
 
-	t.Run("TTL updates", func(t *testing.T) {
-		manager := newMinCommitTsManager()
+	t.Run(
+		"TTL updates", func(t *testing.T) {
+			manager := newMinCommitTsManager()
 
-		manager.tryUpdate(10, ttlAccess)
-		assert.Equal(t, uint64(10), manager.get(), "Value should be 10")
+			manager.tryUpdate(10, ttlAccess)
+			assert.Equal(t, uint64(10), manager.get(), "Value should be 10")
 
-		manager.tryUpdate(5, ttlAccess)
-		assert.Equal(t, uint64(10), manager.get(), "Value should remain 10")
-	})
+			manager.tryUpdate(5, ttlAccess)
+			assert.Equal(t, uint64(10), manager.get(), "Value should remain 10")
+		},
+	)
 
-	t.Run("Elevate write access", func(t *testing.T) {
-		manager := newMinCommitTsManager()
-		manager.tryUpdate(10, ttlAccess)
+	t.Run(
+		"Elevate write access", func(t *testing.T) {
+			manager := newMinCommitTsManager()
+			manager.tryUpdate(10, ttlAccess)
 
-		currentValue := manager.elevateWriteAccess(twoPCAccess)
-		assert.Equal(t, uint64(10), currentValue, "Current value should be 10")
-		assert.Equal(t, twoPCAccess, manager.getRequiredWriteAccess(), "Required write access should be twoPCAccess")
-	})
+			currentValue := manager.elevateWriteAccess(twoPCAccess)
+			assert.Equal(t, uint64(10), currentValue, "Current value should be 10")
+			assert.Equal(
+				t,
+				twoPCAccess,
+				manager.getRequiredWriteAccess(),
+				"Required write access should be twoPCAccess",
+			)
+		},
+	)
 
-	t.Run("Updates after elevation", func(t *testing.T) {
-		manager := newMinCommitTsManager()
-		manager.tryUpdate(10, ttlAccess)
-		manager.elevateWriteAccess(twoPCAccess)
+	t.Run(
+		"Updates after elevation", func(t *testing.T) {
+			manager := newMinCommitTsManager()
+			manager.tryUpdate(10, ttlAccess)
+			manager.elevateWriteAccess(twoPCAccess)
 
-		manager.tryUpdate(20, ttlAccess)
-		assert.Equal(t, uint64(10), manager.get(), "Value should remain 10")
+			manager.tryUpdate(20, ttlAccess)
+			assert.Equal(t, uint64(10), manager.get(), "Value should remain 10")
 
-		manager.tryUpdate(30, twoPCAccess)
-		assert.Equal(t, uint64(30), manager.get(), "Value should be 30")
-	})
+			manager.tryUpdate(30, twoPCAccess)
+			assert.Equal(t, uint64(30), manager.get(), "Value should be 30")
+		},
+	)
 
-	t.Run("Concurrent updates", func(t *testing.T) {
-		manager := newMinCommitTsManager()
-		done := make(chan bool)
+	t.Run(
+		"Concurrent updates", func(t *testing.T) {
+			manager := newMinCommitTsManager()
+			done := make(chan bool)
 
-		go func() {
-			for i := 0; i < 1000; i++ {
-				manager.tryUpdate(uint64(i), ttlAccess)
-			}
-			done <- true
-		}()
+			go func() {
+				for i := 0; i < 1000; i++ {
+					manager.tryUpdate(uint64(i), ttlAccess)
+				}
+				done <- true
+			}()
 
-		go func() {
-			for i := 0; i < 1000; i++ {
-				manager.tryUpdate(uint64(1000+i), ttlAccess)
-			}
-			done <- true
-		}()
+			go func() {
+				for i := 0; i < 1000; i++ {
+					manager.tryUpdate(uint64(1000+i), ttlAccess)
+				}
+				done <- true
+			}()
 
-		<-done
-		<-done
+			<-done
+			<-done
 
-		assert.Equal(t, manager.get(), uint64(1999))
-	})
+			assert.Equal(t, manager.get(), uint64(1999))
+		},
+	)
 }

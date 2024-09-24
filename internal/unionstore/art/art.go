@@ -16,6 +16,7 @@
 package art
 
 import (
+	"fmt"
 	"math"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -76,7 +77,7 @@ func (t *ART) GetFlags(key []byte) (kv.KeyFlags, error) {
 	if leaf.vAddr.IsNull() && leaf.isDeleted() {
 		return 0, tikverr.ErrNotExist
 	}
-	return leaf.getKeyFlags(), nil
+	return leaf.GetKeyFlags(), nil
 }
 
 func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
@@ -324,8 +325,8 @@ func (t *ART) newLeaf(key artKey) (artNode, *artLeaf) {
 }
 
 func (t *ART) setValue(addr arena.MemdbArenaAddr, l *artLeaf, value []byte, ops []kv.FlagsOp) {
-	flags := l.getKeyFlags()
-	if flags == 0 && l.vAddr.IsNull() {
+	flags := l.GetKeyFlags()
+	if flags == 0 && l.vAddr.IsNull() || l.isDeleted() {
 		t.len++
 		t.size += int(l.klen)
 	}
@@ -373,12 +374,12 @@ func (t *ART) trySwapValue(addr arena.MemdbArenaAddr, value []byte) (int, bool) 
 }
 
 func (t *ART) Dirty() bool {
-	panic("unimplemented")
+	return t.dirty
 }
 
 // Mem returns the memory usage of MemBuffer.
 func (t *ART) Mem() uint64 {
-	panic("unimplemented")
+	return t.allocator.nodeAllocator.Capacity() + t.allocator.vlogAllocator.Capacity()
 }
 
 // Len returns the count of entries in the MemBuffer.
@@ -392,51 +393,97 @@ func (t *ART) Size() int {
 }
 
 func (t *ART) checkpoint() arena.MemDBCheckpoint {
-	panic("unimplemented")
+	return t.allocator.vlogAllocator.Checkpoint()
 }
 
-func (t *ART) RevertNode(hdr *arena.MemdbVlogHdr) {
-	panic("unimplemented")
+func (t *ART) RevertVAddr(hdr *arena.MemdbVlogHdr) {
+	lf := t.allocator.getLeaf(hdr.NodeAddr)
+	if lf == nil {
+		panic("revert an invalid node")
+	}
+	lf.vAddr = hdr.OldValue
+	t.size -= int(hdr.ValueLen)
+	if hdr.OldValue.IsNull() {
+		keptFlags := lf.GetKeyFlags()
+		keptFlags = keptFlags.AndPersistent()
+		if keptFlags == 0 {
+			lf.markDelete()
+			t.len--
+			t.size -= int(lf.klen)
+		} else {
+			lf.setKeyFlags(keptFlags)
+		}
+	} else {
+		t.size += len(t.allocator.vlogAllocator.GetValue(hdr.OldValue))
+	}
 }
 
 func (t *ART) InspectNode(addr arena.MemdbArenaAddr) (*artLeaf, arena.MemdbArenaAddr) {
-	panic("unimplemented")
+	lf := t.allocator.getLeaf(addr)
+	return lf, lf.vAddr
 }
 
 // Checkpoint returns a checkpoint of ART.
 func (t *ART) Checkpoint() *arena.MemDBCheckpoint {
-	panic("unimplemented")
+	cp := t.allocator.vlogAllocator.Checkpoint()
+	return &cp
 }
 
 // RevertToCheckpoint reverts the ART to the checkpoint.
 func (t *ART) RevertToCheckpoint(cp *arena.MemDBCheckpoint) {
-	panic("unimplemented")
+	t.allocator.vlogAllocator.RevertToCheckpoint(t, cp)
+	t.allocator.vlogAllocator.Truncate(cp)
+	t.allocator.vlogAllocator.OnMemChange()
 }
 
 func (t *ART) Stages() []arena.MemDBCheckpoint {
-	panic("unimplemented")
+	return t.stages
 }
 
 func (t *ART) Staging() int {
-	return 0
+	t.stages = append(t.stages, t.checkpoint())
+	return len(t.stages)
 }
 
 func (t *ART) Release(h int) {
+	if h == 0 {
+		// 0 is the invalid and no-effect handle.
+		return
+	}
+	if h != len(t.stages) {
+		panic("cannot release staging buffer")
+	}
+	if h == 1 {
+		tail := t.checkpoint()
+		if !t.stages[0].IsSamePosition(&tail) {
+			t.dirty = true
+		}
+	}
+	t.stages = t.stages[:h-1]
 }
 
 func (t *ART) Cleanup(h int) {
-}
+	if h == 0 {
+		// 0 is the invalid and no-effect handle.
+		return
+	}
+	if h > len(t.stages) {
+		return
+	}
+	if h < len(t.stages) {
+		panic(fmt.Sprintf("cannot cleanup staging buffer, h=%v, len(db.stages)=%v", h, len(t.stages)))
+	}
 
-func (t *ART) revertToCheckpoint(cp *arena.MemDBCheckpoint) {
-	panic("unimplemented")
-}
-
-func (t *ART) moveBackCursor(cursor *arena.MemDBCheckpoint, hdr *arena.MemdbVlogHdr) {
-	panic("unimplemented")
-}
-
-func (t *ART) truncate(snap *arena.MemDBCheckpoint) {
-	panic("unimplemented")
+	cp := &t.stages[h-1]
+	if !t.vlogInvalid {
+		curr := t.checkpoint()
+		if !curr.IsSamePosition(cp) {
+			t.allocator.vlogAllocator.RevertToCheckpoint(t, cp)
+			t.allocator.vlogAllocator.Truncate(cp)
+		}
+	}
+	t.stages = t.stages[:h-1]
+	t.allocator.vlogAllocator.OnMemChange()
 }
 
 // Reset resets the MemBuffer to initial states.
@@ -459,7 +506,10 @@ func (t *ART) DiscardValues() {
 
 // InspectStage used to inspect the value updates in the given stage.
 func (t *ART) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte)) {
-	panic("unimplemented")
+	idx := handle - 1
+	tail := t.allocator.vlogAllocator.Checkpoint()
+	head := t.stages[idx]
+	t.allocator.vlogAllocator.InspectKVInLog(t, &head, &tail, f)
 }
 
 // SelectValueHistory select the latest value which makes `predicate` returns true from the modification history.
