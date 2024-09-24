@@ -748,6 +748,8 @@ func refreshFullStoreList(ctx context.Context, pdClient pd.Client, stores storeC
 			continue
 		}
 		s := stores.getOrInsertDefault(store.GetId())
+		// GetAllStores is supposed to return only Up and Offline stores.
+		// This check is being defensive and to make it consistent with store resolve code.
 		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
 			s.setResolveState(tombstone)
 			continue
