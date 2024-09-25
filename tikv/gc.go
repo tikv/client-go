@@ -309,7 +309,7 @@ const unsafeDestroyRangeTimeout = 5 * time.Minute
 // multiple times on an single range.
 func (s *KVStore) UnsafeDestroyRange(ctx context.Context, startKey []byte, endKey []byte) error {
 	// Get all stores every time deleting a region. So the store list is less probably to be stale.
-	stores, err := s.listStoresForUnsafeDestory(ctx)
+	stores, err := s.listStoresForUnsafeDestroy(ctx)
 	if err != nil {
 		metrics.TiKVUnsafeDestroyRangeFailuresCounterVec.WithLabelValues("get_stores").Inc()
 		return err
@@ -366,7 +366,7 @@ func (s *KVStore) UnsafeDestroyRange(ctx context.Context, startKey []byte, endKe
 	return nil
 }
 
-func (s *KVStore) listStoresForUnsafeDestory(ctx context.Context) ([]*metapb.Store, error) {
+func (s *KVStore) listStoresForUnsafeDestroy(ctx context.Context) ([]*metapb.Store, error) {
 	stores, err := s.pdClient.GetAllStores(ctx)
 	if err != nil {
 		return nil, errors.WithStack(err)

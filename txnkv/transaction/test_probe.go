@@ -194,12 +194,12 @@ func (c CommitterProbe) GetCommitTS() uint64 {
 
 // GetMinCommitTS returns the minimal commit ts can be used.
 func (c CommitterProbe) GetMinCommitTS() uint64 {
-	return c.minCommitTS
+	return c.minCommitTSMgr.get()
 }
 
 // SetMinCommitTS sets the minimal commit ts can be used.
 func (c CommitterProbe) SetMinCommitTS(ts uint64) {
-	c.minCommitTS = ts
+	c.minCommitTSMgr.tryUpdate(ts, twoPCAccess)
 }
 
 // SetMaxCommitTS sets the max commit ts can be used.
@@ -381,7 +381,7 @@ func (c CommitterProbe) ResolveFlushedLocks(bo *retry.Backoffer, start, end []by
 
 // SendTxnHeartBeat renews a txn's ttl.
 func SendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
-	return sendTxnHeartBeat(bo, store, primary, startTS, ttl)
+	return sendTxnHeartBeat(bo, store, primary, startTS, ttl, 0)
 }
 
 // ConfigProbe exposes configurations and global variables for testing purpose.

@@ -330,13 +330,31 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 	if err = c.commitMutations(bo, &primaryMutation); err != nil {
 		return errors.Trace(err)
 	}
-	c.mu.RLock()
+	c.mu.Lock()
 	c.mu.committed = true
-	c.mu.RUnlock()
+	c.mu.Unlock()
 	logutil.Logger(bo.GetCtx()).Info(
 		"[pipelined dml] transaction is committed",
 		zap.Uint64("startTS", c.startTS),
 		zap.Uint64("commitTS", commitTS),
+	)
+	broadcastToAllStores(
+		c.txn,
+		c.store,
+		retry.NewBackofferWithVars(
+			bo.GetCtx(),
+			broadcastMaxBackoff,
+			c.txn.vars,
+		),
+		&kvrpcpb.TxnStatus{
+			StartTs:     c.startTS,
+			MinCommitTs: c.minCommitTSMgr.get(),
+			CommitTs:    commitTS,
+			RolledBack:  false,
+			IsCompleted: false,
+		},
+		c.resourceGroupName,
+		c.resourceGroupTag,
 	)
 
 	if _, err := util.EvalFailpoint("pipelinedSkipResolveLock"); err == nil {
@@ -439,13 +457,17 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 	const RESOLVE_CONCURRENCY = 8
 	var resolved atomic.Uint64
 	handler, err := c.buildPipelinedResolveHandler(commit, &resolved)
+	commitTs := uint64(0)
+	if commit {
+		commitTs = atomic.LoadUint64(&c.commitTS)
+	}
 	if err != nil {
 		logutil.Logger(bo.GetCtx()).Error(
 			"[pipelined dml] build buildPipelinedResolveHandler error",
 			zap.Error(err),
 			zap.Uint64("resolved regions", resolved.Load()),
 			zap.Uint64("startTS", c.startTS),
-			zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+			zap.Uint64("commitTS", commitTs),
 		)
 		return
 	}
@@ -470,7 +492,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 				zap.String("txn-status", status),
 				zap.Uint64("resolved regions", resolved.Load()),
 				zap.Uint64("startTS", c.startTS),
-				zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+				zap.Uint64("commitTS", commitTs),
 				zap.Uint64("session", c.sessionID),
 				zap.Error(err),
 			)
@@ -479,8 +501,32 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 				zap.String("txn-status", status),
 				zap.Uint64("resolved regions", resolved.Load()),
 				zap.Uint64("startTS", c.startTS),
-				zap.Uint64("commitTS", atomic.LoadUint64(&c.commitTS)),
+				zap.Uint64("commitTS", commitTs),
 				zap.Uint64("session", c.sessionID),
+			)
+
+			// wait a while before notifying txn_status_cache to evict the txn,
+			// which tolerates slow followers and avoids the situation that the
+			// txn is evicted before the follower catches up.
+			time.Sleep(broadcastGracePeriod)
+
+			broadcastToAllStores(
+				c.txn,
+				c.store,
+				retry.NewBackofferWithVars(
+					bo.GetCtx(),
+					broadcastMaxBackoff,
+					c.txn.vars,
+				),
+				&kvrpcpb.TxnStatus{
+					StartTs:     c.startTS,
+					MinCommitTs: 0,
+					CommitTs:    commitTs,
+					RolledBack:  !commit,
+					IsCompleted: true,
+				},
+				c.resourceGroupName,
+				c.resourceGroupTag,
 			)
 		}
 	}()

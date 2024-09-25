@@ -726,7 +726,45 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 		// cache GC is incompatible with cache refresh
 		c.bg.schedule(c.gcRoundFunc(cleanRegionNumPerRound), cleanCacheInterval)
 	}
+	c.bg.schedule(
+		func(ctx context.Context, _ time.Time) bool {
+			refreshFullStoreList(ctx, c.stores)
+			return false
+		}, refreshStoreListInterval,
+	)
 	return c
+}
+
+// Try to refresh full store list. Errors are ignored.
+func refreshFullStoreList(ctx context.Context, stores storeCache) {
+	storeList, err := stores.fetchAllStores(ctx)
+	if err != nil {
+		logutil.Logger(ctx).Info("refresh full store list failed", zap.Error(err))
+		return
+	}
+	for _, store := range storeList {
+		_, exist := stores.get(store.GetId())
+		if exist {
+			continue
+		}
+		// GetAllStores is supposed to return only Up and Offline stores.
+		// This check is being defensive and to make it consistent with store resolve code.
+		if store == nil || store.GetState() == metapb.StoreState_Tombstone {
+			continue
+		}
+		addr := store.GetAddress()
+		if addr == "" {
+			continue
+		}
+		s := stores.getOrInsertDefault(store.GetId())
+		// TODO: maybe refactor this, together with other places initializing Store
+		s.addr = addr
+		s.peerAddr = store.GetPeerAddress()
+		s.saddr = store.GetStatusAddress()
+		s.storeType = tikvrpc.GetStoreTypeByMeta(store)
+		s.labels = store.GetLabels()
+		s.changeResolveStateTo(unresolved, resolved)
+	}
 }
 
 // only used fot test.
@@ -2649,6 +2687,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 
 const cleanCacheInterval = time.Second
 const cleanRegionNumPerRound = 50
+const refreshStoreListInterval = 10 * time.Second
 
 // gcScanItemHook is only used for testing
 var gcScanItemHook = new(atomic.Pointer[func(*btreeItem)])

@@ -51,7 +51,6 @@ type testKVSuite struct {
 func (s *testKVSuite) SetupTest() {
 	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
 	s.Require().Nil(err)
-	testutils.BootstrapWithSingleStore(cluster)
 	s.setGetMinResolvedTSByStoresIDs(func(ctx context.Context, ids []uint64) (uint64, map[uint64]uint64, error) {
 		return 0, nil, nil
 	})

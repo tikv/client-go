@@ -116,7 +116,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 	}
 	c.mu.Lock()
-	minCommitTS := c.minCommitTS
+	minCommitTS := c.minCommitTSMgr.get()
 	c.mu.Unlock()
 	if c.forUpdateTS > 0 && c.forUpdateTS >= minCommitTS {
 		minCommitTS = c.forUpdateTS + 1
@@ -387,7 +387,7 @@ func (action actionPrewrite) handleSingleBatch(
 					c.setOnePC(false)
 					c.setAsyncCommit(false)
 				} else {
-					// For 1PC, there's no racing to access to access `onePCCommmitTS` so it's safe
+					// For 1PC, there's no racing to access `onePCCommitTS` so it's safe
 					// not to lock the mutex.
 					if c.onePCCommitTS != 0 {
 						logutil.Logger(bo.GetCtx()).Fatal(
@@ -419,8 +419,8 @@ func (action actionPrewrite) handleSingleBatch(
 					c.setAsyncCommit(false)
 				} else {
 					c.mu.Lock()
-					if prewriteResp.MinCommitTs > c.minCommitTS {
-						c.minCommitTS = prewriteResp.MinCommitTs
+					if prewriteResp.MinCommitTs > c.minCommitTSMgr.get() {
+						c.minCommitTSMgr.tryUpdate(prewriteResp.MinCommitTs, twoPCAccess)
 					}
 					c.mu.Unlock()
 				}
