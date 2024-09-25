@@ -42,6 +42,7 @@ func newRbtDBWithContext() *rbtDBWithContext {
 	}
 }
 
+//nolint:unused
 func (db *rbtDBWithContext) setSkipMutex(skip bool) {
 	db.skipMutex = skip
 }
@@ -125,7 +126,7 @@ func (db *rbtDBWithContext) FlushWait() error { return nil }
 
 // GetMemDB implements the MemBuffer interface.
 func (db *rbtDBWithContext) GetMemDB() *MemDB {
-	return db
+	return nil
 }
 
 // BatchGet returns the values for given keys from the MemBuffer.

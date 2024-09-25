@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:unused
 package unionstore
 
 import (
@@ -36,7 +35,6 @@ type artDBWithContext struct {
 	skipMutex bool
 }
 
-//nolint:unused
 func newArtDBWithContext() *artDBWithContext {
 	return &artDBWithContext{ART: art.New()}
 }
@@ -118,7 +116,7 @@ func (db *artDBWithContext) FlushWait() error { return nil }
 
 // GetMemDB implements the MemBuffer interface.
 func (db *artDBWithContext) GetMemDB() *MemDB {
-	panic("unimplemented")
+	return db
 }
 
 // BatchGet returns the values for given keys from the MemBuffer.
