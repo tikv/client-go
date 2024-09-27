@@ -18,6 +18,7 @@ package art
 import (
 	"fmt"
 	"math"
+	"sync/atomic"
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
@@ -44,6 +45,12 @@ type ART struct {
 	bufferSizeLimit uint64
 	len             int
 	size            int
+
+	// The lastTraversedNode stores addr in uint64 of the last traversed node, include Get and Set.
+	// Compare to atomic.Pointer, atomic.Uint64 can avoid heap allocation, so it's more efficient.
+	lastTraversedNode atomic.Uint64
+	hitCount          atomic.Uint64
+	missCount         atomic.Uint64
 }
 
 func New() *ART {
@@ -583,10 +590,31 @@ func (t *ART) RemoveFromBuffer(key []byte) {
 	panic("unimplemented")
 }
 
+// updateLastTraversed updates the last traversed node atomically
+func (t *ART) updateLastTraversed(addr arena.MemdbArenaAddr) {
+	//db.lastTraversedNode.Store(node.addr.AsU64())
+}
+
+// checkKeyInCache retrieves the last traversed node if the key matches
+func (t *ART) checkKeyInCache(key []byte) (*artLeaf, arena.MemdbArenaAddr, bool) {
+	//addrU64 := db.lastTraversedNode.Load()
+	//if addrU64 == arena.NullU64Addr {
+	//	return nullNodeAddr, false
+	//}
+	//addr := arena.U64ToAddr(addrU64)
+	//node := db.getNode(addr)
+	//
+	//if bytes.Equal(key, node.memdbNode.getKey()) {
+	//	return node, true
+	//}
+	//
+	//return nullNodeAddr, false
+}
+
 func (t *ART) GetCacheHitCount() uint64 {
-	return 0
+	return t.hitCount.Load()
 }
 
 func (t *ART) GetCacheMissCount() uint64 {
-	return 0
+	return t.missCount.Load()
 }

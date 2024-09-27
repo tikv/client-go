@@ -1106,3 +1106,66 @@ func testIterNoResult(t *testing.T, buffer MemBuffer) {
 	// Test lower bound > upper bound
 	checkFn([]byte{1, 0, 1}, []byte{1, 0, 0})
 }
+
+func TestMemBufferCache(t *testing.T) {
+	testMemBufferCache(t, newRbtDBWithContext())
+	//testMemBufferCache(t, newArtDBWithContext())
+}
+
+func testMemBufferCache(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+
+	type CacheStats interface {
+		GetCacheHitCount() uint64
+		GetCacheMissCount() uint64
+	}
+	cacheCheck := func(hit bool, fn func()) {
+		beforeHit, beforeMiss := buffer.(CacheStats).GetCacheHitCount(), buffer.(CacheStats).GetCacheMissCount()
+		fn()
+		afterHit, afterMiss := buffer.(CacheStats).GetCacheHitCount(), buffer.(CacheStats).GetCacheMissCount()
+		hitCnt := afterHit - beforeHit
+		missCnt := afterMiss - beforeMiss
+		if hit {
+			assert.Equal(hitCnt, uint64(1))
+			assert.Equal(missCnt, uint64(0))
+		} else {
+			assert.Equal(hitCnt, uint64(0))
+			assert.Equal(missCnt, uint64(1))
+		}
+	}
+
+	cacheCheck(false, func() {
+		assert.Nil(buffer.Set([]byte{1}, []byte{1}))
+	})
+	cacheCheck(false, func() {
+		assert.Nil(buffer.Set([]byte{2}, []byte{2}))
+	})
+	cacheCheck(true, func() {
+		v, err := buffer.Get(context.Background(), []byte{2})
+		assert.Nil(err)
+		assert.Equal(v, []byte{2})
+	})
+	cacheCheck(false, func() {
+		v, err := buffer.Get(context.Background(), []byte{1})
+		assert.Nil(err)
+		assert.Equal(v, []byte{1})
+	})
+	cacheCheck(true, func() {
+		v, err := buffer.Get(context.Background(), []byte{1})
+		assert.Nil(err)
+		assert.Equal(v, []byte{1})
+	})
+	cacheCheck(false, func() {
+		v, err := buffer.Get(context.Background(), []byte{2})
+		assert.Nil(err)
+		assert.Equal(v, []byte{2})
+	})
+	cacheCheck(true, func() {
+		assert.Nil(buffer.Set([]byte{2}, []byte{2, 2}))
+	})
+	cacheCheck(true, func() {
+		v, err := buffer.Get(context.Background(), []byte{2})
+		assert.Nil(err)
+		assert.Equal(v, []byte{2, 2})
+	})
+}
