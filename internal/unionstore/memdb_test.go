@@ -1109,7 +1109,7 @@ func testIterNoResult(t *testing.T, buffer MemBuffer) {
 
 func TestMemBufferCache(t *testing.T) {
 	testMemBufferCache(t, newRbtDBWithContext())
-	//testMemBufferCache(t, newArtDBWithContext())
+	testMemBufferCache(t, newArtDBWithContext())
 }
 
 func testMemBufferCache(t *testing.T, buffer MemBuffer) {

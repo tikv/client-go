@@ -16,6 +16,7 @@
 package art
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"sync/atomic"
@@ -46,7 +47,7 @@ type ART struct {
 	len             int
 	size            int
 
-	// The lastTraversedNode stores addr in uint64 of the last traversed node, include Get and Set.
+	// The lastTraversedNode stores addr in uint64 of the last traversed node, include search and recursiveInsert.
 	// Compare to atomic.Pointer, atomic.Uint64 can avoid heap allocation, so it's more efficient.
 	lastTraversedNode atomic.Uint64
 	hitCount          atomic.Uint64
@@ -62,6 +63,7 @@ func New() *ART {
 	t.allocator.nodeAllocator.freeNode4 = make([]arena.MemdbArenaAddr, 0, 1<<4)
 	t.allocator.nodeAllocator.freeNode16 = make([]arena.MemdbArenaAddr, 0, 1<<3)
 	t.allocator.nodeAllocator.freeNode48 = make([]arena.MemdbArenaAddr, 0, 1<<2)
+	t.lastTraversedNode.Store(arena.NullU64Addr)
 	return &t
 }
 
@@ -109,10 +111,26 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	return nil
 }
 
-// search looks up the leaf with the given key.
+// search wraps searchImpl with cache.
+func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
+	// check cache
+	addr, leaf, found := t.checkKeyInCache(key)
+	if found {
+		t.hitCount.Add(1)
+		return addr, leaf
+	}
+	t.missCount.Add(1)
+	addr, leaf = t.searchImpl(key)
+	if !addr.IsNull() {
+		t.updateLastTraversed(addr)
+	}
+	return addr, leaf
+}
+
+// searchImpl looks up the leaf with the given key.
 // It returns the memory arena address and leaf itself it there is a match leaf,
 // returns arena.NullAddr and nil if the key is not found.
-func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
+func (t *ART) searchImpl(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	current := t.root
 	if current == nullArtNode {
 		return arena.NullAddr, nil
@@ -161,9 +179,25 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	}
 }
 
-// recursiveInsert returns the node address of the key.
-// It will insert the key if not exists, returns the newly inserted or existing leaf.
+// recursiveInsert wraps recursiveInsertImpl with cache.
 func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
+	addr, leaf, found := t.checkKeyInCache(key)
+	if found {
+		t.hitCount.Add(1)
+		return addr, leaf
+	}
+	t.missCount.Add(1)
+	addr, leaf = t.recursiveInsertImpl(key)
+	if !addr.IsNull() {
+		t.updateLastTraversed(addr)
+	}
+	return addr, leaf
+}
+
+// recursiveInsertImpl returns the node address of the key.
+// It will insert the key if not exists, returns the newly inserted or existing leaf.
+func (t *ART) recursiveInsertImpl(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
+
 	// lazy init root node and allocator.
 	// this saves memory for read only txns.
 	if t.root.addr.IsNull() {
@@ -508,6 +542,7 @@ func (t *ART) Reset() {
 	t.len = 0
 	t.allocator.nodeAllocator.Reset()
 	t.allocator.vlogAllocator.Reset()
+	t.lastTraversedNode.Store(arena.NullU64Addr)
 }
 
 // DiscardValues releases the memory used by all values.
@@ -591,24 +626,24 @@ func (t *ART) RemoveFromBuffer(key []byte) {
 }
 
 // updateLastTraversed updates the last traversed node atomically
+// the addr must be a valid leaf address
 func (t *ART) updateLastTraversed(addr arena.MemdbArenaAddr) {
-	//db.lastTraversedNode.Store(node.addr.AsU64())
+	t.lastTraversedNode.Store(addr.AsU64())
 }
 
 // checkKeyInCache retrieves the last traversed node if the key matches
-func (t *ART) checkKeyInCache(key []byte) (*artLeaf, arena.MemdbArenaAddr, bool) {
-	//addrU64 := db.lastTraversedNode.Load()
-	//if addrU64 == arena.NullU64Addr {
-	//	return nullNodeAddr, false
-	//}
-	//addr := arena.U64ToAddr(addrU64)
-	//node := db.getNode(addr)
-	//
-	//if bytes.Equal(key, node.memdbNode.getKey()) {
-	//	return node, true
-	//}
-	//
-	//return nullNodeAddr, false
+func (t *ART) checkKeyInCache(key []byte) (arena.MemdbArenaAddr, *artLeaf, bool) {
+	addrU64 := t.lastTraversedNode.Load()
+	if addrU64 == arena.NullU64Addr {
+		return arena.NullAddr, nil, false
+	}
+
+	addr := arena.U64ToAddr(addrU64)
+	leaf := t.allocator.getLeaf(addr)
+	if !bytes.Equal(leaf.GetKey(), key) {
+		return arena.NullAddr, nil, false
+	}
+	return addr, leaf, true
 }
 
 func (t *ART) GetCacheHitCount() uint64 {

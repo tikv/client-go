@@ -37,7 +37,6 @@ package unionstore
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"math/rand"
 	"testing"
 )
@@ -232,24 +231,20 @@ func benchIterator(b *testing.B, buffer MemBuffer) {
 }
 
 func BenchmarkMemBufferCache(b *testing.B) {
-	type CacheStats interface {
-		GetCacheHitCount() uint64
-		GetCacheMissCount() uint64
-	}
 	fn := func(b *testing.B, buffer MemBuffer) {
 		buf := make([][keySize]byte, b.N)
 		for i := range buf {
 			binary.LittleEndian.PutUint32(buf[i][:], uint32(i))
 			buffer.Set(buf[i][:], buf[i][:])
 		}
-		fmt.Printf("p1 hit: %d, miss: %d\n", buffer.(CacheStats).GetCacheHitCount(), buffer.(CacheStats).GetCacheMissCount())
 		ctx := context.Background()
 		b.ResetTimer()
 		for i := range buf {
 			buffer.Get(ctx, buf[i][:])
-			buffer.Get(ctx, buf[i][:]) // if cache hit, the second get will be fast
+			for j := 0; j < 10; j++ {
+				buffer.Get(ctx, buf[i][:]) // if cache hit, the second get will be fast
+			}
 		}
-		fmt.Printf("p2 hit: %d, miss: %d\n", buffer.(CacheStats).GetCacheHitCount(), buffer.(CacheStats).GetCacheMissCount())
 	}
 	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
 	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
