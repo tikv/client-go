@@ -242,7 +242,8 @@ func BenchmarkMemBufferCache(b *testing.B) {
 		for i := range buf {
 			buffer.Get(ctx, buf[i][:])
 			for j := 0; j < 10; j++ {
-				buffer.Get(ctx, buf[i][:]) // if cache hit, the second get will be fast
+				// the cache hit get will be fast
+				buffer.Get(ctx, buf[i][:])
 			}
 		}
 	}

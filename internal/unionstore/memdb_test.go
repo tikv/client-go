@@ -1135,6 +1135,9 @@ func testMemBufferCache(t *testing.T, buffer MemBuffer) {
 	}
 
 	cacheCheck(false, func() {
+		assert.Nil(buffer.Set([]byte{1}, []byte{0}))
+	})
+	cacheCheck(true, func() {
 		assert.Nil(buffer.Set([]byte{1}, []byte{1}))
 	})
 	cacheCheck(false, func() {
