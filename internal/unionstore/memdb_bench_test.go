@@ -229,3 +229,24 @@ func benchIterator(b *testing.B, buffer MemBuffer) {
 		iter.Close()
 	}
 }
+
+func BenchmarkMemBufferCache(b *testing.B) {
+	fn := func(b *testing.B, buffer MemBuffer) {
+		buf := make([][keySize]byte, b.N)
+		for i := range buf {
+			binary.LittleEndian.PutUint32(buf[i][:], uint32(i))
+			buffer.Set(buf[i][:], buf[i][:])
+		}
+		ctx := context.Background()
+		b.ResetTimer()
+		for i := range buf {
+			buffer.Get(ctx, buf[i][:])
+			for j := 0; j < 10; j++ {
+				// the cache hit get will be fast
+				buffer.Get(ctx, buf[i][:])
+			}
+		}
+	}
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
+}
