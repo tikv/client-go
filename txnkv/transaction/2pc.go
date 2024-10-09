@@ -1349,7 +1349,7 @@ func keepAlive(
 			}
 
 			// broadcast to all stores
-			if isPipelinedTxn {
+			if err != nil && isPipelinedTxn {
 				broadcastToAllStores(
 					c.txn,
 					c.store,
