@@ -1412,6 +1412,7 @@ func broadcastToAllStores(
 					ResourceGroupName: resourceGroupName,
 				}
 				req.Context.ResourceGroupTag = resourceGroupTag
+				req.Context.RequestSource = txn.GetRequestSource()
 
 				_, err := store.GetTiKVClient().SendRequest(
 					bo.GetCtx(),
