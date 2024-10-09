@@ -25,10 +25,36 @@ import (
 // reusing blocks reduces the memory pieces.
 type nodeArena struct {
 	arena.MemdbArena
+	// The ART node will expand to a higher capacity, and the address of the freed node will be stored in the free list for reuse.
+	// By reusing the freed node, memory usage and fragmentation can be reduced.
 	freeNode4  []arena.MemdbArenaAddr
 	freeNode16 []arena.MemdbArenaAddr
 	freeNode48 []arena.MemdbArenaAddr
 }
+
+//type nodeAllocator[N interface {
+//	init()
+//}] struct {
+//	arena.MemdbArena
+//	free []arena.MemdbArenaAddr
+//}
+//
+//func (f *nodeAllocator[N]) alloc() (arena.MemdbArenaAddr, N) {
+//	var (
+//		addr arena.MemdbArenaAddr
+//		data []byte
+//	)
+//	if len(f.free) > 0 {
+//		addr = f.free[len(f.free)-1]
+//		f.free = f.free[:len(f.free)-1]
+//		data = f.GetData(addr)
+//	} else {
+//		addr, data = f.Alloc(node4size, true)
+//	}
+//	n := (N)(unsafe.Pointer(&data[0]))
+//	n.init()
+//	return addr, n
+//}
 
 type artAllocator struct {
 	vlogAllocator arena.MemdbVlog[*artLeaf, *ART]

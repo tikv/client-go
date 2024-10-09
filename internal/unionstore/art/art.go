@@ -47,7 +47,7 @@ type ART struct {
 	len             int
 	size            int
 
-	// The lastTraversedNode stores addr in uint64 of the last traversed node, include search and recursiveInsert.
+	// The lastTraversedNode stores addr in uint64 of the last traversed node, includes search and recursiveInsert.
 	// Compare to atomic.Pointer, atomic.Uint64 can avoid heap allocation, so it's more efficient.
 	lastTraversedNode atomic.Uint64
 	hitCount          atomic.Uint64
@@ -69,7 +69,7 @@ func New() *ART {
 
 func (t *ART) Get(key []byte) ([]byte, error) {
 	// 1. search the leaf node.
-	_, leaf := t.search(key)
+	_, leaf := t.traverse(key, false)
 	if leaf == nil || leaf.vAddr.IsNull() {
 		return nil, tikverr.ErrNotExist
 	}
@@ -79,7 +79,7 @@ func (t *ART) Get(key []byte) ([]byte, error) {
 
 // GetFlags returns the latest flags associated with key.
 func (t *ART) GetFlags(key []byte) (kv.KeyFlags, error) {
-	_, leaf := t.search(key)
+	_, leaf := t.traverse(key, false)
 	if leaf == nil {
 		return 0, tikverr.ErrNotExist
 	}
@@ -102,7 +102,7 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 		t.dirty = true
 	}
 	// 1. create or search the existing leaf in the tree.
-	addr, leaf := t.recursiveInsert(key)
+	addr, leaf := t.traverse(key, true)
 	// 2. set the value and flags.
 	t.setValue(addr, leaf, value, ops)
 	if uint64(t.Size()) > t.bufferSizeLimit {
@@ -111,8 +111,8 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	return nil
 }
 
-// search wraps searchImpl with cache.
-func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
+// search wraps search and recursiveInsert with cache.
+func (t *ART) traverse(key artKey, insert bool) (arena.MemdbArenaAddr, *artLeaf) {
 	// check cache
 	addr, leaf, found := t.checkKeyInCache(key)
 	if found {
@@ -120,17 +120,21 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 		return addr, leaf
 	}
 	t.missCount.Add(1)
-	addr, leaf = t.searchImpl(key)
+	if insert {
+		addr, leaf = t.recursiveInsert(key)
+	} else {
+		addr, leaf = t.search(key)
+	}
 	if !addr.IsNull() {
 		t.updateLastTraversed(addr)
 	}
 	return addr, leaf
 }
 
-// searchImpl looks up the leaf with the given key.
+// search looks up the leaf with the given key.
 // It returns the memory arena address and leaf itself it there is a match leaf,
 // returns arena.NullAddr and nil if the key is not found.
-func (t *ART) searchImpl(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
+func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	current := t.root
 	if current == nullArtNode {
 		return arena.NullAddr, nil
@@ -179,25 +183,9 @@ func (t *ART) searchImpl(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	}
 }
 
-// recursiveInsert wraps recursiveInsertImpl with cache.
-func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
-	addr, leaf, found := t.checkKeyInCache(key)
-	if found {
-		t.hitCount.Add(1)
-		return addr, leaf
-	}
-	t.missCount.Add(1)
-	addr, leaf = t.recursiveInsertImpl(key)
-	if !addr.IsNull() {
-		t.updateLastTraversed(addr)
-	}
-	return addr, leaf
-}
-
-// recursiveInsertImpl returns the node address of the key.
+// recursiveInsert returns the node address of the key.
 // It will insert the key if not exists, returns the newly inserted or existing leaf.
-func (t *ART) recursiveInsertImpl(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
-
+func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 	// lazy init root node and allocator.
 	// this saves memory for read only txns.
 	if t.root.addr.IsNull() {
@@ -328,21 +316,20 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 	newN4.setPrefix(key[depth:], mismatchIdx)
 
 	// update prefix for old node and move it as a child of the new node.
+	var prefix artKey
 	if currNode.prefixLen <= maxPrefixLen {
-		nodeKey := currNode.prefix[mismatchIdx]
-		currNode.prefixLen -= mismatchIdx + 1
-		copy(currNode.prefix[:], currNode.prefix[mismatchIdx+1:])
-		newAn.addChild(&t.allocator, nodeKey, false, current)
+		// node.prefixLen <= maxPrefixLen means all the prefix is in the prefix array.
+		// The char at mismatchIdx will be stored in the index of new node.
+		prefix = currNode.prefix[:]
 	} else {
-		currNode.prefixLen -= mismatchIdx + 1
+		// Unless, we need to find the prefix in the leaf.
+		// Any leaves in the node should have the same prefix, we use minimum node here.
 		leafArtNode := minimum(&t.allocator, current)
-		leaf := leafArtNode.asLeaf(&t.allocator)
-		leafKey := artKey(leaf.GetKey())
-		kMin := depth + mismatchIdx + 1
-		kMax := depth + mismatchIdx + 1 + min(currNode.prefixLen, maxPrefixLen)
-		copy(currNode.prefix[:], leafKey[kMin:kMax])
-		newAn.addChild(&t.allocator, leafKey.charAt(int(depth+mismatchIdx)), !leafKey.valid(int(depth)), current)
+		prefix = leafArtNode.asLeaf(&t.allocator).GetKey()[depth : depth+currNode.prefixLen]
 	}
+	nodeChar := prefix[mismatchIdx]
+	currNode.setPrefix(prefix[mismatchIdx+1:], currNode.prefixLen-mismatchIdx-1)
+	newAn.addChild(&t.allocator, nodeChar, false, current)
 
 	// insert the artLeaf into new node
 	newLeafAddr, newLeaf := t.newLeaf(key)
@@ -577,7 +564,6 @@ func (t *ART) SelectValueHistory(key []byte, predicate func(value []byte) bool) 
 		return nil, nil
 	}
 	return t.allocator.vlogAllocator.GetValue(result), nil
-
 }
 
 func (t *ART) SetMemoryFootprintChangeHook(hook func(uint64)) {

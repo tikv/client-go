@@ -350,7 +350,7 @@ func (an *artNode) asNode256(a *artAllocator) *node256 {
 // longestCommonPrefix returns the length of the longest common prefix of two keys.
 // the LCP is calculated from the given depth, you need to guarantee l1Key[:depth] equals to l2Key[:depth] before calling this function.
 func longestCommonPrefix(l1Key, l2Key artKey, depth uint32) uint32 {
-	idx, limit := depth, min(uint32(len(l1Key)), uint32(len(l2Key)))
+	idx, limit := depth, uint32(min(len(l1Key), len(l2Key)))
 	// TODO: possible optimization
 	// Compare the key by loop can be very slow if the final LCP is large.
 	// Maybe optimize it by comparing the key in chunks if the limit exceeds certain threshold.

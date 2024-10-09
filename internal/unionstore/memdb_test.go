@@ -40,6 +40,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
@@ -1171,4 +1173,34 @@ func testMemBufferCache(t *testing.T, buffer MemBuffer) {
 		assert.Nil(err)
 		assert.Equal(v, []byte{2, 2})
 	})
+}
+
+func TestMemDBLeafFragmentation(t *testing.T) {
+	// RBT cannot pass the leaf fragmentation test.
+	testMemDBLeafFragmentation(t, newArtDBWithContext())
+}
+
+func testMemDBLeafFragmentation(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+	h := buffer.Staging()
+	mem := buffer.Mem()
+	for i := 0; i < 10; i++ {
+		for k := 0; k < 100; k++ {
+			buffer.Set([]byte(strings.Repeat(strconv.Itoa(k), 256)), []byte("value"))
+		}
+		cur := buffer.Mem()
+		if mem == 0 {
+			mem = cur
+		} else {
+			assert.LessOrEqual(cur, mem)
+		}
+		buffer.Cleanup(h)
+		h = buffer.Staging()
+	}
+}
+
+func TestReadOnlyZeroMem(t *testing.T) {
+	// read only MemBuffer should not allocate heap memory.
+	assert.Zero(t, newRbtDBWithContext().Mem())
+	assert.Zero(t, newArtDBWithContext().Mem())
 }
