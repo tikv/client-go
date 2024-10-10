@@ -1,6 +1,6 @@
 module rawkv
 
-go 1.21
+go 1.23
 
 require github.com/tikv/client-go/v2 v2.0.0
 

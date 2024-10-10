@@ -1,6 +1,6 @@
 module integration_tests
 
-go 1.21
+go 1.23
 
 require (
 	github.com/ninedraft/israce v0.0.3
