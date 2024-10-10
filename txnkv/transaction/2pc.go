@@ -1343,12 +1343,15 @@ func keepAlive(
 					}
 					return
 				}
-			} else {
-				keepFail = 0
-				metrics.TxnHeartBeatHistogramOK.Observe(time.Since(startTime).Seconds())
+				continue
 			}
 
-			// broadcast to all stores
+			keepFail = 0
+			metrics.TxnHeartBeatHistogramOK.Observe(time.Since(startTime).Seconds())
+			// Broadcast to all stores only when the heartbeat succeeds.
+			// This ensures that PK is the single source of truth for transaction status on the
+			// TiKV side. It prevents potential inconsistencies where the cached information might
+			// be more up-to-date than the info stored in the PK.
 			if isPipelinedTxn {
 				broadcastToAllStores(
 					c.txn,
@@ -1412,6 +1415,7 @@ func broadcastToAllStores(
 					ResourceGroupName: resourceGroupName,
 				}
 				req.Context.ResourceGroupTag = resourceGroupTag
+				req.Context.RequestSource = txn.GetRequestSource()
 
 				_, err := store.GetTiKVClient().SendRequest(
 					bo.GetCtx(),
