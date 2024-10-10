@@ -1,6 +1,6 @@
 module github.com/tikv/client-go/v2
 
-go 1.21
+go 1.23
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548

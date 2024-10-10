@@ -33,7 +33,6 @@
 // limitations under the License.
 
 //go:build !race
-// +build !race
 
 package unionstore
 
