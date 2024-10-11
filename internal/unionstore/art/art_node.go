@@ -117,6 +117,8 @@ type node256 struct {
 	children [node256cap]artNode
 }
 
+const MaxKeyLen = math.MaxUint16
+
 type artLeaf struct {
 	vAddr arena.MemdbArenaAddr
 	klen  uint16

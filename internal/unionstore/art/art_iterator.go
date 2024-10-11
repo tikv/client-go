@@ -156,44 +156,41 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 		}
 	}
 
+	startKey, endKey := lowerBound, upperBound
 	if it.reverse {
-		it.inner.idxes, it.inner.nodes = it.seek(upperBound)
-		if len(lowerBound) == 0 {
-			it.endAddr = arena.NullAddr
-		} else {
-			helper := new(baseIter)
-			helper.allocator = &it.tree.allocator
-			helper.idxes, helper.nodes = it.seek(lowerBound)
-			if it.inner.compare(helper) > 0 {
-				// lowerBound is inclusive, call next to find the smallest leaf node that >= lowerBound.
-				it.endAddr = helper.next().addr
-				if it.inner.compare(helper) < 0 || len(helper.idxes) == 0 {
-					it.valid = false
-				}
-				return
-			}
-			it.valid = false
-		}
+		startKey, endKey = upperBound, lowerBound
+	}
+
+	it.inner.idxes, it.inner.nodes = it.seek(startKey)
+	if len(endKey) == 0 {
+		it.endAddr = arena.NullAddr
 		return
 	}
 
-	it.inner.idxes, it.inner.nodes = it.seek(lowerBound)
-	if len(upperBound) == 0 {
-		it.endAddr = arena.NullAddr
-	} else {
-		helper := new(baseIter)
-		helper.allocator = &it.tree.allocator
-		helper.idxes, helper.nodes = it.seek(upperBound)
-		if it.inner.compare(helper) < 0 {
-			// upperBound is exclusive, so we move the helper cursor to the previous node, which is the true endAddr.
-			it.endAddr = helper.prev().addr
-			if it.inner.compare(helper) > 0 || len(helper.idxes) == 0 {
-				it.valid = false
-			}
-			return
-		}
+	helper := new(baseIter)
+	helper.allocator = &it.tree.allocator
+	helper.idxes, helper.nodes = it.seek(endKey)
+	cmp := it.inner.compare(helper)
+	if cmp == 0 {
+		// no keys exist between start key and end key, set the iterator to invalid.
 		it.valid = false
 		return
+	}
+
+	if it.reverse {
+		it.endAddr = helper.next().addr
+	} else {
+		it.endAddr = helper.prev().addr
+	}
+	cmp = it.inner.compare(helper)
+	if cmp == 0 {
+		// the current key is valid.
+		return
+	}
+	// in asc scan, if cmp > 0, it means current key is larger than end key, set the iterator to invalid.
+	// in desc scan, if cmp < 0, it means current key is less than end key, set the iterator to invalid.
+	if cmp < 0 == it.reverse || len(helper.idxes) == 0 {
+		it.valid = false
 	}
 }
 

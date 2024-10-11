@@ -90,6 +90,12 @@ func (t *ART) GetFlags(key []byte) (kv.KeyFlags, error) {
 }
 
 func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
+	if len(key) > MaxKeyLen {
+		return &tikverr.ErrEntryTooLarge{
+			Limit: MaxKeyLen,
+			Size:  uint64(len(value)),
+		}
+	}
 	if value != nil {
 		if size := uint64(len(key) + len(value)); size > t.entrySizeLimit {
 			return &tikverr.ErrEntryTooLarge{

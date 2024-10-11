@@ -40,6 +40,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -1203,4 +1204,17 @@ func TestReadOnlyZeroMem(t *testing.T) {
 	// read only MemBuffer should not allocate heap memory.
 	assert.Zero(t, newRbtDBWithContext().Mem())
 	assert.Zero(t, newArtDBWithContext().Mem())
+}
+
+func TestKeyValueOversize(t *testing.T) {
+	check := func(t *testing.T, db MemBuffer) {
+		key := make([]byte, math.MaxUint16)
+		overSizeKey := make([]byte, math.MaxUint16+1)
+
+		assert.Nil(t, db.Set(key, overSizeKey))
+		assert.NotNil(t, db.Set(overSizeKey, key))
+	}
+
+	check(t, newRbtDBWithContext())
+	check(t, newArtDBWithContext())
 }
