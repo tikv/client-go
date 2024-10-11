@@ -265,3 +265,110 @@ func TestLCP(t *testing.T) {
 		require.Equal(t, uint32(5-i), longestCommonPrefix(k1, k2, uint32(i)))
 	}
 }
+
+func TestNodeAddChild(t *testing.T) {
+	var allocator artAllocator
+	allocator.init()
+
+	check := func(n artNode) {
+		require.Equal(t, uint8(0), n.asNode(&allocator).nodeNum)
+		lfAddr, _ := allocator.allocLeaf([]byte{1, 2, 3, 4, 5})
+		lfNode := artNode{kind: typeLeaf, addr: lfAddr}
+		n.addChild(&allocator, 1, false, lfNode)
+		require.Equal(t, uint8(1), n.asNode(&allocator).nodeNum)
+		require.Panics(t, func() {
+			// addChild should panic if the key is existed.
+			n.addChild(&allocator, 1, false, lfNode)
+		})
+		n.addChild(&allocator, 2, false, lfNode)
+		require.Equal(t, uint8(2), n.asNode(&allocator).nodeNum)
+		// inplace leaf won't be counted in nodeNum
+		n.addChild(&allocator, 0, true, lfNode)
+		require.Equal(t, uint8(2), n.asNode(&allocator).nodeNum)
+	}
+
+	addr, _ := allocator.allocNode4()
+	check(artNode{kind: typeNode4, addr: addr})
+	addr, _ = allocator.allocNode16()
+	check(artNode{kind: typeNode16, addr: addr})
+	addr, _ = allocator.allocNode48()
+	check(artNode{kind: typeNode48, addr: addr})
+	addr, _ = allocator.allocNode256()
+	check(artNode{kind: typeNode256, addr: addr})
+}
+
+func TestNodeGrow(t *testing.T) {
+	var allocator artAllocator
+	allocator.init()
+
+	check := func(n artNode) {
+		capacities := map[nodeKind]int{
+			typeNode4:  node4cap,
+			typeNode16: node16cap,
+			typeNode48: node48cap,
+		}
+		growTypes := map[nodeKind]nodeKind{
+			typeNode4:  typeNode16,
+			typeNode16: typeNode48,
+			typeNode48: typeNode256,
+		}
+
+		capacity, ok := capacities[n.kind]
+		require.True(t, ok)
+		beforeKind := n.kind
+		afterKind, ok := growTypes[n.kind]
+		require.True(t, ok)
+
+		for i := 0; i < capacity; i++ {
+			lfAddr, _ := allocator.allocLeaf([]byte{byte(i)})
+			lfNode := artNode{kind: typeLeaf, addr: lfAddr}
+			n.addChild(&allocator, byte(i), false, lfNode)
+			require.Equal(t, beforeKind, n.kind)
+		}
+		lfAddr, _ := allocator.allocLeaf([]byte{byte(capacity)})
+		lfNode := artNode{kind: typeLeaf, addr: lfAddr}
+		n.addChild(&allocator, byte(capacity), false, lfNode)
+		require.Equal(t, afterKind, n.kind)
+	}
+
+	addr, _ := allocator.allocNode4()
+	check(artNode{kind: typeNode4, addr: addr})
+	addr, _ = allocator.allocNode16()
+	check(artNode{kind: typeNode16, addr: addr})
+	addr, _ = allocator.allocNode48()
+	check(artNode{kind: typeNode48, addr: addr})
+}
+
+func TestReplaceChild(t *testing.T) {
+	var allocator artAllocator
+	allocator.init()
+
+	check := func(n artNode) {
+		require.Equal(t, uint8(0), n.asNode(&allocator).nodeNum)
+		lfAddr, _ := allocator.allocLeaf([]byte{1, 2, 3, 4, 5})
+		lfNode := artNode{kind: typeLeaf, addr: lfAddr}
+		n.addChild(&allocator, 1, false, lfNode)
+		require.Equal(t, uint8(1), n.asNode(&allocator).nodeNum)
+		newLfAddr, _ := allocator.allocLeaf([]byte{1, 2, 3, 4, 4})
+		newLfNode := artNode{kind: typeLeaf, addr: newLfAddr}
+		require.Panics(t, func() {
+			// replaceChild should panic if the key is not existed.
+			n.replaceChild(&allocator, 2, newLfNode)
+		})
+		n.replaceChild(&allocator, 1, newLfNode)
+		require.Equal(t, uint8(1), n.asNode(&allocator).nodeNum)
+		_, childLf := n.findChild(&allocator, 1, false)
+		require.NotEqual(t, childLf.addr, lfAddr)
+		require.Equal(t, childLf.addr, newLfAddr)
+	}
+
+	addr, _ := allocator.allocNode4()
+	check(artNode{kind: typeNode4, addr: addr})
+	addr, _ = allocator.allocNode16()
+	check(artNode{kind: typeNode16, addr: addr})
+	addr, _ = allocator.allocNode48()
+	check(artNode{kind: typeNode48, addr: addr})
+	addr, _ = allocator.allocNode256()
+	check(artNode{kind: typeNode256, addr: addr})
+
+}
