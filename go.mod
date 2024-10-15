@@ -4,7 +4,7 @@ go 1.23
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
-	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
+	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da
 	github.com/docker/go-units v0.5.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.4
