@@ -395,6 +395,8 @@ func testReset(t *testing.T, db interface {
 	db.Reset()
 	_, err := db.Get(context.Background(), []byte{0, 0, 0, 0})
 	assert.NotNil(err)
+	_, err = db.GetFlags([]byte{0, 0, 0, 0})
+	assert.NotNil(err)
 	it, _ := db.Iter(nil, nil)
 	assert.False(it.Valid())
 }

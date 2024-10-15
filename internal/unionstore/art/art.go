@@ -68,6 +68,11 @@ func New() *ART {
 }
 
 func (t *ART) Get(key []byte) ([]byte, error) {
+	if t.vlogInvalid {
+		// panic for easier debugging.
+		panic("vlog is resetted")
+	}
+
 	// 1. search the leaf node.
 	_, leaf := t.traverse(key, false)
 	if leaf == nil || leaf.vAddr.IsNull() {
@@ -90,12 +95,18 @@ func (t *ART) GetFlags(key []byte) (kv.KeyFlags, error) {
 }
 
 func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
+	if t.vlogInvalid {
+		// panic for easier debugging.
+		panic("vlog is reset")
+	}
+
 	if len(key) > MaxKeyLen {
 		return &tikverr.ErrEntryTooLarge{
 			Limit: MaxKeyLen,
 			Size:  uint64(len(value)),
 		}
 	}
+
 	if value != nil {
 		if size := uint64(len(key) + len(value)); size > t.entrySizeLimit {
 			return &tikverr.ErrEntryTooLarge{
@@ -104,6 +115,7 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 			}
 		}
 	}
+
 	if len(t.stages) == 0 {
 		t.dirty = true
 	}
@@ -294,11 +306,7 @@ func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena
 	newAn.addChild(&t.allocator, l2Key.charAt(int(depth)), !l2Key.valid(int(depth)), leaf2Addr)
 
 	// swap the old leaf with the new node4.
-	if prev == nullArtNode {
-		t.root = newAn
-	} else {
-		prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
-	}
+	prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
 	return leaf2Addr.addr, leaf2
 }
 
@@ -340,11 +348,7 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 	// insert the artLeaf into new node
 	newLeafAddr, newLeaf := t.newLeaf(key)
 	newAn.addChild(&t.allocator, key.charAt(int(depth+mismatchIdx)), !key.valid(int(depth+mismatchIdx)), newLeafAddr)
-	if prev == nullArtNode {
-		t.root = newAn
-	} else {
-		prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
-	}
+	prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
 	return newLeafAddr.addr, newLeaf
 }
 

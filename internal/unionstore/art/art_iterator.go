@@ -324,7 +324,7 @@ func (it *baseIter) next() artNode {
 		depth := len(it.nodes) - 1
 		curr := it.nodes[depth]
 		idx := it.idxes[depth]
-		child := nullArtNode
+		var child *artNode
 		switch curr.kind {
 		case typeNode4:
 			n4 := it.allocator.getNode4(curr.addr)
@@ -339,7 +339,7 @@ func (it *baseIter) next() artNode {
 			}
 			if idx < int(n4.nodeNum) {
 				it.idxes[depth] = idx
-				child = n4.children[idx]
+				child = &n4.children[idx]
 			}
 		case typeNode16:
 			n16 := it.allocator.getNode16(curr.addr)
@@ -354,7 +354,7 @@ func (it *baseIter) next() artNode {
 			}
 			if idx < int(n16.nodeNum) {
 				it.idxes[depth] = idx
-				child = n16.children[idx]
+				child = &n16.children[idx]
 			}
 		case typeNode48:
 			n48 := it.allocator.getNode48(curr.addr)
@@ -370,7 +370,7 @@ func (it *baseIter) next() artNode {
 			idx = n48.nextPresentIdx(idx)
 			if idx < node256cap {
 				it.idxes[depth] = idx
-				child = n48.children[n48.keys[idx]]
+				child = &n48.children[n48.keys[idx]]
 			}
 		case typeNode256:
 			n256 := it.allocator.getNode256(curr.addr)
@@ -386,15 +386,15 @@ func (it *baseIter) next() artNode {
 			idx = n256.nextPresentIdx(idx)
 			if idx < 256 {
 				it.idxes[depth] = idx
-				child = n256.children[idx]
+				child = &n256.children[idx]
 			}
 		}
-		if !child.addr.IsNull() {
+		if child != nil {
 			if child.kind == typeLeaf {
 				it.idxes[depth]++
-				return child
+				return *child
 			}
-			it.nodes = append(it.nodes, child)
+			it.nodes = append(it.nodes, *child)
 			it.idxes = append(it.idxes, inplaceIndex)
 			continue
 		}
@@ -413,14 +413,14 @@ func (it *baseIter) prev() artNode {
 		curr := it.nodes[depth]
 		idx := it.idxes[depth]
 		idx--
-		child := nullArtNode
+		var child *artNode
 		switch curr.kind {
 		case typeNode4:
 			n4 := it.allocator.getNode4(curr.addr)
 			idx = min(idx, int(n4.nodeNum)-1)
 			if idx >= 0 {
 				it.idxes[depth] = idx
-				child = n4.children[idx]
+				child = &n4.children[idx]
 			} else if idx == inplaceIndex {
 				it.idxes[depth] = idx
 				if !n4.inplaceLeaf.addr.IsNull() {
@@ -432,7 +432,7 @@ func (it *baseIter) prev() artNode {
 			idx = min(idx, int(n16.nodeNum)-1)
 			if idx >= 0 {
 				it.idxes[depth] = idx
-				child = n16.children[idx]
+				child = &n16.children[idx]
 			} else if idx == inplaceIndex {
 				it.idxes[depth] = idx
 				if !n16.inplaceLeaf.addr.IsNull() {
@@ -446,7 +446,7 @@ func (it *baseIter) prev() artNode {
 			}
 			if idx >= 0 {
 				it.idxes[depth] = idx
-				child = n48.children[n48.keys[idx]]
+				child = &n48.children[n48.keys[idx]]
 			} else if idx == inplaceIndex {
 				it.idxes[depth] = idx
 				if !n48.inplaceLeaf.addr.IsNull() {
@@ -460,7 +460,7 @@ func (it *baseIter) prev() artNode {
 			}
 			if idx >= 0 {
 				it.idxes[depth] = idx
-				child = n256.children[idx]
+				child = &n256.children[idx]
 			} else if idx == -1 {
 				it.idxes[depth] = idx
 				if !n256.inplaceLeaf.addr.IsNull() {
@@ -468,11 +468,11 @@ func (it *baseIter) prev() artNode {
 				}
 			}
 		}
-		if !child.addr.IsNull() {
+		if child != nil {
 			if child.kind == typeLeaf {
-				return child
+				return *child
 			}
-			it.nodes = append(it.nodes, child)
+			it.nodes = append(it.nodes, *child)
 			it.idxes = append(it.idxes, node256cap)
 			continue
 		}
