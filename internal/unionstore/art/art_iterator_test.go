@@ -222,3 +222,47 @@ func TestSeekInExistNode(t *testing.T) {
 	check(New(), typeNode48)
 	check(New(), typeNode256)
 }
+
+func TestSeekPresentIndex(t *testing.T) {
+	tree := New()
+	check := func(kind nodeKind) {
+		var addr arena.MemdbArenaAddr
+		switch kind {
+		case typeNode4:
+			addr, _ = tree.allocator.allocNode4()
+		case typeNode16:
+			addr, _ = tree.allocator.allocNode16()
+		case typeNode48:
+			addr, _ = tree.allocator.allocNode48()
+		case typeNode256:
+			addr, _ = tree.allocator.allocNode256()
+		}
+		node := artNode{kind: kind, addr: addr}
+		lfAddr, _ := tree.allocator.allocLeaf([]byte{10})
+		lfNode := artNode{kind: typeLeaf, addr: lfAddr}
+		node.addChild(&tree.allocator, 10, false, lfNode)
+
+		var (
+			existIdx int
+			maxIdx   int
+		)
+		switch kind {
+		case typeNode4, typeNode16:
+			existIdx = 0
+			maxIdx = 1
+		case typeNode48, typeNode256:
+			existIdx = 10
+			maxIdx = node256cap
+		}
+
+		nextIdx := seekToPresentIdx(&tree.allocator, node, 1)
+		require.Equal(t, existIdx, nextIdx)
+		nextIdx = seekToPresentIdx(&tree.allocator, node, 11)
+		require.Equal(t, maxIdx, nextIdx)
+	}
+
+	check(typeNode4)
+	check(typeNode16)
+	check(typeNode48)
+	check(typeNode256)
+}
