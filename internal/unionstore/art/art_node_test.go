@@ -372,3 +372,46 @@ func TestReplaceChild(t *testing.T) {
 	check(artNode{kind: typeNode256, addr: addr})
 
 }
+
+func TestMinimumNode(t *testing.T) {
+	var allocator artAllocator
+	allocator.init()
+
+	check := func(kind nodeKind) {
+		var addr arena.MemdbArenaAddr
+
+		switch kind {
+		case typeNode4:
+			addr, _ = allocator.allocNode4()
+		case typeNode16:
+			addr, _ = allocator.allocNode16()
+		case typeNode48:
+			addr, _ = allocator.allocNode48()
+		case typeNode256:
+			addr, _ = allocator.allocNode256()
+		}
+
+		node := artNode{kind: kind, addr: addr}
+
+		for _, char := range []byte{255, 127, 63, 0} {
+			lfAddr, _ := allocator.allocLeaf([]byte{char})
+			lfNode := artNode{kind: typeLeaf, addr: lfAddr}
+			node.addChild(&allocator, char, false, lfNode)
+			minNode := minimum(&allocator, node)
+			require.Equal(t, typeLeaf, minNode.kind)
+			require.Equal(t, lfAddr, minNode.addr)
+		}
+
+		lfAddr, _ := allocator.allocLeaf([]byte{0})
+		lfNode := artNode{kind: typeLeaf, addr: lfAddr}
+		node.addChild(&allocator, 0, true, lfNode)
+		minNode := minimum(&allocator, node)
+		require.Equal(t, typeLeaf, minNode.kind)
+		require.Equal(t, lfAddr, minNode.addr)
+	}
+
+	check(typeNode4)
+	check(typeNode16)
+	check(typeNode48)
+	check(typeNode256)
+}

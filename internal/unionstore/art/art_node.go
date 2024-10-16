@@ -396,8 +396,8 @@ func minimum(a *artAllocator, an artNode) artNode {
 			}
 			idx := n256.nextPresentIdx(0)
 			an = n256.children[idx]
-		case typeInvalid:
-			return nullArtNode
+		default:
+			panic("invalid node kind")
 		}
 	}
 }
@@ -528,7 +528,7 @@ func (an *artNode) addChild(a *artAllocator, c byte, inplace bool, child artNode
 	case typeNode256:
 		return an.addChild256(a, c, child)
 	}
-	return false
+	panic("add child failed")
 }
 
 func (an *artNode) addChild4(a *artAllocator, c byte, child artNode) bool {

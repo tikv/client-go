@@ -74,7 +74,7 @@ type SnapGetter struct {
 }
 
 func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
-	addr, lf := snap.tree.search(key)
+	addr, lf := snap.tree.traverse(key, false)
 	if addr.IsNull() {
 		return nil, tikverr.ErrNotExist
 	}

@@ -557,25 +557,6 @@ func (t *ART) InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte)) {
 	t.allocator.vlogAllocator.InspectKVInLog(t, &head, &tail, f)
 }
 
-// SelectValueHistory select the latest value which makes `predicate` returns true from the modification history.
-func (t *ART) SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error) {
-	_, x := t.search(key)
-	if x == nil {
-		return nil, tikverr.ErrNotExist
-	}
-	if x.vAddr.IsNull() {
-		// A flags only key, act as value not exists
-		return nil, tikverr.ErrNotExist
-	}
-	result := t.allocator.vlogAllocator.SelectValueHistory(x.vAddr, func(addr arena.MemdbArenaAddr) bool {
-		return predicate(t.allocator.vlogAllocator.GetValue(addr))
-	})
-	if result.IsNull() {
-		return nil, nil
-	}
-	return t.allocator.vlogAllocator.GetValue(result), nil
-}
-
 func (t *ART) SetMemoryFootprintChangeHook(hook func(uint64)) {
 	innerHook := func() {
 		hook(t.allocator.nodeAllocator.Capacity() + t.allocator.vlogAllocator.Capacity())

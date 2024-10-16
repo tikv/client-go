@@ -266,3 +266,68 @@ func TestSeekPresentIndex(t *testing.T) {
 	check(typeNode48)
 	check(typeNode256)
 }
+
+func TestIterateHandle(t *testing.T) {
+	tree := New()
+	h := tree.Staging()
+	require.Nil(t, tree.Set([]byte{1}, []byte{2}))
+	it := tree.IterWithFlags(nil, nil)
+	handle := it.Handle()
+
+	require.Equal(t, tree.GetKeyByHandle(handle), []byte{1})
+	val, valid := tree.GetValueByHandle(handle)
+	require.True(t, valid)
+	require.Equal(t, val, []byte{2})
+
+	tree.Cleanup(h)
+	require.Equal(t, tree.GetKeyByHandle(handle), []byte{1})
+	_, valid = tree.GetValueByHandle(handle)
+	require.False(t, valid)
+}
+
+func TestSeekPrefixMismatch(t *testing.T) {
+	tree := New()
+
+	shortPrefix := make([]byte, 10)
+	longPrefix := make([]byte, 30)
+	for i := 0; i < len(shortPrefix); i++ {
+		shortPrefix[i] = 1
+	}
+	for i := 0; i < len(longPrefix); i++ {
+		longPrefix[i] = 2
+	}
+
+	keys := [][]byte{
+		append(shortPrefix, 1),
+		append(shortPrefix, 2),
+		append(longPrefix, 3),
+		append(longPrefix, 4),
+	}
+	for _, key := range keys {
+		require.Nil(t, tree.Set(key, key))
+	}
+
+	it, err := tree.Iter(append(shortPrefix[:len(shortPrefix)-1], 0), append(longPrefix[:len(longPrefix)-1], 3))
+	require.Nil(t, err)
+	for _, key := range keys {
+		require.True(t, it.Valid())
+		require.Equal(t, it.Key(), key)
+		require.Equal(t, it.Value(), key)
+		require.Nil(t, it.Next())
+	}
+	require.False(t, it.Valid())
+}
+
+func TestIterPositionCompare(t *testing.T) {
+	compare := func(idx1, idx2 []int) int {
+		helper1, helper2 := new(baseIter), new(baseIter)
+		helper1.idxes, helper2.idxes = idx1, idx2
+		return helper1.compare(helper2)
+	}
+
+	require.Equal(t, compare([]int{1, 2, 3}, []int{1, 2, 3}), 0)
+	require.Equal(t, compare([]int{1, 2, 2}, []int{1, 2, 3}), -1)
+	require.Equal(t, compare([]int{1, 2, 4}, []int{1, 2, 3}), 1)
+	require.Equal(t, compare([]int{1, 2, 3}, []int{1, 2}), 1)
+	require.Equal(t, compare([]int{1, 2}, []int{1, 2, 3}), -1)
+}

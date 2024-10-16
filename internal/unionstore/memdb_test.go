@@ -500,6 +500,9 @@ func testDirty(t *testing.T, createDb func() MemBuffer) {
 func TestFlags(t *testing.T) {
 	testFlags(t, newRbtDBWithContext(), func(db MemBuffer) Iterator { return db.(*rbtDBWithContext).IterWithFlags(nil, nil) })
 	testFlags(t, newArtDBWithContext(), func(db MemBuffer) Iterator { return db.(*artDBWithContext).IterWithFlags(nil, nil) })
+
+	testFlags(t, newRbtDBWithContext(), func(db MemBuffer) Iterator { return db.(*rbtDBWithContext).IterReverseWithFlags(nil) })
+	testFlags(t, newArtDBWithContext(), func(db MemBuffer) Iterator { return db.(*artDBWithContext).IterReverseWithFlags(nil) })
 }
 
 func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iterator) {
@@ -543,6 +546,10 @@ func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iter
 	for ; it.Valid(); it.Next() {
 		k := binary.BigEndian.Uint32(it.Key())
 		assert.True(k%2 == 0)
+		hasValue := it.(interface {
+			HasValue() bool
+		}).HasValue()
+		assert.False(hasValue)
 	}
 
 	for i := uint32(0); i < cnt; i++ {
@@ -1051,6 +1058,49 @@ func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 		assert.Equal(reverseIter.Key(), []byte{byte(1)})
 		assert.Equal(reverseIter.Value(), []byte{byte(50)})
 	}
+
+	db.(interface {
+		Reset()
+	}).Reset()
+	db.UpdateFlags([]byte{255}, kv.SetPresumeKeyNotExists)
+	// set (2, 2) ... (100, 100) in snapshot
+	for i := 1; i < 50; i++ {
+		db.Set([]byte{byte(2 * i)}, []byte{byte(2 * i)})
+	}
+	h := db.Staging()
+	// set (0, 0) (1, 2) (2, 4) ... (100, 200) in staging
+	for i := 0; i < 100; i++ {
+		db.Set([]byte{byte(i)}, []byte{byte(2 * i)})
+	}
+
+	snapGetter := db.SnapshotGetter()
+	v, err := snapGetter.Get(context.Background(), []byte{byte(2)})
+	assert.Nil(err)
+	assert.Equal(v, []byte{byte(2)})
+	_, err = snapGetter.Get(context.Background(), []byte{byte(1)})
+	assert.NotNil(err)
+	_, err = snapGetter.Get(context.Background(), []byte{byte(254)})
+	assert.NotNil(err)
+	_, err = snapGetter.Get(context.Background(), []byte{byte(255)})
+	assert.NotNil(err)
+
+	it := db.SnapshotIter(nil, nil)
+	// snapshot iter only see the snapshot data
+	for i := 1; i < 50; i++ {
+		assert.Equal(it.Key(), []byte{byte(2 * i)})
+		assert.Equal(it.Value(), []byte{byte(2 * i)})
+		assert.True(it.Valid())
+		it.Next()
+	}
+	it = db.SnapshotIterReverse(nil, nil)
+	for i := 49; i >= 1; i-- {
+		assert.Equal(it.Key(), []byte{byte(2 * i)})
+		assert.Equal(it.Value(), []byte{byte(2 * i)})
+		assert.True(it.Valid())
+		it.Next()
+	}
+	assert.False(it.Valid())
+	db.Release(h)
 }
 
 func TestCleanupKeepPersistentFlag(t *testing.T) {
@@ -1215,6 +1265,24 @@ func TestKeyValueOversize(t *testing.T) {
 
 		assert.Nil(t, db.Set(key, overSizeKey))
 		assert.NotNil(t, db.Set(overSizeKey, key))
+	}
+
+	check(t, newRbtDBWithContext())
+	check(t, newArtDBWithContext())
+}
+
+func TestSetMemoryFootprintChangeHook(t *testing.T) {
+	check := func(t *testing.T, db MemBuffer) {
+		memoryConsumed := uint64(0)
+		assert.False(t, db.MemHookSet())
+		db.SetMemoryFootprintChangeHook(func(mem uint64) {
+			memoryConsumed = mem
+		})
+		assert.True(t, db.MemHookSet())
+
+		assert.Zero(t, memoryConsumed)
+		db.Set([]byte{1}, []byte{1})
+		assert.NotZero(t, memoryConsumed)
 	}
 
 	check(t, newRbtDBWithContext())
