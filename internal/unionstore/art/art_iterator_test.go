@@ -331,3 +331,38 @@ func TestIterPositionCompare(t *testing.T) {
 	require.Equal(t, compare([]int{1, 2, 3}, []int{1, 2}), 1)
 	require.Equal(t, compare([]int{1, 2}, []int{1, 2, 3}), -1)
 }
+
+func TestIterSeekNoResult(t *testing.T) {
+	check := func(kind nodeKind) {
+		var child int
+		switch kind {
+		case typeNode4:
+			child = 0
+		case typeNode16:
+			child = node4cap + 1
+		case typeNode48:
+			child = node16cap + 1
+		case typeNode256:
+			child = node48cap + 1
+		}
+		// let the node expand to target kind
+		tree := New()
+		for i := 0; i < child; i++ {
+			require.Nil(t, tree.Set([]byte{1, byte(i)}, []byte{1, byte(i)}))
+		}
+
+		require.Nil(t, tree.Set([]byte{1, 100}, []byte{1, 100}))
+		require.Nil(t, tree.Set([]byte{1, 200}, []byte{1, 200}))
+		it, err := tree.Iter([]byte{1, 100, 1}, []byte{1, 200})
+		require.Nil(t, err)
+		require.False(t, it.Valid())
+		it, err = tree.IterReverse([]byte{1, 200}, []byte{1, 100, 1})
+		require.Nil(t, err)
+		require.False(t, it.Valid())
+	}
+
+	check(typeNode4)
+	check(typeNode16)
+	check(typeNode48)
+	check(typeNode256)
+}
