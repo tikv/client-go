@@ -37,6 +37,7 @@
 package unionstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -1283,6 +1284,41 @@ func TestSetMemoryFootprintChangeHook(t *testing.T) {
 		assert.Zero(t, memoryConsumed)
 		db.Set([]byte{1}, []byte{1})
 		assert.NotZero(t, memoryConsumed)
+	}
+
+	check(t, newRbtDBWithContext())
+	check(t, newArtDBWithContext())
+}
+
+func TestSelectValueHistory(t *testing.T) {
+	check := func(t *testing.T, db interface {
+		MemBuffer
+		SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error)
+	}) {
+		db.Set([]byte{1}, []byte{1})
+		h := db.Staging()
+		db.Set([]byte{1}, []byte{1, 1})
+
+		val, err := db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1}) })
+		assert.Nil(t, err)
+		assert.Equal(t, val, []byte{1})
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1, 1}) })
+		assert.Nil(t, err)
+		assert.Equal(t, val, []byte{1, 1})
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1, 1, 1}) })
+		assert.Nil(t, err)
+		assert.Nil(t, val)
+		_, err = db.SelectValueHistory([]byte{2}, func([]byte) bool { return false })
+		assert.NotNil(t, err)
+
+		db.Cleanup(h)
+
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1}) })
+		assert.Nil(t, err)
+		assert.Equal(t, val, []byte{1})
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1, 1}) })
+		assert.Nil(t, err)
+		assert.Nil(t, val)
 	}
 
 	check(t, newRbtDBWithContext())

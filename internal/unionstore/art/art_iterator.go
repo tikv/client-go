@@ -161,7 +161,11 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 		startKey, endKey = upperBound, lowerBound
 	}
 
-	it.inner.idxes, it.inner.nodes = it.seek(startKey)
+	if len(startKey) == 0 {
+		it.inner.seekInf(it.tree.root, it.reverse)
+	} else {
+		it.inner.seek(it.tree.root, startKey)
+	}
 	if len(endKey) == 0 {
 		it.endAddr = arena.NullAddr
 		return
@@ -169,7 +173,7 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 
 	helper := new(baseIter)
 	helper.allocator = &it.tree.allocator
-	helper.idxes, helper.nodes = it.seek(endKey)
+	helper.seek(it.tree.root, endKey)
 	cmp := it.inner.compare(helper)
 	if cmp == 0 {
 		// no keys exist between start key and end key, set the iterator to invalid.
@@ -194,73 +198,83 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 	}
 }
 
+type baseIter struct {
+	allocator *artAllocator
+	idxes     []int
+	nodes     []artNode
+}
+
+// seekInf seeks the boundary of the tree, reverse
+func (it *baseIter) seekInf(root artNode, reverse bool) {
+	// if the seek key is empty, it means -inf or +inf, return root node directly.
+	it.nodes = []artNode{root}
+	if reverse {
+		it.idxes = []int{node256cap}
+	} else {
+		it.idxes = []int{inplaceIndex}
+	}
+}
+
 // seek the first node and index that >= key, return the indexes and nodes of the lookup path
 // nodes[0] is the root node
-func (it *Iterator) seek(key artKey) ([]int, []artNode) {
-	curr := it.tree.root
+func (it *baseIter) seek(root artNode, key artKey) {
+	curr := root
 	depth := uint32(0)
-	idxes := make([]int, 0, 8)
-	nodes := make([]artNode, 0, 8)
+	it.idxes = make([]int, 0, 8)
+	it.nodes = make([]artNode, 0, 8)
 	if len(key) == 0 {
-		// if the seek key is empty, it means -inf or +inf, return root node directly.
-		nodes = append(nodes, curr)
-		if it.reverse {
-			idxes = append(idxes, node256cap)
-		} else {
-			idxes = append(idxes, inplaceIndex)
-		}
-		return idxes, nodes
+		panic("empty key is not allowed")
 	}
 	var node *nodeBase
 	for {
 		if curr.isLeaf() {
 			if key.valid(int(depth)) {
-				lf := curr.asLeaf(&it.tree.allocator)
+				lf := curr.asLeaf(it.allocator)
 				if bytes.Compare(key, lf.GetKey()) > 0 {
 					// the seek key is not exist, and it's longer and larger than the current leaf's key.
 					// e.g. key: [1, 1, 1], leaf: [1, 1].
-					idxes[len(idxes)-1]++
+					it.idxes[len(it.idxes)-1]++
 				}
 			}
-			break
+			return
 		}
 
-		node = curr.asNode(&it.tree.allocator)
+		node = curr.asNode(it.allocator)
 		if node.prefixLen > 0 {
-			mismatchIdx := node.matchDeep(&it.tree.allocator, &curr, key, depth)
+			mismatchIdx := node.matchDeep(it.allocator, &curr, key, depth)
 			if mismatchIdx < node.prefixLen {
 				// no leaf node is match with the seek key
-				leafNode := minimum(&it.tree.allocator, curr)
-				leafKey := leafNode.asLeaf(&it.tree.allocator).GetKey()
+				leafNode := minimum(it.allocator, curr)
+				leafKey := leafNode.asLeaf(it.allocator).GetKey()
 				if mismatchIdx+depth == uint32(len(key)) || key[depth+mismatchIdx] < leafKey[depth+mismatchIdx] {
 					// key < leafKey, set index to -1 means all the children are larger than the seek key
-					idxes = append(idxes, -1)
+					it.idxes = append(it.idxes, -1)
 				} else {
 					// key > leafKey, set index to 256 means all the children are less than the seek key
-					idxes = append(idxes, node256cap)
+					it.idxes = append(it.idxes, node256cap)
 				}
-				nodes = append(nodes, curr)
-				return idxes, nodes
+				it.nodes = append(it.nodes, curr)
+				return
 			}
 			depth += min(mismatchIdx, node.prefixLen)
 		}
 
-		nodes = append(nodes, curr)
+		it.nodes = append(it.nodes, curr)
 		char := key.charAt(int(depth))
-		idx, next := curr.findChild(&it.tree.allocator, char, !key.valid(int(depth)))
+		idx, next := curr.findChild(it.allocator, char, !key.valid(int(depth)))
 		if next.addr.IsNull() {
-			nextIdx := seekToPresentIdx(&it.tree.allocator, curr, char)
-			idxes = append(idxes, nextIdx)
-			return idxes, nodes
+			nextIdx := seekToIdx(it.allocator, curr, char)
+			it.idxes = append(it.idxes, nextIdx)
+			return
 		}
-		idxes = append(idxes, idx)
+		it.idxes = append(it.idxes, idx)
 		curr = next
 		depth++
 	}
-	return idxes, nodes
 }
 
-func seekToPresentIdx(a *artAllocator, curr artNode, char byte) int {
+// seekToIdx finds the index where all nodes before it are less than the given character.
+func seekToIdx(a *artAllocator, curr artNode, char byte) int {
 	var nextIdx int
 	switch curr.kind {
 	case typeNode4:
@@ -286,12 +300,6 @@ func seekToPresentIdx(a *artAllocator, curr artNode, char byte) int {
 		nextIdx = n256.nextPresentIdx(int(char))
 	}
 	return nextIdx
-}
-
-type baseIter struct {
-	allocator *artAllocator
-	idxes     []int
-	nodes     []artNode
 }
 
 // compare compares the path of nodes, return 1 if self > other, -1 if self < other, 0 if self == other

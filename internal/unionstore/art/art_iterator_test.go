@@ -86,7 +86,8 @@ func TestIterSeekLeaf(t *testing.T) {
 			key := []byte{byte(i)}
 			it, err := tree.Iter(key, nil)
 			require.Nil(t, err)
-			idxes, nodes := it.seek(key)
+			it.inner.seek(tree.root, key)
+			idxes, nodes := it.inner.idxes, it.inner.nodes
 			require.Greater(t, len(idxes), 0)
 			require.Equal(t, len(idxes), len(nodes))
 			leafNode := nodes[len(nodes)-1].at(&tree.allocator, idxes[len(idxes)-1])
@@ -198,10 +199,10 @@ func TestSeekInExistNode(t *testing.T) {
 		}
 		require.Equal(t, tree.root.kind, kind)
 		for i := 0; i < cnt-1; i++ {
-			it := &Iterator{
-				tree: tree,
-			}
-			idxes, _ := it.seek([]byte{byte(2*i + 1)})
+			helper := new(baseIter)
+			helper.allocator = &tree.allocator
+			helper.seek(tree.root, []byte{byte(2*i + 1)})
+			idxes := helper.idxes
 			expect := 0
 			switch kind {
 			case typeNode4, typeNode16:
@@ -223,7 +224,7 @@ func TestSeekInExistNode(t *testing.T) {
 	check(New(), typeNode256)
 }
 
-func TestSeekPresentIndex(t *testing.T) {
+func TestSeekToIdx(t *testing.T) {
 	tree := New()
 	check := func(kind nodeKind) {
 		var addr arena.MemdbArenaAddr
@@ -255,9 +256,9 @@ func TestSeekPresentIndex(t *testing.T) {
 			maxIdx = node256cap
 		}
 
-		nextIdx := seekToPresentIdx(&tree.allocator, node, 1)
+		nextIdx := seekToIdx(&tree.allocator, node, 1)
 		require.Equal(t, existIdx, nextIdx)
-		nextIdx = seekToPresentIdx(&tree.allocator, node, 11)
+		nextIdx = seekToIdx(&tree.allocator, node, 11)
 		require.Equal(t, maxIdx, nextIdx)
 	}
 
