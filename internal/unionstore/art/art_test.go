@@ -109,21 +109,21 @@ func TestFlag(t *testing.T) {
 	require.Nil(t, err)
 	require.True(t, flags.HasLocked())
 	// iterate can also see the flags
-	//it, err := tree.Iter(nil, nil)
-	//require.Nil(t, err)
-	//require.True(t, it.Valid())
-	//require.Equal(t, it.Key(), []byte{0})
-	//require.Equal(t, it.Value(), []byte{0})
-	//require.True(t, it.Flags().HasPresumeKeyNotExists())
-	//require.False(t, it.Flags().HasLocked())
-	//require.Nil(t, it.Next())
-	//require.True(t, it.Valid())
-	//require.Equal(t, it.Key(), []byte{1})
-	//require.Equal(t, it.Value(), []byte{1})
-	//require.True(t, it.Flags().HasLocked())
-	//require.False(t, it.Flags().HasPresumeKeyNotExists())
-	//require.Nil(t, it.Next())
-	//require.False(t, it.Valid())
+	it, err := tree.Iter(nil, nil)
+	require.Nil(t, err)
+	require.True(t, it.Valid())
+	require.Equal(t, it.Key(), []byte{0})
+	require.Equal(t, it.Value(), []byte{0})
+	require.True(t, it.Flags().HasPresumeKeyNotExists())
+	require.False(t, it.Flags().HasLocked())
+	require.Nil(t, it.Next())
+	require.True(t, it.Valid())
+	require.Equal(t, it.Key(), []byte{1})
+	require.Equal(t, it.Value(), []byte{1})
+	require.True(t, it.Flags().HasLocked())
+	require.False(t, it.Flags().HasPresumeKeyNotExists())
+	require.Nil(t, it.Next())
+	require.False(t, it.Valid())
 }
 
 func TestLongPrefix1(t *testing.T) {
@@ -184,6 +184,14 @@ func TestFlagOnlyKey(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSearchPrefixMisatch(t *testing.T) {
+	tree := New()
+	tree.Set([]byte{1, 1, 1, 1, 1, 1}, []byte{1, 1, 1, 1, 1, 1})
+	tree.Set([]byte{1, 1, 1, 1, 1, 2}, []byte{1, 1, 1, 1, 1, 2})
+	_, err := tree.Get([]byte{1, 1, 1, 3, 1, 1})
+	require.NotNil(t, err)
+}
+
 func TestSearchOptimisticMismatch(t *testing.T) {
 	tree := New()
 	prefix := make([]byte, 22)
@@ -229,4 +237,28 @@ func TestExpansion(t *testing.T) {
 	require.Equal(t, oldN4.prefix[:1], []byte{1})
 	require.Equal(t, n4.keys[:2], []byte{1, 255})
 	require.Equal(t, n4.children[1].asLeaf(&tree.allocator).GetKey(), append(prefix, []byte{1, 255, 2}...))
+}
+
+func TestDiscardValues(t *testing.T) {
+	tree := New()
+	tree.Set([]byte{1}, []byte{2})
+	it := tree.IterWithFlags(nil, nil)
+	handle := it.Handle()
+	val, exist := tree.GetValueByHandle(handle)
+	require.Equal(t, val, []byte{2})
+	require.True(t, exist)
+	key := tree.GetKeyByHandle(handle)
+	require.Equal(t, key, []byte{1})
+
+	tree.DiscardValues()
+	_, exist = tree.GetValueByHandle(handle)
+	require.False(t, exist)
+	key = tree.GetKeyByHandle(handle)
+	require.Equal(t, key, []byte{1})
+	require.Panics(t, func() {
+		tree.Get([]byte{3})
+	})
+	require.Panics(t, func() {
+		tree.Set([]byte{3}, []byte{4})
+	})
 }

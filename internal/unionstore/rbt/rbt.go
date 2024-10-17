@@ -324,6 +324,13 @@ func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 		panic("vlog is reset")
 	}
 
+	if len(key) > MaxKeyLen {
+		return &tikverr.ErrEntryTooLarge{
+			Limit: MaxKeyLen,
+			Size:  uint64(len(value)),
+		}
+	}
+
 	if value != nil {
 		if size := uint64(len(key) + len(value)); size > db.entrySizeLimit {
 			return &tikverr.ErrEntryTooLarge{
@@ -836,6 +843,8 @@ func (a MemdbNodeAddr) getLeft(db *RBT) MemdbNodeAddr {
 func (a MemdbNodeAddr) getRight(db *RBT) MemdbNodeAddr {
 	return db.getNode(a.right)
 }
+
+const MaxKeyLen = math.MaxUint16
 
 type memdbNode struct {
 	up    arena.MemdbArenaAddr

@@ -212,6 +212,14 @@ func (e *ErrTxnTooLarge) Error() string {
 	return fmt.Sprintf("txn too large, size: %v.", e.Size)
 }
 
+type ErrKeyTooLarge struct {
+	KeySize int
+}
+
+func (e *ErrKeyTooLarge) Error() string {
+	return fmt.Sprintf("key size too large, size: %v.", e.KeySize)
+}
+
 // ErrEntryTooLarge is the error when a key value entry is too large.
 type ErrEntryTooLarge struct {
 	Limit uint64

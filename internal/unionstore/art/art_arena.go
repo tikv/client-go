@@ -25,6 +25,8 @@ import (
 // reusing blocks reduces the memory pieces.
 type nodeArena struct {
 	arena.MemdbArena
+	// The ART node will expand to a higher capacity, and the address of the freed node will be stored in the free list for reuse.
+	// By reusing the freed node, memory usage and fragmentation can be reduced.
 	freeNode4  []arena.MemdbArenaAddr
 	freeNode16 []arena.MemdbArenaAddr
 	freeNode48 []arena.MemdbArenaAddr
