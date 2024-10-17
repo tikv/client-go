@@ -138,6 +138,15 @@ func (db *artDBWithContext) BatchGet(ctx context.Context, keys [][]byte) (map[st
 	return m, nil
 }
 
+// Dirty implements the MemBuffer interface.
+func (db *artDBWithContext) Dirty() bool {
+	if !db.skipMutex {
+		db.RLock()
+		defer db.RUnlock()
+	}
+	return db.ART.Dirty()
+}
+
 // GetMetrics implements the MemBuffer interface.
 func (db *artDBWithContext) GetMetrics() Metrics { return Metrics{} }
 
