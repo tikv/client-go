@@ -2223,7 +2223,18 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
 			continue
 		}
-		return c.handleRegionInfos(bo, regionsInfo, true)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, true)
+		if err != nil {
+			return nil, err
+		}
+		// If the region information is loaded from the local disk and the current leader has not
+		// yet reported a heartbeat to PD, the region information scanned at this time will not include the leader.
+		// Retry if there is no valid regions with leaders.
+		if len(validRegions) == 0 {
+			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			continue
+		}
+		return validRegions, nil
 	}
 }
 
@@ -2290,7 +2301,18 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			)
 			continue
 		}
-		return c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
+		if err != nil {
+			return nil, err
+		}
+		// If the region information is loaded from the local disk and the current leader has not
+		// yet reported a heartbeat to PD, the region information scanned at this time will not include the leader.
+		// Retry if there is no valid regions with leaders.
+		if len(validRegions) == 0 {
+			backoffErr = errors.Errorf("All returned regions have no leaders, limit: %d", limit)
+			continue
+		}
+		return validRegions, nil
 	}
 }
 
@@ -2397,7 +2419,7 @@ func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.R
 		regions = append(regions, region)
 	}
 	if len(regions) == 0 {
-		return nil, errors.New("receive Regions with no peer")
+		return nil, nil
 	}
 	if len(regions) < len(regionsInfo) {
 		logutil.Logger(context.Background()).Debug(

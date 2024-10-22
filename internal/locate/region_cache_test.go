@@ -66,7 +66,9 @@ import (
 
 type inspectedPDClient struct {
 	pd.Client
-	getRegion func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error)
+	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error)
+	scanRegions      func(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error)
+	batchScanRegions func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error)
 }
 
 func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
@@ -74,6 +76,20 @@ func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...p
 		return c.getRegion(ctx, c.Client, key, opts...)
 	}
 	return c.Client.GetRegion(ctx, key, opts...)
+}
+
+func (c *inspectedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+	if c.scanRegions != nil {
+		return c.scanRegions(ctx, key, endKey, limit, opts...)
+	}
+	return c.Client.ScanRegions(ctx, key, endKey, limit, opts...)
+}
+
+func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+	if c.batchScanRegions != nil {
+		return c.batchScanRegions(ctx, keyRanges, limit, opts...)
+	}
+	return c.Client.BatchScanRegions(ctx, keyRanges, limit, opts...)
 }
 
 func TestBackgroundRunner(t *testing.T) {
@@ -457,6 +473,50 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 		s.Equal(store.getResolveState(), tombstone)
 	}
 	s.cluster.AddStore(storeMeta.GetId(), storeMeta.GetAddress(), storeMeta.GetLabels()...)
+}
+
+func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
+	region := s.getRegion([]byte("x"))
+	NoLeaderRegion := &pd.Region{
+		Meta:   region.meta,
+		Leader: nil,
+	}
+
+	originalScanRegions := s.cache.pdClient.ScanRegions
+	originalBatchScanRegions := s.cache.pdClient.BatchScanRegions
+
+	scanCnt := 0
+	batchScanCnt := 0
+	s.cache.pdClient = &inspectedPDClient{
+		Client: s.cache.pdClient,
+		scanRegions: func(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+			if scanCnt == 0 {
+				scanCnt++
+				return []*pd.Region{NoLeaderRegion}, nil
+			} else {
+				return originalScanRegions(ctx, key, endKey, limit, opts...)
+			}
+		},
+		batchScanRegions: func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+			if batchScanCnt == 0 {
+				batchScanCnt++
+				return []*pd.Region{NoLeaderRegion}, nil
+			} else {
+				return originalBatchScanRegions(ctx, keyRanges, limit, opts...)
+			}
+		},
+	}
+
+	bo := retry.NewBackofferWithVars(context.Background(), 1000, nil)
+	returnedRegions, err := s.cache.scanRegions(bo, nil, nil, 100)
+	s.Nil(err)
+	s.Equal(len(returnedRegions), 1)
+	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
+
+	returnedRegions, err = s.cache.batchScanRegions(bo, []pd.KeyRange{{nil, nil}}, 100, WithNeedRegionHasLeaderPeer())
+	s.Nil(err)
+	s.Equal(len(returnedRegions), 1)
+	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
 }
 
 func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
