@@ -67,7 +67,6 @@ import (
 type inspectedPDClient struct {
 	pd.Client
 	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error)
-	scanRegions      func(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error)
 	batchScanRegions func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error)
 }
 
@@ -76,13 +75,6 @@ func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...p
 		return c.getRegion(ctx, c.Client, key, opts...)
 	}
 	return c.Client.GetRegion(ctx, key, opts...)
-}
-
-func (c *inspectedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
-	if c.scanRegions != nil {
-		return c.scanRegions(ctx, key, endKey, limit, opts...)
-	}
-	return c.Client.ScanRegions(ctx, key, endKey, limit, opts...)
 }
 
 func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
@@ -482,21 +474,11 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 		Leader: nil,
 	}
 
-	originalScanRegions := s.cache.pdClient.ScanRegions
 	originalBatchScanRegions := s.cache.pdClient.BatchScanRegions
 
-	scanCnt := 0
 	batchScanCnt := 0
 	s.cache.pdClient = &inspectedPDClient{
 		Client: s.cache.pdClient,
-		scanRegions: func(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
-			if scanCnt == 0 {
-				scanCnt++
-				return []*pd.Region{NoLeaderRegion}, nil
-			} else {
-				return originalScanRegions(ctx, key, endKey, limit, opts...)
-			}
-		},
 		batchScanRegions: func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
 			if batchScanCnt == 0 {
 				batchScanCnt++
@@ -513,7 +495,7 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
 
-	returnedRegions, err = s.cache.batchScanRegions(bo, []pd.KeyRange{{nil, nil}}, 100, WithNeedRegionHasLeaderPeer())
+	returnedRegions, err = s.cache.batchScanRegions(bo, []pd.KeyRange{{StartKey: nil, EndKey: nil}}, 100, WithNeedRegionHasLeaderPeer())
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
