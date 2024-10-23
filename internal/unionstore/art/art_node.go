@@ -38,11 +38,14 @@ const (
 )
 
 const (
-	maxPrefixLen  = 20
-	node4cap      = 4
-	node16cap     = 16
-	node48cap     = 48
-	node256cap    = 256
+	maxPrefixLen = 20
+	node4cap     = 4
+	node16cap    = 16
+	node48cap    = 48
+	node256cap   = 256
+	// inplaceIndex is a special index to indicate the index of an in-place leaf in a node,
+	// the in-place leaf has the same key with its parent node and doesn't occupy the quota of the node.
+	// the other valid index of a node is [0, nodeNum), all the other leaves in the node have larger key than the in-place leaf.
 	inplaceIndex  = -1
 	notExistIndex = -2
 )

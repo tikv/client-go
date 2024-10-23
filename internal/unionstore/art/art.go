@@ -70,7 +70,7 @@ func New() *ART {
 func (t *ART) Get(key []byte) ([]byte, error) {
 	if t.vlogInvalid {
 		// panic for easier debugging.
-		panic("vlog is resetted")
+		panic("vlog is reset")
 	}
 
 	// 1. search the leaf node.
@@ -101,9 +101,8 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	}
 
 	if len(key) > MaxKeyLen {
-		return &tikverr.ErrEntryTooLarge{
-			Limit: MaxKeyLen,
-			Size:  uint64(len(value)),
+		return &tikverr.ErrKeyTooLarge{
+			KeySize: len(key),
 		}
 	}
 
@@ -129,7 +128,7 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	return nil
 }
 
-// search wraps search and recursiveInsert with cache.
+// traverse wraps search and recursiveInsert with cache.
 func (t *ART) traverse(key artKey, insert bool) (arena.MemdbArenaAddr, *artLeaf) {
 	// check cache
 	addr, leaf, found := t.checkKeyInCache(key)

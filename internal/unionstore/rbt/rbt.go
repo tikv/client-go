@@ -325,9 +325,8 @@ func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	}
 
 	if len(key) > MaxKeyLen {
-		return &tikverr.ErrEntryTooLarge{
-			Limit: MaxKeyLen,
-			Size:  uint64(len(value)),
+		return &tikverr.ErrKeyTooLarge{
+			KeySize: len(key),
 		}
 	}
 

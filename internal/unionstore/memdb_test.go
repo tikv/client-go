@@ -41,6 +41,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"math"
 	"strconv"
 	"strings"
@@ -1265,7 +1266,9 @@ func TestKeyValueOversize(t *testing.T) {
 		overSizeKey := make([]byte, math.MaxUint16+1)
 
 		assert.Nil(t, db.Set(key, overSizeKey))
-		assert.NotNil(t, db.Set(overSizeKey, key))
+		err := db.Set(overSizeKey, key)
+		assert.NotNil(t, err)
+		assert.Equal(t, err.(*tikverr.ErrKeyTooLarge).KeySize, math.MaxUint16+1)
 	}
 
 	check(t, newRbtDBWithContext())

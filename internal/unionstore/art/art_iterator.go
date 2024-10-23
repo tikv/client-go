@@ -162,7 +162,7 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 	}
 
 	if len(startKey) == 0 {
-		it.inner.seekInf(it.tree.root, it.reverse)
+		it.inner.seekToFirst(it.tree.root, it.reverse)
 	} else {
 		it.inner.seek(it.tree.root, startKey)
 	}
@@ -198,14 +198,19 @@ func (it *Iterator) init(lowerBound, upperBound []byte) {
 	}
 }
 
+// baseIter is the inner iterator for ART tree.
+// You need to call seek or seekToFirst to initialize the iterator.
+// after initialization, you can call next or prev to iterate the ART.
+// next or prev returns nullArtNode if there is no more leaf node.
 type baseIter struct {
 	allocator *artAllocator
-	idxes     []int
-	nodes     []artNode
+	// the baseIter iterate the ART tree in DFS order, the idxes and nodes are the current visiting stack.
+	idxes []int
+	nodes []artNode
 }
 
-// seekInf seeks the boundary of the tree, reverse
-func (it *baseIter) seekInf(root artNode, reverse bool) {
+// seekToFirst seeks the boundary of the tree, sequential or reverse.
+func (it *baseIter) seekToFirst(root artNode, reverse bool) {
 	// if the seek key is empty, it means -inf or +inf, return root node directly.
 	it.nodes = []artNode{root}
 	if reverse {
@@ -215,15 +220,14 @@ func (it *baseIter) seekInf(root artNode, reverse bool) {
 	}
 }
 
-// seek the first node and index that >= key, return the indexes and nodes of the lookup path
-// nodes[0] is the root node
+// seek the first node and index that >= key, nodes[0] is the root node
 func (it *baseIter) seek(root artNode, key artKey) {
 	curr := root
 	depth := uint32(0)
 	it.idxes = make([]int, 0, 8)
 	it.nodes = make([]artNode, 0, 8)
 	if len(key) == 0 {
-		panic("empty key is not allowed")
+		panic("seek with empty key is not allowed")
 	}
 	var node *nodeBase
 	for {
@@ -243,14 +247,21 @@ func (it *baseIter) seek(root artNode, key artKey) {
 		if node.prefixLen > 0 {
 			mismatchIdx := node.matchDeep(it.allocator, &curr, key, depth)
 			if mismatchIdx < node.prefixLen {
-				// no leaf node is match with the seek key
-				leafNode := minimum(it.allocator, curr)
-				leafKey := leafNode.asLeaf(it.allocator).GetKey()
-				if mismatchIdx+depth == uint32(len(key)) || key[depth+mismatchIdx] < leafKey[depth+mismatchIdx] {
+				// no leaf node is match with the seek key, we need to check whether the seek key is less than the prefix.
+				// If the seek key is less than the prefix, all the children are located on the right side of the seek key,
+				// unless the children are located on the left side of the seek key.
+				var prefix []byte
+				if mismatchIdx < maxPrefixLen {
+					prefix = node.prefix[:]
+				} else {
+					leafNode := minimum(it.allocator, curr)
+					prefix = leafNode.asLeaf(it.allocator).getKeyDepth(depth)
+				}
+				if mismatchIdx+depth == uint32(len(key)) || key[depth+mismatchIdx] < prefix[mismatchIdx] {
 					// key < leafKey, set index to -1 means all the children are larger than the seek key
 					it.idxes = append(it.idxes, -1)
 				} else {
-					// key > leafKey, set index to 256 means all the children are less than the seek key
+					// key > prefix, set index to 256 means all the children are less than the seek key
 					it.idxes = append(it.idxes, node256cap)
 				}
 				it.nodes = append(it.nodes, curr)
