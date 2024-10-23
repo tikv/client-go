@@ -50,6 +50,7 @@ func convertCfName(cf string) string {
 	default:
 		return cf
 	}
+	return config.WorkloadColumnFamilyDefault
 }
 
 func execRawKV(cmd string) {
