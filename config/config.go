@@ -48,7 +48,8 @@ import (
 )
 
 var (
-	globalConf atomic.Value
+	globalConf                atomic.Value
+	PipelinedFlushConcurrency atomic.Uint32
 )
 
 const (
