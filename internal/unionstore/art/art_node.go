@@ -16,8 +16,10 @@ package art
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"math/bits"
+	"runtime"
 	"sort"
 	"testing"
 	"unsafe"
@@ -57,6 +59,22 @@ const (
 	node256size = int(unsafe.Sizeof(node256{}))
 	leafSize    = int(unsafe.Sizeof(artLeaf{}))
 )
+
+var nativeEndian binary.ByteOrder
+
+func init() {
+	buf := [2]byte{}
+	*(*uint16)(unsafe.Pointer(&buf[0])) = uint16(0xABCD)
+
+	switch buf {
+	case [2]byte{0xCD, 0xAB}:
+		nativeEndian = binary.LittleEndian
+	case [2]byte{0xAB, 0xCD}:
+		nativeEndian = binary.BigEndian
+	default:
+		panic("Could not determine native endianness.")
+	}
+}
 
 var nullArtNode = artNode{kind: typeInvalid, addr: arena.NullAddr}
 
@@ -310,14 +328,7 @@ func (n *nodeBase) setPrefix(key artKey, prefixLen uint32) {
 // Node if the nodeBase.prefixLen > maxPrefixLen and the returned mismatch index equals to maxPrefixLen,
 // key[maxPrefixLen:] will not be checked by this function.
 func (n *nodeBase) match(key artKey, depth uint32) uint32 /* mismatch index */ {
-	idx := uint32(0)
-	limit := min(min(n.prefixLen, maxPrefixLen), uint32(len(key))-depth)
-	for ; idx < limit; idx++ {
-		if n.prefix[idx] != key[idx+depth] {
-			return idx
-		}
-	}
-	return idx
+	return longestCommonPrefix(key[depth:], n.prefix[:min(n.prefixLen, maxPrefixLen)], 0)
 }
 
 // matchDeep returns the mismatch index of the key and the node's prefix.
@@ -355,10 +366,49 @@ func (an *artNode) asNode256(a *artAllocator) *node256 {
 // longestCommonPrefix returns the length of the longest common prefix of two keys.
 // the LCP is calculated from the given depth, you need to guarantee l1Key[:depth] equals to l2Key[:depth] before calling this function.
 func longestCommonPrefix(l1Key, l2Key artKey, depth uint32) uint32 {
+	switch runtime.GOARCH {
+	case "amd64", "arm64":
+		// for amd64 and arm64 architectures, we use the chunk comparison to accelerate the calculation.
+		return longestCommonPrefixByChunk(l1Key, l2Key, depth)
+	default:
+	}
+	// For other architectures, we use the byte-by-byte comparison.
 	idx, limit := depth, uint32(min(len(l1Key), len(l2Key)))
-	// TODO: possible optimization
-	// Compare the key by loop can be very slow if the final LCP is large.
-	// Maybe optimize it by comparing the key in chunks if the limit exceeds certain threshold.
+	for ; idx < limit; idx++ {
+		if l1Key[idx] != l2Key[idx] {
+			break
+		}
+	}
+	return idx - depth
+}
+
+// longestCommonPrefixByChunk compares two keys by 8 bytes at a time, which is significantly faster when the keys are long.
+// Note this function only support architecture which is under little-endian and can read memory across unaligned address.
+func longestCommonPrefixByChunk(l1Key, l2Key artKey, depth uint32) uint32 {
+	idx, limit := depth, uint32(min(len(l1Key), len(l2Key)))
+
+	if idx == limit {
+		return 0
+	}
+
+	p1 := unsafe.Pointer(&l1Key[depth])
+	p2 := unsafe.Pointer(&l2Key[depth])
+
+	// Compare 8 bytes at a time
+	remaining := limit - depth
+	for remaining >= 8 {
+		if *(*uint64)(p1) != *(*uint64)(p2) {
+			// Find first different byte using trailing zeros
+			xor := *(*uint64)(p1) ^ *(*uint64)(p2)
+			return limit - remaining + uint32(bits.TrailingZeros64(xor)>>3) - depth
+		}
+		p1 = unsafe.Pointer(uintptr(p1) + 8)
+		p2 = unsafe.Pointer(uintptr(p2) + 8)
+		remaining -= 8
+	}
+
+	// Compare rest bytes
+	idx = limit - remaining
 	for ; idx < limit; idx++ {
 		if l1Key[idx] != l2Key[idx] {
 			break
