@@ -41,7 +41,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	tikverr "github.com/tikv/client-go/v2/error"
 	"math"
 	"strconv"
 	"strings"
@@ -50,6 +49,7 @@ import (
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
 
