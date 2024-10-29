@@ -222,13 +222,11 @@ func (it *baseIter) seekToFirst(root artNode, reverse bool) {
 
 // seek the first node and index that >= key, nodes[0] is the root node
 func (it *baseIter) seek(root artNode, key artKey) {
-	curr := root
-	depth := uint32(0)
-	it.idxes = make([]int, 0, 8)
-	it.nodes = make([]artNode, 0, 8)
 	if len(key) == 0 {
 		panic("seek with empty key is not allowed")
 	}
+	curr := root
+	depth := uint32(0)
 	var node *nodeBase
 	for {
 		if curr.isLeaf() {
@@ -247,9 +245,9 @@ func (it *baseIter) seek(root artNode, key artKey) {
 		if node.prefixLen > 0 {
 			mismatchIdx := node.matchDeep(it.allocator, &curr, key, depth)
 			if mismatchIdx < node.prefixLen {
-				// no leaf node is match with the seek key, we need to check whether the seek key is less than the prefix.
-				// If the seek key is less than the prefix, all the children are located on the right side of the seek key,
-				// unless the children are located on the left side of the seek key.
+				// Check whether the seek key is smaller than the prefix, as no leaf node matches the seek key.
+				// If the seek key is smaller than the prefix, all the children are located on the right side of the seek key.
+				// Otherwise, the children are located on the left side of the seek key.
 				var prefix []byte
 				if mismatchIdx < maxPrefixLen {
 					prefix = node.prefix[:]
@@ -258,10 +256,11 @@ func (it *baseIter) seek(root artNode, key artKey) {
 					prefix = leafNode.asLeaf(it.allocator).getKeyDepth(depth)
 				}
 				if mismatchIdx+depth == uint32(len(key)) || key[depth+mismatchIdx] < prefix[mismatchIdx] {
-					// key < leafKey, set index to -1 means all the children are larger than the seek key
+					// mismatchIdx + depth == len(key) indicates that the seek key is a prefix of any leaf in the current node, implying that key < leafKey.
+					// If key < leafKey, set index to -1 means all the children are larger than the seek key.
 					it.idxes = append(it.idxes, -1)
 				} else {
-					// key > prefix, set index to 256 means all the children are less than the seek key
+					// If key > prefix, set index to 256 means all the children are smaller than the seek key.
 					it.idxes = append(it.idxes, node256cap)
 				}
 				it.nodes = append(it.nodes, curr)
