@@ -360,6 +360,9 @@ func (it *baseIter) next() artNode {
 			if idx >= 0 && idx < int(n4.nodeNum) {
 				it.idxes[depth] = idx
 				child = &n4.children[idx]
+			} else if idx == int(n4.nodeNum) {
+				// idx == n4.nodeNum means this node is drain, break to pop stack.
+				break
 			} else {
 				panicForInvalidIndex(idx)
 			}
@@ -377,6 +380,9 @@ func (it *baseIter) next() artNode {
 			if idx >= 0 && idx < int(n16.nodeNum) {
 				it.idxes[depth] = idx
 				child = &n16.children[idx]
+			} else if idx == int(n16.nodeNum) {
+				// idx == n16.nodeNum means this node is drain, break to pop stack.
+				break
 			} else {
 				panicForInvalidIndex(idx)
 			}
@@ -395,6 +401,9 @@ func (it *baseIter) next() artNode {
 			if idx >= 0 && idx < node256cap {
 				it.idxes[depth] = idx
 				child = &n48.children[n48.keys[idx]]
+			} else if idx == node256cap {
+				// idx == node256cap means this node is drain, break to pop stack.
+				break
 			} else {
 				panicForInvalidIndex(idx)
 			}
@@ -406,13 +415,16 @@ func (it *baseIter) next() artNode {
 				if !n256.inplaceLeaf.addr.IsNull() {
 					return n256.inplaceLeaf
 				}
-			} else if idx == 256 {
+			} else if idx == node256cap {
 				break
 			}
 			idx = n256.nextPresentIdx(idx)
 			if idx >= 0 && idx < 256 {
 				it.idxes[depth] = idx
 				child = &n256.children[idx]
+			} else if idx == node256cap {
+				// idx == node256cap means this node is drain, break to pop stack.
+				break
 			} else {
 				panicForInvalidIndex(idx)
 			}
