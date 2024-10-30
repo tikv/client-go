@@ -16,6 +16,7 @@ package art
 
 import (
 	"bytes"
+	"fmt"
 	"sort"
 
 	"github.com/pkg/errors"
@@ -356,9 +357,11 @@ func (it *baseIter) next() artNode {
 			} else if idx == node4cap {
 				break
 			}
-			if idx < int(n4.nodeNum) {
+			if idx >= 0 && idx < int(n4.nodeNum) {
 				it.idxes[depth] = idx
 				child = &n4.children[idx]
+			} else {
+				panicForInvalidIndex(idx)
 			}
 		case typeNode16:
 			n16 := it.allocator.getNode16(curr.addr)
@@ -371,9 +374,11 @@ func (it *baseIter) next() artNode {
 			} else if idx == node16cap {
 				break
 			}
-			if idx < int(n16.nodeNum) {
+			if idx >= 0 && idx < int(n16.nodeNum) {
 				it.idxes[depth] = idx
 				child = &n16.children[idx]
+			} else {
+				panicForInvalidIndex(idx)
 			}
 		case typeNode48:
 			n48 := it.allocator.getNode48(curr.addr)
@@ -387,9 +392,11 @@ func (it *baseIter) next() artNode {
 				break
 			}
 			idx = n48.nextPresentIdx(idx)
-			if idx < node256cap {
+			if idx >= 0 && idx < node256cap {
 				it.idxes[depth] = idx
 				child = &n48.children[n48.keys[idx]]
+			} else {
+				panicForInvalidIndex(idx)
 			}
 		case typeNode256:
 			n256 := it.allocator.getNode256(curr.addr)
@@ -403,9 +410,11 @@ func (it *baseIter) next() artNode {
 				break
 			}
 			idx = n256.nextPresentIdx(idx)
-			if idx < 256 {
+			if idx >= 0 && idx < 256 {
 				it.idxes[depth] = idx
 				child = &n256.children[idx]
+			} else {
+				panicForInvalidIndex(idx)
 			}
 		default:
 			panic("invalid node type")
@@ -448,6 +457,8 @@ func (it *baseIter) prev() artNode {
 					if !n4.inplaceLeaf.addr.IsNull() {
 						return n4.inplaceLeaf
 					}
+				} else {
+					panicForInvalidIndex(idx)
 				}
 			case typeNode16:
 				n16 := it.allocator.getNode16(curr.addr)
@@ -460,6 +471,8 @@ func (it *baseIter) prev() artNode {
 					if !n16.inplaceLeaf.addr.IsNull() {
 						return n16.inplaceLeaf
 					}
+				} else {
+					panicForInvalidIndex(idx)
 				}
 			case typeNode48:
 				n48 := it.allocator.getNode48(curr.addr)
@@ -476,6 +489,8 @@ func (it *baseIter) prev() artNode {
 					if !n48.inplaceLeaf.addr.IsNull() {
 						return n48.inplaceLeaf
 					}
+				} else {
+					panicForInvalidIndex(idx)
 				}
 			case typeNode256:
 				n256 := it.allocator.getNode256(curr.addr)
@@ -492,6 +507,8 @@ func (it *baseIter) prev() artNode {
 					if !n256.inplaceLeaf.addr.IsNull() {
 						return n256.inplaceLeaf
 					}
+				} else {
+					panicForInvalidIndex(idx)
 				}
 			default:
 				panic("invalid node type")
@@ -511,4 +528,9 @@ func (it *baseIter) prev() artNode {
 			return nullArtNode
 		}
 	}
+}
+
+func panicForInvalidIndex(idx int) {
+	msg := fmt.Sprintf("ART iterator meets an invalid index %d", idx)
+	panic(msg)
 }
