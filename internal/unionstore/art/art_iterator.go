@@ -241,6 +241,7 @@ func (it *baseIter) seek(root artNode, key artKey) {
 			return
 		}
 
+		it.nodes = append(it.nodes, curr)
 		node = curr.asNode(it.allocator)
 		if node.prefixLen > 0 {
 			mismatchIdx := node.matchDeep(it.allocator, &curr, key, depth)
@@ -263,13 +264,11 @@ func (it *baseIter) seek(root artNode, key artKey) {
 					// If key > prefix, set index to 256 means all the children are smaller than the seek key.
 					it.idxes = append(it.idxes, node256cap)
 				}
-				it.nodes = append(it.nodes, curr)
 				return
 			}
 			depth += min(mismatchIdx, node.prefixLen)
 		}
 
-		it.nodes = append(it.nodes, curr)
 		char := key.charAt(int(depth))
 		idx, next := curr.findChild(it.allocator, char, !key.valid(int(depth)))
 		if next.addr.IsNull() {
@@ -308,6 +307,8 @@ func seekToIdx(a *artAllocator, curr artNode, char byte) int {
 	case typeNode256:
 		n256 := curr.asNode256(a)
 		nextIdx = n256.nextPresentIdx(int(char))
+	default:
+		panic("invalid node type")
 	}
 	return nextIdx
 }
@@ -406,6 +407,8 @@ func (it *baseIter) next() artNode {
 				it.idxes[depth] = idx
 				child = &n256.children[idx]
 			}
+		default:
+			panic("invalid node type")
 		}
 		if child != nil {
 			if child.kind == typeLeaf {
@@ -431,68 +434,76 @@ func (it *baseIter) prev() artNode {
 		curr := it.nodes[depth]
 		idx := it.idxes[depth]
 		idx--
-		var child *artNode
-		switch curr.kind {
-		case typeNode4:
-			n4 := it.allocator.getNode4(curr.addr)
-			idx = min(idx, int(n4.nodeNum)-1)
-			if idx >= 0 {
-				it.idxes[depth] = idx
-				child = &n4.children[idx]
-			} else if idx == inplaceIndex {
-				it.idxes[depth] = idx
-				if !n4.inplaceLeaf.addr.IsNull() {
-					return n4.inplaceLeaf
+		if idx != notExistIndex {
+			var child *artNode
+			switch curr.kind {
+			case typeNode4:
+				n4 := it.allocator.getNode4(curr.addr)
+				idx = min(idx, int(n4.nodeNum)-1)
+				if idx >= 0 {
+					it.idxes[depth] = idx
+					child = &n4.children[idx]
+				} else if idx == inplaceIndex {
+					it.idxes[depth] = idx
+					if !n4.inplaceLeaf.addr.IsNull() {
+						return n4.inplaceLeaf
+					}
 				}
-			}
-		case typeNode16:
-			n16 := it.allocator.getNode16(curr.addr)
-			idx = min(idx, int(n16.nodeNum)-1)
-			if idx >= 0 {
-				it.idxes[depth] = idx
-				child = &n16.children[idx]
-			} else if idx == inplaceIndex {
-				it.idxes[depth] = idx
-				if !n16.inplaceLeaf.addr.IsNull() {
-					return n16.inplaceLeaf
+			case typeNode16:
+				n16 := it.allocator.getNode16(curr.addr)
+				idx = min(idx, int(n16.nodeNum)-1)
+				if idx >= 0 {
+					it.idxes[depth] = idx
+					child = &n16.children[idx]
+				} else if idx == inplaceIndex {
+					it.idxes[depth] = idx
+					if !n16.inplaceLeaf.addr.IsNull() {
+						return n16.inplaceLeaf
+					}
 				}
-			}
-		case typeNode48:
-			n48 := it.allocator.getNode48(curr.addr)
-			if idx >= 0 {
-				idx = n48.prevPresentIdx(idx)
-			}
-			if idx >= 0 {
-				it.idxes[depth] = idx
-				child = &n48.children[n48.keys[idx]]
-			} else if idx == inplaceIndex {
-				it.idxes[depth] = idx
-				if !n48.inplaceLeaf.addr.IsNull() {
-					return n48.inplaceLeaf
+			case typeNode48:
+				n48 := it.allocator.getNode48(curr.addr)
+				if idx >= 0 && n48.present[idx>>n48s]&(1<<(idx%n48m)) == 0 {
+					// if idx >= 0 and n48.keys[idx] is not present, goto the previous present key.
+					// for idx < 0, we check inplaceLeaf later.
+					idx = n48.prevPresentIdx(idx)
 				}
-			}
-		case typeNode256:
-			n256 := it.allocator.getNode256(curr.addr)
-			if idx >= 0 {
-				idx = n256.prevPresentIdx(idx)
-			}
-			if idx >= 0 {
-				it.idxes[depth] = idx
-				child = &n256.children[idx]
-			} else if idx == -1 {
-				it.idxes[depth] = idx
-				if !n256.inplaceLeaf.addr.IsNull() {
-					return n256.inplaceLeaf
+				if idx >= 0 {
+					it.idxes[depth] = idx
+					child = &n48.children[n48.keys[idx]]
+				} else if idx == inplaceIndex {
+					it.idxes[depth] = idx
+					if !n48.inplaceLeaf.addr.IsNull() {
+						return n48.inplaceLeaf
+					}
 				}
+			case typeNode256:
+				n256 := it.allocator.getNode256(curr.addr)
+				if idx >= 0 && n256.present[idx>>n48s]&(1<<(idx%n48m)) == 0 {
+					// if idx >= 0 and n256.keys[idx] is not present, goto the previous present key.
+					// for idx < 0, we check inplaceLeaf later.
+					idx = n256.prevPresentIdx(idx)
+				}
+				if idx >= 0 {
+					it.idxes[depth] = idx
+					child = &n256.children[idx]
+				} else if idx == inplaceIndex {
+					it.idxes[depth] = idx
+					if !n256.inplaceLeaf.addr.IsNull() {
+						return n256.inplaceLeaf
+					}
+				}
+			default:
+				panic("invalid node type")
 			}
-		}
-		if child != nil {
-			if child.kind == typeLeaf {
-				return *child
+			if child != nil {
+				if child.kind == typeLeaf {
+					return *child
+				}
+				it.nodes = append(it.nodes, *child)
+				it.idxes = append(it.idxes, node256cap)
+				continue
 			}
-			it.nodes = append(it.nodes, *child)
-			it.idxes = append(it.idxes, node256cap)
-			continue
 		}
 		it.nodes = it.nodes[:depth]
 		it.idxes = it.idxes[:depth]
