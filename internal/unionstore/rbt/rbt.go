@@ -349,8 +349,7 @@ func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	// the NeedConstraintCheckInPrewrite flag is temporary,
 	// every write to the node removes the flag unless it's explicitly set.
 	// This set must be in the latest stage so no special processing is needed.
-	var flags kv.KeyFlags
-	flags = x.GetKeyFlags()
+	flags := x.GetKeyFlags()
 	if flags == 0 && x.vptr.IsNull() && x.isDeleted() {
 		db.count++
 		db.size += int(x.klen)
@@ -365,9 +364,6 @@ func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 		db.dirty = true
 	}
 	x.setKeyFlags(flags)
-	if x.isDeleted() {
-		panic("")
-	}
 
 	if value == nil {
 		return nil
