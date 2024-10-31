@@ -37,14 +37,19 @@
 package unionstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"testing"
 
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 )
 
@@ -392,6 +397,8 @@ func testReset(t *testing.T, db interface {
 	db.Reset()
 	_, err := db.Get(context.Background(), []byte{0, 0, 0, 0})
 	assert.NotNil(err)
+	_, err = db.GetFlags([]byte{0, 0, 0, 0})
+	assert.NotNil(err)
 	it, _ := db.Iter(nil, nil)
 	assert.False(it.Valid())
 }
@@ -495,6 +502,9 @@ func testDirty(t *testing.T, createDb func() MemBuffer) {
 func TestFlags(t *testing.T) {
 	testFlags(t, newRbtDBWithContext(), func(db MemBuffer) Iterator { return db.(*rbtDBWithContext).IterWithFlags(nil, nil) })
 	testFlags(t, newArtDBWithContext(), func(db MemBuffer) Iterator { return db.(*artDBWithContext).IterWithFlags(nil, nil) })
+
+	testFlags(t, newRbtDBWithContext(), func(db MemBuffer) Iterator { return db.(*rbtDBWithContext).IterReverseWithFlags(nil) })
+	testFlags(t, newArtDBWithContext(), func(db MemBuffer) Iterator { return db.(*artDBWithContext).IterReverseWithFlags(nil) })
 }
 
 func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iterator) {
@@ -538,6 +548,10 @@ func testFlags(t *testing.T, db MemBuffer, iterWithFlags func(db MemBuffer) Iter
 	for ; it.Valid(); it.Next() {
 		k := binary.BigEndian.Uint32(it.Key())
 		assert.True(k%2 == 0)
+		hasValue := it.(interface {
+			HasValue() bool
+		}).HasValue()
+		assert.False(hasValue)
 	}
 
 	for i := uint32(0); i < cnt; i++ {
@@ -1046,6 +1060,49 @@ func testSnapshotGetIter(t *testing.T, db MemBuffer) {
 		assert.Equal(reverseIter.Key(), []byte{byte(1)})
 		assert.Equal(reverseIter.Value(), []byte{byte(50)})
 	}
+
+	db.(interface {
+		Reset()
+	}).Reset()
+	db.UpdateFlags([]byte{255}, kv.SetPresumeKeyNotExists)
+	// set (2, 2) ... (100, 100) in snapshot
+	for i := 1; i < 50; i++ {
+		db.Set([]byte{byte(2 * i)}, []byte{byte(2 * i)})
+	}
+	h := db.Staging()
+	// set (0, 0) (1, 2) (2, 4) ... (100, 200) in staging
+	for i := 0; i < 100; i++ {
+		db.Set([]byte{byte(i)}, []byte{byte(2 * i)})
+	}
+
+	snapGetter := db.SnapshotGetter()
+	v, err := snapGetter.Get(context.Background(), []byte{byte(2)})
+	assert.Nil(err)
+	assert.Equal(v, []byte{byte(2)})
+	_, err = snapGetter.Get(context.Background(), []byte{byte(1)})
+	assert.NotNil(err)
+	_, err = snapGetter.Get(context.Background(), []byte{byte(254)})
+	assert.NotNil(err)
+	_, err = snapGetter.Get(context.Background(), []byte{byte(255)})
+	assert.NotNil(err)
+
+	it := db.SnapshotIter(nil, nil)
+	// snapshot iter only see the snapshot data
+	for i := 1; i < 50; i++ {
+		assert.Equal(it.Key(), []byte{byte(2 * i)})
+		assert.Equal(it.Value(), []byte{byte(2 * i)})
+		assert.True(it.Valid())
+		it.Next()
+	}
+	it = db.SnapshotIterReverse(nil, nil)
+	for i := 49; i >= 1; i-- {
+		assert.Equal(it.Key(), []byte{byte(2 * i)})
+		assert.Equal(it.Value(), []byte{byte(2 * i)})
+		assert.True(it.Valid())
+		it.Next()
+	}
+	assert.False(it.Valid())
+	db.Release(h)
 }
 
 func TestCleanupKeepPersistentFlag(t *testing.T) {
@@ -1171,4 +1228,102 @@ func testMemBufferCache(t *testing.T, buffer MemBuffer) {
 		assert.Nil(err)
 		assert.Equal(v, []byte{2, 2})
 	})
+}
+
+func TestMemDBLeafFragmentation(t *testing.T) {
+	// RBT cannot pass the leaf fragmentation test.
+	testMemDBLeafFragmentation(t, newArtDBWithContext())
+}
+
+func testMemDBLeafFragmentation(t *testing.T, buffer MemBuffer) {
+	assert := assert.New(t)
+	h := buffer.Staging()
+	mem := buffer.Mem()
+	for i := 0; i < 10; i++ {
+		for k := 0; k < 100; k++ {
+			buffer.Set([]byte(strings.Repeat(strconv.Itoa(k), 256)), []byte("value"))
+		}
+		cur := buffer.Mem()
+		if mem == 0 {
+			mem = cur
+		} else {
+			assert.LessOrEqual(cur, mem)
+		}
+		buffer.Cleanup(h)
+		h = buffer.Staging()
+	}
+}
+
+func TestReadOnlyZeroMem(t *testing.T) {
+	// read only MemBuffer should not allocate heap memory.
+	assert.Zero(t, newRbtDBWithContext().Mem())
+	assert.Zero(t, newArtDBWithContext().Mem())
+}
+
+func TestKeyValueOversize(t *testing.T) {
+	check := func(t *testing.T, db MemBuffer) {
+		key := make([]byte, math.MaxUint16)
+		overSizeKey := make([]byte, math.MaxUint16+1)
+
+		assert.Nil(t, db.Set(key, overSizeKey))
+		err := db.Set(overSizeKey, key)
+		assert.NotNil(t, err)
+		assert.Equal(t, err.(*tikverr.ErrKeyTooLarge).KeySize, math.MaxUint16+1)
+	}
+
+	check(t, newRbtDBWithContext())
+	check(t, newArtDBWithContext())
+}
+
+func TestSetMemoryFootprintChangeHook(t *testing.T) {
+	check := func(t *testing.T, db MemBuffer) {
+		memoryConsumed := uint64(0)
+		assert.False(t, db.MemHookSet())
+		db.SetMemoryFootprintChangeHook(func(mem uint64) {
+			memoryConsumed = mem
+		})
+		assert.True(t, db.MemHookSet())
+
+		assert.Zero(t, memoryConsumed)
+		db.Set([]byte{1}, []byte{1})
+		assert.NotZero(t, memoryConsumed)
+	}
+
+	check(t, newRbtDBWithContext())
+	check(t, newArtDBWithContext())
+}
+
+func TestSelectValueHistory(t *testing.T) {
+	check := func(t *testing.T, db interface {
+		MemBuffer
+		SelectValueHistory(key []byte, predicate func(value []byte) bool) ([]byte, error)
+	}) {
+		db.Set([]byte{1}, []byte{1})
+		h := db.Staging()
+		db.Set([]byte{1}, []byte{1, 1})
+
+		val, err := db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1}) })
+		assert.Nil(t, err)
+		assert.Equal(t, val, []byte{1})
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1, 1}) })
+		assert.Nil(t, err)
+		assert.Equal(t, val, []byte{1, 1})
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1, 1, 1}) })
+		assert.Nil(t, err)
+		assert.Nil(t, val)
+		_, err = db.SelectValueHistory([]byte{2}, func([]byte) bool { return false })
+		assert.NotNil(t, err)
+
+		db.Cleanup(h)
+
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1}) })
+		assert.Nil(t, err)
+		assert.Equal(t, val, []byte{1})
+		val, err = db.SelectValueHistory([]byte{1}, func(value []byte) bool { return bytes.Equal(value, []byte{1, 1}) })
+		assert.Nil(t, err)
+		assert.Nil(t, val)
+	}
+
+	check(t, newRbtDBWithContext())
+	check(t, newArtDBWithContext())
 }

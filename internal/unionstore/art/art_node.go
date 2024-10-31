@@ -38,11 +38,14 @@ const (
 )
 
 const (
-	maxPrefixLen  = 20
-	node4cap      = 4
-	node16cap     = 16
-	node48cap     = 48
-	node256cap    = 256
+	maxPrefixLen = 20
+	node4cap     = 4
+	node16cap    = 16
+	node48cap    = 48
+	node256cap   = 256
+	// inplaceIndex is a special index to indicate the index of an in-place leaf in a node,
+	// the in-place leaf has the same key with its parent node and doesn't occupy the quota of the node.
+	// the other valid index of a node is [0, nodeNum), all the other leaves in the node have larger key than the in-place leaf.
 	inplaceIndex  = -1
 	notExistIndex = -2
 )
@@ -116,6 +119,8 @@ type node256 struct {
 	present  [4]uint64
 	children [node256cap]artNode
 }
+
+const MaxKeyLen = math.MaxUint16
 
 type artLeaf struct {
 	vAddr arena.MemdbArenaAddr
@@ -350,7 +355,7 @@ func (an *artNode) asNode256(a *artAllocator) *node256 {
 // longestCommonPrefix returns the length of the longest common prefix of two keys.
 // the LCP is calculated from the given depth, you need to guarantee l1Key[:depth] equals to l2Key[:depth] before calling this function.
 func longestCommonPrefix(l1Key, l2Key artKey, depth uint32) uint32 {
-	idx, limit := depth, min(uint32(len(l1Key)), uint32(len(l2Key)))
+	idx, limit := depth, uint32(min(len(l1Key), len(l2Key)))
 	// TODO: possible optimization
 	// Compare the key by loop can be very slow if the final LCP is large.
 	// Maybe optimize it by comparing the key in chunks if the limit exceeds certain threshold.
@@ -394,8 +399,8 @@ func minimum(a *artAllocator, an artNode) artNode {
 			}
 			idx := n256.nextPresentIdx(0)
 			an = n256.children[idx]
-		case typeInvalid:
-			return nullArtNode
+		default:
+			panic("invalid node kind")
 		}
 	}
 }
@@ -526,52 +531,52 @@ func (an *artNode) addChild(a *artAllocator, c byte, inplace bool, child artNode
 	case typeNode256:
 		return an.addChild256(a, c, child)
 	}
-	return false
+	panic("add child failed")
 }
 
 func (an *artNode) addChild4(a *artAllocator, c byte, child artNode) bool {
-	node := an.asNode4(a)
+	n4 := an.asNode4(a)
 
-	if node.nodeNum >= node4cap {
-		an.grow(a)
-		an.addChild(a, c, false, child)
+	if n4.nodeNum >= node4cap {
+		an.growNode4(n4, a)
+		an.addChild16(a, c, child)
 		return true
 	}
 
 	i := uint8(0)
-	for ; i < node.nodeNum; i++ {
-		if c <= node.keys[i] {
-			if testing.Testing() && c == node.keys[i] {
+	for ; i < n4.nodeNum; i++ {
+		if c <= n4.keys[i] {
+			if testing.Testing() && c == n4.keys[i] {
 				panic("key already exists")
 			}
 			break
 		}
 	}
 
-	if i < node.nodeNum {
-		copy(node.keys[i+1:node.nodeNum+1], node.keys[i:node.nodeNum])
-		copy(node.children[i+1:node.nodeNum+1], node.children[i:node.nodeNum])
+	if i < n4.nodeNum {
+		copy(n4.keys[i+1:n4.nodeNum+1], n4.keys[i:n4.nodeNum])
+		copy(n4.children[i+1:n4.nodeNum+1], n4.children[i:n4.nodeNum])
 	}
-	node.keys[i] = c
-	node.children[i] = child
-	node.nodeNum++
+	n4.keys[i] = c
+	n4.children[i] = child
+	n4.nodeNum++
 	return false
 }
 
 func (an *artNode) addChild16(a *artAllocator, c byte, child artNode) bool {
-	node := an.asNode16(a)
+	n16 := an.asNode16(a)
 
-	if node.nodeNum >= node16cap {
-		an.grow(a)
-		an.addChild(a, c, false, child)
+	if n16.nodeNum >= node16cap {
+		an.growNode16(n16, a)
+		an.addChild48(a, c, child)
 		return true
 	}
 
-	i, found := sort.Find(int(node.nodeNum), func(i int) int {
-		if node.keys[i] < c {
+	i, found := sort.Find(int(n16.nodeNum), func(i int) int {
+		if n16.keys[i] < c {
 			return 1
 		}
-		if node.keys[i] == c {
+		if n16.keys[i] == c {
 			return 0
 		}
 		return -1
@@ -581,47 +586,47 @@ func (an *artNode) addChild16(a *artAllocator, c byte, child artNode) bool {
 		panic("key already exists")
 	}
 
-	if i < int(node.nodeNum) {
-		copy(node.keys[i+1:node.nodeNum+1], node.keys[i:node.nodeNum])
-		copy(node.children[i+1:node.nodeNum+1], node.children[i:node.nodeNum])
+	if i < int(n16.nodeNum) {
+		copy(n16.keys[i+1:n16.nodeNum+1], n16.keys[i:n16.nodeNum])
+		copy(n16.children[i+1:n16.nodeNum+1], n16.children[i:n16.nodeNum])
 	}
 
-	node.keys[i] = c
-	node.children[i] = child
-	node.nodeNum++
+	n16.keys[i] = c
+	n16.children[i] = child
+	n16.nodeNum++
 	return false
 }
 
 func (an *artNode) addChild48(a *artAllocator, c byte, child artNode) bool {
-	node := an.asNode48(a)
+	n48 := an.asNode48(a)
 
-	if node.nodeNum >= node48cap {
-		an.grow(a)
-		an.addChild(a, c, false, child)
+	if n48.nodeNum >= node48cap {
+		an.growNode48(n48, a)
+		an.addChild256(a, c, child)
 		return true
 	}
 
-	if testing.Testing() && node.present[c>>n48s]&(1<<(c%n48m)) != 0 {
+	if testing.Testing() && n48.present[c>>n48s]&(1<<(c%n48m)) != 0 {
 		panic("key already exists")
 	}
 
-	node.keys[c] = node.nodeNum
-	node.present[c>>n48s] |= 1 << (c % n48m)
-	node.children[node.nodeNum] = child
-	node.nodeNum++
+	n48.keys[c] = n48.nodeNum
+	n48.present[c>>n48s] |= 1 << (c % n48m)
+	n48.children[n48.nodeNum] = child
+	n48.nodeNum++
 	return false
 }
 
 func (an *artNode) addChild256(a *artAllocator, c byte, child artNode) bool {
-	node := an.asNode256(a)
+	n256 := an.asNode256(a)
 
-	if testing.Testing() && node.present[c>>n48s]&(1<<(c%n48m)) != 0 {
+	if testing.Testing() && n256.present[c>>n48s]&(1<<(c%n48m)) != 0 {
 		panic("key already exists")
 	}
 
-	node.present[c>>n48s] |= 1 << (c % n48m)
-	node.children[c] = child
-	node.nodeNum++
+	n256.present[c>>n48s] |= 1 << (c % n48m)
+	n256.children[c] = child
+	n256.nodeNum++
 	return false
 }
 
@@ -632,49 +637,47 @@ func (n *nodeBase) copyMeta(src *nodeBase) {
 	copy(n.prefix[:], src.prefix[:])
 }
 
-func (an *artNode) grow(a *artAllocator) {
-	switch an.kind {
-	case typeNode4:
-		n4 := an.asNode4(a)
-		newAddr, n16 := a.allocNode16()
-		n16.copyMeta(&n4.nodeBase)
+func (an *artNode) growNode4(n4 *node4, a *artAllocator) {
+	newAddr, n16 := a.allocNode16()
+	n16.copyMeta(&n4.nodeBase)
 
-		copy(n16.keys[:], n4.keys[:])
-		copy(n16.children[:], n4.children[:])
+	copy(n16.keys[:], n4.keys[:])
+	copy(n16.children[:], n4.children[:])
 
-		// replace addr and free node4
-		a.freeNode4(an.addr)
-		an.kind = typeNode16
-		an.addr = newAddr
-	case typeNode16:
-		n16 := an.asNode16(a)
-		newAddr, n48 := a.allocNode48()
-		n48.copyMeta(&n16.nodeBase)
+	// replace addr and free node4
+	a.freeNode4(an.addr)
+	an.kind = typeNode16
+	an.addr = newAddr
+}
 
-		for i := uint8(0); i < n16.nodeBase.nodeNum; i++ {
-			ch := n16.keys[i]
-			n48.keys[ch] = i
-			n48.present[ch>>n48s] |= 1 << (ch % n48m)
-			n48.children[i] = n16.children[i]
-		}
+func (an *artNode) growNode16(n16 *node16, a *artAllocator) {
+	newAddr, n48 := a.allocNode48()
+	n48.copyMeta(&n16.nodeBase)
 
-		// replace addr and free node16
-		a.freeNode16(an.addr)
-		an.kind = typeNode48
-		an.addr = newAddr
-	case typeNode48:
-		n48 := an.asNode48(a)
-		newAddr, n256 := a.allocNode256()
-		n256.copyMeta(&n48.nodeBase)
-
-		for i := n48.nextPresentIdx(0); i < node256cap; i = n48.nextPresentIdx(i + 1) {
-			n256.children[i] = n48.children[n48.keys[i]]
-		}
-		copy(n256.present[:], n48.present[:])
-
-		// replace addr and free node48
-		a.freeNode48(an.addr)
-		an.kind = typeNode256
-		an.addr = newAddr
+	for i := uint8(0); i < n16.nodeBase.nodeNum; i++ {
+		ch := n16.keys[i]
+		n48.keys[ch] = i
+		n48.present[ch>>n48s] |= 1 << (ch % n48m)
+		n48.children[i] = n16.children[i]
 	}
+
+	// replace addr and free node16
+	a.freeNode16(an.addr)
+	an.kind = typeNode48
+	an.addr = newAddr
+}
+
+func (an *artNode) growNode48(n48 *node48, a *artAllocator) {
+	newAddr, n256 := a.allocNode256()
+	n256.copyMeta(&n48.nodeBase)
+
+	for i := n48.nextPresentIdx(0); i < node256cap; i = n48.nextPresentIdx(i + 1) {
+		n256.children[i] = n48.children[n48.keys[i]]
+	}
+	copy(n256.present[:], n48.present[:])
+
+	// replace addr and free node48
+	a.freeNode48(an.addr)
+	an.kind = typeNode256
+	an.addr = newAddr
 }
