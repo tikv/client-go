@@ -119,7 +119,7 @@ func (i *RBTIterator) init() {
 		}
 	}
 
-	if i.isFlagsOnly() && !i.includeFlags {
+	if (i.isFlagsOnly() && !i.includeFlags) || (!i.curr.isNull() && i.curr.isDeleted()) {
 		err := i.Next()
 		_ = err // memdbIterator will never fail
 	}
@@ -172,6 +172,10 @@ func (i *RBTIterator) Next() error {
 			i.curr = i.db.predecessor(i.curr)
 		} else {
 			i.curr = i.db.successor(i.curr)
+		}
+
+		if i.curr.isDeleted() {
+			continue
 		}
 
 		// We need to skip persistent flags only nodes.
