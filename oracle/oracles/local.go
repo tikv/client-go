@@ -36,6 +36,7 @@ package oracles
 
 import (
 	"context"
+	"github.com/pingcap/errors"
 	"sync"
 	"time"
 
@@ -147,4 +148,15 @@ func (l *localOracle) SetExternalTimestamp(ctx context.Context, newTimestamp uin
 
 func (l *localOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
 	return l.getExternalTimestamp(ctx)
+}
+
+func (l *localOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *oracle.Option) error {
+	currentTS, err := l.GetTimestamp(ctx, opt)
+	if err != nil {
+		return errors.Errorf("fail to validate read timestamp: %v", err)
+	}
+	if currentTS < readTS {
+		return errors.Errorf("cannot set read timestamp to a future time")
+	}
+	return nil
 }

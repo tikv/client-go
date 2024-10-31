@@ -37,6 +37,7 @@ package oracles
 import (
 	"context"
 	"fmt"
+	"golang.org/x/sync/singleflight"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,13 +55,44 @@ var _ oracle.Oracle = &pdOracle{}
 
 const slowDist = 30 * time.Millisecond
 
+const minAllowedAdaptiveUpdateTSInterval = 500 * time.Millisecond
+const adaptiveUpdateTSIntervalShrinkingPreserve = 100 * time.Millisecond
+const adaptiveUpdateTSIntervalResetThreshold = 200 * time.Millisecond
+const adaptiveUpdateTSIntervalResetPerSecond = 20 * time.Millisecond
+const adaptiveUpdateTSIntervalResetTimeout = 5 * time.Minute
+
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
 	c pd.Client
 	// txn_scope (string) -> lastTSPointer (*atomic.Pointer[lastTSO])
-	lastTSMap            sync.Map
-	quit                 chan struct{}
+	lastTSMap sync.Map
+	quit      chan struct{}
+	// The configured interval to update the low resolution ts.
 	lastTSUpdateInterval atomic.Int64
+	// The actual interval to update the low resolution ts. If the configured one is too large to satisfy the
+	// requirement of the stale read or snapshot read, the actual interval can be automatically set to a shorter
+	// value than lastTSUpdateInterval.
+	adaptiveLastTSUpdateInterval atomic.Int64
+
+	adaptiveUpdateIntervalState struct {
+		// The most recent time that a stale read / snapshot read requests a timestamp that is close enough to
+		// the current adaptive update interval. If there is such a request recently, the adaptive interval
+		// should avoid falling back to the original (configured) value.
+		// Stored in unix microseconds to make it able to be accessed atomically.
+		lastReachDropThresholdTime atomic.Int64
+		// When someone requests need shrinking the update interval immediately, it sends the duration it expects to
+		// this channel.
+		shrinkIntervalCh chan time.Duration
+
+		lastTick time.Time
+	}
+
+	// When the low resolution ts is not new enough and there are many concurrent stane read / snapshot read
+	// operations that needs to validate the read ts, we can use this to avoid too many concurrent GetTS calls by
+	// reusing a result for different `ValidateSnapshotReadTS` calls. This can be done because that
+	// we don't require the ts for validation to be strictly the latest one.
+	// Note that the result can't be reused for different txnScopes. The txnScope is used as the key.
+	tsForValidation singleflight.Group
 }
 
 // lastTSO stores the last timestamp oracle gets from PD server and the local time when the TSO is fetched.
@@ -84,6 +116,7 @@ func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracl
 	if err != nil {
 		return nil, err
 	}
+	o.adaptiveLastTSUpdateInterval.Store(o.lastTSUpdateInterval.Load())
 	ctx := context.TODO()
 	go o.updateTS(ctx)
 	// Initialize the timestamp of the global txnScope by Get.
@@ -241,28 +274,77 @@ func (o *pdOracle) getLastTSWithArrivalTS(txnScope string) (*lastTSO, bool) {
 	return last, true
 }
 
+func (o *pdOracle) nextUpdateInterval(now time.Time, requireStaleness time.Duration) time.Duration {
+	configuredInterval := time.Duration(o.lastTSUpdateInterval.Load())
+	currentAdaptiveInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
+	if configuredInterval <= minAllowedAdaptiveUpdateTSInterval {
+		// If the user has configured a very short interval, we don't have any space to adjust it. Just use
+		// the user's configured value directly.
+		if currentAdaptiveInterval != configuredInterval {
+			o.adaptiveLastTSUpdateInterval.Store(int64(configuredInterval))
+		}
+		return configuredInterval
+	}
+
+	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
+	if now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalResetTimeout {
+		return currentAdaptiveInterval
+	}
+
+	timeSinceLastTick := now.Sub(o.adaptiveUpdateIntervalState.lastTick)
+	newInterval := currentAdaptiveInterval + time.Duration(timeSinceLastTick.Seconds()*float64(adaptiveUpdateTSIntervalResetPerSecond))
+	if newInterval > configuredInterval {
+		newInterval = configuredInterval
+	}
+
+	if newInterval != currentAdaptiveInterval {
+		o.adaptiveLastTSUpdateInterval.Store(int64(newInterval))
+	}
+	return newInterval
+}
+
 func (o *pdOracle) updateTS(ctx context.Context) {
-	currentInterval := o.lastTSUpdateInterval.Load()
-	ticker := time.NewTicker(time.Duration(currentInterval))
+	currentInterval := time.Duration(o.lastTSUpdateInterval.Load())
+	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
+
+	doUpdate := func() {
+		// Update the timestamp for each txnScope
+		o.lastTSMap.Range(func(key, _ interface{}) bool {
+			txnScope := key.(string)
+			ts, err := o.getTimestamp(ctx, txnScope)
+			if err != nil {
+				logutil.Logger(ctx).Error("updateTS error", zap.String("txnScope", txnScope), zap.Error(err))
+				return true
+			}
+			o.setLastTS(ts, txnScope)
+			return true
+		})
+	}
+
 	for {
 		select {
-		case <-ticker.C:
-			// Update the timestamp for each txnScope
-			o.lastTSMap.Range(func(key, _ interface{}) bool {
-				txnScope := key.(string)
-				ts, err := o.getTimestamp(ctx, txnScope)
-				if err != nil {
-					logutil.Logger(ctx).Error("updateTS error", zap.String("txnScope", txnScope), zap.Error(err))
-					return true
-				}
-				o.setLastTS(ts, txnScope)
-				return true
-			})
-			newInterval := o.lastTSUpdateInterval.Load()
+		case now := <-ticker.C:
+			doUpdate()
+
+			newInterval := o.nextUpdateInterval(now, 0)
 			if newInterval != currentInterval {
 				currentInterval = newInterval
-				ticker.Reset(time.Duration(currentInterval))
+				ticker.Reset(currentInterval)
+			}
+
+			o.adaptiveUpdateIntervalState.lastTick = now
+
+		case interval := <-o.adaptiveUpdateIntervalState.shrinkIntervalCh:
+			if interval < currentInterval && currentInterval > minAllowedAdaptiveUpdateTSInterval {
+				currentInterval = max(interval-adaptiveUpdateTSIntervalShrinkingPreserve, minAllowedAdaptiveUpdateTSInterval)
+
+				if time.Since(o.adaptiveUpdateIntervalState.lastTick) > currentInterval {
+					doUpdate()
+					o.adaptiveUpdateIntervalState.lastTick = time.Now()
+				}
+
+				ticker.Reset(currentInterval)
 			}
 		case <-o.quit:
 			return
@@ -296,6 +378,8 @@ func (f lowResolutionTsFuture) Wait() (uint64, error) {
 
 // SetLowResolutionTimestampUpdateInterval sets the refresh interval for low resolution timestamps. Note this will take
 // effect up to the previous update interval amount of time after being called.
+// This setting may not be strictly followed. If Stale Read requests too new data to be available, the low resolution
+// ts may be actually updated in a shorter interval than the configured one.
 func (o *pdOracle) SetLowResolutionTimestampUpdateInterval(updateInterval time.Duration) error {
 	if updateInterval <= 0 {
 		return fmt.Errorf("updateInterval must be > 0")
@@ -365,4 +449,80 @@ func (o *pdOracle) SetExternalTimestamp(ctx context.Context, ts uint64) error {
 
 func (o *pdOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
 	return o.c.GetExternalTimestamp(ctx)
+}
+
+func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Option) (uint64, error) {
+	ch := o.tsForValidation.DoChan(opt.TxnScope, func() (interface{}, error) {
+		//metrics.ValidateReadTSFromPDCount.Inc()
+
+		// If the call that triggers the execution of this function is canceled by the context, other calls that are
+		// waiting for reusing the same result should not be canceled. So pass context.Background() instead of the
+		// current ctx.
+		res, err := o.GetTimestamp(context.Background(), opt)
+		// After finishing the current call, allow the next call to trigger fetching a new TS.
+		o.tsForValidation.Forget(opt.TxnScope)
+		return res, err
+	})
+	select {
+	case <-ctx.Done():
+		return 0, errors.WithStack(ctx.Err())
+	case res := <-ch:
+		if res.Err != nil {
+			return 0, errors.WithStack(res.Err)
+		}
+		return res.Val.(uint64), nil
+	}
+}
+
+func (o *pdOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *oracle.Option) error {
+	latestTS, err := o.GetLowResolutionTimestamp(ctx, opt)
+	// If we fail to get latestTS or the readTS exceeds it, get a timestamp from PD to double check.
+	// But we don't need to strictly fetch the latest TS. So if there are already concurrent calls to this function
+	// loading the latest TS, we can just reuse the same result to avoid too many concurrent GetTS calls.
+	if err != nil || readTS > latestTS {
+		currentTS, err := o.getCurrentTSForValidation(ctx, opt)
+		if err != nil {
+			return errors.Errorf("fail to validate read timestamp: %v", err)
+		}
+		o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS)
+		if readTS > currentTS {
+			return errors.Errorf("cannot set read timestamp to a future time")
+		}
+	} else {
+		estimatedCurrentTS, err := o.getStaleTimestamp(opt.TxnScope, 0)
+		if err != nil {
+			logutil.Logger(ctx).Warn("failed to estimate current ts by getSlateTimestamp for auto-adjusting update low resolution ts interval",
+				zap.Error(err), zap.Uint64("readTS", readTS), zap.String("txnScope", opt.TxnScope))
+		} else {
+			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, estimatedCurrentTS)
+		}
+	}
+	return nil
+}
+
+func (o *pdOracle) adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS uint64, currentTS uint64) {
+	requiredStaleness := oracle.GetTimeFromTS(currentTS).Sub(oracle.GetTimeFromTS(readTS))
+	currentUpdateInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
+
+	if requiredStaleness <= currentUpdateInterval+adaptiveUpdateTSIntervalResetThreshold {
+		now := time.Now().UnixMilli()
+		for {
+			last := o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load()
+			if last >= now {
+				break
+			}
+			if o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.CompareAndSwap(last, now) {
+				break
+			}
+		}
+	}
+
+	if requiredStaleness <= currentUpdateInterval && currentUpdateInterval > minAllowedAdaptiveUpdateTSInterval {
+		// Try to non-blocking send a signal to notify it to change the interval immediately. But if the channel is
+		// busy, it means that there's another concurrent call trying to update it. Just skip it in this case.
+		select {
+		case o.adaptiveUpdateIntervalState.shrinkIntervalCh <- requiredStaleness:
+		default:
+		}
+	}
 }
