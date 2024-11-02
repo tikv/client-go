@@ -194,6 +194,10 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 				req.StaleRead = true
 				req.ReplicaRead = false
 			}
+		} else if s.isStaleRead {
+			// we can retry with stale reads on replica
+			req.StaleRead = true
+			req.ReplicaRead = false	
 		} else {
 			// always use replica.
 			req.StaleRead = false
