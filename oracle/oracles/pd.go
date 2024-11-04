@@ -55,11 +55,37 @@ var _ oracle.Oracle = &pdOracle{}
 
 const slowDist = 30 * time.Millisecond
 
-const minAllowedAdaptiveUpdateTSInterval = 500 * time.Millisecond
-const adaptiveUpdateTSIntervalShrinkingPreserve = 100 * time.Millisecond
-const adaptiveUpdateTSIntervalResetThreshold = 200 * time.Millisecond
-const adaptiveUpdateTSIntervalResetPerSecond = 20 * time.Millisecond
-const adaptiveUpdateTSIntervalResetTimeout = 5 * time.Minute
+type adaptiveUpdateTSIntervalState int
+
+const (
+	adaptiveUpdateTSIntervalStateNormal adaptiveUpdateTSIntervalState = iota
+	adaptiveUpdateTSIntervalStateAdapting
+	adaptiveUpdateTSIntervalStateRecovering
+	adaptiveUpdateTSIntervalStateUnadjustable
+)
+
+func (s adaptiveUpdateTSIntervalState) String() string {
+	switch s {
+	case adaptiveUpdateTSIntervalStateNormal:
+		return "normal"
+	case adaptiveUpdateTSIntervalStateAdapting:
+		return "adapting"
+	case adaptiveUpdateTSIntervalStateRecovering:
+		return "recovering"
+	case adaptiveUpdateTSIntervalStateUnadjustable:
+		return "unadjustable"
+	default:
+		return "unknown"
+	}
+}
+
+const (
+	minAllowedAdaptiveUpdateTSInterval        = 500 * time.Millisecond
+	adaptiveUpdateTSIntervalShrinkingPreserve = 100 * time.Millisecond
+	adaptiveUpdateTSIntervalResetThreshold    = 200 * time.Millisecond
+	adaptiveUpdateTSIntervalResetPerSecond    = 20 * time.Millisecond
+	adaptiveUpdateTSIntervalResetTimeout      = 5 * time.Minute
+)
 
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
@@ -72,9 +98,13 @@ type pdOracle struct {
 	// The actual interval to update the low resolution ts. If the configured one is too large to satisfy the
 	// requirement of the stale read or snapshot read, the actual interval can be automatically set to a shorter
 	// value than lastTSUpdateInterval.
+	// This value is also possible to be updated by SetLowResolutionTimestampUpdateInterval, which may happen when
+	// user adjusting the update interval manually.
 	adaptiveLastTSUpdateInterval atomic.Int64
 
 	adaptiveUpdateIntervalState struct {
+		// The mutex to avoid racing between updateTS goroutine and SetLowResolutionTimestampUpdateInterval.
+		mu sync.Mutex
 		// The most recent time that a stale read / snapshot read requests a timestamp that is close enough to
 		// the current adaptive update interval. If there is such a request recently, the adaptive interval
 		// should avoid falling back to the original (configured) value.
@@ -84,7 +114,10 @@ type pdOracle struct {
 		// this channel.
 		shrinkIntervalCh chan time.Duration
 
+		// Only accessed in updateTS goroutine. No need to use atomic value.
 		lastTick time.Time
+		// For logging.
+		state adaptiveUpdateTSIntervalState
 	}
 
 	// When the low resolution ts is not new enough and there are many concurrent stane read / snapshot read
@@ -107,20 +140,24 @@ type lastTSO struct {
 // `GetTimestamp()` is not called after `lastTSUpdateInterval`, it will be called by
 // itself to keep up with the timestamp on PD server.
 func NewPdOracle(pdClient pd.Client, updateInterval time.Duration) (oracle.Oracle, error) {
+	if updateInterval <= 0 {
+		return nil, fmt.Errorf("updateInterval must be > 0")
+	}
+
 	o := &pdOracle{
 		c:                    pdClient,
 		quit:                 make(chan struct{}),
 		lastTSUpdateInterval: atomic.Int64{},
 	}
-	err := o.SetLowResolutionTimestampUpdateInterval(updateInterval)
-	if err != nil {
-		return nil, err
-	}
-	o.adaptiveLastTSUpdateInterval.Store(o.lastTSUpdateInterval.Load())
+	o.adaptiveUpdateIntervalState.shrinkIntervalCh = make(chan time.Duration, 1)
+	o.lastTSUpdateInterval.Store(int64(updateInterval))
+	o.adaptiveLastTSUpdateInterval.Store(int64(updateInterval))
+	o.adaptiveUpdateIntervalState.lastTick = time.Now()
+
 	ctx := context.TODO()
 	go o.updateTS(ctx)
 	// Initialize the timestamp of the global txnScope by Get.
-	_, err = o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	_, err := o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	if err != nil {
 		o.Close()
 		return nil, err
@@ -274,7 +311,10 @@ func (o *pdOracle) getLastTSWithArrivalTS(txnScope string) (*lastTSO, bool) {
 	return last, true
 }
 
-func (o *pdOracle) nextUpdateInterval(now time.Time, requireStaleness time.Duration) time.Duration {
+func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Duration) time.Duration {
+	o.adaptiveUpdateIntervalState.mu.Lock()
+	defer o.adaptiveUpdateIntervalState.mu.Unlock()
+
 	configuredInterval := time.Duration(o.lastTSUpdateInterval.Load())
 	currentAdaptiveInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
 	if configuredInterval <= minAllowedAdaptiveUpdateTSInterval {
@@ -283,11 +323,39 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requireStaleness time.Durat
 		if currentAdaptiveInterval != configuredInterval {
 			o.adaptiveLastTSUpdateInterval.Store(int64(configuredInterval))
 		}
+		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateUnadjustable {
+			logutil.Logger(context.Background()).Info("update low resolution ts interval is not being adaptive because the configured interval is too short",
+				zap.Duration("configuredInterval", configuredInterval),
+				zap.Stringer("state", o.adaptiveUpdateIntervalState.state),
+				zap.Stringer("newState", adaptiveUpdateTSIntervalStateUnadjustable))
+			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateUnadjustable
+		}
 		return configuredInterval
+	}
+
+	if requiredStaleness != 0 && requiredStaleness < currentAdaptiveInterval {
+		if currentAdaptiveInterval > minAllowedAdaptiveUpdateTSInterval {
+			// If we are calculating the interval because of a request that requires a shorter staleness, we shrink the
+			// update interval immediately to adapt to it.
+			// We shrink the update interval to a value slightly lower than the requested staleness to avoid potential
+			// frequent shrinking operations. But there's a lower bound to prevent loading ts too frequently.
+			prevAdaptiveInterval := currentAdaptiveInterval
+			currentAdaptiveInterval = max(requiredStaleness-adaptiveUpdateTSIntervalShrinkingPreserve, minAllowedAdaptiveUpdateTSInterval)
+			o.adaptiveLastTSUpdateInterval.Store(int64(currentAdaptiveInterval))
+			logutil.Logger(context.Background()).Info("shrink low resolution ts update interval immediately",
+				zap.Duration("requestedStaleness", requiredStaleness),
+				zap.Duration("prevAdaptiveUpdateInterval", prevAdaptiveInterval),
+				zap.Duration("newAdaptiveUpdateInterval", currentAdaptiveInterval),
+				zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
+				zap.Stringer("newState", adaptiveUpdateTSIntervalStateAdapting))
+			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateAdapting
+		}
+		return currentAdaptiveInterval
 	}
 
 	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
 	if now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalResetTimeout {
+		// There is a recent request that requires a short staleness. Keep the current adaptive interval.
 		return currentAdaptiveInterval
 	}
 
@@ -299,7 +367,26 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requireStaleness time.Durat
 
 	if newInterval != currentAdaptiveInterval {
 		o.adaptiveLastTSUpdateInterval.Store(int64(newInterval))
+		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateRecovering {
+			logutil.Logger(context.Background()).Info("update low resolution ts interval is recovering",
+				zap.Duration("currentAdaptiveUpdateInterval", newInterval),
+				zap.Duration("configuredInterval", configuredInterval),
+				zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
+				zap.Stringer("newState", adaptiveUpdateTSIntervalStateRecovering))
+			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateRecovering
+		}
 	}
+
+	if newInterval == configuredInterval {
+		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateNormal {
+			logutil.Logger(context.Background()).Info("update low resolution ts interval is now synced with the configuration",
+				zap.Duration("updateInterval", currentAdaptiveInterval),
+				zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
+				zap.Stringer("newState", adaptiveUpdateTSIntervalStateNormal))
+			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateNormal
+		}
+	}
+
 	return newInterval
 }
 
@@ -335,9 +422,9 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 
 			o.adaptiveUpdateIntervalState.lastTick = now
 
-		case interval := <-o.adaptiveUpdateIntervalState.shrinkIntervalCh:
-			if interval < currentInterval && currentInterval > minAllowedAdaptiveUpdateTSInterval {
-				currentInterval = max(interval-adaptiveUpdateTSIntervalShrinkingPreserve, minAllowedAdaptiveUpdateTSInterval)
+		case requiredStaleness := <-o.adaptiveUpdateIntervalState.shrinkIntervalCh:
+			if requiredStaleness < currentInterval && currentInterval > minAllowedAdaptiveUpdateTSInterval {
+				currentInterval = max(requiredStaleness-adaptiveUpdateTSIntervalShrinkingPreserve, minAllowedAdaptiveUpdateTSInterval)
 
 				if time.Since(o.adaptiveUpdateIntervalState.lastTick) > currentInterval {
 					doUpdate()
@@ -380,11 +467,33 @@ func (f lowResolutionTsFuture) Wait() (uint64, error) {
 // effect up to the previous update interval amount of time after being called.
 // This setting may not be strictly followed. If Stale Read requests too new data to be available, the low resolution
 // ts may be actually updated in a shorter interval than the configured one.
-func (o *pdOracle) SetLowResolutionTimestampUpdateInterval(updateInterval time.Duration) error {
-	if updateInterval <= 0 {
+func (o *pdOracle) SetLowResolutionTimestampUpdateInterval(newUpdateInterval time.Duration) error {
+	if newUpdateInterval <= 0 {
 		return fmt.Errorf("updateInterval must be > 0")
 	}
-	o.lastTSUpdateInterval.Store(updateInterval.Nanoseconds())
+
+	o.adaptiveUpdateIntervalState.mu.Lock()
+	defer o.adaptiveUpdateIntervalState.mu.Unlock()
+
+	prevConfigured := o.lastTSUpdateInterval.Swap(int64(newUpdateInterval))
+	adaptiveUpdateInterval := o.adaptiveLastTSUpdateInterval.Load()
+
+	var adaptiveUpdateIntervalUpdated bool
+
+	if adaptiveUpdateInterval == prevConfigured || newUpdateInterval < time.Duration(adaptiveUpdateInterval) {
+		// If the adaptive update interval is the same as the configured one, treat it as the adaptive adjusting
+		// mechanism not taking effect. So update it immediately.
+		// If the new configured interval is short so that it's smaller than the current adaptive interval, also shrink
+		// the adaptive interval immediately.
+		o.adaptiveLastTSUpdateInterval.Store(int64(newUpdateInterval))
+		adaptiveUpdateIntervalUpdated = true
+	}
+	logutil.Logger(context.Background()).Info("updated low resolution ts update interval",
+		zap.Duration("previous", time.Duration(prevConfigured)),
+		zap.Duration("new", newUpdateInterval),
+		zap.Duration("prevAdaptiveUpdateInterval", time.Duration(adaptiveUpdateInterval)),
+		zap.Bool("adaptiveUpdateIntervalUpdated", adaptiveUpdateIntervalUpdated))
+
 	return nil
 }
 
@@ -502,9 +611,15 @@ func (o *pdOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, op
 
 func (o *pdOracle) adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS uint64, currentTS uint64) {
 	requiredStaleness := oracle.GetTimeFromTS(currentTS).Sub(oracle.GetTimeFromTS(readTS))
-	currentUpdateInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
 
-	if requiredStaleness <= currentUpdateInterval+adaptiveUpdateTSIntervalResetThreshold {
+	// Do not acquire the mutex, as here we only needs a rough check.
+	// So it's possible that we get inconsistent values from these two atomic fields, but it won't cause any problem.
+	currentUpdateInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
+	configuredUpdateInterval := time.Duration(o.lastTSUpdateInterval.Load())
+
+	if requiredStaleness <= currentUpdateInterval+adaptiveUpdateTSIntervalResetThreshold && currentUpdateInterval != configuredUpdateInterval {
+		// Record the most recent time when there's a read operation requesting the staleness close enough to the
+		// current update interval.
 		now := time.Now().UnixMilli()
 		for {
 			last := o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load()
