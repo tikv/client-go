@@ -32,7 +32,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package oracles_test
+package oracles
 
 import (
 	"context"
@@ -44,25 +44,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/oracle/oracles"
 	pd "github.com/tikv/pd/client"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {
 	lockAfter, lockExp := 10, 15
-	o := oracles.NewEmptyPDOracle()
+	o := NewEmptyPDOracle()
 	start := time.Now()
-	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
+	SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
 	lockTs := oracle.GoTimeToTS(start.Add(time.Duration(lockAfter)*time.Millisecond)) + 1
 	waitTs := o.UntilExpired(lockTs, uint64(lockExp), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 	assert.Equal(t, int64(lockAfter+lockExp), waitTs)
 }
 
 func TestPdOracle_GetStaleTimestamp(t *testing.T) {
-	o := oracles.NewEmptyPDOracle()
+	o := NewEmptyPDOracle()
 
 	start := time.Now()
-	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
+	SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
 	ts, err := o.GetStaleTimestamp(context.Background(), oracle.GlobalTxnScope, 10)
 	assert.Nil(t, err)
 	assert.WithinDuration(t, start.Add(-10*time.Second), oracle.GetTimeFromTS(ts), 2*time.Second)
@@ -90,7 +89,7 @@ func (c *MockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
 
 func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
 	pdClient := MockPdClient{}
-	o := oracles.NewPdOracleWithClient(&pdClient)
+	o := NewPdOracleWithClient(&pdClient)
 	ctx := context.TODO()
 	wg := sync.WaitGroup{}
 
@@ -131,7 +130,7 @@ func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
 		assert.LessOrEqual(t, elapsed, 3*updateInterval)
 	}
 
-	oracles.StartTsUpdateLoop(o, ctx, &wg)
+	StartTsUpdateLoop(o, ctx, &wg)
 	// Check each update interval. Note that since these are in increasing
 	// order the time for the new interval to take effect is always less
 	// than the new interval. If we iterated in opposite order, then we'd have
@@ -150,8 +149,8 @@ func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
 }
 
 func TestNonFutureStaleTSO(t *testing.T) {
-	o := oracles.NewEmptyPDOracle()
-	oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(time.Now()))
+	o := NewEmptyPDOracle()
+	SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(time.Now()))
 	for i := 0; i < 100; i++ {
 		time.Sleep(10 * time.Millisecond)
 		now := time.Now()
@@ -160,7 +159,7 @@ func TestNonFutureStaleTSO(t *testing.T) {
 		closeCh := make(chan struct{})
 		go func() {
 			time.Sleep(100 * time.Microsecond)
-			oracles.SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(now))
+			SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(now))
 			close(closeCh)
 		}()
 	CHECK:
@@ -179,4 +178,125 @@ func TestNonFutureStaleTSO(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestNextUpdateTSInterval(t *testing.T) {
+	oracleInterface, err := NewPdOracle(&MockPdClient{}, &PDOracleOptions{
+		UpdateInterval: time.Second * 2,
+		NoUpdateTS:     true,
+	})
+	assert.NoError(t, err)
+	o := oracleInterface.(*pdOracle)
+	now := time.Now()
+
+	mockTS := func(beforeNow time.Duration) uint64 {
+		return oracle.ComposeTS(oracle.GetPhysical(now.Add(-beforeNow)), 1)
+	}
+	mustNotifyShrinking := func(expectedRequiredStaleness time.Duration) {
+		// Normally this channel should be checked in pdOracle.updateTS method. Here we are testing the layer below the
+		// updateTS method, so we just do this assert to ensure the message is sent to this channel.
+		select {
+		case requiredStaleness := <-o.adaptiveUpdateIntervalState.shrinkIntervalCh:
+			assert.Equal(t, expectedRequiredStaleness, requiredStaleness)
+		default:
+			assert.Fail(t, "expects notifying shrinking update interval immediately, but no message received")
+		}
+	}
+	mustNoNotify := func() {
+		select {
+		case <-o.adaptiveUpdateIntervalState.shrinkIntervalCh:
+			assert.Fail(t, "expects not notifying shrinking update interval immediately, but message was received")
+		default:
+		}
+	}
+
+	now = now.Add(time.Second * 2)
+	assert.Equal(t, time.Second*2, o.nextUpdateInterval(now, 0))
+	now = now.Add(time.Second * 2)
+	assert.Equal(t, time.Second*2, o.nextUpdateInterval(now, 0))
+	assert.Equal(t, adaptiveUpdateTSIntervalStateNormal, o.adaptiveUpdateIntervalState.state)
+
+	now = now.Add(time.Second)
+	// Simulate a read requesting a staleness larger than 2s, in which case nothing special will happen.
+	o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(mockTS(time.Second*3), mockTS(0), now)
+	mustNoNotify()
+	assert.Equal(t, time.Second*2, o.nextUpdateInterval(now, 0))
+
+	now = now.Add(time.Second)
+	// Simulate a read requesting a staleness less than 2s, in which case it should trigger immediate shrinking on the
+	// update interval.
+	o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(mockTS(time.Second), mockTS(0), now)
+	mustNotifyShrinking(time.Second)
+	expectedInterval := time.Second - adaptiveUpdateTSIntervalShrinkingPreserve
+	assert.Equal(t, expectedInterval, o.nextUpdateInterval(now, time.Second))
+	assert.Equal(t, adaptiveUpdateTSIntervalStateAdapting, o.adaptiveUpdateIntervalState.state)
+	assert.Equal(t, now.UnixMilli(), o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
+
+	// Let read with short staleness continue happening.
+	now = now.Add(adaptiveUpdateTSIntervalDelayBeforeRecovering / 2)
+	o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(mockTS(time.Second), mockTS(0), now)
+	mustNoNotify()
+	assert.Equal(t, now.UnixMilli(), o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
+
+	// The adaptiveUpdateTSIntervalDelayBeforeRecovering has not been elapsed since the last time there is a read with short
+	// staleness. The update interval won't start being reset at this time.
+	now = now.Add(adaptiveUpdateTSIntervalDelayBeforeRecovering/2 + time.Second)
+	o.adaptiveUpdateIntervalState.lastTick = now.Add(-time.Second)
+	assert.Equal(t, expectedInterval, o.nextUpdateInterval(now, 0))
+	assert.Equal(t, adaptiveUpdateTSIntervalStateAdapting, o.adaptiveUpdateIntervalState.state)
+
+	// The adaptiveUpdateTSIntervalDelayBeforeRecovering has been elapsed.
+	now = now.Add(adaptiveUpdateTSIntervalDelayBeforeRecovering / 2)
+	o.adaptiveUpdateIntervalState.lastTick = now.Add(-time.Second)
+	expectedInterval += adaptiveUpdateTSIntervalRecoverPerSecond
+	assert.InEpsilon(t, expectedInterval.Seconds(), o.nextUpdateInterval(now, 0).Seconds(), 1e-3)
+	assert.Equal(t, adaptiveUpdateTSIntervalStateRecovering, o.adaptiveUpdateIntervalState.state)
+	o.adaptiveUpdateIntervalState.lastTick = now
+	now = now.Add(time.Second * 2)
+	// No effect if the required staleness didn't trigger the threshold.
+	o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(mockTS(expectedInterval+adaptiveUpdateTSIntervalBlockRecoverThreshold*2), mockTS(0), now)
+	mustNoNotify()
+	expectedInterval += adaptiveUpdateTSIntervalRecoverPerSecond * 2
+	assert.InEpsilon(t, expectedInterval.Seconds(), o.nextUpdateInterval(now, 0).Seconds(), 1e-3)
+	assert.Equal(t, adaptiveUpdateTSIntervalStateRecovering, o.adaptiveUpdateIntervalState.state)
+
+	// If there's a read operation requires a staleness that is close enough to the current adaptive update interval,
+	// then block the update interval from recovering.
+	o.adaptiveUpdateIntervalState.lastTick = now
+	now = now.Add(time.Second)
+	o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(mockTS(expectedInterval+adaptiveUpdateTSIntervalBlockRecoverThreshold/2), mockTS(0), now)
+	mustNoNotify()
+	assert.InEpsilon(t, expectedInterval.Seconds(), o.nextUpdateInterval(now, 0).Seconds(), 1e-3)
+	assert.Equal(t, adaptiveUpdateTSIntervalStateAdapting, o.adaptiveUpdateIntervalState.state)
+	o.adaptiveUpdateIntervalState.lastTick = now
+	now = now.Add(time.Second)
+	assert.InEpsilon(t, expectedInterval.Seconds(), o.nextUpdateInterval(now, 0).Seconds(), 1e-3)
+	assert.Equal(t, adaptiveUpdateTSIntervalStateAdapting, o.adaptiveUpdateIntervalState.state)
+
+	// Now adaptiveUpdateTSIntervalDelayBeforeRecovering + 1s has been elapsed. Continue recovering.
+	now = now.Add(adaptiveUpdateTSIntervalDelayBeforeRecovering)
+	o.adaptiveUpdateIntervalState.lastTick = now.Add(-time.Second)
+	expectedInterval += adaptiveUpdateTSIntervalRecoverPerSecond
+	assert.InEpsilon(t, expectedInterval.Seconds(), o.nextUpdateInterval(now, 0).Seconds(), 1e-3)
+	assert.Equal(t, adaptiveUpdateTSIntervalStateRecovering, o.adaptiveUpdateIntervalState.state)
+
+	// Without any other interruption, the update interval will gradually recover to the same value as configured.
+	for {
+		o.adaptiveUpdateIntervalState.lastTick = now
+		now = now.Add(time.Second)
+		expectedInterval += adaptiveUpdateTSIntervalRecoverPerSecond
+		if expectedInterval >= time.Second*2 {
+			break
+		}
+		assert.InEpsilon(t, expectedInterval.Seconds(), o.nextUpdateInterval(now, 0).Seconds(), 1e-3)
+		assert.Equal(t, adaptiveUpdateTSIntervalStateRecovering, o.adaptiveUpdateIntervalState.state)
+	}
+	expectedInterval = time.Second * 2
+	assert.Equal(t, expectedInterval, o.nextUpdateInterval(now, 0))
+	assert.Equal(t, adaptiveUpdateTSIntervalStateNormal, o.adaptiveUpdateIntervalState.state)
+
+	// Test adjusting configurations manually.
+	// When the adaptive update interval is not taking effect, the actual used update interval follows the change of
+	// the configuration immediately.
+
 }
