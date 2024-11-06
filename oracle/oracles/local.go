@@ -36,10 +36,10 @@ package oracles
 
 import (
 	"context"
-	"github.com/pingcap/errors"
 	"sync"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
