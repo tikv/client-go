@@ -612,7 +612,7 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 
 func (o *pdOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *oracle.Option) error {
 	latestTS, err := o.GetLowResolutionTimestamp(ctx, opt)
-	// If we fail to get latestTS or the readTS exceeds it, get a timestamp from PD to double check.
+	// If we fail to get latestTS or the readTS exceeds it, get a timestamp from PD to double-check.
 	// But we don't need to strictly fetch the latest TS. So if there are already concurrent calls to this function
 	// loading the latest TS, we can just reuse the same result to avoid too many concurrent GetTS calls.
 	if err != nil || readTS > latestTS {
