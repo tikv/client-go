@@ -385,8 +385,9 @@ func longestCommonPrefixByChunk(l1Key, l2Key artKey, depth uint32) uint32 {
 			xor := *(*uint64)(p1) ^ *(*uint64)(p2)
 			return limit - remaining + uint32(bits.TrailingZeros64(xor)>>3) - depth
 		}
-		p1 = unsafe.Pointer(uintptr(p1) + 8)
-		p2 = unsafe.Pointer(uintptr(p2) + 8)
+
+		p1 = unsafe.Add(p1, 8)
+		p2 = unsafe.Add(p2, 8)
 		remaining -= 8
 	}
 
