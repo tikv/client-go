@@ -927,7 +927,7 @@ func (c *twoPhaseCommitter) getKeyspaceID() apicodec.KeyspaceID {
 }
 
 func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
-	if c.txn == nil || !c.txn.vars.EnableTxnFile {
+	if c.txn == nil || c.txn.vars.DisableTxnFile {
 		return false, nil
 	}
 	conf := config.GetGlobalConfig()
