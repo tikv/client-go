@@ -298,5 +298,44 @@ func TestNextUpdateTSInterval(t *testing.T) {
 	// Test adjusting configurations manually.
 	// When the adaptive update interval is not taking effect, the actual used update interval follows the change of
 	// the configuration immediately.
+	err = o.SetLowResolutionTimestampUpdateInterval(time.Second * 1)
+	assert.NoError(t, err)
+	assert.Equal(t, time.Second, time.Duration(o.adaptiveLastTSUpdateInterval.Load()))
+	assert.Equal(t, time.Second, o.nextUpdateInterval(now, 0))
 
+	err = o.SetLowResolutionTimestampUpdateInterval(time.Second * 2)
+	assert.NoError(t, err)
+	assert.Equal(t, time.Second*2, time.Duration(o.adaptiveLastTSUpdateInterval.Load()))
+	assert.Equal(t, time.Second*2, o.nextUpdateInterval(now, 0))
+
+	// If the adaptive update interval is taking effect, the configuration change doesn't immediately affect the actual
+	// update interval.
+	now = now.Add(time.Second)
+	o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(mockTS(time.Second), mockTS(0), now)
+	mustNotifyShrinking(time.Second)
+	expectedInterval = time.Second - adaptiveUpdateTSIntervalShrinkingPreserve
+	assert.Equal(t, expectedInterval, o.nextUpdateInterval(now, time.Second))
+	assert.Equal(t, adaptiveUpdateTSIntervalStateAdapting, o.adaptiveUpdateIntervalState.state)
+	err = o.SetLowResolutionTimestampUpdateInterval(time.Second * 3)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedInterval, time.Duration(o.adaptiveLastTSUpdateInterval.Load()))
+	assert.Equal(t, expectedInterval, o.nextUpdateInterval(now, 0))
+	err = o.SetLowResolutionTimestampUpdateInterval(time.Second)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedInterval, time.Duration(o.adaptiveLastTSUpdateInterval.Load()))
+	assert.Equal(t, expectedInterval, o.nextUpdateInterval(now, 0))
+
+	// ...unless it's set to a value shorter than the current actual update interval.
+	err = o.SetLowResolutionTimestampUpdateInterval(time.Millisecond * 800)
+	assert.NoError(t, err)
+	assert.Equal(t, time.Millisecond*800, time.Duration(o.adaptiveLastTSUpdateInterval.Load()))
+	assert.Equal(t, time.Millisecond*800, o.nextUpdateInterval(now, 0))
+	assert.Equal(t, adaptiveUpdateTSIntervalStateNormal, o.adaptiveUpdateIntervalState.state)
+
+	// If the configured value is too short, the actual update interval won't be adaptive
+	err = o.SetLowResolutionTimestampUpdateInterval(minAllowedAdaptiveUpdateTSInterval / 2)
+	assert.NoError(t, err)
+	assert.Equal(t, minAllowedAdaptiveUpdateTSInterval/2, time.Duration(o.adaptiveLastTSUpdateInterval.Load()))
+	assert.Equal(t, minAllowedAdaptiveUpdateTSInterval/2, o.nextUpdateInterval(now, 0))
+	assert.Equal(t, adaptiveUpdateTSIntervalStateUnadjustable, o.adaptiveUpdateIntervalState.state)
 }

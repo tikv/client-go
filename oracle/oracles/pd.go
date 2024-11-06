@@ -368,10 +368,10 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 	}
 
 	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
-	if now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
+	if now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering && currentAdaptiveInterval != configuredInterval {
 		// There is a recent request that requires a short staleness. Keep the current adaptive interval.
 
-		if currentAdaptiveInterval != configuredInterval && o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateAdapting {
+		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateAdapting {
 			logutil.Logger(context.Background()).Info("update low resolution ts interval is not recovering as there is a recent read requesting a short staleness",
 				zap.Duration("currentAdaptiveUpdateInterval", currentAdaptiveInterval),
 				zap.Duration("configuredInterval", configuredInterval),
