@@ -37,7 +37,6 @@ package oracles
 import (
 	"context"
 	"fmt"
-	"golang.org/x/sync/singleflight"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,6 +48,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 var _ oracle.Oracle = &pdOracle{}
