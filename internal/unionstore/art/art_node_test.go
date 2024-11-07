@@ -415,3 +415,14 @@ func TestMinimumNode(t *testing.T) {
 	check(typeNode48)
 	check(typeNode256)
 }
+
+func TestKey2Chunk(t *testing.T) {
+	key := artKey([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+
+	for i := 0; i < len(key); i++ {
+		diffKey := make(artKey, len(key))
+		copy(diffKey, key)
+		diffKey[i] = 255
+		require.Equal(t, uint32(i), longestCommonPrefix(key, diffKey, 0))
+	}
+}
