@@ -58,9 +58,21 @@ const slowDist = 30 * time.Millisecond
 type adaptiveUpdateTSIntervalState int
 
 const (
+	// adaptiveUpdateTSIntervalStateNormal represents the state that the adaptive update ts interval is synced with the
+	// configuration without performing any automatic adjustment.
 	adaptiveUpdateTSIntervalStateNormal adaptiveUpdateTSIntervalState = iota
+	// adaptiveUpdateTSIntervalStateAdapting represents the state that as there are recently some stale read / snapshot
+	// read operations requesting a short staleness (now - readTS is nearly or exceeds the current update interval),
+	// so that we automatically shrink the update interval. Otherwise, read operations may don't have low resolution ts
+	// that is new enough for checking the legality of the read ts, causing them have to fetch the latest ts from PD,
+	// which is time-consuming.
 	adaptiveUpdateTSIntervalStateAdapting
+	// adaptiveUpdateTSIntervalStateRecovering represents the state that the update ts interval have once been shrunk,
+	// to adapt to reads with short staleness, but there isn't any such read operations for a while, so that we
+	// gradually recover the update interval to the configured value.
 	adaptiveUpdateTSIntervalStateRecovering
+	// adaptiveUpdateTSIntervalStateUnadjustable represents the state that the user has configured a very short update
+	// interval, so that we don't have any space to automatically adjust it.
 	adaptiveUpdateTSIntervalStateUnadjustable
 )
 
@@ -80,10 +92,21 @@ func (s adaptiveUpdateTSIntervalState) String() string {
 }
 
 const (
-	minAllowedAdaptiveUpdateTSInterval            = 500 * time.Millisecond
-	adaptiveUpdateTSIntervalShrinkingPreserve     = 100 * time.Millisecond
+	// minAllowedAdaptiveUpdateTSInterval is the lower bound of the adaptive update ts interval for avoiding an abnormal
+	// read operation causing the update interval to be too short.
+	minAllowedAdaptiveUpdateTSInterval = 500 * time.Millisecond
+	// adaptiveUpdateTSIntervalShrinkingPreserve is the duration that we additionally shrinks when adapting to a read
+	// operation that requires a short staleness.
+	adaptiveUpdateTSIntervalShrinkingPreserve = 100 * time.Millisecond
+	// adaptiveUpdateTSIntervalBlockRecoverThreshold is the threshold of the difference between the current update
+	// interval and the staleness the read operation request to prevent the update interval from recovering back to
+	// normal.
 	adaptiveUpdateTSIntervalBlockRecoverThreshold = 200 * time.Millisecond
-	adaptiveUpdateTSIntervalRecoverPerSecond      = 20 * time.Millisecond
+	// adaptiveUpdateTSIntervalRecoverPerSecond is the duration that the update interval should grow per second when
+	// recovering to normal state from adapting state.
+	adaptiveUpdateTSIntervalRecoverPerSecond = 20 * time.Millisecond
+	// adaptiveUpdateTSIntervalDelayBeforeRecovering is the duration that we should hold the current adaptive update
+	// interval before turning back to normal state.
 	adaptiveUpdateTSIntervalDelayBeforeRecovering = 5 * time.Minute
 )
 
@@ -93,7 +116,8 @@ type pdOracle struct {
 	// txn_scope (string) -> lastTSPointer (*atomic.Pointer[lastTSO])
 	lastTSMap sync.Map
 	quit      chan struct{}
-	// The configured interval to update the low resolution ts.
+	// The configured interval to update the low resolution ts. Set by SetLowResolutionTimestampUpdateInterval.
+	// For TiDB, this is directly controlled by the system variable `tidb_low_resolution_tso_update_interval`.
 	lastTSUpdateInterval atomic.Int64
 	// The actual interval to update the low resolution ts. If the configured one is too large to satisfy the
 	// requirement of the stale read or snapshot read, the actual interval can be automatically set to a shorter
@@ -368,9 +392,10 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 	}
 
 	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
-	if now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering && currentAdaptiveInterval != configuredInterval {
+	if currentAdaptiveInterval != configuredInterval && now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
 		// There is a recent request that requires a short staleness. Keep the current adaptive interval.
-
+		// If it's not adapting state, it's possible that it's previously in recovering state, and it stops recovering
+		// as there is a new read operation requesting a short staleness.
 		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateAdapting {
 			logutil.Logger(context.Background()).Info("update low resolution ts interval is not recovering as there is a recent read requesting a short staleness",
 				zap.Duration("currentAdaptiveUpdateInterval", currentAdaptiveInterval),
@@ -420,7 +445,7 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
 
-	doUpdate := func() {
+	doUpdate := func(now time.Time) {
 		// Update the timestamp for each txnScope
 		o.lastTSMap.Range(func(key, _ interface{}) bool {
 			txnScope := key.(string)
@@ -432,20 +457,20 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 			o.setLastTS(ts, txnScope)
 			return true
 		})
+
+		o.adaptiveUpdateIntervalState.lastTick = now
 	}
 
 	for {
 		select {
 		case now := <-ticker.C:
-			doUpdate()
+			doUpdate(now)
 
 			newInterval := o.nextUpdateInterval(now, 0)
 			if newInterval != currentInterval {
 				currentInterval = newInterval
 				ticker.Reset(currentInterval)
 			}
-
-			o.adaptiveUpdateIntervalState.lastTick = now
 
 		case requiredStaleness := <-o.adaptiveUpdateIntervalState.shrinkIntervalCh:
 			now := time.Now()
@@ -454,8 +479,7 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 				currentInterval = newInterval
 
 				if time.Since(o.adaptiveUpdateIntervalState.lastTick) >= currentInterval {
-					doUpdate()
-					o.adaptiveUpdateIntervalState.lastTick = time.Now()
+					doUpdate(time.Now())
 				}
 
 				ticker.Reset(currentInterval)
