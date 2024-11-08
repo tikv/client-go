@@ -141,7 +141,7 @@ type pdOracle struct {
 
 		// Only accessed in updateTS goroutine. No need to use atomic value.
 		lastTick time.Time
-		// Represents a description about the current state. For logging and diagnosing purposes.
+		// Represents a description about the current state.
 		state adaptiveUpdateTSIntervalState
 	}
 
