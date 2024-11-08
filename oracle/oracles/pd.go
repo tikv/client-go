@@ -58,9 +58,10 @@ const slowDist = 30 * time.Millisecond
 type adaptiveUpdateTSIntervalState int
 
 const (
+	adaptiveUpdateTSIntervalStateNone adaptiveUpdateTSIntervalState = iota
 	// adaptiveUpdateTSIntervalStateNormal represents the state that the adaptive update ts interval is synced with the
 	// configuration without performing any automatic adjustment.
-	adaptiveUpdateTSIntervalStateNormal adaptiveUpdateTSIntervalState = iota
+	adaptiveUpdateTSIntervalStateNormal
 	// adaptiveUpdateTSIntervalStateAdapting represents the state that as there are recently some stale read / snapshot
 	// read operations requesting a short staleness (now - readTS is nearly or exceeds the current update interval),
 	// so that we automatically shrink the update interval. Otherwise, read operations may don't have low resolution ts
@@ -87,7 +88,7 @@ func (s adaptiveUpdateTSIntervalState) String() string {
 	case adaptiveUpdateTSIntervalStateUnadjustable:
 		return "unadjustable"
 	default:
-		return "unknown"
+		return fmt.Sprintf("unknown(%v)", int(s))
 	}
 }
 
@@ -344,99 +345,123 @@ func (o *pdOracle) getLastTSWithArrivalTS(txnScope string) (*lastTSO, bool) {
 	return last, true
 }
 
-// nextUpdateInterval calculates the next interval to update the low resolution ts. When this is triggered by timer
-// tick, requiredStaleness should be 0. This function may also be called in case there is a stale read / snapshot read
-// requesting a short staleness (i.e., the read operation specifies the version it wants to read instead of allocating
-// from PD, and the required version is very close to the current time). In this case, the requested staleness should be
-// passed to this function as the requiredStaleness parameter.
 func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Duration) time.Duration {
 	o.adaptiveUpdateIntervalState.mu.Lock()
 	defer o.adaptiveUpdateIntervalState.mu.Unlock()
 
 	configuredInterval := time.Duration(o.lastTSUpdateInterval.Load())
-	currentAdaptiveInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
-	if configuredInterval <= minAllowedAdaptiveUpdateTSInterval {
+	prevAdaptiveInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
+	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
+
+	currentAdaptiveInterval := prevAdaptiveInterval
+
+	// Shortcut
+	const none = adaptiveUpdateTSIntervalStateNone
+
+	// The following `checkX` functions checks whether it should transit to the X state. Returns
+	// a tuple representing (state, newInterval).
+	// When `checkX` returns a valid state, it means that the current situation matches the state. In this case, it
+	// also returns the new interval that should be used next.
+	// When it returns `none`, we need to check if it should transit to other states. For each call to
+	// nextUpdateInterval, if all attempts to `checkX` function returns false, it keeps the previous state unchanged.
+
+	checkUnadjustable := func() (adaptiveUpdateTSIntervalState, time.Duration) {
 		// If the user has configured a very short interval, we don't have any space to adjust it. Just use
 		// the user's configured value directly.
-		if currentAdaptiveInterval != configuredInterval {
-			o.adaptiveLastTSUpdateInterval.Store(int64(configuredInterval))
+		if configuredInterval <= minAllowedAdaptiveUpdateTSInterval {
+			return adaptiveUpdateTSIntervalStateUnadjustable, configuredInterval
 		}
-		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateUnadjustable {
-			logutil.Logger(context.Background()).Info("update low resolution ts interval is not being adaptive because the configured interval is too short",
-				zap.Duration("configuredInterval", configuredInterval),
-				zap.Stringer("state", o.adaptiveUpdateIntervalState.state),
-				zap.Stringer("newState", adaptiveUpdateTSIntervalStateUnadjustable))
-			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateUnadjustable
-		}
-		return configuredInterval
+		return none, 0
 	}
 
-	if requiredStaleness != 0 {
-		if requiredStaleness < currentAdaptiveInterval && currentAdaptiveInterval > minAllowedAdaptiveUpdateTSInterval {
+	checkNormal := func() (adaptiveUpdateTSIntervalState, time.Duration) {
+		// If the current actual update interval is synced with the configured value, and it's not unadjustable state,
+		// then it's the normal state.
+		if configuredInterval > minAllowedAdaptiveUpdateTSInterval && currentAdaptiveInterval == configuredInterval {
+			return adaptiveUpdateTSIntervalStateNormal, currentAdaptiveInterval
+		}
+		return none, 0
+	}
+
+	checkAdapting := func() (adaptiveUpdateTSIntervalState, time.Duration) {
+		if requiredStaleness != 0 && requiredStaleness < currentAdaptiveInterval && currentAdaptiveInterval > minAllowedAdaptiveUpdateTSInterval {
 			// If we are calculating the interval because of a request that requires a shorter staleness, we shrink the
 			// update interval immediately to adapt to it.
 			// We shrink the update interval to a value slightly lower than the requested staleness to avoid potential
 			// frequent shrinking operations. But there's a lower bound to prevent loading ts too frequently.
-			prevAdaptiveInterval := currentAdaptiveInterval
-			currentAdaptiveInterval = max(requiredStaleness-adaptiveUpdateTSIntervalShrinkingPreserve, minAllowedAdaptiveUpdateTSInterval)
+			newInterval := max(requiredStaleness-adaptiveUpdateTSIntervalShrinkingPreserve, minAllowedAdaptiveUpdateTSInterval)
+			return adaptiveUpdateTSIntervalStateAdapting, newInterval
+		}
+
+		if currentAdaptiveInterval != configuredInterval && now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
+			// There is a recent request that requires a short staleness. Keep the current adaptive interval.
+			// If it's not adapting state, it's possible that it's previously in recovering state, and it stops recovering
+			// as there is a new read operation requesting a short staleness.
+			return adaptiveUpdateTSIntervalStateAdapting, currentAdaptiveInterval
+		}
+
+		return none, 0
+	}
+
+	checkRecovering := func() (adaptiveUpdateTSIntervalState, time.Duration) {
+		if currentAdaptiveInterval == configuredInterval || now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
+			return none, 0
+		}
+
+		timeSinceLastTick := now.Sub(o.adaptiveUpdateIntervalState.lastTick)
+		newInterval := currentAdaptiveInterval + time.Duration(timeSinceLastTick.Seconds()*float64(adaptiveUpdateTSIntervalRecoverPerSecond))
+		if newInterval > configuredInterval {
+			newInterval = configuredInterval
+		}
+
+		return adaptiveUpdateTSIntervalStateRecovering, newInterval
+	}
+
+	// Check the specified states in order, until the state becomes determined.
+	// If it's still undetermined after all checks, keep the previous state.
+	nextState := func(checkFuncs ...func() (adaptiveUpdateTSIntervalState, time.Duration)) time.Duration {
+		for _, f := range checkFuncs {
+			state, newInterval := f()
+			if state == none {
+				continue
+			}
+
+			currentAdaptiveInterval = newInterval
+
+			// If the final state is the recovering state, do an additional step to check whether it can go back to
+			// normal state immediately.
+			if state == adaptiveUpdateTSIntervalStateRecovering {
+				var nextState adaptiveUpdateTSIntervalState
+				nextState, newInterval = checkNormal()
+				if nextState != none {
+					state = nextState
+					currentAdaptiveInterval = newInterval
+				}
+			}
+
 			o.adaptiveLastTSUpdateInterval.Store(int64(currentAdaptiveInterval))
-			logutil.Logger(context.Background()).Info("shrink low resolution ts update interval immediately",
-				zap.Duration("requestedStaleness", requiredStaleness),
-				zap.Duration("prevAdaptiveUpdateInterval", prevAdaptiveInterval),
-				zap.Duration("newAdaptiveUpdateInterval", currentAdaptiveInterval),
-				zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
-				zap.Stringer("newState", adaptiveUpdateTSIntervalStateAdapting))
-			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateAdapting
+			if o.adaptiveUpdateIntervalState.state != state {
+				logutil.Logger(context.Background()).Info("adaptive update ts interval state transition",
+					zap.Duration("configuredInterval", configuredInterval),
+					zap.Duration("prevAdaptiveUpdateInterval", prevAdaptiveInterval),
+					zap.Duration("newAdaptiveUpdateInterval", currentAdaptiveInterval),
+					zap.Duration("requiredStaleness", requiredStaleness),
+					zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
+					zap.Stringer("newState", state))
+				o.adaptiveUpdateIntervalState.state = state
+			}
+
+			return currentAdaptiveInterval
 		}
 		return currentAdaptiveInterval
 	}
 
-	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
-	if currentAdaptiveInterval != configuredInterval && now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
-		// There is a recent request that requires a short staleness. Keep the current adaptive interval.
-		// If it's not adapting state, it's possible that it's previously in recovering state, and it stops recovering
-		// as there is a new read operation requesting a short staleness.
-		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateAdapting {
-			logutil.Logger(context.Background()).Info("update low resolution ts interval is not recovering as there is a recent read requesting a short staleness",
-				zap.Duration("currentAdaptiveUpdateInterval", currentAdaptiveInterval),
-				zap.Duration("configuredInterval", configuredInterval),
-				zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
-				zap.Stringer("newState", adaptiveUpdateTSIntervalStateAdapting),
-				zap.Time("recentRequestExceedingThreshold", lastReachDropThresholdTime))
-			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateAdapting
-		}
-
-		return currentAdaptiveInterval
+	var newInterval time.Duration
+	if requiredStaleness != 0 {
+		newInterval = nextState(checkUnadjustable, checkAdapting)
+	} else {
+		newInterval = nextState(checkUnadjustable, checkAdapting, checkNormal, checkRecovering)
 	}
-
-	timeSinceLastTick := now.Sub(o.adaptiveUpdateIntervalState.lastTick)
-	newInterval := currentAdaptiveInterval + time.Duration(timeSinceLastTick.Seconds()*float64(adaptiveUpdateTSIntervalRecoverPerSecond))
-	if newInterval > configuredInterval {
-		newInterval = configuredInterval
-	}
-
-	if newInterval != currentAdaptiveInterval {
-		o.adaptiveLastTSUpdateInterval.Store(int64(newInterval))
-		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateRecovering {
-			logutil.Logger(context.Background()).Info("update low resolution ts interval is recovering",
-				zap.Duration("currentAdaptiveUpdateInterval", newInterval),
-				zap.Duration("configuredInterval", configuredInterval),
-				zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
-				zap.Stringer("newState", adaptiveUpdateTSIntervalStateRecovering))
-			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateRecovering
-		}
-	}
-
-	if newInterval == configuredInterval {
-		if o.adaptiveUpdateIntervalState.state != adaptiveUpdateTSIntervalStateNormal {
-			logutil.Logger(context.Background()).Info("update low resolution ts interval is now synced with the configuration",
-				zap.Duration("updateInterval", currentAdaptiveInterval),
-				zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
-				zap.Stringer("newState", adaptiveUpdateTSIntervalStateNormal))
-			o.adaptiveUpdateIntervalState.state = adaptiveUpdateTSIntervalStateNormal
-		}
-	}
-
 	return newInterval
 }
 
@@ -680,6 +705,11 @@ func (o *pdOracle) adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(rea
 	}
 
 	if requiredStaleness <= currentUpdateInterval && currentUpdateInterval > minAllowedAdaptiveUpdateTSInterval {
+		// Considering system time / PD time drifts, it's possible that we get a non-positive value from the
+		// calculation. Make sure it's always positive before passing it to the updateTS goroutine.
+		// Note that `nextUpdateInterval` method expects the requiredStaleness is always non-zero when triggerred
+		// by this path.
+		requiredStaleness = max(requiredStaleness, time.Millisecond)
 		// Try to non-blocking send a signal to notify it to change the interval immediately. But if the channel is
 		// busy, it means that there's another concurrent call trying to update it. Just skip it in this case.
 		select {
