@@ -462,6 +462,9 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 	} else {
 		newInterval = nextState(checkUnadjustable, checkAdapting, checkNormal, checkRecovering)
 	}
+
+	metrics.TiKVLowResolutionTSOUpdateIntervalSecondsGauge.Set(newInterval.Seconds())
+
 	return newInterval
 }
 
@@ -638,7 +641,7 @@ func (o *pdOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
 
 func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Option) (uint64, error) {
 	ch := o.tsForValidation.DoChan(opt.TxnScope, func() (interface{}, error) {
-		//metrics.ValidateReadTSFromPDCount.Inc()
+		metrics.TiKVValidateReadTSFromPDCount.Inc()
 
 		// If the call that triggers the execution of this function is canceled by the context, other calls that are
 		// waiting for reusing the same result should not be canceled. So pass context.Background() instead of the
