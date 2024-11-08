@@ -134,7 +134,7 @@ type pdOracle struct {
 		// the current adaptive update interval. If there is such a request recently, the adaptive interval
 		// should avoid falling back to the original (configured) value.
 		// Stored in unix microseconds to make it able to be accessed atomically.
-		lastReachDropThresholdTime atomic.Int64
+		lastShortStalenessReadTime atomic.Int64
 		// When someone requests need shrinking the update interval immediately, it sends the duration it expects to
 		// this channel.
 		shrinkIntervalCh chan time.Duration
@@ -350,10 +350,10 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 	defer o.adaptiveUpdateIntervalState.mu.Unlock()
 
 	configuredInterval := time.Duration(o.lastTSUpdateInterval.Load())
-	prevAdaptiveInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
-	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
+	prevAdaptiveUpdateInterval := time.Duration(o.adaptiveLastTSUpdateInterval.Load())
+	lastReachDropThresholdTime := time.UnixMilli(o.adaptiveUpdateIntervalState.lastShortStalenessReadTime.Load())
 
-	currentAdaptiveInterval := prevAdaptiveInterval
+	currentAdaptiveUpdateInterval := prevAdaptiveUpdateInterval
 
 	// Shortcut
 	const none = adaptiveUpdateTSIntervalStateNone
@@ -377,14 +377,14 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 	checkNormal := func() (adaptiveUpdateTSIntervalState, time.Duration) {
 		// If the current actual update interval is synced with the configured value, and it's not unadjustable state,
 		// then it's the normal state.
-		if configuredInterval > minAllowedAdaptiveUpdateTSInterval && currentAdaptiveInterval == configuredInterval {
-			return adaptiveUpdateTSIntervalStateNormal, currentAdaptiveInterval
+		if configuredInterval > minAllowedAdaptiveUpdateTSInterval && currentAdaptiveUpdateInterval == configuredInterval {
+			return adaptiveUpdateTSIntervalStateNormal, currentAdaptiveUpdateInterval
 		}
 		return none, 0
 	}
 
 	checkAdapting := func() (adaptiveUpdateTSIntervalState, time.Duration) {
-		if requiredStaleness != 0 && requiredStaleness < currentAdaptiveInterval && currentAdaptiveInterval > minAllowedAdaptiveUpdateTSInterval {
+		if requiredStaleness != 0 && requiredStaleness < currentAdaptiveUpdateInterval && currentAdaptiveUpdateInterval > minAllowedAdaptiveUpdateTSInterval {
 			// If we are calculating the interval because of a request that requires a shorter staleness, we shrink the
 			// update interval immediately to adapt to it.
 			// We shrink the update interval to a value slightly lower than the requested staleness to avoid potential
@@ -393,23 +393,23 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 			return adaptiveUpdateTSIntervalStateAdapting, newInterval
 		}
 
-		if currentAdaptiveInterval != configuredInterval && now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
+		if currentAdaptiveUpdateInterval != configuredInterval && now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
 			// There is a recent request that requires a short staleness. Keep the current adaptive interval.
 			// If it's not adapting state, it's possible that it's previously in recovering state, and it stops recovering
 			// as there is a new read operation requesting a short staleness.
-			return adaptiveUpdateTSIntervalStateAdapting, currentAdaptiveInterval
+			return adaptiveUpdateTSIntervalStateAdapting, currentAdaptiveUpdateInterval
 		}
 
 		return none, 0
 	}
 
 	checkRecovering := func() (adaptiveUpdateTSIntervalState, time.Duration) {
-		if currentAdaptiveInterval == configuredInterval || now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
+		if currentAdaptiveUpdateInterval == configuredInterval || now.Sub(lastReachDropThresholdTime) < adaptiveUpdateTSIntervalDelayBeforeRecovering {
 			return none, 0
 		}
 
 		timeSinceLastTick := now.Sub(o.adaptiveUpdateIntervalState.lastTick)
-		newInterval := currentAdaptiveInterval + time.Duration(timeSinceLastTick.Seconds()*float64(adaptiveUpdateTSIntervalRecoverPerSecond))
+		newInterval := currentAdaptiveUpdateInterval + time.Duration(timeSinceLastTick.Seconds()*float64(adaptiveUpdateTSIntervalRecoverPerSecond))
 		if newInterval > configuredInterval {
 			newInterval = configuredInterval
 		}
@@ -426,7 +426,7 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 				continue
 			}
 
-			currentAdaptiveInterval = newInterval
+			currentAdaptiveUpdateInterval = newInterval
 
 			// If the final state is the recovering state, do an additional step to check whether it can go back to
 			// normal state immediately.
@@ -435,25 +435,25 @@ func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Dura
 				nextState, newInterval = checkNormal()
 				if nextState != none {
 					state = nextState
-					currentAdaptiveInterval = newInterval
+					currentAdaptiveUpdateInterval = newInterval
 				}
 			}
 
-			o.adaptiveLastTSUpdateInterval.Store(int64(currentAdaptiveInterval))
+			o.adaptiveLastTSUpdateInterval.Store(int64(currentAdaptiveUpdateInterval))
 			if o.adaptiveUpdateIntervalState.state != state {
-				logutil.Logger(context.Background()).Info("adaptive update ts interval state transition",
+				logutil.BgLogger().Info("adaptive update ts interval state transition",
 					zap.Duration("configuredInterval", configuredInterval),
-					zap.Duration("prevAdaptiveUpdateInterval", prevAdaptiveInterval),
-					zap.Duration("newAdaptiveUpdateInterval", currentAdaptiveInterval),
+					zap.Duration("prevAdaptiveUpdateInterval", prevAdaptiveUpdateInterval),
+					zap.Duration("newAdaptiveUpdateInterval", currentAdaptiveUpdateInterval),
 					zap.Duration("requiredStaleness", requiredStaleness),
 					zap.Stringer("prevState", o.adaptiveUpdateIntervalState.state),
 					zap.Stringer("newState", state))
 				o.adaptiveUpdateIntervalState.state = state
 			}
 
-			return currentAdaptiveInterval
+			return currentAdaptiveUpdateInterval
 		}
-		return currentAdaptiveInterval
+		return currentAdaptiveUpdateInterval
 	}
 
 	var newInterval time.Duration
@@ -644,8 +644,6 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 		// waiting for reusing the same result should not be canceled. So pass context.Background() instead of the
 		// current ctx.
 		res, err := o.GetTimestamp(context.Background(), opt)
-		// After finishing the current call, allow the next call to trigger fetching a new TS.
-		o.tsForValidation.Forget(opt.TxnScope)
 		return res, err
 	})
 	select {
@@ -696,11 +694,11 @@ func (o *pdOracle) adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(rea
 		// Record the most recent time when there's a read operation requesting the staleness close enough to the
 		// current update interval.
 		nowMillis := now.UnixMilli()
-		last := o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load()
+		last := o.adaptiveUpdateIntervalState.lastShortStalenessReadTime.Load()
 		if last < nowMillis {
 			// Do not retry if the CAS fails (which may happen when there are other goroutines updating it
 			// concurrently), as we don't actually need to set it strictly.
-			o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.CompareAndSwap(last, nowMillis)
+			o.adaptiveUpdateIntervalState.lastShortStalenessReadTime.CompareAndSwap(last, nowMillis)
 		}
 	}
 

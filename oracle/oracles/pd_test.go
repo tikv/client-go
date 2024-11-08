@@ -232,13 +232,13 @@ func TestAdaptiveUpdateTSInterval(t *testing.T) {
 	expectedInterval := time.Second - adaptiveUpdateTSIntervalShrinkingPreserve
 	assert.Equal(t, expectedInterval, o.nextUpdateInterval(now, time.Second))
 	assert.Equal(t, adaptiveUpdateTSIntervalStateAdapting, o.adaptiveUpdateIntervalState.state)
-	assert.Equal(t, now.UnixMilli(), o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
+	assert.Equal(t, now.UnixMilli(), o.adaptiveUpdateIntervalState.lastShortStalenessReadTime.Load())
 
 	// Let read with short staleness continue happening.
 	now = now.Add(adaptiveUpdateTSIntervalDelayBeforeRecovering / 2)
 	o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(mockTS(time.Second), mockTS(0), now)
 	mustNoNotify()
-	assert.Equal(t, now.UnixMilli(), o.adaptiveUpdateIntervalState.lastReachDropThresholdTime.Load())
+	assert.Equal(t, now.UnixMilli(), o.adaptiveUpdateIntervalState.lastShortStalenessReadTime.Load())
 
 	// The adaptiveUpdateTSIntervalDelayBeforeRecovering has not been elapsed since the last time there is a read with short
 	// staleness. The update interval won't start being reset at this time.
