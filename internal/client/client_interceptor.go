@@ -124,13 +124,13 @@ func buildResourceControlInterceptor(
 			resp, err := next(target, req)
 			if resp != nil {
 				respInfo := resourcecontrol.MakeResponseInfo(resp)
-				consumption, err = resourceControlInterceptor.OnResponse(resourceGroupName, reqInfo, respInfo)
+				consumption, waitDuration, err = resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
 				if err != nil {
 					return nil, err
 				}
 				if ruDetails != nil {
 					detail := ruDetails.(*util.RUDetails)
-					detail.Update(consumption, time.Duration(0))
+					detail.Update(consumption, waitDuration)
 				}
 			}
 			return resp, err
