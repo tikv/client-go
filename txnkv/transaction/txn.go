@@ -1704,6 +1704,10 @@ func (txn *KVTxn) StartTS() uint64 {
 	return txn.startTS
 }
 
+func (txn *KVTxn) CommitTS() uint64 {
+	return txn.commitTS
+}
+
 // Valid returns if the transaction is valid.
 // A transaction become invalid after commit or rollback.
 func (txn *KVTxn) Valid() bool {

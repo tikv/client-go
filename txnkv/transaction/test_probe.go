@@ -38,11 +38,6 @@ func (txn TxnProbe) SetStartTS(ts uint64) {
 	txn.startTS = ts
 }
 
-// GetCommitTS returns the commit ts.
-func (txn TxnProbe) GetCommitTS() uint64 {
-	return txn.commitTS
-}
-
 // GetUnionStore returns transaction's embedded unionstore.
 func (txn TxnProbe) GetUnionStore() *unionstore.KVUnionStore {
 	return txn.us
