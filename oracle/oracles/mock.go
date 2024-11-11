@@ -137,6 +137,17 @@ func (o *MockOracle) SetLowResolutionTimestampUpdateInterval(time.Duration) erro
 	return nil
 }
 
+func (o *MockOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *oracle.Option) error {
+	currentTS, err := o.GetTimestamp(ctx, opt)
+	if err != nil {
+		return errors.Errorf("fail to validate read timestamp: %v", err)
+	}
+	if currentTS < readTS {
+		return errors.Errorf("cannot set read timestamp to a future time")
+	}
+	return nil
+}
+
 // IsExpired implements oracle.Oracle interface.
 func (o *MockOracle) IsExpired(lockTimestamp, TTL uint64, _ *oracle.Option) bool {
 	o.RLock()
