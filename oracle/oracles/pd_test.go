@@ -335,8 +335,9 @@ func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
 		getCtx := func(index int) context.Context {
 			if cancelIndex == index {
 				return ctx
+			} else {
+				return context.Background()
 			}
-			return context.Background()
 		}
 
 		results = append(results, asyncValidate(getCtx(0), ts-2))
