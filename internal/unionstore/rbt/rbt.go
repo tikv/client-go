@@ -124,8 +124,8 @@ func (db *RBT) RevertVAddr(hdr *arena.MemdbVlogHdr) {
 			db.count--
 			db.size -= int(node.klen)
 		} else {
-			node.setKeyFlags(keptFlags)
 			db.dirty = true
+			node.setKeyFlags(keptFlags)
 		}
 	} else {
 		db.size += len(db.vlog.GetValue(hdr.OldValue))
@@ -908,7 +908,7 @@ func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
 }
 
 func (n *memdbNode) markDelete() {
-	n.flags |= deleteFlag
+	n.flags = (nodeColorBit & n.flags) | deleteFlag
 }
 
 func (n *memdbNode) isDeleted() bool {
