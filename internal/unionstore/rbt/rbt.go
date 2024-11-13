@@ -911,7 +911,7 @@ func (n *memdbNode) markDelete() {
 	n.flags = (nodeColorBit & n.flags) | deleteFlag
 }
 
-func (n *memdbNode) markUndelete() {
+func (n *memdbNode) unmarkDelete() {
 	n.flags &= ^deleteFlag
 }
 
