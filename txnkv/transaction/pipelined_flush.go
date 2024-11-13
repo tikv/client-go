@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -481,7 +480,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		fmt.Sprintf("pipelined-dml-%s", status),
 		fmt.Sprintf("pipelined-dml-%s-%d", status, c.startTS),
 		c.store,
-		int(config.PipelinedResolveConcurrency.Load()),
+		c.txn.pipelinedResolveLockConcurrency,
 		handler,
 	)
 	runner.SetStatLogInterval(30 * time.Second)

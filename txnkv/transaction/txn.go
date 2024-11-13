@@ -109,12 +109,18 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 	return true
 }
 
+type PipelinedTxnOptions struct {
+	Enable                 bool
+	FlushConcurrency       int
+	ResolveLockConcurrency int
+}
+
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope       string
-	StartTS        *uint64
-	PipelinedMemDB bool
+	TxnScope     string
+	StartTS      *uint64
+	PipelinedTxn PipelinedTxnOptions
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -170,8 +176,10 @@ type KVTxn struct {
 
 	forUpdateTSChecks map[string]uint64
 
-	isPipelined     bool
-	pipelinedCancel context.CancelFunc
+	isPipelined                     bool
+	pipelinedCancel                 context.CancelFunc
+	pipelinedFlushConcurrency       int
+	pipelinedResolveLockConcurrency int
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -190,10 +198,12 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
 		RequestSource:     snapshot.RequestSource,
 	}
-	if !options.PipelinedMemDB {
+	if !options.PipelinedTxn.Enable {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
 		return newTiKVTxn, nil
 	}
+	newTiKVTxn.pipelinedFlushConcurrency = options.PipelinedTxn.FlushConcurrency
+	newTiKVTxn.pipelinedResolveLockConcurrency = options.PipelinedTxn.ResolveLockConcurrency
 	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
 		return nil, err
 	}

@@ -1117,7 +1117,7 @@ func (c *twoPhaseCommitter) calcActionConcurrency(
 	// TODO: Find a self-adaptive way to control the rate limit here.
 	switch action.(type) {
 	case actionPipelinedFlush:
-		rateLim = min(rateLim, max(1, int(config.PipelinedFlushConcurrency.Load())))
+		rateLim = min(rateLim, max(1, c.txn.pipelinedFlushConcurrency))
 	default:
 		if rateLim > config.GetGlobalConfig().CommitterConcurrency {
 			rateLim = config.GetGlobalConfig().CommitterConcurrency
