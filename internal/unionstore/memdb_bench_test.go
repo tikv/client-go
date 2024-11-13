@@ -38,6 +38,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math/rand"
+	"slices"
 	"testing"
 )
 
@@ -245,6 +246,26 @@ func BenchmarkMemBufferCache(b *testing.B) {
 				// the cache hit get will be fast
 				buffer.Get(ctx, buf[i][:])
 			}
+		}
+	}
+	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
+	b.Run("ART", func(b *testing.B) { fn(b, newArtDBWithContext()) })
+}
+
+func BenchmarkMemBufferSetGetLongKey(b *testing.B) {
+	fn := func(b *testing.B, buffer MemBuffer) {
+		keys := make([][]byte, b.N)
+		for i := 0; i < b.N; i++ {
+			keys[i] = make([]byte, 1024)
+			binary.BigEndian.PutUint64(keys[i], uint64(i))
+			slices.Reverse(keys[i])
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			buffer.Set(keys[i], keys[i])
+		}
+		for i := 0; i < b.N; i++ {
+			buffer.Get(context.Background(), keys[i])
 		}
 	}
 	b.Run("RBT", func(b *testing.B) { fn(b, newRbtDBWithContext()) })
