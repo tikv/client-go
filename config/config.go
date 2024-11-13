@@ -48,18 +48,23 @@ import (
 )
 
 var (
-	globalConf                atomic.Value
-	PipelinedFlushConcurrency atomic.Uint32
+	globalConf                  atomic.Value
+	PipelinedFlushConcurrency   atomic.Uint32
+	PipelinedResolveConcurrency atomic.Uint32
 )
 
 const (
 	// DefStoresRefreshInterval is the default value of StoresRefreshInterval
-	DefStoresRefreshInterval = 60
+	DefStoresRefreshInterval       = 60
+	DefPipelinedFlushConcurrency   = 128
+	DefPipelinedResolveConcurrency = 8
 )
 
 func init() {
 	conf := DefaultConfig()
 	StoreGlobalConfig(&conf)
+	PipelinedFlushConcurrency.Store(DefPipelinedFlushConcurrency)
+	PipelinedResolveConcurrency.Store(DefPipelinedResolveConcurrency)
 }
 
 // Config contains configuration options.
