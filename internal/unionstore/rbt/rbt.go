@@ -351,6 +351,7 @@ func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	// This set must be in the latest stage so no special processing is needed.
 	flags := x.GetKeyFlags()
 	if flags == 0 && x.vptr.IsNull() && x.isDeleted() {
+		x.markUndelete()
 		db.count++
 		db.size += int(x.klen)
 	}
@@ -903,12 +904,15 @@ func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 }
 
 func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
-	// only keep the color bit.
-	n.flags = (nodeColorBit & n.flags) | uint16(f)
+	n.flags = (^nodeFlagsMask & n.flags) | uint16(f)
 }
 
 func (n *memdbNode) markDelete() {
 	n.flags = (nodeColorBit & n.flags) | deleteFlag
+}
+
+func (n *memdbNode) markUndelete() {
+	n.flags &= ^deleteFlag
 }
 
 func (n *memdbNode) isDeleted() bool {
