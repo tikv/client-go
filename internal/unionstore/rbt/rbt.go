@@ -125,7 +125,7 @@ func (db *RBT) RevertVAddr(hdr *arena.MemdbVlogHdr) {
 			db.size -= int(node.klen)
 		} else {
 			db.dirty = true
-			node.setKeyFlags(keptFlags)
+			node.resetKeyFlags(keptFlags)
 		}
 	} else {
 		db.size += len(db.vlog.GetValue(hdr.OldValue))
@@ -364,7 +364,7 @@ func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	if flags.AndPersistent() != 0 {
 		db.dirty = true
 	}
-	x.setKeyFlags(flags)
+	x.resetKeyFlags(flags)
 
 	if value == nil {
 		return nil
@@ -903,7 +903,7 @@ func (n *memdbNode) getKeyFlags() kv.KeyFlags {
 	return kv.KeyFlags(n.flags & nodeFlagsMask)
 }
 
-func (n *memdbNode) setKeyFlags(f kv.KeyFlags) {
+func (n *memdbNode) resetKeyFlags(f kv.KeyFlags) {
 	n.flags = (^nodeFlagsMask & n.flags) | uint16(f)
 }
 

@@ -142,7 +142,7 @@ func (i *RBTIterator) Flags() kv.KeyFlags {
 func (i *RBTIterator) UpdateFlags(ops ...kv.FlagsOp) {
 	origin := i.curr.getKeyFlags()
 	n := kv.ApplyFlagsOps(origin, ops...)
-	i.curr.setKeyFlags(n)
+	i.curr.resetKeyFlags(n)
 }
 
 // HasValue returns false if it is flags only.
