@@ -84,16 +84,8 @@ func TestDiscard(t *testing.T) {
 	}
 	it, _ := db.Iter(nil, nil)
 	it.seekToFirst()
-	// find a non-deleted key after seek.
-	for !it.curr.isNull() && it.curr.isDeleted() {
-		_ = it.Next()
-	}
 	assert.False(it.Valid())
 	it.seekToLast()
-	// find a non-deleted key after seek.
-	for !it.curr.isNull() && it.curr.isDeleted() {
-		_ = it.Next()
-	}
 	assert.False(it.Valid())
 	it.seek([]byte{0xff})
 	assert.False(it.Valid())

@@ -199,6 +199,9 @@ func (i *RBTIterator) seekToFirst() {
 	}
 
 	i.curr = y
+	for !i.curr.isNull() && i.curr.isDeleted() {
+		i.curr = i.db.successor(i.curr)
+	}
 }
 
 func (i *RBTIterator) seekToLast() {
@@ -211,6 +214,9 @@ func (i *RBTIterator) seekToLast() {
 	}
 
 	i.curr = y
+	for !i.curr.isNull() && i.curr.isDeleted() {
+		i.curr = i.db.predecessor(i.curr)
+	}
 }
 
 func (i *RBTIterator) seek(key []byte) {
