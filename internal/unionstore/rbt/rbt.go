@@ -351,7 +351,7 @@ func (db *RBT) Set(key []byte, value []byte, ops ...kv.FlagsOp) error {
 	// This set must be in the latest stage so no special processing is needed.
 	flags := x.GetKeyFlags()
 	if flags == 0 && x.vptr.IsNull() && x.isDeleted() {
-		x.markUndelete()
+		x.unmarkDelete()
 		db.count++
 		db.size += int(x.klen)
 	}
