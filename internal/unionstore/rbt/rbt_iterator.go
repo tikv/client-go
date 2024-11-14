@@ -119,7 +119,7 @@ func (i *RBTIterator) init() {
 		}
 	}
 
-	if i.isFlagsOnly() && !i.includeFlags {
+	if (i.isFlagsOnly() && !i.includeFlags) || (!i.curr.isNull() && i.curr.isDeleted()) {
 		err := i.Next()
 		_ = err // memdbIterator will never fail
 	}
@@ -142,7 +142,7 @@ func (i *RBTIterator) Flags() kv.KeyFlags {
 func (i *RBTIterator) UpdateFlags(ops ...kv.FlagsOp) {
 	origin := i.curr.getKeyFlags()
 	n := kv.ApplyFlagsOps(origin, ops...)
-	i.curr.setKeyFlags(n)
+	i.curr.resetKeyFlags(n)
 }
 
 // HasValue returns false if it is flags only.
@@ -174,6 +174,10 @@ func (i *RBTIterator) Next() error {
 			i.curr = i.db.successor(i.curr)
 		}
 
+		if i.curr.isDeleted() {
+			continue
+		}
+
 		// We need to skip persistent flags only nodes.
 		if i.includeFlags || !i.isFlagsOnly() {
 			break
@@ -195,6 +199,9 @@ func (i *RBTIterator) seekToFirst() {
 	}
 
 	i.curr = y
+	for !i.curr.isNull() && i.curr.isDeleted() {
+		i.curr = i.db.successor(i.curr)
+	}
 }
 
 func (i *RBTIterator) seekToLast() {
@@ -207,6 +214,9 @@ func (i *RBTIterator) seekToLast() {
 	}
 
 	i.curr = y
+	for !i.curr.isNull() && i.curr.isDeleted() {
+		i.curr = i.db.predecessor(i.curr)
+	}
 }
 
 func (i *RBTIterator) seek(key []byte) {

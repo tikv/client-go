@@ -1231,7 +1231,7 @@ func testMemBufferCache(t *testing.T, buffer MemBuffer) {
 }
 
 func TestMemDBLeafFragmentation(t *testing.T) {
-	// RBT cannot pass the leaf fragmentation test.
+	testMemDBLeafFragmentation(t, newRbtDBWithContext())
 	testMemDBLeafFragmentation(t, newArtDBWithContext())
 }
 
