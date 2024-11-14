@@ -449,6 +449,7 @@ func (action actionPrewrite) handleSingleBatch(
 					zap.Uint64("session", c.sessionID),
 					zap.Uint64("txnID", c.startTS),
 					zap.Stringer("lock", lock),
+					zap.Stringer("policy", c.txn.prewriteEncounterLockPolicy),
 				)
 				logged[lock.TxnID] = struct{}{}
 			}
@@ -457,7 +458,8 @@ func (action actionPrewrite) handleSingleBatch(
 			// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
-			if lock.TxnID > c.startTS && !c.isPessimistic {
+			if (lock.TxnID > c.startTS && !c.isPessimistic) ||
+				c.txn.prewriteEncounterLockPolicy == TryResolvePolicy {
 				return tikverr.NewErrWriteConflictWithArgs(
 					c.startTS,
 					lock.TxnID,

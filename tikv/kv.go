@@ -951,6 +951,12 @@ func WithPipelinedMemDB() TxnOption {
 	}
 }
 
+func WithPrewriteEncounterLockPolicy(policy transaction.PrewriteEncounterLockPolicy) TxnOption {
+	return func(st *transaction.TxnOptions) {
+		st.PrewriteEncounterLockPolicy = policy
+	}
+}
+
 // TODO: remove once tidb and br are ready
 
 // KVTxn contains methods to interact with a TiKV transaction.
