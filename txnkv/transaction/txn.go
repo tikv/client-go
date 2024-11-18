@@ -842,23 +842,27 @@ func (txn *KVTxn) Rollback() error {
 		// no need to clean up locks when no flush triggered.
 		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
 		needCleanUpLocks := len(pipelinedStart) != 0 && len(pipelinedEnd) != 0
-		broadcastToAllStores(
-			txn,
-			txn.committer.store,
-			retry.NewBackofferWithVars(
-				txn.store.Ctx(),
-				broadcastMaxBackoff,
-				txn.committer.txn.vars,
-			),
-			&kvrpcpb.TxnStatus{
-				StartTs:     txn.startTS,
-				MinCommitTs: txn.committer.minCommitTSMgr.get(),
-				CommitTs:    0,
-				RolledBack:  true,
-				IsCompleted: !needCleanUpLocks,
+		txn.spawnWithStorePool(
+			func() {
+				broadcastToAllStores(
+					txn,
+					txn.committer.store,
+					retry.NewBackofferWithVars(
+						txn.store.Ctx(),
+						broadcastMaxBackoff,
+						txn.committer.txn.vars,
+					),
+					&kvrpcpb.TxnStatus{
+						StartTs:     txn.startTS,
+						MinCommitTs: txn.committer.minCommitTSMgr.get(),
+						CommitTs:    0,
+						RolledBack:  true,
+						IsCompleted: !needCleanUpLocks,
+					},
+					txn.resourceGroupName,
+					txn.resourceGroupTag,
+				)
 			},
-			txn.resourceGroupName,
-			txn.resourceGroupTag,
 		)
 		if needCleanUpLocks {
 			rollbackBo := retry.NewBackofferWithVars(txn.store.Ctx(), CommitSecondaryMaxBackoff, txn.vars)

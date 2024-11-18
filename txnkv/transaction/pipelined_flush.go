@@ -486,7 +486,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 	)
 	runner.SetStatLogInterval(30 * time.Second)
 
-	go func() {
+	c.txn.spawnWithStorePool(func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
 			logutil.Logger(bo.GetCtx()).Error("[pipelined dml] resolve flushed locks failed",
 				zap.String("txn-status", status),
@@ -529,5 +529,5 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 				c.resourceGroupTag,
 			)
 		}
-	}()
+	})
 }
