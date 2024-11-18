@@ -388,8 +388,8 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 		Priority:         c.priority,
 		SyncLog:          c.syncLog,
 		ResourceGroupTag: c.resourceGroupTag,
-		DiskFullOpt:      c.txn.diskFullOpt,
-		TxnSource:        c.txn.txnSource,
+		DiskFullOpt:      c.diskFullOpt,
+		TxnSource:        c.txnSource,
 		RequestSource:    PipelinedRequestSource,
 		ResourceControlContext: &kvrpcpb.ResourceControlContext{
 			ResourceGroupName: c.resourceGroupName,
