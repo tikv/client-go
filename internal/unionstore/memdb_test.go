@@ -40,6 +40,8 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	leveldb "github.com/pingcap/goleveldb/leveldb/memdb"
@@ -894,5 +896,25 @@ func TestSnapshotGetIter(t *testing.T) {
 	for _, iter := range iters {
 		assert.Equal(iter.Key(), []byte{byte(0)})
 		assert.Equal(iter.Value(), []byte{byte(50)})
+	}
+}
+
+func TestMemDBLeafFragmentation(t *testing.T) {
+	buffer := newMemDB()
+	assert := assert.New(t)
+	h := buffer.Staging()
+	mem := buffer.Mem()
+	for i := 0; i < 10; i++ {
+		for k := 0; k < 100; k++ {
+			buffer.Set([]byte(strings.Repeat(strconv.Itoa(k), 256)), []byte("value"))
+		}
+		cur := buffer.Mem()
+		if mem == 0 {
+			mem = cur
+		} else {
+			assert.LessOrEqual(cur, mem)
+		}
+		buffer.Cleanup(h)
+		h = buffer.Staging()
 	}
 }
