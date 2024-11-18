@@ -115,11 +115,11 @@ type TxnOptions struct {
 	TxnScope       string
 	StartTS        *uint64
 	PipelinedMemDB bool
-	PrewriteEncounterLockPolicy PrewriteEncounterLockPolicy
 }
 
 // PrewriteEncounterLockPolicy specifies the policy when prewrite encounters locks.
 type PrewriteEncounterLockPolicy int
+
 const (
 	// TryResolvePolicy is the default one: try to resolve those locks with smaller startTS.
 	TryResolvePolicy PrewriteEncounterLockPolicy = iota
@@ -494,6 +494,11 @@ func (txn *KVTxn) ClearDiskFullOpt() {
 // SetAssertionLevel sets how strict the assertions in the transaction should be.
 func (txn *KVTxn) SetAssertionLevel(assertionLevel kvrpcpb.AssertionLevel) {
 	txn.assertionLevel = assertionLevel
+}
+
+// SetPrewriteEncounterLockPolicy specifies the behavior when prewrite encounters locks.
+func (txn *KVTxn) SetPrewriteEncounterLockPolicy(policy PrewriteEncounterLockPolicy) {
+	txn.prewriteEncounterLockPolicy = policy
 }
 
 // IsPessimistic returns true if it is pessimistic.

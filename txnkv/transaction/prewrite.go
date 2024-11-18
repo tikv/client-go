@@ -459,7 +459,7 @@ func (action actionPrewrite) handleSingleBatch(
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if (lock.TxnID > c.startTS && !c.isPessimistic) ||
-				c.txn.prewriteEncounterLockPolicy == TryResolvePolicy {
+				c.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
 				return tikverr.NewErrWriteConflictWithArgs(
 					c.startTS,
 					lock.TxnID,
