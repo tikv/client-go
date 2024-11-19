@@ -43,11 +43,15 @@ func (t *ART) SnapshotIter(start, end []byte) *SnapIter {
 		panic(err)
 	}
 	it := &SnapIter{
-		Iterator: inner,
-		cp:       t.getSnapshot(),
+		Iterator:   inner,
+		cp:         t.getSnapshot(),
+		isCounting: false,
 	}
 	for !it.setValue() && it.Valid() {
 		_ = it.Next()
+	}
+	if it.Valid() {
+		it.counterInc()
 	}
 	return it
 }
@@ -62,8 +66,11 @@ func (t *ART) SnapshotIterReverse(k, lowerBound []byte) *SnapIter {
 		Iterator: inner,
 		cp:       t.getSnapshot(),
 	}
-	for !it.setValue() && it.valid {
+	for !it.setValue() && it.Valid() {
 		_ = it.Next()
+	}
+	if it.Valid() {
+		it.counterInc()
 	}
 	return it
 }
@@ -91,8 +98,9 @@ func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
 
 type SnapIter struct {
 	*Iterator
-	value []byte
-	cp    arena.MemDBCheckpoint
+	value      []byte
+	cp         arena.MemDBCheckpoint
+	isCounting bool
 }
 
 func (i *SnapIter) Value() []byte {
@@ -100,6 +108,11 @@ func (i *SnapIter) Value() []byte {
 }
 
 func (i *SnapIter) Next() error {
+	defer func() {
+		if !i.Valid() {
+			i.counterDec()
+		}
+	}()
 	i.value = nil
 	for i.Valid() {
 		if err := i.Iterator.Next(); err != nil {
@@ -112,6 +125,11 @@ func (i *SnapIter) Next() error {
 	return nil
 }
 
+func (i *SnapIter) Close() {
+	i.Iterator.Close()
+	i.counterDec()
+}
+
 func (i *SnapIter) setValue() bool {
 	if !i.Valid() {
 		return false
@@ -121,4 +139,17 @@ func (i *SnapIter) setValue() bool {
 		return true
 	}
 	return false
+}
+
+func (i *SnapIter) counterInc() {
+	i.isCounting = true
+	i.tree.allocator.snapshotInc()
+}
+
+func (i *SnapIter) counterDec() {
+	if !i.isCounting {
+		return
+	}
+	i.isCounting = false
+	i.tree.allocator.snapshotDec()
 }

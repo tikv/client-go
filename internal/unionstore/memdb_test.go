@@ -1329,36 +1329,37 @@ func TestSelectValueHistory(t *testing.T) {
 }
 
 func TestSnapshotReaderWithWrite(t *testing.T) {
-	check := func(db MemBuffer) {
-		db.Set([]byte{0, 1}, []byte{0, 1})
-		db.Set([]byte{0, 2}, []byte{0, 2})
-		db.Set([]byte{0, 3}, []byte{0, 3})
-		db.Set([]byte{0, 4}, []byte{0, 4})
+	check := func(db MemBuffer, num int) {
+		for i := 0; i < num; i++ {
+			db.Set([]byte{0, byte(i)}, []byte{0, byte(i)})
+		}
 		h := db.Staging()
 		defer db.Release(h)
 
-		iter := db.SnapshotIter([]byte{0, 1}, []byte{0, 255})
-		assert.Equal(t, iter.Key(), []byte{0, 1})
+		iter := db.SnapshotIter([]byte{0, 0}, []byte{0, 255})
+		assert.Equal(t, iter.Key(), []byte{0, 0})
 
-		db.Set([]byte{0, 5}, []byte{0, 5}) // node4 is freed and wait to be reused.
+		db.Set([]byte{0, byte(num)}, []byte{0, byte(num)}) // ART: node4/node16/node48 is freed and wait to be reused.
 
-		// reuse the node4
-		db.Set([]byte{1, 1}, []byte{1, 1})
-		db.Set([]byte{1, 2}, []byte{1, 2})
-		db.Set([]byte{1, 3}, []byte{1, 3})
-		db.Set([]byte{1, 4}, []byte{1, 4})
+		// ART: reuse the node4/node16/node48
+		for i := 0; i < num; i++ {
+			db.Set([]byte{1, byte(i)}, []byte{1, byte(i)})
+		}
 
-		assert.Equal(t, iter.Key(), []byte{0, 1})
-		iter.Next()
-		assert.Equal(t, iter.Key(), []byte{0, 2})
-		iter.Next()
-		assert.Equal(t, iter.Key(), []byte{0, 3})
-		iter.Next()
-		assert.Equal(t, iter.Key(), []byte{0, 4})
-		iter.Next()
+		for i := 0; i < num; i++ {
+			assert.True(t, iter.Valid())
+			assert.Equal(t, iter.Key(), []byte{0, byte(i)})
+			assert.Nil(t, iter.Next())
+		}
 		assert.False(t, iter.Valid())
 	}
 
-	check(newRbtDBWithContext())
-	check(newArtDBWithContext())
+	check(newRbtDBWithContext(), 4)
+	check(newArtDBWithContext(), 4)
+
+	check(newRbtDBWithContext(), 16)
+	check(newArtDBWithContext(), 16)
+
+	check(newRbtDBWithContext(), 48)
+	check(newArtDBWithContext(), 48)
 }
