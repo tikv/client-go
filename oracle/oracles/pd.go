@@ -485,6 +485,8 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
 
+	// Note that as `doUpdate` updates last tick time while `nextUpdateInterval` may perform calculation depending on the
+	// last tick time, `doUpdate` should be called after finishing calculating the next interval.
 	doUpdate := func(now time.Time) {
 		// Update the timestamp for each txnScope
 		o.lastTSMap.Range(func(key, _ interface{}) bool {
