@@ -1327,3 +1327,38 @@ func TestSelectValueHistory(t *testing.T) {
 	check(t, newRbtDBWithContext())
 	check(t, newArtDBWithContext())
 }
+
+func TestSnapshotReaderWithWrite(t *testing.T) {
+	check := func(db MemBuffer) {
+		db.Set([]byte{0, 1}, []byte{0, 1})
+		db.Set([]byte{0, 2}, []byte{0, 2})
+		db.Set([]byte{0, 3}, []byte{0, 3})
+		db.Set([]byte{0, 4}, []byte{0, 4})
+		h := db.Staging()
+		defer db.Release(h)
+
+		iter := db.SnapshotIter([]byte{0, 1}, []byte{0, 255})
+		assert.Equal(t, iter.Key(), []byte{0, 1})
+
+		db.Set([]byte{0, 5}, []byte{0, 5}) // node4 is freed and wait to be reused.
+
+		// reuse the node4
+		db.Set([]byte{1, 1}, []byte{1, 1})
+		db.Set([]byte{1, 2}, []byte{1, 2})
+		db.Set([]byte{1, 3}, []byte{1, 3})
+		db.Set([]byte{1, 4}, []byte{1, 4})
+
+		assert.Equal(t, iter.Key(), []byte{0, 1})
+		iter.Next()
+		assert.Equal(t, iter.Key(), []byte{0, 2})
+		iter.Next()
+		assert.Equal(t, iter.Key(), []byte{0, 3})
+		iter.Next()
+		assert.Equal(t, iter.Key(), []byte{0, 4})
+		iter.Next()
+		assert.False(t, iter.Valid())
+	}
+
+	check(newRbtDBWithContext())
+	check(newArtDBWithContext())
+}
