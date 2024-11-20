@@ -54,6 +54,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
+	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -836,11 +837,17 @@ func (s *RegionRequestSender) SendReqCtx(
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
 		}
-
+		execDetails := bo.GetCtx().Value(util.ExecDetailsKey)
+		trafficCollector := &networkCollector{}
 		var isLocalTraffic bool
+		isTiflashTarget := et == tikvrpc.TiFlash
 		if staleReadCollector != nil && s.replicaSelector != nil && s.replicaSelector.target != nil {
 			isLocalTraffic = s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels)
 			staleReadCollector.onReq(req, isLocalTraffic)
+		}
+		if execDetails != nil {
+			detail := execDetails.(*util.ExecDetails)
+			trafficCollector.onReq(req, detail, isLocalTraffic, isTiflashTarget)
 		}
 
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
@@ -926,6 +933,11 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 		if staleReadCollector != nil {
 			staleReadCollector.onResp(req.Type, resp, isLocalTraffic)
+		}
+
+		if execDetails != nil {
+			detail := execDetails.(*util.ExecDetails)
+			trafficCollector.onResp(req.Type, resp, detail, isLocalTraffic, isTiflashTarget)
 		}
 		return resp, rpcCtx, retryTimes, nil
 	}
@@ -1803,6 +1815,93 @@ func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Res
 		metrics.StaleReadLocalInBytes.Add(float64(size))
 	} else {
 		metrics.StaleReadRemoteInBytes.Add(float64(size))
+	}
+}
+
+type networkCollector struct {
+}
+
+func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails, isLocalTraffic bool, isTiflashTarget bool) {
+	size := 0
+	switch req.Type {
+	case tikvrpc.CmdGet:
+		size = req.Get().Size()
+	case tikvrpc.CmdBatchGet:
+		size = req.BatchGet().Size()
+	case tikvrpc.CmdScan:
+		size = req.Scan().Size()
+	case tikvrpc.CmdCop:
+		size = req.Cop().Size()
+	case tikvrpc.CmdPrewrite:
+		size = req.Prewrite().Size()
+	case tikvrpc.CmdCommit:
+		size = req.Commit().Size()
+	case tikvrpc.CmdPessimisticLock:
+		size = req.PessimisticLock().Size()
+	case tikvrpc.CmdMPPTask:
+		size = req.DispatchMPPTask().Size()
+	default:
+		// ignore others
+		return
+	}
+	size += req.Context.Size()
+	var total, crossZone *int64
+	if isTiflashTarget {
+		total = &details.BytesSendMPPTotal
+		crossZone = &details.BytesSendMPPCrossZone
+	} else {
+		total = &details.BytesSendKVTotal
+		crossZone = &details.BytesSendKVCrossZone
+	}
+
+	atomic.AddInt64(total, int64(size))
+	if !isLocalTraffic {
+		atomic.AddInt64(crossZone, int64(size))
+	}
+}
+
+func (s *networkCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Response, details *util.ExecDetails, isLocalTraffic bool, isTiflashTarget bool) {
+	size := 0
+	switch tp {
+	case tikvrpc.CmdGet:
+		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
+	case tikvrpc.CmdBatchGet:
+		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
+	case tikvrpc.CmdScan:
+		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
+	case tikvrpc.CmdCop:
+		size += resp.Resp.(*coprocessor.Response).Size()
+	case tikvrpc.CmdPrewrite:
+		size += resp.Resp.(*kvrpcpb.PrewriteResponse).Size()
+	case tikvrpc.CmdCommit:
+		size += resp.Resp.(*kvrpcpb.CommitResponse).Size()
+	case tikvrpc.CmdPessimisticLock:
+		size += resp.Resp.(*kvrpcpb.PessimisticLockResponse).Size()
+	case tikvrpc.CmdMPPTask:
+		// if is MPPDataPacket
+		if resp1, ok := resp.Resp.(*mpp.MPPDataPacket); ok && resp1 != nil {
+			size += resp1.Size()
+		}
+		// if is DispatchTaskResponse
+		if resp1, ok := resp.Resp.(*mpp.DispatchTaskResponse); ok && resp1 != nil {
+			size += resp1.Size()
+		}
+	default:
+		// ignore others
+		return
+	}
+	var total, crossZone *int64
+	if isTiflashTarget {
+		total = &details.BytesReceivedMPPTotal
+		crossZone = &details.BytesReceivedMPPCrossZone
+	} else {
+		total = &details.BytesReceivedKVTotal
+		crossZone = &details.BytesReceivedKVCrossZone
+	}
+
+	atomic.AddInt64(total, int64(size))
+	if !isLocalTraffic {
+		atomic.AddInt64(crossZone, int64(size))
 	}
 }
 

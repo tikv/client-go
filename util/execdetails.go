@@ -337,6 +337,19 @@ type ExecDetails struct {
 	BackoffDuration    int64
 	WaitKVRespDuration int64
 	WaitPDRespDuration int64
+	TrafficDetails
+}
+
+// TrafficDetails contains traffic detail info.
+type TrafficDetails struct {
+	BytesSendKVTotal          int64
+	BytesReceivedKVTotal      int64
+	BytesSendKVCrossZone      int64
+	BytesReceivedKVCrossZone  int64
+	BytesSendMPPTotal         int64
+	BytesReceivedMPPTotal     int64
+	BytesSendMPPCrossZone     int64
+	BytesReceivedMPPCrossZone int64
 }
 
 // FormatDuration uses to format duration, this function will prune precision before format duration.
