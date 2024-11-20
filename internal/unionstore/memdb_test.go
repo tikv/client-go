@@ -1352,6 +1352,7 @@ func TestSnapshotReaderWithWrite(t *testing.T) {
 			assert.Nil(t, iter.Next())
 		}
 		assert.False(t, iter.Valid())
+		iter.Close()
 	}
 
 	check(newRbtDBWithContext(), 4)
