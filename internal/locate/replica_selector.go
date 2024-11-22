@@ -185,7 +185,7 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		if s.isStaleRead && s.attempts == 1 {
 			// stale-read request first access.
 			if !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
-				if hasDeadlineExceededError(strategy.leader()) || hasServierIsBusyError(strategy.leader()) {
+				if !strategy.canSendReplicaRead() {
 					// don't overwhelm the leader if it is busy
 					req.StaleRead = true
 					req.ReplicaRead = false
@@ -199,7 +199,7 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 				req.ReplicaRead = true
 			}
 		} else if s.isStaleRead {
-			if hasDeadlineExceededError(strategy.leader()) || hasServierIsBusyError(strategy.leader()) {
+			if !strategy.canSendReplicaRead() {
 				// don't overwhelm the leader if it is busy
 				req.StaleRead = true
 				req.ReplicaRead = false
@@ -315,23 +315,18 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	return nil
 }
 
-func (s *ReplicaSelectMixedStrategy) leader() *replica {
-	return replicas[s.leaderIdx]
-}
+func (s *ReplicaSelectMixedStrategy) canSendReplicaRead() bool {
+	replica := replicas[s.leaderIdx];
+	if (replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(notLeaderFlag)) {
+		return false
+	}	
+	return true
+}	
 
 func hasDeadlineExceededError(replicas []*replica) bool {
 	for _, replica := range replicas {
 		if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) {
 			// when meet deadline exceeded error, do fast retry without invalidate region cache.
-			return true
-		}
-	}
-	return false
-}
-
-func hasServierIsBusyError(replicas []*replica) bool {
-	for _, replica := range replicas {
-		if replica.hasFlag(serverIsBusyFlag) {
 			return true
 		}
 	}
