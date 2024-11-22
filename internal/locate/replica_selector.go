@@ -185,19 +185,29 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		if s.isStaleRead && s.attempts == 1 {
 			// stale-read request first access.
 			if !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
-				// If the target replica's labels is not match and not leader, use replica read.
-				// This is for compatible with old version.
+				if hasDeadlineExceededError(strategy.leader()) || hasServierIsBusyError(strategy.leader()) {
+					// don't overwhelm the leader if it is busy
+					req.StaleRead = true
+					req.ReplicaRead = false
+				} else {
+					req.StaleRead = false
+					req.ReplicaRead = true
+				}
+			} else {
+				// use replica read.
 				req.StaleRead = false
 				req.ReplicaRead = true
-			} else {
-				// use stale read.
-				req.StaleRead = true
-				req.ReplicaRead = false
 			}
 		} else if s.isStaleRead {
-			// we can retry with stale reads on replica
-			req.StaleRead = true
-			req.ReplicaRead = false	
+			if hasDeadlineExceededError(strategy.leader()) || hasServierIsBusyError(strategy.leader()) {
+				// don't overwhelm the leader if it is busy
+				req.StaleRead = true
+				req.ReplicaRead = false
+			} else { 
+				// use replica read.
+				req.StaleRead = false
+				req.ReplicaRead = true	
+			}
 		} else {
 			// always use replica.
 			req.StaleRead = false
@@ -213,6 +223,7 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		}
 	}
 }
+
 
 type ReplicaSelectLeaderStrategy struct {
 	leaderIdx AccessIndex
@@ -304,10 +315,23 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	return nil
 }
 
+func (s *ReplicaSelectMixedStrategy) leader() *replica {
+	return replicas[s.leaderIdx]
+}
+
 func hasDeadlineExceededError(replicas []*replica) bool {
 	for _, replica := range replicas {
 		if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) {
 			// when meet deadline exceeded error, do fast retry without invalidate region cache.
+			return true
+		}
+	}
+	return false
+}
+
+func hasServierIsBusyError(replicas []*replica) bool {
+	for _, replica := range replicas {
+		if replica.hasFlag(serverIsBusyFlag) {
 			return true
 		}
 	}
