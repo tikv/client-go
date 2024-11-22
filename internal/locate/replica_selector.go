@@ -185,7 +185,7 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		if s.isStaleRead && s.attempts == 1 {
 			// stale-read request first access.
 			if !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
-				if !strategy.canSendReplicaRead() {
+				if !strategy.canSendReplicaRead(s) {
 					// don't overwhelm the leader if it is busy
 					req.StaleRead = true
 					req.ReplicaRead = false
@@ -199,7 +199,7 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 				req.ReplicaRead = true
 			}
 		} else if s.isStaleRead {
-			if !strategy.canSendReplicaRead() {
+			if !strategy.canSendReplicaRead(s) {
 				// don't overwhelm the leader if it is busy
 				req.StaleRead = true
 				req.ReplicaRead = false
@@ -315,7 +315,8 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	return nil
 }
 
-func (s *ReplicaSelectMixedStrategy) canSendReplicaRead() bool {
+func (s *ReplicaSelectMixedStrategy) canSendReplicaRead(selector *replicaSelector) bool {
+	replicas := selector.replicas
 	replica := replicas[s.leaderIdx];
 	if (replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(notLeaderFlag)) {
 		return false
