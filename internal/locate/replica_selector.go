@@ -186,17 +186,18 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 			// stale-read request first access.
 			if !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
 				if !strategy.canSendReplicaRead(s) {
-					// don't overwhelm the leader if it is busy
+					// don't overwhelm the leader if it is busy. use stale read.
 					req.StaleRead = true
 					req.ReplicaRead = false
 				} else {
+					// use replica read.
 					req.StaleRead = false
 					req.ReplicaRead = true
 				}
 			} else {
-				// use replica read.
-				req.StaleRead = false
-				req.ReplicaRead = true
+				// use stale read.
+				req.StaleRead = true
+				req.ReplicaRead = false
 			}
 		} else if s.isStaleRead {
 			if !strategy.canSendReplicaRead(s) {
