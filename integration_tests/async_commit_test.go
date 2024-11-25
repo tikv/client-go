@@ -112,7 +112,7 @@ func (s *testAsyncCommitCommon) putKV(key, value []byte, enableAsyncCommit bool)
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
-	return txn.StartTS(), txn.GetCommitTS()
+	return txn.StartTS(), txn.CommitTS()
 }
 
 func (s *testAsyncCommitCommon) mustGetFromTxn(txn transaction.TxnProbe, key, expectedValue []byte) {
@@ -440,8 +440,8 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLinearizability() {
 	s.Nil(err)
 	err = t1.Commit(ctx)
 	s.Nil(err)
-	commitTS1 := t1.GetCommitTS()
-	commitTS2 := t2.GetCommitTS()
+	commitTS1 := t1.CommitTS()
+	commitTS2 := t2.CommitTS()
 	s.Less(commitTS2, commitTS1)
 }
 

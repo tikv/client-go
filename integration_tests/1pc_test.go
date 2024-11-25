@@ -112,12 +112,12 @@ func (s *testOnePCSuite) Test1PC() {
 	s.Equal(txn.GetCommitter().GetOnePCCommitTS(), txn.GetCommitter().GetCommitTS())
 	s.Greater(txn.GetCommitter().GetOnePCCommitTS(), txn.StartTS())
 	// Check keys are committed with the same version
-	s.mustGetFromSnapshot(txn.GetCommitTS(), k3, v3)
-	s.mustGetFromSnapshot(txn.GetCommitTS(), k4, v4)
-	s.mustGetFromSnapshot(txn.GetCommitTS(), k5, v5)
-	s.mustGetNoneFromSnapshot(txn.GetCommitTS()-1, k3)
-	s.mustGetNoneFromSnapshot(txn.GetCommitTS()-1, k4)
-	s.mustGetNoneFromSnapshot(txn.GetCommitTS()-1, k5)
+	s.mustGetFromSnapshot(txn.CommitTS(), k3, v3)
+	s.mustGetFromSnapshot(txn.CommitTS(), k4, v4)
+	s.mustGetFromSnapshot(txn.CommitTS(), k5, v5)
+	s.mustGetNoneFromSnapshot(txn.CommitTS()-1, k3)
+	s.mustGetNoneFromSnapshot(txn.CommitTS()-1, k4)
+	s.mustGetNoneFromSnapshot(txn.CommitTS()-1, k5)
 
 	// Overwriting in MVCC
 	v5New := []byte("v5new")
@@ -129,8 +129,8 @@ func (s *testOnePCSuite) Test1PC() {
 	s.True(txn.GetCommitter().IsOnePC())
 	s.Equal(txn.GetCommitter().GetOnePCCommitTS(), txn.GetCommitter().GetCommitTS())
 	s.Greater(txn.GetCommitter().GetOnePCCommitTS(), txn.StartTS())
-	s.mustGetFromSnapshot(txn.GetCommitTS(), k5, v5New)
-	s.mustGetFromSnapshot(txn.GetCommitTS()-1, k5, v5)
+	s.mustGetFromSnapshot(txn.CommitTS(), k5, v5New)
+	s.mustGetFromSnapshot(txn.CommitTS()-1, k5, v5)
 
 	// Check all keys
 	keys := [][]byte{k1, k2, k3, k4, k5}
@@ -175,8 +175,8 @@ func (s *testOnePCSuite) Test1PCIsolation() {
 	s.mustGetFromTxn(txn2, k, v1)
 	s.Nil(txn2.Rollback())
 
-	s.mustGetFromSnapshot(txn.GetCommitTS(), k, v2)
-	s.mustGetFromSnapshot(txn.GetCommitTS()-1, k, v1)
+	s.mustGetFromSnapshot(txn.CommitTS(), k, v2)
+	s.mustGetFromSnapshot(txn.CommitTS()-1, k, v1)
 }
 
 func (s *testOnePCSuite) Test1PCDisallowMultiRegion() {

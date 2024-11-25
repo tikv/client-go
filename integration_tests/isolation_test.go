@@ -96,7 +96,7 @@ func (s *testIsolationSuite) SetWithRetry(k, v []byte) writeRecord {
 		if err == nil {
 			return writeRecord{
 				startTS:  txn.StartTS(),
-				commitTS: txn.GetCommitTS(),
+				commitTS: txn.CommitTS(),
 			}
 		}
 	}

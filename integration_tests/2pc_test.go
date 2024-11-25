@@ -1076,7 +1076,7 @@ func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflict() {
 			txn.StartAggressiveLocking()
 
 			s.Nil(txn0.Commit(context.Background()))
-			s.Greater(txn0.GetCommitTS(), txn.StartTS())
+			s.Greater(txn0.CommitTS(), txn.StartTS())
 
 			lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 			if checkExistence {
@@ -1087,9 +1087,9 @@ func (s *testCommitterSuite) TestPessimisticLockAllowLockWithConflict() {
 			}
 			s.Nil(txn.LockKeys(context.Background(), lockCtx, key))
 
-			s.Equal(txn0.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
+			s.Equal(txn0.CommitTS(), lockCtx.MaxLockedWithConflictTS)
 			v := lockCtx.Values[string(key)]
-			s.Equal(txn0.GetCommitTS(), v.LockedWithConflictTS)
+			s.Equal(txn0.CommitTS(), v.LockedWithConflictTS)
 			s.True(v.Exists)
 			s.Equal(value, v.Value)
 
@@ -1269,12 +1269,12 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 	s.IsType(errors.Cause(err), &tikverr.ErrWriteConflict{})
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
 	s.NoError(insertPessimisticLock(lockCtx, "k8"))
-	s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
-	s.Equal(txn2.GetCommitTS(), lockCtx.Values["k8"].LockedWithConflictTS)
+	s.Equal(txn2.CommitTS(), lockCtx.MaxLockedWithConflictTS)
+	s.Equal(txn2.CommitTS(), lockCtx.Values["k8"].LockedWithConflictTS)
 	// Update forUpdateTS to simulate a pessimistic retry.
 	newForUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
 	s.Nil(err)
-	s.GreaterOrEqual(newForUpdateTS, txn2.GetCommitTS())
+	s.GreaterOrEqual(newForUpdateTS, txn2.CommitTS())
 	lockCtx = &kv.LockCtx{ForUpdateTS: newForUpdateTS, WaitStartTime: time.Now()}
 	mustAlreadyExist(insertPessimisticLock(lockCtx, "k7"))
 	s.NoError(insertPessimisticLock(lockCtx, "k8"))
@@ -1291,7 +1291,7 @@ func (s *testCommitterSuite) TestAggressiveLockingLockOnlyIfExists() {
 	txn0 := s.begin()
 	s.NoError(txn0.Set([]byte("k1"), []byte("v1")))
 	s.NoError(txn0.Commit(context.Background()))
-	txn0CommitTS := txn0.GetCommitTS()
+	txn0CommitTS := txn0.CommitTS()
 
 	txn.StartAggressiveLocking()
 	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
@@ -1312,7 +1312,7 @@ func (s *testCommitterSuite) TestAggressiveLockingLockOnlyIfExists() {
 	txn0 = s.begin()
 	s.NoError(txn0.Delete([]byte("k1")))
 	s.NoError(txn0.Commit(context.Background()))
-	txn0CommitTS = txn0.GetCommitTS()
+	txn0CommitTS = txn0.CommitTS()
 
 	txn.StartAggressiveLocking()
 	lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now(), ReturnValues: true, LockOnlyIfExists: true}
@@ -1461,13 +1461,13 @@ func (s *testCommitterSuite) TestAggressiveLockingLoadValueOptionChanges() {
 		s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k2")))
 
 		if firstAttemptLockedWithConflict {
-			s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
-			s.Equal(txn2.GetCommitTS(), lockCtx.Values["k1"].LockedWithConflictTS)
-			s.Equal(txn2.GetCommitTS(), lockCtx.Values["k2"].LockedWithConflictTS)
+			s.Equal(txn2.CommitTS(), lockCtx.MaxLockedWithConflictTS)
+			s.Equal(txn2.CommitTS(), lockCtx.Values["k1"].LockedWithConflictTS)
+			s.Equal(txn2.CommitTS(), lockCtx.Values["k2"].LockedWithConflictTS)
 		}
 
 		if firstAttemptLockedWithConflict {
-			forUpdateTS = txn2.GetCommitTS() + 1
+			forUpdateTS = txn2.CommitTS() + 1
 		} else {
 			forUpdateTS++
 		}
