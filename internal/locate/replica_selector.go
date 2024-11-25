@@ -186,7 +186,7 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 			// stale-read request first access.
 			bool isStaleRead = true; 
 			readType := kv.ReplicaReadLeader
-			if s.attempts != 1 || !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
+			if s.attempts != 1 || (!s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID()) {
 				// target replica's labels does not match and not leader
 				if strategy.canSendReplicaRead(s) {
 					// use replica read.
