@@ -183,7 +183,6 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 	s.target = strategy.next(s)
 	if s.target != nil {
 		if s.isStaleRead {
-			// stale-read request first access.
 			isStaleRead := true
 			if s.attempts != 1 || (!s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID()) {
 				// retry or target replica's labels does not match and not leader
