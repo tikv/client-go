@@ -184,18 +184,18 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 	if s.target != nil {
 		if s.isStaleRead {
 			// stale-read request first access.
-			bool isStaleRead = true; 
+			isStaleRead := true
 			readType := kv.ReplicaReadLeader
 			if s.attempts != 1 || (!s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID()) {
-				// target replica's labels does not match and not leader
+				// retry or target replica's labels does not match and not leader
 				if strategy.canSendReplicaRead(s) {
 					// use replica read.
-					isStaleRead = false	
+					isStaleRead = false
 				}
 			}
-			if (isStaleRead) {
+			if isStaleRead {
 				req.StaleRead = true
-				req.ReplicaRead = false	
+				req.ReplicaRead = false
 			} else {
 				req.StaleRead = false
 				req.ReplicaRead = true
@@ -215,7 +215,6 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 		}
 	}
 }
-
 
 type ReplicaSelectLeaderStrategy struct {
 	leaderIdx AccessIndex
@@ -309,13 +308,13 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 
 func (s *ReplicaSelectMixedStrategy) canSendReplicaRead(selector *replicaSelector) bool {
 	replicas := selector.replicas
-	replica := replicas[s.leaderIdx];
-	if (replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag)) {
+	replica := replicas[s.leaderIdx]
+	if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag) {
 		// don't overwhelm the leader if it is busy
 		return false
-	}	
+	}
 	return true
-}	
+}
 
 func hasDeadlineExceededError(replicas []*replica) bool {
 	for _, replica := range replicas {
