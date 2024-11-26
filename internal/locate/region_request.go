@@ -727,7 +727,6 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
 	leader := selector.replicas[state.leaderIdx]
-	leaderTimeout := leader.deadlineErrUsingConfTimeout
 	if(leader.deadlineErrUsingConfTimeout || leader.serverIsBusy) {
 		rpcCtx.contextPatcher.staleRead = &state.isStaleRead
 	} else {
@@ -1231,6 +1230,16 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 		// Only work for read requests, return false for non-read requests.
 		return false
 	}
+}
+
+func (s *replicaSelector) onServerIsBusy(req *tikvrpc.Request) {
+	switch req.Type {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		if target := s.targetReplica(); target != nil {
+			target.serverIsBusy = true
+		}
+	}	
 }
 
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
@@ -2137,8 +2146,8 @@ func (s *RegionRequestSender) onRegionError(bo *retry.Backoffer, ctx *RPCContext
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
 				return true, nil
 			}
-		} else if s.target != nil {
-			s.target.serverIsBusy = true
+		} else if s.replicaSelector != nil {
+			s.replicaSelector.onServerIsBusy(req)
 		}
 		logutil.Logger(bo.GetCtx()).Debug(
 			"tikv reports `ServerIsBusy` retry later",
