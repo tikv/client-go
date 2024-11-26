@@ -1704,6 +1704,7 @@ func (txn *KVTxn) StartTS() uint64 {
 	return txn.startTS
 }
 
+// CommitTS returns the commit timestamp of the already committed transaction, or zero if it's not committed yet.
 func (txn *KVTxn) CommitTS() uint64 {
 	return txn.commitTS
 }
