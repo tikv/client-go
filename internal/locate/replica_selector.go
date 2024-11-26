@@ -543,6 +543,9 @@ func (s *replicaSelector) onServerIsBusy(
 	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
 	if s.canFastRetry() {
 		s.addPendingBackoff(store, retry.BoTiKVServerBusy, backoffErr)
+		if s.target != nil {
+			s.target.addFlag(serverIsBusyFlag)
+		}
 		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr)
