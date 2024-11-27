@@ -1704,6 +1704,11 @@ func (txn *KVTxn) StartTS() uint64 {
 	return txn.startTS
 }
 
+// CommitTS returns the commit timestamp of the already committed transaction, or zero if it's not committed yet.
+func (txn *KVTxn) CommitTS() uint64 {
+	return txn.commitTS
+}
+
 // Valid returns if the transaction is valid.
 // A transaction become invalid after commit or rollback.
 func (txn *KVTxn) Valid() bool {
