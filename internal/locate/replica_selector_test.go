@@ -376,7 +376,7 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store2, replica-read: true, stale-read: false}"},
+				"{addr: store2, replica-read: false, stale-read: true}"},
 			respErr:         "",
 			respRegionError: nil,
 			backoffCnt:      0,
@@ -418,7 +418,7 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}"}, // store2 has DeadLineExceededErr, so don't retry store2 even it is new leader.
+				"{addr: store3, replica-read: false, stale-read: true}"}, // store2 has DeadLineExceededErr, so don't retry store2 even it is new leader.
 			respErr:         "",
 			respRegionError: nil,
 			backoffCnt:      0,
@@ -518,8 +518,8 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
-				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}"},
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store3, replica-read: false, stale-read: true}"},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
 			backoffCnt:      1,
@@ -562,7 +562,7 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 			accessPath: []string{
 				"{addr: store3, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store2, replica-read: true, stale-read: false}"},
+				"{addr: store2, replica-read: false, stale-read: true}"},
 			respErr:         "",
 			respRegionError: nil,
 			backoffCnt:      0,
@@ -582,8 +582,8 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
-				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store3, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
@@ -604,8 +604,8 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
 				"{addr: store2, replica-read: false, stale-read: false}", // try leader with leader read.
-				"{addr: store3, replica-read: true, stale-read: false}",
-				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -625,8 +625,8 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
 				"{addr: store2, replica-read: false, stale-read: false}", // try leader with leader read.
-				"{addr: store3, replica-read: true, stale-read: false}",
-				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
@@ -668,8 +668,8 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
-				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store3, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -948,7 +948,7 @@ func testReplicaReadAccessPathByCase2(s *testReplicaSelectorSuite) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}"},
+				"{addr: store3, replica-read: false, stale-read: true}"},
 			respErr:         "",
 			respRegionError: nil,
 			backoffCnt:      0,
@@ -1094,9 +1094,16 @@ func testReplicaReadAccessPathByBasicCase(s *testReplicaSelectorSuite) {
 							backoff = []string{}
 						}
 						if staleRead {
-							accessPath = []string{
-								"{addr: store1, replica-read: false, stale-read: true}",
-								"{addr: store2, replica-read: true, stale-read: false}",
+							if tp == ServerIsBusyErr || tp == ServerIsBusyWithEstimatedWaitMsErr {
+								accessPath = []string{
+									"{addr: store1, replica-read: false, stale-read: true}",
+									"{addr: store2, replica-read: false, stale-read: true}",
+								}
+							} else {
+								accessPath = []string{
+									"{addr: store1, replica-read: false, stale-read: true}",
+									"{addr: store2, replica-read: true, stale-read: false}",
+								}
 							}
 						}
 					default:
@@ -2014,8 +2021,8 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}", // try leader with leader read.
-				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store3, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
@@ -2036,8 +2043,8 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
 				"{addr: store2, replica-read: false, stale-read: false}", // try leader with leader read.
-				"{addr: store3, replica-read: true, stale-read: false}",
-				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: true}",
+				"{addr: store1, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
@@ -2146,8 +2153,8 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
-				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store2, replica-read: false, stale-read: true}",
+				"{addr: store3, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -2169,7 +2176,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -2191,7 +2198,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 			accessPath: []string{
 				"{addr: store2, replica-read: false, stale-read: true}",
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store3, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: false, stale-read: true}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -2762,7 +2769,11 @@ func TestReplicaReadAvoidSlowStore(t *testing.T) {
 			if expectedFirstStore == 3 {
 				// Retry on store 2 which is a follower.
 				// Stale-read mode falls back to replica-read mode.
-				expectedSecondPath = "{addr: store2, replica-read: true, stale-read: false}"
+				if staleRead {
+					expectedSecondPath = "{addr: store2, replica-read: false, stale-read: true}"
+				} else {
+					expectedSecondPath = "{addr: store2, replica-read: true, stale-read: false}"
+				}
 			} else {
 				// Retry in leader read mode will not use replica-read.
 				expectedSecondPath = "{addr: store3, replica-read: false, stale-read: false}"
