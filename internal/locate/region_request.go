@@ -1432,12 +1432,18 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "mismatch_peer_id"
 	} else if e.GetBucketVersionNotMatch() != nil {
 		return "bucket_version_not_match"
+	} else if isInvalidMaxTsUpdate(e) {
+		return "invalid_max_ts_update"
 	}
 	return "unknown"
 }
 
 func isDeadlineExceeded(e *errorpb.Error) bool {
 	return strings.Contains(e.GetMessage(), "Deadline is exceeded")
+}
+
+func isInvalidMaxTsUpdate(e *errorpb.Error) bool {
+	return strings.Contains(e.GetMessage(), "invalid max_ts update")
 }
 
 func (s *RegionRequestSender) onRegionError(
@@ -1733,6 +1739,10 @@ func (s *RegionRequestSender) onRegionError(
 			s.replicaSelector.invalidateRegion()
 		}
 		return false, nil
+	}
+
+	if isInvalidMaxTsUpdate(regionErr) {
+		return false, errors.New(regionErr.String())
 	}
 
 	logutil.Logger(bo.GetCtx()).Debug(
