@@ -342,7 +342,7 @@ func TestAdaptiveUpdateTSInterval(t *testing.T) {
 	assert.Equal(t, adaptiveUpdateTSIntervalStateUnadjustable, o.adaptiveUpdateIntervalState.state)
 }
 
-func TestValidateSnapshotReadTS(t *testing.T) {
+func TestValidateReadTSForStaleRead(t *testing.T) {
 	pdClient := MockPdClient{}
 	o, err := NewPdOracle(&pdClient, &PDOracleOptions{
 		UpdateInterval: time.Second * 2,
@@ -356,25 +356,25 @@ func TestValidateSnapshotReadTS(t *testing.T) {
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, ts, uint64(1))
 
-	err = o.ValidateSnapshotReadTS(ctx, 1, opt)
+	err = o.ValidateReadTS(ctx, 1, true, opt)
 	assert.NoError(t, err)
 	ts, err = o.GetTimestamp(ctx, opt)
 	assert.NoError(t, err)
 	// The readTS exceeds the latest ts, so it first fails the check with the low resolution ts. Then it fallbacks to
 	// the fetching-from-PD path, and it can get the previous ts + 1, which can allow this validation to pass.
-	err = o.ValidateSnapshotReadTS(ctx, ts+1, opt)
+	err = o.ValidateReadTS(ctx, ts+1, true, opt)
 	assert.NoError(t, err)
 	// It can't pass if the readTS is newer than previous ts + 2.
 	ts, err = o.GetTimestamp(ctx, opt)
 	assert.NoError(t, err)
-	err = o.ValidateSnapshotReadTS(ctx, ts+2, opt)
+	err = o.ValidateReadTS(ctx, ts+2, true, opt)
 	assert.Error(t, err)
 
 	// Simulate other PD clients requests a timestamp.
 	ts, err = o.GetTimestamp(ctx, opt)
 	assert.NoError(t, err)
 	pdClient.logicalTimestamp.Add(2)
-	err = o.ValidateSnapshotReadTS(ctx, ts+3, opt)
+	err = o.ValidateReadTS(ctx, ts+3, true, opt)
 	assert.NoError(t, err)
 }
 
@@ -397,7 +397,7 @@ func (c *MockPDClientWithPause) Resume() {
 	c.mu.Unlock()
 }
 
-func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
+func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 	pdClient := &MockPDClientWithPause{}
 	o, err := NewPdOracle(pdClient, &PDOracleOptions{
 		UpdateInterval: time.Second * 2,
@@ -409,7 +409,7 @@ func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
 	asyncValidate := func(ctx context.Context, readTS uint64) chan error {
 		ch := make(chan error, 1)
 		go func() {
-			err := o.ValidateSnapshotReadTS(ctx, readTS, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			err := o.ValidateReadTS(ctx, readTS, true, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 			ch <- err
 		}()
 		return ch
@@ -418,7 +418,7 @@ func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
 	noResult := func(ch chan error) {
 		select {
 		case <-ch:
-			assert.FailNow(t, "a ValidateSnapshotReadTS operation is not blocked while it's expected to be blocked")
+			assert.FailNow(t, "a ValidateReadTS operation is not blocked while it's expected to be blocked")
 		default:
 		}
 	}

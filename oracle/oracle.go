@@ -68,12 +68,11 @@ type Oracle interface {
 	// GetAllTSOKeyspaceGroupMinTS gets a minimum timestamp from all TSO keyspace groups.
 	GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, error)
 
-	// ValidateSnapshotReadTS verifies whether it can be guaranteed that the given readTS doesn't exceed the maximum ts
-	// that has been allocated by the oracle, so that it's safe to use this ts to perform snapshot read, stale read,
-	// etc.
+	// ValidateReadTS verifies whether it can be guaranteed that the given readTS doesn't exceed the maximum ts
+	// that has been allocated by the oracle, so that it's safe to use this ts to perform read operations.
 	// Note that this method only checks the ts from the oracle's perspective. It doesn't check whether the snapshot
 	// has been GCed.
-	ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *Option) error
+	ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *Option) error
 }
 
 // Future is a future which promises to return a timestamp.
