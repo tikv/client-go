@@ -1765,8 +1765,8 @@ func (s *RegionRequestSender) onRegionError(
 }
 
 func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.Request) error {
-	if req.StoreTp != tikvrpc.TiKV {
-		// Only check on TiKV.
+	if req.StoreTp == tikvrpc.TiDB {
+		// Skip the checking if the store type is TiDB.
 		return nil
 	}
 
