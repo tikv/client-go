@@ -64,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
@@ -93,7 +94,7 @@ func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
-	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
 
 	s.NoError(failpoint.Enable("tikvclient/doNotRecoverStoreHealthCheckPanic", "return"))
 }
@@ -601,7 +602,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 	}()
 
 	cli := client.NewRPCClient()
-	sender := NewRegionRequestSender(s.cache, cli)
+	sender := NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{})
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -622,7 +623,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 		Client:       client.NewRPCClient(),
 		redirectAddr: addr,
 	}
-	sender = NewRegionRequestSender(s.cache, client1)
+	sender = NewRegionRequestSender(s.cache, client1, oracle.NoopReadTSValidator{})
 	sender.SendReq(s.bo, req, region.Region, 3*time.Second)
 
 	// cleanup
@@ -806,7 +807,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 					cancel()
 				}()
 				req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{Data: []byte("a"), StartTs: 1})
-				regionRequestSender := NewRegionRequestSender(s.cache, fnClient)
+				regionRequestSender := NewRegionRequestSender(s.cache, fnClient, oracle.NoopReadTSValidator{})
 				reachable.injectConstantLiveness(regionRequestSender.regionCache.stores)
 				regionRequestSender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 			}
@@ -850,19 +851,19 @@ type emptyClient struct {
 
 func (s *testRegionRequestToSingleStoreSuite) TestClientExt() {
 	var cli client.Client = client.NewRPCClient()
-	sender := NewRegionRequestSender(s.cache, cli)
+	sender := NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{})
 	s.NotNil(sender.client)
 	s.NotNil(sender.getClientExt())
 	cli.Close()
 
 	cli = &emptyClient{}
-	sender = NewRegionRequestSender(s.cache, cli)
+	sender = NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{})
 	s.NotNil(sender.client)
 	s.Nil(sender.getClientExt())
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestSenderString() {
-	sender := NewRegionRequestSender(s.cache, &fnClient{})
+	sender := NewRegionRequestSender(s.cache, &fnClient{}, oracle.NoopReadTSValidator{})
 	loc, err := s.cache.LocateRegionByID(s.bo, s.region)
 	s.Nil(err)
 	// invalid region cache before sending request.

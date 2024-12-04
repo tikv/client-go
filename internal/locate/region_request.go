@@ -38,6 +38,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -45,6 +46,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -107,6 +109,7 @@ type RegionRequestSender struct {
 	regionCache       *RegionCache
 	apiVersion        kvrpcpb.APIVersion
 	client            client.Client
+	readTSValidator   oracle.ReadTSValidator
 	storeAddr         string
 	rpcError          error
 	replicaSelector   *replicaSelector
@@ -377,11 +380,12 @@ func (s *ReplicaAccessStats) String() string {
 }
 
 // NewRegionRequestSender creates a new sender.
-func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
+func NewRegionRequestSender(regionCache *RegionCache, client client.Client, readTSValidator oracle.ReadTSValidator) *RegionRequestSender {
 	return &RegionRequestSender{
-		regionCache: regionCache,
-		apiVersion:  regionCache.codec.GetAPIVersion(),
-		client:      client,
+		regionCache:     regionCache,
+		apiVersion:      regionCache.codec.GetAPIVersion(),
+		client:          client,
+		readTSValidator: readTSValidator,
 	}
 }
 
@@ -764,6 +768,10 @@ func (s *RegionRequestSender) SendReqCtx(
 				}
 			}
 		}
+	}
+
+	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
+		return nil, nil, 0, err
 	}
 
 	// If the MaxExecutionDurationMs is not set yet, we set it to be the RPC timeout duration
@@ -1754,6 +1762,20 @@ func (s *RegionRequestSender) onRegionError(
 	// For other errors, we only drop cache here.
 	// Because caller may need to re-split the request.
 	return false, nil
+}
+
+func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.Request) error {
+	var readTS uint64
+	switch req.Type {
+	case tikvrpc.CmdGet, tikvrpc.CmdScan, tikvrpc.CmdBatchGet, tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop, tikvrpc.CmdScanLock, tikvrpc.CmdBufferBatchGet:
+		readTS = req.GetStartTS()
+	default:
+		return nil
+	}
+	if readTS == math.MaxUint64 {
+		return nil
+	}
+	return s.readTSValidator.ValidateReadTS(ctx, readTS, req.StaleRead, &oracle.Option{TxnScope: req.TxnScope})
 }
 
 type staleReadMetricsCollector struct {
