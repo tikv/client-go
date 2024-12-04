@@ -670,7 +670,7 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 	}
 }
 
-func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
+func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
 			return errors.Errorf("cannot set read ts to max uint64 for stale read")
