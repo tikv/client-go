@@ -38,7 +38,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -1776,27 +1775,27 @@ func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.R
 	case tikvrpc.CmdGet, tikvrpc.CmdScan, tikvrpc.CmdBatchGet, tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop, tikvrpc.CmdScanLock, tikvrpc.CmdBufferBatchGet:
 		readTS = req.GetStartTS()
 
-	// Check transactional write requests that has implicit read.
-	case tikvrpc.CmdPessimisticLock:
-		readTS = req.PessimisticLock().GetForUpdateTs()
-	case tikvrpc.CmdPrewrite:
-		inner := req.Prewrite()
-		readTS = inner.GetForUpdateTs()
-		if readTS == 0 {
-			readTS = inner.GetStartVersion()
-		}
-	case tikvrpc.CmdCheckTxnStatus:
-		inner := req.CheckTxnStatus()
-		// TiKV uses the greater one of these three fields to update the max_ts.
-		readTS = inner.GetLockTs()
-		if inner.GetCurrentTs() != math.MaxUint64 && inner.GetCurrentTs() > readTS {
-			readTS = inner.GetCurrentTs()
-		}
-		if inner.GetCallerStartTs() != math.MaxUint64 && inner.GetCallerStartTs() > readTS {
-			readTS = inner.GetCallerStartTs()
-		}
-	case tikvrpc.CmdCheckSecondaryLocks, tikvrpc.CmdCleanup, tikvrpc.CmdBatchRollback:
-		readTS = req.GetStartTS()
+	// TODO: Check transactional write requests that has implicit read.
+	// case tikvrpc.CmdPessimisticLock:
+	//	readTS = req.PessimisticLock().GetForUpdateTs()
+	// case tikvrpc.CmdPrewrite:
+	//	inner := req.Prewrite()
+	//	readTS = inner.GetForUpdateTs()
+	//	if readTS == 0 {
+	//		readTS = inner.GetStartVersion()
+	//	}
+	// case tikvrpc.CmdCheckTxnStatus:
+	//	inner := req.CheckTxnStatus()
+	//	// TiKV uses the greater one of these three fields to update the max_ts.
+	//	readTS = inner.GetLockTs()
+	//	if inner.GetCurrentTs() != math.MaxUint64 && inner.GetCurrentTs() > readTS {
+	//		readTS = inner.GetCurrentTs()
+	//	}
+	//	if inner.GetCallerStartTs() != math.MaxUint64 && inner.GetCallerStartTs() > readTS {
+	//		readTS = inner.GetCallerStartTs()
+	//	}
+	// case tikvrpc.CmdCheckSecondaryLocks, tikvrpc.CmdCleanup, tikvrpc.CmdBatchRollback:
+	//	readTS = req.GetStartTS()
 	default:
 		return nil
 	}
