@@ -65,7 +65,9 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	pd "github.com/tikv/pd/client"
 	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
 )
@@ -80,6 +82,7 @@ type testRegionRequestToSingleStoreSuite struct {
 	store               uint64
 	peer                uint64
 	region              uint64
+	pdCli               pd.Client
 	cache               *RegionCache
 	bo                  *retry.Backoffer
 	regionRequestSender *RegionRequestSender
@@ -90,8 +93,8 @@ func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
 	s.mvccStore = mocktikv.MustNewMVCCStore()
 	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.store, s.peer, s.region = mocktikv.BootstrapWithSingleStore(s.cluster)
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
-	s.cache = NewRegionCache(pdCli)
+	s.pdCli = &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	s.cache = NewRegionCache(s.pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
 	s.regionRequestSender = NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
@@ -913,6 +916,55 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 		"{stale_read, peer:1, store:2, err:data_not_ready}, {peer:3, store:4, err:not_leader}, {replica_read, peer:5, store:6, err:server_is_Busy}, {peer:5, store:6, err:server_is_Busy}, {peer:6, store:6, err:server_is_Busy}, overflow_count:{{peer:6, error_stats:{server_is_Busy:9}}, {peer:5, error_stats:{server_is_Busy:9}}}",
 	}
 	s.Contains(expecteds, access.String())
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestValidateReadTS() {
+	o, err := oracles.NewPdOracle(s.pdCli, &oracles.PDOracleOptions{
+		UpdateInterval: time.Second * 2,
+	})
+	s.NoError(err)
+	s.regionRequestSender.readTSValidator = o
+	defer o.Close()
+
+	testImpl := func(ts func() uint64, staleRead bool, expectedErrorType error) {
+		region, err := s.cache.LocateRegionByID(s.bo, s.region)
+		s.Nil(err)
+		s.NotNil(region)
+
+		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+			Key:     []byte("k"),
+			Version: ts(),
+		})
+
+		req.StaleRead = staleRead
+		_, _, _, err = s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+
+		if expectedErrorType == nil {
+			s.NoError(err)
+		} else {
+			s.Error(err)
+			s.IsType(err, expectedErrorType)
+		}
+	}
+
+	getTS := func() uint64 {
+		ts, err := o.GetTimestamp(s.bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		s.NoError(err)
+		return ts
+	}
+
+	addTS := func(ts uint64, diff time.Duration) uint64 {
+		return oracle.ComposeTS(oracle.GetPhysical(oracle.GetTimeFromTS(ts).Add(diff)), oracle.ExtractLogical(ts))
+	}
+
+	testImpl(getTS, false, nil)
+	testImpl(getTS, true, nil)
+	testImpl(func() uint64 { return addTS(getTS(), -time.Minute) }, false, nil)
+	testImpl(func() uint64 { return addTS(getTS(), -time.Minute) }, true, nil)
+	testImpl(func() uint64 { return addTS(getTS(), +time.Minute) }, false, oracle.ErrFutureTSRead{})
+	testImpl(func() uint64 { return addTS(getTS(), +time.Minute) }, true, oracle.ErrFutureTSRead{})
+	testImpl(func() uint64 { return math.MaxUint64 }, false, nil)
+	testImpl(func() uint64 { return math.MaxUint64 }, true, oracle.ErrLatestStaleRead{})
 }
 
 type noCauseError struct {

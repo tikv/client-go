@@ -673,7 +673,7 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
-			return errors.Errorf("cannot set read ts to max uint64 for stale read")
+			return oracle.ErrLatestStaleRead{}
 		}
 		return nil
 	}
@@ -691,7 +691,10 @@ func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRea
 			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
 		}
 		if readTS > currentTS {
-			return errors.Errorf("cannot set read timestamp to a future time")
+			return oracle.ErrFutureTSRead{
+				ReadTS:    readTS,
+				CurrentTS: currentTS,
+			}
 		}
 	} else if isStaleRead {
 		estimatedCurrentTS, err := o.getStaleTimestampWithLastTS(latestTSInfo, 0)
