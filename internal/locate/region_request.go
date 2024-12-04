@@ -464,7 +464,7 @@ type replica struct {
 	attempts int
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
-	serverIsBusy				bool
+	serverIsBusy                bool
 }
 
 func (r *replica) isEpochStale() bool {
@@ -727,7 +727,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
 	leader := selector.replicas[state.leaderIdx]
-	if(leader.deadlineErrUsingConfTimeout || leader.serverIsBusy) {
+	if leader.attempts == 0 || leader.deadlineErrUsingConfTimeout || leader.serverIsBusy {
 		rpcCtx.contextPatcher.staleRead = &state.isStaleRead
 	} else {
 		staleRead := false
@@ -941,9 +941,9 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			if (state.isStaleRead && !selector.StaleRead.PreventRetryFollower) ||
 				(!state.isStaleRead && leader.deadlineErrUsingConfTimeout) {
 				selector.state = &tryFollower{
-					leaderIdx: state.leaderIdx,
-					lastIdx:   state.leaderIdx,
-					labels:    state.option.labels,
+					leaderIdx:   state.leaderIdx,
+					lastIdx:     state.leaderIdx,
+					labels:      state.option.labels,
 					isStaleRead: state.isStaleRead,
 				}
 				if leaderEpochStale {
@@ -1239,7 +1239,7 @@ func (s *replicaSelector) onServerIsBusy(req *tikvrpc.Request) {
 		if target := s.targetReplica(); target != nil {
 			target.serverIsBusy = true
 		}
-	}	
+	}
 }
 
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
