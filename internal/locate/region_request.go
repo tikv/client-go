@@ -782,9 +782,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 	}()
 
-	// var staleReadCollector *staleReadMetricsCollector
 	if req.StaleRead {
-		// staleReadCollector = &staleReadMetricsCollector{}
 		defer func() {
 			if retryTimes == 0 {
 				metrics.StaleReadHitCounter.Add(1)
