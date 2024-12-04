@@ -37,6 +37,7 @@ package oracles
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -670,6 +671,13 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 }
 
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
+	if readTS == math.MaxUint64 {
+		if isStaleRead {
+			return errors.Errorf("cannot set read ts to max uint64 for stale read")
+		}
+		return nil
+	}
+
 	latestTSInfo, exists := o.getLastTSWithArrivalTS(opt.TxnScope)
 	// If we fail to get latestTSInfo or the readTS exceeds it, get a timestamp from PD to double-check.
 	// But we don't need to strictly fetch the latest TS. So if there are already concurrent calls to this function

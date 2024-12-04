@@ -771,6 +771,7 @@ func (s *RegionRequestSender) SendReqCtx(
 	}
 
 	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
+		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		return nil, nil, 0, err
 	}
 
@@ -1765,14 +1766,38 @@ func (s *RegionRequestSender) onRegionError(
 }
 
 func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.Request) error {
+	if req.StoreTp != tikvrpc.TiKV {
+		// Only check on TiKV.
+		return nil
+	}
+
 	var readTS uint64
 	switch req.Type {
 	case tikvrpc.CmdGet, tikvrpc.CmdScan, tikvrpc.CmdBatchGet, tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop, tikvrpc.CmdScanLock, tikvrpc.CmdBufferBatchGet:
 		readTS = req.GetStartTS()
+
+	// Check transactional write requests that has implicit read.
+	case tikvrpc.CmdPessimisticLock:
+		readTS = req.PessimisticLock().GetForUpdateTs()
+	case tikvrpc.CmdPrewrite:
+		inner := req.Prewrite()
+		readTS = inner.GetForUpdateTs()
+		if readTS == 0 {
+			readTS = inner.GetStartVersion()
+		}
+	case tikvrpc.CmdCheckTxnStatus:
+		inner := req.CheckTxnStatus()
+		// TiKV uses the greater one of these three fields to update the max_ts.
+		readTS = inner.GetLockTs()
+		if inner.GetCurrentTs() != math.MaxUint64 && inner.GetCurrentTs() > readTS {
+			readTS = inner.GetCurrentTs()
+		}
+		if inner.GetCallerStartTs() != math.MaxUint64 && inner.GetCallerStartTs() > readTS {
+			readTS = inner.GetCallerStartTs()
+		}
+	case tikvrpc.CmdCheckSecondaryLocks, tikvrpc.CmdCleanup, tikvrpc.CmdBatchRollback:
+		readTS = req.GetStartTS()
 	default:
-		return nil
-	}
-	if readTS == math.MaxUint64 {
 		return nil
 	}
 	return s.readTSValidator.ValidateReadTS(ctx, readTS, req.StaleRead, &oracle.Option{TxnScope: req.TxnScope})
