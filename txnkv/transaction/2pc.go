@@ -1620,8 +1620,32 @@ func (c *twoPhaseCommitter) cleanup(ctx context.Context) {
 		cleanupKeysCtx := context.WithValue(c.store.Ctx(), retry.TxnStartKey, ctx.Value(retry.TxnStartKey))
 		var err error
 		if c.txn.IsPipelined() {
-			// TODO: cleanup pipelined txn
-			// TODO: broadcast txn status
+			if len(c.pipelinedCommitInfo.pipelinedStart) != 0 && len(c.pipelinedCommitInfo.pipelinedEnd) != 0 {
+				broadcastToAllStores(
+					c.txn,
+					c.store,
+					retry.NewBackofferWithVars(
+						ctx,
+						broadcastMaxBackoff,
+						c.txn.vars,
+					),
+					&kvrpcpb.TxnStatus{
+						StartTs:     c.startTS,
+						MinCommitTs: c.txn.committer.minCommitTSMgr.get(),
+						CommitTs:    0,
+						RolledBack:  true,
+						IsCompleted: false,
+					},
+					c.resourceGroupName,
+					c.resourceGroupTag,
+				)
+				c.resolveFlushedLocks(
+					retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars),
+					c.pipelinedCommitInfo.pipelinedStart,
+					c.pipelinedCommitInfo.pipelinedEnd,
+					false,
+				)
+			}
 		} else if !c.isOnePC() {
 			err = c.cleanupMutations(retry.NewBackofferWithVars(cleanupKeysCtx, cleanupMaxBackoff, c.txn.vars), c.mutations)
 		} else if c.isPessimistic {
