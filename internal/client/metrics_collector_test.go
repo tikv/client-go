@@ -53,19 +53,19 @@ func TestNetworkCollectorOnReq(t *testing.T) {
 	}
 
 	testCases := []struct {
-		expectBytesSendKVTotal     int64
-		expectBytesSendKVCrossZone int64
-		req                        *tikvrpc.Request
+		expectUnpackedBytesSentKV          int64
+		expectUnpackedBytesSentKVCrossZone int64
+		req                                *tikvrpc.Request
 	}{
 		{
-			expectBytesSendKVTotal:     8,
-			expectBytesSendKVCrossZone: 0,
-			req:                        reqs[0],
+			expectUnpackedBytesSentKV:          8,
+			expectUnpackedBytesSentKVCrossZone: 0,
+			req:                                reqs[0],
 		},
 		{
-			expectBytesSendKVTotal:     18,
-			expectBytesSendKVCrossZone: 0,
-			req:                        reqs[1],
+			expectUnpackedBytesSentKV:          18,
+			expectUnpackedBytesSentKVCrossZone: 0,
+			req:                                reqs[1],
 		},
 	}
 
@@ -77,8 +77,8 @@ func TestNetworkCollectorOnReq(t *testing.T) {
 		collector.onReq(cas.req, details)
 
 		// Verify metrics
-		assert.Equal(t, cas.expectBytesSendKVTotal, atomic.LoadInt64(&details.BytesSendKVTotal), "Total bytes mismatch")
-		assert.Equal(t, cas.expectBytesSendKVCrossZone, atomic.LoadInt64(&details.BytesSendKVCrossZone), "Cross-zone bytes mismatch")
+		assert.Equal(t, cas.expectUnpackedBytesSentKV, atomic.LoadInt64(&details.UnpackedBytesSentKVTotal), "Total bytes mismatch")
+		assert.Equal(t, cas.expectUnpackedBytesSentKVCrossZone, atomic.LoadInt64(&details.UnpackedBytesSentKVCrossZone), "Cross-zone bytes mismatch")
 		beforeMetric := dto.Metric{}
 		// Verify stale-read metrics
 		if cas.req.StaleRead {
@@ -122,22 +122,22 @@ func TestNetworkCollectorOnResp(t *testing.T) {
 	}
 
 	testCases := []struct {
-		expectBytesReceivedKVTotal     int64
-		expectBytesReceivedKVCrossZone int64
-		req                            *tikvrpc.Request
-		resp                           *tikvrpc.Response
+		expectUnpackedBytesReceivedKV          int64
+		expectUnpackedBytesReceivedKVCrossZone int64
+		req                                    *tikvrpc.Request
+		resp                                   *tikvrpc.Response
 	}{
 		{
-			expectBytesReceivedKVTotal:     7,
-			expectBytesReceivedKVCrossZone: 0,
-			req:                            reqs[0],
-			resp:                           resps[0],
+			expectUnpackedBytesReceivedKV:          7,
+			expectUnpackedBytesReceivedKVCrossZone: 0,
+			req:                                    reqs[0],
+			resp:                                   resps[0],
 		},
 		{
-			expectBytesReceivedKVTotal:     20,
-			expectBytesReceivedKVCrossZone: 0,
-			req:                            reqs[1],
-			resp:                           resps[1],
+			expectUnpackedBytesReceivedKV:          20,
+			expectUnpackedBytesReceivedKVCrossZone: 0,
+			req:                                    reqs[1],
+			resp:                                   resps[1],
 		},
 	}
 
@@ -149,8 +149,8 @@ func TestNetworkCollectorOnResp(t *testing.T) {
 		collector.onResp(cas.req, cas.resp, details)
 
 		// Verify metrics
-		assert.Equal(t, cas.expectBytesReceivedKVTotal, atomic.LoadInt64(&details.BytesReceivedKVTotal), "Total bytes mismatch")
-		assert.Equal(t, cas.expectBytesReceivedKVCrossZone, atomic.LoadInt64(&details.BytesReceivedKVCrossZone), "Cross-zone bytes mismatch")
+		assert.Equal(t, cas.expectUnpackedBytesReceivedKV, atomic.LoadInt64(&details.UnpackedBytesReceivedKVTotal), "Total bytes mismatch")
+		assert.Equal(t, cas.expectUnpackedBytesReceivedKVCrossZone, atomic.LoadInt64(&details.UnpackedBytesReceivedKVCrossZone), "Cross-zone bytes mismatch")
 
 		// Verify stale-read metrics if applicable
 		if cas.req.StaleRead {

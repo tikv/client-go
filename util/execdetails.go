@@ -342,14 +342,14 @@ type ExecDetails struct {
 
 // TrafficDetails contains traffic detail info.
 type TrafficDetails struct {
-	BytesSendKVTotal          int64
-	BytesReceivedKVTotal      int64
-	BytesSendKVCrossZone      int64
-	BytesReceivedKVCrossZone  int64
-	BytesSendMPPTotal         int64
-	BytesReceivedMPPTotal     int64
-	BytesSendMPPCrossZone     int64
-	BytesReceivedMPPCrossZone int64
+	UnpackedBytesSentKVTotal          int64
+	UnpackedBytesReceivedKVTotal      int64
+	UnpackedBytesSentKVCrossZone      int64
+	UnpackedBytesReceivedKVCrossZone  int64
+	UnpackedBytesSentMPPTotal         int64
+	UnpackedBytesReceivedMPPTotal     int64
+	UnpackedBytesSentMPPCrossZone     int64
+	UnpackedBytesReceivedMPPCrossZone int64
 }
 
 // FormatDuration uses to format duration, this function will prune precision before format duration.

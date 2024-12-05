@@ -110,11 +110,11 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 	isTiflashTarget := req.StoreTp == tikvrpc.TiFlash
 	var total, crossZone *int64
 	if isTiflashTarget {
-		total = &details.BytesSendMPPTotal
-		crossZone = &details.BytesSendMPPCrossZone
+		total = &details.UnpackedBytesSentMPPTotal
+		crossZone = &details.UnpackedBytesSentMPPCrossZone
 	} else {
-		total = &details.BytesSendKVTotal
-		crossZone = &details.BytesSendKVCrossZone
+		total = &details.UnpackedBytesSentKVTotal
+		crossZone = &details.UnpackedBytesSentKVCrossZone
 	}
 
 	atomic.AddInt64(total, int64(size))
@@ -168,11 +168,11 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	var total, crossZone *int64
 	isTiflashTarget := req.StoreTp == tikvrpc.TiFlash
 	if isTiflashTarget {
-		total = &details.BytesReceivedMPPTotal
-		crossZone = &details.BytesReceivedMPPCrossZone
+		total = &details.UnpackedBytesReceivedMPPTotal
+		crossZone = &details.UnpackedBytesReceivedMPPCrossZone
 	} else {
-		total = &details.BytesReceivedKVTotal
-		crossZone = &details.BytesReceivedKVCrossZone
+		total = &details.UnpackedBytesReceivedKVTotal
+		crossZone = &details.UnpackedBytesReceivedKVCrossZone
 	}
 
 	atomic.AddInt64(total, int64(size))
