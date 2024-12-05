@@ -49,6 +49,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/VividCortex/ewma"
 	"github.com/dgryski/go-farm"
 	"github.com/docker/go-units"
 	"github.com/opentracing/opentracing-go"
@@ -74,6 +75,7 @@ import (
 // MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = 24 * 60 * 60 * 1000
+const defaultEWMAAge = 10
 
 type tempLockBufferEntry struct {
 	HasReturnValue    bool
@@ -113,6 +115,8 @@ type PipelinedTxnOptions struct {
 	Enable                 bool
 	FlushConcurrency       int
 	ResolveLockConcurrency int
+	// (0,1], 1 = no sleep
+	WriteSpeedRatio float64
 }
 
 // TxnOptions indicates the option when beginning a transaction.
@@ -180,23 +184,27 @@ type KVTxn struct {
 	pipelinedCancel                 context.CancelFunc
 	pipelinedFlushConcurrency       int
 	pipelinedResolveLockConcurrency int
+	writeSpeedRatio                 float64
+	// flushBatchDurationEWMA is read before each flush, and written after each flush => no race
+	flushBatchDurationEWMA ewma.MovingAverage
 }
 
 // NewTiKVTxn creates a new KVTxn.
 func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:          snapshot,
-		store:             store,
-		startTS:           startTS,
-		startTime:         time.Now(),
-		valid:             true,
-		vars:              tikv.DefaultVars,
-		scope:             options.TxnScope,
-		enableAsyncCommit: cfg.EnableAsyncCommit,
-		enable1PC:         cfg.Enable1PC,
-		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		RequestSource:     snapshot.RequestSource,
+		snapshot:               snapshot,
+		store:                  store,
+		startTS:                startTS,
+		startTime:              time.Now(),
+		valid:                  true,
+		vars:                   tikv.DefaultVars,
+		scope:                  options.TxnScope,
+		enableAsyncCommit:      cfg.EnableAsyncCommit,
+		enable1PC:              cfg.Enable1PC,
+		diskFullOpt:            kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:          snapshot.RequestSource,
+		flushBatchDurationEWMA: ewma.NewMovingAverage(defaultEWMAAge),
 	}
 	if !options.PipelinedTxn.Enable {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
@@ -204,6 +212,7 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 	}
 	newTiKVTxn.pipelinedFlushConcurrency = options.PipelinedTxn.FlushConcurrency
 	newTiKVTxn.pipelinedResolveLockConcurrency = options.PipelinedTxn.ResolveLockConcurrency
+	newTiKVTxn.writeSpeedRatio = options.PipelinedTxn.WriteSpeedRatio
 	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
 		return nil, err
 	}
@@ -637,7 +646,15 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			}
 			mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		}
-		return txn.committer.pipelinedFlushMutations(bo, mutations, generation)
+		txn.throttle()
+		flushStart := time.Now()
+		err = txn.committer.pipelinedFlushMutations(bo, mutations, generation)
+		if txn.flushBatchDurationEWMA.Value() == 0 {
+			txn.flushBatchDurationEWMA.Set(float64(time.Since(flushStart).Milliseconds()))
+		} else {
+			txn.flushBatchDurationEWMA.Add(float64(time.Since(flushStart).Milliseconds()))
+		}
+		return err
 	})
 	txn.committer.priority = txn.priority.ToPB()
 	txn.committer.syncLog = txn.syncLog
@@ -646,6 +663,33 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	txn.committer.resourceGroupName = txn.resourceGroupName
 	txn.us = unionstore.NewUnionStore(pipelinedMemDB, txn.snapshot)
 	return nil
+}
+
+func (txn *KVTxn) throttle() {
+	if txn.writeSpeedRatio > 1 || txn.writeSpeedRatio <= 0 {
+		logutil.BgLogger().Error(
+			"[pipelined dml] invalid write speed ratio",
+			zap.Float64("writeSpeedRatio", txn.writeSpeedRatio),
+			zap.Uint64("session", txn.committer.sessionID),
+			zap.Uint64("startTS", txn.startTS),
+		)
+		return
+	}
+
+	expectedFlushMs := txn.flushBatchDurationEWMA.Value()
+	// T_sleep / (T_sleep + T_flush) = 1 - writeSpeedRatio
+	sleepMs := int((1.0 - txn.writeSpeedRatio) / txn.writeSpeedRatio * expectedFlushMs)
+	if sleepMs == 0 {
+		return
+	}
+	logutil.BgLogger().Info(
+		"[pipelined dml] throttle",
+		zap.Int("sleepMs", sleepMs),
+		zap.Float64("writeSpeedRatio", txn.writeSpeedRatio),
+		zap.Uint64("session", txn.committer.sessionID),
+		zap.Uint64("startTS", txn.startTS),
+	)
+	time.Sleep(time.Duration(sleepMs) * time.Millisecond)
 }
 
 // IsCasualConsistency returns if the transaction allows linearizability
