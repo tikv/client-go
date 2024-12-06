@@ -184,7 +184,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			time.Sleep(300 * time.Millisecond)
 			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})
 		}
-		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 		startTime := time.Now()
 		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		diagCtx.reqDuration = time.Since(startTime)

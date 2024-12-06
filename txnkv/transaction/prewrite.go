@@ -268,7 +268,7 @@ func (action actionPrewrite) handleSingleBatch(
 	attempts := 0
 
 	req := c.buildPrewriteRequest(batch, txnSize)
-	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	var resolvingRecordToken *int
 	defer func() {
 		if err != nil {

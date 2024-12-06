@@ -197,7 +197,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		zap.String("nextEndKey", kv.StrKey(s.nextEndKey)),
 		zap.Bool("reverse", s.reverse),
 		zap.Uint64("txnStartTS", s.startTS()))
-	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient(), s.snapshot.store.GetOracle())
 	var reqEndKey, reqStartKey []byte
 	var loc *locate.KeyLocation
 	var resolvingRecordToken *int

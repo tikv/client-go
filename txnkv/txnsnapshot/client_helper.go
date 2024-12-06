@@ -40,6 +40,7 @@ import (
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
@@ -62,6 +63,7 @@ type ClientHelper struct {
 	committedLocks *util.TSSet
 	client         client.Client
 	resolveLite    bool
+	oracle         oracle.Oracle
 	Stats          *locate.RegionRequestRuntimeStats
 }
 
@@ -74,6 +76,7 @@ func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, committedLocks *u
 		committedLocks: committedLocks,
 		client:         store.GetTiKVClient(),
 		resolveLite:    resolveLite,
+		oracle:         store.GetOracle(),
 	}
 }
 
@@ -136,7 +139,7 @@ func (ch *ClientHelper) ResolveLocksDone(callerStartTS uint64, token int) {
 
 // SendReqCtx wraps the SendReqCtx function and use the resolved lock result in the kvrpcpb.Context.
 func (ch *ClientHelper) SendReqCtx(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration, et tikvrpc.EndpointType, directStoreAddr string, opts ...locate.StoreSelectorOption) (*tikvrpc.Response, *locate.RPCContext, string, error) {
-	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client)
+	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client, ch.oracle)
 	if len(directStoreAddr) > 0 {
 		sender.SetStoreAddr(directStoreAddr)
 	}

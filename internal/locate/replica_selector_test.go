@@ -2793,7 +2793,7 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) *Regio
 			Value: []byte("hello world"),
 		}}, nil
 	}}
-	sender := NewRegionRequestSender(s.cache, fnClient)
+	sender := NewRegionRequestSender(s.cache, fnClient, oracle.NoopReadTSValidator{})
 	req, opts, timeout := ca.buildRequest(s)
 	beforeRun(s, ca)
 	rc := s.getRegion()
@@ -3220,7 +3220,7 @@ func TestTiKVClientReadTimeout(t *testing.T) {
 	req.ReplicaReadType = kv.ReplicaReadLeader
 	req.MaxExecutionDurationMs = 1
 	bo := retry.NewBackofferWithVars(context.Background(), 2000, nil)
-	sender := NewRegionRequestSender(s.cache, fnClient)
+	sender := NewRegionRequestSender(s.cache, fnClient, oracle.NoopReadTSValidator{})
 	resp, _, err := sender.SendReq(bo, req, rc.VerID(), time.Millisecond)
 	s.Nil(err)
 	s.NotNil(resp)
@@ -3234,7 +3234,7 @@ func TestTiKVClientReadTimeout(t *testing.T) {
 	}, accessPath)
 	// clear max execution duration for retry.
 	req.MaxExecutionDurationMs = 0
-	sender = NewRegionRequestSender(s.cache, fnClient)
+	sender = NewRegionRequestSender(s.cache, fnClient, oracle.NoopReadTSValidator{})
 	resp, _, err = sender.SendReq(bo, req, rc.VerID(), time.Second) // use a longer timeout.
 	s.Nil(err)
 	s.NotNil(resp)
@@ -3310,7 +3310,7 @@ func BenchmarkReplicaSelector(b *testing.B) {
 		if err != nil {
 			b.Fail()
 		}
-		sender := NewRegionRequestSender(cache, fnClient)
+		sender := NewRegionRequestSender(cache, fnClient, oracle.NoopReadTSValidator{})
 		sender.SendReqCtx(bo, req, loc.Region, client.ReadTimeoutShort, tikvrpc.TiKV)
 	}
 }
