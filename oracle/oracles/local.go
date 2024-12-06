@@ -36,6 +36,7 @@ package oracles
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -151,12 +152,22 @@ func (l *localOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) 
 }
 
 func (l *localOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
+	if readTS == math.MaxUint64 {
+		if isStaleRead {
+			return oracle.ErrLatestStaleRead{}
+		}
+		return nil
+	}
+
 	currentTS, err := l.GetTimestamp(ctx, opt)
 	if err != nil {
 		return errors.Errorf("fail to validate read timestamp: %v", err)
 	}
 	if currentTS < readTS {
-		return errors.Errorf("cannot set read timestamp to a future time")
+		return oracle.ErrFutureTSRead{
+			ReadTS:    readTS,
+			CurrentTS: currentTS,
+		}
 	}
 	return nil
 }
