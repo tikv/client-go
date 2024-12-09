@@ -119,3 +119,5 @@ replace (
 )
 
 replace github.com/pingcap/tidb => github.com/MyonKeminta/tidb v1.1.0-alpha.1.0.20241206091441-d8254eef1420
+
+replace github.com/pingcap/tidb/pkg/parser => github.com/MyonKeminta/tidb/pkg/parser v0.0.0-20241206091441-d8254eef1420
