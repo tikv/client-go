@@ -148,7 +148,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 	})
 
-	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient(), s.oracle)
 	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 
 	batchResp := kvrpc.BatchResult{Response: resp}

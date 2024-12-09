@@ -43,6 +43,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -85,7 +86,9 @@ func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
-	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
+
+	s.NoError(failpoint.Enable("tikvclient/doNotRecoverStoreHealthCheckPanic", "return"))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TearDownTest() {
@@ -150,7 +153,8 @@ func (s *testRegionRequestToThreeStoresSuite) loadAndGetLeaderStore() (*Store, s
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
-	s.regionRequestSender.regionCache.enableForwarding = true
+	sender := NewRegionRequestSender(s.cache, s.regionRequestSender.client, oracle.NoopReadTSValidator{})
+	sender.regionCache.enableForwarding = true
 
 	// First get the leader's addr from region cache
 	leaderStore, leaderAddr := s.loadAndGetLeaderStore()
@@ -1240,7 +1244,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 	}
 	resetStats := func() {
 		reqTargetAddrs = make(map[string]struct{})
-		s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+		s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient, oracle.NoopReadTSValidator{})
 		s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 	}
 
@@ -1564,7 +1568,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeo
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
 	}}
-	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient, oracle.NoopReadTSValidator{})
 	s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 	getLocFn := func() *KeyLocation {
 		loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("a"))
