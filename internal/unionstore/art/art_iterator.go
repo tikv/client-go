@@ -82,10 +82,10 @@ func (it *Iterator) Valid() bool        { return it.valid }
 func (it *Iterator) Key() []byte        { return it.currLeaf.GetKey() }
 func (it *Iterator) Flags() kv.KeyFlags { return it.currLeaf.GetKeyFlags() }
 func (it *Iterator) Value() []byte {
-	if it.currLeaf.vAddr.IsNull() {
+	if it.currLeaf.vLogAddr.IsNull() {
 		return nil
 	}
-	return it.tree.allocator.vlogAllocator.GetValue(it.currLeaf.vAddr)
+	return it.tree.allocator.vlogAllocator.GetValue(it.currLeaf.vLogAddr)
 }
 
 // HasValue returns false if it is flags only.
@@ -94,7 +94,7 @@ func (it *Iterator) HasValue() bool {
 }
 
 func (it *Iterator) isFlagsOnly() bool {
-	return it.currLeaf != nil && it.currLeaf.vAddr.IsNull()
+	return it.currLeaf != nil && it.currLeaf.vLogAddr.IsNull()
 }
 
 func (it *Iterator) Next() error {
@@ -119,7 +119,7 @@ func (it *Iterator) Next() error {
 			return nil
 		}
 		it.setCurrLeaf(nextLeaf.addr)
-		if it.currLeaf.vAddr.IsNull() {
+		if it.currLeaf.vLogAddr.IsNull() {
 			// if it.includeFlags is true, the iterator should return even the value is null.
 			if it.includeFlags && !it.currLeaf.isDeleted() {
 				return nil
@@ -251,10 +251,10 @@ func (it *baseIter) seek(root artNode, key artKey) {
 				// If the seek key is smaller than the prefix, all the children are located on the right side of the seek key.
 				// Otherwise, the children are located on the left side of the seek key.
 				var prefix []byte
-				if mismatchIdx < maxPrefixLen {
+				if mismatchIdx < maxInNodePrefixLen {
 					prefix = node.prefix[:]
 				} else {
-					leafNode := minimum(it.allocator, curr)
+					leafNode := minimumLeafNode(it.allocator, curr)
 					prefix = leafNode.asLeaf(it.allocator).getKeyDepth(depth)
 				}
 				if mismatchIdx+depth == uint32(len(key)) || key[depth+mismatchIdx] < prefix[mismatchIdx] {
