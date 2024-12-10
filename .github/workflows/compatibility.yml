@@ -24,7 +24,8 @@ jobs:
     - name: Checkout TiDB
       uses: actions/checkout@v2
       with:
-        repository: pingcap/tidb
+        repository: MyonKeminta/tidb
+        ref: m/update-ts-check
         path: tidb
 
     - name: Check build
