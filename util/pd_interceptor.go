@@ -41,6 +41,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
 )
 
 var (
@@ -95,7 +96,7 @@ func (m InterceptedPDClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 }
 
 // GetRegion implements pd.Client#GetRegion.
-func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
 	r, err := m.Client.GetRegion(ctx, key, opts...)
 	recordPDWaitTime(ctx, start)
@@ -103,7 +104,7 @@ func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte, opts ...
 }
 
 // GetPrevRegion implements pd.Client#GetPrevRegion.
-func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
 	r, err := m.Client.GetPrevRegion(ctx, key, opts...)
 	recordPDWaitTime(ctx, start)
@@ -111,7 +112,7 @@ func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts
 }
 
 // GetRegionByID implements pd.Client#GetRegionByID.
-func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
 	r, err := m.Client.GetRegionByID(ctx, regionID, opts...)
 	recordPDWaitTime(ctx, start)
@@ -119,7 +120,7 @@ func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64,
 }
 
 // ScanRegions implements pd.Client#ScanRegions.
-func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
 	start := time.Now()
 	//nolint:staticcheck
 	r, err := m.Client.ScanRegions(ctx, key, endKey, limit, opts...)
