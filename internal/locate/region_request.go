@@ -1804,56 +1804,6 @@ func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.R
 	return s.readTSValidator.ValidateReadTS(ctx, readTS, req.StaleRead, &oracle.Option{TxnScope: req.TxnScope})
 }
 
-type staleReadMetricsCollector struct {
-}
-
-func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request, isLocalTraffic bool) {
-	size := 0
-	switch req.Type {
-	case tikvrpc.CmdGet:
-		size = req.Get().Size()
-	case tikvrpc.CmdBatchGet:
-		size = req.BatchGet().Size()
-	case tikvrpc.CmdScan:
-		size = req.Scan().Size()
-	case tikvrpc.CmdCop:
-		size = req.Cop().Size()
-	default:
-		// ignore non-read requests
-		return
-	}
-	size += req.Context.Size()
-	if isLocalTraffic {
-		metrics.StaleReadLocalOutBytes.Add(float64(size))
-		metrics.StaleReadReqLocalCounter.Add(1)
-	} else {
-		metrics.StaleReadRemoteOutBytes.Add(float64(size))
-		metrics.StaleReadReqCrossZoneCounter.Add(1)
-	}
-}
-
-func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Response, isLocalTraffic bool) {
-	size := 0
-	switch tp {
-	case tikvrpc.CmdGet:
-		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
-	case tikvrpc.CmdBatchGet:
-		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
-	case tikvrpc.CmdScan:
-		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
-	case tikvrpc.CmdCop:
-		size += resp.Resp.(*coprocessor.Response).Size()
-	default:
-		// ignore non-read requests
-		return
-	}
-	if isLocalTraffic {
-		metrics.StaleReadLocalInBytes.Add(float64(size))
-	} else {
-		metrics.StaleReadRemoteInBytes.Add(float64(size))
-	}
-}
-
 func patchRequestSource(req *tikvrpc.Request, replicaType string) {
 	var sb strings.Builder
 	defer func() {
