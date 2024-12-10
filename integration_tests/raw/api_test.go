@@ -228,7 +228,7 @@ func (s *apiTestSuite) mustBatchDelete(prefix string, keys []string) {
 }
 
 func (s *apiTestSuite) mustCASBytes(prefix, key string, old, new []byte) (bool, []byte) {
-	oldValue, success, err := s.clientForCas.CompareAndSwap(context.Background(), []byte(withPrefix(prefix, key)), old, new)
+	oldValue, success, err := s.clientForCas.CompareAndSwap(context.Background(), []byte(withPrefix(prefix, key)), old, new, 0)
 	s.Nil(err)
 	return success, oldValue
 }
