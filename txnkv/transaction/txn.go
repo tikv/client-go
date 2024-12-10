@@ -115,8 +115,8 @@ type PipelinedTxnOptions struct {
 	Enable                 bool
 	FlushConcurrency       int
 	ResolveLockConcurrency int
-	// (0,1], 1 = no sleep
-	WriteSpeedRatio float64
+	// [0,1), 0 = no sleep, 1 = no write
+	WriteThrottleRatio float64
 }
 
 // TxnOptions indicates the option when beginning a transaction.
@@ -184,7 +184,7 @@ type KVTxn struct {
 	pipelinedCancel                 context.CancelFunc
 	pipelinedFlushConcurrency       int
 	pipelinedResolveLockConcurrency int
-	writeSpeedRatio                 float64
+	writeThrottleRatio              float64
 	// flushBatchDurationEWMA is read before each flush, and written after each flush => no race
 	flushBatchDurationEWMA ewma.MovingAverage
 }
@@ -212,7 +212,7 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 	}
 	newTiKVTxn.pipelinedFlushConcurrency = options.PipelinedTxn.FlushConcurrency
 	newTiKVTxn.pipelinedResolveLockConcurrency = options.PipelinedTxn.ResolveLockConcurrency
-	newTiKVTxn.writeSpeedRatio = options.PipelinedTxn.WriteSpeedRatio
+	newTiKVTxn.writeThrottleRatio = options.PipelinedTxn.WriteThrottleRatio
 	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
 		return nil, err
 	}
@@ -666,10 +666,10 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 }
 
 func (txn *KVTxn) throttle() {
-	if txn.writeSpeedRatio > 1 || txn.writeSpeedRatio <= 0 {
+	if txn.writeThrottleRatio >= 1 || txn.writeThrottleRatio < 0 {
 		logutil.BgLogger().Error(
 			"[pipelined dml] invalid write speed ratio",
-			zap.Float64("writeSpeedRatio", txn.writeSpeedRatio),
+			zap.Float64("writeThrottleRatio", txn.writeThrottleRatio),
 			zap.Uint64("session", txn.committer.sessionID),
 			zap.Uint64("startTS", txn.startTS),
 		)
@@ -677,15 +677,16 @@ func (txn *KVTxn) throttle() {
 	}
 
 	expectedFlushMs := txn.flushBatchDurationEWMA.Value()
-	// T_sleep / (T_sleep + T_flush) = 1 - writeSpeedRatio
-	sleepMs := int((1.0 - txn.writeSpeedRatio) / txn.writeSpeedRatio * expectedFlushMs)
+	// T_sleep / (T_sleep + T_flush) = writeThrottleRatio
+	sleepMs := int(txn.writeThrottleRatio / (1.0 - txn.writeThrottleRatio) * expectedFlushMs)
+	metrics.TiKVPipelinedFlushThrottleSecondsHistogram.Observe(float64(sleepMs) / 1000)
 	if sleepMs == 0 {
 		return
 	}
 	logutil.BgLogger().Info(
 		"[pipelined dml] throttle",
 		zap.Int("sleepMs", sleepMs),
-		zap.Float64("writeSpeedRatio", txn.writeSpeedRatio),
+		zap.Float64("writeThrottleRatio", txn.writeThrottleRatio),
 		zap.Uint64("session", txn.committer.sessionID),
 		zap.Uint64("startTS", txn.startTS),
 	)

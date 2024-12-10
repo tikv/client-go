@@ -117,6 +117,7 @@ var (
 	TiKVPipelinedFlushDuration                     prometheus.Histogram
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
+	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
 )
 
 // Label constants.
@@ -852,6 +853,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "The actual working update interval for the low resolution TSO. As there are adaptive mechanism internally, this value may differ from the config.",
 		})
 
+	TiKVPipelinedFlushThrottleSecondsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "pipelined_flush_throttle_seconds",
+			Help:      "Throttle durations of pipelined flushes.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
+		})
+
 	initShortcuts()
 }
 
@@ -948,6 +958,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVPipelinedFlushDuration)
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
+	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.

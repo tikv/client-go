@@ -83,7 +83,7 @@ const (
 
 	defaultPipelinedFlushConcurrency       = 128
 	defaultPipelinedResolveLockConcurrency = 8
-	defaultPipelinedWriteSpeedRatio        = 1.0
+	defaultPipelinedWriteThrottleRatio     = 0.0
 )
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
@@ -955,20 +955,23 @@ func WithDefaultPipelinedTxn() TxnOption {
 			Enable:                 true,
 			FlushConcurrency:       defaultPipelinedFlushConcurrency,
 			ResolveLockConcurrency: defaultPipelinedResolveLockConcurrency,
-			WriteSpeedRatio:        defaultPipelinedWriteSpeedRatio,
+			WriteThrottleRatio:     defaultPipelinedWriteThrottleRatio,
 		}
 	}
 }
 
 // WithPipelinedTxn creates pipelined txn with specified parameters
-func WithPipelinedTxn(flushConcurrency, resolveLockConcurrency int,
-	writeSpeedRatio float64) TxnOption {
+func WithPipelinedTxn(
+	flushConcurrency,
+	resolveLockConcurrency int,
+	writeThrottleRatio float64,
+) TxnOption {
 	return func(st *transaction.TxnOptions) {
 		st.PipelinedTxn = transaction.PipelinedTxnOptions{
 			Enable:                 true,
 			FlushConcurrency:       flushConcurrency,
 			ResolveLockConcurrency: resolveLockConcurrency,
-			WriteSpeedRatio:        writeSpeedRatio,
+			WriteThrottleRatio:     writeThrottleRatio,
 		}
 	}
 }
