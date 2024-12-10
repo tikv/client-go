@@ -905,7 +905,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...opt.C
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdCli = util.InterceptedPDClient{Client: pdCli}
+	pdCli = util.NewInterceptedPDClient(pdCli)
 	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID(context.TODO()))
 
 	tlsConfig, err := security.ToTLSConfig()
