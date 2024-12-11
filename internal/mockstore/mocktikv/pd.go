@@ -51,6 +51,8 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/caller"
+	"github.com/tikv/pd/client/opt"
 	"go.uber.org/atomic"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -220,7 +222,7 @@ func (m *mockTSFuture) Wait() (int64, int64, error) {
 	return m.pdc.GetTS(m.ctx)
 }
 
-func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	region, peer, buckets, downPeers := c.cluster.GetRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
@@ -234,11 +236,11 @@ func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegi
 	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	return &pd.Region{}, nil
 }
 
-func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	region, peer, buckets, downPeers := c.cluster.GetPrevRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
@@ -246,17 +248,17 @@ func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.Get
 	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	region, peer, buckets, downPeers := c.cluster.GetRegionByID(regionID)
 	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
 	regions := c.cluster.ScanRegions(startKey, endKey, limit, opts...)
 	return regions, nil
 }
 
-func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
 	if _, err := util.EvalFailpoint("mockBatchScanRegionsUnimplemented"); err == nil {
 		return nil, status.Errorf(codes.Unimplemented, "mock BatchScanRegions is not implemented")
 	}
@@ -301,7 +303,7 @@ func (c *pdClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store,
 	return store, nil
 }
 
-func (c *pdClient) GetAllStores(ctx context.Context, opts ...pd.GetStoreOption) ([]*metapb.Store, error) {
+func (c *pdClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
 	return c.cluster.GetAllStores(), nil
 }
 
@@ -355,11 +357,11 @@ func (c *pdClient) ScatterRegion(ctx context.Context, regionID uint64) error {
 	return nil
 }
 
-func (c *pdClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts ...pd.RegionsOption) (*pdpb.ScatterRegionResponse, error) {
+func (c *pdClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts ...opt.RegionsOption) (*pdpb.ScatterRegionResponse, error) {
 	return nil, nil
 }
 
-func (c *pdClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+func (c *pdClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...opt.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
 	return nil, nil
 }
 
@@ -367,7 +369,7 @@ func (c *pdClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetO
 	return &pdpb.GetOperatorResponse{Status: pdpb.OperatorStatus_SUCCESS}, nil
 }
 
-func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
+func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...opt.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
 	return nil, nil
 }
 
@@ -377,7 +379,7 @@ func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
 
 func (c *pdClient) GetLeaderURL() string { return "mockpd" }
 
-func (c *pdClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
+func (c *pdClient) UpdateOption(option opt.DynamicOption, value interface{}) error {
 	return nil
 }
 
@@ -441,15 +443,15 @@ func (c *pdClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation
 	return nil
 }
 
-func (c *pdClient) Watch(ctx context.Context, key []byte, opts ...pd.OpOption) (chan []*meta_storagepb.Event, error) {
+func (c *pdClient) Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan []*meta_storagepb.Event, error) {
 	return nil, nil
 }
 
-func (c *pdClient) Get(ctx context.Context, key []byte, opts ...pd.OpOption) (*meta_storagepb.GetResponse, error) {
+func (c *pdClient) Get(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (*meta_storagepb.GetResponse, error) {
 	return nil, nil
 }
 
-func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd.OpOption) (*meta_storagepb.PutResponse, error) {
+func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...opt.MetaStorageOption) (*meta_storagepb.PutResponse, error) {
 	return nil, nil
 }
 
@@ -458,3 +460,5 @@ func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 }
 
 func (m *pdClient) GetServiceDiscovery() pd.ServiceDiscovery { return nil }
+
+func (m *pdClient) WithCallerComponent(callerComponent caller.Component) pd.RPCClient { return nil }

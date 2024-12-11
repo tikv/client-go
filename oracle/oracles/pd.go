@@ -245,12 +245,7 @@ func (f *tsFuture) Wait() (uint64, error) {
 }
 
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
-	var ts pd.TSFuture
-	if opt.TxnScope == oracle.GlobalTxnScope || opt.TxnScope == "" {
-		ts = o.c.GetTSAsync(ctx)
-	} else {
-		ts = o.c.GetLocalTSAsync(ctx, opt.TxnScope)
-	}
+	ts := o.c.GetTSAsync(ctx)
 	return &tsFuture{ts, o, opt.TxnScope}
 }
 
@@ -260,11 +255,7 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 		physical, logical int64
 		err               error
 	)
-	if txnScope == oracle.GlobalTxnScope || txnScope == "" {
-		physical, logical, err = o.c.GetTS(ctx)
-	} else {
-		physical, logical, err = o.c.GetLocalTS(ctx, txnScope)
-	}
+	physical, logical, err = o.c.GetTS(ctx)
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
