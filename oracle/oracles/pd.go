@@ -245,8 +245,7 @@ func (f *tsFuture) Wait() (uint64, error) {
 }
 
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
-	var ts pd.TSFuture
-	ts = o.c.GetTSAsync(ctx)
+	ts := o.c.GetTSAsync(ctx)
 	return &tsFuture{ts, o, opt.TxnScope}
 }
 
