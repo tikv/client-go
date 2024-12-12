@@ -1742,6 +1742,12 @@ func (s *RegionRequestSender) onRegionError(
 	}
 
 	if isInvalidMaxTsUpdate(regionErr) {
+		logutil.Logger(bo.GetCtx()).Error(
+			"tikv reports `InvalidMaxTsUpdate`",
+			zap.String("message", regionErr.GetMessage()),
+			zap.Stringer("req", req),
+			zap.Stringer("ctx", ctx),
+		)
 		return false, errors.New(regionErr.String())
 	}
 
