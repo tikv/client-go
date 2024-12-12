@@ -237,7 +237,9 @@ func loadOption(store *KVStore, opt ...Option) {
 
 // NewKVStore creates a new TiKV store instance.
 func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
-	o, err := oracles.NewPdOracle(pdClient, defaultOracleUpdateInterval)
+	o, err := oracles.NewPdOracle(pdClient, &oracles.PDOracleOptions{
+		UpdateInterval: defaultOracleUpdateInterval,
+	})
 	if err != nil {
 		return nil, err
 	}

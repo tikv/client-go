@@ -51,6 +51,12 @@ type Oracle interface {
 	GetLowResolutionTimestamp(ctx context.Context, opt *Option) (uint64, error)
 	GetLowResolutionTimestampAsync(ctx context.Context, opt *Option) Future
 	SetLowResolutionTimestampUpdateInterval(time.Duration) error
+	// GetStaleTimestamp generates a timestamp based on the recently fetched timestamp and the elapsed time since
+	// when that timestamp was fetched. The result is expected to be about `prevSecond` seconds before the current
+	// time.
+	// WARNING: This method does not guarantee whether the generated timestamp is legal for accessing the data.
+	// Neither is it safe to use it for verifying the legality of another calculated timestamp.
+	// Be sure to validate the timestamp before using it to access the data.
 	GetStaleTimestamp(ctx context.Context, txnScope string, prevSecond uint64) (uint64, error)
 	IsExpired(lockTimestamp, TTL uint64, opt *Option) bool
 	UntilExpired(lockTimeStamp, TTL uint64, opt *Option) int64
@@ -61,6 +67,13 @@ type Oracle interface {
 
 	// GetAllTSOKeyspaceGroupMinTS gets a minimum timestamp from all TSO keyspace groups.
 	GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, error)
+
+	// ValidateSnapshotReadTS verifies whether it can be guaranteed that the given readTS doesn't exceed the maximum ts
+	// that has been allocated by the oracle, so that it's safe to use this ts to perform snapshot read, stale read,
+	// etc.
+	// Note that this method only checks the ts from the oracle's perspective. It doesn't check whether the snapshot
+	// has been GCed.
+	ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *Option) error
 }
 
 // Future is a future which promises to return a timestamp.
