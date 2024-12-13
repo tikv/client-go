@@ -15,7 +15,6 @@
 package client
 
 import (
-	"reflect"
 	"sync/atomic"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
@@ -54,6 +53,9 @@ type networkCollector struct {
 }
 
 func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails) {
+	if req == nil {
+		return
+	}
 	size := 0
 	switch req.Type {
 	case tikvrpc.CmdGet:
@@ -70,6 +72,20 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 		size = req.Commit().Size()
 	case tikvrpc.CmdPessimisticLock:
 		size = req.PessimisticLock().Size()
+	case tikvrpc.CmdPessimisticRollback:
+		size = req.PessimisticRollback().Size()
+	case tikvrpc.CmdBatchRollback:
+		size = req.BatchRollback().Size()
+	case tikvrpc.CmdCheckSecondaryLocks:
+		size = req.CheckSecondaryLocks().Size()
+	case tikvrpc.CmdScanLock:
+		size = req.ScanLock().Size()
+	case tikvrpc.CmdResolveLock:
+		size = req.ResolveLock().Size()
+	case tikvrpc.CmdFlush:
+		size = req.Flush().Size()
+	case tikvrpc.CmdCheckTxnStatus:
+		size = req.CheckTxnStatus().Size()
 	case tikvrpc.CmdMPPTask:
 		size = req.DispatchMPPTask().Size()
 	default:
@@ -107,12 +123,7 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	case tikvrpc.CmdGet:
 		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
 	case tikvrpc.CmdBatchGet:
-		resp1 := resp.Resp.(*kvrpcpb.BatchGetResponse)
-		if resp1 == nil {
-			panic(reflect.TypeOf(resp.Resp))
-		} else {
-			size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
-		}
+		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
 	case tikvrpc.CmdScan:
 		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
 	case tikvrpc.CmdCop:
