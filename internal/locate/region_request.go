@@ -842,18 +842,22 @@ func (s *RegionRequestSender) SendReqCtx(
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
 		}
-		// patch the access location if it is not set under region request sender. which inculdes the coprocessor,
+		// patch the access location if it is not set under region request sender. which includes the coprocessor,
 		// txn relative tikv request.
 		// note: MPP not use this path. need specified in the MPP layer.
-		if s.replicaSelector != nil &&
-			s.replicaSelector.target != nil &&
-			req.AccessLocation == kv.AccessUnknown &&
-			len(s.replicaSelector.option.labels) != 0 {
+		patchAccessLocation := func() {
 			if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
 				req.AccessLocation = kv.AccessLocalZone
 			} else {
 				req.AccessLocation = kv.AccessCrossZone
 			}
+		}
+		if s.replicaSelector != nil &&
+			s.replicaSelector.target != nil &&
+			req.AccessLocation == kv.AccessUnknown &&
+			len(s.replicaSelector.option.labels) != 0 {
+			// patch the access location if it is not set under region request sender.
+			patchAccessLocation()
 		}
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
 		s.storeAddr = rpcCtx.Addr

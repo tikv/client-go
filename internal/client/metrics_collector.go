@@ -30,52 +30,22 @@ import (
 type staleReadMetricsCollector struct {
 }
 
-func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request) {
-	size := 0
-	switch req.Type {
-	case tikvrpc.CmdGet:
-		size = req.Get().Size()
-	case tikvrpc.CmdBatchGet:
-		size = req.BatchGet().Size()
-	case tikvrpc.CmdScan:
-		size = req.Scan().Size()
-	case tikvrpc.CmdCop:
-		size = req.Cop().Size()
-	default:
-		// ignore non-read requests
-		return
-	}
-	isLocalTraffic := req.AccessLocation == kv.AccessLocalZone
-	size += req.Context.Size()
-	if isLocalTraffic {
-		metrics.StaleReadLocalOutBytes.Add(float64(size))
-		metrics.StaleReadReqLocalCounter.Add(1)
-	} else {
+func (s *staleReadMetricsCollector) onReq(size float64, isCrossZoneTraffic bool) {
+	if isCrossZoneTraffic {
 		metrics.StaleReadRemoteOutBytes.Add(float64(size))
 		metrics.StaleReadReqCrossZoneCounter.Add(1)
+
+	} else {
+		metrics.StaleReadLocalOutBytes.Add(float64(size))
+		metrics.StaleReadReqLocalCounter.Add(1)
 	}
 }
 
-func (s *staleReadMetricsCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response) {
-	size := 0
-	switch req.Type {
-	case tikvrpc.CmdGet:
-		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
-	case tikvrpc.CmdBatchGet:
-		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
-	case tikvrpc.CmdScan:
-		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
-	case tikvrpc.CmdCop:
-		size += resp.Resp.(*coprocessor.Response).Size()
-	default:
-		// ignore non-read requests
-		return
-	}
-	isLocalTraffic := req.AccessLocation == kv.AccessLocalZone
-	if isLocalTraffic {
-		metrics.StaleReadLocalInBytes.Add(float64(size))
-	} else {
+func (s *staleReadMetricsCollector) onResp(size float64, isCrossZoneTraffic bool) {
+	if isCrossZoneTraffic {
 		metrics.StaleReadRemoteInBytes.Add(float64(size))
+	} else {
+		metrics.StaleReadLocalInBytes.Add(float64(size))
 	}
 }
 
@@ -118,12 +88,13 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 	}
 
 	atomic.AddInt64(total, int64(size))
-	if req.AccessLocation == kv.AccessCrossZone {
+	isCrossZoneTraffic := req.AccessLocation == kv.AccessCrossZone
+	if isCrossZoneTraffic {
 		atomic.AddInt64(crossZone, int64(size))
 	}
 	// stale read metrics
 	if req.StaleRead {
-		s.staleReadMetricsCollector.onReq(req)
+		s.staleReadMetricsCollector.onReq(float64(size), isCrossZoneTraffic)
 	}
 }
 
@@ -152,6 +123,20 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 		size += resp.Resp.(*kvrpcpb.CommitResponse).Size()
 	case tikvrpc.CmdPessimisticLock:
 		size += resp.Resp.(*kvrpcpb.PessimisticLockResponse).Size()
+	case tikvrpc.CmdPessimisticRollback:
+		size += resp.Resp.(*kvrpcpb.PessimisticRollbackResponse).Size()
+	case tikvrpc.CmdBatchRollback:
+		size += resp.Resp.(*kvrpcpb.BatchRollbackResponse).Size()
+	case tikvrpc.CmdCheckSecondaryLocks:
+		size += resp.Resp.(*kvrpcpb.CheckSecondaryLocksResponse).Size()
+	case tikvrpc.CmdScanLock:
+		size += resp.Resp.(*kvrpcpb.ScanLockResponse).Size()
+	case tikvrpc.CmdResolveLock:
+		size += resp.Resp.(*kvrpcpb.ResolveLockResponse).Size()
+	case tikvrpc.CmdFlush:
+		size += resp.Resp.(*kvrpcpb.FlushResponse).Size()
+	case tikvrpc.CmdCheckTxnStatus:
+		size += resp.Resp.(*kvrpcpb.CheckTxnStatusResponse).Size()
 	case tikvrpc.CmdMPPTask:
 		// if is MPPDataPacket
 		if resp1, ok := resp.Resp.(*mpp.MPPDataPacket); ok && resp1 != nil {
@@ -176,11 +161,12 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	}
 
 	atomic.AddInt64(total, int64(size))
-	if req.AccessLocation == kv.AccessCrossZone {
+	isCrossZoneTraffic := req.AccessLocation == kv.AccessCrossZone
+	if isCrossZoneTraffic {
 		atomic.AddInt64(crossZone, int64(size))
 	}
 	// stale read metrics
 	if req.StaleRead {
-		s.staleReadMetricsCollector.onResp(req, resp)
+		s.staleReadMetricsCollector.onResp(float64(size), isCrossZoneTraffic)
 	}
 }
