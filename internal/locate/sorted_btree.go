@@ -38,7 +38,7 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/google/btree"
+	"github.com/tidwall/btree"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"go.uber.org/zap"
 )
@@ -51,13 +51,13 @@ type SortedRegions struct {
 // NewSortedRegions returns a new SortedRegions.
 func NewSortedRegions(btreeDegree int) *SortedRegions {
 	return &SortedRegions{
-		b: btree.NewG(btreeDegree, func(a, b *btreeItem) bool { return a.Less(b) }),
+		b: btree.NewBTreeGOptions(func(a, b *btreeItem) bool { return bytes.Compare(a.key, b.key) < 0 }, btree.Options{Degree: btreeDegree, NoLocks: true}),
 	}
 }
 
 // ReplaceOrInsert inserts a new item into the btree.
 func (s *SortedRegions) ReplaceOrInsert(cachedRegion *Region) *Region {
-	old, _ := s.b.ReplaceOrInsert(newBtreeItem(cachedRegion))
+	old, _ := s.b.Set(newBtreeItem(cachedRegion))
 	if old != nil {
 		return old.cachedRegion
 	}
@@ -66,7 +66,7 @@ func (s *SortedRegions) ReplaceOrInsert(cachedRegion *Region) *Region {
 
 // SearchByKey returns the region which contains the key. Note that the region might be expired and it's caller's duty to check the region TTL.
 func (s *SortedRegions) SearchByKey(key []byte, isEndKey bool) (r *Region) {
-	s.b.DescendLessOrEqual(newBtreeSearchItem(key), func(item *btreeItem) bool {
+	s.b.Descend(newBtreeSearchItem(key), func(item *btreeItem) bool {
 		region := item.cachedRegion
 		if isEndKey && bytes.Equal(region.StartKey(), key) {
 			return true // iterate next item
@@ -84,7 +84,7 @@ func (s *SortedRegions) SearchByKey(key []byte, isEndKey bool) (r *Region) {
 func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int) (regions []*Region) {
 	now := time.Now().Unix()
 	lastStartKey := startKey
-	s.b.AscendGreaterOrEqual(newBtreeSearchItem(startKey), func(item *btreeItem) bool {
+	s.b.Ascend(newBtreeSearchItem(startKey), func(item *btreeItem) bool {
 		region := item.cachedRegion
 		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
 			return false
@@ -107,7 +107,7 @@ func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int)
 func (s *SortedRegions) removeIntersecting(r *Region, verID RegionVerID) ([]*btreeItem, bool) {
 	var deleted []*btreeItem
 	var stale bool
-	s.b.AscendGreaterOrEqual(newBtreeSearchItem(r.StartKey()), func(item *btreeItem) bool {
+	s.b.Ascend(newBtreeSearchItem(r.StartKey()), func(item *btreeItem) bool {
 		if len(r.EndKey()) > 0 && bytes.Compare(item.cachedRegion.StartKey(), r.EndKey()) >= 0 {
 			return false
 		}
@@ -132,17 +132,17 @@ func (s *SortedRegions) removeIntersecting(r *Region, verID RegionVerID) ([]*btr
 
 // Clear removes all items from the btree.
 func (s *SortedRegions) Clear() {
-	s.b.Clear(false)
+	s.b.Clear()
 }
 
 // ValidRegionsInBtree returns the number of valid regions in the btree.
 func (s *SortedRegions) ValidRegionsInBtree(ts int64) (len int) {
-	s.b.Descend(func(item *btreeItem) bool {
-		r := item.cachedRegion
-		if !r.checkRegionCacheTTL(ts) {
-			return true
+	s.b.Walk(func(items []*btreeItem) bool {
+		for _, item := range items {
+			if item.cachedRegion.checkRegionCacheTTL(ts) {
+				len++
+			}
 		}
-		len++
 		return true
 	})
 	return

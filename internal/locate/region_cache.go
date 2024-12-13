@@ -50,7 +50,6 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/google/btree"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -2736,7 +2735,7 @@ func (c *RegionCache) gcRoundFunc(limit int) func(context.Context, time.Time) bo
 
 		// Only RLock when checking TTL to avoid blocking other readers
 		c.mu.RLock()
-		c.mu.sorted.b.AscendGreaterOrEqual(cursor, func(item *btreeItem) bool {
+		c.mu.sorted.b.Ascend(cursor, func(item *btreeItem) bool {
 			count++
 			if count > limit {
 				cursor = item
@@ -2814,10 +2813,6 @@ func newBtreeSearchItem(key []byte) *btreeItem {
 	return &btreeItem{
 		key: key,
 	}
-}
-
-func (item *btreeItem) Less(other btree.Item) bool {
-	return bytes.Compare(item.key, other.(*btreeItem).key) < 0
 }
 
 // GetID returns id.
