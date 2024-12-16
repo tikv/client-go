@@ -1520,6 +1520,82 @@ func (s *testCommitterSuite) TestAggressiveLockingExitIfInapplicable() {
 	s.NoError(txn.Rollback())
 }
 
+func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
+	// Not blocked
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	s.True(txn.IsInAggressiveLockingMode())
+	s.True(txn.GetCommitter().IsNil())
+
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.True(txn.GetCommitter().IsTTLRunning())
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.False(txn.IsInAggressiveLockingMode())
+	s.False(txn.GetCommitter().IsTTLRunning())
+
+	// End the transaction to test the next case.
+	s.NoError(txn.Rollback())
+
+	// txn blocked by txn2
+	txn = s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	s.True(txn.IsInAggressiveLockingMode())
+	s.True(txn.GetCommitter().IsNil())
+
+	txn2 := s.begin()
+	txn2.SetPessimistic(true)
+	lockCtx2 := &kv.LockCtx{ForUpdateTS: txn2.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn2.LockKeys(context.Background(), lockCtx2, []byte("k1")))
+
+	lockResCh := make(chan error)
+	go func() {
+		lockCtx = &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+		lockResCh <- txn.LockKeys(context.Background(), lockCtx, []byte("k1"))
+	}()
+	// No immediate result as blocked by txn2
+	select {
+	case <-time.After(time.Millisecond * 100):
+	case err := <-lockResCh:
+		s.FailNowf("get lock result when expected to be blocked", "error: %+v", err)
+	}
+
+	s.NoError(txn2.Set([]byte("k1"), []byte("v1")))
+	s.NoError(txn2.Commit(context.Background()))
+
+	// txn is resumed
+	select {
+	case <-time.After(time.Second):
+		s.FailNow("txn not resumed after blocker is committed")
+	case err := <-lockResCh:
+		s.NoError(err)
+	}
+
+	s.Equal(txn2.CommitTS(), lockCtx.MaxLockedWithConflictTS)
+	s.Greater(lockCtx.MaxLockedWithConflictTS, txn.StartTS())
+
+	s.True(txn.GetCommitter().IsTTLRunning())
+
+	txn.RetryAggressiveLocking(context.Background())
+	s.True(txn.GetCommitter().IsTTLRunning())
+
+	// Get a new ts as the new forUpdateTS.
+	forUpdateTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	s.NoError(err)
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.True(txn.GetCommitter().IsTTLRunning())
+
+	txn.CancelAggressiveLocking(context.Background())
+	s.True(txn.GetCommitter().IsTTLRunning())
+
+	// End the test.
+	s.NoError(txn.Rollback())
+}
+
 // TestElapsedTTL tests that elapsed time is correct even if ts physical time is greater than local time.
 func (s *testCommitterSuite) TestElapsedTTL() {
 	key := []byte("key")
