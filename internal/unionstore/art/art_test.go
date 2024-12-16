@@ -197,7 +197,7 @@ func TestSearchOptimisticMismatch(t *testing.T) {
 	prefix := make([]byte, 22)
 	tree.Set(append(prefix, []byte{1}...), prefix)
 	tree.Set(append(prefix, []byte{2}...), prefix)
-	// the search key is matched within maxPrefixLen, but the full key is not matched.
+	// the search key is matched within maxInNodePrefixLen, but the full key is not matched.
 	_, err := tree.Get(append(make([]byte, 21), []byte{1, 1}...))
 	require.NotNil(t, err)
 }
@@ -205,7 +205,7 @@ func TestSearchOptimisticMismatch(t *testing.T) {
 func TestExpansion(t *testing.T) {
 	// expand leaf
 	tree := New()
-	prefix := make([]byte, maxPrefixLen)
+	prefix := make([]byte, maxInNodePrefixLen)
 	tree.Set(append(prefix, []byte{1, 1, 1, 1}...), []byte{1})
 	an := tree.root.asNode4(&tree.allocator).children[0]
 	require.Equal(t, an.kind, typeLeaf)

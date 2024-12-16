@@ -167,9 +167,9 @@ func (f *artAllocator) allocLeaf(key []byte) (arena.MemdbArenaAddr, *artLeaf) {
 	size := leafSize + len(key)
 	addr, data := f.nodeAllocator.Alloc(size, true)
 	lf := (*artLeaf)(unsafe.Pointer(&data[0]))
-	lf.klen = uint16(len(key))
+	lf.keyLen = uint16(len(key))
 	lf.flags = 0
-	lf.vAddr = arena.NullAddr
+	lf.vLogAddr = arena.NullAddr
 	copy(data[leafSize:], key)
 	return addr, lf
 }
