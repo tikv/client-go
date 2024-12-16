@@ -1590,7 +1590,8 @@ func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
 	s.True(txn.GetCommitter().IsTTLRunning())
 
 	txn.CancelAggressiveLocking(context.Background())
-	s.True(txn.GetCommitter().IsTTLRunning())
+	s.False(txn.GetCommitter().IsTTLRunning())
+	s.Zero(txn.GetLockedCount())
 
 	// End the test.
 	s.NoError(txn.Rollback())
