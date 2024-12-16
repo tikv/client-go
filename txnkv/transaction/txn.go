@@ -715,8 +715,8 @@ func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 	}
 	txn.cleanupAggressiveLockingRedundantLocks(ctx)
 	if txn.aggressiveLockingContext.assignedPrimaryKey {
-		txn.resetPrimary()
 		txn.aggressiveLockingContext.assignedPrimaryKey = false
+		txn.aggressiveLockingContext.lastAssignedPrimaryKey = true
 	}
 
 	txn.aggressiveLockingContext.lastPrimaryKey = txn.aggressiveLockingContext.primaryKey
@@ -1110,10 +1110,17 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			metrics.AggressiveLockedKeysNew.Add(float64(len(keys)))
 
 			if len(keys) == 0 {
+				// Assume the primary key is not changed in this case. Keep the ttlManager running.
+				// Ref: https://github.com/pingcap/tidb/issues/58279
 				if lockCtx.Stats != nil {
 					txn.collectAggressiveLockingStats(lockCtx, 0, 0, filteredAggressiveLockedKeysCount, lockWakeUpMode)
 				}
 				return nil
+			} else if !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
+				// If the primary key is changed, we need the ttlManager to be restarted to run on the new primary key.
+				// Otherwise, we do nothing but keep it running. When it sends the RPC requests, ttlManager.run()
+				// will be called, but it's reentrant and will do nothing as the ttlManager is already running.
+				txn.committer.ttlManager.reset()
 			}
 		}
 
@@ -1310,6 +1317,7 @@ func (txn *KVTxn) selectPrimaryForPessimisticLock(sortedKeys [][]byte) {
 type aggressiveLockingContext struct {
 	lastRetryUnnecessaryLocks map[string]tempLockBufferEntry
 	lastPrimaryKey            []byte
+	lastAssignedPrimaryKey    bool
 	lastAttemptStartTime      time.Time
 
 	currentLockedKeys       map[string]tempLockBufferEntry
