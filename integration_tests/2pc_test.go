@@ -1597,6 +1597,123 @@ func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
 	s.NoError(txn.Rollback())
 }
 
+type aggressiveLockingExitPhase int
+
+const (
+	exitOnEnterAggressiveLocking aggressiveLockingExitPhase = iota
+	exitOnFirstLockKeys
+	exitOnRetry
+	exitOnSecondLockKeys
+)
+
+func (s *testCommitterSuite) testAggressiveLockingResetPrimaryAndTTLManagerAfterExitImpl(done bool, exitPhase aggressiveLockingExitPhase, retryDifferentKey bool) {
+	s.T().Logf("testing subcase, done-or-cancel: %v, exitPhase: %v, retryDifferentKey: %v", done, exitPhase, retryDifferentKey)
+	txn := s.begin()
+	txn.SetPessimistic(true)
+	txn.StartAggressiveLocking()
+	s.True(txn.IsInAggressiveLockingMode())
+	s.True(txn.GetCommitter().IsNil())
+	defer func() {
+		s.NoError(txn.Rollback())
+	}()
+
+	if exitPhase == exitOnEnterAggressiveLocking {
+		if done {
+			txn.DoneAggressiveLocking(context.Background())
+		} else {
+			txn.CancelAggressiveLocking(context.Background())
+		}
+		s.False(txn.IsInAggressiveLockingMode())
+		s.Zero(txn.GetLockedCount())
+		s.True(txn.GetCommitter().IsNil())
+		return
+	}
+
+	lockCtx := &kv.LockCtx{ForUpdateTS: txn.StartTS(), WaitStartTime: time.Now()}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
+	s.True(txn.GetCommitter().IsTTLRunning())
+	s.Equal(1, txn.GetLockedCount())
+
+	if exitPhase == exitOnFirstLockKeys {
+		if done {
+			txn.DoneAggressiveLocking(context.Background())
+			s.True(txn.GetCommitter().IsTTLRunning())
+			s.Equal(1, txn.GetLockedCount())
+		} else {
+			txn.CancelAggressiveLocking(context.Background())
+			s.False(txn.GetCommitter().IsTTLRunning())
+			s.Zero(txn.GetLockedCount())
+		}
+		s.False(txn.IsInAggressiveLockingMode())
+		return
+	}
+
+	txn.RetryAggressiveLocking(context.Background())
+
+	if exitPhase == exitOnRetry {
+		if done {
+			txn.DoneAggressiveLocking(context.Background())
+		} else {
+			txn.CancelAggressiveLocking(context.Background())
+		}
+		s.False(txn.IsInAggressiveLockingMode())
+		s.Zero(txn.GetLockedCount())
+		s.False(txn.GetCommitter().IsTTLRunning())
+		return
+	}
+
+	forUpdateTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	s.NoError(err)
+	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
+	key := []byte("k1")
+	if retryDifferentKey {
+		key = []byte("k2")
+	}
+	s.NoError(txn.LockKeys(context.Background(), lockCtx, key))
+	s.True(txn.GetCommitter().IsTTLRunning())
+	s.Equal(key, txn.GetCommitter().GetPrimaryKey())
+	expectedLockCount := 1
+	if retryDifferentKey {
+		// When lock k2 during retry, the previously-locked k1 is not immediately released, and it will be released when
+		// the fair locking state switches (either retry/cancel/done).
+		expectedLockCount = 2
+	}
+	s.Equal(expectedLockCount, txn.GetLockedCount())
+
+	if exitPhase == exitOnSecondLockKeys {
+		if done {
+			txn.DoneAggressiveLocking(context.Background())
+			s.True(txn.GetCommitter().IsTTLRunning())
+			s.Equal(1, txn.GetLockedCount())
+		} else {
+			txn.CancelAggressiveLocking(context.Background())
+			s.False(txn.GetCommitter().IsTTLRunning())
+			s.Zero(txn.GetLockedCount())
+		}
+		s.False(txn.IsInAggressiveLockingMode())
+		return
+	}
+
+	s.FailNow("unreachable")
+}
+
+func (s *testCommitterSuite) TestAggressiveLockingResetPrimaryAndTTLManagerAfterExit() {
+	// Done or cancel
+	for _, done := range []bool{false, true} {
+		// Iterate exiting phase
+		for _, exitPhase := range []aggressiveLockingExitPhase{
+			exitOnEnterAggressiveLocking,
+			exitOnFirstLockKeys,
+			exitOnRetry,
+			exitOnSecondLockKeys,
+		} {
+			for _, retryDifferentKey := range []bool{false, true} {
+				s.testAggressiveLockingResetPrimaryAndTTLManagerAfterExitImpl(done, exitPhase, retryDifferentKey)
+			}
+		}
+	}
+}
+
 // TestElapsedTTL tests that elapsed time is correct even if ts physical time is greater than local time.
 func (s *testCommitterSuite) TestElapsedTTL() {
 	key := []byte("key")
