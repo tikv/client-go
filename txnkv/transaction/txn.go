@@ -788,6 +788,12 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 		txn.aggressiveLockingContext = nil
 	}()
 
+	// If finally no key locked and ttlManager is just started during the current fair locking procedure, reset the
+	// ttlManager as no key will be the primary.
+	if txn.aggressiveLockingContext.lastAssignedPrimaryKey && !txn.aggressiveLockingContext.assignedPrimaryKey {
+		txn.committer.ttlManager.reset()
+	}
+
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 
 	if txn.forUpdateTSChecks == nil {
@@ -1294,6 +1300,8 @@ func (txn *KVTxn) resetPrimary(keepTTLManager bool) {
 // This function is only used during the LockKeys invocation, and the parameter noNewLockToAcquire indicates whether
 // there are any key needs to be locked in the current LockKeys call, after filtering out those that has already been
 // locked before the most recent RetryAggressiveLocking.
+// Also note that this function is not the only path that fair locking resets the ttlManager. DoneAggressiveLocking may
+// also stop the ttlManager if no key is locked after exiting.
 func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(noNewLockToAcquire bool) {
 	if !txn.IsInAggressiveLockingMode() {
 		// Not supposed to be called in a non fair locking context
