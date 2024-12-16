@@ -717,6 +717,10 @@ func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 	if txn.aggressiveLockingContext.assignedPrimaryKey {
 		txn.aggressiveLockingContext.assignedPrimaryKey = false
 		txn.aggressiveLockingContext.lastAssignedPrimaryKey = true
+		// Do not reset the ttlManager immediately. Instead, we
+		// will handle the case specially (see KVTxn.resetTTLManagerForAggressiveLockingMode).
+		// See: https://github.com/pingcap/tidb/issues/58279
+		txn.resetPrimary(true)
 	}
 
 	txn.aggressiveLockingContext.lastPrimaryKey = txn.aggressiveLockingContext.primaryKey
@@ -748,8 +752,8 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	}()
 
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
-	if txn.aggressiveLockingContext.assignedPrimaryKey {
-		txn.resetPrimary()
+	if txn.aggressiveLockingContext.assignedPrimaryKey || txn.aggressiveLockingContext.lastAssignedPrimaryKey {
+		txn.resetPrimary(false)
 		txn.aggressiveLockingContext.assignedPrimaryKey = false
 	}
 
@@ -1056,7 +1060,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		}
 		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
 		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
-		// a LockOnlyIfExists pessmistic lock request.
+		// a LockOnlyIfExists pessimistic lock request.
 		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys) > 1 {
 			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
 				StartTS:     txn.startTS,
@@ -1109,18 +1113,13 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			metrics.AggressiveLockedKeysDerived.Add(float64(filteredAggressiveLockedKeysCount))
 			metrics.AggressiveLockedKeysNew.Add(float64(len(keys)))
 
+			txn.resetTTLManagerForAggressiveLockingMode(len(keys) == 0)
+
 			if len(keys) == 0 {
-				// Assume the primary key is not changed in this case. Keep the ttlManager running.
-				// Ref: https://github.com/pingcap/tidb/issues/58279
 				if lockCtx.Stats != nil {
 					txn.collectAggressiveLockingStats(lockCtx, 0, 0, filteredAggressiveLockedKeysCount, lockWakeUpMode)
 				}
 				return nil
-			} else if !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
-				// If the primary key is changed, we need the ttlManager to be restarted to run on the new primary key.
-				// Otherwise, we do nothing but keep it running. When it sends the RPC requests, ttlManager.run()
-				// will be called, but it's reentrant and will do nothing as the ttlManager is already running.
-				txn.committer.ttlManager.reset()
 			}
 		}
 
@@ -1206,7 +1205,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 			if assignedPrimaryKey {
 				// unset the primary key and stop heartbeat if we assigned primary key when failed to lock it.
-				txn.resetPrimary()
+				txn.resetPrimary(false)
 			}
 			return err
 		}
@@ -1281,9 +1280,35 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	return nil
 }
 
-func (txn *KVTxn) resetPrimary() {
+// resetPrimary resets the primary. It's used when the first LockKeys call in a transaction is failed, or need to be
+// rolled back for some reason (e.g. TiDB may perform statement rollback), in which case the primary will be unlocked
+// another key may be chosen as the new primary.
+func (txn *KVTxn) resetPrimary(keepTTLManager bool) {
 	txn.committer.primaryKey = nil
-	txn.committer.ttlManager.reset()
+	if !keepTTLManager {
+		txn.committer.ttlManager.reset()
+	}
+}
+
+// resetTTLManagerForAggressiveLockingMode is used in a fair locking procedure to reset the ttlManager when necessary.
+// This function is only used during the LockKeys invocation, and the parameter noNewLockToAcquire indicates whether
+// there are any key needs to be locked in the current LockKeys call, after filtering out those that has already been
+// locked before the most recent RetryAggressiveLocking.
+func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(noNewLockToAcquire bool) {
+	if !txn.IsInAggressiveLockingMode() {
+		// Not supposed to be called in a non fair locking context
+		return
+	}
+	// * When there's no new lock to acquire, assume the primary key is not changed in this case. Keep the ttlManager
+	// running.
+	// * When there is key to write:
+	//   * If the primary key is not changed, also keep the ttlManager running. Then, when sending the
+	//     acquirePessimisticLock requests, it will call ttlManager.run() again, but it's reentrant and will do nothing
+	//     as the ttlManager is already running.
+	//   * If the primary key is changed, the ttlManager will need to run on the new primary key instead. Reset it.
+	if !noNewLockToAcquire && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
+		txn.committer.ttlManager.reset()
+	}
 }
 
 func (txn *KVTxn) selectPrimaryForPessimisticLock(sortedKeys [][]byte) {
