@@ -17,6 +17,7 @@ import (
 	"github.com/tikv/client-go/v2/rawkv"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func TestAPI(t *testing.T) {
@@ -74,7 +75,7 @@ func (s *apiTestSuite) newRawKVClient(pdCli pd.Client, addrs []string) *rawkv.Cl
 	return cli
 }
 
-func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
+func (s *apiTestSuite) wrapPDClient(pdCli pd.Client) pd.Client {
 	var err error
 	if s.getApiVersion(pdCli) == kvrpcpb.APIVersion_V2 {
 		pdCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdCli, tikv.DefaultKeyspaceName)
@@ -86,7 +87,7 @@ func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
 func (s *apiTestSuite) SetupTest() {
 	addrs := strings.Split(*pdAddrs, ",")
 
-	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
+	pdClient, err := pd.NewClient(caller.Component("client-go-integration-test"), addrs, pd.SecurityOption{})
 	s.Nil(err)
 	s.apiVersion = s.getApiVersion(pdClient)
 

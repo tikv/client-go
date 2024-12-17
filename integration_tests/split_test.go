@@ -50,6 +50,11 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/clients/tso"
+	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
+	sd "github.com/tikv/pd/client/servicediscovery"
 )
 
 func TestSplit(t *testing.T) {
@@ -183,15 +188,15 @@ func (c *mockPDClient) GetLocalTS(ctx context.Context, dcLocation string) (int64
 	return c.GetTS(ctx)
 }
 
-func (c *mockPDClient) GetTSAsync(ctx context.Context) pd.TSFuture {
+func (c *mockPDClient) GetTSAsync(ctx context.Context) tso.TSFuture {
 	return nil
 }
 
-func (c *mockPDClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
+func (c *mockPDClient) GetLocalTSAsync(ctx context.Context, dcLocation string) tso.TSFuture {
 	return nil
 }
 
-func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -201,11 +206,11 @@ func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.Get
 	return c.client.GetRegion(ctx, key, opts...)
 }
 
-func (c *mockPDClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...opt.GetRegionOption) (*router.Region, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -215,7 +220,7 @@ func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd
 	return c.client.GetPrevRegion(ctx, key, opts...)
 }
 
-func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -225,7 +230,7 @@ func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts 
 	return c.client.GetRegionByID(ctx, regionID, opts...)
 }
 
-func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -235,7 +240,7 @@ func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey 
 	return c.client.ScanRegions(ctx, startKey, endKey, limit)
 }
 
-func (c *mockPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *mockPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -255,7 +260,7 @@ func (c *mockPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.St
 	return c.client.GetStore(ctx, storeID)
 }
 
-func (c *mockPDClient) GetAllStores(ctx context.Context, opts ...pd.GetStoreOption) ([]*metapb.Store, error) {
+func (c *mockPDClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption) ([]*metapb.Store, error) {
 	c.RLock()
 	defer c.Unlock()
 
@@ -279,15 +284,15 @@ func (c *mockPDClient) ScatterRegion(ctx context.Context, regionID uint64) error
 	return nil
 }
 
-func (c *mockPDClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts ...pd.RegionsOption) (*pdpb.ScatterRegionResponse, error) {
+func (c *mockPDClient) ScatterRegions(ctx context.Context, regionsID []uint64, opts ...opt.RegionsOption) (*pdpb.ScatterRegionResponse, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+func (c *mockPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...opt.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
+func (c *mockPDClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byte, opts ...opt.RegionsOption) (*pdpb.SplitAndScatterRegionsResponse, error) {
 	return nil, nil
 }
 
@@ -297,7 +302,7 @@ func (c *mockPDClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.
 
 func (c *mockPDClient) GetLeaderURL() string { return "mockpd" }
 
-func (c *mockPDClient) UpdateOption(option pd.DynamicOption, value interface{}) error {
+func (c *mockPDClient) UpdateOption(option opt.DynamicOption, value interface{}) error {
 	return nil
 }
 
@@ -357,7 +362,7 @@ func (c *mockPDClient) GetTSWithinKeyspace(ctx context.Context, keyspaceID uint3
 	return 0, 0, nil
 }
 
-func (c *mockPDClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) pd.TSFuture {
+func (c *mockPDClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) tso.TSFuture {
 	return nil
 }
 
@@ -365,19 +370,19 @@ func (c *mockPDClient) GetLocalTSWithinKeyspace(ctx context.Context, dcLocation 
 	return 0, 0, nil
 }
 
-func (c *mockPDClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) pd.TSFuture {
+func (c *mockPDClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) tso.TSFuture {
 	return nil
 }
 
-func (c *mockPDClient) Watch(ctx context.Context, key []byte, opts ...pd.OpOption) (chan []*meta_storagepb.Event, error) {
+func (c *mockPDClient) Watch(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (chan []*meta_storagepb.Event, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) Get(ctx context.Context, key []byte, opts ...pd.OpOption) (*meta_storagepb.GetResponse, error) {
+func (c *mockPDClient) Get(ctx context.Context, key []byte, opts ...opt.MetaStorageOption) (*meta_storagepb.GetResponse, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) Put(ctx context.Context, key []byte, value []byte, opts ...pd.OpOption) (*meta_storagepb.PutResponse, error) {
+func (c *mockPDClient) Put(ctx context.Context, key []byte, value []byte, opts ...opt.MetaStorageOption) (*meta_storagepb.PutResponse, error) {
 	return nil, nil
 }
 
@@ -401,6 +406,8 @@ func (c *mockPDClient) WatchGCSafePointV2(ctx context.Context, revision int64) (
 	panic("unimplemented")
 }
 
-func (c *mockPDClient) GetServiceDiscovery() pd.ServiceDiscovery {
+func (c *mockPDClient) GetServiceDiscovery() sd.ServiceDiscovery {
 	panic("unimplemented")
 }
+
+func (c *mockPDClient) WithCallerComponent(component caller.Component) pd.RPCClient { return c }
