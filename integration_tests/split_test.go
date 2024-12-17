@@ -50,6 +50,8 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/opt"
 )
 
 func TestSplit(t *testing.T) {
@@ -191,7 +193,7 @@ func (c *mockPDClient) GetLocalTSAsync(ctx context.Context, dcLocation string) p
 	return nil
 }
 
-func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -201,11 +203,11 @@ func (c *mockPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.Get
 	return c.client.GetRegion(ctx, key, opts...)
 }
 
-func (c *mockPDClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...opt.GetRegionOption) (*router.Region, error) {
 	return nil, nil
 }
 
-func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -215,7 +217,7 @@ func (c *mockPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd
 	return c.client.GetPrevRegion(ctx, key, opts...)
 }
 
-func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -225,7 +227,7 @@ func (c *mockPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts 
 	return c.client.GetRegionByID(ctx, regionID, opts...)
 }
 
-func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -235,7 +237,7 @@ func (c *mockPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey 
 	return c.client.ScanRegions(ctx, startKey, endKey, limit)
 }
 
-func (c *mockPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *mockPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	c.RLock()
 	defer c.RUnlock()
 
