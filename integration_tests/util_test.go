@@ -56,6 +56,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 var (
@@ -101,7 +102,7 @@ func NewTestUniStore(t *testing.T) *tikv.KVStore {
 func newTiKVStore(t *testing.T) *tikv.KVStore {
 	re := require.New(t)
 	addrs := strings.Split(*pdAddrs, ",")
-	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
+	pdClient, err := pd.NewClient(caller.Component("client-go-integration-test"), addrs, pd.SecurityOption{})
 	re.Nil(err)
 	var opt tikv.ClientOpt
 	switch mustGetApiVersion(re, pdClient) {
