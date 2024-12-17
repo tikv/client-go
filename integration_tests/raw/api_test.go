@@ -91,7 +91,7 @@ func (s *apiTestSuite) SetupTest() {
 	s.Nil(err)
 	s.apiVersion = s.getApiVersion(pdClient)
 
-	s.pdClient = s.wrapPDClient(pdClient, addrs)
+	s.pdClient = s.wrapPDClient(pdClient)
 
 	client := s.newRawKVClient(pdClient, addrs)
 	s.client = client
