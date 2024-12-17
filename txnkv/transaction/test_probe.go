@@ -152,6 +152,11 @@ type CommitterProbe struct {
 	*twoPhaseCommitter
 }
 
+// IsNil returns whether tie internal twoPhaseCommitter is nil.
+func (c CommitterProbe) IsNil() bool {
+	return c.twoPhaseCommitter == nil
+}
+
 // InitKeysAndMutations prepares the committer for commit.
 func (c CommitterProbe) InitKeysAndMutations() error {
 	return c.initKeysAndMutations(context.Background())
