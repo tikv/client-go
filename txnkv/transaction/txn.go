@@ -1339,7 +1339,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			metrics.AggressiveLockedKeysDerived.Add(float64(filteredAggressiveLockedKeysCount))
 			metrics.AggressiveLockedKeysNew.Add(float64(len(keys)))
 
-			txn.resetTTLManagerForAggressiveLockingMode(len(keys) == 0)
+			txn.resetTTLManagerForAggressiveLockingMode(len(keys) != 0)
 
 			if len(keys) == 0 {
 				if lockCtx.Stats != nil {
@@ -1511,12 +1511,12 @@ func (txn *KVTxn) resetPrimary(keepTTLManager bool) {
 }
 
 // resetTTLManagerForAggressiveLockingMode is used in a fair locking procedure to reset the ttlManager when necessary.
-// This function is only used during the LockKeys invocation, and the parameter noNewLockToAcquire indicates whether
+// This function is only used during the LockKeys invocation, and the parameter hasNewLockToAcquire indicates whether
 // there are any key needs to be locked in the current LockKeys call, after filtering out those that has already been
 // locked before the most recent RetryAggressiveLocking.
 // Also note that this function is not the only path that fair locking resets the ttlManager. DoneAggressiveLocking may
 // also stop the ttlManager if no key is locked after exiting.
-func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(noNewLockToAcquire bool) {
+func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(hasNewLockToAcquire bool) {
 	if !txn.IsInAggressiveLockingMode() {
 		// Not supposed to be called in a non fair locking context
 		return
@@ -1528,7 +1528,7 @@ func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(noNewLockToAcquire boo
 	//     acquirePessimisticLock requests, it will call ttlManager.run() again, but it's reentrant and will do nothing
 	//     as the ttlManager is already running.
 	//   * If the primary key is changed, the ttlManager will need to run on the new primary key instead. Reset it.
-	if !noNewLockToAcquire && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
+	if hasNewLockToAcquire && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
 		txn.committer.ttlManager.reset()
 	}
 }
