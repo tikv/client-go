@@ -36,6 +36,7 @@ package unionstore
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -254,3 +255,14 @@ var (
 	_ MemBuffer = &rbtDBWithContext{}
 	_ MemBuffer = &artDBWithContext{}
 )
+
+type SnapshotGetter struct {
+	mu     *sync.RWMutex
+	getter Getter
+}
+
+func (getter *SnapshotGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
+	getter.mu.RLock()
+	defer getter.mu.RUnlock()
+	return getter.getter.Get(ctx, key)
+}
