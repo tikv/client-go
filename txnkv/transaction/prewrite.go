@@ -232,11 +232,11 @@ func (action actionPrewrite) handleSingleBatch(
 	}
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
-	defer handler.drop(err)
 
 	for {
 		retryable, err := handler.sendReqAndCheck()
 		if !retryable {
+			handler.drop(err)
 			return err
 		}
 	}
