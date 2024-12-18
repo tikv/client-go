@@ -75,11 +75,11 @@ func (t *ART) Get(key []byte) ([]byte, error) {
 
 	// 1. search the leaf node.
 	_, leaf := t.traverse(key, false)
-	if leaf == nil || leaf.vAddr.IsNull() {
+	if leaf == nil || leaf.vLogAddr.IsNull() {
 		return nil, tikverr.ErrNotExist
 	}
 	// 2. get the value from the vlog.
-	return t.allocator.vlogAllocator.GetValue(leaf.vAddr), nil
+	return t.allocator.vlogAllocator.GetValue(leaf.vLogAddr), nil
 }
 
 // GetFlags returns the latest flags associated with key.
@@ -88,7 +88,7 @@ func (t *ART) GetFlags(key []byte) (kv.KeyFlags, error) {
 	if leaf == nil {
 		return 0, tikverr.ErrNotExist
 	}
-	if leaf.vAddr.IsNull() && leaf.isDeleted() {
+	if leaf.vLogAddr.IsNull() && leaf.isDeleted() {
 		return 0, tikverr.ErrNotExist
 	}
 	return leaf.GetKeyFlags(), nil
@@ -184,10 +184,10 @@ func (t *ART) search(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 
 		if node.prefixLen > 0 {
 			prefixLen := node.match(key, depth)
-			if prefixLen < min(node.prefixLen, maxPrefixLen) {
+			if prefixLen < min(node.prefixLen, maxInNodePrefixLen) {
 				return arena.NullAddr, nil
 			}
-			// If node.prefixLen > maxPrefixLen, we optimistically match the prefix here.
+			// If node.prefixLen > maxInNodePrefixLen, we optimistically match the prefix here.
 			// False positive is possible, but it's fine since we will check the full artLeaf key at last.
 			depth += node.prefixLen
 		}
@@ -209,51 +209,51 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 		t.root, _ = t.newNode4()
 	}
 
-	depth := uint32(0)
 	prevDepth := 0
-	prev := nullArtNode
-	current := t.root
-	var node *nodeBase
+	currentDepth := uint32(0)
+	prevNode := nullArtNode
+	currentNode := t.root
+	var nodeBasePtr *nodeBase
 	for {
-		if current.isLeaf() {
-			return t.expandLeaf(key, depth, prev, current)
+		if currentNode.isLeaf() {
+			return t.expandLeafIfNeeded(key, currentDepth, prevNode, currentNode)
 		}
 
 		// inline: performance critical path
 		// get the basic node information.
-		switch current.kind {
+		switch currentNode.kind {
 		case typeNode4:
-			node = &current.asNode4(&t.allocator).nodeBase
+			nodeBasePtr = &currentNode.asNode4(&t.allocator).nodeBase
 		case typeNode16:
-			node = &current.asNode16(&t.allocator).nodeBase
+			nodeBasePtr = &currentNode.asNode16(&t.allocator).nodeBase
 		case typeNode48:
-			node = &current.asNode48(&t.allocator).nodeBase
+			nodeBasePtr = &currentNode.asNode48(&t.allocator).nodeBase
 		case typeNode256:
-			node = &current.asNode256(&t.allocator).nodeBase
+			nodeBasePtr = &currentNode.asNode256(&t.allocator).nodeBase
 		default:
 			panic("invalid nodeBase kind")
 		}
 
-		if node.prefixLen > 0 {
-			mismatchIdx := node.matchDeep(&t.allocator, &current, key, depth)
-			if mismatchIdx < node.prefixLen {
+		if nodeBasePtr.prefixLen > 0 {
+			mismatchIdx := nodeBasePtr.matchDeep(&t.allocator, &currentNode, key, currentDepth)
+			if mismatchIdx < nodeBasePtr.prefixLen {
 				// if the prefix doesn't match, we split the node into different prefixes.
-				return t.expandNode(key, depth, mismatchIdx, prev, current, node)
+				return t.expandNode(key, currentDepth, mismatchIdx, prevNode, currentNode, nodeBasePtr)
 			}
-			depth += node.prefixLen
+			currentDepth += nodeBasePtr.prefixLen
 		}
 
 		// search next node
-		valid := key.valid(int(depth))
-		_, next := current.findChild(&t.allocator, key.charAt(int(depth)), !valid)
+		valid := key.valid(int(currentDepth))
+		_, next := currentNode.findChild(&t.allocator, key.charAt(int(currentDepth)), !valid)
 		if next == nullArtNode {
 			// insert as leaf if there is no child.
 			newAn, newLeaf := t.newLeaf(key)
-			if current.addChild(&t.allocator, key.charAt(int(depth)), !valid, newAn) {
-				if prev == nullArtNode {
-					t.root = current
+			if currentNode.addChild(&t.allocator, key.charAt(int(currentDepth)), !valid, newAn) {
+				if prevNode == nullArtNode {
+					t.root = currentNode
 				} else {
-					prev.replaceChild(&t.allocator, key.charAt(prevDepth), current)
+					prevNode.replaceChild(&t.allocator, key.charAt(prevDepth), currentNode)
 				}
 			}
 			return newAn.addr, newLeaf
@@ -262,17 +262,18 @@ func (t *ART) recursiveInsert(key artKey) (arena.MemdbArenaAddr, *artLeaf) {
 			// key is drained, return the leaf.
 			return next.addr, next.asLeaf(&t.allocator)
 		}
-		prev = current
-		current = next
-		prevDepth = int(depth)
-		depth++
+		prevNode = currentNode
+		currentNode = next
+		prevDepth = int(currentDepth)
+		currentDepth++
 		continue
 	}
 }
 
-// expandLeaf expands the existing artLeaf to a node4 if the keys are different.
-// it returns the addr and leaf of the given key.
-func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena.MemdbArenaAddr, *artLeaf) {
+// expandLeafIfNeeded expands the existing artLeaf to a node4 if the keys are different.
+// Otherwise, the existing leaf node is returned and would be reused.
+// It returns the addr and leaf of the given key.
+func (t *ART) expandLeafIfNeeded(key artKey, depth uint32, prevNode, currentNode artNode) (arena.MemdbArenaAddr, *artLeaf) {
 	// Expand the artLeaf to a node4.
 	//
 	//                            ┌────────────┐
@@ -286,30 +287,32 @@ func (t *ART) expandLeaf(key artKey, depth uint32, prev, current artNode) (arena
 	//                     │   old   │       │   new   │
 	//                     │  leaf1  │       │  leaf2  │
 	//                     └─────────┘       └─────────┘
-	leaf1 := current.asLeaf(&t.allocator)
+	if depth == 0 {
+		panic("Invalid expandLeafIfNeeded input with zero depth")
+	}
+	leaf1 := currentNode.asLeaf(&t.allocator)
 	if leaf1.match(depth-1, key) {
 		// same key, return the artLeaf and overwrite the value.
-		return current.addr, leaf1
+		return currentNode.addr, leaf1
 	}
 	prevDepth := int(depth - 1)
-
-	leaf2Addr, leaf2 := t.newLeaf(key)
-	l1Key, l2Key := artKey(leaf1.GetKey()), artKey(leaf2.GetKey())
-	lcp := longestCommonPrefix(l1Key, l2Key, depth)
+	newLeafNode, leaf2 := t.newLeaf(key)
 
 	// calculate the common prefix length of new node.
+	l1Key, l2Key := artKey(leaf1.GetKey()), artKey(leaf2.GetKey())
+	lcp := longestCommonPrefix(l1Key, l2Key, depth)
 	newAn, newN4 := t.newNode4()
 	newN4.setPrefix(key[depth:], lcp)
 	depth += lcp
-	newAn.addChild(&t.allocator, l1Key.charAt(int(depth)), !l1Key.valid(int(depth)), current)
-	newAn.addChild(&t.allocator, l2Key.charAt(int(depth)), !l2Key.valid(int(depth)), leaf2Addr)
+	newAn.addChild(&t.allocator, l1Key.charAt(int(depth)), !l1Key.valid(int(depth)), currentNode)
+	newAn.addChild(&t.allocator, l2Key.charAt(int(depth)), !l2Key.valid(int(depth)), newLeafNode)
 
 	// swap the old leaf with the new node4.
-	prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
-	return leaf2Addr.addr, leaf2
+	prevNode.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
+	return newLeafNode.addr, leaf2
 }
 
-func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current artNode, currNode *nodeBase) (arena.MemdbArenaAddr, *artLeaf) {
+func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prevNode, currentNode artNode, nodeBasePtr *nodeBase) (arena.MemdbArenaAddr, *artLeaf) {
 	// prefix mismatch, create a new parent node which has a shorter prefix.
 	// example of insert "acc" into node with "abc prefix:
 	//                                    ┌────────────┐
@@ -330,24 +333,24 @@ func (t *ART) expandNode(key artKey, depth, mismatchIdx uint32, prev, current ar
 
 	// update prefix for old node and move it as a child of the new node.
 	var prefix artKey
-	if currNode.prefixLen <= maxPrefixLen {
-		// node.prefixLen <= maxPrefixLen means all the prefix is in the prefix array.
+	if nodeBasePtr.prefixLen <= maxInNodePrefixLen {
+		// The node.prefixLen <= maxInNodePrefixLen means all the prefix is in the prefix array.
 		// The char at mismatchIdx will be stored in the index of new node.
-		prefix = currNode.prefix[:]
+		prefix = nodeBasePtr.prefix[:]
 	} else {
-		// Unless, we need to find the prefix in the leaf.
-		// Any leaves in the node should have the same prefix, we use minimum node here.
-		leafArtNode := minimum(&t.allocator, current)
-		prefix = leafArtNode.asLeaf(&t.allocator).GetKey()[depth : depth+currNode.prefixLen]
+		// Otherwise, we need to find the prefix in the leaf.
+		// Any leaves in the node should have the same prefix, we use minimumLeafNode node here.
+		leafArtNode := minimumLeafNode(&t.allocator, currentNode)
+		prefix = leafArtNode.asLeaf(&t.allocator).GetKey()[depth : depth+nodeBasePtr.prefixLen]
 	}
 	nodeChar := prefix[mismatchIdx]
-	currNode.setPrefix(prefix[mismatchIdx+1:], currNode.prefixLen-mismatchIdx-1)
-	newAn.addChild(&t.allocator, nodeChar, false, current)
+	nodeBasePtr.setPrefix(prefix[mismatchIdx+1:], nodeBasePtr.prefixLen-mismatchIdx-1)
+	newAn.addChild(&t.allocator, nodeChar, false, currentNode)
 
-	// insert the artLeaf into new node
+	// Insert the new artLeaf node.
 	newLeafAddr, newLeaf := t.newLeaf(key)
 	newAn.addChild(&t.allocator, key.charAt(int(depth+mismatchIdx)), !key.valid(int(depth+mismatchIdx)), newLeafAddr)
-	prev.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
+	prevNode.replaceChild(&t.allocator, key.charAt(prevDepth), newAn)
 	return newLeafAddr.addr, newLeaf
 }
 
@@ -363,9 +366,9 @@ func (t *ART) newLeaf(key artKey) (artNode, *artLeaf) {
 
 func (t *ART) setValue(addr arena.MemdbArenaAddr, l *artLeaf, value []byte, ops []kv.FlagsOp) {
 	flags := l.GetKeyFlags()
-	if flags == 0 && l.vAddr.IsNull() || l.isDeleted() {
+	if flags == 0 && l.vLogAddr.IsNull() || l.isDeleted() {
 		t.len++
-		t.size += int(l.klen)
+		t.size += int(l.keyLen)
 	}
 	if value != nil {
 		flags = kv.ApplyFlagsOps(flags, append([]kv.FlagsOp{kv.DelNeedConstraintCheckInPrewrite}, ops...)...)
@@ -381,13 +384,13 @@ func (t *ART) setValue(addr arena.MemdbArenaAddr, l *artLeaf, value []byte, ops 
 		// value == nil means it updates flags only.
 		return
 	}
-	oldSize, swapper := t.trySwapValue(l.vAddr, value)
+	oldSize, swapper := t.trySwapValue(l.vLogAddr, value)
 	if swapper {
 		return
 	}
 	t.size += len(value) - oldSize
-	vAddr := t.allocator.vlogAllocator.AppendValue(addr, l.vAddr, value)
-	l.vAddr = vAddr
+	vAddr := t.allocator.vlogAllocator.AppendValue(addr, l.vLogAddr, value)
+	l.vLogAddr = vAddr
 }
 
 // trySwapValue checks if the value can be updated in place.
@@ -438,7 +441,7 @@ func (t *ART) RevertVAddr(hdr *arena.MemdbVlogHdr) {
 	if lf == nil {
 		panic("revert an invalid node")
 	}
-	lf.vAddr = hdr.OldValue
+	lf.vLogAddr = hdr.OldValue
 	t.size -= int(hdr.ValueLen)
 	if hdr.OldValue.IsNull() {
 		keptFlags := lf.GetKeyFlags()
@@ -446,7 +449,7 @@ func (t *ART) RevertVAddr(hdr *arena.MemdbVlogHdr) {
 		if keptFlags == 0 {
 			lf.markDelete()
 			t.len--
-			t.size -= int(lf.klen)
+			t.size -= int(lf.keyLen)
 		} else {
 			lf.setKeyFlags(keptFlags)
 		}
@@ -457,7 +460,7 @@ func (t *ART) RevertVAddr(hdr *arena.MemdbVlogHdr) {
 
 func (t *ART) InspectNode(addr arena.MemdbArenaAddr) (*artLeaf, arena.MemdbArenaAddr) {
 	lf := t.allocator.getLeaf(addr)
-	return lf, lf.vAddr
+	return lf, lf.vLogAddr
 }
 
 // IsStaging returns whether the MemBuffer is in staging status.
@@ -562,11 +565,11 @@ func (t *ART) SelectValueHistory(key []byte, predicate func(value []byte) bool) 
 	if x == nil {
 		return nil, tikverr.ErrNotExist
 	}
-	if x.vAddr.IsNull() {
+	if x.vLogAddr.IsNull() {
 		// A flags only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
-	result := t.allocator.vlogAllocator.SelectValueHistory(x.vAddr, func(addr arena.MemdbArenaAddr) bool {
+	result := t.allocator.vlogAllocator.SelectValueHistory(x.vLogAddr, func(addr arena.MemdbArenaAddr) bool {
 		return predicate(t.allocator.vlogAllocator.GetValue(addr))
 	})
 	if result.IsNull() {
@@ -600,10 +603,10 @@ func (t *ART) GetValueByHandle(handle arena.MemKeyHandle) ([]byte, bool) {
 		return nil, false
 	}
 	lf := t.allocator.getLeaf(handle.ToAddr())
-	if lf.vAddr.IsNull() {
+	if lf.vLogAddr.IsNull() {
 		return nil, false
 	}
-	return t.allocator.vlogAllocator.GetValue(lf.vAddr), true
+	return t.allocator.vlogAllocator.GetValue(lf.vLogAddr), true
 }
 
 // GetEntrySizeLimit gets the size limit for each entry and total buffer.

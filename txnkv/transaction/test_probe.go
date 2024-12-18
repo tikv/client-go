@@ -38,11 +38,6 @@ func (txn TxnProbe) SetStartTS(ts uint64) {
 	txn.startTS = ts
 }
 
-// GetCommitTS returns the commit ts.
-func (txn TxnProbe) GetCommitTS() uint64 {
-	return txn.commitTS
-}
-
 // GetUnionStore returns transaction's embedded unionstore.
 func (txn TxnProbe) GetUnionStore() *unionstore.KVUnionStore {
 	return txn.us
@@ -155,6 +150,11 @@ func newTwoPhaseCommitterWithInit(txn *KVTxn, sessionID uint64) (*twoPhaseCommit
 // CommitterProbe wraps a 2PC committer and exports internal states for testing purpose.
 type CommitterProbe struct {
 	*twoPhaseCommitter
+}
+
+// IsNil returns whether tie internal twoPhaseCommitter is nil.
+func (c CommitterProbe) IsNil() bool {
+	return c.twoPhaseCommitter == nil
 }
 
 // InitKeysAndMutations prepares the committer for commit.

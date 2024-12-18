@@ -81,7 +81,7 @@ func (s *testAssertionSuite) testAssertionImpl(keyPrefix string, pessimistic boo
 	err = prepareTxn.Commit(context.Background())
 	s.Nil(err)
 	prepareStartTS := prepareTxn.GetCommitter().GetStartTS()
-	prepareCommitTS := prepareTxn.GetCommitTS()
+	prepareCommitTS := prepareTxn.CommitTS()
 
 	// A helper to perform a complete transaction. When multiple keys are passed in, assertion will be set on only
 	// the last key.
