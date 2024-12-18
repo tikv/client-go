@@ -291,6 +291,7 @@ func (c *twoPhaseCommitter) prewriteMutations(bo *retry.Backoffer, mutations Com
 	return c.doActionOnMutations(bo, actionPrewrite{isInternal: c.txn.isInternal()}, mutations)
 }
 
+// prewrite1BatchReqHandler is used to handle 1 singleBatch prewrite request.
 type prewrite1BatchReqHandler struct {
 	committer            *twoPhaseCommitter
 	action               *actionPrewrite
