@@ -817,6 +817,19 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	return nil
 }
 
+// SetContextNoAttach likes SetContext, but it doesn't attach the context to the underlying request.
+func SetContextNoAttach(req *Request, region *metapb.Region, peer *metapb.Peer) error {
+	if !isValidReqType(req.Type) {
+		return errors.Errorf("invalid request type %v", req.Type)
+	}
+	if region != nil {
+		req.Context.RegionId = region.Id
+		req.Context.RegionEpoch = region.RegionEpoch
+	}
+	req.Context.Peer = peer
+	return nil
+}
+
 // GenRegionErrorResp returns corresponding Response with specified RegionError
 // according to the given req.
 func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
