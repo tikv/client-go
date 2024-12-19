@@ -40,7 +40,6 @@ import (
 	"io"
 	"math"
 
-	"github.com/google/btree"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/util/codec"
@@ -242,8 +241,8 @@ func (l *mvccLock) check(ts uint64, key []byte, resolvedLocks []uint64) (uint64,
 	return 0, l.lockErr(key)
 }
 
-func (e *mvccEntry) Less(than btree.Item) bool {
-	return bytes.Compare(e.key, than.(*mvccEntry).key) < 0
+func (e *mvccEntry) Less(than *mvccEntry) bool {
+	return bytes.Compare(e.key, than.key) < 0
 }
 
 func (e *mvccEntry) Get(ts uint64, isoLevel kvrpcpb.IsolationLevel, resolvedLocks []uint64) ([]byte, error) {

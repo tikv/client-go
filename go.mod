@@ -8,7 +8,6 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.4
-	github.com/google/btree v1.1.2
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0
 	github.com/opentracing/opentracing-go v1.2.0
@@ -22,6 +21,7 @@ require (
 	github.com/prometheus/client_model v0.5.0
 	github.com/stretchr/testify v1.8.2
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
+	github.com/tidwall/btree v1.7.0
 	github.com/tikv/pd/client v0.0.0-20241111073742-238d4d79ea31
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.10
