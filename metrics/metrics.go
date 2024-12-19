@@ -117,7 +117,7 @@ var (
 	TiKVPipelinedFlushDuration                     prometheus.Histogram
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
-	StaleRegionFromPDCounter                       prometheus.Counter
+	TiKVStaleRegionFromPDCounter                   prometheus.Counter
 )
 
 // Label constants.
@@ -853,7 +853,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "The actual working update interval for the low resolution TSO. As there are adaptive mechanism internally, this value may differ from the config.",
 		})
 
-	StaleRegionFromPDCounter = prometheus.NewCounter(
+	TiKVStaleRegionFromPDCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
@@ -957,7 +957,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVPipelinedFlushDuration)
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
-	prometheus.MustRegister(StaleRegionFromPDCounter)
+	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.
