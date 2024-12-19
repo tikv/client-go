@@ -37,8 +37,8 @@ package txnsnapshot
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1201,7 +1201,12 @@ func (rs *SnapshotRuntimeStats) String() string {
 		}
 		ms := rs.backoffSleepMS[k]
 		d := time.Duration(ms) * time.Millisecond
-		buf.WriteString(fmt.Sprintf("%s_backoff:{num:%d, total_time:%s}", k, v, util.FormatDuration(d)))
+		buf.WriteString(k)
+		buf.WriteString("_backoff:{num:")
+		buf.WriteString(strconv.Itoa(v))
+		buf.WriteString(", total_time:")
+		buf.WriteString(util.FormatDuration(d))
+		buf.WriteString("}")
 	}
 	timeDetail := rs.timeDetail.String()
 	if timeDetail != "" {

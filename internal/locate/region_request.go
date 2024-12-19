@@ -132,7 +132,6 @@ type RegionRequestRuntimeStats struct {
 	FirstRPCStats RPCRuntimeStats
 	// OtherRPCStatsMap uses to record another types of RPC requests.
 	OtherRPCStatsMap map[tikvrpc.CmdType]*RPCRuntimeStats
-
 	RequestErrorStats
 }
 
@@ -181,6 +180,7 @@ func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d
 	stat.Consume += d
 }
 
+// GetRPCCount returns the total rpc types count.
 func (r *RegionRequestRuntimeStats) GetRPCCount() int {
 	if r.FirstRPCStats.Count > 0 {
 		return len(r.OtherRPCStatsMap) + 1
@@ -188,6 +188,7 @@ func (r *RegionRequestRuntimeStats) GetRPCCount() int {
 	return len(r.OtherRPCStatsMap)
 }
 
+// GetCmdRPCCount returns the rpc count of the specified cmd type.
 func (r *RegionRequestRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) uint32 {
 	if r.FirstRPCStats.Cmd == cmd {
 		return r.FirstRPCStats.Count
@@ -232,13 +233,13 @@ func (r *RegionRequestRuntimeStats) String() string {
 	}
 	var builder strings.Builder
 	if r.FirstRPCStats.Count > 0 {
-		r.FirstRPCStats.BuildString(&builder)
+		r.FirstRPCStats.buildString(&builder)
 	}
 	for _, v := range r.OtherRPCStatsMap {
 		if builder.Len() > 0 {
 			builder.WriteByte(',')
 		}
-		v.BuildString(&builder)
+		v.buildString(&builder)
 	}
 	if errStatsStr := r.RequestErrorStats.String(); errStatsStr != "" {
 		builder.WriteString(", rpc_errors:")
@@ -247,7 +248,7 @@ func (r *RegionRequestRuntimeStats) String() string {
 	return builder.String()
 }
 
-func (s *RPCRuntimeStats) BuildString(builder *strings.Builder) {
+func (s *RPCRuntimeStats) buildString(builder *strings.Builder) {
 	builder.WriteString(s.Cmd.String())
 	builder.WriteString(":{num_rpc:")
 	builder.WriteString(strconv.FormatUint(uint64(s.Count), 10))

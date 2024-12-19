@@ -983,7 +983,3 @@ func TestGetErrMsg(t *testing.T) {
 	}, "should panic")
 	require.Equal(t, "no cause err", getErrMsg(err))
 }
-
-func TestDebugCs(t *testing.T) {
-	fmt.Printf("size: %v -------\n\n", unsafe.Sizeof(RPCRuntimeStats{}))
-}

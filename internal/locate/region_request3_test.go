@@ -1169,7 +1169,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			s.Nil(err)
 			s.True(IsFakeRegionError(regionErr))
 			s.Equal(1, s.regionRequestSender.Stats.GetRPCCount())
-			s.Equal(uint32(3), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 2 rpc
+			s.Equal(uint32(3), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 3 rpc
 			s.Equal(3, len(reqTargetAddrs))                                                // each rpc to a different store.
 			s.Equal(0, bo.GetTotalBackoffTimes())                                          // no backoff since fast retry.
 			// warn: must rest MaxExecutionDurationMs before retry.
@@ -1188,7 +1188,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			s.Nil(regionErr)
 			s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
 			s.Equal(1, s.regionRequestSender.Stats.GetRPCCount())
-			s.Equal(uint32(1), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 2 rpc
+			s.Equal(uint32(1), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 1 rpc
 			s.Equal(0, bo.GetTotalBackoffTimes())                                          // no backoff since fast retry.
 		}
 	}
