@@ -142,7 +142,7 @@ func (s *testLockSuite) putKV(key, value []byte) (uint64, uint64) {
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
-	return txn.StartTS(), txn.GetCommitTS()
+	return txn.StartTS(), txn.CommitTS()
 }
 
 func (s *testLockSuite) prepareAlphabetLocks() {
@@ -1311,7 +1311,7 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 			info := simulatedTxn.GetAggressiveLockingKeysInfo()
 			s.Equal(1, len(info))
 			s.Equal(k1, info[0].Key())
-			s.Equal(txn2.GetCommitTS(), info[0].ActualLockForUpdateTS())
+			s.Equal(txn2.CommitTS(), info[0].ActualLockForUpdateTS())
 
 			simulatedTxn.DoneAggressiveLocking(context.Background())
 			defer func() {
@@ -1324,12 +1324,12 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		s.Error(err)
 		s.Regexp("[pP]essimistic ?[lL]ock ?[nN]ot ?[fF]ound", err.Error())
 
-		snapshot := s.store.GetSnapshot(txn2.GetCommitTS())
+		snapshot := s.store.GetSnapshot(txn2.CommitTS())
 		v, err := snapshot.Get(context.Background(), k1)
 		s.NoError(err)
 		s.Equal(v2, v)
 
-		snapshot = s.store.GetSnapshot(txn2.GetCommitTS() - 1)
+		snapshot = s.store.GetSnapshot(txn2.CommitTS() - 1)
 		_, err = snapshot.Get(context.Background(), k1)
 		s.Equal(tikverr.ErrNotExist, err)
 
@@ -1369,7 +1369,7 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 
 		s.NoError(txn.Commit(ctx))
 
-		snapshot = s.store.GetSnapshot(txn.GetCommitTS())
+		snapshot = s.store.GetSnapshot(txn.CommitTS())
 		v, err = snapshot.Get(context.Background(), k2)
 		s.NoError(err)
 		s.Equal(v1, v)
@@ -1377,7 +1377,7 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		s.NoError(err)
 		s.Equal(v1, v)
 
-		snapshot = s.store.GetSnapshot(txn.GetCommitTS() - 1)
+		snapshot = s.store.GetSnapshot(txn.CommitTS() - 1)
 		v, err = snapshot.Get(context.Background(), k2)
 		s.NoError(err)
 		s.Equal(v2, v)

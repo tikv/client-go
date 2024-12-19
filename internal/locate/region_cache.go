@@ -1902,6 +1902,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	// and there is the synchronization time between the pd follower and the leader.
 	// So we should check the epoch.
 	if ok && (oldVer.GetVer() > newVer.GetVer() || oldVer.GetConfVer() > newVer.GetConfVer()) {
+		metrics.TiKVStaleRegionFromPDCounter.Inc()
 		logutil.BgLogger().Debug("get stale region",
 			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
 			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))

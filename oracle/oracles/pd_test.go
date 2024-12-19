@@ -342,40 +342,54 @@ func TestAdaptiveUpdateTSInterval(t *testing.T) {
 	assert.Equal(t, adaptiveUpdateTSIntervalStateUnadjustable, o.adaptiveUpdateIntervalState.state)
 }
 
-func TestValidateSnapshotReadTS(t *testing.T) {
-	pdClient := MockPdClient{}
-	o, err := NewPdOracle(&pdClient, &PDOracleOptions{
-		UpdateInterval: time.Second * 2,
-	})
-	assert.NoError(t, err)
-	defer o.Close()
+func TestValidateReadTS(t *testing.T) {
+	testImpl := func(staleRead bool) {
+		pdClient := MockPdClient{}
+		o, err := NewPdOracle(&pdClient, &PDOracleOptions{
+			UpdateInterval: time.Second * 2,
+		})
+		assert.NoError(t, err)
+		defer o.Close()
 
-	ctx := context.Background()
-	opt := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
-	ts, err := o.GetTimestamp(ctx, opt)
-	assert.NoError(t, err)
-	assert.GreaterOrEqual(t, ts, uint64(1))
+		ctx := context.Background()
+		opt := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
 
-	err = o.ValidateSnapshotReadTS(ctx, 1, opt)
-	assert.NoError(t, err)
-	ts, err = o.GetTimestamp(ctx, opt)
-	assert.NoError(t, err)
-	// The readTS exceeds the latest ts, so it first fails the check with the low resolution ts. Then it fallbacks to
-	// the fetching-from-PD path, and it can get the previous ts + 1, which can allow this validation to pass.
-	err = o.ValidateSnapshotReadTS(ctx, ts+1, opt)
-	assert.NoError(t, err)
-	// It can't pass if the readTS is newer than previous ts + 2.
-	ts, err = o.GetTimestamp(ctx, opt)
-	assert.NoError(t, err)
-	err = o.ValidateSnapshotReadTS(ctx, ts+2, opt)
-	assert.Error(t, err)
+		// Always returns error for MaxUint64
+		err = o.ValidateReadTS(ctx, math.MaxUint64, staleRead, opt)
+		if staleRead {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
+		}
 
-	// Simulate other PD clients requests a timestamp.
-	ts, err = o.GetTimestamp(ctx, opt)
-	assert.NoError(t, err)
-	pdClient.logicalTimestamp.Add(2)
-	err = o.ValidateSnapshotReadTS(ctx, ts+3, opt)
-	assert.NoError(t, err)
+		ts, err := o.GetTimestamp(ctx, opt)
+		assert.NoError(t, err)
+		assert.GreaterOrEqual(t, ts, uint64(1))
+
+		err = o.ValidateReadTS(ctx, 1, staleRead, opt)
+		assert.NoError(t, err)
+		ts, err = o.GetTimestamp(ctx, opt)
+		assert.NoError(t, err)
+		// The readTS exceeds the latest ts, so it first fails the check with the low resolution ts. Then it fallbacks to
+		// the fetching-from-PD path, and it can get the previous ts + 1, which can allow this validation to pass.
+		err = o.ValidateReadTS(ctx, ts+1, staleRead, opt)
+		assert.NoError(t, err)
+		// It can't pass if the readTS is newer than previous ts + 2.
+		ts, err = o.GetTimestamp(ctx, opt)
+		assert.NoError(t, err)
+		err = o.ValidateReadTS(ctx, ts+2, staleRead, opt)
+		assert.Error(t, err)
+
+		// Simulate other PD clients requests a timestamp.
+		ts, err = o.GetTimestamp(ctx, opt)
+		assert.NoError(t, err)
+		pdClient.logicalTimestamp.Add(2)
+		err = o.ValidateReadTS(ctx, ts+3, staleRead, opt)
+		assert.NoError(t, err)
+	}
+
+	testImpl(true)
+	testImpl(false)
 }
 
 type MockPDClientWithPause struct {
@@ -397,7 +411,7 @@ func (c *MockPDClientWithPause) Resume() {
 	c.mu.Unlock()
 }
 
-func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
+func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 	pdClient := &MockPDClientWithPause{}
 	o, err := NewPdOracle(pdClient, &PDOracleOptions{
 		UpdateInterval: time.Second * 2,
@@ -409,7 +423,7 @@ func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
 	asyncValidate := func(ctx context.Context, readTS uint64) chan error {
 		ch := make(chan error, 1)
 		go func() {
-			err := o.ValidateSnapshotReadTS(ctx, readTS, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			err := o.ValidateReadTS(ctx, readTS, true, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
 			ch <- err
 		}()
 		return ch
@@ -418,7 +432,7 @@ func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
 	noResult := func(ch chan error) {
 		select {
 		case <-ch:
-			assert.FailNow(t, "a ValidateSnapshotReadTS operation is not blocked while it's expected to be blocked")
+			assert.FailNow(t, "a ValidateReadTS operation is not blocked while it's expected to be blocked")
 		default:
 		}
 	}
@@ -495,4 +509,45 @@ func TestValidateSnapshotReadTSReusingGetTSResult(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
+	oracleInterface, err := NewPdOracle(&MockPdClient{}, &PDOracleOptions{
+		UpdateInterval: time.Second * 2,
+		NoUpdateTS:     true,
+	})
+	assert.NoError(t, err)
+	o := oracleInterface.(*pdOracle)
+	defer o.Close()
+
+	ctx := context.Background()
+	opt := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
+
+	// Validating read ts for non-stale-read requests must not trigger updating the adaptive update interval of
+	// low resolution ts.
+	mustNoNotify := func() {
+		select {
+		case <-o.adaptiveUpdateIntervalState.shrinkIntervalCh:
+			assert.Fail(t, "expects not notifying shrinking update interval immediately, but message was received")
+		default:
+		}
+	}
+
+	ts, err := o.GetTimestamp(ctx, opt)
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, ts, uint64(1))
+
+	err = o.ValidateReadTS(ctx, ts, false, opt)
+	assert.NoError(t, err)
+	mustNoNotify()
+
+	// It loads `ts + 1` from the mock PD, and the check cannot pass.
+	err = o.ValidateReadTS(ctx, ts+2, false, opt)
+	assert.Error(t, err)
+	mustNoNotify()
+
+	// Do the check again. It loads `ts + 2` from the mock PD, and the check passes.
+	err = o.ValidateReadTS(ctx, ts+2, false, opt)
+	assert.NoError(t, err)
+	mustNoNotify()
 }
