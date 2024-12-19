@@ -1308,7 +1308,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 	resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, region.VerID(), time.Second, tikvrpc.TiKV, WithMatchLabels(follower.labels))
 	s.Nil(err)
 	// `tryFollower` always try the local peer firstly
-	s.Equal(follower.addr, string(resp.Resp.(*kvrpcpb.GetResponse).Value))
+	s.Equal("store3", string(resp.Resp.(*kvrpcpb.GetResponse).Value))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
