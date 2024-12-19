@@ -1404,23 +1404,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	s.NotNil(regionLoc)
 
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		select {
-		case <-ctx.Done():
-			return nil, errors.New("timeout")
-		default:
-		}
-		// Return `mismatch peer id` when accesses the leader.
-		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
-			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
-				MismatchPeerId: &errorpb.MismatchPeerId{
-					RequestPeerId: 1,
-					StorePeerId:   2,
-				},
-			}}}, nil
-		}
-		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
-			DataIsNotReady: &errorpb.DataIsNotReady{},
-		}}}, nil
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+			Value: []byte(addr),
+		}}, nil
 	}}
 
 	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())

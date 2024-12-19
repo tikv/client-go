@@ -438,6 +438,7 @@ type replica struct {
 	attemptedTime time.Duration
 	// deadlineErrUsingConfTimeout indicates the replica is already tried, but the received deadline exceeded error.
 	deadlineErrUsingConfTimeout bool
+	serverIsBusy                bool
 }
 
 func (r *replica) getEpoch() uint32 {
@@ -601,7 +602,7 @@ func (state *accessKnownLeader) next(bo *retry.Backoffer, selector *replicaSelec
 	// a request. So, before the new leader is elected, we should not send requests
 	// to the unreachable old leader to avoid unnecessary timeout.
 	if liveness != reachable || leader.isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
+		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true, isStaleRead: false}
 		return nil, stateChanged{}
 	}
 	if selector.busyThreshold > 0 {
@@ -625,7 +626,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 		return
 	}
 	if liveness != reachable || selector.targetReplica().isExhausted(maxReplicaAttempt) {
-		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
+		selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true, isStaleRead: false}
 	}
 	if liveness != reachable {
 		selector.invalidateReplicaStore(selector.targetReplica(), cause)
@@ -633,7 +634,7 @@ func (state *accessKnownLeader) onSendFailure(bo *retry.Backoffer, selector *rep
 }
 
 func (state *accessKnownLeader) onNoLeader(selector *replicaSelector) {
-	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true}
+	selector.state = &tryFollower{leaderIdx: state.leaderIdx, lastIdx: state.leaderIdx, fromAccessKnownLeader: true, isStaleRead: false}
 }
 
 // tryFollower is the state where we cannot access the known leader
@@ -650,6 +651,7 @@ type tryFollower struct {
 	// fromAccessKnownLeader indicates whether the state is changed from `accessKnownLeader`.
 	fromAccessKnownLeader bool
 	labels                []*metapb.StoreLabel
+	isStaleRead           bool
 }
 
 func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (*RPCContext, error) {
@@ -711,8 +713,13 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		replicaRead := true
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
-	staleRead := false
-	rpcCtx.contextPatcher.staleRead = &staleRead
+	leader := selector.replicas[state.leaderIdx]
+	if leader.attempts == 0 || leader.deadlineErrUsingConfTimeout || leader.serverIsBusy {
+		rpcCtx.contextPatcher.staleRead = &state.isStaleRead
+	} else {
+		staleRead := false
+		rpcCtx.contextPatcher.staleRead = &staleRead
+	}
 	return rpcCtx, nil
 }
 
@@ -937,9 +944,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 			// If leader tried and received deadline exceeded error, try follower.
 			if state.isStaleRead || leader.deadlineErrUsingConfTimeout {
 				selector.state = &tryFollower{
-					leaderIdx: state.leaderIdx,
-					lastIdx:   state.leaderIdx,
-					labels:    state.option.labels,
+					leaderIdx:   state.leaderIdx,
+					lastIdx:     state.leaderIdx,
+					labels:      state.option.labels,
+					isStaleRead: state.isStaleRead,
 				}
 				if leaderEpochStale {
 					selector.regionCache.scheduleReloadRegion(selector.region)
@@ -1295,12 +1303,22 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 		}
 		if accessLeader, ok := s.state.(*accessKnownLeader); ok {
 			// If leader return deadline exceeded error, we should try to access follower next time.
-			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx}
+			s.state = &tryFollower{leaderIdx: accessLeader.leaderIdx, lastIdx: accessLeader.leaderIdx, isStaleRead: false}
 		}
 		return true
 	default:
 		// Only work for read requests, return false for non-read requests.
 		return false
+	}
+}
+
+func (s *replicaSelector) onServerIsBusy(req *tikvrpc.Request) {
+	switch req.Type {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		if target := s.targetReplica(); target != nil {
+			target.serverIsBusy = true
+		}
 	}
 }
 
@@ -1442,8 +1460,9 @@ func (s *replicaSelector) canFallback2Follower() bool {
 	if !ok {
 		return false
 	}
-	if !state.isStaleRead {
-		return false
+	if state.isStaleRead {
+		// fallback to follower if it is stale reads
+		return true
 	}
 	// can fallback to follower only when the leader is exhausted.
 	return state.lastIdx == state.leaderIdx && state.IsLeaderExhausted(s.replicas[state.leaderIdx])
@@ -2375,6 +2394,8 @@ func (s *RegionRequestSender) onRegionError(
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
 				return true, nil
 			}
+		} else if s.replicaSelector != nil {
+			s.replicaSelector.onServerIsBusy(req)
 		}
 		if s.replicaSelector != nil {
 			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
