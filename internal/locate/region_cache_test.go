@@ -62,23 +62,24 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	uatomic "go.uber.org/atomic"
 )
 
 type inspectedPDClient struct {
 	pd.Client
-	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error)
-	batchScanRegions func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error)
+	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...pdopt.GetRegionOption) (*pd.Region, error)
+	batchScanRegions func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pdopt.GetRegionOption) ([]*pd.Region, error)
 }
 
-func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pdopt.GetRegionOption) (*pd.Region, error) {
 	if c.getRegion != nil {
 		return c.getRegion(ctx, c.Client, key, opts...)
 	}
 	return c.Client.GetRegion(ctx, key, opts...)
 }
 
-func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pdopt.GetRegionOption) ([]*pd.Region, error) {
 	if c.batchScanRegions != nil {
 		return c.batchScanRegions(ctx, keyRanges, limit, opts...)
 	}
@@ -480,7 +481,7 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	batchScanCnt := 0
 	s.cache.pdClient = &inspectedPDClient{
 		Client: s.cache.pdClient,
-		batchScanRegions: func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+		batchScanRegions: func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pdopt.GetRegionOption) ([]*pd.Region, error) {
 			if batchScanCnt == 0 {
 				batchScanCnt++
 				return []*pd.Region{NoLeaderRegion}, nil
@@ -509,7 +510,7 @@ func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 	cntGetRegion := 0
 	s.cache.pdClient = &inspectedPDClient{
 		Client: s.cache.pdClient,
-		getRegion: func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+		getRegion: func(ctx context.Context, cli pd.Client, key []byte, opts ...pdopt.GetRegionOption) (*pd.Region, error) {
 			cntGetRegion++
 			return cli.GetRegion(ctx, key, opts...)
 		},

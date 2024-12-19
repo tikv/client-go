@@ -42,6 +42,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
 )
 
 var _ pd.Client = &CodecPDClient{}
@@ -55,7 +56,7 @@ type CodecPDClient struct {
 // NewCodecPDClient creates a CodecPDClient in API v1.
 func NewCodecPDClient(mode apicodec.Mode, client pd.Client) *CodecPDClient {
 	codec := apicodec.NewCodecV1(mode)
-	return &CodecPDClient{client, codec}
+	return &CodecPDClient{client.WithCallerComponent("CodecPDClient").(pd.Client), codec}
 }
 
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
@@ -101,7 +102,7 @@ func (c *CodecPDClient) GetCodec() apicodec.Codec {
 
 // GetRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	encodedKey := c.codec.EncodeRegionKey(key)
 	region, err := c.Client.GetRegion(ctx, encodedKey, opts...)
 	return c.processRegionResult(region, err)
@@ -109,7 +110,7 @@ func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.Ge
 
 // GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	encodedKey := c.codec.EncodeRegionKey(key)
 	region, err := c.Client.GetPrevRegion(ctx, encodedKey, opts...)
 	return c.processRegionResult(region, err)
@@ -117,14 +118,14 @@ func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...p
 
 // GetRegionByID encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	region, err := c.Client.GetRegionByID(ctx, regionID, opts...)
 	return c.processRegionResult(region, err)
 }
 
 // ScanRegions encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
 	startKey, endKey = c.codec.EncodeRegionRange(startKey, endKey)
 	//nolint:staticcheck
 	regions, err := c.Client.ScanRegions(ctx, startKey, endKey, limit, opts...)
@@ -145,7 +146,7 @@ func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey
 // BatchScanRegions encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 // if limit > 0, it limits the maximum number of returned regions, should check if the result regions fully contain the given key ranges.
-func (c *CodecPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *CodecPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
 	encodedRanges := make([]pd.KeyRange, len(keyRanges))
 	for i, keyRange := range keyRanges {
 		encodedRanges[i].StartKey, encodedRanges[i].EndKey = c.codec.EncodeRegionRange(keyRange.StartKey, keyRange.EndKey)
@@ -166,7 +167,7 @@ func (c *CodecPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.Key
 }
 
 // SplitRegions split regions by given split keys
-func (c *CodecPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...pd.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
+func (c *CodecPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, opts ...opt.RegionsOption) (*pdpb.SplitRegionsResponse, error) {
 	var keys [][]byte
 	for i := range splitKeys {
 		keys = append(keys, c.codec.EncodeRegionKey(splitKeys[i]))

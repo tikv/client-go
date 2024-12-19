@@ -41,6 +41,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
 )
 
 var (
@@ -59,6 +60,10 @@ func recordPDWaitTime(ctx context.Context, start time.Time) {
 // InterceptedPDClient is a PD's wrapper client to record stmt detail.
 type InterceptedPDClient struct {
 	pd.Client
+}
+
+func NewInterceptedPDClient(client pd.Client) *InterceptedPDClient {
+	return &InterceptedPDClient{client.WithCallerComponent("InterceptedPDClient").(pd.Client)}
 }
 
 // interceptedTsFuture is a PD's wrapper future to record stmt detail.
@@ -95,7 +100,7 @@ func (m InterceptedPDClient) GetTSAsync(ctx context.Context) pd.TSFuture {
 }
 
 // GetRegion implements pd.Client#GetRegion.
-func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
 	r, err := m.Client.GetRegion(ctx, key, opts...)
 	recordPDWaitTime(ctx, start)
@@ -103,7 +108,7 @@ func (m InterceptedPDClient) GetRegion(ctx context.Context, key []byte, opts ...
 }
 
 // GetPrevRegion implements pd.Client#GetPrevRegion.
-func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
 	r, err := m.Client.GetPrevRegion(ctx, key, opts...)
 	recordPDWaitTime(ctx, start)
@@ -111,7 +116,7 @@ func (m InterceptedPDClient) GetPrevRegion(ctx context.Context, key []byte, opts
 }
 
 // GetRegionByID implements pd.Client#GetRegionByID.
-func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*pd.Region, error) {
 	start := time.Now()
 	r, err := m.Client.GetRegionByID(ctx, regionID, opts...)
 	recordPDWaitTime(ctx, start)
@@ -119,10 +124,10 @@ func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64,
 }
 
 // ScanRegions implements pd.Client#ScanRegions.
-func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
 	start := time.Now()
 	//nolint:staticcheck
-	r, err := m.Client.ScanRegions(ctx, key, endKey, limit, opts...)
+	r, err := m.Client.WithCallerComponent("InterceptedPDClient").ScanRegions(ctx, key, endKey, limit, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err
 }

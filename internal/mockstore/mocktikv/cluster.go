@@ -49,6 +49,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/cluster"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 )
 
 var _ cluster.Cluster = &Cluster{}
@@ -351,7 +352,7 @@ func (c *Cluster) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer, 
 }
 
 // ScanRegions returns at most `limit` regions from given `key` and their leaders.
-func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...pd.GetRegionOption) []*pd.Region {
+func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...pdopt.GetRegionOption) []*pd.Region {
 	c.RLock()
 	defer c.RUnlock()
 

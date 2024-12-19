@@ -67,6 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -666,7 +667,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	}
 
 	c := &RegionCache{
-		pdClient:                      pdClient,
+		pdClient:                      pdClient.WithCallerComponent("RegionCache").(pd.Client),
 		requestHealthFeedbackCallback: options.requestHealthFeedbackCallback,
 	}
 
@@ -1494,7 +1495,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 	if r == nil || expired {
 		// load region when it is not exists or expired.
 		observeLoadRegion(tag, r, expired, 0)
-		lr, err := c.loadRegion(bo, key, isEndKey, pd.WithAllowFollowerHandle())
+		lr, err := c.loadRegion(bo, key, isEndKey, pdopt.WithAllowFollowerHandle())
 		if err != nil {
 			// no region data, return error if failure.
 			return nil, err
@@ -2047,7 +2048,7 @@ func observeLoadRegion(tag string, region *Region, expired bool, reloadFlags int
 // loadRegion loads region from pd client, and picks the first peer as leader.
 // If the given key is the end key of the region that you want, you may set the second argument to true. This is useful
 // when processing in reverse order.
-func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool, opts ...pd.GetRegionOption) (*Region, error) {
+func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool, opts ...pdopt.GetRegionOption) (*Region, error) {
 	ctx := bo.GetCtx()
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("loadRegion", opentracing.ChildOf(span.Context()))
@@ -2057,7 +2058,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 
 	var backoffErr error
 	searchPrev := false
-	opts = append(opts, pd.WithBuckets())
+	opts = append(opts, pdopt.WithBuckets())
 	for {
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
@@ -2119,7 +2120,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			}
 		}
 		start := time.Now()
-		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pd.WithBuckets())
+		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pdopt.WithBuckets())
 		metrics.LoadRegionCacheHistogramWithRegionByID.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
@@ -2199,7 +2200,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		}
 		start := time.Now()
 		//nolint:staticcheck
-		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pd.WithAllowFollowerHandle())
+		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pdopt.WithAllowFollowerHandle())
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
@@ -2264,9 +2265,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			}
 		}
 		start := time.Now()
-		pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
+		pdOpts := []pdopt.GetRegionOption{pdopt.WithAllowFollowerHandle()}
 		if opt.needBuckets {
-			pdOpts = append(pdOpts, pd.WithBuckets())
+			pdOpts = append(pdOpts, pdopt.WithBuckets())
 		}
 		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
