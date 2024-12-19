@@ -122,6 +122,7 @@ var (
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
 	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
 	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
+	TiKVStaleRegionFromPDCounter                   prometheus.Counter
 )
 
 // Label constants.
@@ -889,6 +890,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
+	TiKVStaleRegionFromPDCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_region_from_pd",
+			Help:      "Counter of stale region from PD",
+		})
+
 	initShortcuts()
 	storeMetricVecList.Store(&storeMetrics)
 }
@@ -988,6 +997,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVReadRequestBytes)
 	prometheus.MustRegister(TiKVAsyncSendReqCounter)
 	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
+	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.

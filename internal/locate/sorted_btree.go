@@ -40,6 +40,7 @@ import (
 
 	"github.com/google/btree"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/metrics"
 	"go.uber.org/zap"
 )
 
@@ -112,6 +113,7 @@ func (s *SortedRegions) removeIntersecting(r *Region, verID RegionVerID) ([]*btr
 			return false
 		}
 		if item.cachedRegion.meta.GetRegionEpoch().GetVersion() > verID.ver {
+			metrics.TiKVStaleRegionFromPDCounter.Inc()
 			logutil.BgLogger().Debug("get stale region",
 				zap.Uint64("region", verID.GetID()), zap.Uint64("ver", verID.GetVer()), zap.Uint64("conf", verID.GetConfVer()),
 				zap.Uint64("intersecting-ver", item.cachedRegion.meta.GetRegionEpoch().GetVersion()))
