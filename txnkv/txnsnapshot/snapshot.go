@@ -37,8 +37,8 @@ package txnsnapshot
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1201,7 +1201,12 @@ func (rs *SnapshotRuntimeStats) String() string {
 		}
 		ms := rs.backoffSleepMS[k]
 		d := time.Duration(ms) * time.Millisecond
-		buf.WriteString(fmt.Sprintf("%s_backoff:{num:%d, total_time:%s}", k, v, util.FormatDuration(d)))
+		buf.WriteString(k)
+		buf.WriteString("_backoff:{num:")
+		buf.WriteString(strconv.Itoa(v))
+		buf.WriteString(", total_time:")
+		buf.WriteString(util.FormatDuration(d))
+		buf.WriteString("}")
 	}
 	timeDetail := rs.timeDetail.String()
 	if timeDetail != "" {
@@ -1223,14 +1228,9 @@ func (rs *SnapshotRuntimeStats) GetTimeDetail() *util.TimeDetail {
 
 // GetCmdRPCCount returns the count of the corresponding kind of rpc requests
 func (rs *SnapshotRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) int64 {
-	if rs.rpcStats == nil || len(rs.rpcStats.RPCStats) == 0 {
+	if rs.rpcStats == nil {
 		return 0
 	}
 
-	stats, ok := rs.rpcStats.RPCStats[cmd]
-	if !ok {
-		return 0
-	}
-
-	return stats.Count
+	return int64(rs.rpcStats.GetCmdRPCCount(cmd))
 }
