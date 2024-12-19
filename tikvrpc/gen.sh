@@ -97,3 +97,25 @@ cat <<EOF >> $output
 	return true
 }
 EOF
+
+cat <<EOF >> $output
+
+func isValidReqType(cmd CmdType) bool {
+	switch cmd {
+EOF
+
+for cmd in "${cmds[@]}"; do
+cat <<EOF >> $output
+	case Cmd${cmd}:
+		return true
+EOF
+done
+
+cat <<EOF >> $output
+	case CmdCopStream, CmdMPPTask, CmdMPPConn, CmdMPPCancel, CmdMPPAlive, CmdEmpty:
+		return true
+	default:
+		return false
+	}
+}
+EOF
