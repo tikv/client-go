@@ -56,7 +56,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/util/codec"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/caller"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 var (

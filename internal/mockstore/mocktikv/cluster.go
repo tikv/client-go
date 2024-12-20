@@ -48,8 +48,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/internal/mockstore/cluster"
 	"github.com/tikv/client-go/v2/util"
-	pd "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/opt"
 )
 
 var _ cluster.Cluster = &Cluster{}
@@ -352,7 +352,7 @@ func (c *Cluster) GetRegionByID(regionID uint64) (*metapb.Region, *metapb.Peer, 
 }
 
 // ScanRegions returns at most `limit` regions from given `key` and their leaders.
-func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...pdopt.GetRegionOption) []*pd.Region {
+func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...opt.GetRegionOption) []*router.Region {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -393,7 +393,7 @@ func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...pdopt.
 		regions = regions[:limit]
 	}
 
-	result := make([]*pd.Region, 0, len(regions))
+	result := make([]*router.Region, 0, len(regions))
 	for _, region := range regions {
 		leader := region.leaderPeer()
 		if leader == nil {
@@ -402,7 +402,7 @@ func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...pdopt.
 			leader = proto.Clone(leader).(*metapb.Peer)
 		}
 
-		r := &pd.Region{
+		r := &router.Region{
 			Meta:      proto.Clone(region.Meta).(*metapb.Region),
 			Leader:    leader,
 			DownPeers: c.getDownPeers(region),

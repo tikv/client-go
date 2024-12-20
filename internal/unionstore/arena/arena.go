@@ -294,13 +294,13 @@ func (hdr *MemdbVlogHdr) load(src []byte) {
 }
 
 // AppendValue appends a value and it's vlog header to the vlog.
-func (l *MemdbVlog[G, M]) AppendValue(nodeAddr MemdbArenaAddr, oldValue MemdbArenaAddr, value []byte) MemdbArenaAddr {
-	size := memdbVlogHdrSize + len(value)
+func (l *MemdbVlog[G, M]) AppendValue(nodeAddr MemdbArenaAddr, oldValueAddr MemdbArenaAddr, value []byte) MemdbArenaAddr {
 	prevBlocks := len(l.blocks)
+	size := memdbVlogHdrSize + len(value)
 	addr, mem := l.Alloc(size, false)
 
 	copy(mem, value)
-	hdr := MemdbVlogHdr{nodeAddr, oldValue, uint32(len(value))}
+	hdr := MemdbVlogHdr{nodeAddr, oldValueAddr, uint32(len(value))}
 	hdr.store(mem[len(value):])
 
 	addr.off += uint32(size)

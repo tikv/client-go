@@ -790,9 +790,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 	}()
 
-	var staleReadCollector *staleReadMetricsCollector
 	if req.StaleRead {
-		staleReadCollector = &staleReadMetricsCollector{}
 		defer func() {
 			if retryTimes == 0 {
 				metrics.StaleReadHitCounter.Add(1)
@@ -844,13 +842,23 @@ func (s *RegionRequestSender) SendReqCtx(
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
 		}
-
-		var isLocalTraffic bool
-		if staleReadCollector != nil && s.replicaSelector != nil && s.replicaSelector.target != nil {
-			isLocalTraffic = s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels)
-			staleReadCollector.onReq(req, isLocalTraffic)
+		// patch the access location if it is not set under region request sender. which includes the coprocessor,
+		// txn relative tikv request.
+		// note: MPP not use this path. need specified in the MPP layer.
+		patchAccessLocation := func() {
+			if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
+				req.AccessLocation = kv.AccessLocalZone
+			} else {
+				req.AccessLocation = kv.AccessCrossZone
+			}
 		}
-
+		if s.replicaSelector != nil &&
+			s.replicaSelector.target != nil &&
+			req.AccessLocation == kv.AccessUnknown &&
+			len(s.replicaSelector.option.labels) != 0 {
+			// patch the access location if it is not set under region request sender.
+			patchAccessLocation()
+		}
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
 		s.storeAddr = rpcCtx.Addr
 
@@ -932,9 +940,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				s.replicaSelector.onSendSuccess(req)
 			}
 		}
-		if staleReadCollector != nil {
-			staleReadCollector.onResp(req.Type, resp, isLocalTraffic)
-		}
+
 		return resp, rpcCtx, retryTimes, nil
 	}
 }
@@ -1800,56 +1806,6 @@ func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.R
 		return nil
 	}
 	return s.readTSValidator.ValidateReadTS(ctx, readTS, req.StaleRead, &oracle.Option{TxnScope: req.TxnScope})
-}
-
-type staleReadMetricsCollector struct {
-}
-
-func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request, isLocalTraffic bool) {
-	size := 0
-	switch req.Type {
-	case tikvrpc.CmdGet:
-		size = req.Get().Size()
-	case tikvrpc.CmdBatchGet:
-		size = req.BatchGet().Size()
-	case tikvrpc.CmdScan:
-		size = req.Scan().Size()
-	case tikvrpc.CmdCop:
-		size = req.Cop().Size()
-	default:
-		// ignore non-read requests
-		return
-	}
-	size += req.Context.Size()
-	if isLocalTraffic {
-		metrics.StaleReadLocalOutBytes.Add(float64(size))
-		metrics.StaleReadReqLocalCounter.Add(1)
-	} else {
-		metrics.StaleReadRemoteOutBytes.Add(float64(size))
-		metrics.StaleReadReqCrossZoneCounter.Add(1)
-	}
-}
-
-func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Response, isLocalTraffic bool) {
-	size := 0
-	switch tp {
-	case tikvrpc.CmdGet:
-		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
-	case tikvrpc.CmdBatchGet:
-		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
-	case tikvrpc.CmdScan:
-		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
-	case tikvrpc.CmdCop:
-		size += resp.Resp.(*coprocessor.Response).Size()
-	default:
-		// ignore non-read requests
-		return
-	}
-	if isLocalTraffic {
-		metrics.StaleReadLocalInBytes.Add(float64(size))
-	} else {
-		metrics.StaleReadRemoteInBytes.Add(float64(size))
-	}
 }
 
 func patchRequestSource(req *tikvrpc.Request, replicaType string) {

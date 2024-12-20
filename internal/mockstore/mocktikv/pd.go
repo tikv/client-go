@@ -51,8 +51,11 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/caller"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
+	sd "github.com/tikv/pd/client/servicediscovery"
 	"go.uber.org/atomic"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -172,11 +175,11 @@ func (c *pdClient) GetLocalTS(ctx context.Context, dcLocation string) (int64, in
 	return c.GetTS(ctx)
 }
 
-func (c *pdClient) GetTSAsync(ctx context.Context) pd.TSFuture {
+func (c *pdClient) GetTSAsync(ctx context.Context) tso.TSFuture {
 	return &mockTSFuture{c, ctx, false}
 }
 
-func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) pd.TSFuture {
+func (c *pdClient) GetLocalTSAsync(ctx context.Context, dcLocation string) tso.TSFuture {
 	return c.GetTSAsync(ctx)
 }
 
@@ -222,7 +225,7 @@ func (m *mockTSFuture) Wait() (int64, int64, error) {
 	return m.pdc.GetTS(m.ctx)
 }
 
-func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
+func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	region, peer, buckets, downPeers := c.cluster.GetRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
@@ -233,37 +236,37 @@ func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetReg
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
+	return &router.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...opt.GetRegionOption) (*pd.Region, error) {
-	return &pd.Region{}, nil
+func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberURLs []string, opts ...opt.GetRegionOption) (*router.Region, error) {
+	return &router.Region{}, nil
 }
 
-func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
+func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	region, peer, buckets, downPeers := c.cluster.GetPrevRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
 	}
-	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
+	return &router.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*pd.Region, error) {
+func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
 	region, peer, buckets, downPeers := c.cluster.GetRegionByID(regionID)
-	return &pd.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
+	return &router.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
-func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
+func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	regions := c.cluster.ScanRegions(startKey, endKey, limit, opts...)
 	return regions, nil
 }
 
-func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
+func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	if _, err := util.EvalFailpoint("mockBatchScanRegionsUnimplemented"); err == nil {
 		return nil, status.Errorf(codes.Unimplemented, "mock BatchScanRegions is not implemented")
 	}
-	regions := make([]*pd.Region, 0, len(keyRanges))
-	var lastRegion *pd.Region
+	regions := make([]*router.Region, 0, len(keyRanges))
+	var lastRegion *router.Region
 	for _, keyRange := range keyRanges {
 		if lastRegion != nil && lastRegion.Meta != nil {
 			if lastRegion.Meta.EndKey == nil || bytes.Compare(lastRegion.Meta.EndKey, keyRange.EndKey) >= 0 {
@@ -431,7 +434,7 @@ func (c *pdClient) GetTSWithinKeyspace(ctx context.Context, keyspaceID uint32) (
 	return 0, 0, nil
 }
 
-func (c *pdClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) pd.TSFuture {
+func (c *pdClient) GetTSWithinKeyspaceAsync(ctx context.Context, keyspaceID uint32) tso.TSFuture {
 	return nil
 }
 
@@ -439,7 +442,7 @@ func (c *pdClient) GetLocalTSWithinKeyspace(ctx context.Context, dcLocation stri
 	return 0, 0, nil
 }
 
-func (c *pdClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) pd.TSFuture {
+func (c *pdClient) GetLocalTSWithinKeyspaceAsync(ctx context.Context, dcLocation string, keyspaceID uint32) tso.TSFuture {
 	return nil
 }
 
@@ -459,6 +462,6 @@ func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 	return nil, 0, nil
 }
 
-func (m *pdClient) GetServiceDiscovery() pd.ServiceDiscovery { return nil }
+func (m *pdClient) GetServiceDiscovery() sd.ServiceDiscovery { return nil }
 
-func (m *pdClient) WithCallerComponent(callerComponent caller.Component) pd.RPCClient { return nil }
+func (m *pdClient) WithCallerComponent(caller.Component) pd.RPCClient { return m }

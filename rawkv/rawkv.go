@@ -53,6 +53,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	"google.golang.org/grpc"
 )
 
@@ -203,7 +204,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	}
 
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdCli, err := pd.NewClientWithContext(ctx, "client-go/rawkv", pdAddrs, pd.SecurityOption{
+	pdCli, err := pd.NewClientWithContext(ctx, caller.Component("rawkv-client-go"), pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
 		KeyPath:  opt.security.ClusterSSLKey,

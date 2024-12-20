@@ -551,3 +551,38 @@ func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
 	assert.NoError(t, err)
 	mustNoNotify()
 }
+
+func TestSetLastTSAlwaysPushTS(t *testing.T) {
+	oracleInterface, err := NewPdOracle(&MockPdClient{}, &PDOracleOptions{
+		UpdateInterval: time.Second * 2,
+		NoUpdateTS:     true,
+	})
+	assert.NoError(t, err)
+	o := oracleInterface.(*pdOracle)
+	defer o.Close()
+
+	var wg sync.WaitGroup
+	cancel := make(chan struct{})
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx := context.Background()
+			for {
+				select {
+				case <-cancel:
+					return
+				default:
+				}
+				ts, err := o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+				assert.NoError(t, err)
+				lastTS, found := o.getLastTS(oracle.GlobalTxnScope)
+				assert.True(t, found)
+				assert.GreaterOrEqual(t, lastTS, ts)
+			}
+		}()
+	}
+	time.Sleep(time.Second)
+	close(cancel)
+	wg.Wait()
+}

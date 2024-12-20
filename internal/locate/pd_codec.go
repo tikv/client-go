@@ -42,6 +42,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
 )
 
@@ -102,7 +103,7 @@ func (c *CodecPDClient) GetCodec() apicodec.Codec {
 
 // GetRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
+func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	encodedKey := c.codec.EncodeRegionKey(key)
 	region, err := c.Client.GetRegion(ctx, encodedKey, opts...)
 	return c.processRegionResult(region, err)
@@ -110,7 +111,7 @@ func (c *CodecPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.G
 
 // GetPrevRegion encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*pd.Region, error) {
+func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	encodedKey := c.codec.EncodeRegionKey(key)
 	region, err := c.Client.GetPrevRegion(ctx, encodedKey, opts...)
 	return c.processRegionResult(region, err)
@@ -118,14 +119,14 @@ func (c *CodecPDClient) GetPrevRegion(ctx context.Context, key []byte, opts ...o
 
 // GetRegionByID encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*pd.Region, error) {
+func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
 	region, err := c.Client.GetRegionByID(ctx, regionID, opts...)
 	return c.processRegionResult(region, err)
 }
 
 // ScanRegions encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
-func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
+func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	startKey, endKey = c.codec.EncodeRegionRange(startKey, endKey)
 	//nolint:staticcheck
 	regions, err := c.Client.ScanRegions(ctx, startKey, endKey, limit, opts...)
@@ -146,8 +147,8 @@ func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey
 // BatchScanRegions encodes the key before send requests to pd-server and decodes the
 // returned StartKey && EndKey from pd-server.
 // if limit > 0, it limits the maximum number of returned regions, should check if the result regions fully contain the given key ranges.
-func (c *CodecPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*pd.Region, error) {
-	encodedRanges := make([]pd.KeyRange, len(keyRanges))
+func (c *CodecPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+	encodedRanges := make([]router.KeyRange, len(keyRanges))
 	for i, keyRange := range keyRanges {
 		encodedRanges[i].StartKey, encodedRanges[i].EndKey = c.codec.EncodeRegionRange(keyRange.StartKey, keyRange.EndKey)
 	}
@@ -175,7 +176,7 @@ func (c *CodecPDClient) SplitRegions(ctx context.Context, splitKeys [][]byte, op
 	return c.Client.SplitRegions(ctx, keys, opts...)
 }
 
-func (c *CodecPDClient) processRegionResult(region *pd.Region, err error) (*pd.Region, error) {
+func (c *CodecPDClient) processRegionResult(region *router.Region, err error) (*router.Region, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -189,7 +190,7 @@ func (c *CodecPDClient) processRegionResult(region *pd.Region, err error) (*pd.R
 	return region, nil
 }
 
-func (c *CodecPDClient) decodeRegionKeyInPlace(r *pd.Region) error {
+func (c *CodecPDClient) decodeRegionKeyInPlace(r *router.Region) error {
 	decodedStart, decodedEnd, err := c.codec.DecodeRegionRange(r.Meta.StartKey, r.Meta.EndKey)
 	if err != nil {
 		return err

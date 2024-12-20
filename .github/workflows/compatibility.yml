@@ -24,8 +24,8 @@ jobs:
     - name: Checkout TiDB
       uses: actions/checkout@v2
       with:
-        repository: MyonKeminta/tidb
-        ref: m/update-ts-check
+        repository: JmPotato/tidb
+        ref: update_pd_client
         path: tidb
 
     - name: Check build

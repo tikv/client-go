@@ -32,7 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/caller"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func TestPDAPI(t *testing.T) {
