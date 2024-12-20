@@ -32,6 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func TestPDAPI(t *testing.T) {
@@ -49,7 +50,7 @@ type apiTestSuite struct {
 func (s *apiTestSuite) SetupTest() {
 	require := s.Require()
 	addrs := strings.Split(*pdAddrs, ",")
-	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
+	pdClient, err := pd.NewClient(caller.TestComponent, addrs, pd.SecurityOption{})
 	require.NoError(err)
 	rpcClient := tikv.NewRPCClient()
 	require.NoError(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
