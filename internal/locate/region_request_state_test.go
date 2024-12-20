@@ -17,6 +17,8 @@ package locate
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -322,7 +324,7 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(false),
 			followerSuccessReplica:  []string{"z2"},
@@ -333,7 +335,7 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.None[bool](),
 			followerSuccessReplica:  []string{"z2"},
@@ -344,7 +346,7 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.None[bool](),
 			followerSuccessReplica:  []string{"z2"},
@@ -432,11 +434,11 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(true),
 			followerSuccessReplica:  []string{"z2", "z3"},
-			followerSuccessReadType: SuccessFollowerRead,
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                      leaderDown,
@@ -445,11 +447,11 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(true),
 			followerSuccessReplica:  []string{"z3"},
-			followerSuccessReadType: SuccessFollowerRead,
+			followerSuccessReadType: SuccessStaleRead,
 		},
 		{
 			do:                      leaderDown,
@@ -458,11 +460,11 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.Some(true),
 			followerSuccessReplica:  []string{"z3"},
-			followerSuccessReadType: SuccessFollowerRead,
+			followerSuccessReadType: SuccessStaleRead,
 		},
 	}
 	tests := []func(*testRegionCacheStaleReadSuite, *RegionCacheTestCase){
@@ -562,6 +564,8 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			}
 		}
 	} else {
+		funcName := runtime.FuncForPC(reflect.ValueOf(r.do).Pointer()).Name()
+		fmt.Printf("Function name of r.do(): %s\n", funcName)
 		s.Equal(r.followerSuccessReadType, successReadType)
 		for _, z := range r.followerSuccessReplica {
 			if z == successZone {
