@@ -309,8 +309,11 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
 	for {
 		last := lastTSPointer.Load()
-		if current.tso <= last.tso || !current.arrival.After(last.arrival) {
+		if current.tso <= last.tso {
 			return
+		}
+		if last.arrival.After(current.arrival) {
+			current.arrival = last.arrival
 		}
 		if lastTSPointer.CompareAndSwap(last, current) {
 			return
@@ -691,6 +694,12 @@ func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRea
 			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
 		}
 		if readTS > currentTS {
+			logutil.Logger(ctx).Warn("DBG",
+				zap.Uint64("readTS", readTS),
+				zap.Uint64("currentTS", currentTS),
+				zap.Uint64("latestTS", latestTSInfo.tso),
+				zap.Time("latest arrive", latestTSInfo.arrival),
+			)
 			return oracle.ErrFutureTSRead{
 				ReadTS:    readTS,
 				CurrentTS: currentTS,
