@@ -810,15 +810,6 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 	if detail == nil || s.mu.stats == nil {
 		return
 	}
-	if s.mu.stats.resolveLockDetail == nil {
-		s.mu.stats.resolveLockDetail = &util.ResolveLockDetail{}
-	}
-	if s.mu.stats.scanDetail == nil {
-		s.mu.stats.scanDetail = &util.ScanDetail{}
-	}
-	if s.mu.stats.timeDetail == nil {
-		s.mu.stats.timeDetail = &util.TimeDetail{}
-	}
 	s.mu.stats.scanDetail.MergeFromScanDetailV2(detail.ScanDetailV2)
 	s.mu.stats.timeDetail.MergeFromTimeDetail(detail.TimeDetailV2, detail.TimeDetail)
 }
@@ -1107,7 +1098,7 @@ func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {
 	if s.mu.stats == nil {
 		return nil
 	}
-	return s.mu.stats.resolveLockDetail
+	return &s.mu.stats.resolveLockDetail
 }
 
 // SetPipelined sets the snapshot to pipelined mode.
@@ -1126,14 +1117,18 @@ type SnapshotRuntimeStats struct {
 	rpcStats          *locate.RegionRequestRuntimeStats
 	backoffSleepMS    map[string]int
 	backoffTimes      map[string]int
-	scanDetail        *util.ScanDetail
-	timeDetail        *util.TimeDetail
-	resolveLockDetail *util.ResolveLockDetail
+	scanDetail        util.ScanDetail
+	timeDetail        util.TimeDetail
+	resolveLockDetail util.ResolveLockDetail
 }
 
 // Clone implements the RuntimeStats interface.
 func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
-	newRs := SnapshotRuntimeStats{}
+	newRs := SnapshotRuntimeStats{
+		scanDetail:        rs.scanDetail,
+		timeDetail:        rs.timeDetail,
+		resolveLockDetail: rs.resolveLockDetail,
+	}
 	if rs.rpcStats != nil {
 		newRs.rpcStats = rs.rpcStats.Clone()
 	}
@@ -1147,19 +1142,6 @@ func (rs *SnapshotRuntimeStats) Clone() *SnapshotRuntimeStats {
 			newRs.backoffTimes[k] += v
 		}
 	}
-
-	if rs.scanDetail != nil {
-		newRs.scanDetail = rs.scanDetail
-	}
-
-	if rs.timeDetail != nil {
-		newRs.timeDetail = rs.timeDetail
-	}
-
-	if rs.resolveLockDetail != nil {
-		newRs.resolveLockDetail = rs.resolveLockDetail
-	}
-
 	return &newRs
 }
 
@@ -1185,6 +1167,9 @@ func (rs *SnapshotRuntimeStats) Merge(other *SnapshotRuntimeStats) {
 			rs.backoffTimes[k] += v
 		}
 	}
+	rs.scanDetail.Merge(&other.scanDetail)
+	rs.timeDetail.Merge(&other.timeDetail)
+	rs.resolveLockDetail.Merge(&other.resolveLockDetail)
 }
 
 // String implements fmt.Stringer interface.
@@ -1216,12 +1201,17 @@ func (rs *SnapshotRuntimeStats) String() string {
 		buf.WriteString(", ")
 		buf.WriteString(scanDetail)
 	}
+	if rs.resolveLockDetail.ResolveLockTime > 0 {
+		buf.WriteString(", ")
+		buf.WriteString("resolve_lock_time:")
+		buf.WriteString(util.FormatDuration(time.Duration(rs.resolveLockDetail.ResolveLockTime)))
+	}
 	return buf.String()
 }
 
 // GetTimeDetail returns the timeDetail
 func (rs *SnapshotRuntimeStats) GetTimeDetail() *util.TimeDetail {
-	return rs.timeDetail
+	return &rs.timeDetail
 }
 
 // GetCmdRPCCount returns the count of the corresponding kind of rpc requests
