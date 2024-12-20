@@ -102,7 +102,7 @@ func NewTestUniStore(t *testing.T) *tikv.KVStore {
 func newTiKVStore(t *testing.T) *tikv.KVStore {
 	re := require.New(t)
 	addrs := strings.Split(*pdAddrs, ",")
-	pdClient, err := pd.NewClient(caller.Component("client-go-integration-test"), addrs, pd.SecurityOption{})
+	pdClient, err := pd.NewClient(caller.TestComponent, addrs, pd.SecurityOption{})
 	re.Nil(err)
 	var opt tikv.ClientOpt
 	switch mustGetApiVersion(re, pdClient) {

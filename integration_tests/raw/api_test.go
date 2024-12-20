@@ -87,7 +87,7 @@ func (s *apiTestSuite) wrapPDClient(pdCli pd.Client) pd.Client {
 func (s *apiTestSuite) SetupTest() {
 	addrs := strings.Split(*pdAddrs, ",")
 
-	pdClient, err := pd.NewClient(caller.Component("client-go-integration-test"), addrs, pd.SecurityOption{})
+	pdClient, err := pd.NewClient(caller.TestComponent, addrs, pd.SecurityOption{})
 	s.Nil(err)
 	s.apiVersion = s.getApiVersion(pdClient)
 

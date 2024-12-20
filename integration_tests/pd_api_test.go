@@ -50,7 +50,7 @@ type apiTestSuite struct {
 func (s *apiTestSuite) SetupTest() {
 	require := s.Require()
 	addrs := strings.Split(*pdAddrs, ",")
-	pdClient, err := pd.NewClient(caller.Component("client-go-integration-test"), addrs, pd.SecurityOption{})
+	pdClient, err := pd.NewClient(caller.TestComponent, addrs, pd.SecurityOption{})
 	require.NoError(err)
 	rpcClient := tikv.NewRPCClient()
 	require.NoError(failpoint.Enable("tikvclient/mockFastSafeTSUpdater", `return()`))
