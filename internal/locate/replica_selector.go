@@ -307,11 +307,10 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 func (s *ReplicaSelectMixedStrategy) canSendReplicaRead(selector *replicaSelector) bool {
 	replicas := selector.replicas
 	replica := replicas[s.leaderIdx]
-	liveness := replica.store.getLivenessState()
-	epochStale := replica.isEpochStale()
 
-	if liveness != reachable || epochStale || replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag) {
-		// don't overwhelm the leader is busy, timeout, not accessible or stale epoch.
+	maxAttempt := 1
+	if !replica.isExhausted(maxAttempt, 0) || replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag) {
+		// don't do the replica read if leader is not exhausted or leader has timeout or server busy error.
 		return false
 	}
 	return true
