@@ -898,8 +898,8 @@ func TestReplicaReadAccessPathByCase2(t *testing.T) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: true}",
-				"{addr: store2, replica-read: false, stale-read: true}",
-				"{addr: store3, replica-read: false, stale-read: true}"},
+				"{addr: store2, replica-read: true, stale-read: false}",
+				"{addr: store3, replica-read: true, stale-read: false}"},
 			respErr:         "",
 			respRegionError: fakeEpochNotMatch,
 			backoffCnt:      3,
@@ -2125,7 +2125,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 				accessPath: []string{
 					"{addr: store2, replica-read: false, stale-read: true}",
 					"{addr: store1, replica-read: false, stale-read: false}",
-					"{addr: store3, replica-read: false, stale-read: true}",
+					"{addr: store3, replica-read: true, stale-read: false}",
 				},
 				respErr:         "",
 				respRegionError: nil,
