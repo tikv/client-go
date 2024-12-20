@@ -814,9 +814,7 @@ func (s *KVSnapshot) mergeExecDetail(detail *kvrpcpb.ExecDetailsV2) {
 		s.mu.stats.resolveLockDetail = &util.ResolveLockDetail{}
 	}
 	if s.mu.stats.scanDetail == nil {
-		s.mu.stats.scanDetail = &util.ScanDetail{
-			ResolveLock: s.mu.stats.resolveLockDetail,
-		}
+		s.mu.stats.scanDetail = &util.ScanDetail{}
 	}
 	if s.mu.stats.timeDetail == nil {
 		s.mu.stats.timeDetail = &util.TimeDetail{}
