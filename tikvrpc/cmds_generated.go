@@ -382,3 +382,94 @@ func patchCmdCtx(req *Request, cmd CmdType, ctx *kvrpcpb.Context) bool {
 	}
 	return true
 }
+
+func isValidReqType(cmd CmdType) bool {
+	switch cmd {
+	case CmdGet:
+		return true
+	case CmdScan:
+		return true
+	case CmdPrewrite:
+		return true
+	case CmdPessimisticLock:
+		return true
+	case CmdPessimisticRollback:
+		return true
+	case CmdCommit:
+		return true
+	case CmdCleanup:
+		return true
+	case CmdBatchGet:
+		return true
+	case CmdBatchRollback:
+		return true
+	case CmdScanLock:
+		return true
+	case CmdResolveLock:
+		return true
+	case CmdGC:
+		return true
+	case CmdDeleteRange:
+		return true
+	case CmdRawGet:
+		return true
+	case CmdRawBatchGet:
+		return true
+	case CmdRawPut:
+		return true
+	case CmdRawBatchPut:
+		return true
+	case CmdRawDelete:
+		return true
+	case CmdRawBatchDelete:
+		return true
+	case CmdRawDeleteRange:
+		return true
+	case CmdRawScan:
+		return true
+	case CmdRawGetKeyTTL:
+		return true
+	case CmdRawCompareAndSwap:
+		return true
+	case CmdRawChecksum:
+		return true
+	case CmdUnsafeDestroyRange:
+		return true
+	case CmdRegisterLockObserver:
+		return true
+	case CmdCheckLockObserver:
+		return true
+	case CmdRemoveLockObserver:
+		return true
+	case CmdPhysicalScanLock:
+		return true
+	case CmdCop:
+		return true
+	case CmdBatchCop:
+		return true
+	case CmdMvccGetByKey:
+		return true
+	case CmdMvccGetByStartTs:
+		return true
+	case CmdSplitRegion:
+		return true
+	case CmdTxnHeartBeat:
+		return true
+	case CmdCheckTxnStatus:
+		return true
+	case CmdCheckSecondaryLocks:
+		return true
+	case CmdFlashbackToVersion:
+		return true
+	case CmdPrepareFlashbackToVersion:
+		return true
+	case CmdFlush:
+		return true
+	case CmdBufferBatchGet:
+		return true
+	case CmdCopStream, CmdMPPTask, CmdMPPConn, CmdMPPCancel, CmdMPPAlive, CmdEmpty:
+		return true
+	default:
+		return false
+	}
+}
