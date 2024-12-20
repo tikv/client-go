@@ -464,4 +464,4 @@ func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 
 func (m *pdClient) GetServiceDiscovery() sd.ServiceDiscovery { return nil }
 
-func (m *pdClient) WithCallerComponent(caller.Component) pd.RPCClient { return m }
+func (m *pdClient) WithCallerComponent(caller.Component) pd.Client { return m }

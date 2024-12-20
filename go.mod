@@ -10,7 +10,7 @@ require (
 	github.com/golang/protobuf v1.5.4
 	github.com/google/btree v1.1.2
 	github.com/google/uuid v1.6.0
-	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0
+	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
@@ -22,13 +22,13 @@ require (
 	github.com/prometheus/client_model v0.6.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20241219070100-ac5967544f1b
+	github.com/tikv/pd/client v0.0.0-20241220053006-461b86adc78d
 	github.com/twmb/murmur3 v1.1.3
-	go.etcd.io/etcd/api/v3 v3.5.10
-	go.etcd.io/etcd/client/v3 v3.5.10
+	go.etcd.io/etcd/api/v3 v3.5.15
+	go.etcd.io/etcd/client/v3 v3.5.15
 	go.uber.org/atomic v1.11.0
-	go.uber.org/goleak v1.2.0
-	go.uber.org/zap v1.26.0
+	go.uber.org/goleak v1.3.0
+	go.uber.org/zap v1.27.0
 	golang.org/x/sync v0.7.0
 	google.golang.org/grpc v1.63.2
 )
@@ -47,13 +47,13 @@ require (
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.5.10 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.5.15 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230711005742-c3f37128e5a4 // indirect
 	golang.org/x/net v0.26.0 // indirect
 	golang.org/x/sys v0.22.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240304212257-790db918fca8 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20240401170217-c3f982113cda // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240401170217-c3f982113cda // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
