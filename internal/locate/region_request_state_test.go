@@ -17,8 +17,6 @@ package locate
 import (
 	"context"
 	"fmt"
-	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
