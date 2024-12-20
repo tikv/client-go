@@ -564,7 +564,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			resolveLocksOpts := txnlock.ResolveLocksOptions{
 				CallerStartTS: s.version,
 				Locks:         locks,
-				Detail:        s.getResolveLockDetail(),
+				Detail:        s.GetResolveLockDetail(),
 			}
 			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 			msBeforeExpired := resolveLocksRes.TTL
@@ -785,7 +785,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			resolveLocksOpts := txnlock.ResolveLocksOptions{
 				CallerStartTS: s.version,
 				Locks:         locks,
-				Detail:        s.getResolveLockDetail(),
+				Detail:        s.GetResolveLockDetail(),
 			}
 			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
 			if err != nil {
@@ -1092,7 +1092,8 @@ func (s *KVSnapshot) GetKVReadTimeout() time.Duration {
 	return s.readTimeout
 }
 
-func (s *KVSnapshot) getResolveLockDetail() *util.ResolveLockDetail {
+// GetResolveLockDetail returns ResolveLockDetail, exports for testing.
+func (s *KVSnapshot) GetResolveLockDetail() *util.ResolveLockDetail {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.stats == nil {
@@ -1196,15 +1197,15 @@ func (rs *SnapshotRuntimeStats) String() string {
 		buf.WriteString(", ")
 		buf.WriteString(timeDetail)
 	}
-	scanDetail := rs.scanDetail.String()
-	if scanDetail != "" {
-		buf.WriteString(", ")
-		buf.WriteString(scanDetail)
-	}
 	if rs.resolveLockDetail.ResolveLockTime > 0 {
 		buf.WriteString(", ")
 		buf.WriteString("resolve_lock_time:")
 		buf.WriteString(util.FormatDuration(time.Duration(rs.resolveLockDetail.ResolveLockTime)))
+	}
+	scanDetail := rs.scanDetail.String()
+	if scanDetail != "" {
+		buf.WriteString(", ")
+		buf.WriteString(scanDetail)
 	}
 	return buf.String()
 }
