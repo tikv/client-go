@@ -554,8 +554,6 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 	_, successZone, successReadType := s.extractResp(resp)
 	find := false
 	if leaderZone {
-		funcName := runtime.FuncForPC(reflect.ValueOf(r.do).Pointer()).Name()
-		fmt.Printf("Function name of r.do(): %s\n", funcName)
 		s.Equal(r.leaderSuccessReadType, successReadType, msg)
 		for _, z := range r.leaderSuccessReplica {
 			if z == successZone {
@@ -564,8 +562,6 @@ func testStaleRead(s *testRegionCacheStaleReadSuite, r *RegionCacheTestCase, zon
 			}
 		}
 	} else {
-		funcName := runtime.FuncForPC(reflect.ValueOf(r.do).Pointer()).Name()
-		fmt.Printf("Function name of r.do(): %s\n", funcName)
 		s.Equal(r.followerSuccessReadType, successReadType)
 		for _, z := range r.followerSuccessReplica {
 			if z == successZone {
