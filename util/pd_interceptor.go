@@ -64,6 +64,10 @@ type InterceptedPDClient struct {
 	pd.Client
 }
 
+func NewInterceptedPDClient(client pd.Client) *InterceptedPDClient {
+	return &InterceptedPDClient{client.WithCallerComponent("InterceptedPDClient")}
+}
+
 // interceptedTsFuture is a PD's wrapper future to record stmt detail.
 type interceptedTsFuture struct {
 	tso.TSFuture
@@ -125,7 +129,7 @@ func (m InterceptedPDClient) GetRegionByID(ctx context.Context, regionID uint64,
 func (m InterceptedPDClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	start := time.Now()
 	//nolint:staticcheck
-	r, err := m.Client.ScanRegions(ctx, key, endKey, limit, opts...)
+	r, err := m.Client.WithCallerComponent("InterceptedPDClient").ScanRegions(ctx, key, endKey, limit, opts...)
 	recordPDWaitTime(ctx, start)
 	return r, err
 }

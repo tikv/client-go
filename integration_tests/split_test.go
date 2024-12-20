@@ -410,4 +410,4 @@ func (c *mockPDClient) GetServiceDiscovery() sd.ServiceDiscovery {
 	panic("unimplemented")
 }
 
-func (c *mockPDClient) WithCallerComponent(caller.Component) pd.RPCClient { return c }
+func (c *mockPDClient) WithCallerComponent(caller.Component) pd.Client { return c }
