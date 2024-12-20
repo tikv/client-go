@@ -160,3 +160,33 @@ func (i *rbtSnapIter) init() {
 		_ = err // memdbIterator will never fail
 	}
 }
+
+func (db *RBT) Snapshot() *Snapshot {
+	return &Snapshot{
+		db: db,
+		cp: db.getSnapshot(),
+	}
+}
+
+type Snapshot struct {
+	db *RBT
+	cp arena.MemDBCheckpoint
+}
+
+func (snap *Snapshot) Get(ctx context.Context, key []byte) ([]byte, error) {
+	x := snap.db.traverse(key, false)
+	if x.isNull() {
+		return nil, tikverr.ErrNotExist
+	}
+	if x.vptr.IsNull() {
+		// A flag only key, act as value not exists
+		return nil, tikverr.ErrNotExist
+	}
+	v, ok := snap.db.vlog.GetSnapshotValue(x.vptr, &snap.cp)
+	if !ok {
+		return nil, tikverr.ErrNotExist
+	}
+	return v, nil
+}
+
+func (snap *Snapshot) Close() {}

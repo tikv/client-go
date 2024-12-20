@@ -210,3 +210,15 @@ func (db *rbtDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse boo
 		return db.SnapshotIter(lower, upper)
 	}
 }
+
+func (db *rbtDBWithContext) GetSnapshot() MemBufferSnapshot {
+	seqCheck := func() error {
+		return nil
+	}
+	return &SnapshotWithMutex{
+		mu:       &db.RWMutex,
+		seqCheck: seqCheck,
+		db:       db,
+		getter:   db.SnapshotGetter(),
+	}
+}

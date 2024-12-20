@@ -279,8 +279,9 @@ func benchBatchedSnapshotIter(b *testing.B, buffer MemBuffer) {
 	}
 	buffer.Staging()
 	b.ResetTimer()
+	snapshot := buffer.GetSnapshot()
 	for i := 0; i < b.N; i++ {
-		iter := buffer.BatchedSnapshotIter(nil, nil, false)
+		iter := snapshot.BatchedSnapshotIter(nil, nil, false)
 		for iter.Valid() {
 			iter.Next()
 		}
@@ -297,8 +298,9 @@ func benchForEachInSnapshot(b *testing.B, buffer MemBuffer) {
 	f := func(key, value []byte) (bool, error) {
 		return false, nil
 	}
+	snapshot := buffer.GetSnapshot()
 	for i := 0; i < b.N; i++ {
-		err := buffer.ForEachInSnapshotRange(nil, nil, f, false)
+		err := snapshot.ForEachInSnapshotRange(nil, nil, f, false)
 		if err != nil {
 			b.Error(err)
 		}

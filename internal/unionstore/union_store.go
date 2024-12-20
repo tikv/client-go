@@ -36,6 +36,7 @@ package unionstore
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -203,35 +204,13 @@ type MemBuffer interface {
 	// Attempting to use such an invalidated iterator will result in a panic.
 	IterReverse([]byte, []byte) (Iterator, error)
 	// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
-	// Deprecated: use ForEachInSnapshotRange or BatchedSnapshotIter instead.
+	// Deprecated: use GetSnapshot instead.
 	SnapshotIter([]byte, []byte) Iterator
 	// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
-	// Deprecated: use ForEachInSnapshotRange or BatchedSnapshotIter instead.
+	// Deprecated: use GetSnapshot instead.
 	SnapshotIterReverse([]byte, []byte) Iterator
 
-	// ForEachInSnapshotRange scans the key-value pairs in the state[0] snapshot if it exists,
-	// otherwise it uses the current checkpoint as snapshot.
-	//
-	// NOTE: returned kv-pairs are only valid during the iteration. If you want to use them after the iteration,
-	// you need to make a copy.
-	//
-	// The method is protected by a RWLock to prevent potential iterator invalidation, i.e.
-	// You cannot modify the MemBuffer during the iteration.
-	//
-	// Use it when you need to scan the whole range, otherwise consider using BatchedSnapshotIter.
-	ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error
-
-	// BatchedSnapshotIter returns an iterator of the "snapshot", namely stage[0].
-	// It iterates in batches and prevents iterator invalidation.
-	//
-	// Use it when you need on-demand "next", otherwise consider using ForEachInSnapshotRange.
-	// NOTE: you should never use it when there are no stages.
-	//
-	// The iterator becomes invalid when any operation that may modify the "snapshot",
-	// e.g. RevertToCheckpoint or releasing stage[0].
-	BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator
-
-	//SnapshotGetter returns a Getter for a snapshot of MemBuffer.
+	// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
 	SnapshotGetter() Getter
 	// InspectStage iterates all buffered keys and values in MemBuffer.
 	InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte))
@@ -270,6 +249,8 @@ type MemBuffer interface {
 	FlushWait() error
 	// GetMetrics returns the metrics related to flushing
 	GetMetrics() Metrics
+	// GetSnapshot returns a snapshot of the MemBuffer.
+	GetSnapshot() MemBufferSnapshot
 }
 
 type Metrics struct {
@@ -284,3 +265,223 @@ var (
 	_ MemBuffer = &rbtDBWithContext{}
 	_ MemBuffer = &artDBWithContext{}
 )
+
+type MemBufferSnapshot interface {
+	Getter
+
+	// ForEachInSnapshotRange scans the key-value pairs in the state[0] snapshot if it exists,
+	// otherwise it uses the current checkpoint as snapshot.
+	//
+	// NOTE: returned kv-pairs are only valid during the iteration. If you want to use them after the iteration,
+	// you need to make a copy.
+	//
+	// The method is protected by a RWLock to prevent potential iterator invalidation, i.e.
+	// You cannot modify the MemBuffer during the iteration.
+	//
+	// Use it when you need to scan the whole range, otherwise consider using BatchedSnapshotIter.
+	ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error
+
+	// BatchedSnapshotIter returns an iterator of the "snapshot", namely stage[0].
+	// It iterates in batches and prevents iterator invalidation.
+	//
+	// Use it when you need on-demand "next", otherwise consider using ForEachInSnapshotRange.
+	// NOTE: you should never use it when there are no stages.
+	//
+	// The iterator becomes invalid when any operation that may modify the "snapshot",
+	// e.g. RevertToCheckpoint or releasing stage[0].
+	BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator
+
+	// Close releases the snapshot.
+	Close()
+}
+
+type SnapshotWithMutex struct {
+	mu       *sync.RWMutex
+	seqCheck func() error
+	db       MemBuffer
+	getter   Getter
+}
+
+func (s *SnapshotWithMutex) Get(ctx context.Context, k []byte) ([]byte, error) {
+	if err := s.seqCheck(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.getter.Get(ctx, k)
+}
+
+type snapshotBatchedIter struct {
+	seqCheck func() error
+	db       MemBuffer
+	lower    []byte
+	upper    []byte
+	reverse  bool
+	err      error
+
+	// current batch
+	keys      [][]byte
+	values    [][]byte
+	pos       int
+	batchSize int
+	nextKey   []byte
+}
+
+func (s *SnapshotWithMutex) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
+	iter := &snapshotBatchedIter{
+		seqCheck:  s.seqCheck,
+		db:        s.db,
+		lower:     lower,
+		upper:     upper,
+		reverse:   reverse,
+		batchSize: 32,
+	}
+
+	iter.err = iter.fillBatch()
+	return iter
+}
+
+func (it *snapshotBatchedIter) fillBatch() error {
+	// The check of sequence numbers don't have to be protected by the rwlock, as the invariant is that
+	// there cannot be concurrent writes to the seqNo variables.
+	if err := it.seqCheck(); err != nil {
+		return err
+	}
+
+	it.db.RLock()
+	defer it.db.RUnlock()
+
+	if it.keys == nil || it.values == nil || cap(it.keys) < it.batchSize || cap(it.values) < it.batchSize {
+		it.keys = make([][]byte, 0, it.batchSize)
+		it.values = make([][]byte, 0, it.batchSize)
+	} else {
+		it.keys = it.keys[:0]
+		it.values = it.values[:0]
+	}
+
+	var snapshotIter Iterator
+	if it.reverse {
+		searchUpper := it.upper
+		if it.nextKey != nil {
+			searchUpper = it.nextKey
+		}
+		snapshotIter = it.db.SnapshotIterReverse(searchUpper, it.lower)
+	} else {
+		searchLower := it.lower
+		if it.nextKey != nil {
+			searchLower = it.nextKey
+		}
+		snapshotIter = it.db.SnapshotIter(searchLower, it.upper)
+	}
+	defer snapshotIter.Close()
+
+	// fill current batch
+	// Further optimization: let the underlying memdb support batch iter.
+	for i := 0; i < it.batchSize && snapshotIter.Valid(); i++ {
+		it.keys = it.keys[:i+1]
+		it.values = it.values[:i+1]
+		it.keys[i] = snapshotIter.Key()
+		it.values[i] = snapshotIter.Value()
+		if err := snapshotIter.Next(); err != nil {
+			return err
+		}
+	}
+
+	// update state
+	it.pos = 0
+	if len(it.keys) > 0 {
+		lastKey := it.keys[len(it.keys)-1]
+		keyLen := len(lastKey)
+
+		if it.reverse {
+			if cap(it.nextKey) >= keyLen {
+				it.nextKey = it.nextKey[:keyLen]
+			} else {
+				it.nextKey = make([]byte, keyLen)
+			}
+			copy(it.nextKey, lastKey)
+		} else {
+			if cap(it.nextKey) >= keyLen+1 {
+				it.nextKey = it.nextKey[:keyLen+1]
+			} else {
+				it.nextKey = make([]byte, keyLen+1)
+			}
+			copy(it.nextKey, lastKey)
+			it.nextKey[keyLen] = 0
+		}
+	} else {
+		it.nextKey = nil
+	}
+
+	it.batchSize = min(it.batchSize*2, 4096)
+	return nil
+}
+
+func (it *snapshotBatchedIter) Valid() bool {
+	return it.seqCheck() == nil &&
+		it.pos < len(it.keys) &&
+		it.err == nil
+}
+
+func (it *snapshotBatchedIter) Next() error {
+	if it.err != nil {
+		return it.err
+	}
+	if err := it.seqCheck(); err != nil {
+		return err
+	}
+
+	it.pos++
+	if it.pos >= len(it.keys) {
+		return it.fillBatch()
+	}
+	return nil
+}
+
+func (it *snapshotBatchedIter) Key() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.keys[it.pos]
+}
+
+func (it *snapshotBatchedIter) Value() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.values[it.pos]
+}
+
+func (it *snapshotBatchedIter) Close() {
+	it.keys = nil
+	it.values = nil
+	it.nextKey = nil
+}
+
+func (s *SnapshotWithMutex) ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error {
+	s.db.RLock()
+	defer s.db.RUnlock()
+	var iter Iterator
+	if reverse {
+		iter = s.db.SnapshotIterReverse(upper, lower)
+	} else {
+		iter = s.db.SnapshotIter(lower, upper)
+	}
+	defer iter.Close()
+	for iter.Valid() {
+		stop, err := f(iter.Key(), iter.Value())
+		if err != nil {
+			return err
+		}
+		err = iter.Next()
+		if err != nil {
+			return err
+		}
+		if stop {
+			break
+		}
+	}
+	return nil
+}
+
+func (s *SnapshotWithMutex) Close() {}
