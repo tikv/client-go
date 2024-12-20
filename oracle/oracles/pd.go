@@ -309,8 +309,11 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
 	for {
 		last := lastTSPointer.Load()
-		if current.tso <= last.tso || !current.arrival.After(last.arrival) {
+		if current.tso <= last.tso {
 			return
+		}
+		if last.arrival.After(current.arrival) {
+			current.arrival = last.arrival
 		}
 		if lastTSPointer.CompareAndSwap(last, current) {
 			return
