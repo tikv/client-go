@@ -52,6 +52,8 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	"google.golang.org/grpc"
 )
 
@@ -135,15 +137,15 @@ type option struct {
 	apiVersion      kvrpcpb.APIVersion
 	security        config.Security
 	gRPCDialOptions []grpc.DialOption
-	pdOptions       []pd.ClientOption
+	pdOptions       []opt.ClientOption
 	keyspace        string
 }
 
 // ClientOpt is factory to set the client options.
 type ClientOpt func(*option)
 
-// WithPDOptions is used to set the pd.ClientOption
-func WithPDOptions(opts ...pd.ClientOption) ClientOpt {
+// WithPDOptions is used to set the opt.ClientOption
+func WithPDOptions(opts ...opt.ClientOption) ClientOpt {
 	return func(o *option) {
 		o.pdOptions = append(o.pdOptions, opts...)
 	}
@@ -190,7 +192,7 @@ func (c *Client) SetColumnFamily(columnFamily string) *Client {
 }
 
 // NewClient creates a client with PD cluster addrs.
-func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
+func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...opt.ClientOption) (*Client, error) {
 	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
 }
 
@@ -202,7 +204,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	}
 
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdCli, err := pd.NewClientWithContext(ctx, pdAddrs, pd.SecurityOption{
+	pdCli, err := pd.NewClientWithContext(ctx, caller.Component("rawkv-client-go"), pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
 		KeyPath:  opt.security.ClusterSSLKey,

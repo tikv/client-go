@@ -68,6 +68,8 @@ import (
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
+	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	atomicutil "go.uber.org/atomic"
@@ -301,12 +303,13 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 	cfg := config.GetGlobalConfig()
 	// init pd-client
 	pdCli, err := pd.NewClient(
+		caller.Component("client-go"),
 		pdAddrs, pd.SecurityOption{
 			CAPath:   cfg.Security.ClusterSSLCA,
 			CertPath: cfg.Security.ClusterSSLCert,
 			KeyPath:  cfg.Security.ClusterSSLKey,
 		},
-		pd.WithGRPCDialOptions(
+		opt.WithGRPCDialOptions(
 			grpc.WithKeepaliveParams(
 				keepalive.ClientParameters{
 					Time:    time.Duration(cfg.TiKVClient.GrpcKeepAliveTime) * time.Second,
@@ -314,8 +317,8 @@ func NewPDClient(pdAddrs []string) (pd.Client, error) {
 				},
 			),
 		),
-		pd.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
-		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
+		opt.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
+		opt.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
 	)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -889,10 +892,11 @@ var _ = NewLockResolver
 // It is exported for other pkg to use. For instance, binlog service needs
 // to determine a transaction's commit state.
 // TODO(iosmanthus): support api v2
-func NewLockResolver(etcdAddrs []string, security config.Security, opts ...pd.ClientOption) (
+func NewLockResolver(etcdAddrs []string, security config.Security, opts ...opt.ClientOption) (
 	*txnlock.LockResolver, error,
 ) {
 	pdCli, err := pd.NewClient(
+		caller.Component("lock-resolver"),
 		etcdAddrs, pd.SecurityOption{
 			CAPath:   security.ClusterSSLCA,
 			CertPath: security.ClusterSSLCert,
