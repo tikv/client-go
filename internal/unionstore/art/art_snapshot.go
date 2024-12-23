@@ -80,11 +80,11 @@ func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
 	if addr.IsNull() {
 		return nil, tikverr.ErrNotExist
 	}
-	if lf.vAddr.IsNull() {
+	if lf.vLogAddr.IsNull() {
 		// A flags only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
-	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vAddr, &snap.cp)
+	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vLogAddr, &snap.cp)
 	if !ok {
 		return nil, tikverr.ErrNotExist
 	}
@@ -125,7 +125,7 @@ func (i *SnapIter) setValue() bool {
 	if !i.Valid() {
 		return false
 	}
-	if v, ok := i.tree.allocator.vlogAllocator.GetSnapshotValue(i.currLeaf.vAddr, &i.cp); ok {
+	if v, ok := i.tree.allocator.vlogAllocator.GetSnapshotValue(i.currLeaf.vLogAddr, &i.cp); ok {
 		i.value = v
 		return true
 	}
