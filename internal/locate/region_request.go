@@ -127,7 +127,7 @@ func (s *RegionRequestSender) String() string {
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
-	// FirstRPCStats is the stats of first kinds of rpc request, since in most cases, only one rpc request is sent at a time,
+	// FirstRPCStats is the stats of first kinds of rpc request, since in most cases, only one kind of rpc request is sent at a time,
 	// this is to avoid allocating map memory.
 	FirstRPCStats RPCRuntimeStats
 	// OtherRPCStatsMap uses to record another types of RPC requests.

@@ -11,7 +11,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20241220061251-c5d92baf4928
+	github.com/tikv/client-go/v2 v2.0.8-0.20241223070848-fd950fcf9fcc
 	github.com/tikv/pd/client v0.0.0-20241220053006-461b86adc78d
 	go.uber.org/goleak v1.3.0
 )
@@ -114,7 +114,7 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20241223063748-1032fe27d1d9
+	github.com/pingcap/tidb => github.com/crazycs520/tidb v1.1.0-beta.0.20241224021142-32ed5a21be20
 
 	github.com/tikv/client-go/v2 => ../
 )
