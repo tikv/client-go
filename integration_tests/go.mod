@@ -11,8 +11,8 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20241209094930-06d7f4b9233b
-	github.com/tikv/pd/client v0.0.0-20241219070100-ac5967544f1b
+	github.com/tikv/client-go/v2 v2.0.8-0.20241220061251-c5d92baf4928
+	github.com/tikv/pd/client v0.0.0-20241220053006-461b86adc78d
 	go.uber.org/goleak v1.3.0
 )
 
@@ -97,7 +97,7 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
-	golang.org/x/net v0.32.0 // indirect
+	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
@@ -114,7 +114,7 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20241220025720-41dfe86b3d23
+	github.com/pingcap/tidb => github.com/JmPotato/tidb v1.1.0-beta.0.20241223063748-1032fe27d1d9
 
 	github.com/tikv/client-go/v2 => ../
 )
