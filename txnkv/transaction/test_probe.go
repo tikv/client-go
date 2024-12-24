@@ -379,6 +379,11 @@ func (c CommitterProbe) ResolveFlushedLocks(bo *retry.Backoffer, start, end []by
 	c.resolveFlushedLocks(bo, start, end, commit)
 }
 
+// GetCommitInfo expose CommitInfo of committer for testing purpose.
+func (c CommitterProbe) GetCommitInfo() *CommitInfo {
+	return c.getCommitInfo()
+}
+
 // SendTxnHeartBeat renews a txn's ttl.
 func SendTxnHeartBeat(bo *retry.Backoffer, store kvstore, primary []byte, startTS, ttl uint64) (newTTL uint64, stopHeartBeat bool, err error) {
 	return sendTxnHeartBeat(bo, store, primary, startTS, ttl, 0)

@@ -143,6 +143,9 @@ type KVStore struct {
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
 	gP     Pool
+
+	// lastCommitTxnInfo is used to store the commit info of the latest committed transaction.
+	lastCommitTxnInfo atomic.Pointer[transaction.CommitInfo]
 }
 
 var _ Storage = (*KVStore)(nil)
@@ -856,6 +859,24 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 	}
 
 	return false
+}
+
+// SetLastCommitInfo sets the last committed transaction's information.
+func (s *KVStore) SetLastCommitInfo(ci *transaction.CommitInfo) {
+	for {
+		old := s.lastCommitTxnInfo.Load()
+		if old != nil && old.CommitTS > ci.CommitTS {
+			return
+		}
+		if s.lastCommitTxnInfo.CompareAndSwap(old, ci) {
+			return
+		}
+	}
+}
+
+// GetLastCommitInfo get the last committed transaction's information.
+func (s *KVStore) GetLastCommitInfo() *transaction.CommitInfo {
+	return s.lastCommitTxnInfo.Load()
 }
 
 func isValidSafeTS(ts uint64) bool {
