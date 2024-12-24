@@ -306,3 +306,8 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 	s.Equal(diff.AsyncCommit, int64(1))
 	s.Equal(diff.OnePC, int64(1))
 }
+
+func (s *testOnePCSuite) Test1PCUpdateLatestCommitInf() {
+	store := tikv.StoreProbe{KVStore: s.store}
+	testUpdateLatestCommitInfo(s.Require(), store, "1pc")
+}

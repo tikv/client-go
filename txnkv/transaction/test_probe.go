@@ -26,6 +26,7 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"github.com/tikv/client-go/v2/util"
 )
 
 // TxnProbe wraps a txn and exports internal states for testing purpose.
@@ -377,6 +378,11 @@ func (c CommitterProbe) CleanupMutations(ctx context.Context) error {
 // ResolveFlushedLocks exports resolveFlushedLocks
 func (c CommitterProbe) ResolveFlushedLocks(bo *retry.Backoffer, start, end []byte, commit bool) {
 	c.resolveFlushedLocks(bo, start, end, commit)
+}
+
+// GetCommitInfo expose CommitInfo of committer for testing purpose.
+func (c CommitterProbe) GetCommitInfo() *util.CommitInfo {
+	return c.getCommitInfo()
 }
 
 // SendTxnHeartBeat renews a txn's ttl.

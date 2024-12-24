@@ -2769,3 +2769,7 @@ func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
 }
+
+func (s *testCommitterSuite) Test2PCUpdateLatestCommitInf() {
+	testUpdateLatestCommitInfo(s.Require(), s.store, "2pc")
+}

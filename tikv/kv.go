@@ -143,6 +143,8 @@ type KVStore struct {
 	wg     sync.WaitGroup
 	close  atomicutil.Bool
 	gP     Pool
+
+	tsVerifier *util.TSVerifier
 }
 
 var _ Storage = (*KVStore)(nil)
@@ -261,8 +263,10 @@ func requestHealthFeedbackFromKVClient(ctx context.Context, addr string, tikvCli
 
 // NewKVStore creates a new TiKV store instance.
 func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
+	tsVerifier := util.NewTSVerifier()
 	o, err := oracles.NewPdOracle(pdClient, &oracles.PDOracleOptions{
 		UpdateInterval: defaultOracleUpdateInterval,
+		TSVerifier:     tsVerifier,
 	})
 	if err != nil {
 		return nil, err
@@ -284,7 +288,9 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		ctx:             ctx,
 		cancel:          cancel,
 		gP:              NewSpool(128, 10*time.Second),
+		tsVerifier:      tsVerifier,
 	}
+
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
@@ -856,6 +862,16 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 	}
 
 	return false
+}
+
+// SetLastCommitInfo sets the last committed transaction's information.
+func (s *KVStore) SetLastCommitInfo(txnScope string, ci *util.CommitInfo) {
+	s.tsVerifier.StoreCommitInfo(txnScope, ci)
+}
+
+// GetLastCommitInfo get the last committed transaction's information.
+func (s *KVStore) GetLastCommitInfo(txnScope string) *util.CommitInfo {
+	return s.tsVerifier.GetLastCommitInfo(txnScope)
 }
 
 func isValidSafeTS(ts uint64) bool {
