@@ -347,6 +347,13 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 		"scan_detail: {total_process_keys: 20, total_process_keys_size: 20, total_keys: 30, get_snapshot_time: 1µs, " +
 		"rocksdb: {delete_skipped_count: 10, key_skipped_count: 2, block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
 	s.Equal(expect, snapshot.FormatStats())
+	snapshot.GetResolveLockDetail().ResolveLockTime = int64(time.Second)
+	expect = "Get:{num_rpc:4, total_time:2s},txnLockFast_backoff:{num:2, total_time:10ms}, " +
+		"time_detail: {total_process_time: 200ms, total_wait_time: 200ms}, " +
+		"resolve_lock_time:1s, " +
+		"scan_detail: {total_process_keys: 20, total_process_keys_size: 20, total_keys: 30, get_snapshot_time: 1µs, " +
+		"rocksdb: {delete_skipped_count: 10, key_skipped_count: 2, block: {cache_hit_count: 20, read_count: 40, read_byte: 30 Bytes}}}"
+	s.Equal(expect, snapshot.FormatStats())
 }
 
 func (s *testSnapshotSuite) TestRCRead() {

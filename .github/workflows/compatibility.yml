@@ -24,8 +24,8 @@ jobs:
     - name: Checkout TiDB
       uses: actions/checkout@v2
       with:
-        repository: JmPotato/tidb
-        ref: update_pd_client
+        repository: crazycs520/tidb
+        ref: opt-stats
         path: tidb
 
     - name: Check build
