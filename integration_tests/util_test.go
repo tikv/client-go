@@ -109,7 +109,9 @@ func newTiKVStore(t *testing.T) *tikv.KVStore {
 		pdClient = tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 		opt = tikv.WithCodec(tikv.NewCodecV1(tikv.ModeTxn))
 	case kvrpcpb.APIVersion_V2:
-		codecCli, err := tikv.NewCodecPDClientWithKeyspace(tikv.ModeTxn, pdClient, tikv.DefaultKeyspaceName)
+		keyspaceMeta, err := pdClient.LoadKeyspace(context.Background(), tikv.DefaultKeyspaceName)
+		re.Nil(err)
+		codecCli, err := tikv.NewCodecPDClientWithKeyspaceMeta(tikv.ModeTxn, pdClient, keyspaceMeta)
 		pdClient = codecCli
 		re.Nil(err)
 		opt = tikv.WithCodec(codecCli.GetCodec())
