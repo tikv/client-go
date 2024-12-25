@@ -218,11 +218,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		keyspaceMeta, err := pdClient.LoadKeyspace(context.Background(), opt.keyspace)
-		if err != nil {
-			return nil, err
-		}
-		codecCli, err = tikv.NewCodecPDClientWithKeyspaceMeta(tikv.ModeRaw, pdClient, keyspaceMeta)
+		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeRaw, pdClient, opt.keyspace)
 		if err != nil {
 			return nil, err
 		}

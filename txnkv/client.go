@@ -97,11 +97,7 @@ func NewClient(pdAddrs []string, opts ...ClientOpt) (*Client, error) {
 	case kvrpcpb.APIVersion_V1:
 		codecCli = tikv.NewCodecPDClient(tikv.ModeTxn, pdClient)
 	case kvrpcpb.APIVersion_V2:
-		keyspaceMeta, err := pdClient.LoadKeyspace(context.Background(), opt.keyspaceName)
-		if err != nil {
-			return nil, err
-		}
-		codecCli, err = tikv.NewCodecPDClientWithKeyspaceMeta(tikv.ModeTxn, pdClient, keyspaceMeta)
+		codecCli, err = tikv.NewCodecPDClientWithKeyspace(tikv.ModeTxn, pdClient, opt.keyspaceName)
 		if err != nil {
 			return nil, err
 		}
