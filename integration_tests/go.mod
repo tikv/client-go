@@ -7,7 +7,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20241120071417-b5b7843d9037
-	github.com/pingcap/tidb v1.1.0-beta.0.20241219182103-27a9a7d39567
+	github.com/pingcap/tidb v1.1.0-beta.0.20241223103612-14a469ab9d4e
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1

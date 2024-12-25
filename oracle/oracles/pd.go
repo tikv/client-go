@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/tso"
 	"go.uber.org/zap"
@@ -153,6 +154,9 @@ type pdOracle struct {
 	// we don't require the ts for validation to be strictly the latest one.
 	// Note that the result can't be reused for different txnScopes. The txnScope is used as the key.
 	tsForValidation singleflight.Group
+
+	// tsVerifier is used to verify the correctness of the partial order between the received timestamp and committed transactions.
+	tsVerifier *util.TSVerifier
 }
 
 // lastTSO stores the last timestamp oracle gets from PD server and the local time when the TSO is fetched.
@@ -166,6 +170,8 @@ type PDOracleOptions struct {
 	UpdateInterval time.Duration
 	// Disable the background periodic update of the last ts. This is for test purposes only.
 	NoUpdateTS bool
+	// TSVerifier is used to verify the correctness of the timestamp.
+	TSVerifier *util.TSVerifier
 }
 
 // NewPdOracle create an Oracle that uses a pd client source.
@@ -182,6 +188,7 @@ func NewPdOracle(pdClient pd.Client, options *PDOracleOptions) (oracle.Oracle, e
 		c:                    pdClient,
 		quit:                 make(chan struct{}),
 		lastTSUpdateInterval: atomic.Int64{},
+		tsVerifier:           options.TSVerifier,
 	}
 	o.adaptiveUpdateIntervalState.shrinkIntervalCh = make(chan time.Duration, 1)
 	o.lastTSUpdateInterval.Store(int64(options.UpdateInterval))
@@ -228,8 +235,9 @@ func (o *pdOracle) GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, err
 
 type tsFuture struct {
 	tso.TSFuture
-	o        *pdOracle
-	txnScope string
+	o          *pdOracle
+	txnScope   string
+	commitInfo *util.CommitInfo
 }
 
 // Wait implements the oracle.Future interface.
@@ -241,16 +249,27 @@ func (f *tsFuture) Wait() (uint64, error) {
 		return 0, errors.WithStack(err)
 	}
 	ts := oracle.ComposeTS(physical, logical)
+	if f.commitInfo != nil {
+		f.commitInfo.Verify(ts)
+	}
 	f.o.setLastTS(ts, f.txnScope)
 	return ts, nil
 }
 
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
-	return &tsFuture{o.c.GetTSAsync(ctx), o, opt.TxnScope}
+	var commitInfo *util.CommitInfo
+	if o.tsVerifier != nil {
+		commitInfo = o.tsVerifier.GetLastCommitInfo(opt.TxnScope)
+	}
+	return &tsFuture{o.c.GetTSAsync(ctx), o, opt.TxnScope, commitInfo}
 }
 
 func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, error) {
 	now := time.Now()
+	var commitInfo *util.CommitInfo
+	if o.tsVerifier != nil {
+		commitInfo = o.tsVerifier.GetLastCommitInfo(txnScope)
+	}
 	physical, logical, err := o.c.GetTS(ctx)
 	if err != nil {
 		return 0, errors.WithStack(err)
@@ -260,7 +279,11 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 		logutil.Logger(ctx).Warn("get timestamp too slow",
 			zap.Duration("cost time", dist))
 	}
-	return oracle.ComposeTS(physical, logical), nil
+	ts := oracle.ComposeTS(physical, logical)
+	if commitInfo != nil {
+		commitInfo.Verify(ts)
+	}
+	return ts, nil
 }
 
 func (o *pdOracle) getMinTimestampInAllTSOGroup(ctx context.Context) (uint64, error) {

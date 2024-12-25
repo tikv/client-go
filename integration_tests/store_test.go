@@ -42,12 +42,14 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func TestStore(t *testing.T) {
@@ -191,4 +193,38 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 	val, err := txn.Get(context.TODO(), []byte("key"))
 	s.Nil(err)
 	s.Equal(val, []byte("value"))
+}
+
+func testUpdateLatestCommitInfo(require *require.Assertions, store tikv.StoreProbe, mode string) {
+	doTxn := func() *util.CommitInfo {
+		txn, err := store.Begin()
+		require.Nil(err)
+		switch mode {
+		case "async":
+			txn.SetEnableAsyncCommit(true)
+		case "1pc":
+			txn.SetEnable1PC(true)
+		case "2pc":
+			// do nothing
+		default:
+			require.FailNow("unknown mode:" + mode)
+		}
+		err = txn.Set([]byte("key"), []byte("value"))
+		require.Nil(err)
+		err = txn.Commit(context.Background())
+		require.Nil(err)
+		return txn.GetCommitter().GetCommitInfo()
+	}
+
+	commitInfo1 := doTxn()
+	require.Equal(commitInfo1, store.GetLastCommitInfo(""))
+	require.Equal(commitInfo1.MutationLen, 1)
+	require.Equal(commitInfo1.TxnSize, 8)
+	require.Equal(commitInfo1.TxnType, mode)
+	commitInfo2 := doTxn()
+	lastInfo := store.GetLastCommitInfo("")
+	require.NotEqual(commitInfo1, lastInfo)
+	require.Equal(commitInfo2, lastInfo)
+	require.Greater(lastInfo.CommitTS, commitInfo1.CommitTS)
+	require.GreaterOrEqual(lastInfo.StartTS, commitInfo1.CommitTS)
 }
