@@ -72,7 +72,7 @@ func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace
 	return &CodecPDClient{client, codec}, nil
 }
 
-// NewCodecPDClientWithKeyspaceMeta creates a CodecPDClient in API v2 with keyspace name.
+// NewCodecPDClientWithKeyspaceMeta creates a CodecPDClient in API v2 with keyspace meta.
 func NewCodecPDClientWithKeyspaceMeta(mode apicodec.Mode, client pd.Client, keyspaceMeta *keyspacepb.KeyspaceMeta) (*CodecPDClient, error) {
 	if keyspaceMeta == nil {
 		return NewCodecPDClient(mode, client), nil
