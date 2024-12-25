@@ -95,9 +95,6 @@ type CodecPDClient = locate.CodecPDClient
 // NewCodecPDClient is a constructor for CodecPDClient
 var NewCodecPDClient = locate.NewCodecPDClient
 
-// NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
-var NewCodecPDClientWithKeyspace = locate.NewCodecPDClientWithKeyspace
-
 // NewCodecPDClientWithKeyspaceMeta creates a CodecPDClient in API v2 with keyspace meta.
 var NewCodecPDClientWithKeyspaceMeta = locate.NewCodecPDClientWithKeyspaceMeta
 
