@@ -128,7 +128,8 @@ func (s *RegionRequestSender) String() string {
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
-	RPCStats map[tikvrpc.CmdType]*RPCRuntimeStats
+	// RPCStatsList uses to record RPC requests stats, since in most cases, only one kind of rpc request is sent at a time, use slice instead of map for performance.
+	RPCStatsList []RPCRuntimeStats
 	RequestErrorStats
 }
 
@@ -143,29 +144,47 @@ type RequestErrorStats struct {
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
 func NewRegionRequestRuntimeStats() *RegionRequestRuntimeStats {
 	return &RegionRequestRuntimeStats{
-		RPCStats: make(map[tikvrpc.CmdType]*RPCRuntimeStats),
+		RPCStatsList: make([]RPCRuntimeStats, 0, 1),
 	}
 }
 
 // RPCRuntimeStats indicates the RPC request count and consume time.
 type RPCRuntimeStats struct {
-	Count int64
+	Cmd   tikvrpc.CmdType
+	Count uint32
 	// Send region request consume time.
-	Consume int64
+	Consume time.Duration
 }
 
 // RecordRPCRuntimeStats uses to record the rpc count and duration stats.
 func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d time.Duration) {
-	stat, ok := r.RPCStats[cmd]
-	if !ok {
-		r.RPCStats[cmd] = &RPCRuntimeStats{
-			Count:   1,
-			Consume: int64(d),
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == cmd {
+			r.RPCStatsList[i].Count++
+			r.RPCStatsList[i].Consume += d
+			return
 		}
-		return
 	}
-	stat.Count++
-	stat.Consume += int64(d)
+	r.RPCStatsList = append(r.RPCStatsList, RPCRuntimeStats{
+		Cmd:     cmd,
+		Count:   1,
+		Consume: d,
+	})
+}
+
+// GetRPCStatsCount returns the total rpc types count.
+func (r *RegionRequestRuntimeStats) GetRPCStatsCount() int {
+	return len(r.RPCStatsList)
+}
+
+// GetCmdRPCCount returns the rpc count of the specified cmd type.
+func (r *RegionRequestRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) uint32 {
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == cmd {
+			return r.RPCStatsList[i].Count
+		}
+	}
+	return 0
 }
 
 // RecordRPCErrorStats uses to record the request error(region error label and rpc error) info and count.
@@ -199,15 +218,15 @@ func (r *RegionRequestRuntimeStats) String() string {
 		return ""
 	}
 	var builder strings.Builder
-	for k, v := range r.RPCStats {
+	for _, v := range r.RPCStatsList {
 		if builder.Len() > 0 {
 			builder.WriteByte(',')
 		}
-		builder.WriteString(k.String())
+		builder.WriteString(v.Cmd.String())
 		builder.WriteString(":{num_rpc:")
-		builder.WriteString(strconv.FormatInt(v.Count, 10))
+		builder.WriteString(strconv.FormatUint(uint64(v.Count), 10))
 		builder.WriteString(", total_time:")
-		builder.WriteString(util.FormatDuration(time.Duration(v.Consume)))
+		builder.WriteString(util.FormatDuration(v.Consume))
 		builder.WriteString("}")
 	}
 	if errStatsStr := r.RequestErrorStats.String(); errStatsStr != "" {
@@ -243,7 +262,8 @@ func (r *RequestErrorStats) String() string {
 // Clone returns a copy of itself.
 func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
-	maps.Copy(newRs.RPCStats, r.RPCStats)
+	newRs.RPCStatsList = make([]RPCRuntimeStats, 0, len(r.RPCStatsList))
+	newRs.RPCStatsList = append(newRs.RPCStatsList, r.RPCStatsList...)
 	if len(r.ErrStats) > 0 {
 		newRs.ErrStats = make(map[string]int)
 		maps.Copy(newRs.ErrStats, r.ErrStats)
@@ -257,17 +277,8 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 	if rs == nil {
 		return
 	}
-	for cmd, v := range rs.RPCStats {
-		stat, ok := r.RPCStats[cmd]
-		if !ok {
-			r.RPCStats[cmd] = &RPCRuntimeStats{
-				Count:   v.Count,
-				Consume: v.Consume,
-			}
-			continue
-		}
-		stat.Count += v.Count
-		stat.Consume += v.Consume
+	for i := range rs.RPCStatsList {
+		r.mergeRPCRuntimeStats(rs.RPCStatsList[i])
 	}
 	if len(rs.ErrStats) > 0 {
 		if r.ErrStats == nil {
@@ -278,6 +289,17 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 		}
 		r.OtherErrCnt += rs.OtherErrCnt
 	}
+}
+
+func (r *RegionRequestRuntimeStats) mergeRPCRuntimeStats(rs RPCRuntimeStats) {
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == rs.Cmd {
+			r.RPCStatsList[i].Count += rs.Count
+			r.RPCStatsList[i].Consume += rs.Consume
+			return
+		}
+	}
+	r.RPCStatsList = append(r.RPCStatsList, rs)
 }
 
 // ReplicaAccessStats records the replica access info.
