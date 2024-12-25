@@ -349,6 +349,13 @@ func (o *pdOracle) getLastTSWithArrivalTS(txnScope string) (*lastTSO, bool) {
 	return last, true
 }
 
+func max(x, y time.Duration) time.Duration {
+	if x > y {
+		return x
+	}
+	return y
+}
+
 func (o *pdOracle) nextUpdateInterval(now time.Time, requiredStaleness time.Duration) time.Duration {
 	o.adaptiveUpdateIntervalState.mu.Lock()
 	defer o.adaptiveUpdateIntervalState.mu.Unlock()
