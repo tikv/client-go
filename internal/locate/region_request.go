@@ -262,9 +262,7 @@ func (r *RequestErrorStats) String() string {
 func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
 	newRs.RPCStatsList = make([]RPCRuntimeStats, 0, len(r.RPCStatsList))
-	for i := range r.RPCStatsList {
-		newRs.RPCStatsList = append(newRs.RPCStatsList, r.RPCStatsList[i])
-	}
+	newRs.RPCStatsList = append(newRs.RPCStatsList, r.RPCStatsList...)
 	if len(r.ErrStats) > 0 {
 		newRs.ErrStats = make(map[string]int)
 		maps.Copy(newRs.ErrStats, r.ErrStats)
