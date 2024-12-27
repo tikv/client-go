@@ -179,7 +179,7 @@ func NewPdOracle(pdClient pd.Client, options *PDOracleOptions) (oracle.Oracle, e
 	}
 
 	o := &pdOracle{
-		c:                    pdClient,
+		c:                    pdClient.WithCallerComponent("oracle"),
 		quit:                 make(chan struct{}),
 		lastTSUpdateInterval: atomic.Int64{},
 	}
