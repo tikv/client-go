@@ -1900,55 +1900,53 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 	resp *tikvrpc.Response,
 	err error,
 ) {
-	val, e := util.EvalFailpoint("tikvStoreSendReqResult")
-	if e != nil {
-		return
-	}
-	errMsg, ok := val.(string)
-	if !ok {
-		return
-	}
-	switch errMsg {
-	case "timeout":
-		{
-			err = errors.New("timeout")
+	if val, e := util.EvalFailpoint("tikvStoreSendReqResult"); e == nil {
+		errMsg, ok := val.(string)
+		if !ok {
 			return
 		}
-	case "GCNotLeader":
-		if req.Type == tikvrpc.CmdGC {
-			resp = &tikvrpc.Response{
-				Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+		switch errMsg {
+		case "timeout":
+			{
+				err = errors.New("timeout")
+				return
 			}
-			return
-		}
-	case "PessimisticLockNotLeader":
-		if req.Type == tikvrpc.CmdPessimisticLock {
-			resp = &tikvrpc.Response{
-				Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+		case "GCNotLeader":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
 			}
-			return
-		}
-	case "GCServerIsBusy":
-		if req.Type == tikvrpc.CmdGC {
+		case "PessimisticLockNotLeader":
+			if req.Type == tikvrpc.CmdPessimisticLock {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
+			}
+		case "GCServerIsBusy":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+				}
+				return
+			}
+		case "busy":
 			resp = &tikvrpc.Response{
 				Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
 			}
 			return
-		}
-	case "busy":
-		resp = &tikvrpc.Response{
-			Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-		}
-		return
-	case "requestTiDBStoreError":
-		if et == tikvrpc.TiDB {
-			err = errors.WithStack(tikverr.ErrTiKVServerTimeout)
-			return
-		}
-	case "requestTiFlashError":
-		if et == tikvrpc.TiFlash {
-			err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
-			return
+		case "requestTiDBStoreError":
+			if et == tikvrpc.TiDB {
+				err = errors.WithStack(tikverr.ErrTiKVServerTimeout)
+				return
+			}
+		case "requestTiFlashError":
+			if et == tikvrpc.TiFlash {
+				err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
+				return
+			}
 		}
 	}
 	return
