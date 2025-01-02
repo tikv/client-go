@@ -64,6 +64,10 @@ type InterceptedPDClient struct {
 	pd.Client
 }
 
+func NewInterceptedPDClient(client pd.Client) *InterceptedPDClient {
+	return &InterceptedPDClient{client.WithCallerComponent("intercepted-pd-client")}
+}
+
 // interceptedTsFuture is a PD's wrapper future to record stmt detail.
 type interceptedTsFuture struct {
 	tso.TSFuture

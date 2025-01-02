@@ -57,7 +57,7 @@ type CodecPDClient struct {
 // NewCodecPDClient creates a CodecPDClient in API v1.
 func NewCodecPDClient(mode apicodec.Mode, client pd.Client) *CodecPDClient {
 	codec := apicodec.NewCodecV1(mode)
-	return &CodecPDClient{client, codec}
+	return &CodecPDClient{client.WithCallerComponent("codec-pd-client"), codec}
 }
 
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
@@ -71,7 +71,7 @@ func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace
 		return nil, err
 	}
 
-	return &CodecPDClient{client, codec}, nil
+	return &CodecPDClient{client.WithCallerComponent("codec-pd-client"), codec}, nil
 }
 
 // GetKeyspaceID attempts to retrieve keyspace ID corresponding to the given keyspace name from PD.
