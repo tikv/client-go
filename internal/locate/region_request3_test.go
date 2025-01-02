@@ -1412,9 +1412,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 	follower, _, _, _ := region.FollowerStorePeer(regionStore, 0, &storeSelectorOp{})
 
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		if req.StaleRead && addr == follower.addr {
-			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}}}, nil
-		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
 			Value: []byte(addr),
 		}}, nil
