@@ -1901,11 +1901,11 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 	err error,
 ) {
 	if val, e := util.EvalFailpoint("tikvStoreSendReqResult"); e == nil {
-		errMsg, ok := val.(string)
+		failpointCfg, ok := val.(string)
 		if !ok {
 			return
 		}
-		switch errMsg {
+		switch failpointCfg {
 		case "timeout":
 			{
 				err = errors.New("timeout")
