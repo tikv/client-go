@@ -67,6 +67,8 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -306,7 +308,7 @@ func (r *regionStore) filterStoreCandidate(aidx AccessIndex, op *storeSelectorOp
 	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (aidx == r.workTiKVIdx && !s.healthStatus.IsSlow()))
 }
 
-func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Region, error) {
+func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*Region, error) {
 	r := &Region{meta: pdRegion.Meta}
 	// regionStore pull used store from global store map
 	// to avoid acquire storeMu in later access.
@@ -1216,7 +1218,7 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 			startKey = r.EndKey()
 		}
 		// 2. load remaining regions from pd client
-		batchRegions, err := c.BatchLoadRegionsWithKeyRanges(bo, []pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, defaultRegionsPerBatch, WithNeedRegionHasLeaderPeer())
+		batchRegions, err := c.BatchLoadRegionsWithKeyRanges(bo, []router.KeyRange{{StartKey: startKey, EndKey: endKey}}, defaultRegionsPerBatch, WithNeedRegionHasLeaderPeer())
 		if err != nil {
 			return nil, err
 		}
@@ -1266,7 +1268,7 @@ func WithNeedRegionHasLeaderPeer() BatchLocateKeyRangesOpt {
 
 // BatchLocateKeyRanges lists regions in the given ranges.
 func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.KeyRange, opts ...BatchLocateKeyRangesOpt) ([]*KeyLocation, error) {
-	uncachedRanges := make([]pd.KeyRange, 0, len(keyRanges))
+	uncachedRanges := make([]router.KeyRange, 0, len(keyRanges))
 	cachedRegions := make([]*Region, 0, len(keyRanges))
 	// 1. find regions from cache
 	var lastRegion *Region
@@ -1285,7 +1287,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		lastRegion = r
 		if r == nil {
 			// region cache miss, add the cut range to uncachedRanges, load from PD later.
-			uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
+			uncachedRanges = append(uncachedRanges, router.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
 			continue
 		}
 		// region cache hit, add the region to cachedRegions.
@@ -1321,7 +1323,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 			}
 		}
 		if !containsAll {
-			uncachedRanges = append(uncachedRanges, pd.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
+			uncachedRanges = append(uncachedRanges, router.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
 		}
 	}
 
@@ -1421,7 +1423,7 @@ func (m *batchLocateRangesMerger) build() []*KeyLocation {
 // rangesAfterKey split the key ranges and return the rest ranges after splitKey.
 // the returned ranges are referenced to the input keyRanges, and the key range may be changed in place,
 // the input keyRanges should not be used after calling this function.
-func rangesAfterKey(keyRanges []pd.KeyRange, splitKey []byte) []pd.KeyRange {
+func rangesAfterKey(keyRanges []router.KeyRange, splitKey []byte) []router.KeyRange {
 	if len(keyRanges) == 0 {
 		return nil
 	}
@@ -1494,7 +1496,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 	if r == nil || expired {
 		// load region when it is not exists or expired.
 		observeLoadRegion(tag, r, expired, 0)
-		lr, err := c.loadRegion(bo, key, isEndKey, pd.WithAllowFollowerHandle())
+		lr, err := c.loadRegion(bo, key, isEndKey, opt.WithAllowFollowerHandle())
 		if err != nil {
 			// no region data, return error if failure.
 			return nil, err
@@ -1799,7 +1801,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 
 // BatchLoadRegionsWithKeyRanges loads at most given numbers of regions to the RegionCache,
 // within the given key range from the key ranges. Returns the loaded regions.
-func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRanges []pd.KeyRange, count int, opts ...BatchLocateKeyRangesOpt) (regions []*Region, err error) {
+func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRanges []router.KeyRange, count int, opts ...BatchLocateKeyRangesOpt) (regions []*Region, err error) {
 	if len(keyRanges) == 0 {
 		return nil, nil
 	}
@@ -1902,6 +1904,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	// and there is the synchronization time between the pd follower and the leader.
 	// So we should check the epoch.
 	if ok && (oldVer.GetVer() > newVer.GetVer() || oldVer.GetConfVer() > newVer.GetConfVer()) {
+		metrics.TiKVStaleRegionFromPDCounter.Inc()
 		logutil.BgLogger().Debug("get stale region",
 			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
 			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
@@ -2046,7 +2049,7 @@ func observeLoadRegion(tag string, region *Region, expired bool, reloadFlags int
 // loadRegion loads region from pd client, and picks the first peer as leader.
 // If the given key is the end key of the region that you want, you may set the second argument to true. This is useful
 // when processing in reverse order.
-func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool, opts ...pd.GetRegionOption) (*Region, error) {
+func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool, opts ...opt.GetRegionOption) (*Region, error) {
 	ctx := bo.GetCtx()
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("loadRegion", opentracing.ChildOf(span.Context()))
@@ -2056,7 +2059,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 
 	var backoffErr error
 	searchPrev := false
-	opts = append(opts, pd.WithBuckets())
+	opts = append(opts, opt.WithBuckets())
 	for {
 		if backoffErr != nil {
 			err := bo.Backoff(retry.BoPDRPC, backoffErr)
@@ -2065,7 +2068,7 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 			}
 		}
 		start := time.Now()
-		var reg *pd.Region
+		var reg *router.Region
 		var err error
 		if searchPrev {
 			reg, err = c.pdClient.GetPrevRegion(ctx, key, opts...)
@@ -2118,7 +2121,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			}
 		}
 		start := time.Now()
-		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pd.WithBuckets())
+		reg, err := c.pdClient.GetRegionByID(ctx, regionID, opt.WithBuckets())
 		metrics.LoadRegionCacheHistogramWithRegionByID.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
@@ -2198,7 +2201,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 		}
 		start := time.Now()
 		//nolint:staticcheck
-		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, pd.WithAllowFollowerHandle())
+		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit, opt.WithAllowFollowerHandle())
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
@@ -2219,7 +2222,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			backoffErr = errors.Errorf("PD returned no region, limit: %d", limit)
 			continue
 		}
-		if regionsHaveGapInRanges([]pd.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo, limit) {
+		if regionsHaveGapInRanges([]router.KeyRange{{StartKey: startKey, EndKey: endKey}}, regionsInfo, limit) {
 			backoffErr = errors.Errorf("PD returned regions have gaps, limit: %d", limit)
 			continue
 		}
@@ -2239,7 +2242,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 }
 
 // batchScanRegions scans at most `limit` regions from PD, starts from the region containing `startKey` and in key order.
-func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
+func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
 	if limit == 0 || len(keyRanges) == 0 {
 		return nil, nil
 	}
@@ -2249,9 +2252,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 		defer span1.Finish()
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
-	var opt batchLocateKeyRangesOption
+	var batchOpt batchLocateKeyRangesOption
 	for _, op := range opts {
-		op(&opt)
+		op(&batchOpt)
 	}
 	// TODO: return start key and end key after redact is introduced.
 	var backoffErr error
@@ -2263,9 +2266,9 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			}
 		}
 		start := time.Now()
-		pdOpts := []pd.GetRegionOption{pd.WithAllowFollowerHandle()}
-		if opt.needBuckets {
-			pdOpts = append(pdOpts, pd.WithBuckets())
+		pdOpts := []opt.GetRegionOption{opt.WithAllowFollowerHandle()}
+		if batchOpt.needBuckets {
+			pdOpts = append(pdOpts, opt.WithBuckets())
 		}
 		regionsInfo, err := c.pdClient.BatchScanRegions(ctx, keyRanges, limit, pdOpts...)
 		metrics.LoadRegionCacheHistogramWithBatchScanRegions.Observe(time.Since(start).Seconds())
@@ -2301,7 +2304,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 			)
 			continue
 		}
-		validRegions, err := c.handleRegionInfos(bo, regionsInfo, opt.needRegionHasLeaderPeer)
+		validRegions, err := c.handleRegionInfos(bo, regionsInfo, batchOpt.needRegionHasLeaderPeer)
 		if err != nil {
 			return nil, err
 		}
@@ -2319,7 +2322,7 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []pd.KeyRa
 // regionsHaveGapInRanges checks if the loaded regions can fully cover the key ranges.
 // If there are any gaps between the regions, it returns true, then the requests might be retried.
 // TODO: remove this function after PD client supports gap detection and handling it.
-func regionsHaveGapInRanges(ranges []pd.KeyRange, regionsInfo []*pd.Region, limit int) bool {
+func regionsHaveGapInRanges(ranges []router.KeyRange, regionsInfo []*router.Region, limit int) bool {
 	if len(ranges) == 0 {
 		return false
 	}
@@ -2371,7 +2374,7 @@ func regionsHaveGapInRanges(ranges []pd.KeyRange, regionsInfo []*pd.Region, limi
 	return bytes.Compare(checkKey, ranges[checkIdx].EndKey) < 0
 }
 
-func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []pd.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
+func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []router.KeyRange, limit int, opts ...BatchLocateKeyRangesOpt) ([]*Region, error) {
 	logutil.BgLogger().Warn("batch scan regions fallback to scan regions", zap.Int("range-num", len(keyRanges)))
 	res := make([]*Region, 0, len(keyRanges))
 	var lastRegion *Region
@@ -2405,7 +2408,7 @@ func (c *RegionCache) batchScanRegionsFallback(bo *retry.Backoffer, keyRanges []
 	return res, nil
 }
 
-func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*pd.Region, needLeader bool) ([]*Region, error) {
+func (c *RegionCache) handleRegionInfos(bo *retry.Backoffer, regionsInfo []*router.Region, needLeader bool) ([]*Region, error) {
 	regions := make([]*Region, 0, len(regionsInfo))
 	for _, r := range regionsInfo {
 		// Leader id = 0 indicates no leader.
@@ -2573,7 +2576,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	for _, meta := range currentRegions {
 		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error
 		// carry buckets information. Can it bring much overhead?
-		region, err := newRegion(bo, c, &pd.Region{Meta: meta, Buckets: buckets})
+		region, err := newRegion(bo, c, &router.Region{Meta: meta, Buckets: buckets})
 		if err != nil {
 			return false, err
 		}

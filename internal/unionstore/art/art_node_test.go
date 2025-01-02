@@ -42,7 +42,7 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n4)
 		checkNodeInitialization(t, n4)
 		n4.nodeNum = uint8(i % 4)
-		n4.prefixLen = uint32(i % maxPrefixLen)
+		n4.prefixLen = uint32(i % maxInNodePrefixLen)
 		n4s = append(n4s, addr)
 	}
 
@@ -54,7 +54,7 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n16)
 		checkNodeInitialization(t, n16)
 		n16.nodeNum = uint8(i % 16)
-		n16.prefixLen = uint32(i % maxPrefixLen)
+		n16.prefixLen = uint32(i % maxInNodePrefixLen)
 		n16s = append(n16s, addr)
 	}
 
@@ -66,7 +66,7 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n48)
 		checkNodeInitialization(t, n48)
 		n48.nodeNum = uint8(i % 48)
-		n48.prefixLen = uint32(i % maxPrefixLen)
+		n48.prefixLen = uint32(i % maxInNodePrefixLen)
 		n48s = append(n48s, addr)
 	}
 
@@ -78,7 +78,7 @@ func TestAllocNode(t *testing.T) {
 		require.NotNil(t, n256)
 		checkNodeInitialization(t, n256)
 		n256.nodeNum = uint8(i % 256)
-		n256.prefixLen = uint32(i % maxPrefixLen)
+		n256.prefixLen = uint32(i % maxInNodePrefixLen)
 		n256s = append(n256s, addr)
 	}
 
@@ -97,22 +97,22 @@ func TestAllocNode(t *testing.T) {
 	for i, addr := range n4s {
 		n4 := allocator.getNode4(addr)
 		require.Equal(t, uint8(i%4), n4.nodeNum, i)
-		require.Equal(t, uint32(i%maxPrefixLen), n4.prefixLen, i)
+		require.Equal(t, uint32(i%maxInNodePrefixLen), n4.prefixLen, i)
 	}
 	for i, addr := range n16s {
 		n16 := allocator.getNode16(addr)
 		require.Equal(t, uint8(i%16), n16.nodeNum)
-		require.Equal(t, uint32(i%maxPrefixLen), n16.prefixLen, i)
+		require.Equal(t, uint32(i%maxInNodePrefixLen), n16.prefixLen, i)
 	}
 	for i, addr := range n48s {
 		n48 := allocator.getNode48(addr)
 		require.Equal(t, uint8(i%48), n48.nodeNum)
-		require.Equal(t, uint32(i%maxPrefixLen), n48.prefixLen, i)
+		require.Equal(t, uint32(i%maxInNodePrefixLen), n48.prefixLen, i)
 	}
 	for i, addr := range n256s {
 		n256 := allocator.getNode256(addr)
 		require.Equal(t, uint8(i%256), n256.nodeNum)
-		require.Equal(t, uint32(i%maxPrefixLen), n256.prefixLen, i)
+		require.Equal(t, uint32(i%maxInNodePrefixLen), n256.prefixLen, i)
 	}
 	for i, addr := range leafs {
 		key := []byte(strconv.Itoa(i))
@@ -142,15 +142,15 @@ func TestNodePrefix(t *testing.T) {
 		require.Equal(t, uint32(5), idx)
 
 		// deep match
-		leafKey := append(make([]byte, maxPrefixLen), []byte{1, 2, 3, 4, 5}...)
+		leafKey := append(make([]byte, maxInNodePrefixLen), []byte{1, 2, 3, 4, 5}...)
 		leafAddr, _ := allocator.allocLeaf(leafKey)
 		an.addChild(&allocator, 2, false, artNode{kind: typeLeaf, addr: leafAddr})
 		// the real prefix is [0, ..., 0, 1], but the node.prefix only store [0, ..., 0]
-		n.setPrefix(leafKey, maxPrefixLen+1)
-		matchKey := append(make([]byte, maxPrefixLen), []byte{1, 22, 33, 44, 55}...)
-		mismatchKey := append(make([]byte, maxPrefixLen), []byte{11, 22, 33, 44, 55}...)
-		require.Equal(t, uint32(maxPrefixLen+1), n.matchDeep(&allocator, an, matchKey, 0))
-		require.Equal(t, uint32(maxPrefixLen), n.matchDeep(&allocator, an, mismatchKey, 0))
+		n.setPrefix(leafKey, maxInNodePrefixLen+1)
+		matchKey := append(make([]byte, maxInNodePrefixLen), []byte{1, 22, 33, 44, 55}...)
+		mismatchKey := append(make([]byte, maxInNodePrefixLen), []byte{11, 22, 33, 44, 55}...)
+		require.Equal(t, uint32(maxInNodePrefixLen+1), n.matchDeep(&allocator, an, matchKey, 0))
+		require.Equal(t, uint32(maxInNodePrefixLen), n.matchDeep(&allocator, an, mismatchKey, 0))
 
 		// deep match with depth
 		leafKey = append(make([]byte, 10), leafKey...)
@@ -158,9 +158,9 @@ func TestNodePrefix(t *testing.T) {
 		mismatchKey = append(make([]byte, 10), mismatchKey...)
 		leafAddr, _ = allocator.allocLeaf(leafKey)
 		an.replaceChild(&allocator, 2, artNode{kind: typeLeaf, addr: leafAddr})
-		n.setPrefix(leafKey[10:], maxPrefixLen+1)
-		require.Equal(t, uint32(maxPrefixLen+1), n.matchDeep(&allocator, an, matchKey, 10))
-		require.Equal(t, uint32(maxPrefixLen), n.matchDeep(&allocator, an, mismatchKey, 10))
+		n.setPrefix(leafKey[10:], maxInNodePrefixLen+1)
+		require.Equal(t, uint32(maxInNodePrefixLen+1), n.matchDeep(&allocator, an, matchKey, 10))
+		require.Equal(t, uint32(maxInNodePrefixLen), n.matchDeep(&allocator, an, mismatchKey, 10))
 	}
 
 	addr, n4 := allocator.allocNode4()
@@ -397,7 +397,7 @@ func TestMinimumNode(t *testing.T) {
 			lfAddr, _ := allocator.allocLeaf([]byte{char})
 			lfNode := artNode{kind: typeLeaf, addr: lfAddr}
 			node.addChild(&allocator, char, false, lfNode)
-			minNode := minimum(&allocator, node)
+			minNode := minimumLeafNode(&allocator, node)
 			require.Equal(t, typeLeaf, minNode.kind)
 			require.Equal(t, lfAddr, minNode.addr)
 		}
@@ -405,7 +405,7 @@ func TestMinimumNode(t *testing.T) {
 		lfAddr, _ := allocator.allocLeaf([]byte{0})
 		lfNode := artNode{kind: typeLeaf, addr: lfAddr}
 		node.addChild(&allocator, 0, true, lfNode)
-		minNode := minimum(&allocator, node)
+		minNode := minimumLeafNode(&allocator, node)
 		require.Equal(t, typeLeaf, minNode.kind)
 		require.Equal(t, lfAddr, minNode.addr)
 	}

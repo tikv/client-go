@@ -88,7 +88,7 @@ func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
-	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
 
 	s.NoError(failpoint.Enable("tikvclient/doNotRecoverStoreHealthCheckPanic", "return"))
 }
@@ -185,7 +185,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeaderErrorWit
 	s.Nil(err)
 	s.NotNil(location)
 	bo := retry.NewBackoffer(context.Background(), 1000)
-	resp, _, _, err := NewRegionRequestSender(s.cache, cli).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
+	resp, _, _, err := NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{}).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, err := resp.GetRegionError()
@@ -208,7 +208,7 @@ func (s *testRegionRequestToThreeStoresSuite) loadAndGetLeaderStore() (*Store, s
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
-	sender := NewRegionRequestSender(s.cache, s.regionRequestSender.client)
+	sender := NewRegionRequestSender(s.cache, s.regionRequestSender.client, oracle.NoopReadTSValidator{})
 	sender.regionCache.enableForwarding = true
 
 	// First get the leader's addr from region cache
@@ -1144,7 +1144,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 	}
 	resetStats := func() {
 		reqTargetAddrs = make(map[string]struct{})
-		s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+		s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient, oracle.NoopReadTSValidator{})
 		s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 	}
 
@@ -1168,10 +1168,10 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			regionErr, err := resp.GetRegionError()
 			s.Nil(err)
 			s.True(IsFakeRegionError(regionErr))
-			s.Equal(1, len(s.regionRequestSender.Stats.RPCStats))
-			s.Equal(int64(3), s.regionRequestSender.Stats.RPCStats[tikvrpc.CmdGet].Count) // 3 rpc
-			s.Equal(3, len(reqTargetAddrs))                                               // each rpc to a different store.
-			s.Equal(0, bo.GetTotalBackoffTimes())                                         // no backoff since fast retry.
+			s.Equal(1, s.regionRequestSender.Stats.GetRPCStatsCount())
+			s.Equal(uint32(3), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 3 rpc
+			s.Equal(3, len(reqTargetAddrs))                                                // each rpc to a different store.
+			s.Equal(0, bo.GetTotalBackoffTimes())                                          // no backoff since fast retry.
 			// warn: must rest MaxExecutionDurationMs before retry.
 			resetStats()
 			if staleRead {
@@ -1187,9 +1187,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			s.Nil(err)
 			s.Nil(regionErr)
 			s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
-			s.Equal(1, len(s.regionRequestSender.Stats.RPCStats))
-			s.Equal(int64(1), s.regionRequestSender.Stats.RPCStats[tikvrpc.CmdGet].Count) // 1 rpc
-			s.Equal(0, bo.GetTotalBackoffTimes())                                         // no backoff since fast retry.
+			s.Equal(1, s.regionRequestSender.Stats.GetRPCStatsCount())
+			s.Equal(uint32(1), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 1 rpc
+			s.Equal(0, bo.GetTotalBackoffTimes())                                          // no backoff since fast retry.
 		}
 	}
 
@@ -1375,7 +1375,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeo
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
 	}}
-	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient, oracle.NoopReadTSValidator{})
 	s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 	getLocFn := func() *KeyLocation {
 		loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("a"))
@@ -1398,9 +1398,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeo
 	s.Nil(err)
 	s.Nil(regionErr)
 	s.Equal([]byte("value"), resp.Resp.(*kvrpcpb.GetResponse).Value)
-	s.Equal(1, len(s.regionRequestSender.Stats.RPCStats))
-	s.Equal(int64(2), s.regionRequestSender.Stats.RPCStats[tikvrpc.CmdGet].Count) // 2 rpc
-	s.Equal(0, bo.GetTotalBackoffTimes())                                         // no backoff since fast retry.
+	s.Equal(1, s.regionRequestSender.Stats.GetRPCStatsCount())
+	s.Equal(uint32(2), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 2 rpc
+	s.Equal(0, bo.GetTotalBackoffTimes())                                          // no backoff since fast retry.
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {

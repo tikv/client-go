@@ -570,7 +570,7 @@ type sendReqCounterCacheValue struct {
 	timeCounter prometheus.Counter
 }
 
-func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time, staleRead bool) {
+func (c *RPCClient) updateSendReqHistogramAndExecStats(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time, staleRead bool, execDetails *util.ExecDetails) {
 	elapsed := time.Since(start)
 	secs := elapsed.Seconds()
 	storeID := req.Context.GetPeer().GetStoreId()
@@ -641,6 +641,13 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 			latHist.(prometheus.Observer).Observe(latency.Seconds())
 		}
 	}
+
+	execNetworkCollector := &networkCollector{}
+	// update execDetails
+	if execDetails != nil {
+		execNetworkCollector.onReq(req, execDetails)
+		execNetworkCollector.onResp(req, resp, execDetails)
+	}
 }
 
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
@@ -671,11 +678,12 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	staleRead := req.GetStaleRead()
 	defer func() {
 		stmtExec := ctx.Value(util.ExecDetailsKey)
+		var detail *util.ExecDetails
 		if stmtExec != nil {
-			detail := stmtExec.(*util.ExecDetails)
+			detail = stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
-		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
+		c.updateSendReqHistogramAndExecStats(req, resp, start, staleRead, detail)
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {

@@ -129,7 +129,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	attempts := 0
 
 	req := c.buildPipelinedFlushRequest(batch, action.generation)
-	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	var resolvingRecordToken *int
 
 	for {

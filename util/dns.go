@@ -32,7 +32,7 @@ func wrapWithDomain(target, domain string) (string, error) {
 //
 //	context.TODO(),
 //	[]string{"pd0.pd:2379"},
-//	rawkv.WithPDOptions(pd.WithGRPCDialOptions(dialer)),
+//	rawkv.WithPDOptions(opt.WithGRPCDialOptions(dialer)),
 //	rawkv.WithGRPCDialOptions(dialer),
 //
 // )
