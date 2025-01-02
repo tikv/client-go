@@ -1,6 +1,6 @@
 module pessimistic_txn
 
-go 1.23
+go 1.23.2
 
 require github.com/tikv/client-go/v2 v2.0.0
 
