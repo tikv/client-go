@@ -36,9 +36,16 @@ func (t *ART) SnapshotGetter() *SnapGetter {
 	}
 }
 
-// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
-func (t *ART) SnapshotIter(start, end []byte) *SnapIter {
-	inner, err := t.Iter(start, end)
+func (t *ART) newSnapshotIterator(start, end []byte, desc bool) *SnapIter {
+	var (
+		inner *Iterator
+		err   error
+	)
+	if desc {
+		inner, err = t.IterReverse(start, end)
+	} else {
+		inner, err = t.Iter(start, end)
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -46,26 +53,21 @@ func (t *ART) SnapshotIter(start, end []byte) *SnapIter {
 		Iterator: inner,
 		cp:       t.getSnapshot(),
 	}
+	it.tree.allocator.snapshotInc()
 	for !it.setValue() && it.Valid() {
 		_ = it.Next()
 	}
 	return it
 }
 
+// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
+func (t *ART) SnapshotIter(start, end []byte) *SnapIter {
+	return t.newSnapshotIterator(start, end, false)
+}
+
 // SnapshotIterReverse returns a reverse Iterator for a snapshot of MemBuffer.
 func (t *ART) SnapshotIterReverse(k, lowerBound []byte) *SnapIter {
-	inner, err := t.IterReverse(k, lowerBound)
-	if err != nil {
-		panic(err)
-	}
-	it := &SnapIter{
-		Iterator: inner,
-		cp:       t.getSnapshot(),
-	}
-	for !it.setValue() && it.valid {
-		_ = it.Next()
-	}
-	return it
+	return t.newSnapshotIterator(k, lowerBound, true)
 }
 
 type SnapGetter struct {
@@ -78,11 +80,11 @@ func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
 	if addr.IsNull() {
 		return nil, tikverr.ErrNotExist
 	}
-	if lf.vAddr.IsNull() {
+	if lf.vLogAddr.IsNull() {
 		// A flags only key, act as value not exists
 		return nil, tikverr.ErrNotExist
 	}
-	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vAddr, &snap.cp)
+	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vLogAddr, &snap.cp)
 	if !ok {
 		return nil, tikverr.ErrNotExist
 	}
@@ -112,11 +114,18 @@ func (i *SnapIter) Next() error {
 	return nil
 }
 
+// Close releases the resources of the iterator and related version.
+// Make sure to call `Close` after the iterator is not used.
+func (i *SnapIter) Close() {
+	i.Iterator.Close()
+	i.tree.allocator.snapshotDec()
+}
+
 func (i *SnapIter) setValue() bool {
 	if !i.Valid() {
 		return false
 	}
-	if v, ok := i.tree.allocator.vlogAllocator.GetSnapshotValue(i.currLeaf.vAddr, &i.cp); ok {
+	if v, ok := i.tree.allocator.vlogAllocator.GetSnapshotValue(i.currLeaf.vLogAddr, &i.cp); ok {
 		i.value = v
 		return true
 	}

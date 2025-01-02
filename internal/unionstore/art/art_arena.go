@@ -15,6 +15,7 @@
 package art
 
 import (
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
@@ -25,11 +26,23 @@ import (
 // reusing blocks reduces the memory pieces.
 type nodeArena struct {
 	arena.MemdbArena
+
 	// The ART node will expand to a higher capacity, and the address of the freed node will be stored in the free list for reuse.
 	// By reusing the freed node, memory usage and fragmentation can be reduced.
 	freeNode4  []arena.MemdbArenaAddr
 	freeNode16 []arena.MemdbArenaAddr
 	freeNode48 []arena.MemdbArenaAddr
+
+	// When there is ongoing snapshot iterator, ART should keep the old versions available,
+	// reuse the node can cause incorrect snapshot read result in this time.
+	// To avoid reused, freed nodes will be stored in unused slices before the snapshot iterator is closed.
+	// blockedSnapshotCnt is used to count the ongoing snapshot iterator.
+	blockedSnapshotCnt atomic.Int64
+	// isUnusedNodeFreeing protect the free unused nodes process from data race.
+	isUnusedNodeFreeing atomic.Bool
+	unusedNode4         []arena.MemdbArenaAddr
+	unusedNode16        []arena.MemdbArenaAddr
+	unusedNode48        []arena.MemdbArenaAddr
 }
 
 type artAllocator struct {
@@ -62,7 +75,11 @@ func (f *artAllocator) allocNode4() (arena.MemdbArenaAddr, *node4) {
 }
 
 func (f *artAllocator) freeNode4(addr arena.MemdbArenaAddr) {
-	f.nodeAllocator.freeNode4 = append(f.nodeAllocator.freeNode4, addr)
+	if f.nodeAllocator.blockedSnapshotCnt.Load() == 0 {
+		f.nodeAllocator.freeNode4 = append(f.nodeAllocator.freeNode4, addr)
+		return
+	}
+	f.nodeAllocator.unusedNode4 = append(f.nodeAllocator.unusedNode4, addr)
 }
 
 func (f *artAllocator) getNode4(addr arena.MemdbArenaAddr) *node4 {
@@ -88,7 +105,11 @@ func (f *artAllocator) allocNode16() (arena.MemdbArenaAddr, *node16) {
 }
 
 func (f *artAllocator) freeNode16(addr arena.MemdbArenaAddr) {
-	f.nodeAllocator.freeNode16 = append(f.nodeAllocator.freeNode16, addr)
+	if f.nodeAllocator.blockedSnapshotCnt.Load() == 0 {
+		f.nodeAllocator.freeNode16 = append(f.nodeAllocator.freeNode16, addr)
+		return
+	}
+	f.nodeAllocator.unusedNode16 = append(f.nodeAllocator.unusedNode16, addr)
 }
 
 func (f *artAllocator) getNode16(addr arena.MemdbArenaAddr) *node16 {
@@ -114,7 +135,11 @@ func (f *artAllocator) allocNode48() (arena.MemdbArenaAddr, *node48) {
 }
 
 func (f *artAllocator) freeNode48(addr arena.MemdbArenaAddr) {
-	f.nodeAllocator.freeNode48 = append(f.nodeAllocator.freeNode48, addr)
+	if f.nodeAllocator.blockedSnapshotCnt.Load() == 0 {
+		f.nodeAllocator.freeNode48 = append(f.nodeAllocator.freeNode48, addr)
+		return
+	}
+	f.nodeAllocator.unusedNode48 = append(f.nodeAllocator.unusedNode48, addr)
 }
 
 func (f *artAllocator) getNode48(addr arena.MemdbArenaAddr) *node48 {
@@ -142,9 +167,9 @@ func (f *artAllocator) allocLeaf(key []byte) (arena.MemdbArenaAddr, *artLeaf) {
 	size := leafSize + len(key)
 	addr, data := f.nodeAllocator.Alloc(size, true)
 	lf := (*artLeaf)(unsafe.Pointer(&data[0]))
-	lf.klen = uint16(len(key))
+	lf.keyLen = uint16(len(key))
 	lf.flags = 0
-	lf.vAddr = arena.NullAddr
+	lf.vLogAddr = arena.NullAddr
 	copy(data[leafSize:], key)
 	return addr, lf
 }
@@ -155,4 +180,32 @@ func (f *artAllocator) getLeaf(addr arena.MemdbArenaAddr) *artLeaf {
 	}
 	data := f.nodeAllocator.GetData(addr)
 	return (*artLeaf)(unsafe.Pointer(&data[0]))
+}
+
+func (f *artAllocator) snapshotInc() {
+	f.nodeAllocator.blockedSnapshotCnt.Add(1)
+}
+
+// freeUnusedNodes will move the unused old version nodes into free list, allow it to be reused.
+// This function is called when the snapshot iterator is closed, because read iterators can run concurrently.
+func (f *artAllocator) snapshotDec() {
+	if f.nodeAllocator.blockedSnapshotCnt.Add(-1) != 0 {
+		return
+	}
+	if !f.nodeAllocator.isUnusedNodeFreeing.CompareAndSwap(false, true) {
+		return
+	}
+	if len(f.nodeAllocator.unusedNode4) > 0 {
+		f.nodeAllocator.freeNode4 = append(f.nodeAllocator.freeNode4, f.nodeAllocator.unusedNode4...)
+		f.nodeAllocator.unusedNode4 = f.nodeAllocator.unusedNode4[:0]
+	}
+	if len(f.nodeAllocator.unusedNode16) > 0 {
+		f.nodeAllocator.freeNode16 = append(f.nodeAllocator.freeNode16, f.nodeAllocator.unusedNode16...)
+		f.nodeAllocator.unusedNode16 = f.nodeAllocator.unusedNode16[:0]
+	}
+	if len(f.nodeAllocator.unusedNode48) > 0 {
+		f.nodeAllocator.freeNode48 = append(f.nodeAllocator.freeNode48, f.nodeAllocator.unusedNode48...)
+		f.nodeAllocator.unusedNode48 = f.nodeAllocator.unusedNode48[:0]
+	}
+	f.nodeAllocator.isUnusedNodeFreeing.Store(false)
 }

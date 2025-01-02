@@ -59,25 +59,28 @@ import (
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/opt"
 	uatomic "go.uber.org/atomic"
 )
 
 type inspectedPDClient struct {
 	pd.Client
-	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error)
-	batchScanRegions func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error)
+	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...opt.GetRegionOption) (*router.Region, error)
+	batchScanRegions func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error)
 }
 
-func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 	if c.getRegion != nil {
 		return c.getRegion(ctx, c.Client, key, opts...)
 	}
 	return c.Client.GetRegion(ctx, key, opts...)
 }
 
-func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	if c.batchScanRegions != nil {
 		return c.batchScanRegions(ctx, keyRanges, limit, opts...)
 	}
@@ -469,7 +472,7 @@ func (s *testRegionCacheSuite) TestResolveStateTransition() {
 
 func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	region := s.getRegion([]byte("x"))
-	NoLeaderRegion := &pd.Region{
+	NoLeaderRegion := &router.Region{
 		Meta:   region.meta,
 		Leader: nil,
 	}
@@ -479,10 +482,10 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	batchScanCnt := 0
 	s.cache.pdClient = &inspectedPDClient{
 		Client: s.cache.pdClient,
-		batchScanRegions: func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
+		batchScanRegions: func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 			if batchScanCnt == 0 {
 				batchScanCnt++
-				return []*pd.Region{NoLeaderRegion}, nil
+				return []*router.Region{NoLeaderRegion}, nil
 			} else {
 				return originalBatchScanRegions(ctx, keyRanges, limit, opts...)
 			}
@@ -495,7 +498,7 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
 
-	returnedRegions, err = s.cache.batchScanRegions(bo, []pd.KeyRange{{StartKey: nil, EndKey: nil}}, 100, WithNeedRegionHasLeaderPeer())
+	returnedRegions, err = s.cache.batchScanRegions(bo, []router.KeyRange{{StartKey: nil, EndKey: nil}}, 100, WithNeedRegionHasLeaderPeer())
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
@@ -508,7 +511,7 @@ func (s *testRegionCacheSuite) TestNeedExpireRegionAfterTTL() {
 	cntGetRegion := 0
 	s.cache.pdClient = &inspectedPDClient{
 		Client: s.cache.pdClient,
-		getRegion: func(ctx context.Context, cli pd.Client, key []byte, opts ...pd.GetRegionOption) (*pd.Region, error) {
+		getRegion: func(ctx context.Context, cli pd.Client, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
 			cntGetRegion++
 			return cli.GetRegion(ctx, key, opts...)
 		},
@@ -1333,7 +1336,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	s.Equal(ctxTiFlash.Peer.Id, s.peer1)
 	ctxTiFlash.Peer.Role = metapb.PeerRole_Learner
 	r := ctxTiFlash.Meta
-	reqSend := NewRegionRequestSender(s.cache, nil)
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{CurrentRegions: []*metapb.Region{r}}}
 	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr)
 
@@ -1580,7 +1583,7 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 		Peers:       make([]*metapb.Peer, len(ctx.Meta.Peers)),
 	}
 	copy(cpMeta.Peers, ctx.Meta.Peers)
-	cpRegion := &pd.Region{
+	cpRegion := &router.Region{
 		Meta:      cpMeta,
 		DownPeers: []*metapb.Peer{{Id: s.peer1, StoreId: s.store1}},
 	}
@@ -1619,7 +1622,7 @@ func (s *testRegionCacheSuite) TestPeersLenChangedByWitness() {
 			peer.IsWitness = true
 		}
 	}
-	cpRegion := &pd.Region{Meta: cpMeta}
+	cpRegion := &router.Region{Meta: cpMeta}
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
 	s.cache.insertRegionToCache(region, true, true)
@@ -1970,7 +1973,7 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	ctx, err := s.cache.GetTiKVRPCContext(retry.NewBackofferWithVars(context.Background(), 100, nil), loc.Region, kv.ReplicaReadLeader, 0)
 	s.NotNil(ctx)
 	s.NoError(err)
-	reqSend := NewRegionRequestSender(s.cache, nil)
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
 	s.Error(err)
 	s.False(shouldRetry)
@@ -2649,9 +2652,9 @@ func (s *testRegionCacheSuite) TestBatchScanRegionsMerger() {
 
 func (s *testRegionCacheSuite) TestSplitKeyRanges() {
 	check := func(keyRangeKeys []string, splitKey string, expects []string) {
-		keyRanges := make([]pd.KeyRange, 0, len(keyRangeKeys)/2)
+		keyRanges := make([]router.KeyRange, 0, len(keyRangeKeys)/2)
 		for i := 0; i < len(keyRangeKeys); i += 2 {
-			keyRanges = append(keyRanges, pd.KeyRange{StartKey: []byte(keyRangeKeys[i]), EndKey: []byte(keyRangeKeys[i+1])})
+			keyRanges = append(keyRanges, router.KeyRange{StartKey: []byte(keyRangeKeys[i]), EndKey: []byte(keyRangeKeys[i+1])})
 		}
 		splitKeyRanges := rangesAfterKey(keyRanges, []byte(splitKey))
 		splitKeys := make([]string, 0, 2*len(splitKeyRanges))
@@ -2774,13 +2777,13 @@ func (s *testRegionCacheSuite) testBatchScanRegions() {
 
 func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 	check := func(ranges []string, regions []string, limit int, expect bool) {
-		rs := make([]pd.KeyRange, 0, len(ranges)/2)
+		rs := make([]router.KeyRange, 0, len(ranges)/2)
 		for i := 0; i < len(ranges); i += 2 {
-			rs = append(rs, pd.KeyRange{StartKey: []byte(ranges[i]), EndKey: []byte(ranges[i+1])})
+			rs = append(rs, router.KeyRange{StartKey: []byte(ranges[i]), EndKey: []byte(ranges[i+1])})
 		}
-		rgs := make([]*pd.Region, 0, len(regions))
+		rgs := make([]*router.Region, 0, len(regions))
 		for i := 0; i < len(regions); i += 2 {
-			rgs = append(rgs, &pd.Region{Meta: &metapb.Region{
+			rgs = append(rgs, &router.Region{Meta: &metapb.Region{
 				StartKey: []byte(regions[i]),
 				EndKey:   []byte(regions[i+1]),
 			}})
@@ -2911,7 +2914,7 @@ func (s *testRegionCacheSuite) TestScanRegionsWithGaps() {
 	s.Equal(scanRegionRes, regions)
 
 	batchScanRegionRes := getRegionIDsWithInject(func() ([]*Region, error) {
-		return s.cache.BatchLoadRegionsWithKeyRanges(s.bo, []pd.KeyRange{{StartKey: []byte{}, EndKey: []byte{}}}, 10)
+		return s.cache.BatchLoadRegionsWithKeyRanges(s.bo, []router.KeyRange{{StartKey: []byte{}, EndKey: []byte{}}}, 10)
 	})
 	s.Equal(batchScanRegionRes, regions)
 }

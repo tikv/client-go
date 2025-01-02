@@ -37,6 +37,7 @@ package oracles
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/tso"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -147,7 +149,7 @@ type pdOracle struct {
 
 	// When the low resolution ts is not new enough and there are many concurrent stane read / snapshot read
 	// operations that needs to validate the read ts, we can use this to avoid too many concurrent GetTS calls by
-	// reusing a result for different `ValidateSnapshotReadTS` calls. This can be done because that
+	// reusing a result for different `ValidateReadTS` calls. This can be done because that
 	// we don't require the ts for validation to be strictly the latest one.
 	// Note that the result can't be reused for different txnScopes. The txnScope is used as the key.
 	tsForValidation singleflight.Group
@@ -156,7 +158,7 @@ type pdOracle struct {
 // lastTSO stores the last timestamp oracle gets from PD server and the local time when the TSO is fetched.
 type lastTSO struct {
 	tso     uint64
-	arrival uint64
+	arrival time.Time
 }
 
 type PDOracleOptions struct {
@@ -225,7 +227,7 @@ func (o *pdOracle) GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, err
 }
 
 type tsFuture struct {
-	pd.TSFuture
+	tso.TSFuture
 	o        *pdOracle
 	txnScope string
 }
@@ -244,26 +246,12 @@ func (f *tsFuture) Wait() (uint64, error) {
 }
 
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
-	var ts pd.TSFuture
-	if opt.TxnScope == oracle.GlobalTxnScope || opt.TxnScope == "" {
-		ts = o.c.GetTSAsync(ctx)
-	} else {
-		ts = o.c.GetLocalTSAsync(ctx, opt.TxnScope)
-	}
-	return &tsFuture{ts, o, opt.TxnScope}
+	return &tsFuture{o.c.GetTSAsync(ctx), o, opt.TxnScope}
 }
 
 func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, error) {
 	now := time.Now()
-	var (
-		physical, logical int64
-		err               error
-	)
-	if txnScope == oracle.GlobalTxnScope || txnScope == "" {
-		physical, logical, err = o.c.GetTS(ctx)
-	} else {
-		physical, logical, err = o.c.GetLocalTS(ctx, txnScope)
-	}
+	physical, logical, err := o.c.GetTS(ctx)
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
@@ -290,17 +278,13 @@ func (o *pdOracle) getMinTimestampInAllTSOGroup(ctx context.Context) (uint64, er
 	return oracle.ComposeTS(physical, logical), nil
 }
 
-func (o *pdOracle) getArrivalTimestamp() uint64 {
-	return oracle.GoTimeToTS(time.Now())
-}
-
 func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	if txnScope == "" {
 		txnScope = oracle.GlobalTxnScope
 	}
 	current := &lastTSO{
 		tso:     ts,
-		arrival: o.getArrivalTimestamp(),
+		arrival: time.Now(),
 	}
 	lastTSInterface, ok := o.lastTSMap.Load(txnScope)
 	if !ok {
@@ -312,8 +296,11 @@ func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
 	for {
 		last := lastTSPointer.Load()
-		if current.tso <= last.tso || current.arrival <= last.arrival {
+		if current.tso <= last.tso {
 			return
+		}
+		if last.arrival.After(current.arrival) {
+			current.arrival = last.arrival
 		}
 		if lastTSPointer.CompareAndSwap(last, current) {
 			return
@@ -473,6 +460,8 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
 
+	// Note that as `doUpdate` updates last tick time while `nextUpdateInterval` may perform calculation depending on the
+	// last tick time, `doUpdate` should be called after finishing calculating the next interval.
 	doUpdate := func(now time.Time) {
 		// Update the timestamp for each txnScope
 		o.lastTSMap.Range(func(key, _ interface{}) bool {
@@ -492,9 +481,12 @@ func (o *pdOracle) updateTS(ctx context.Context) {
 	for {
 		select {
 		case now := <-ticker.C:
+			// nextUpdateInterval has calculation that depends on the time of the last tick. Calculate next interval
+			// before `doUpdate` as `doUpdate` is responsible for updating the time of the last tick.
+			newInterval := o.nextUpdateInterval(now, 0)
+
 			doUpdate(now)
 
-			newInterval := o.nextUpdateInterval(now, 0)
 			if newInterval != currentInterval {
 				currentInterval = newInterval
 				ticker.Reset(currentInterval)
@@ -557,6 +549,11 @@ func (o *pdOracle) SetLowResolutionTimestampUpdateInterval(newUpdateInterval tim
 	prevConfigured := o.lastTSUpdateInterval.Swap(int64(newUpdateInterval))
 	adaptiveUpdateInterval := o.adaptiveLastTSUpdateInterval.Load()
 
+	if newUpdateInterval == time.Duration(prevConfigured) {
+		// The config is unchanged. Do nothing.
+		return nil
+	}
+
 	var adaptiveUpdateIntervalUpdated bool
 
 	if adaptiveUpdateInterval == prevConfigured || newUpdateInterval < time.Duration(adaptiveUpdateInterval) {
@@ -604,8 +601,11 @@ func (o *pdOracle) getStaleTimestamp(txnScope string, prevSecond uint64) (uint64
 	if !ok {
 		return 0, errors.Errorf("get stale timestamp fail, txnScope: %s", txnScope)
 	}
-	ts, arrivalTS := last.tso, last.arrival
-	arrivalTime := oracle.GetTimeFromTS(arrivalTS)
+	return o.getStaleTimestampWithLastTS(last, prevSecond)
+}
+
+func (o *pdOracle) getStaleTimestampWithLastTS(last *lastTSO, prevSecond uint64) (uint64, error) {
+	ts, arrivalTime := last.tso, last.arrival
 	physicalTime := oracle.GetTimeFromTS(ts)
 	if uint64(physicalTime.Unix()) <= prevSecond {
 		return 0, errors.Errorf("invalid prevSecond %v", prevSecond)
@@ -660,22 +660,34 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 	}
 }
 
-func (o *pdOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *oracle.Option) error {
-	latestTS, err := o.GetLowResolutionTimestamp(ctx, opt)
-	// If we fail to get latestTS or the readTS exceeds it, get a timestamp from PD to double-check.
+func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
+	if readTS == math.MaxUint64 {
+		if isStaleRead {
+			return oracle.ErrLatestStaleRead{}
+		}
+		return nil
+	}
+
+	latestTSInfo, exists := o.getLastTSWithArrivalTS(opt.TxnScope)
+	// If we fail to get latestTSInfo or the readTS exceeds it, get a timestamp from PD to double-check.
 	// But we don't need to strictly fetch the latest TS. So if there are already concurrent calls to this function
 	// loading the latest TS, we can just reuse the same result to avoid too many concurrent GetTS calls.
-	if err != nil || readTS > latestTS {
+	if !exists || readTS > latestTSInfo.tso {
 		currentTS, err := o.getCurrentTSForValidation(ctx, opt)
 		if err != nil {
 			return errors.Errorf("fail to validate read timestamp: %v", err)
 		}
-		o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
-		if readTS > currentTS {
-			return errors.Errorf("cannot set read timestamp to a future time")
+		if isStaleRead {
+			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
 		}
-	} else {
-		estimatedCurrentTS, err := o.getStaleTimestamp(opt.TxnScope, 0)
+		if readTS > currentTS {
+			return oracle.ErrFutureTSRead{
+				ReadTS:    readTS,
+				CurrentTS: currentTS,
+			}
+		}
+	} else if isStaleRead {
+		estimatedCurrentTS, err := o.getStaleTimestampWithLastTS(latestTSInfo, 0)
 		if err != nil {
 			logutil.Logger(ctx).Warn("failed to estimate current ts by getSlateTimestamp for auto-adjusting update low resolution ts interval",
 				zap.Error(err), zap.Uint64("readTS", readTS), zap.String("txnScope", opt.TxnScope))
@@ -686,6 +698,9 @@ func (o *pdOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, op
 	return nil
 }
 
+// adjustUpdateLowResolutionTSIntervalWithRequestedStaleness triggers adjustments the update interval of low resolution
+// ts, if necessary, to suite the usage of stale read.
+// This method is not supposed to be called when performing non-stale-read operations.
 func (o *pdOracle) adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS uint64, currentTS uint64, now time.Time) {
 	requiredStaleness := oracle.GetTimeFromTS(currentTS).Sub(oracle.GetTimeFromTS(readTS))
 

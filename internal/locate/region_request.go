@@ -45,6 +45,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -107,6 +108,7 @@ type RegionRequestSender struct {
 	regionCache       *RegionCache
 	apiVersion        kvrpcpb.APIVersion
 	client            client.Client
+	readTSValidator   oracle.ReadTSValidator
 	storeAddr         string
 	rpcError          error
 	replicaSelector   *replicaSelector
@@ -125,7 +127,8 @@ func (s *RegionRequestSender) String() string {
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
-	RPCStats map[tikvrpc.CmdType]*RPCRuntimeStats
+	// RPCStatsList uses to record RPC requests stats, since in most cases, only one kind of rpc request is sent at a time, use slice instead of map for performance.
+	RPCStatsList []RPCRuntimeStats
 	RequestErrorStats
 }
 
@@ -140,29 +143,47 @@ type RequestErrorStats struct {
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
 func NewRegionRequestRuntimeStats() *RegionRequestRuntimeStats {
 	return &RegionRequestRuntimeStats{
-		RPCStats: make(map[tikvrpc.CmdType]*RPCRuntimeStats),
+		RPCStatsList: make([]RPCRuntimeStats, 0, 1),
 	}
 }
 
 // RPCRuntimeStats indicates the RPC request count and consume time.
 type RPCRuntimeStats struct {
-	Count int64
+	Cmd   tikvrpc.CmdType
+	Count uint32
 	// Send region request consume time.
-	Consume int64
+	Consume time.Duration
 }
 
 // RecordRPCRuntimeStats uses to record the rpc count and duration stats.
 func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d time.Duration) {
-	stat, ok := r.RPCStats[cmd]
-	if !ok {
-		r.RPCStats[cmd] = &RPCRuntimeStats{
-			Count:   1,
-			Consume: int64(d),
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == cmd {
+			r.RPCStatsList[i].Count++
+			r.RPCStatsList[i].Consume += d
+			return
 		}
-		return
 	}
-	stat.Count++
-	stat.Consume += int64(d)
+	r.RPCStatsList = append(r.RPCStatsList, RPCRuntimeStats{
+		Cmd:     cmd,
+		Count:   1,
+		Consume: d,
+	})
+}
+
+// GetRPCStatsCount returns the total rpc types count.
+func (r *RegionRequestRuntimeStats) GetRPCStatsCount() int {
+	return len(r.RPCStatsList)
+}
+
+// GetCmdRPCCount returns the rpc count of the specified cmd type.
+func (r *RegionRequestRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) uint32 {
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == cmd {
+			return r.RPCStatsList[i].Count
+		}
+	}
+	return 0
 }
 
 // RecordRPCErrorStats uses to record the request error(region error label and rpc error) info and count.
@@ -196,15 +217,15 @@ func (r *RegionRequestRuntimeStats) String() string {
 		return ""
 	}
 	var builder strings.Builder
-	for k, v := range r.RPCStats {
+	for _, v := range r.RPCStatsList {
 		if builder.Len() > 0 {
 			builder.WriteByte(',')
 		}
-		builder.WriteString(k.String())
+		builder.WriteString(v.Cmd.String())
 		builder.WriteString(":{num_rpc:")
-		builder.WriteString(strconv.FormatInt(v.Count, 10))
+		builder.WriteString(strconv.FormatUint(uint64(v.Count), 10))
 		builder.WriteString(", total_time:")
-		builder.WriteString(util.FormatDuration(time.Duration(v.Consume)))
+		builder.WriteString(util.FormatDuration(v.Consume))
 		builder.WriteString("}")
 	}
 	if errStatsStr := r.RequestErrorStats.String(); errStatsStr != "" {
@@ -240,7 +261,8 @@ func (r *RequestErrorStats) String() string {
 // Clone returns a copy of itself.
 func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
-	maps.Copy(newRs.RPCStats, r.RPCStats)
+	newRs.RPCStatsList = make([]RPCRuntimeStats, 0, len(r.RPCStatsList))
+	newRs.RPCStatsList = append(newRs.RPCStatsList, r.RPCStatsList...)
 	if len(r.ErrStats) > 0 {
 		newRs.ErrStats = make(map[string]int)
 		maps.Copy(newRs.ErrStats, r.ErrStats)
@@ -254,17 +276,8 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 	if rs == nil {
 		return
 	}
-	for cmd, v := range rs.RPCStats {
-		stat, ok := r.RPCStats[cmd]
-		if !ok {
-			r.RPCStats[cmd] = &RPCRuntimeStats{
-				Count:   v.Count,
-				Consume: v.Consume,
-			}
-			continue
-		}
-		stat.Count += v.Count
-		stat.Consume += v.Consume
+	for i := range rs.RPCStatsList {
+		r.mergeRPCRuntimeStats(rs.RPCStatsList[i])
 	}
 	if len(rs.ErrStats) > 0 {
 		if r.ErrStats == nil {
@@ -275,6 +288,17 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 		}
 		r.OtherErrCnt += rs.OtherErrCnt
 	}
+}
+
+func (r *RegionRequestRuntimeStats) mergeRPCRuntimeStats(rs RPCRuntimeStats) {
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == rs.Cmd {
+			r.RPCStatsList[i].Count += rs.Count
+			r.RPCStatsList[i].Consume += rs.Consume
+			return
+		}
+	}
+	r.RPCStatsList = append(r.RPCStatsList, rs)
 }
 
 // ReplicaAccessStats records the replica access info.
@@ -377,11 +401,12 @@ func (s *ReplicaAccessStats) String() string {
 }
 
 // NewRegionRequestSender creates a new sender.
-func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
+func NewRegionRequestSender(regionCache *RegionCache, client client.Client, readTSValidator oracle.ReadTSValidator) *RegionRequestSender {
 	return &RegionRequestSender{
-		regionCache: regionCache,
-		apiVersion:  regionCache.codec.GetAPIVersion(),
-		client:      client,
+		regionCache:     regionCache,
+		apiVersion:      regionCache.codec.GetAPIVersion(),
+		client:          client,
+		readTSValidator: readTSValidator,
 	}
 }
 
@@ -766,6 +791,11 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 	}
 
+	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
+		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
+		return nil, nil, 0, err
+	}
+
 	// If the MaxExecutionDurationMs is not set yet, we set it to be the RPC timeout duration
 	// so TiKV can give up the requests whose response TiDB cannot receive due to timeout.
 	if req.Context.MaxExecutionDurationMs == 0 {
@@ -782,9 +812,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 	}()
 
-	var staleReadCollector *staleReadMetricsCollector
 	if req.StaleRead {
-		staleReadCollector = &staleReadMetricsCollector{}
 		defer func() {
 			if retryTimes == 0 {
 				metrics.StaleReadHitCounter.Add(1)
@@ -836,13 +864,23 @@ func (s *RegionRequestSender) SendReqCtx(
 			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
 			return resp, nil, retryTimes, err
 		}
-
-		var isLocalTraffic bool
-		if staleReadCollector != nil && s.replicaSelector != nil && s.replicaSelector.target != nil {
-			isLocalTraffic = s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels)
-			staleReadCollector.onReq(req, isLocalTraffic)
+		// patch the access location if it is not set under region request sender. which includes the coprocessor,
+		// txn relative tikv request.
+		// note: MPP not use this path. need specified in the MPP layer.
+		patchAccessLocation := func() {
+			if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
+				req.AccessLocation = kv.AccessLocalZone
+			} else {
+				req.AccessLocation = kv.AccessCrossZone
+			}
 		}
-
+		if s.replicaSelector != nil &&
+			s.replicaSelector.target != nil &&
+			req.AccessLocation == kv.AccessUnknown &&
+			len(s.replicaSelector.option.labels) != 0 {
+			// patch the access location if it is not set under region request sender.
+			patchAccessLocation()
+		}
 		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
 		s.storeAddr = rpcCtx.Addr
 
@@ -924,9 +962,7 @@ func (s *RegionRequestSender) SendReqCtx(
 				s.replicaSelector.onSendSuccess(req)
 			}
 		}
-		if staleReadCollector != nil {
-			staleReadCollector.onResp(req.Type, resp, isLocalTraffic)
-		}
+
 		return resp, rpcCtx, retryTimes, nil
 	}
 }
@@ -1756,54 +1792,42 @@ func (s *RegionRequestSender) onRegionError(
 	return false, nil
 }
 
-type staleReadMetricsCollector struct {
-}
+func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.Request) error {
+	if req.StoreTp == tikvrpc.TiDB {
+		// Skip the checking if the store type is TiDB.
+		return nil
+	}
 
-func (s *staleReadMetricsCollector) onReq(req *tikvrpc.Request, isLocalTraffic bool) {
-	size := 0
+	var readTS uint64
 	switch req.Type {
-	case tikvrpc.CmdGet:
-		size = req.Get().Size()
-	case tikvrpc.CmdBatchGet:
-		size = req.BatchGet().Size()
-	case tikvrpc.CmdScan:
-		size = req.Scan().Size()
-	case tikvrpc.CmdCop:
-		size = req.Cop().Size()
-	default:
-		// ignore non-read requests
-		return
-	}
-	size += req.Context.Size()
-	if isLocalTraffic {
-		metrics.StaleReadLocalOutBytes.Add(float64(size))
-		metrics.StaleReadReqLocalCounter.Add(1)
-	} else {
-		metrics.StaleReadRemoteOutBytes.Add(float64(size))
-		metrics.StaleReadReqCrossZoneCounter.Add(1)
-	}
-}
+	case tikvrpc.CmdGet, tikvrpc.CmdScan, tikvrpc.CmdBatchGet, tikvrpc.CmdCop, tikvrpc.CmdCopStream, tikvrpc.CmdBatchCop, tikvrpc.CmdScanLock, tikvrpc.CmdBufferBatchGet:
+		readTS = req.GetStartTS()
 
-func (s *staleReadMetricsCollector) onResp(tp tikvrpc.CmdType, resp *tikvrpc.Response, isLocalTraffic bool) {
-	size := 0
-	switch tp {
-	case tikvrpc.CmdGet:
-		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
-	case tikvrpc.CmdBatchGet:
-		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
-	case tikvrpc.CmdScan:
-		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
-	case tikvrpc.CmdCop:
-		size += resp.Resp.(*coprocessor.Response).Size()
+	// TODO: Check transactional write requests that has implicit read.
+	// case tikvrpc.CmdPessimisticLock:
+	//	readTS = req.PessimisticLock().GetForUpdateTs()
+	// case tikvrpc.CmdPrewrite:
+	//	inner := req.Prewrite()
+	//	readTS = inner.GetForUpdateTs()
+	//	if readTS == 0 {
+	//		readTS = inner.GetStartVersion()
+	//	}
+	// case tikvrpc.CmdCheckTxnStatus:
+	//	inner := req.CheckTxnStatus()
+	//	// TiKV uses the greater one of these three fields to update the max_ts.
+	//	readTS = inner.GetLockTs()
+	//	if inner.GetCurrentTs() != math.MaxUint64 && inner.GetCurrentTs() > readTS {
+	//		readTS = inner.GetCurrentTs()
+	//	}
+	//	if inner.GetCallerStartTs() != math.MaxUint64 && inner.GetCallerStartTs() > readTS {
+	//		readTS = inner.GetCallerStartTs()
+	//	}
+	// case tikvrpc.CmdCheckSecondaryLocks, tikvrpc.CmdCleanup, tikvrpc.CmdBatchRollback:
+	//	readTS = req.GetStartTS()
 	default:
-		// ignore non-read requests
-		return
+		return nil
 	}
-	if isLocalTraffic {
-		metrics.StaleReadLocalInBytes.Add(float64(size))
-	} else {
-		metrics.StaleReadRemoteInBytes.Add(float64(size))
-	}
+	return s.readTSValidator.ValidateReadTS(ctx, readTS, req.StaleRead, &oracle.Option{TxnScope: req.TxnScope})
 }
 
 func patchRequestSource(req *tikvrpc.Request, replicaType string) {

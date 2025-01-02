@@ -54,7 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/util"
-	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 )
 
@@ -148,7 +148,7 @@ func (s *KVStore) batchSendSingleRegion(bo *Backoffer, batch kvrpc.Batch, scatte
 		RequestSource: util.RequestSourceFromCtx(bo.GetCtx()),
 	})
 
-	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient(), s.oracle)
 	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 
 	batchResp := kvrpc.BatchResult{Response: resp}
@@ -242,9 +242,9 @@ func (s *KVStore) scatterRegion(bo *Backoffer, regionID uint64, tableID *int64) 
 	logutil.BgLogger().Info("start scatter region",
 		zap.Uint64("regionID", regionID))
 	for {
-		opts := make([]pd.RegionsOption, 0, 1)
+		opts := make([]opt.RegionsOption, 0, 1)
 		if tableID != nil {
-			opts = append(opts, pd.WithGroup(fmt.Sprintf("%v", *tableID)))
+			opts = append(opts, opt.WithGroup(fmt.Sprintf("%v", *tableID)))
 		}
 		_, err := s.pdClient.ScatterRegions(bo.GetCtx(), []uint64{regionID}, opts...)
 

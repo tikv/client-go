@@ -48,9 +48,12 @@ import (
 	"github.com/tikv/client-go/v2/internal/kvrpc"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 	"google.golang.org/grpc"
 )
 
@@ -134,15 +137,15 @@ type option struct {
 	apiVersion      kvrpcpb.APIVersion
 	security        config.Security
 	gRPCDialOptions []grpc.DialOption
-	pdOptions       []pd.ClientOption
+	pdOptions       []opt.ClientOption
 	keyspace        string
 }
 
 // ClientOpt is factory to set the client options.
 type ClientOpt func(*option)
 
-// WithPDOptions is used to set the pd.ClientOption
-func WithPDOptions(opts ...pd.ClientOption) ClientOpt {
+// WithPDOptions is used to set the opt.ClientOption
+func WithPDOptions(opts ...opt.ClientOption) ClientOpt {
 	return func(o *option) {
 		o.pdOptions = append(o.pdOptions, opts...)
 	}
@@ -189,7 +192,7 @@ func (c *Client) SetColumnFamily(columnFamily string) *Client {
 }
 
 // NewClient creates a client with PD cluster addrs.
-func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...pd.ClientOption) (*Client, error) {
+func NewClient(ctx context.Context, pdAddrs []string, security config.Security, opts ...opt.ClientOption) (*Client, error) {
 	return NewClientWithOpts(ctx, pdAddrs, WithSecurity(security), WithPDOptions(opts...))
 }
 
@@ -201,7 +204,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	}
 
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdCli, err := pd.NewClientWithContext(ctx, pdAddrs, pd.SecurityOption{
+	pdCli, err := pd.NewClientWithContext(ctx, caller.Component("rawkv-client-go"), pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
 		KeyPath:  opt.security.ClusterSSLKey,
@@ -687,7 +690,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	for {
 		var loc *locate.KeyLocation
 		var err error
@@ -784,7 +787,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *raw
 		})
 	}
 
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 
@@ -834,7 +837,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *raw
 // TODO: Is there any better way to avoid duplicating code with func `sendReq` ?
 func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey []byte, opts *rawOptions) (*tikvrpc.Response, []byte, error) {
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	for {
 		loc, err := c.regionCache.LocateKey(bo, startKey)
 		if err != nil {
@@ -936,7 +939,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOpt
 			Ttl:    ttl,
 		})
 
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	req.ApiVersion = c.apiVersion
 	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
