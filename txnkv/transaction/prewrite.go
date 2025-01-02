@@ -232,11 +232,11 @@ func (action actionPrewrite) handleSingleBatch(
 	}
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
+	defer handler.drop(err)
 
 	for {
 		retryable, err := handler.sendReqAndCheck()
 		if !retryable {
-			handler.drop(err)
 			return err
 		}
 	}
@@ -360,6 +360,7 @@ func (handler *prewrite1BatchReqHandler) beforeSend() {
 }
 
 // sendAndCheckReq sends the prewrite request to the TiKV server and check the response.
+// If the TiKV server returns a retryable error, the function returns true. Otherwise, it returns false.
 func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err error) {
 	handler.beforeSend()
 	resp, retryTimes, err := handler.sender.SendReq(handler.bo, handler.req, handler.batch.region, client.ReadTimeoutShort)
@@ -461,6 +462,7 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 				zap.Uint64("session", handler.committer.sessionID),
 				zap.Uint64("txnID", handler.committer.startTS),
 				zap.Stringer("lock", lock),
+				zap.Stringer("policy", handler.committer.txn.prewriteEncounterLockPolicy),
 			)
 			logged[lock.TxnID] = struct{}{}
 		}
@@ -469,7 +471,8 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 		// Pessimistic transactions don't need such an optimization. If this key needs a pessimistic lock,
 		// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 		// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
-		if lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic {
+		if (lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic) ||
+			handler.committer.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
 			return nil, tikverr.NewErrWriteConflictWithArgs(
 				handler.committer.startTS,
 				lock.TxnID,
