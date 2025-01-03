@@ -227,11 +227,12 @@ func (action actionPrewrite) handleSingleBatch(
 	// regions. It invokes `prewriteMutations` recursively here, and the number of batches will be
 	// checked there.
 
-	if err := action.handleSingleBatchFailpoint(c, bo, batch); err != nil {
+	if err = action.handleSingleBatchFailpoint(c, bo, batch); err != nil {
 		return err
 	}
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
+	defer handler.drop(err)
 
 	var retryable bool
 	for {
@@ -239,7 +240,6 @@ func (action actionPrewrite) handleSingleBatch(
 		// otherwise if the error is retryable, it will return true.
 		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
-			handler.drop(err)
 			return err
 		}
 	}
