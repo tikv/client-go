@@ -232,13 +232,14 @@ func (action actionPrewrite) handleSingleBatch(
 	}
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
-	defer handler.drop(err)
+
 	var retryable bool
 	for {
 		// It will return false if the request is success or meet an unretryable error.
 		// otherwise if the error is retryable, it will return true.
 		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
+			handler.drop(err)
 			return err
 		}
 	}
