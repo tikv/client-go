@@ -232,11 +232,13 @@ func (action actionPrewrite) handleSingleBatch(
 	}
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
-
+	defer handler.drop(err)
+	var retryable bool
 	for {
-		retryable, err := handler.sendReqAndCheck()
+		// It will return false if the request is success or meet an unretryable error.
+		// otherwise if the error is retryable, it will return true.
+		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
-			handler.drop(err)
 			return err
 		}
 	}
@@ -365,7 +367,8 @@ func (handler *prewrite1BatchReqHandler) beforeSend(reqBegin time.Time) {
 }
 
 // sendAndCheckReq sends the prewrite request to the TiKV server and check the response.
-// If the TiKV server returns a retryable error, the function returns true. Otherwise, it returns false.
+// If the TiKV server returns a retryable error, the function returns true.
+// If the TiKV server returns ok or a non-retryable error, the function returns false.
 func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err error) {
 	reqBegin := time.Now()
 	handler.beforeSend(reqBegin)
@@ -407,6 +410,11 @@ func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err 
 }
 
 // handleRegionErr handles region errors when sending the prewrite request.
+// If the region error is EpochNotMatch and the data is still in the same region, return with retrable true.
+// Otherwise, the function returns with retryable false if the region error is not retryable:
+//  1. The region epoch is changed and the data is not in the same region any more:
+//     doActionOnMutations directly and return retryable false regardless of success or failure.
+//  2. Other region errors.
 func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Error) (retryable bool, err error) {
 	// For other region error and the fake region error, backoff because
 	// there's something wrong.
