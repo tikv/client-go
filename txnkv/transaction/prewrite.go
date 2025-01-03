@@ -232,7 +232,6 @@ func (action actionPrewrite) handleSingleBatch(
 	}
 
 	handler := action.newSingleBatchPrewriteReqHandler(c, batch, bo)
-	defer handler.drop(err)
 
 	var retryable bool
 	for {
@@ -240,10 +239,10 @@ func (action actionPrewrite) handleSingleBatch(
 		// otherwise if the error is retryable, it will return true.
 		retryable, err = handler.sendReqAndCheck()
 		if !retryable {
+			handler.drop(err)
 			return err
 		}
 	}
-
 }
 
 // handleSingleBatchFailpoint is used to inject errors for test.
