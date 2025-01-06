@@ -685,10 +685,10 @@ func (txn *KVTxn) throttle() {
 	}
 	logutil.BgLogger().Info(
 		"[pipelined dml] throttle",
-		zap.Int("sleepMs", sleepMs),
-		zap.Float64("writeThrottleRatio", txn.writeThrottleRatio),
 		zap.Uint64("session", txn.committer.sessionID),
 		zap.Uint64("startTS", txn.startTS),
+		zap.Int("sleepMs", sleepMs),
+		zap.Float64("writeThrottleRatio", txn.writeThrottleRatio),
 	)
 	time.Sleep(time.Duration(sleepMs) * time.Millisecond)
 }
