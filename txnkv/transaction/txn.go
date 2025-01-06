@@ -646,7 +646,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			}
 			mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		}
-		txn.throttle()
+		txn.throttlePipelinedTxn()
 		flushStart := time.Now()
 		err = txn.committer.pipelinedFlushMutations(bo, mutations, generation)
 		if txn.flushBatchDurationEWMA.Value() == 0 {
@@ -665,7 +665,7 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	return nil
 }
 
-func (txn *KVTxn) throttle() {
+func (txn *KVTxn) throttlePipelinedTxn() {
 	if txn.writeThrottleRatio >= 1 || txn.writeThrottleRatio < 0 {
 		logutil.BgLogger().Error(
 			"[pipelined dml] invalid write speed ratio",
