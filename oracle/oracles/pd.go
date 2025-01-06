@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	stdatomic "sync/atomic"
 	"time"
 	"unsafe"
 
@@ -173,15 +174,15 @@ func NewLastTSOPointer(last *lastTSO) *lastTSOPointer {
 }
 
 func (p *lastTSOPointer) load() *lastTSO {
-	return (*lastTSO)(atomic.LoadPointer(&p.p))
+	return (*lastTSO)(stdatomic.LoadPointer(&p.p))
 }
 
 func (p *lastTSOPointer) store(last *lastTSO) {
-	atomic.StorePointer(&p.p, unsafe.Pointer(last))
+	stdatomic.StorePointer(&p.p, unsafe.Pointer(last))
 }
 
 func (p *lastTSOPointer) compareAndSwap(old, new *lastTSO) bool {
-	return atomic.CompareAndSwapPointer(&p.p, unsafe.Pointer(old), unsafe.Pointer(new))
+	return stdatomic.CompareAndSwapPointer(&p.p, unsafe.Pointer(old), unsafe.Pointer(new))
 }
 
 type PDOracleOptions struct {
