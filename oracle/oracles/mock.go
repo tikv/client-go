@@ -122,6 +122,7 @@ func (o *MockOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *or
 	return o.GetTimestampAsync(ctx, opt)
 }
 
+// ValidateSnapshotReadTS implements oracle.Oracle interface.
 func (o *MockOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *oracle.Option) error {
 	currentTS, err := o.GetTimestamp(ctx, opt)
 	if err != nil {

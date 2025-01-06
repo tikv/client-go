@@ -185,6 +185,7 @@ func (p *lastTSOPointer) compareAndSwap(old, new *lastTSO) bool {
 	return stdatomic.CompareAndSwapPointer(&p.p, unsafe.Pointer(old), unsafe.Pointer(new))
 }
 
+// PDOracleOptions is the options for creating a new pdOracle.
 type PDOracleOptions struct {
 	// The duration to update the last ts, i.e., the low resolution ts.
 	UpdateInterval time.Duration
