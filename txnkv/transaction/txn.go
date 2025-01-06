@@ -210,8 +210,17 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
 		return newTiKVTxn, nil
 	}
+	if options.PipelinedTxn.FlushConcurrency == 0 {
+		return nil, errors.New("pipelined txn flush concurrency should be greater than 0")
+	}
 	newTiKVTxn.pipelinedFlushConcurrency = options.PipelinedTxn.FlushConcurrency
+	if options.PipelinedTxn.ResolveLockConcurrency == 0 {
+		return nil, errors.New("pipelined txn resolve lock concurrency should be greater than 0")
+	}
 	newTiKVTxn.pipelinedResolveLockConcurrency = options.PipelinedTxn.ResolveLockConcurrency
+	if options.PipelinedTxn.WriteThrottleRatio < 0 || options.PipelinedTxn.WriteThrottleRatio >= 1 {
+		return nil, errors.New(fmt.Sprintf("invalid write throttle ratio: %v", options.PipelinedTxn.WriteThrottleRatio))
+	}
 	newTiKVTxn.writeThrottleRatio = options.PipelinedTxn.WriteThrottleRatio
 	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
 		return nil, err
