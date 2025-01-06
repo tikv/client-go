@@ -37,13 +37,14 @@ package oracles
 import (
 	"context"
 	"math"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {
