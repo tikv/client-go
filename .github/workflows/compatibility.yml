@@ -24,8 +24,8 @@ jobs:
     - name: Checkout TiDB
       uses: actions/checkout@v2
       with:
-        repository: MyonKeminta/tidb
-        ref: m/update-ts-check
+        repository: you06/tidb
+        ref: verify-read-ts/8.5
         path: tidb
 
     - name: Check build
