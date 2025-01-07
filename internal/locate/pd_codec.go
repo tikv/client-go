@@ -44,6 +44,7 @@ import (
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 var _ pd.Client = &CodecPDClient{}
@@ -201,4 +202,9 @@ func (c *CodecPDClient) decodeRegionKeyInPlace(r *router.Region) error {
 		r.Buckets.Keys, err = c.codec.DecodeBucketKeys(r.Buckets.Keys)
 	}
 	return err
+}
+
+// WithCallerComponent returns a new PD client with the specified caller component.
+func (c *CodecPDClient) WithCallerComponent(component caller.Component) pd.Client {
+	return &CodecPDClient{c.Client.WithCallerComponent(component), c.codec}
 }

@@ -44,6 +44,7 @@ import (
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 var (
@@ -140,4 +141,9 @@ func (m InterceptedPDClient) GetStore(ctx context.Context, storeID uint64) (*met
 	s, err := m.Client.GetStore(ctx, storeID)
 	recordPDWaitTime(ctx, start)
 	return s, err
+}
+
+// WithCallerComponent implements pd.Client#WithCallerComponent.
+func (m InterceptedPDClient) WithCallerComponent(component caller.Component) pd.Client {
+	return NewInterceptedPDClient(m.Client.WithCallerComponent(component))
 }
