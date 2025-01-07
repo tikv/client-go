@@ -308,8 +308,7 @@ func (s *ReplicaSelectMixedStrategy) canSendReplicaRead(selector *replicaSelecto
 	replicas := selector.replicas
 	replica := replicas[s.leaderIdx]
 
-	maxAttempt := 1
-	if !replica.isExhausted(maxAttempt, 0) || replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag) {
+	if leader.attempts == 0 || replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag) {
 		// don't do the replica read if leader is not exhausted or leader has timeout or server busy error.
 		return false
 	}
