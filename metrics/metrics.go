@@ -117,6 +117,7 @@ var (
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
 	TiKVStaleRegionFromPDCounter                   prometheus.Counter
 	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
+	TiKvTxnWriteConflictCounter                    prometheus.Counter
 )
 
 // Label constants.
@@ -848,6 +849,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
 		})
 
+	TiKvTxnWriteConflictCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "txn_write_conflict_counter",
+			Help:      "Counter of txn write conflict",
+		})
+
 	initShortcuts()
 }
 
@@ -944,6 +953,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
 	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
 	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
+	prometheus.MustRegister(TiKvTxnWriteConflictCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.
