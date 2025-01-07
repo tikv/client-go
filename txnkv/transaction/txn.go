@@ -117,6 +117,28 @@ type TxnOptions struct {
 	PipelinedMemDB bool
 }
 
+// PrewriteEncounterLockPolicy specifies the policy when prewrite encounters locks.
+type PrewriteEncounterLockPolicy int
+
+const (
+	// TryResolvePolicy is the default one: try to resolve those locks with smaller startTS.
+	TryResolvePolicy PrewriteEncounterLockPolicy = iota
+	// NoResolvePolicy means do not resolve, but return write conflict errors directly.
+	// This can be used to let the upper layer choose to retry in pessimistic mode.
+	NoResolvePolicy
+)
+
+func (p PrewriteEncounterLockPolicy) String() string {
+	switch p {
+	case TryResolvePolicy:
+		return "TryResolvePolicy"
+	case NoResolvePolicy:
+		return "NoResolvePolicy"
+	default:
+		return "Unknown"
+	}
+}
+
 // KVTxn contains methods to interact with a TiKV transaction.
 type KVTxn struct {
 	snapshot  *txnsnapshot.KVSnapshot
@@ -172,6 +194,8 @@ type KVTxn struct {
 
 	isPipelined     bool
 	pipelinedCancel context.CancelFunc
+
+	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -470,6 +494,11 @@ func (txn *KVTxn) ClearDiskFullOpt() {
 // SetAssertionLevel sets how strict the assertions in the transaction should be.
 func (txn *KVTxn) SetAssertionLevel(assertionLevel kvrpcpb.AssertionLevel) {
 	txn.assertionLevel = assertionLevel
+}
+
+// SetPrewriteEncounterLockPolicy specifies the behavior when prewrite encounters locks.
+func (txn *KVTxn) SetPrewriteEncounterLockPolicy(policy PrewriteEncounterLockPolicy) {
+	txn.prewriteEncounterLockPolicy = policy
 }
 
 // IsPessimistic returns true if it is pessimistic.

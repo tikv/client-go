@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.8-0.20241225040645-f2266d6bf259
-	github.com/tikv/pd/client v0.0.0-20241220053006-461b86adc78d
+	github.com/tikv/pd/client v0.0.0-20250107032658-5c4ab57d68de
 	go.uber.org/goleak v1.3.0
 )
 
