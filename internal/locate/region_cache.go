@@ -3078,7 +3078,7 @@ func (c *RegionCache) checkAndUpdateStoreHealthStatus(ctx context.Context, now t
 func (c *RegionCache) reportStoreReplicaFlows() {
 	c.stores.forEach(func(store *Store) {
 		for destType := toLeader; destType < numReplicaFlowsType; destType++ {
-			metrics.TiKVPreferLeaderFlowsGauge.WithLabelValues(destType.String(), store.addr).Set(float64(store.getReplicaFlowsStats(destType)))
+			metrics.TiKVPreferLeaderFlowsGauge.WithLabelValues(destType.String(), strconv.FormatUint(store.storeID, 10)).Set(float64(store.getReplicaFlowsStats(destType)))
 			store.resetReplicaFlowsStats(destType)
 		}
 	})
