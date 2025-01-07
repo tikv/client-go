@@ -45,6 +45,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/circuitbreaker"
 )
 
 // RPCContext contains data that is needed to send RPC to a region.
@@ -195,6 +196,11 @@ func NewRegionRequestRuntimeStats() *RegionRequestRuntimeStats {
 // Deprecated: use SetRegionCacheTTLWithJitter instead.
 func SetRegionCacheTTLSec(t int64) {
 	locate.SetRegionCacheTTLSec(t)
+}
+
+// ChangePdRegionMetaCircuitBreakerSettings changes circuit breaker settings for region metadata calls
+func ChangePdRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
+	locate.ChangePdRegionMetaCircuitBreakerSettings(apply)
 }
 
 // SetRegionCacheTTLWithJitter sets region cache TTL with jitter. The real TTL is in range of [base, base+jitter).

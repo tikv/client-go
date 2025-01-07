@@ -69,6 +69,7 @@ import (
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/circuitbreaker"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -131,6 +132,20 @@ func nextTTL(ts int64) int64 {
 		jitter = rand.Int63n(regionCacheTTLJitterSec)
 	}
 	return ts + regionCacheTTLSec + jitter
+}
+
+var pdRegionMetaCircuitBreaker = circuitbreaker.NewCircuitBreaker(
+	"region-meta",
+	circuitbreaker.Settings{
+		ErrorRateThresholdPct: 0,
+		MinQPSForOpen:         100,
+		ErrorRateWindow:       time.Second * 30,
+		CoolDownInterval:      time.Second * 10,
+		HalfOpenSuccessCount:  1})
+
+// ChangePdRegionMetaCircuitBreakerSettings changes circuit breaker changes for region metadata calls
+func ChangePdRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
+	pdRegionMetaCircuitBreaker.ChangeSettings(apply)
 }
 
 // nextTTLWithoutJitter is used for test.
@@ -2070,10 +2085,11 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 		start := time.Now()
 		var reg *router.Region
 		var err error
+		cbCtx := circuitbreaker.WithCircuitBreaker(ctx, pdRegionMetaCircuitBreaker)
 		if searchPrev {
-			reg, err = c.pdClient.GetPrevRegion(ctx, key, opts...)
+			reg, err = c.pdClient.GetPrevRegion(cbCtx, key, opts...)
 		} else {
-			reg, err = c.pdClient.GetRegion(ctx, key, opts...)
+			reg, err = c.pdClient.GetRegion(cbCtx, key, opts...)
 		}
 		metrics.LoadRegionCacheHistogramWhenCacheMiss.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2121,7 +2137,8 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			}
 		}
 		start := time.Now()
-		reg, err := c.pdClient.GetRegionByID(ctx, regionID, opt.WithBuckets())
+		cbCtx := circuitbreaker.WithCircuitBreaker(ctx, pdRegionMetaCircuitBreaker)
+		reg, err := c.pdClient.GetRegionByID(cbCtx, regionID, opt.WithBuckets())
 		metrics.LoadRegionCacheHistogramWithRegionByID.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
