@@ -34,6 +34,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
@@ -226,6 +227,9 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			// Extract lock from key error
 			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err1 != nil {
+				if tikverr.IsErrWriteConflict(errors.Cause(err1)) {
+					metrics.TiKvTxnWriteConflictCounter.Inc()
+				}
 				return err1
 			}
 			if _, ok := logged[lock.TxnID]; !ok {
@@ -244,6 +248,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if lock.TxnID > c.startTS && !c.isPessimistic {
+				metrics.TiKvTxnWriteConflictCounter.Inc()
 				return tikverr.NewErrWriteConflictWithArgs(
 					c.startTS,
 					lock.TxnID,
