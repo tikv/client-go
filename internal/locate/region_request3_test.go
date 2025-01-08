@@ -1418,9 +1418,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 				},
 			}}}, nil
 		}
-		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-			Value: []byte(addr),
-		}}, nil
+		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+			DataIsNotReady: &errorpb.DataIsNotReady{},
+		}}}, nil
 	}}
 
 	region := s.cache.getRegionByIDFromCache(regionLoc.Region.GetID())
