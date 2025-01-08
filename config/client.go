@@ -160,12 +160,12 @@ type CircuitBreakerSettings struct {
 	// CooldownIntervalSeconds defines how long to wait after circuit breaker is open before go to half-open state to send a probe request.
 	CooldownIntervalSeconds uint `toml:"cooldown-interval-seconds" json:"cooldown-interval-seconds"`
 	// HalfOpenSuccessCount defines how many subsequent requests to test after cooldown period before fully close the circuit. All request in excess of this count will be errored till the circuit is fully closed pending results of the firsts HalfOpenSuccessCount requests.
-	HalfOpenSuccessCount uint `toml:"half_open_success_count" json:"half_open_success_count"`
+	HalfOpenSuccessCount uint `toml:"half-open-success-count" json:"half-open-success-count"`
 }
 
 // CircuitBreakerSettingsList is a container to configure all circuit breakers
 type CircuitBreakerSettingsList struct {
-	PDRegionsMetadata CircuitBreakerSettings `toml:"pd-regions-metadata" json:"pd-regions-metadata"`
+	PDRegionsMetadata CircuitBreakerSettings `toml:"pd-region-metadata" json:"pd-region-metadata"`
 }
 
 // DefaultTiKVClient returns default config for TiKVClient.
