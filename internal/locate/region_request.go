@@ -1312,16 +1312,6 @@ func (s *replicaSelector) onReadReqConfigurableTimeout(req *tikvrpc.Request) boo
 	}
 }
 
-func (s *replicaSelector) onServerIsBusy(req *tikvrpc.Request) {
-	switch req.Type {
-	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
-		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
-		if target := s.targetReplica(); target != nil {
-			target.serverIsBusy = true
-		}
-	}
-}
-
 func (s *replicaSelector) checkLiveness(bo *retry.Backoffer, accessReplica *replica) livenessState {
 	store := accessReplica.store
 	liveness := store.requestLiveness(bo, s.regionCache)
@@ -1407,6 +1397,13 @@ func (s *replicaSelector) updateLeader(leader *metapb.Peer) {
 func (s *replicaSelector) onServerIsBusy(
 	bo *retry.Backoffer, ctx *RPCContext, req *tikvrpc.Request, serverIsBusy *errorpb.ServerIsBusy,
 ) (shouldRetry bool, err error) {
+	switch req.Type {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		if target := s.targetReplica(); target != nil {
+			target.serverIsBusy = true
+		}
+	}
 	if serverIsBusy.EstimatedWaitMs != 0 && ctx != nil && ctx.Store != nil {
 		estimatedWait := time.Duration(serverIsBusy.EstimatedWaitMs) * time.Millisecond
 		// Update the estimated wait time of the store.
@@ -2394,8 +2391,6 @@ func (s *RegionRequestSender) onRegionError(
 			if s.replicaSelector.onReadReqConfigurableTimeout(req) {
 				return true, nil
 			}
-		} else if s.replicaSelector != nil {
-			s.replicaSelector.onServerIsBusy(req)
 		}
 		if s.replicaSelector != nil {
 			return s.replicaSelector.onServerIsBusy(bo, ctx, req, serverIsBusy)
