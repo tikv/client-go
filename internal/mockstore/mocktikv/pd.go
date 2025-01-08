@@ -56,7 +56,7 @@ import (
 	"github.com/tikv/pd/client/opt"
 	"github.com/tikv/pd/client/pkg/caller"
 	"github.com/tikv/pd/client/pkg/circuitbreaker"
-sd "github.com/tikv/pd/client/servicediscovery"
+	sd "github.com/tikv/pd/client/servicediscovery"
 	"go.uber.org/atomic"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -472,6 +472,6 @@ func (m *pdClient) WithCallerComponent(caller.Component) pd.Client { return m }
 
 func enforceCircuitBreakerFor(name string, ctx context.Context) {
 	if circuitbreaker.FromContext(ctx) == nil {
-    	panic(fmt.Errorf("CircuitBreaker must be configured for %s", name))
+		panic(fmt.Errorf("CircuitBreaker must be configured for %s", name))
 	}
 }
