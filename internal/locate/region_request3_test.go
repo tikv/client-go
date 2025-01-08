@@ -1404,6 +1404,20 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	s.NotNil(regionLoc)
 
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("timeout")
+		default:
+		}
+		// Return `mismatch peer id` when accesses the leader.
+		if addr == s.cluster.GetStore(s.storeIDs[0]).Address {
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
+				MismatchPeerId: &errorpb.MismatchPeerId{
+					RequestPeerId: 1,
+					StorePeerId:   2,
+				},
+			}}}, nil
+		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
 			Value: []byte(addr),
 		}}, nil
@@ -1585,9 +1599,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestDoNotTryUnreachableLeader() {
 	regionStore := region.getStore()
 	leader, _, _, _ := region.WorkStorePeer(regionStore)
 	follower, _, _, _ := region.FollowerStorePeer(regionStore, 0, &storeSelectorOp{})
+	var numCalls int
 
 	s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (response *tikvrpc.Response, err error) {
-		if req.StaleRead && addr == follower.addr {
+		if req.StaleRead && addr == follower.addr && numCalls == 0 {
+			numCalls++
 			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{DataIsNotReady: &errorpb.DataIsNotReady{}}}}, nil
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
