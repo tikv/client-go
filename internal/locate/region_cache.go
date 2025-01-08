@@ -134,14 +134,7 @@ func nextTTL(ts int64) int64 {
 	return ts + regionCacheTTLSec + jitter
 }
 
-var pdRegionMetaCircuitBreaker = circuitbreaker.NewCircuitBreaker(
-	"region-meta",
-	circuitbreaker.Settings{
-		ErrorRateThresholdPct: 0,
-		MinQPSForOpen:         100,
-		ErrorRateWindow:       time.Second * 30,
-		CoolDownInterval:      time.Second * 10,
-		HalfOpenSuccessCount:  1})
+var pdRegionMetaCircuitBreaker = circuitbreaker.NewCircuitBreaker("region-meta", circuitbreaker.AlwaysClosedSettings)
 
 // ChangePdRegionMetaCircuitBreakerSettings changes circuit breaker changes for region metadata calls
 func ChangePdRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
