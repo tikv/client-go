@@ -36,6 +36,7 @@ package oracle
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -64,12 +65,17 @@ type Oracle interface {
 	GetExternalTimestamp(ctx context.Context) (uint64, error)
 	SetExternalTimestamp(ctx context.Context, ts uint64) error
 
-	// ValidateSnapshotReadTS verifies whether it can be guaranteed that the given readTS doesn't exceed the maximum ts
-	// that has been allocated by the oracle, so that it's safe to use this ts to perform snapshot read, stale read,
-	// etc.
+	ReadTSValidator
+}
+
+// ReadTSValidator is the interface for providing the ability for verifying whether a timestamp is safe to be used
+// for readings, as part of the `Oracle` interface.
+type ReadTSValidator interface {
+	// ValidateReadTS verifies whether it can be guaranteed that the given readTS doesn't exceed the maximum ts
+	// that has been allocated by the oracle, so that it's safe to use this ts to perform read operations.
 	// Note that this method only checks the ts from the oracle's perspective. It doesn't check whether the snapshot
 	// has been GCed.
-	ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *Option) error
+	ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *Option) error
 }
 
 // Future is a future which promises to return a timestamp.
@@ -120,4 +126,28 @@ func GoTimeToTS(t time.Time) uint64 {
 // maxTxnTimeUse means the max time a Txn May use (in ms) from its begin to commit.
 func GoTimeToLowerLimitStartTS(now time.Time, maxTxnTimeUse int64) uint64 {
 	return GoTimeToTS(now.Add(-time.Duration(maxTxnTimeUse) * time.Millisecond))
+}
+
+// NoopReadTSValidator is a dummy implementation of ReadTSValidator that always let the validation pass.
+// Only use this when using RPCs that are not related to ts (e.g. rawkv), or in tests where `Oracle` is not available
+// and the validation is not necessary.
+type NoopReadTSValidator struct{}
+
+func (NoopReadTSValidator) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *Option) error {
+	return nil
+}
+
+type ErrFutureTSRead struct {
+	ReadTS    uint64
+	CurrentTS uint64
+}
+
+func (e ErrFutureTSRead) Error() string {
+	return fmt.Sprintf("cannot set read timestamp to a future time, readTS: %d, currentTS: %d", e.ReadTS, e.CurrentTS)
+}
+
+type ErrLatestStaleRead struct{}
+
+func (ErrLatestStaleRead) Error() string {
+	return "cannot set read ts to max uint64 for stale read"
 }

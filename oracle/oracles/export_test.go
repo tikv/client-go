@@ -62,9 +62,9 @@ func NewEmptyPDOracle() oracle.Oracle {
 func SetEmptyPDOracleLastTs(oc oracle.Oracle, ts uint64) {
 	switch o := oc.(type) {
 	case *pdOracle:
-		now := &lastTSO{ts, ts}
+		now := &lastTSO{ts, oracle.GetTimeFromTS(ts)}
 		lastTSInterface, _ := o.lastTSMap.LoadOrStore(oracle.GlobalTxnScope, NewLastTSOPointer(now))
 		lastTSPointer := lastTSInterface.(*lastTSOPointer)
-		lastTSPointer.store(&lastTSO{tso: ts, arrival: ts})
+		lastTSPointer.store(&lastTSO{tso: ts, arrival: oracle.GetTimeFromTS(ts)})
 	}
 }
