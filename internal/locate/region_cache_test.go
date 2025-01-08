@@ -54,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -1004,7 +1005,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	s.Equal(ctxTiFlash.Peer.Id, s.peer1)
 	ctxTiFlash.Peer.Role = metapb.PeerRole_Learner
 	r := ctxTiFlash.Meta
-	reqSend := NewRegionRequestSender(s.cache, nil)
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{CurrentRegions: []*metapb.Region{r}}}
 	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr)
 
@@ -1640,7 +1641,7 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	ctx, err := s.cache.GetTiKVRPCContext(retry.NewBackofferWithVars(context.Background(), 100, nil), loc.Region, kv.ReplicaReadLeader, 0)
 	s.NotNil(ctx)
 	s.NoError(err)
-	reqSend := NewRegionRequestSender(s.cache, nil)
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
 	s.Error(err)
 	s.False(shouldRetry)

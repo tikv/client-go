@@ -60,7 +60,9 @@ import (
 	"github.com/tikv/client-go/v2/internal/client/mock_server"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	pd "github.com/tikv/pd/client"
 	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
 )
@@ -75,6 +77,7 @@ type testRegionRequestToSingleStoreSuite struct {
 	store               uint64
 	peer                uint64
 	region              uint64
+	pdCli               pd.Client
 	cache               *RegionCache
 	bo                  *retry.Backoffer
 	regionRequestSender *RegionRequestSender
@@ -85,11 +88,11 @@ func (s *testRegionRequestToSingleStoreSuite) SetupTest() {
 	s.mvccStore = mocktikv.MustNewMVCCStore()
 	s.cluster = mocktikv.NewCluster(s.mvccStore)
 	s.store, s.peer, s.region = mocktikv.BootstrapWithSingleStore(s.cluster)
-	pdCli := &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
-	s.cache = NewRegionCache(pdCli)
+	s.pdCli = &CodecPDClient{mocktikv.NewPDClient(s.cluster), apicodec.NewCodecV1(apicodec.ModeTxn)}
+	s.cache = NewRegionCache(s.pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
-	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TearDownTest() {
@@ -567,7 +570,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 	}()
 
 	cli := client.NewRPCClient()
-	sender := NewRegionRequestSender(s.cache, cli)
+	sender := NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{})
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -586,7 +589,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionForGrpcWhenCtxCa
 		Client:       client.NewRPCClient(),
 		redirectAddr: addr,
 	}
-	sender = NewRegionRequestSender(s.cache, client1)
+	sender = NewRegionRequestSender(s.cache, client1, oracle.NoopReadTSValidator{})
 	sender.SendReq(s.bo, req, region.Region, 3*time.Second)
 
 	// cleanup
@@ -772,7 +775,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestBatchClientSendLoopPanic() {
 					cancel()
 				}()
 				req := tikvrpc.NewRequest(tikvrpc.CmdCop, &coprocessor.Request{Data: []byte("a"), StartTs: 1})
-				regionRequestSender := NewRegionRequestSender(s.cache, fnClient)
+				regionRequestSender := NewRegionRequestSender(s.cache, fnClient, oracle.NoopReadTSValidator{})
 				regionRequestSender.regionCache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
 				regionRequestSender.SendReq(bo, req, region.Region, client.ReadTimeoutShort)
 			}
