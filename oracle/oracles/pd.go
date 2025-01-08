@@ -273,25 +273,6 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 	return oracle.ComposeTS(physical, logical), nil
 }
 
-func (o *pdOracle) getArrivalTimestamp() uint64 {
-	return oracle.GoTimeToTS(time.Now())
-}
-
-func (o *pdOracle) getMinTimestampInAllTSOGroup(ctx context.Context) (uint64, error) {
-	now := time.Now()
-
-	physical, logical, err := o.c.GetMinTS(ctx)
-	if err != nil {
-		return 0, errors.WithStack(err)
-	}
-	dist := time.Since(now)
-	if dist > slowDist {
-		logutil.Logger(ctx).Warn("get minimum timestamp too slow",
-			zap.Duration("cost time", dist))
-	}
-	return oracle.ComposeTS(physical, logical), nil
-}
-
 func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	if txnScope == "" {
 		txnScope = oracle.GlobalTxnScope
