@@ -436,6 +436,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		s.mu.RLock()
 		req, err := s.buildBatchGetRequest(pending, busyThresholdMs, readTier)
 		if err != nil {
+			s.mu.RUnlock()
 			return err
 		}
 		req.InputRequestSource = s.GetRequestSource()
