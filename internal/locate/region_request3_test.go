@@ -88,7 +88,7 @@ func (s *testRegionRequestToThreeStoresSuite) SetupTest() {
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
-	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
 
 	s.NoError(failpoint.Enable("tikvclient/doNotRecoverStoreHealthCheckPanic", "return"))
 }
@@ -185,7 +185,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSwitchPeerWhenNoLeaderErrorWit
 	s.Nil(err)
 	s.NotNil(location)
 	bo := retry.NewBackoffer(context.Background(), 1000)
-	resp, _, _, err := NewRegionRequestSender(s.cache, cli).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
+	resp, _, _, err := NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{}).SendReqCtx(bo, req, location.Region, time.Second, tikvrpc.TiKV)
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, err := resp.GetRegionError()
@@ -235,7 +235,7 @@ func (s *testRegionRequestToThreeStoresSuite) loadAndGetLeaderStore() (*Store, s
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestForwarding() {
-	sender := NewRegionRequestSender(s.cache, s.regionRequestSender.client)
+	sender := NewRegionRequestSender(s.cache, s.regionRequestSender.client, oracle.NoopReadTSValidator{})
 	sender.regionCache.enableForwarding = true
 
 	// First get the leader's addr from region cache
@@ -1242,7 +1242,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 	}
 	resetStats := func() {
 		reqTargetAddrs = make(map[string]struct{})
-		s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+		s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient, oracle.NoopReadTSValidator{})
 		s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 	}
 
@@ -1481,7 +1481,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadTryFollowerAfterTimeo
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte("value")}}, nil
 	}}
-	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, mockRPCClient, oracle.NoopReadTSValidator{})
 	s.regionRequestSender.Stats = NewRegionRequestRuntimeStats()
 	getLocFn := func() *KeyLocation {
 		loc, err := s.regionRequestSender.regionCache.LocateKey(bo, []byte("a"))
