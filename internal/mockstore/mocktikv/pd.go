@@ -261,11 +261,13 @@ func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...o
 }
 
 func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+	enforceCircuitBreakerFor("ScanRegions", ctx)
 	regions := c.cluster.ScanRegions(startKey, endKey, limit, opts...)
 	return regions, nil
 }
 
 func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+	enforceCircuitBreakerFor("BatchScanRegions", ctx)
 	if _, err := util.EvalFailpoint("mockBatchScanRegionsUnimplemented"); err == nil {
 		return nil, status.Errorf(codes.Unimplemented, "mock BatchScanRegions is not implemented")
 	}

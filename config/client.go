@@ -100,8 +100,6 @@ type TiKVClient struct {
 	// If a Region has not been accessed for more than the given duration (in seconds), it
 	// will be reloaded from the PD.
 	RegionCacheTTL uint `toml:"region-cache-ttl" json:"region-cache-ttl"`
-	// CircuitBreakerSettingsList is the config for default circuit breaker settings
-	CircuitBreakerSettingsList CircuitBreakerSettingsList `toml:"circuit-breaker" json:"circuit-breaker"`
 	// If a store has been up to the limit, it will return error for successive request to
 	// prevent the store occupying too much token in dispatching level.
 	StoreLimit int64 `toml:"store-limit" json:"store-limit"`
@@ -151,23 +149,6 @@ type CoprocessorCache struct {
 	AdmissionMinProcessMs uint64 `toml:"admission-min-process-ms" json:"-"`
 }
 
-// CircuitBreakerSettings is the config for default circuit breaker settings excluding the error rate
-type CircuitBreakerSettings struct {
-	// ErrorRateEvaluationWindowSeconds defines how long to track errors before evaluating error rate threshold.
-	ErrorRateEvaluationWindowSeconds uint `toml:"error-rate-evaluation-window-seconds" json:"error-rate-evaluation-window-seconds"`
-	// MinQPSToOpen defines the average qps over the error-rate-evaluation-window-seconds that must be met before evaluating the error rate threshold.
-	MinQPSToOpen uint `toml:"min-qps-to-open" json:"min-qps-to-open"`
-	// CooldownIntervalSeconds defines how long to wait after circuit breaker is open before go to half-open state to send a probe request.
-	CooldownIntervalSeconds uint `toml:"cooldown-interval-seconds" json:"cooldown-interval-seconds"`
-	// HalfOpenSuccessCount defines how many subsequent requests to test after cooldown period before fully close the circuit. All request in excess of this count will be errored till the circuit is fully closed pending results of the firsts HalfOpenSuccessCount requests.
-	HalfOpenSuccessCount uint `toml:"half-open-success-count" json:"half-open-success-count"`
-}
-
-// CircuitBreakerSettingsList is a container to configure all circuit breakers
-type CircuitBreakerSettingsList struct {
-	PDRegionsMetadata CircuitBreakerSettings `toml:"pd-region-metadata" json:"pd-region-metadata"`
-}
-
 // DefaultTiKVClient returns default config for TiKVClient.
 func DefaultTiKVClient() TiKVClient {
 	return TiKVClient{
@@ -195,16 +176,7 @@ func DefaultTiKVClient() TiKVClient {
 
 		EnableChunkRPC: true,
 
-		RegionCacheTTL: 600,
-		CircuitBreakerSettingsList: CircuitBreakerSettingsList{
-			PDRegionsMetadata: CircuitBreakerSettings{
-				ErrorRateEvaluationWindowSeconds: 30,
-				MinQPSToOpen:                     10,
-				CooldownIntervalSeconds:          10,
-				HalfOpenSuccessCount:             1,
-			},
-		},
-
+		RegionCacheTTL:       600,
 		StoreLimit:           0,
 		StoreLivenessTimeout: DefStoreLivenessTimeout,
 
