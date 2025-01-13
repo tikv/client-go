@@ -860,7 +860,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			patchRequestSource(req, s.replicaSelector.replicaType())
 		}
-		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+		if err := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); err != nil {
 			return nil, nil, retryTimes, err
 		}
 		if s.replicaSelector != nil {
