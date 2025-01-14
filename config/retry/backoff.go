@@ -233,7 +233,20 @@ func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err e
 		zap.Int("maxSleep", b.maxSleep),
 		zap.Stringer("type", cfg),
 		zap.Reflect("txnStartTS", startTs))
+
+	// fail fast if we don't have enough retry tokens
+	if cfg.retryRateLimiter != nil && !cfg.retryRateLimiter.takeRetryToken() {
+		logutil.Logger(b.ctx).Warn(fmt.Sprintf("Retry limit for %s is exhausted", cfg.name))
+		return errors.WithStack(err)
+	}
+
 	return nil
+}
+
+func (b *Backoffer) OnSuccess(cfg *Config) {
+	if cfg.retryRateLimiter != nil {
+		cfg.retryRateLimiter.addRetryToken()
+	}
 }
 
 func (b *Backoffer) String() string {
