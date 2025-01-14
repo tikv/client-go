@@ -804,6 +804,8 @@ func AttachContext(req *Request, rpcCtx kvrpcpb.Context) bool {
 }
 
 // SetContext set the Context field for the given req to the specified ctx.
+//
+// Deprecated: use SetContextNoAttach instead, RPCClient will call AttachContext(req, req.Context).
 func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 	if region != nil {
 		req.Context.RegionId = region.Id

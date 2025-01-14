@@ -59,6 +59,7 @@ func (c *CodecClient) SendRequest(ctx context.Context, addr string, req *tikvrpc
 	if err != nil {
 		return nil, err
 	}
+	tikvrpc.AttachContext(req, req.Context)
 	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
 	if err != nil {
 		return nil, err
