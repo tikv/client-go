@@ -36,6 +36,7 @@ package tikv_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -217,14 +218,25 @@ func testUpdateLatestCommitInfo(require *require.Assertions, store tikv.StorePro
 	}
 
 	commitInfo1 := doTxn()
-	require.Equal(commitInfo1, store.GetLastCommitInfo(""))
+	require.Equal(commitInfo1, store.GetLastCommitInfo())
 	require.Equal(commitInfo1.MutationLen, 1)
 	require.Equal(commitInfo1.TxnSize, 8)
 	require.Equal(commitInfo1.TxnType, mode)
 	commitInfo2 := doTxn()
-	lastInfo := store.GetLastCommitInfo("")
+	lastInfo := store.GetLastCommitInfo()
 	require.NotEqual(commitInfo1, lastInfo)
 	require.Equal(commitInfo2, lastInfo)
 	require.Greater(lastInfo.CommitTS, commitInfo1.CommitTS)
 	require.GreaterOrEqual(lastInfo.StartTS, commitInfo1.CommitTS)
+
+	errMsg := fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: 1, TxnSize: 8, Primary: [107 101 121]",
+		lastInfo.StartTS, mode, lastInfo.StartTS, lastInfo.CommitTS)
+	require.PanicsWithValue(errMsg, func() {
+		lastInfo.Verify(lastInfo.StartTS)
+	})
+	errMsg = fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: 1, TxnSize: 8, Primary: [107 101 121]",
+		lastInfo.CommitTS-1, mode, lastInfo.StartTS, lastInfo.CommitTS)
+	require.PanicsWithValue(errMsg, func() {
+		lastInfo.Verify(lastInfo.CommitTS - 1)
+	})
 }

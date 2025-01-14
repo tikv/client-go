@@ -38,7 +38,7 @@ func (c *CommitInfo) String() string {
 // Verify checks validation of this commit information from the given ts.
 func (c *CommitInfo) Verify(ts uint64) {
 	if ts < c.CommitTS || ts <= c.StartTS {
-		panic(fmt.Sprintf("ts: %d, lastCommit: %s", ts, c.String()))
+		panic(fmt.Sprintf("Verified ts: %d, LastCommit: %s", ts, c.String()))
 	}
 }
 
