@@ -344,7 +344,7 @@ type PlainMutations struct {
 	flags  []CommitterMutationFlags
 }
 
-// NewPlainMutations creates a PlainMutations object with sizeHint reserved.G
+// NewPlainMutations creates a PlainMutations object with sizeHint reserved.
 func NewPlainMutations(sizeHint int) PlainMutations {
 	return PlainMutations{
 		ops:    make([]kvrpcpb.Op, 0, sizeHint),
@@ -2376,6 +2376,11 @@ func (c *twoPhaseCommitter) mutationsOfKeys(keys [][]byte) CommitterMutations {
 	return &res
 }
 
+// updateStoreCommitInfo sets the commit info for the store.
+func (c *twoPhaseCommitter) updateStoreCommitInfo() {
+	c.store.SetLastCommitInfo(c.getCommitInfo())
+}
+
 func (c *twoPhaseCommitter) getCommitInfo() *util.CommitInfo {
 	var txnType string
 	if c.isAsyncCommit() {
@@ -2391,16 +2396,12 @@ func (c *twoPhaseCommitter) getCommitInfo() *util.CommitInfo {
 		CommitTS:    atomic.LoadUint64(&c.commitTS),
 		MutationLen: c.mutations.Len(),
 		TxnSize:     c.txnSize,
+		Primary:     c.primary(),
 	}
 }
 
-// updateStoreCommitInfo sets the commit info for the store.
-func (c *twoPhaseCommitter) updateStoreCommitInfo() {
-	c.store.SetLastCommitInfo(c.txn.scope, c.getCommitInfo())
-}
-
 type storeCommitInfo interface {
-	SetLastCommitInfo(string, *util.CommitInfo)
+	SetLastCommitInfo(*util.CommitInfo)
 	// GetLastCommitInfo get the last committed transaction's information.
-	GetLastCommitInfo(string) *util.CommitInfo
+	GetLastCommitInfo() *util.CommitInfo
 }

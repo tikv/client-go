@@ -865,13 +865,13 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 }
 
 // SetLastCommitInfo sets the last committed transaction's information.
-func (s *KVStore) SetLastCommitInfo(txnScope string, ci *util.CommitInfo) {
-	s.tsVerifier.StoreCommitInfo(txnScope, ci)
+func (s *KVStore) SetLastCommitInfo(ci *util.CommitInfo) {
+	s.tsVerifier.SetLastCommitInfo(ci)
 }
 
 // GetLastCommitInfo get the last committed transaction's information.
-func (s *KVStore) GetLastCommitInfo(txnScope string) *util.CommitInfo {
-	return s.tsVerifier.GetLastCommitInfo(txnScope)
+func (s *KVStore) GetLastCommitInfo() *util.CommitInfo {
+	return s.tsVerifier.GetLastCommitInfo()
 }
 
 func isValidSafeTS(ts uint64) bool {

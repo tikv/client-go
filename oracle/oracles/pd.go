@@ -259,7 +259,7 @@ func (f *tsFuture) Wait() (uint64, error) {
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
 	var commitInfo *util.CommitInfo
 	if o.tsVerifier != nil {
-		commitInfo = o.tsVerifier.GetLastCommitInfo(opt.TxnScope)
+		commitInfo = o.tsVerifier.GetLastCommitInfo()
 	}
 	return &tsFuture{o.c.GetTSAsync(ctx), o, opt.TxnScope, commitInfo}
 }
@@ -268,7 +268,7 @@ func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, e
 	now := time.Now()
 	var commitInfo *util.CommitInfo
 	if o.tsVerifier != nil {
-		commitInfo = o.tsVerifier.GetLastCommitInfo(txnScope)
+		commitInfo = o.tsVerifier.GetLastCommitInfo()
 	}
 	physical, logical, err := o.c.GetTS(ctx)
 	if err != nil {
