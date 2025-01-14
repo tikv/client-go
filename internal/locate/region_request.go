@@ -752,43 +752,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
-	if val, err := util.EvalFailpoint("tikvStoreSendReqResult"); err == nil {
-		if s, ok := val.(string); ok {
-			switch s {
-			case "timeout":
-				return nil, nil, 0, errors.New("timeout")
-			case "GCNotLeader":
-				if req.Type == tikvrpc.CmdGC {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
-					}, nil, 0, nil
-				}
-			case "PessimisticLockNotLeader":
-				if req.Type == tikvrpc.CmdPessimisticLock {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
-					}, nil, 0, nil
-				}
-			case "GCServerIsBusy":
-				if req.Type == tikvrpc.CmdGC {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-					}, nil, 0, nil
-				}
-			case "busy":
-				return &tikvrpc.Response{
-					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-				}, nil, 0, nil
-			case "requestTiDBStoreError":
-				if et == tikvrpc.TiDB {
-					return nil, nil, 0, errors.WithStack(tikverr.ErrTiKVServerTimeout)
-				}
-			case "requestTiFlashError":
-				if et == tikvrpc.TiFlash {
-					return nil, nil, 0, errors.WithStack(tikverr.ErrTiFlashServerTimeout)
-				}
-			}
-		}
+	if resp, err = failpointSendReqResult(req, et); err != nil || resp != nil {
+		return
 	}
 
 	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
@@ -895,7 +860,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			patchRequestSource(req, s.replicaSelector.replicaType())
 		}
-		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+		if err := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); err != nil {
 			return nil, nil, retryTimes, err
 		}
 		if s.replicaSelector != nil {
@@ -1468,12 +1433,18 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "mismatch_peer_id"
 	} else if e.GetBucketVersionNotMatch() != nil {
 		return "bucket_version_not_match"
+	} else if isInvalidMaxTsUpdate(e) {
+		return "invalid_max_ts_update"
 	}
 	return "unknown"
 }
 
 func isDeadlineExceeded(e *errorpb.Error) bool {
 	return strings.Contains(e.GetMessage(), "Deadline is exceeded")
+}
+
+func isInvalidMaxTsUpdate(e *errorpb.Error) bool {
+	return strings.Contains(e.GetMessage(), "invalid max_ts update")
 }
 
 func (s *RegionRequestSender) onRegionError(
@@ -1771,6 +1742,16 @@ func (s *RegionRequestSender) onRegionError(
 		return false, nil
 	}
 
+	if isInvalidMaxTsUpdate(regionErr) {
+		logutil.Logger(bo.GetCtx()).Error(
+			"tikv reports `InvalidMaxTsUpdate`",
+			zap.String("message", regionErr.GetMessage()),
+			zap.Stringer("req", req),
+			zap.Stringer("ctx", ctx),
+		)
+		return false, errors.New(regionErr.String())
+	}
+
 	logutil.Logger(bo.GetCtx()).Debug(
 		"tikv reports region failed",
 		zap.Stringer("regionErr", regionErr),
@@ -1906,4 +1887,61 @@ func (s *baseReplicaSelector) backoffOnNoCandidate(bo *retry.Backoffer) error {
 		return nil
 	}
 	return bo.Backoff(args.cfg, args.err)
+}
+
+// failpointSendReqResult is used to process the failpoint For tikvStoreSendReqResult.
+func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
+	resp *tikvrpc.Response,
+	err error,
+) {
+	if val, e := util.EvalFailpoint("tikvStoreSendReqResult"); e == nil {
+		failpointCfg, ok := val.(string)
+		if !ok {
+			return
+		}
+		switch failpointCfg {
+		case "timeout":
+			{
+				err = errors.New("timeout")
+				return
+			}
+		case "GCNotLeader":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
+			}
+		case "PessimisticLockNotLeader":
+			if req.Type == tikvrpc.CmdPessimisticLock {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
+			}
+		case "GCServerIsBusy":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+				}
+				return
+			}
+		case "busy":
+			resp = &tikvrpc.Response{
+				Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+			}
+			return
+		case "requestTiDBStoreError":
+			if et == tikvrpc.TiDB {
+				err = errors.WithStack(tikverr.ErrTiKVServerTimeout)
+				return
+			}
+		case "requestTiFlashError":
+			if et == tikvrpc.TiFlash {
+				err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
+				return
+			}
+		}
+	}
+	return
 }

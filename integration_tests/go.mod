@@ -7,12 +7,12 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20241120071417-b5b7843d9037
-	github.com/pingcap/tidb v1.1.0-beta.0.20241223103612-14a469ab9d4e
+	github.com/pingcap/tidb v1.1.0-beta.0.20241228173342-cdcc291f254e
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20241223070848-fd950fcf9fcc
-	github.com/tikv/pd/client v0.0.0-20241220053006-461b86adc78d
+	github.com/tikv/client-go/v2 v2.0.8-0.20241225040645-f2266d6bf259
+	github.com/tikv/pd/client v0.0.0-20250107032658-5c4ab57d68de
 	go.uber.org/goleak v1.3.0
 )
 
@@ -49,7 +49,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/influxdata/tdigest v0.0.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20230326075908-cb1d2100619a // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -114,7 +114,6 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/crazycs520/tidb v1.1.0-beta.0.20241225031701-9554991d22f6
 
 	github.com/tikv/client-go/v2 => ../
 )

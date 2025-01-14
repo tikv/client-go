@@ -3,8 +3,6 @@ name: Compatibility Test
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
 
 jobs:
 
@@ -24,8 +22,7 @@ jobs:
     - name: Checkout TiDB
       uses: actions/checkout@v2
       with:
-        repository: crazycs520/tidb
-        ref: opt-stats
+        repository: pingcap/tidb
         path: tidb
 
     - name: Check build
