@@ -146,8 +146,8 @@ func withPDCircuitBreaker(ctx context.Context) context.Context {
 	return circuitbreaker.WithCircuitBreaker(ctx, pdRegionMetaCircuitBreaker)
 }
 
-// ChangePdRegionMetaCircuitBreakerSettings changes circuit breaker changes for region metadata calls
-func ChangePdRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
+// ChangePDRegionMetaCircuitBreakerSettings changes circuit breaker changes for region metadata calls
+func ChangePDRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
 	pdRegionMetaCircuitBreaker.ChangeSettings(apply)
 }
 

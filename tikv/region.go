@@ -198,9 +198,9 @@ func SetRegionCacheTTLSec(t int64) {
 	locate.SetRegionCacheTTLSec(t)
 }
 
-// ChangePdRegionMetaCircuitBreakerSettings changes circuit breaker settings for region metadata calls
-func ChangePdRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
-	locate.ChangePdRegionMetaCircuitBreakerSettings(apply)
+// ChangePDRegionMetaCircuitBreakerSettings changes circuit breaker settings for region metadata calls
+func ChangePDRegionMetaCircuitBreakerSettings(apply func(config *circuitbreaker.Settings)) {
+	locate.ChangePDRegionMetaCircuitBreakerSettings(apply)
 }
 
 // SetRegionCacheTTLWithJitter sets region cache TTL with jitter. The real TTL is in range of [base, base+jitter).
