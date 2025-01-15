@@ -120,6 +120,7 @@ type kvstore interface {
 	IsClose() bool
 	// Go run the function in a separate goroutine.
 	Go(f func()) error
+	storeCommitInfo
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -1868,6 +1869,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Debug("1PC protocol is used to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("session", c.sessionID))
+		c.updateStoreCommitInfo()
 		return nil
 	}
 
@@ -1903,6 +1905,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
+	c.updateStoreCommitInfo()
 
 	if c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
@@ -2371,4 +2374,34 @@ func (c *twoPhaseCommitter) mutationsOfKeys(keys [][]byte) CommitterMutations {
 		}
 	}
 	return &res
+}
+
+// updateStoreCommitInfo sets the commit info for the store.
+func (c *twoPhaseCommitter) updateStoreCommitInfo() {
+	c.store.SetLastCommitInfo(c.getCommitInfo())
+}
+
+func (c *twoPhaseCommitter) getCommitInfo() *util.CommitInfo {
+	var txnType string
+	if c.isAsyncCommit() {
+		txnType = "async"
+	} else if c.isOnePC() {
+		txnType = "1pc"
+	} else {
+		txnType = "2pc"
+	}
+	return &util.CommitInfo{
+		TxnType:     txnType,
+		StartTS:     c.startTS,
+		CommitTS:    atomic.LoadUint64(&c.commitTS),
+		MutationLen: c.mutations.Len(),
+		TxnSize:     c.txnSize,
+		Primary:     c.primaryKey,
+	}
+}
+
+type storeCommitInfo interface {
+	SetLastCommitInfo(*util.CommitInfo)
+	// GetLastCommitInfo get the last committed transaction's information.
+	GetLastCommitInfo() *util.CommitInfo
 }
