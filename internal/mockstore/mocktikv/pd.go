@@ -55,6 +55,7 @@ import (
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
 	"github.com/tikv/pd/client/pkg/caller"
+	"github.com/tikv/pd/client/pkg/circuitbreaker"
 	sd "github.com/tikv/pd/client/servicediscovery"
 	"go.uber.org/atomic"
 	"google.golang.org/grpc/codes"
@@ -226,6 +227,7 @@ func (m *mockTSFuture) Wait() (int64, int64, error) {
 }
 
 func (c *pdClient) GetRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
+	enforceCircuitBreakerFor("GetRegion", ctx)
 	region, peer, buckets, downPeers := c.cluster.GetRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
@@ -244,6 +246,7 @@ func (c *pdClient) GetRegionFromMember(ctx context.Context, key []byte, memberUR
 }
 
 func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.GetRegionOption) (*router.Region, error) {
+	enforceCircuitBreakerFor("GetPrevRegion", ctx)
 	region, peer, buckets, downPeers := c.cluster.GetPrevRegionByKey(key)
 	if len(opts) == 0 {
 		buckets = nil
@@ -252,16 +255,19 @@ func (c *pdClient) GetPrevRegion(ctx context.Context, key []byte, opts ...opt.Ge
 }
 
 func (c *pdClient) GetRegionByID(ctx context.Context, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
+	enforceCircuitBreakerFor("GetRegionByID", ctx)
 	region, peer, buckets, downPeers := c.cluster.GetRegionByID(regionID)
 	return &router.Region{Meta: region, Leader: peer, Buckets: buckets, DownPeers: downPeers}, nil
 }
 
 func (c *pdClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+	enforceCircuitBreakerFor("ScanRegions", ctx)
 	regions := c.cluster.ScanRegions(startKey, endKey, limit, opts...)
 	return regions, nil
 }
 
 func (c *pdClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+	enforceCircuitBreakerFor("BatchScanRegions", ctx)
 	if _, err := util.EvalFailpoint("mockBatchScanRegionsUnimplemented"); err == nil {
 		return nil, status.Errorf(codes.Unimplemented, "mock BatchScanRegions is not implemented")
 	}
@@ -465,3 +471,9 @@ func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 func (m *pdClient) GetServiceDiscovery() sd.ServiceDiscovery { return nil }
 
 func (m *pdClient) WithCallerComponent(caller.Component) pd.Client { return m }
+
+func enforceCircuitBreakerFor(name string, ctx context.Context) {
+	if circuitbreaker.FromContext(ctx) == nil {
+		panic(fmt.Errorf("CircuitBreaker must be configured for %s", name))
+	}
+}
