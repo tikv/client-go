@@ -44,8 +44,7 @@ var (
 	TiKVTxnCmdHistogram                            *prometheus.HistogramVec
 	TiKVBackoffHistogram                           *prometheus.HistogramVec
 	TiKVSendReqHistogram                           *prometheus.HistogramVec
-	TiKVSendReqCounter                             *prometheus.CounterVec
-	TiKVSendReqTimeCounter                         *prometheus.CounterVec
+	TiKVSendReqSummary                             *prometheus.SummaryVec
 	TiKVRPCNetLatencyHistogram                     *prometheus.HistogramVec
 	TiKVCoprocessorHistogram                       *prometheus.HistogramVec
 	TiKVLockResolverCounter                        *prometheus.CounterVec
@@ -176,23 +175,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope})
 
-	TiKVSendReqCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	TiKVSendReqSummary = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
-			Name:        "request_counter",
-			Help:        "Counter of sending request with multi dimensions.",
+			Name:        "source_request_seconds",
+			Help:        "Summary of sending request with multi dimensions.",
 			ConstLabels: constLabels,
-		}, []string{LblType, LblStore, LblStaleRead, LblSource, LblScope})
-
-	TiKVSendReqTimeCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "request_time_counter",
-			Help:        "Counter of request time with multi dimensions.",
-			ConstLabels: constLabels,
-		}, []string{LblType, LblStore, LblStaleRead, LblSource, LblScope})
+		}, []string{LblType, LblStore, LblStaleRead, LblScope, LblSource})
 
 	TiKVRPCNetLatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -884,8 +874,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCmdHistogram)
 	prometheus.MustRegister(TiKVBackoffHistogram)
 	prometheus.MustRegister(TiKVSendReqHistogram)
-	prometheus.MustRegister(TiKVSendReqCounter)
-	prometheus.MustRegister(TiKVSendReqTimeCounter)
+	prometheus.MustRegister(TiKVSendReqSummary)
 	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
 	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
