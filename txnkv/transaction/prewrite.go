@@ -460,6 +460,7 @@ func (action actionPrewrite) handleSingleBatch(
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if (lock.TxnID > c.startTS && !c.isPessimistic) ||
 				c.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
+				metrics.LockResolverCountWithWriteConflict.Inc()
 				return tikverr.NewErrWriteConflictWithArgs(
 					c.startTS,
 					lock.TxnID,
