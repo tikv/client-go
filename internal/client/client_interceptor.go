@@ -129,7 +129,7 @@ func getResourceControlInfo(ctx context.Context, req *tikvrpc.Request) (
 // the given resource group name.
 //
 // Deprecated: embedded in `interceptedClient.SendRequest` directly to reduce overhead.
-func buildResourceControlInterceptor(
+func buildResourceControlInterceptor( //nolint:unused
 	ctx context.Context,
 	req *tikvrpc.Request,
 ) interceptor.RPCInterceptor {
