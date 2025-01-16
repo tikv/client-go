@@ -1,6 +1,8 @@
 package apicodec
 
 import (
+	"sync"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
@@ -9,19 +11,24 @@ import (
 )
 
 type codecV1 struct {
+	reqPool  sync.Pool
 	memCodec memCodec
 }
 
 // NewCodecV1 returns a codec that can be used to encode/decode
 // keys and requests to and from APIv1 format.
 func NewCodecV1(mode Mode) Codec {
+	var codec *codecV1
 	switch mode {
 	case ModeRaw:
-		return &codecV1{memCodec: &defaultMemCodec{}}
+		codec = &codecV1{memCodec: &defaultMemCodec{}}
 	case ModeTxn:
-		return &codecV1{memCodec: &memComparableCodec{}}
+		codec = &codecV1{memCodec: &memComparableCodec{}}
+	default:
+		panic("unknown mode")
 	}
-	panic("unknown mode")
+	codec.reqPool.New = func() any { return &tikvrpc.Request{} }
+	return codec
 }
 
 func (c *codecV1) GetAPIVersion() kvrpcpb.APIVersion {
@@ -37,10 +44,14 @@ func (c *codecV1) GetKeyspaceID() KeyspaceID {
 }
 
 func (c *codecV1) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	return attachAPICtx(c, req), nil
+	r := c.reqPool.Get().(*tikvrpc.Request)
+	*r = *req
+	setAPICtx(c, r)
+	return r, nil
 }
 
 func (c *codecV1) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
+	defer c.reqPool.Put(req)
 	regionError, err := resp.GetRegionError()
 	// If GetRegionError returns error, it means the response does not contain region error to decode,
 	// therefore we skip decoding and return the response as is.

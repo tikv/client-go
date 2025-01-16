@@ -132,6 +132,7 @@ func (f *fnClient) CloseAddrVer(addr string, ver uint64) error {
 func (f *fnClient) SetEventListener(listener client.ClientEventListener) {}
 
 func (f *fnClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	tikvrpc.AttachContext(req, req.Context)
 	return f.fn(ctx, addr, req, timeout)
 }
 
