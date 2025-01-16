@@ -123,10 +123,7 @@ func (o *MockOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *or
 	return o.GetTimestampAsync(ctx, opt)
 }
 
-func (o *MockOracle) SetLowResolutionTimestampUpdateInterval(time.Duration) error {
-	return nil
-}
-
+// ValidateReadTS implements ReadTSValidator interface.
 func (o *MockOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
 	if readTS == math.MaxUint64 {
 		if isStaleRead {

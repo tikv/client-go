@@ -133,10 +133,12 @@ func GoTimeToLowerLimitStartTS(now time.Time, maxTxnTimeUse int64) uint64 {
 // and the validation is not necessary.
 type NoopReadTSValidator struct{}
 
+// ValidateReadTS implements the ReadTSValidator interface.
 func (NoopReadTSValidator) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *Option) error {
 	return nil
 }
 
+// ErrFutureTSRead is returned when the read timestamp is set to a future time.
 type ErrFutureTSRead struct {
 	ReadTS    uint64
 	CurrentTS uint64
@@ -146,6 +148,7 @@ func (e ErrFutureTSRead) Error() string {
 	return fmt.Sprintf("cannot set read timestamp to a future time, readTS: %d, currentTS: %d", e.ReadTS, e.CurrentTS)
 }
 
+// ErrLatestStaleRead is returned when the read timestamp is set to max uint64 for stale read.
 type ErrLatestStaleRead struct{}
 
 func (ErrLatestStaleRead) Error() string {
