@@ -36,6 +36,7 @@ package oracles
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -122,14 +123,24 @@ func (o *MockOracle) GetLowResolutionTimestampAsync(ctx context.Context, opt *or
 	return o.GetTimestampAsync(ctx, opt)
 }
 
-// ValidateSnapshotReadTS implements oracle.Oracle interface.
-func (o *MockOracle) ValidateSnapshotReadTS(ctx context.Context, readTS uint64, opt *oracle.Option) error {
+// ValidateReadTS implements ReadTSValidator interface.
+func (o *MockOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
+	if readTS == math.MaxUint64 {
+		if isStaleRead {
+			return oracle.ErrLatestStaleRead{}
+		}
+		return nil
+	}
+
 	currentTS, err := o.GetTimestamp(ctx, opt)
 	if err != nil {
 		return errors.Errorf("fail to validate read timestamp: %v", err)
 	}
 	if currentTS < readTS {
-		return errors.Errorf("cannot set read timestamp to a future time")
+		return oracle.ErrFutureTSRead{
+			ReadTS:    readTS,
+			CurrentTS: currentTS,
+		}
 	}
 	return nil
 }

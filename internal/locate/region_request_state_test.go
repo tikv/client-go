@@ -33,6 +33,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 )
 
@@ -75,7 +76,7 @@ func (s *testRegionCacheStaleReadSuite) SetupTest() {
 	s.cache = NewRegionCache(pdCli)
 	s.bo = retry.NewNoopBackoff(context.Background())
 	client := mocktikv.NewRPCClient(s.cluster, s.mvccStore, nil)
-	s.regionRequestSender = NewRegionRequestSender(s.cache, client)
+	s.regionRequestSender = NewRegionRequestSender(s.cache, client, oracle.NoopReadTSValidator{})
 	s.setClient()
 	s.injection = testRegionCacheFSMSuiteInjection{
 		unavailableStoreIDs: make(map[uint64]struct{}),

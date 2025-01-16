@@ -419,7 +419,7 @@ func (s *KVStore) SupportDeleteRange() (supported bool) {
 
 // SendReq sends a request to locate.
 func (s *KVStore) SendReq(bo *Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error) {
-	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient(), s.oracle)
 	return sender.SendReq(bo, req, regionID, timeout)
 }
 

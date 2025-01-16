@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
 )
@@ -138,8 +139,8 @@ func GetStoreTypeByMeta(store *metapb.Store) tikvrpc.EndpointType {
 }
 
 // NewRegionRequestSender creates a new sender.
-func NewRegionRequestSender(regionCache *RegionCache, client client.Client) *RegionRequestSender {
-	return locate.NewRegionRequestSender(regionCache, client)
+func NewRegionRequestSender(regionCache *RegionCache, client client.Client, readTSValidator oracle.ReadTSValidator) *RegionRequestSender {
+	return locate.NewRegionRequestSender(regionCache, client, readTSValidator)
 }
 
 // LoadShuttingDown atomically loads ShuttingDown.
