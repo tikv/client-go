@@ -44,6 +44,7 @@ import (
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 var _ pd.Client = &CodecPDClient{}
@@ -57,7 +58,7 @@ type CodecPDClient struct {
 // NewCodecPDClient creates a CodecPDClient in API v1.
 func NewCodecPDClient(mode apicodec.Mode, client pd.Client) *CodecPDClient {
 	codec := apicodec.NewCodecV1(mode)
-	return &CodecPDClient{client, codec}
+	return &CodecPDClient{client.WithCallerComponent("codec-pd-client"), codec}
 }
 
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
@@ -71,7 +72,7 @@ func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace
 		return nil, err
 	}
 
-	return &CodecPDClient{client, codec}, nil
+	return &CodecPDClient{client.WithCallerComponent("codec-pd-client"), codec}, nil
 }
 
 // GetKeyspaceID attempts to retrieve keyspace ID corresponding to the given keyspace name from PD.
@@ -201,4 +202,9 @@ func (c *CodecPDClient) decodeRegionKeyInPlace(r *router.Region) error {
 		r.Buckets.Keys, err = c.codec.DecodeBucketKeys(r.Buckets.Keys)
 	}
 	return err
+}
+
+// WithCallerComponent returns a new PD client with the specified caller component.
+func (c *CodecPDClient) WithCallerComponent(component caller.Component) pd.Client {
+	return &CodecPDClient{c.Client.WithCallerComponent(component), c.codec}
 }
