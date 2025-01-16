@@ -36,19 +36,13 @@ func TestNetworkCollectorOnReq(t *testing.T) {
 	reqs := []*tikvrpc.Request{
 		tikvrpc.NewRequest(
 			tikvrpc.CmdGet,
-			&kvrpcpb.GetRequest{Key: []byte("key")},
-			kvrpcpb.Context{
-				BusyThresholdMs: 50,
-			},
+			&kvrpcpb.GetRequest{Context: &kvrpcpb.Context{BusyThresholdMs: 50}, Key: []byte("key")},
 		),
 		tikvrpc.NewReplicaReadRequest(
 			tikvrpc.CmdGet,
-			&kvrpcpb.GetRequest{Key: []byte("key")},
+			&kvrpcpb.GetRequest{Context: &kvrpcpb.Context{StaleRead: true}, Key: []byte("key")},
 			kv.ReplicaReadFollower,
 			nil,
-			kvrpcpb.Context{
-				StaleRead: true,
-			},
 		),
 	}
 
@@ -58,12 +52,12 @@ func TestNetworkCollectorOnReq(t *testing.T) {
 		req                                *tikvrpc.Request
 	}{
 		{
-			expectUnpackedBytesSentKV:          8,
+			expectUnpackedBytesSentKV:          10,
 			expectUnpackedBytesSentKVCrossZone: 0,
 			req:                                reqs[0],
 		},
 		{
-			expectUnpackedBytesSentKV:          18,
+			expectUnpackedBytesSentKV:          20,
 			expectUnpackedBytesSentKVCrossZone: 0,
 			req:                                reqs[1],
 		},
