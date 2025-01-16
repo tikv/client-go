@@ -360,13 +360,19 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 	if len(batches) == 1 {
 		return s.batchGetSingleRegion(bo, batches[0], readTier, collectF)
 	}
-	ch := make(chan error)
-	for _, batch1 := range batches {
+	ch := make(chan error, len(batches))
+	bo, cancel := bo.Fork()
+	defer cancel()
+	for i, batch1 := range batches {
+		var backoffer *retry.Backoffer
+		if i == 0 {
+			backoffer = bo
+		} else {
+			backoffer = bo.Clone()
+		}
 		batch := batch1
 		go func() {
 			growStackForBatchGetWorker()
-			backoffer, cancel := bo.Fork()
-			defer cancel()
 			ch <- s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
 		}()
 	}
