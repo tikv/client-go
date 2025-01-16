@@ -3,6 +3,7 @@ module github.com/tikv/client-go/v2
 go 1.23
 
 require (
+	github.com/VividCortex/ewma v1.2.0
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da
 	github.com/docker/go-units v0.5.0
