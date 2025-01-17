@@ -733,6 +733,8 @@ func (c *RPCClient) checkArgs(ctx context.Context, addr string) (*Session, error
 
 // SendRequest sends a request to mock cluster.
 func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	tikvrpc.AttachContext(req, req.Context)
+
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("RPCClient.SendRequest", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()

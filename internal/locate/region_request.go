@@ -865,7 +865,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			patchRequestSource(req, s.replicaSelector.replicaType())
 		}
-		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+		// RPCClient.SendRequest will attach `req.Context` thus skip attaching here to reduce overhead.
+		if err := tikvrpc.SetContextNoAttach(req, rpcCtx.Meta, rpcCtx.Peer); err != nil {
 			return nil, nil, retryTimes, err
 		}
 		if s.replicaSelector != nil {
