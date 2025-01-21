@@ -71,8 +71,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -265,14 +263,6 @@ func NewPDClientWithAPIContext(pdAddrs []string, apiContext pd.APIContext) (pd.C
 			CertPath: cfg.Security.ClusterSSLCert,
 			KeyPath:  cfg.Security.ClusterSSLKey,
 		},
-		pd.WithGRPCDialOptions(
-			grpc.WithKeepaliveParams(
-				keepalive.ClientParameters{
-					Time:    time.Duration(cfg.TiKVClient.GrpcKeepAliveTime) * time.Second,
-					Timeout: time.Duration(cfg.TiKVClient.GrpcKeepAliveTimeout) * time.Second,
-				},
-			),
-		),
 		pd.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
 		pd.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
 	)
