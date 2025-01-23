@@ -16,7 +16,10 @@ package unionstore
 
 import (
 	"context"
+	"fmt"
 	"sync"
+
+	"github.com/pingcap/errors"
 
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
@@ -151,6 +154,32 @@ func (db *artDBWithContext) IterReverse(upper, lower []byte) (Iterator, error) {
 	return db.ART.IterReverse(upper, lower)
 }
 
+func (db *artDBWithContext) ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error {
+	db.RLock()
+	defer db.RUnlock()
+	var iter Iterator
+	if reverse {
+		iter = db.SnapshotIterReverse(upper, lower)
+	} else {
+		iter = db.SnapshotIter(lower, upper)
+	}
+	defer iter.Close()
+	for iter.Valid() {
+		stop, err := f(iter.Key(), iter.Value())
+		if err != nil {
+			return err
+		}
+		err = iter.Next()
+		if err != nil {
+			return err
+		}
+		if stop {
+			break
+		}
+	}
+	return nil
+}
+
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
 	return db.ART.SnapshotIter(lower, upper)
@@ -164,4 +193,134 @@ func (db *artDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotGetter() Getter {
 	return db.ART.SnapshotGetter()
+}
+
+type snapshotBatchedIter struct {
+	db                    *artDBWithContext
+	snapshotTruncateSeqNo int
+	lower                 []byte
+	upper                 []byte
+	reverse               bool
+
+	// current batch
+	kvs       []KvPair
+	pos       int
+	batchSize int
+	nextKey   []byte
+}
+
+func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
+	iter := &snapshotBatchedIter{
+		db:                    db,
+		snapshotTruncateSeqNo: db.SnapshotSeqNo,
+		lower:                 lower,
+		upper:                 upper,
+		reverse:               reverse,
+		batchSize:             4,
+	}
+
+	// Position at first key immediately
+	iter.fillBatch()
+	return iter
+}
+
+func (it *snapshotBatchedIter) fillBatch() error {
+	if it.snapshotTruncateSeqNo != it.db.SnapshotSeqNo {
+		return errors.New(fmt.Sprintf("invalid iter: truncation happened, iter's=%d, db's=%d",
+			it.snapshotTruncateSeqNo, it.db.SnapshotSeqNo))
+	}
+
+	it.db.RLock()
+	defer it.db.RUnlock()
+
+	if it.kvs == nil {
+		it.kvs = make([]KvPair, 0, it.batchSize)
+	} else {
+		it.kvs = it.kvs[:0]
+	}
+
+	var snapshotIter Iterator
+	if it.reverse {
+		searchUpper := it.upper
+		if it.nextKey != nil {
+			searchUpper = it.nextKey
+		}
+		snapshotIter = it.db.SnapshotIterReverse(searchUpper, it.lower)
+	} else {
+		searchLower := it.lower
+		if it.nextKey != nil {
+			searchLower = it.nextKey
+		}
+		snapshotIter = it.db.SnapshotIter(searchLower, it.upper)
+	}
+	defer snapshotIter.Close()
+
+	// fill current batch
+	for i := 0; i < it.batchSize && snapshotIter.Valid(); i++ {
+		it.kvs = append(it.kvs, KvPair{
+			Key:   snapshotIter.Key(),
+			Value: snapshotIter.Value(),
+		})
+		if err := snapshotIter.Next(); err != nil {
+			return err
+		}
+	}
+
+	// update state
+	it.pos = 0
+	if len(it.kvs) > 0 {
+		lastKV := it.kvs[len(it.kvs)-1]
+		if it.reverse {
+			it.nextKey = append([]byte(nil), lastKV.Key...)
+		} else {
+			it.nextKey = append(append([]byte(nil), lastKV.Key...), 0)
+		}
+	} else {
+		it.nextKey = nil
+	}
+
+	it.batchSize = min(it.batchSize*2, 4096)
+	return nil
+}
+
+func (it *snapshotBatchedIter) Valid() bool {
+	return it.snapshotTruncateSeqNo == it.db.SnapshotSeqNo &&
+		it.pos < len(it.kvs)
+}
+
+func (it *snapshotBatchedIter) Next() error {
+	if it.snapshotTruncateSeqNo != it.db.SnapshotSeqNo {
+		return errors.New(
+			fmt.Sprintf(
+				"invalid snapshotBatchedIter: truncation happened, iter's=%d, db's=%d",
+				it.snapshotTruncateSeqNo,
+				it.db.SnapshotSeqNo,
+			),
+		)
+	}
+
+	it.pos++
+	if it.pos >= len(it.kvs) {
+		return it.fillBatch()
+	}
+	return nil
+}
+
+func (it *snapshotBatchedIter) Key() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.kvs[it.pos].Key
+}
+
+func (it *snapshotBatchedIter) Value() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.kvs[it.pos].Value
+}
+
+func (it *snapshotBatchedIter) Close() {
+	it.kvs = nil
+	it.nextKey = nil
 }

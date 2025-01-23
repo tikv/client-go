@@ -56,6 +56,7 @@ func (t *ART) iter(lowerBound, upperBound []byte, reverse, includeFlags bool) (*
 		// this avoids the initial value of currAddr equals to endAddr.
 		currAddr: arena.BadAddr,
 		endAddr:  arena.NullAddr,
+		seqNo:    t.SeqNo,
 	}
 	it.init(lowerBound, upperBound)
 	if !it.valid {
@@ -76,9 +77,12 @@ type Iterator struct {
 	currLeaf     *artLeaf
 	currAddr     arena.MemdbArenaAddr
 	endAddr      arena.MemdbArenaAddr
+
+	// only when seqNo == art.seqNo, the iterator is valid.
+	seqNo int
 }
 
-func (it *Iterator) Valid() bool        { return it.valid }
+func (it *Iterator) Valid() bool        { return it.valid && it.seqNo == it.tree.SeqNo }
 func (it *Iterator) Key() []byte        { return it.currLeaf.GetKey() }
 func (it *Iterator) Flags() kv.KeyFlags { return it.currLeaf.GetKeyFlags() }
 func (it *Iterator) Value() []byte {
@@ -101,6 +105,9 @@ func (it *Iterator) Next() error {
 	if !it.valid {
 		// iterate is finished
 		return errors.New("Art: iterator is finished")
+	}
+	if it.seqNo != it.tree.SeqNo {
+		return errors.New(fmt.Sprintf("seqNo mismatch: iter=%d, art=%d", it.seqNo, it.tree.SeqNo))
 	}
 	if it.currAddr == it.endAddr {
 		it.valid = false

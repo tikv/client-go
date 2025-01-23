@@ -38,6 +38,9 @@ import (
 	"encoding/binary"
 	"math"
 
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"go.uber.org/zap"
+
 	"github.com/tikv/client-go/v2/kv"
 	"go.uber.org/atomic"
 )
@@ -221,6 +224,19 @@ type MemDBCheckpoint struct {
 
 func (cp *MemDBCheckpoint) IsSamePosition(other *MemDBCheckpoint) bool {
 	return cp.blocks == other.blocks && cp.offsetInBlock == other.offsetInBlock
+}
+
+func (cp *MemDBCheckpoint) LessThan(cp2 *MemDBCheckpoint) bool {
+	if cp == nil || cp2 == nil {
+		logutil.BgLogger().Panic("unexpected nil checkpoint", zap.Any("cp", cp), zap.Any("cp2", cp2))
+	}
+	if cp.blocks < cp2.blocks {
+		return true
+	}
+	if cp.blocks == cp2.blocks && cp.offsetInBlock < cp2.offsetInBlock {
+		return true
+	}
+	return false
 }
 
 func (a *MemdbArena) Checkpoint() MemDBCheckpoint {

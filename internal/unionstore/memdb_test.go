@@ -1336,7 +1336,7 @@ func TestSnapshotReaderWithWrite(t *testing.T) {
 		h := db.Staging()
 		defer db.Release(h)
 
-		iter := db.SnapshotIter([]byte{0, 0}, []byte{0, 255})
+		iter := db.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, false)
 		assert.Equal(t, iter.Key(), []byte{0, 0})
 
 		db.Set([]byte{0, byte(num)}, []byte{0, byte(num)}) // ART: node4/node16/node48 is freed and wait to be reused.
@@ -1363,4 +1363,231 @@ func TestSnapshotReaderWithWrite(t *testing.T) {
 
 	check(newRbtDBWithContext(), 48)
 	check(newArtDBWithContext(), 48)
+}
+
+func TestBatchedSnapshotIter(t *testing.T) {
+	check := func(db *artDBWithContext, num int) {
+		// Insert test data
+		for i := 0; i < num; i++ {
+			db.Set([]byte{0, byte(i)}, []byte{0, byte(i)})
+		}
+		h := db.Staging()
+		defer db.Release(h)
+
+		// Create iterator - should be positioned at first key
+		iter := db.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, false)
+		defer iter.Close()
+
+		// Should be able to read first key immediately
+		require.True(t, iter.Valid())
+		require.Equal(t, []byte{0, 0}, iter.Key())
+
+		// Write additional data
+		db.Set([]byte{0, byte(num)}, []byte{0, byte(num)})
+		for i := 0; i < num; i++ {
+			db.Set([]byte{1, byte(i)}, []byte{1, byte(i)})
+		}
+
+		// Verify iteration
+		i := 0
+		for ; i < num; i++ {
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte{0, byte(i)}, iter.Key())
+			require.Equal(t, []byte{0, byte(i)}, iter.Value())
+			require.NoError(t, iter.Next())
+		}
+		require.False(t, iter.Valid())
+	}
+
+	checkReverse := func(db *artDBWithContext, num int) {
+		for i := 0; i < num; i++ {
+			db.Set([]byte{0, byte(i)}, []byte{0, byte(i)})
+		}
+		h := db.Staging()
+		defer db.Release(h)
+
+		iter := db.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, true)
+		defer iter.Close()
+
+		// Should be positioned at last key
+		require.True(t, iter.Valid())
+		require.Equal(t, []byte{0, byte(num - 1)}, iter.Key())
+
+		db.Set([]byte{0, byte(num)}, []byte{0, byte(num)})
+		for i := 0; i < num; i++ {
+			db.Set([]byte{1, byte(i)}, []byte{1, byte(i)})
+		}
+
+		i := num - 1
+		for ; i >= 0; i-- {
+			require.True(t, iter.Valid())
+			require.Equal(t, []byte{0, byte(i)}, iter.Key())
+			require.Equal(t, []byte{0, byte(i)}, iter.Value())
+			require.NoError(t, iter.Next())
+		}
+		require.False(t, iter.Valid())
+	}
+
+	// Run size test cases
+	check(newArtDBWithContext(), 3)
+	check(newArtDBWithContext(), 17)
+	check(newArtDBWithContext(), 64)
+
+	checkReverse(newArtDBWithContext(), 3)
+	checkReverse(newArtDBWithContext(), 17)
+	checkReverse(newArtDBWithContext(), 64)
+}
+
+func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
+	t.Run("EdgeCases", func(t *testing.T) {
+		db := newArtDBWithContext()
+
+		// invalid range - should be invalid immediately
+		iter := db.BatchedSnapshotIter([]byte{1}, []byte{1}, false)
+		require.False(t, iter.Valid())
+		iter.Close()
+
+		// empty range - should be invalid immediately
+		iter = db.BatchedSnapshotIter([]byte{0}, []byte{1}, false)
+		require.False(t, iter.Valid())
+		iter.Close()
+
+		// Single element range
+		db.Set([]byte{1}, []byte{1})
+		iter = db.BatchedSnapshotIter([]byte{1}, []byte{2}, false)
+		require.True(t, iter.Valid())
+		require.Equal(t, []byte{1}, iter.Key())
+		require.NoError(t, iter.Next())
+		require.False(t, iter.Valid())
+		iter.Close()
+
+		// Multiple elements
+		db.Set([]byte{2}, []byte{2})
+		db.Set([]byte{3}, []byte{3})
+		db.Set([]byte{4}, []byte{4})
+
+		// Forward iteration [2,4)
+		iter = db.BatchedSnapshotIter([]byte{2}, []byte{4}, false)
+		vals := []byte{}
+		for iter.Valid() {
+			vals = append(vals, iter.Key()[0])
+			require.NoError(t, iter.Next())
+		}
+		require.Equal(t, []byte{2, 3}, vals)
+		iter.Close()
+
+		// Reverse iteration [2,4)
+		iter = db.BatchedSnapshotIter([]byte{2}, []byte{4}, true)
+		vals = []byte{}
+		for iter.Valid() {
+			vals = append(vals, iter.Key()[0])
+			require.NoError(t, iter.Next())
+		}
+		require.Equal(t, []byte{3, 2}, vals)
+		iter.Close()
+	})
+
+	t.Run("BoundaryTests", func(t *testing.T) {
+		db := newArtDBWithContext()
+		keys := [][]byte{
+			{1, 0}, {1, 2}, {1, 4}, {1, 6}, {1, 8},
+		}
+		for _, k := range keys {
+			db.Set(k, k)
+		}
+
+		// lower bound included
+		iter := db.BatchedSnapshotIter([]byte{1, 2}, []byte{1, 9}, false)
+		vals := []byte{}
+		for iter.Valid() {
+			vals = append(vals, iter.Key()[1])
+			require.NoError(t, iter.Next())
+		}
+		require.Equal(t, []byte{2, 4, 6, 8}, vals)
+		iter.Close()
+
+		// upper bound excluded
+		iter = db.BatchedSnapshotIter([]byte{1, 0}, []byte{1, 6}, false)
+		vals = []byte{}
+		for iter.Valid() {
+			vals = append(vals, iter.Key()[1])
+			require.NoError(t, iter.Next())
+		}
+		require.Equal(t, []byte{0, 2, 4}, vals)
+		iter.Close()
+
+		// reverse
+		iter = db.BatchedSnapshotIter([]byte{1, 0}, []byte{1, 6}, true)
+		vals = []byte{}
+		for iter.Valid() {
+			vals = append(vals, iter.Key()[1])
+			require.NoError(t, iter.Next())
+		}
+		require.Equal(t, []byte{4, 2, 0}, vals)
+		iter.Close()
+	})
+
+	t.Run("AlphabeticalOrder", func(t *testing.T) {
+		db := newArtDBWithContext()
+		keys := [][]byte{
+			{2},
+			{2, 1},
+			{2, 1, 1},
+			{2, 1, 1, 1},
+		}
+		for _, k := range keys {
+			db.Set(k, k)
+		}
+
+		// forward
+		iter := db.BatchedSnapshotIter([]byte{2}, []byte{3}, false)
+		count := 0
+		for iter.Valid() {
+			require.Equal(t, keys[count], iter.Key())
+			require.NoError(t, iter.Next())
+			count++
+		}
+		require.Equal(t, len(keys), count)
+		iter.Close()
+
+		// reverse
+		iter = db.BatchedSnapshotIter([]byte{2}, []byte{3}, true)
+		count = len(keys) - 1
+		for iter.Valid() {
+			require.Equal(t, keys[count], iter.Key())
+			require.NoError(t, iter.Next())
+			count--
+		}
+		require.Equal(t, -1, count)
+		iter.Close()
+	})
+
+	t.Run("BatchSizeGrowth", func(t *testing.T) {
+		db := newArtDBWithContext()
+		for i := 0; i < 100; i++ {
+			db.Set([]byte{3, byte(i)}, []byte{3, byte(i)})
+		}
+
+		// forward
+		iter := db.BatchedSnapshotIter([]byte{3, 0}, []byte{3, 255}, false)
+		count := 0
+		for iter.Valid() {
+			require.Equal(t, []byte{3, byte(count)}, iter.Key())
+			require.NoError(t, iter.Next())
+			count++
+		}
+		require.Equal(t, 100, count)
+		iter.Close()
+
+		// reverse
+		iter = db.BatchedSnapshotIter([]byte{3, 0}, []byte{3, 255}, true)
+		count = 99
+		for iter.Valid() {
+			require.Equal(t, []byte{3, byte(count)}, iter.Key())
+			require.NoError(t, iter.Next())
+			count--
+		}
+		require.Equal(t, -1, count)
+		iter.Close()
+	})
 }
