@@ -559,6 +559,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	var err error
 	var assertionError error
+	toUpdatePrewriteOnly := make([][]byte, 0)
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
@@ -607,7 +608,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
 					op = kvrpcpb.Op_CheckNotExists
 					checkCnt++
-					memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
+					toUpdatePrewriteOnly = append(toUpdatePrewriteOnly, key)
 				} else {
 					if flags.HasNewlyInserted() {
 						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
@@ -680,6 +681,10 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
 			c.primaryKey = key
 		}
+	}
+
+	for _, key := range toUpdatePrewriteOnly {
+		memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
 	}
 
 	if c.mutations.Len() == 0 {

@@ -19,6 +19,9 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"go.uber.org/zap"
+
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
@@ -84,7 +87,21 @@ type Iterator struct {
 	ignoreSeqNo bool
 }
 
-func (it *Iterator) Valid() bool        { return it.valid && (it.seqNo == it.tree.SeqNo || it.ignoreSeqNo) }
+func (it *Iterator) checkSeqNo() {
+	if it.seqNo != it.tree.SeqNo && !it.ignoreSeqNo {
+		logutil.BgLogger().Panic(
+			"seqNo mismatch",
+			zap.Int("it seqNo", it.seqNo),
+			zap.Int("art seqNo", it.tree.SeqNo),
+			zap.Stack("stack"),
+		)
+	}
+}
+
+func (it *Iterator) Valid() bool {
+	it.checkSeqNo()
+	return it.valid
+}
 func (it *Iterator) Key() []byte        { return it.currLeaf.GetKey() }
 func (it *Iterator) Flags() kv.KeyFlags { return it.currLeaf.GetKeyFlags() }
 func (it *Iterator) Value() []byte {
@@ -108,9 +125,7 @@ func (it *Iterator) Next() error {
 		// iterate is finished
 		return errors.New("Art: iterator is finished")
 	}
-	if !it.ignoreSeqNo && it.seqNo != it.tree.SeqNo {
-		return errors.New(fmt.Sprintf("seqNo mismatch: iter=%d, art=%d", it.seqNo, it.tree.SeqNo))
-	}
+	it.checkSeqNo()
 	if it.currAddr == it.endAddr {
 		it.valid = false
 		return nil
