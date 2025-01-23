@@ -412,6 +412,14 @@ func (p *PipelinedMemDB) IterReverse([]byte, []byte) (Iterator, error) {
 	return nil, errors.New("pipelined memdb does not support IterReverse")
 }
 
+func (p *PipelinedMemDB) Scan([]byte, []byte, bool) ([]KvPair, error) {
+	return nil, errors.New("pipelined memdb does not support Scan")
+}
+
+func (db *PipelinedMemDB) ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (bool, error), reverse bool) error {
+	return errors.New("pipelined memdb does not support ForEachInSnapshotRange")
+}
+
 // SetEntrySizeLimit sets the size limit for each entry and total buffer.
 func (p *PipelinedMemDB) SetEntrySizeLimit(entryLimit, _ uint64) {
 	p.entryLimit = entryLimit
@@ -549,4 +557,8 @@ func (p *PipelinedMemDB) GetMetrics() Metrics {
 // MemHookSet implements the MemBuffer interface.
 func (p *PipelinedMemDB) MemHookSet() bool {
 	return p.memChangeHook != nil
+}
+
+func (p *PipelinedMemDB) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
+	panic("BatchedSnapshotIter is not supported for PipelinedMemDB")
 }

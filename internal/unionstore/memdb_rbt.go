@@ -161,6 +161,58 @@ func (db *rbtDBWithContext) IterReverse(upper, lower []byte) (Iterator, error) {
 	return db.RBT.IterReverse(upper, lower)
 }
 
+func (db *rbtDBWithContext) Scan(lower, upper []byte, reverse bool) ([]KvPair, error) {
+	var iter Iterator
+	var err error
+	if reverse {
+		iter, err = db.IterReverse(upper, lower)
+	} else {
+		iter, err = db.Iter(lower, upper)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	var entries []KvPair
+	for iter.Valid() {
+		entries = append(entries, KvPair{
+			Key:   append([]byte(nil), iter.Key()...),
+			Value: append([]byte(nil), iter.Value()...),
+		})
+		err = iter.Next()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return entries, nil
+}
+
+func (db *rbtDBWithContext) ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error {
+	db.RLock()
+	defer db.RUnlock()
+	var iter Iterator
+	if reverse {
+		iter = db.SnapshotIterReverse(upper, lower)
+	} else {
+		iter = db.SnapshotIter(lower, upper)
+	}
+	defer iter.Close()
+	for iter.Valid() {
+		stop, err := f(iter.Key(), iter.Value())
+		if err != nil {
+			return err
+		}
+		err = iter.Next()
+		if err != nil {
+			return err
+		}
+		if stop {
+			break
+		}
+	}
+	return nil
+}
+
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *rbtDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
 	return db.RBT.SnapshotIter(lower, upper)
@@ -174,4 +226,13 @@ func (db *rbtDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
 func (db *rbtDBWithContext) SnapshotGetter() Getter {
 	return db.RBT.SnapshotGetter()
+}
+
+func (db *rbtDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
+	// TODO: implement this
+	if reverse {
+		return db.SnapshotIterReverse(upper, lower)
+	} else {
+		return db.SnapshotIter(lower, upper)
+	}
 }

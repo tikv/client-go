@@ -162,6 +162,11 @@ func (us *KVUnionStore) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 	us.memBuffer.SetEntrySizeLimit(entryLimit, bufferLimit)
 }
 
+type KvPair struct {
+	Key   []byte
+	Value []byte
+}
+
 // MemBuffer is an interface that stores mutations that written during transaction execution.
 // It now unifies MemDB and PipelinedMemDB.
 // The implementations should follow the transaction guarantees:
@@ -193,15 +198,39 @@ type MemBuffer interface {
 	Delete([]byte) error
 	// DeleteWithFlags deletes the key k in the MemBuffer with flags.
 	DeleteWithFlags([]byte, ...kv.FlagsOp) error
+
 	// Iter implements the Retriever interface.
 	Iter([]byte, []byte) (Iterator, error)
 	// IterReverse implements the Retriever interface.
 	IterReverse([]byte, []byte) (Iterator, error)
 	// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
+	// Deprecated: use ForEachInSnapshotRange or BatchedSnapshotIter instead.
 	SnapshotIter([]byte, []byte) Iterator
 	// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
+	// Deprecated: use ForEachInSnapshotRange or BatchedSnapshotIter instead.
 	SnapshotIterReverse([]byte, []byte) Iterator
-	// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
+
+	// ForEachInSnapshotRange scans the key-value pairs in the state[0] snapshot if it exists,
+	// otherwise it uses the current checkpoint as snapshot.
+	//
+	// NOTE: returned kv-pairs are only valid during the iteration. If you want to use them after the iteration,
+	// you need to make a copy.
+	//
+	// The method is protected by a RWLock to prevent potential iterator invalidation, i.e.
+	// You cannot modify the MemBuffer during the iteration.
+	//
+	// Use it when you need to scan the whole range, otherwise consider using BatchedSnapshotIter.
+	ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error
+
+	// BatchedSnapshotIter iterates in batches to prevent iterator invalidation:
+	// It does not save any iterator state, instead it copies the keys and values to a buffer.
+	// It behaves like SnapshotIter, but it is safe to use the returned keys and values after the iteration.
+	// Use it when you need on-demand "next", otherwise consider using ForEachInSnapshotRange.
+	//
+	// The iterator becomes invalid after a membuffer vlog truncation operation.
+	BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator
+
+	//SnapshotGetter returns a Getter for a snapshot of MemBuffer.
 	SnapshotGetter() Getter
 	// InspectStage iterates all buffered keys and values in MemBuffer.
 	InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte))

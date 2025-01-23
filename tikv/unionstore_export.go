@@ -60,3 +60,5 @@ type MemDBCheckpoint = unionstore.MemDBCheckpoint
 
 // Metrics is the metrics of unionstore.
 type Metrics = unionstore.Metrics
+
+type KvPair = unionstore.KvPair
