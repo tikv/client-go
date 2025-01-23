@@ -65,7 +65,7 @@ require (
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/log v1.1.1-0.20241212030209-7e3ff8601a2a // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20241219182103-27a9a7d39567 // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20250123092444-cf4d252af8aa // indirect
 	github.com/pingcap/tipb v0.0.0-20241212101007-246f91188357 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
