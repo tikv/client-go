@@ -80,9 +80,11 @@ type Iterator struct {
 
 	// only when seqNo == art.seqNo, the iterator is valid.
 	seqNo int
+	// ignoreSeqNo is used to ignore the seqNo check, used for snapshot iter before its full deprecation.
+	ignoreSeqNo bool
 }
 
-func (it *Iterator) Valid() bool        { return it.valid && it.seqNo == it.tree.SeqNo }
+func (it *Iterator) Valid() bool        { return it.valid && (it.seqNo == it.tree.SeqNo || it.ignoreSeqNo) }
 func (it *Iterator) Key() []byte        { return it.currLeaf.GetKey() }
 func (it *Iterator) Flags() kv.KeyFlags { return it.currLeaf.GetKeyFlags() }
 func (it *Iterator) Value() []byte {
@@ -106,7 +108,7 @@ func (it *Iterator) Next() error {
 		// iterate is finished
 		return errors.New("Art: iterator is finished")
 	}
-	if it.seqNo != it.tree.SeqNo {
+	if !it.ignoreSeqNo && it.seqNo != it.tree.SeqNo {
 		return errors.New(fmt.Sprintf("seqNo mismatch: iter=%d, art=%d", it.seqNo, it.tree.SeqNo))
 	}
 	if it.currAddr == it.endAddr {

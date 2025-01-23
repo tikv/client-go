@@ -1336,7 +1336,7 @@ func TestSnapshotReaderWithWrite(t *testing.T) {
 		h := db.Staging()
 		defer db.Release(h)
 
-		iter := db.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, false)
+		iter := db.SnapshotIter([]byte{0, 0}, []byte{0, 255})
 		assert.Equal(t, iter.Key(), []byte{0, 0})
 
 		db.Set([]byte{0, byte(num)}, []byte{0, byte(num)}) // ART: node4/node16/node48 is freed and wait to be reused.
