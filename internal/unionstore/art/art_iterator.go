@@ -102,9 +102,19 @@ func (it *Iterator) Valid() bool {
 	it.checkSeqNo()
 	return it.valid
 }
-func (it *Iterator) Key() []byte        { return it.currLeaf.GetKey() }
-func (it *Iterator) Flags() kv.KeyFlags { return it.currLeaf.GetKeyFlags() }
+
+func (it *Iterator) Key() []byte {
+	it.checkSeqNo()
+	return it.currLeaf.GetKey()
+}
+
+func (it *Iterator) Flags() kv.KeyFlags {
+	it.checkSeqNo()
+	return it.currLeaf.GetKeyFlags()
+}
+
 func (it *Iterator) Value() []byte {
+	it.checkSeqNo()
 	if it.currLeaf.vLogAddr.IsNull() {
 		return nil
 	}
