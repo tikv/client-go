@@ -49,6 +49,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/VividCortex/ewma"
 	"github.com/dgryski/go-farm"
 	"github.com/docker/go-units"
 	"github.com/opentracing/opentracing-go"
@@ -74,6 +75,7 @@ import (
 // MaxTxnTimeUse is the max time a Txn may use (in ms) from its begin to commit.
 // We use it to abort the transaction to guarantee GC worker will not influence it.
 const MaxTxnTimeUse = 24 * 60 * 60 * 1000
+const defaultEWMAAge = 10
 
 type tempLockBufferEntry struct {
 	HasReturnValue    bool
@@ -109,12 +111,42 @@ func (e *tempLockBufferEntry) trySkipLockingOnRetry(returnValue bool, checkExist
 	return true
 }
 
+type PipelinedTxnOptions struct {
+	Enable                 bool
+	FlushConcurrency       int
+	ResolveLockConcurrency int
+	// [0,1), 0 = no sleep, 1 = no write
+	WriteThrottleRatio float64
+}
+
 // TxnOptions indicates the option when beginning a transaction.
 // TxnOptions are set by the TxnOption values passed to Begin
 type TxnOptions struct {
-	TxnScope       string
-	StartTS        *uint64
-	PipelinedMemDB bool
+	TxnScope     string
+	StartTS      *uint64
+	PipelinedTxn PipelinedTxnOptions
+}
+
+// PrewriteEncounterLockPolicy specifies the policy when prewrite encounters locks.
+type PrewriteEncounterLockPolicy int
+
+const (
+	// TryResolvePolicy is the default one: try to resolve those locks with smaller startTS.
+	TryResolvePolicy PrewriteEncounterLockPolicy = iota
+	// NoResolvePolicy means do not resolve, but return write conflict errors directly.
+	// This can be used to let the upper layer choose to retry in pessimistic mode.
+	NoResolvePolicy
+)
+
+func (p PrewriteEncounterLockPolicy) String() string {
+	switch p {
+	case TryResolvePolicy:
+		return "TryResolvePolicy"
+	case NoResolvePolicy:
+		return "NoResolvePolicy"
+	default:
+		return "Unknown"
+	}
 }
 
 // KVTxn contains methods to interact with a TiKV transaction.
@@ -170,30 +202,50 @@ type KVTxn struct {
 
 	forUpdateTSChecks map[string]uint64
 
-	isPipelined     bool
-	pipelinedCancel context.CancelFunc
+	isPipelined                     bool
+	pipelinedCancel                 context.CancelFunc
+	pipelinedFlushConcurrency       int
+	pipelinedResolveLockConcurrency int
+	writeThrottleRatio              float64
+	// flushBatchDurationEWMA is read before each flush, and written after each flush => no race
+	flushBatchDurationEWMA ewma.MovingAverage
+
+	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
 }
 
 // NewTiKVTxn creates a new KVTxn.
 func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64, options *TxnOptions) (*KVTxn, error) {
 	cfg := config.GetGlobalConfig()
 	newTiKVTxn := &KVTxn{
-		snapshot:          snapshot,
-		store:             store,
-		startTS:           startTS,
-		startTime:         time.Now(),
-		valid:             true,
-		vars:              tikv.DefaultVars,
-		scope:             options.TxnScope,
-		enableAsyncCommit: cfg.EnableAsyncCommit,
-		enable1PC:         cfg.Enable1PC,
-		diskFullOpt:       kvrpcpb.DiskFullOpt_NotAllowedOnFull,
-		RequestSource:     snapshot.RequestSource,
+		snapshot:               snapshot,
+		store:                  store,
+		startTS:                startTS,
+		startTime:              time.Now(),
+		valid:                  true,
+		vars:                   tikv.DefaultVars,
+		scope:                  options.TxnScope,
+		enableAsyncCommit:      cfg.EnableAsyncCommit,
+		enable1PC:              cfg.Enable1PC,
+		diskFullOpt:            kvrpcpb.DiskFullOpt_NotAllowedOnFull,
+		RequestSource:          snapshot.RequestSource,
+		flushBatchDurationEWMA: ewma.NewMovingAverage(defaultEWMAAge),
 	}
-	if !options.PipelinedMemDB {
+	if !options.PipelinedTxn.Enable {
 		newTiKVTxn.us = unionstore.NewUnionStore(unionstore.NewMemDB(), snapshot)
 		return newTiKVTxn, nil
 	}
+	if options.PipelinedTxn.FlushConcurrency == 0 {
+		return nil, errors.New("pipelined txn flush concurrency should be greater than 0")
+	}
+	newTiKVTxn.pipelinedFlushConcurrency = options.PipelinedTxn.FlushConcurrency
+	if options.PipelinedTxn.ResolveLockConcurrency == 0 {
+		return nil, errors.New("pipelined txn resolve lock concurrency should be greater than 0")
+	}
+	newTiKVTxn.pipelinedResolveLockConcurrency = options.PipelinedTxn.ResolveLockConcurrency
+	if options.PipelinedTxn.WriteThrottleRatio < 0 || options.PipelinedTxn.WriteThrottleRatio >= 1 {
+		return nil, errors.New(fmt.Sprintf("invalid write throttle ratio: %v", options.PipelinedTxn.WriteThrottleRatio))
+	}
+	newTiKVTxn.writeThrottleRatio = options.PipelinedTxn.WriteThrottleRatio
 	if err := newTiKVTxn.InitPipelinedMemDB(); err != nil {
 		return nil, err
 	}
@@ -472,6 +524,11 @@ func (txn *KVTxn) SetAssertionLevel(assertionLevel kvrpcpb.AssertionLevel) {
 	txn.assertionLevel = assertionLevel
 }
 
+// SetPrewriteEncounterLockPolicy specifies the behavior when prewrite encounters locks.
+func (txn *KVTxn) SetPrewriteEncounterLockPolicy(policy PrewriteEncounterLockPolicy) {
+	txn.prewriteEncounterLockPolicy = policy
+}
+
 // IsPessimistic returns true if it is pessimistic.
 func (txn *KVTxn) IsPessimistic() bool {
 	return txn.isPessimistic
@@ -627,7 +684,15 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 			}
 			mutations.Push(op, false, mustExist, mustNotExist, flags.HasNeedConstraintCheckInPrewrite(), it.Handle())
 		}
-		return txn.committer.pipelinedFlushMutations(bo, mutations, generation)
+		txn.throttlePipelinedTxn()
+		flushStart := time.Now()
+		err = txn.committer.pipelinedFlushMutations(bo, mutations, generation)
+		if txn.flushBatchDurationEWMA.Value() == 0 {
+			txn.flushBatchDurationEWMA.Set(float64(time.Since(flushStart).Milliseconds()))
+		} else {
+			txn.flushBatchDurationEWMA.Add(float64(time.Since(flushStart).Milliseconds()))
+		}
+		return err
 	})
 	txn.committer.priority = txn.priority.ToPB()
 	txn.committer.syncLog = txn.syncLog
@@ -636,6 +701,34 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	txn.committer.resourceGroupName = txn.resourceGroupName
 	txn.us = unionstore.NewUnionStore(pipelinedMemDB, txn.snapshot)
 	return nil
+}
+
+func (txn *KVTxn) throttlePipelinedTxn() {
+	if txn.writeThrottleRatio >= 1 || txn.writeThrottleRatio < 0 {
+		logutil.BgLogger().Error(
+			"[pipelined dml] invalid write speed ratio",
+			zap.Float64("writeThrottleRatio", txn.writeThrottleRatio),
+			zap.Uint64("session", txn.committer.sessionID),
+			zap.Uint64("startTS", txn.startTS),
+		)
+		return
+	}
+
+	expectedFlushMs := txn.flushBatchDurationEWMA.Value()
+	// T_sleep / (T_sleep + T_flush) = writeThrottleRatio
+	sleepMs := int(txn.writeThrottleRatio / (1.0 - txn.writeThrottleRatio) * expectedFlushMs)
+	metrics.TiKVPipelinedFlushThrottleSecondsHistogram.Observe(float64(sleepMs) / 1000)
+	if sleepMs == 0 {
+		return
+	}
+	logutil.BgLogger().Info(
+		"[pipelined dml] throttle",
+		zap.Uint64("session", txn.committer.sessionID),
+		zap.Uint64("startTS", txn.startTS),
+		zap.Int("sleepMs", sleepMs),
+		zap.Float64("writeThrottleRatio", txn.writeThrottleRatio),
+	)
+	time.Sleep(time.Duration(sleepMs) * time.Millisecond)
 }
 
 // IsCasualConsistency returns if the transaction allows linearizability
@@ -1006,8 +1099,12 @@ func (txn *KVTxn) RetryAggressiveLocking(ctx context.Context) {
 	}
 	txn.cleanupAggressiveLockingRedundantLocks(ctx)
 	if txn.aggressiveLockingContext.assignedPrimaryKey {
-		txn.resetPrimary()
 		txn.aggressiveLockingContext.assignedPrimaryKey = false
+		txn.aggressiveLockingContext.lastAssignedPrimaryKey = true
+		// Do not reset the ttlManager immediately. Instead, we
+		// will handle the case specially (see KVTxn.resetTTLManagerForAggressiveLockingMode).
+		// See: https://github.com/pingcap/tidb/issues/58279
+		txn.resetPrimary(true)
 	}
 
 	txn.aggressiveLockingContext.lastPrimaryKey = txn.aggressiveLockingContext.primaryKey
@@ -1039,8 +1136,8 @@ func (txn *KVTxn) CancelAggressiveLocking(ctx context.Context) {
 	}()
 
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
-	if txn.aggressiveLockingContext.assignedPrimaryKey {
-		txn.resetPrimary()
+	if txn.aggressiveLockingContext.assignedPrimaryKey || txn.aggressiveLockingContext.lastAssignedPrimaryKey {
+		txn.resetPrimary(false)
 		txn.aggressiveLockingContext.assignedPrimaryKey = false
 	}
 
@@ -1074,6 +1171,12 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	defer func() {
 		txn.aggressiveLockingContext = nil
 	}()
+
+	// If finally no key locked and ttlManager is just started during the current fair locking procedure, reset the
+	// ttlManager as no key will be the primary.
+	if txn.aggressiveLockingContext.lastAssignedPrimaryKey && !txn.aggressiveLockingContext.assignedPrimaryKey {
+		txn.committer.ttlManager.reset()
+	}
 
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
 
@@ -1347,7 +1450,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		}
 		// It can't transform LockOnlyIfExists mode to normal mode. If so, it can add a lock to a key
 		// which doesn't exist in tikv. TiDB should ensure that primary key must be set when it sends
-		// a LockOnlyIfExists pessmistic lock request.
+		// a LockOnlyIfExists pessimistic lock request.
 		if (txn.committer == nil || txn.committer.primaryKey == nil) && len(keys) > 1 {
 			return &tikverr.ErrLockOnlyIfExistsNoPrimaryKey{
 				StartTS:     txn.startTS,
@@ -1399,6 +1502,8 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			filteredAggressiveLockedKeysCount = len(allKeys) - len(keys)
 			metrics.AggressiveLockedKeysDerived.Add(float64(filteredAggressiveLockedKeysCount))
 			metrics.AggressiveLockedKeysNew.Add(float64(len(keys)))
+
+			txn.resetTTLManagerForAggressiveLockingMode(len(keys) != 0)
 
 			if len(keys) == 0 {
 				if lockCtx.Stats != nil {
@@ -1484,7 +1589,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			}
 			if assignedPrimaryKey {
 				// unset the primary key and stop heartbeat if we assigned primary key when failed to lock it.
-				txn.resetPrimary()
+				txn.resetPrimary(false)
 			}
 			return err
 		}
@@ -1559,9 +1664,37 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 	return nil
 }
 
-func (txn *KVTxn) resetPrimary() {
+// resetPrimary resets the primary. It's used when the first LockKeys call in a transaction is failed, or need to be
+// rolled back for some reason (e.g. TiDB may perform statement rollback), in which case the primary will be unlocked
+// another key may be chosen as the new primary.
+func (txn *KVTxn) resetPrimary(keepTTLManager bool) {
 	txn.committer.primaryKey = nil
-	txn.committer.ttlManager.reset()
+	if !keepTTLManager {
+		txn.committer.ttlManager.reset()
+	}
+}
+
+// resetTTLManagerForAggressiveLockingMode is used in a fair locking procedure to reset the ttlManager when necessary.
+// This function is only used during the LockKeys invocation, and the parameter hasNewLockToAcquire indicates whether
+// there are any key needs to be locked in the current LockKeys call, after filtering out those that has already been
+// locked before the most recent RetryAggressiveLocking.
+// Also note that this function is not the only path that fair locking resets the ttlManager. DoneAggressiveLocking may
+// also stop the ttlManager if no key is locked after exiting.
+func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(hasNewLockToAcquire bool) {
+	if !txn.IsInAggressiveLockingMode() {
+		// Not supposed to be called in a non fair locking context
+		return
+	}
+	// * When there's no new lock to acquire, assume the primary key is not changed in this case. Keep the ttlManager
+	// running.
+	// * When there is key to write:
+	//   * If the primary key is not changed, also keep the ttlManager running. Then, when sending the
+	//     acquirePessimisticLock requests, it will call ttlManager.run() again, but it's reentrant and will do nothing
+	//     as the ttlManager is already running.
+	//   * If the primary key is changed, the ttlManager will need to run on the new primary key instead. Reset it.
+	if hasNewLockToAcquire && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
+		txn.committer.ttlManager.reset()
+	}
 }
 
 func (txn *KVTxn) selectPrimaryForPessimisticLock(sortedKeys [][]byte) {
@@ -1595,6 +1728,7 @@ func (txn *KVTxn) selectPrimaryForPessimisticLock(sortedKeys [][]byte) {
 type aggressiveLockingContext struct {
 	lastRetryUnnecessaryLocks map[string]tempLockBufferEntry
 	lastPrimaryKey            []byte
+	lastAssignedPrimaryKey    bool
 	lastAttemptStartTime      time.Time
 
 	currentLockedKeys       map[string]tempLockBufferEntry

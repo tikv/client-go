@@ -97,7 +97,7 @@ func (s *testPipelinedMemDBSuite) mustGetLock(key []byte) *txnkv.Lock {
 
 func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 	ctx := context.Background()
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	txn1, err := s.store.Begin()
 	s.Nil(err)
@@ -139,7 +139,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedAndFlush() {
 
 func (s *testPipelinedMemDBSuite) TestPipelinedMemDBBufferGet() {
 	ctx := context.Background()
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	for i := 0; i < 100; i++ {
 		key := []byte(strconv.Itoa(i))
@@ -161,7 +161,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedMemDBBufferGet() {
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedFlushBlock() {
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	txn.Set([]byte("key1"), []byte("value1"))
 
@@ -192,7 +192,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedFlushBlock() {
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedSkipFlushedLock() {
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	txn.Set([]byte("key1"), []byte("value1"))
 	flushed, err := txn.GetMemBuffer().Flush(true)
@@ -206,7 +206,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedSkipFlushedLock() {
 	s.Nil(txn.Commit(context.Background()))
 
 	// can see it after commit
-	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	defer txn.Rollback()
 	val, err := txn.Get(context.Background(), []byte("key1"))
@@ -222,7 +222,7 @@ func (s *testPipelinedMemDBSuite) TestResolveLockRace() {
 		failpoint.Disable("tikvclient/pipelinedCommitFail")
 	}()
 	for i := 0; i < 100; i++ {
-		txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+		txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 		startTS := txn.StartTS()
 		s.Nil(err)
 		for j := 0; j < 100; j++ {
@@ -246,7 +246,7 @@ func (s *testPipelinedMemDBSuite) TestResolveLockRace() {
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	for i := 0; i < 100; i++ {
 		key := []byte(strconv.Itoa(i))
@@ -279,7 +279,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 	}
 
 	// check the result
-	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	for i := 0; i < 100; i++ {
 		key := []byte(strconv.Itoa(i))
@@ -290,7 +290,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedCommit() {
 }
 
 func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	startTS := txn.StartTS()
 	s.Nil(err)
 	keys := make([][]byte, 0, 100)
@@ -304,7 +304,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
 	s.Nil(txn.GetMemBuffer().FlushWait())
 	s.Nil(txn.Rollback())
 	s.Eventuallyf(func() bool {
-		txn, err := s.store.Begin(tikv.WithStartTS(startTS), tikv.WithPipelinedMemDB())
+		txn, err := s.store.Begin(tikv.WithStartTS(startTS), tikv.WithDefaultPipelinedTxn())
 		s.Nil(err)
 		defer func() { s.Nil(txn.Rollback()) }()
 		storageBufferedValues, err := txn.GetSnapshot().BatchGetWithTier(context.Background(), keys, txnsnapshot.BatchGetBufferTier)
@@ -322,7 +322,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedRollback() {
 func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	failpoint.Enable("tikvclient/beforeSendReqToRegion", "return")
 	defer failpoint.Disable("tikvclient/beforeSendReqToRegion")
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 
 	mustFlush := func(txn *transaction.KVTxn) {
@@ -384,7 +384,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 
 	s.Nil(txn.Commit(context.Background()))
 
-	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	txn.Set([]byte("100"), []byte("100")) // snapshot: [0, 1, ..., 99], membuffer: [100]
 	m, err := txn.BatchGet(context.Background(), [][]byte{[]byte("99"), []byte("100"), []byte("101")})
@@ -417,7 +417,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedPrefetch() {
 	txn.Rollback()
 
 	// empty memdb should also cache the not exist result.
-	txn, err = s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err = s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	// batch get cache: [99 -> not exist]
 	m, err = txn.BatchGet(context.Background(), [][]byte{[]byte("99")})
 	s.Nil(err)
@@ -433,7 +433,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKRollback() {
 	atomic.StoreUint64(&transaction.ManagedLockTTL, 100) // set to 100ms
 	defer atomic.StoreUint64(&transaction.ManagedLockTTL, originManageTTLVal)
 
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	txn.Set([]byte("key1"), []byte("value1"))
 	txnProbe := transaction.TxnProbe{KVTxn: txn}
@@ -482,7 +482,7 @@ func (s *testPipelinedMemDBSuite) TestPipelinedDMLFailedByPKMaxTTLExceeded() {
 		restoreGlobalConfFunc()
 	}()
 
-	txn, err := s.store.Begin(tikv.WithPipelinedMemDB())
+	txn, err := s.store.Begin(tikv.WithDefaultPipelinedTxn())
 	s.Nil(err)
 	txn.Set([]byte("key1"), []byte("value1"))
 	txnProbe := transaction.TxnProbe{KVTxn: txn}

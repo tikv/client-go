@@ -538,6 +538,10 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 		a.reqBuilder.reset()
 
 		headRecvTime, headArrivalInterval := a.fetchAllPendingRequests(int(cfg.MaxBatchSize))
+		if a.reqBuilder.len() == 0 {
+			// the conn is closed or recycled.
+			return
+		}
 
 		// curl -X PUT -d 'return(true)' http://0.0.0.0:10080/fail/tikvclient/mockBlockOnBatchClient
 		if val, err := util.EvalFailpoint("mockBlockOnBatchClient"); err == nil {
@@ -558,13 +562,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 			}
 		}
 		length := a.reqBuilder.len()
+		avgBatchWaitSize = 0.2*float64(length) + 0.8*avgBatchWaitSize
 		a.metrics.pendingRequests.Observe(float64(len(a.batchCommandsCh) + length))
-		if uint(length) == 0 {
-			// The batch command channel is closed.
-			return
-		} else {
-			avgBatchWaitSize = 0.2*float64(length) + 0.8*avgBatchWaitSize
-		}
 		a.metrics.bestBatchSize.Observe(avgBatchWaitSize)
 		a.metrics.headArrivalInterval.Observe(headArrivalInterval.Seconds())
 		a.metrics.sendLoopWaitHeadDur.Observe(headRecvTime.Sub(sendLoopStartTime).Seconds())
@@ -1163,25 +1162,4 @@ func sendBatchRequest(
 		}
 		return nil, errors.WithMessage(context.DeadlineExceeded, reason)
 	}
-}
-
-func (c *RPCClient) recycleIdleConnArray() {
-	start := time.Now()
-
-	var addrs []string
-	var vers []uint64
-	c.RLock()
-	for _, conn := range c.conns {
-		if conn.batchConn != nil && conn.isIdle() {
-			addrs = append(addrs, conn.target)
-			vers = append(vers, conn.ver)
-		}
-	}
-	c.RUnlock()
-
-	for i, addr := range addrs {
-		c.CloseAddrVer(addr, vers[i])
-	}
-
-	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
 }

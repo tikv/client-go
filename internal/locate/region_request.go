@@ -127,7 +127,8 @@ func (s *RegionRequestSender) String() string {
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
-	RPCStats map[tikvrpc.CmdType]*RPCRuntimeStats
+	// RPCStatsList uses to record RPC requests stats, since in most cases, only one kind of rpc request is sent at a time, use slice instead of map for performance.
+	RPCStatsList []RPCRuntimeStats
 	RequestErrorStats
 }
 
@@ -142,29 +143,47 @@ type RequestErrorStats struct {
 // NewRegionRequestRuntimeStats returns a new RegionRequestRuntimeStats.
 func NewRegionRequestRuntimeStats() *RegionRequestRuntimeStats {
 	return &RegionRequestRuntimeStats{
-		RPCStats: make(map[tikvrpc.CmdType]*RPCRuntimeStats),
+		RPCStatsList: make([]RPCRuntimeStats, 0, 1),
 	}
 }
 
 // RPCRuntimeStats indicates the RPC request count and consume time.
 type RPCRuntimeStats struct {
-	Count int64
+	Cmd   tikvrpc.CmdType
+	Count uint32
 	// Send region request consume time.
-	Consume int64
+	Consume time.Duration
 }
 
 // RecordRPCRuntimeStats uses to record the rpc count and duration stats.
 func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d time.Duration) {
-	stat, ok := r.RPCStats[cmd]
-	if !ok {
-		r.RPCStats[cmd] = &RPCRuntimeStats{
-			Count:   1,
-			Consume: int64(d),
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == cmd {
+			r.RPCStatsList[i].Count++
+			r.RPCStatsList[i].Consume += d
+			return
 		}
-		return
 	}
-	stat.Count++
-	stat.Consume += int64(d)
+	r.RPCStatsList = append(r.RPCStatsList, RPCRuntimeStats{
+		Cmd:     cmd,
+		Count:   1,
+		Consume: d,
+	})
+}
+
+// GetRPCStatsCount returns the total rpc types count.
+func (r *RegionRequestRuntimeStats) GetRPCStatsCount() int {
+	return len(r.RPCStatsList)
+}
+
+// GetCmdRPCCount returns the rpc count of the specified cmd type.
+func (r *RegionRequestRuntimeStats) GetCmdRPCCount(cmd tikvrpc.CmdType) uint32 {
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == cmd {
+			return r.RPCStatsList[i].Count
+		}
+	}
+	return 0
 }
 
 // RecordRPCErrorStats uses to record the request error(region error label and rpc error) info and count.
@@ -198,15 +217,15 @@ func (r *RegionRequestRuntimeStats) String() string {
 		return ""
 	}
 	var builder strings.Builder
-	for k, v := range r.RPCStats {
+	for _, v := range r.RPCStatsList {
 		if builder.Len() > 0 {
 			builder.WriteByte(',')
 		}
-		builder.WriteString(k.String())
+		builder.WriteString(v.Cmd.String())
 		builder.WriteString(":{num_rpc:")
-		builder.WriteString(strconv.FormatInt(v.Count, 10))
+		builder.WriteString(strconv.FormatUint(uint64(v.Count), 10))
 		builder.WriteString(", total_time:")
-		builder.WriteString(util.FormatDuration(time.Duration(v.Consume)))
+		builder.WriteString(util.FormatDuration(v.Consume))
 		builder.WriteString("}")
 	}
 	if errStatsStr := r.RequestErrorStats.String(); errStatsStr != "" {
@@ -242,7 +261,8 @@ func (r *RequestErrorStats) String() string {
 // Clone returns a copy of itself.
 func (r *RegionRequestRuntimeStats) Clone() *RegionRequestRuntimeStats {
 	newRs := NewRegionRequestRuntimeStats()
-	maps.Copy(newRs.RPCStats, r.RPCStats)
+	newRs.RPCStatsList = make([]RPCRuntimeStats, 0, len(r.RPCStatsList))
+	newRs.RPCStatsList = append(newRs.RPCStatsList, r.RPCStatsList...)
 	if len(r.ErrStats) > 0 {
 		newRs.ErrStats = make(map[string]int)
 		maps.Copy(newRs.ErrStats, r.ErrStats)
@@ -256,17 +276,8 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 	if rs == nil {
 		return
 	}
-	for cmd, v := range rs.RPCStats {
-		stat, ok := r.RPCStats[cmd]
-		if !ok {
-			r.RPCStats[cmd] = &RPCRuntimeStats{
-				Count:   v.Count,
-				Consume: v.Consume,
-			}
-			continue
-		}
-		stat.Count += v.Count
-		stat.Consume += v.Consume
+	for i := range rs.RPCStatsList {
+		r.mergeRPCRuntimeStats(rs.RPCStatsList[i])
 	}
 	if len(rs.ErrStats) > 0 {
 		if r.ErrStats == nil {
@@ -277,6 +288,17 @@ func (r *RegionRequestRuntimeStats) Merge(rs *RegionRequestRuntimeStats) {
 		}
 		r.OtherErrCnt += rs.OtherErrCnt
 	}
+}
+
+func (r *RegionRequestRuntimeStats) mergeRPCRuntimeStats(rs RPCRuntimeStats) {
+	for i := range r.RPCStatsList {
+		if r.RPCStatsList[i].Cmd == rs.Cmd {
+			r.RPCStatsList[i].Count += rs.Count
+			r.RPCStatsList[i].Consume += rs.Consume
+			return
+		}
+	}
+	r.RPCStatsList = append(r.RPCStatsList, rs)
 }
 
 // ReplicaAccessStats records the replica access info.
@@ -730,43 +752,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
-	if val, err := util.EvalFailpoint("tikvStoreSendReqResult"); err == nil {
-		if s, ok := val.(string); ok {
-			switch s {
-			case "timeout":
-				return nil, nil, 0, errors.New("timeout")
-			case "GCNotLeader":
-				if req.Type == tikvrpc.CmdGC {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
-					}, nil, 0, nil
-				}
-			case "PessimisticLockNotLeader":
-				if req.Type == tikvrpc.CmdPessimisticLock {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
-					}, nil, 0, nil
-				}
-			case "GCServerIsBusy":
-				if req.Type == tikvrpc.CmdGC {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-					}, nil, 0, nil
-				}
-			case "busy":
-				return &tikvrpc.Response{
-					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-				}, nil, 0, nil
-			case "requestTiDBStoreError":
-				if et == tikvrpc.TiDB {
-					return nil, nil, 0, errors.WithStack(tikverr.ErrTiKVServerTimeout)
-				}
-			case "requestTiFlashError":
-				if et == tikvrpc.TiFlash {
-					return nil, nil, 0, errors.WithStack(tikverr.ErrTiFlashServerTimeout)
-				}
-			}
-		}
+	if resp, err = failpointSendReqResult(req, et); err != nil || resp != nil {
+		return
 	}
 
 	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
@@ -873,7 +860,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			patchRequestSource(req, s.replicaSelector.replicaType())
 		}
-		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+		// RPCClient.SendRequest will attach `req.Context` thus skip attaching here to reduce overhead.
+		if err := tikvrpc.SetContextNoAttach(req, rpcCtx.Meta, rpcCtx.Peer); err != nil {
 			return nil, nil, retryTimes, err
 		}
 		if s.replicaSelector != nil {
@@ -1446,12 +1434,18 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "mismatch_peer_id"
 	} else if e.GetBucketVersionNotMatch() != nil {
 		return "bucket_version_not_match"
+	} else if isInvalidMaxTsUpdate(e) {
+		return "invalid_max_ts_update"
 	}
 	return "unknown"
 }
 
 func isDeadlineExceeded(e *errorpb.Error) bool {
 	return strings.Contains(e.GetMessage(), "Deadline is exceeded")
+}
+
+func isInvalidMaxTsUpdate(e *errorpb.Error) bool {
+	return strings.Contains(e.GetMessage(), "invalid max_ts update")
 }
 
 func (s *RegionRequestSender) onRegionError(
@@ -1749,6 +1743,16 @@ func (s *RegionRequestSender) onRegionError(
 		return false, nil
 	}
 
+	if isInvalidMaxTsUpdate(regionErr) {
+		logutil.Logger(bo.GetCtx()).Error(
+			"tikv reports `InvalidMaxTsUpdate`",
+			zap.String("message", regionErr.GetMessage()),
+			zap.Stringer("req", req),
+			zap.Stringer("ctx", ctx),
+		)
+		return false, errors.New(regionErr.String())
+	}
+
 	logutil.Logger(bo.GetCtx()).Debug(
 		"tikv reports region failed",
 		zap.Stringer("regionErr", regionErr),
@@ -1884,4 +1888,61 @@ func (s *baseReplicaSelector) backoffOnNoCandidate(bo *retry.Backoffer) error {
 		return nil
 	}
 	return bo.Backoff(args.cfg, args.err)
+}
+
+// failpointSendReqResult is used to process the failpoint For tikvStoreSendReqResult.
+func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
+	resp *tikvrpc.Response,
+	err error,
+) {
+	if val, e := util.EvalFailpoint("tikvStoreSendReqResult"); e == nil {
+		failpointCfg, ok := val.(string)
+		if !ok {
+			return
+		}
+		switch failpointCfg {
+		case "timeout":
+			{
+				err = errors.New("timeout")
+				return
+			}
+		case "GCNotLeader":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
+			}
+		case "PessimisticLockNotLeader":
+			if req.Type == tikvrpc.CmdPessimisticLock {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
+			}
+		case "GCServerIsBusy":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+				}
+				return
+			}
+		case "busy":
+			resp = &tikvrpc.Response{
+				Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+			}
+			return
+		case "requestTiDBStoreError":
+			if et == tikvrpc.TiDB {
+				err = errors.WithStack(tikverr.ErrTiKVServerTimeout)
+				return
+			}
+		case "requestTiFlashError":
+			if et == tikvrpc.TiFlash {
+				err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
+				return
+			}
+		}
+	}
+	return
 }

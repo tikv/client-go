@@ -44,8 +44,7 @@ var (
 	TiKVTxnCmdHistogram                            *prometheus.HistogramVec
 	TiKVBackoffHistogram                           *prometheus.HistogramVec
 	TiKVSendReqHistogram                           *prometheus.HistogramVec
-	TiKVSendReqCounter                             *prometheus.CounterVec
-	TiKVSendReqTimeCounter                         *prometheus.CounterVec
+	TiKVSendReqSummary                             *prometheus.SummaryVec
 	TiKVRPCNetLatencyHistogram                     *prometheus.HistogramVec
 	TiKVCoprocessorHistogram                       *prometheus.HistogramVec
 	TiKVLockResolverCounter                        *prometheus.CounterVec
@@ -117,6 +116,8 @@ var (
 	TiKVPipelinedFlushDuration                     prometheus.Histogram
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
+	TiKVStaleRegionFromPDCounter                   prometheus.Counter
+	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
 )
 
 // Label constants.
@@ -175,23 +176,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope})
 
-	TiKVSendReqCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	TiKVSendReqSummary = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
-			Name:        "request_counter",
-			Help:        "Counter of sending request with multi dimensions.",
+			Name:        "source_request_seconds",
+			Help:        "Summary of sending request with multi dimensions.",
 			ConstLabels: constLabels,
-		}, []string{LblType, LblStore, LblStaleRead, LblSource, LblScope})
-
-	TiKVSendReqTimeCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "request_time_counter",
-			Help:        "Counter of request time with multi dimensions.",
-			ConstLabels: constLabels,
-		}, []string{LblType, LblStore, LblStaleRead, LblSource, LblScope})
+		}, []string{LblType, LblStore, LblStaleRead, LblScope, LblSource})
 
 	TiKVRPCNetLatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -851,6 +843,21 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:      "low_resolution_tso_update_interval_seconds",
 			Help:      "The actual working update interval for the low resolution TSO. As there are adaptive mechanism internally, this value may differ from the config.",
 		})
+	TiKVStaleRegionFromPDCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "stale_region_from_pd",
+			Help:      "Counter of stale region from PD",
+		})
+	TiKVPipelinedFlushThrottleSecondsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "pipelined_flush_throttle_seconds",
+			Help:      "Throttle durations of pipelined flushes.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
+		})
 
 	initShortcuts()
 }
@@ -875,8 +882,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTxnCmdHistogram)
 	prometheus.MustRegister(TiKVBackoffHistogram)
 	prometheus.MustRegister(TiKVSendReqHistogram)
-	prometheus.MustRegister(TiKVSendReqCounter)
-	prometheus.MustRegister(TiKVSendReqTimeCounter)
+	prometheus.MustRegister(TiKVSendReqSummary)
 	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
 	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
@@ -948,6 +954,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVPipelinedFlushDuration)
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
+	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
+	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
 }
 
 // readCounter reads the value of a prometheus.Counter.

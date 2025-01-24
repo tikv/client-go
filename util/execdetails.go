@@ -417,8 +417,6 @@ type ScanDetail struct {
 	RocksdbBlockReadDuration time.Duration
 	// GetSnapshotDuration is the time spent getting an engine snapshot.
 	GetSnapshotDuration time.Duration
-
-	ResolveLock *ResolveLockDetail
 }
 
 // Merge merges scan detail execution details into self.
