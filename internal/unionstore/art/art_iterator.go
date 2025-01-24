@@ -19,6 +19,9 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/tikv/client-go/v2/internal/logutil"
+	"go.uber.org/zap"
+
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
@@ -56,6 +59,7 @@ func (t *ART) iter(lowerBound, upperBound []byte, reverse, includeFlags bool) (*
 		// this avoids the initial value of currAddr equals to endAddr.
 		currAddr: arena.BadAddr,
 		endAddr:  arena.NullAddr,
+		seqNo:    t.SeqNo,
 	}
 	it.init(lowerBound, upperBound)
 	if !it.valid {
@@ -76,12 +80,41 @@ type Iterator struct {
 	currLeaf     *artLeaf
 	currAddr     arena.MemdbArenaAddr
 	endAddr      arena.MemdbArenaAddr
+
+	// only when seqNo == art.seqNo, the iterator is valid.
+	seqNo int
+	// ignoreSeqNo is used to ignore the seqNo check, used for snapshot iter before its full deprecation.
+	ignoreSeqNo bool
 }
 
-func (it *Iterator) Valid() bool        { return it.valid }
-func (it *Iterator) Key() []byte        { return it.currLeaf.GetKey() }
-func (it *Iterator) Flags() kv.KeyFlags { return it.currLeaf.GetKeyFlags() }
+func (it *Iterator) checkSeqNo() {
+	if it.seqNo != it.tree.SeqNo && !it.ignoreSeqNo {
+		logutil.BgLogger().Panic(
+			"seqNo mismatch",
+			zap.Int("it seqNo", it.seqNo),
+			zap.Int("art seqNo", it.tree.SeqNo),
+			zap.Stack("stack"),
+		)
+	}
+}
+
+func (it *Iterator) Valid() bool {
+	it.checkSeqNo()
+	return it.valid
+}
+
+func (it *Iterator) Key() []byte {
+	it.checkSeqNo()
+	return it.currLeaf.GetKey()
+}
+
+func (it *Iterator) Flags() kv.KeyFlags {
+	it.checkSeqNo()
+	return it.currLeaf.GetKeyFlags()
+}
+
 func (it *Iterator) Value() []byte {
+	it.checkSeqNo()
 	if it.currLeaf.vLogAddr.IsNull() {
 		return nil
 	}
@@ -102,6 +135,7 @@ func (it *Iterator) Next() error {
 		// iterate is finished
 		return errors.New("Art: iterator is finished")
 	}
+	it.checkSeqNo()
 	if it.currAddr == it.endAddr {
 		it.valid = false
 		return nil

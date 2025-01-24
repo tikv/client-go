@@ -49,6 +49,7 @@ func (t *ART) newSnapshotIterator(start, end []byte, desc bool) *SnapIter {
 	if err != nil {
 		panic(err)
 	}
+	inner.ignoreSeqNo = true
 	it := &SnapIter{
 		Iterator: inner,
 		cp:       t.getSnapshot(),
