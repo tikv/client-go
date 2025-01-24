@@ -200,8 +200,12 @@ type MemBuffer interface {
 	DeleteWithFlags([]byte, ...kv.FlagsOp) error
 
 	// Iter implements the Retriever interface.
+	// Any write operation to the memdb invalidates this iterator immediately after its creation.
+	// Attempting to use such an invalidated iterator will result in a panic.
 	Iter([]byte, []byte) (Iterator, error)
 	// IterReverse implements the Retriever interface.
+	// Any write operation to the memdb invalidates this iterator immediately after its creation.
+	// Attempting to use such an invalidated iterator will result in a panic.
 	IterReverse([]byte, []byte) (Iterator, error)
 	// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 	// Deprecated: use ForEachInSnapshotRange or BatchedSnapshotIter instead.
@@ -222,12 +226,14 @@ type MemBuffer interface {
 	// Use it when you need to scan the whole range, otherwise consider using BatchedSnapshotIter.
 	ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error
 
-	// BatchedSnapshotIter iterates in batches to prevent iterator invalidation:
-	// It does not save any iterator state, instead it copies the keys and values to a buffer.
-	// It behaves like SnapshotIter, but it is safe to use the returned keys and values after the iteration.
-	// Use it when you need on-demand "next", otherwise consider using ForEachInSnapshotRange.
+	// BatchedSnapshotIter returns an iterator of the "snapshot", namely stage[0].
+	// It iterates in batches and prevents iterator invalidation.
 	//
-	// The iterator becomes invalid after a membuffer vlog truncation operation.
+	// Use it when you need on-demand "next", otherwise consider using ForEachInSnapshotRange.
+	// NOTE: you should never use it when there are no stages.
+	//
+	// The iterator becomes invalid when any operation that may modify the "snapshot",
+	// e.g. RevertToCheckpoint or releasing stage[0].
 	BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator
 
 	//SnapshotGetter returns a Getter for a snapshot of MemBuffer.

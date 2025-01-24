@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/tikv/client-go/v2/internal/logutil"
+
 	"github.com/pingcap/errors"
 
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -211,6 +213,9 @@ type snapshotBatchedIter struct {
 }
 
 func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
+	if len(db.Stages()) == 0 {
+		logutil.BgLogger().Error("should not use BatchedSnapshotIter for a memdb without any staging buffer")
+	}
 	iter := &snapshotBatchedIter{
 		db:                    db,
 		snapshotTruncateSeqNo: db.SnapshotSeqNo,
