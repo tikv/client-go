@@ -27,6 +27,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/namespace"
+	zap "go.uber.org/zap"
 )
 
 var etcdMutex sync.Mutex
@@ -46,8 +47,10 @@ func getSharedEtcdClient(addrs []string) (*clientv3.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	etcdLogCfg := zap.NewProductionConfig()
 	cli, err := clientv3.New(
 		clientv3.Config{
+			LogConfig:        &etcdLogCfg,
 			Endpoints:        addrs,
 			AutoSyncInterval: 30 * time.Second,
 			DialTimeout:      5 * time.Second,
