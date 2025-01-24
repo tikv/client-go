@@ -75,8 +75,6 @@ type TiKVClient struct {
 	GrpcKeepAliveTimeout float64 `toml:"grpc-keepalive-timeout" json:"grpc-keepalive-timeout"`
 	// GrpcCompressionType is the compression type for gRPC channel: none or gzip.
 	GrpcCompressionType string `toml:"grpc-compression-type" json:"grpc-compression-type"`
-	// GrpcSharedBufferPool is the flag to control whether to share the buffer pool in the TiKV gRPC clients.
-	GrpcSharedBufferPool bool `toml:"grpc-shared-buffer-pool" json:"grpc-shared-buffer-pool"`
 	// GrpcInitialWindowSize is the value for initial window size on a stream.
 	GrpcInitialWindowSize int32 `toml:"grpc-initial-window-size" json:"grpc-initial-window-size"`
 	// GrpcInitialConnWindowSize is the value for initial window size on a connection.
@@ -156,7 +154,6 @@ func DefaultTiKVClient() TiKVClient {
 		GrpcKeepAliveTime:         10,
 		GrpcKeepAliveTimeout:      3,
 		GrpcCompressionType:       "none",
-		GrpcSharedBufferPool:      false,
 		GrpcInitialWindowSize:     DefGrpcInitialWindowSize,
 		GrpcInitialConnWindowSize: DefGrpcInitialConnWindowSize,
 		CommitTimeout:             "41s",
