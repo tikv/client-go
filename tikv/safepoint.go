@@ -46,7 +46,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/client/v3/namespace"
 	"go.uber.org/zap"
 )
 
@@ -134,7 +133,7 @@ func WithPrefix(prefix string) SafePointKVOpt {
 
 // EtcdSafePointKV implements SafePointKV at runtime
 type EtcdSafePointKV struct {
-	cli *clientv3.Client
+	cli EtcdClient
 }
 
 // NewEtcdSafePointKV creates an instance of EtcdSafePointKV
@@ -144,15 +143,10 @@ func NewEtcdSafePointKV(addrs []string, tlsConfig *tls.Config, opts ...SafePoint
 	for _, o := range opts {
 		o(opt)
 	}
-	etcdCli, err := createEtcdKV(addrs, tlsConfig)
+
+	etcdCli, err := GetEtcdClientWithPrefix(addrs, opt.prefix)
 	if err != nil {
 		return nil, err
-	}
-	// If a prefix is specified, wrap the etcd client with the target namespace.
-	if opt.prefix != "" {
-		etcdCli.KV = namespace.NewKV(etcdCli.KV, opt.prefix)
-		etcdCli.Watcher = namespace.NewWatcher(etcdCli.Watcher, opt.prefix)
-		etcdCli.Lease = namespace.NewLease(etcdCli.Lease, opt.prefix)
 	}
 	return &EtcdSafePointKV{cli: etcdCli}, nil
 }
