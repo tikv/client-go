@@ -45,6 +45,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {
@@ -85,6 +86,12 @@ type MockPdClient struct {
 
 func (c *MockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
 	return 0, c.logicalTimestamp.Add(1), nil
+}
+
+func (c *MockPdClient) WithCallerComponent(component caller.Component) pd.Client {
+	client := &MockPdClient{Client: c.Client.WithCallerComponent(component)}
+	client.logicalTimestamp.Store(c.logicalTimestamp.Load())
+	return client
 }
 
 func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
