@@ -267,6 +267,9 @@ func (a *connArray) monitoredDial(ctx context.Context, connName, target string, 
 	conn = &monitoredConn{
 		Name: connName,
 	}
+	// grpc.NewClient doesn't support timeout options, so we have to use grpc.DialContext here.
+	// This API will be supported throughout 1.x
+	//nolint:staticcheck
 	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
