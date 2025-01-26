@@ -774,6 +774,7 @@ func (s *sendReqState) next(
 		retry, err := s.onRegionError(bo, s.vars.rpcCtx, req, s.vars.regionErr)
 		if err != nil {
 			s.vars.rpcCtx, s.vars.resp = nil, nil
+			s.vars.err = err
 			s.vars.msg = fmt.Sprintf("failed to handle region error: %v", err)
 			return true
 		}
