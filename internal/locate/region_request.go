@@ -786,10 +786,22 @@ func (s *sendReqState) next(
 	}
 
 	s.vars.rpcCtx, s.vars.resp = nil, nil
+	if !req.IsRetryRequest && s.vars.sendTimes > 0 {
+		req.IsRetryRequest = true
+	}
 
 	s.vars.rpcCtx, s.vars.err = s.getRPCContext(bo, req, regionID, et, opts...)
 	if s.vars.err != nil {
 		return true
+	}
+
+	if _, err := util.EvalFailpoint("invalidCacheAndRetry"); err == nil {
+		// cooperate with tikvclient/setGcResolveMaxBackoff
+		if c := bo.GetCtx().Value("injectedBackoff"); c != nil {
+			s.vars.regionErr = &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+			s.vars.resp, s.vars.err = tikvrpc.GenRegionErrorResp(req, s.vars.regionErr)
+			return true
+		}
 	}
 
 	if s.vars.rpcCtx == nil {
@@ -826,14 +838,6 @@ func (s *sendReqState) next(
 	logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, s.vars.rpcCtx.Addr)
 	s.storeAddr = s.vars.rpcCtx.Addr
 
-	if _, err := util.EvalFailpoint("beforeSendReqToRegion"); err == nil {
-		if hook := bo.GetCtx().Value("sendReqToRegionHook"); hook != nil {
-			h := hook.(func(*tikvrpc.Request))
-			h(req)
-		}
-	}
-
-	req.IsRetryRequest = s.vars.sendTimes > 0
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
@@ -845,6 +849,13 @@ func (s *sendReqState) next(
 	if s.replicaSelector != nil {
 		if s.vars.err = s.replicaSelector.backoffOnRetry(s.vars.rpcCtx.Store, bo); s.vars.err != nil {
 			return true
+		}
+	}
+
+	if _, err := util.EvalFailpoint("beforeSendReqToRegion"); err == nil {
+		if hook := bo.GetCtx().Value("sendReqToRegionHook"); hook != nil {
+			h := hook.(func(*tikvrpc.Request))
+			h(req)
 		}
 	}
 
