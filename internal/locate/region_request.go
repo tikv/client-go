@@ -804,7 +804,7 @@ func (s *sendReqState) next(
 				return true
 			}
 		}
-		s.vars.regionErr = &errorpb.Error{RegionNotFound: &errorpb.RegionNotFound{}}
+		s.vars.regionErr = &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
 		s.vars.resp, s.vars.err = tikvrpc.GenRegionErrorResp(req, s.vars.regionErr)
 		s.vars.msg = "throwing pseudo region error due to no replica available"
 		return true
