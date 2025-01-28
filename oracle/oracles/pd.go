@@ -235,9 +235,9 @@ func (o *pdOracle) GetAllTSOKeyspaceGroupMinTS(ctx context.Context) (uint64, err
 
 type tsFuture struct {
 	tso.TSFuture
-	o          *pdOracle
-	txnScope   string
-	commitInfo *util.CommitInfo
+	o              *pdOracle
+	txnScope       string
+	lastCommitInfo *util.CommitInfo
 }
 
 // Wait implements the oracle.Future interface.
@@ -249,8 +249,8 @@ func (f *tsFuture) Wait() (uint64, error) {
 		return 0, errors.WithStack(err)
 	}
 	ts := oracle.ComposeTS(physical, logical)
-	if f.commitInfo != nil {
-		f.commitInfo.Verify(ts)
+	if f.lastCommitInfo != nil {
+		f.lastCommitInfo.Verify(ts)
 	}
 	f.o.setLastTS(ts, f.txnScope)
 	return ts, nil

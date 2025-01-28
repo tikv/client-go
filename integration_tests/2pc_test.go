@@ -2772,4 +2772,5 @@ func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
 
 func (s *testCommitterSuite) Test2PCUpdateLatestCommitInf() {
 	testUpdateLatestCommitInfo(s.Require(), s.store, "2pc")
+	testUpdateLatestCommitInfo(s.Require(), s.store, "pipelined")
 }

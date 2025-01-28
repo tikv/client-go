@@ -1013,6 +1013,9 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 
 	// Already spawned a goroutine for async commit transaction.
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
+		if !c.txn.IsPipelined() {
+			c.updateStoreCommitInfo()
+		}
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
 		if c.store.IsClose() {
 			logutil.Logger(bo.GetCtx()).Warn("the store is closed",
@@ -1905,7 +1908,6 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		}
 	}
 	atomic.StoreUint64(&c.commitTS, commitTS)
-	c.updateStoreCommitInfo()
 
 	if c.store.GetOracle().IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
@@ -1958,6 +1960,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	if c.isAsyncCommit() {
 		// For async commit protocol, the commit is considered success here.
 		c.txn.commitTS = c.commitTS
+		c.updateStoreCommitInfo()
 		logutil.Logger(ctx).Debug("2PC will use async commit protocol to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
@@ -2383,18 +2386,24 @@ func (c *twoPhaseCommitter) updateStoreCommitInfo() {
 
 func (c *twoPhaseCommitter) getCommitInfo() *util.CommitInfo {
 	var txnType string
-	if c.isAsyncCommit() {
+	if c.txn.isPipelined {
+		txnType = "pipelined"
+	} else if c.isAsyncCommit() {
 		txnType = "async"
 	} else if c.isOnePC() {
 		txnType = "1pc"
 	} else {
 		txnType = "2pc"
 	}
+	var mutationLen int
+	if !c.txn.isPipelined {
+		mutationLen = c.mutations.Len()
+	}
 	return &util.CommitInfo{
 		TxnType:     txnType,
 		StartTS:     c.startTS,
 		CommitTS:    atomic.LoadUint64(&c.commitTS),
-		MutationLen: c.mutations.Len(),
+		MutationLen: mutationLen,
 		TxnSize:     c.txnSize,
 		Primary:     c.primaryKey,
 	}

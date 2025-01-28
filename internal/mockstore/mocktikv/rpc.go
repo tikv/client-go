@@ -661,6 +661,40 @@ func (h kvHandler) handleSplitRegion(req *kvrpcpb.SplitRegionRequest) *kvrpcpb.S
 	return resp
 }
 
+func (h kvHandler) handleKvFlush(req *kvrpcpb.FlushRequest) *kvrpcpb.FlushResponse {
+	regionID := req.Context.RegionId
+	prewriteReq := &kvrpcpb.PrewriteRequest{
+		Context:        req.Context,
+		Mutations:      req.Mutations,
+		PrimaryLock:    req.PrimaryKey,
+		StartVersion:   req.StartTs,
+		MinCommitTs:    req.MinCommitTs,
+		LockTtl:        req.LockTtl,
+		AssertionLevel: req.AssertionLevel,
+	}
+
+	h.cluster.handleDelay(prewriteReq.StartVersion, regionID)
+
+	for _, m := range req.Mutations {
+		if !h.checkKeyInRegion(m.Key) {
+			panic("KvPrewrite: key not in region")
+		}
+	}
+	errs := h.mvccStore.Prewrite(prewriteReq)
+	for i, e := range errs {
+		if e != nil {
+			if _, isLocked := errors.Cause(e).(*ErrLocked); !isLocked {
+				// Keep only one error if it's not a KeyIsLocked error.
+				errs = errs[i : i+1]
+				break
+			}
+		}
+	}
+	return &kvrpcpb.FlushResponse{
+		Errors: convertToKeyErrors(errs),
+	}
+}
+
 // Client is a client that sends RPC.
 // This is same with tikv.Client, define again for avoid circle import.
 type Client interface {
@@ -1070,6 +1104,13 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 				Name:  "mvcc.num_rows",
 				Value: strconv.Itoa(len(scanResp.Pairs)),
 			}}}
+	case tikvrpc.CmdFlush:
+		r := req.Flush()
+		if err := session.checkRequest(reqCtx, r.Size()); err != nil {
+			resp.Resp = &kvrpcpb.PrewriteResponse{RegionError: err}
+			return resp, nil
+		}
+		resp.Resp = kvHandler{session}.handleKvFlush(r)
 	default:
 		return nil, errors.Errorf("unsupported this request type %v", req.Type)
 	}

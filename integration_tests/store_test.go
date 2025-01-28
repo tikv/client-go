@@ -198,14 +198,18 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 
 func testUpdateLatestCommitInfo(require *require.Assertions, store tikv.StoreProbe, mode string) {
 	doTxn := func() *util.CommitInfo {
-		txn, err := store.Begin()
+		var ops []tikv.TxnOption
+		if mode == "pipelined" {
+			ops = append(ops, tikv.WithPipelinedMemDB())
+		}
+		txn, err := store.Begin(ops...)
 		require.Nil(err)
 		switch mode {
 		case "async":
 			txn.SetEnableAsyncCommit(true)
 		case "1pc":
 			txn.SetEnable1PC(true)
-		case "2pc":
+		case "2pc", "pipelined":
 			// do nothing
 		default:
 			require.FailNow("unknown mode:" + mode)
@@ -217,10 +221,16 @@ func testUpdateLatestCommitInfo(require *require.Assertions, store tikv.StorePro
 		return txn.GetCommitter().GetCommitInfo()
 	}
 
+	txnSize := 8
+	mutationLen := 1
+	if mode == "pipelined" {
+		txnSize = 0
+		mutationLen = 0
+	}
 	commitInfo1 := doTxn()
 	require.Equal(commitInfo1, store.GetLastCommitInfo())
-	require.Equal(commitInfo1.MutationLen, 1)
-	require.Equal(commitInfo1.TxnSize, 8)
+	require.Equal(commitInfo1.MutationLen, mutationLen)
+	require.Equal(commitInfo1.TxnSize, txnSize)
 	require.Equal(commitInfo1.TxnType, mode)
 	commitInfo2 := doTxn()
 	lastInfo := store.GetLastCommitInfo()
@@ -229,13 +239,13 @@ func testUpdateLatestCommitInfo(require *require.Assertions, store tikv.StorePro
 	require.Greater(lastInfo.CommitTS, commitInfo1.CommitTS)
 	require.GreaterOrEqual(lastInfo.StartTS, commitInfo1.CommitTS)
 
-	errMsg := fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: 1, TxnSize: 8, Primary: [107 101 121]",
-		lastInfo.StartTS, mode, lastInfo.StartTS, lastInfo.CommitTS)
+	errMsg := fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: %d, TxnSize: %d, Primary: [107 101 121]",
+		lastInfo.StartTS, mode, lastInfo.StartTS, lastInfo.CommitTS, mutationLen, txnSize)
 	require.PanicsWithValue(errMsg, func() {
 		lastInfo.Verify(lastInfo.StartTS)
 	})
-	errMsg = fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: 1, TxnSize: 8, Primary: [107 101 121]",
-		lastInfo.CommitTS-1, mode, lastInfo.StartTS, lastInfo.CommitTS)
+	errMsg = fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: %d, TxnSize: %d, Primary: [107 101 121]",
+		lastInfo.CommitTS-1, mode, lastInfo.StartTS, lastInfo.CommitTS, mutationLen, txnSize)
 	require.PanicsWithValue(errMsg, func() {
 		lastInfo.Verify(lastInfo.CommitTS - 1)
 	})
