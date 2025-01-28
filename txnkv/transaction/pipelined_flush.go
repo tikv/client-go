@@ -338,6 +338,7 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 		zap.Uint64("startTS", c.startTS),
 		zap.Uint64("commitTS", commitTS),
 	)
+	c.updateStoreCommitInfo()
 	broadcastToAllStores(
 		c.txn,
 		c.store,
