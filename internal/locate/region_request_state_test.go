@@ -333,7 +333,7 @@ func TestRegionCacheStaleRead(t *testing.T) {
 			leaderRegionValid:       true,
 			leaderAsyncReload:       util.Some(true),
 			leaderSuccessReplica:    []string{"z2", "z3"},
-			leaderSuccessReadType:   SuccessFollowerRead,
+			leaderSuccessReadType:   SuccessStaleRead,
 			followerRegionValid:     true,
 			followerAsyncReload:     util.None[bool](),
 			followerSuccessReplica:  []string{"z2"},
