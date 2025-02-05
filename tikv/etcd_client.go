@@ -19,15 +19,18 @@
 package tikv
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/tikv/client-go/v2/config"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/namespace"
 	zap "go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 var etcdMutex sync.Mutex
@@ -101,10 +104,15 @@ type EtcdClient interface {
 	clientv3.Watcher
 	clientv3.Auth
 	clientv3.Maintenance
+
+	ActiveConnection() *grpc.ClientConn
+	Endpoints() []string
+	Close() error
 }
 
 type wrappedEtcdClient struct {
-	inner *clientv3.Client
+	inner  *clientv3.Client
+	prefix string
 
 	clientv3.Cluster
 	clientv3.Auth
@@ -117,12 +125,11 @@ type wrappedEtcdClient struct {
 
 func newWrappedEtcdClient(inner *clientv3.Client) EtcdClient {
 	return &wrappedEtcdClient{
-		inner:   inner,
-		Cluster: inner.Cluster,
-		KV:      inner.KV,
-		Lease:   inner.Lease,
-
-		Watcher:     inner.Watcher,
+		inner:       inner,
+		Cluster:     inner.Cluster,
+		KV:          inner.KV,
+		Lease:       wrapLeaseClient(inner.Lease),
+		Watcher:     wrapWatchClient(inner.Watcher),
 		Auth:        inner.Auth,
 		Maintenance: inner.Maintenance,
 	}
@@ -130,17 +137,144 @@ func newWrappedEtcdClient(inner *clientv3.Client) EtcdClient {
 
 func newWrappedEtcdClientWithKeyPrefix(inner *clientv3.Client, prefix string) EtcdClient {
 	return &wrappedEtcdClient{
-		inner:       inner,
+		inner:  inner,
+		prefix: prefix,
+
 		Cluster:     inner.Cluster,
 		Auth:        inner.Auth,
 		Maintenance: inner.Maintenance,
 
 		KV:      namespace.NewKV(inner.KV, prefix),
-		Lease:   namespace.NewLease(inner.Lease, prefix),
-		Watcher: namespace.NewWatcher(inner.Watcher, prefix),
+		Lease:   wrapLeaseClient(namespace.NewLease(inner.Lease, prefix)),
+		Watcher: wrapWatchClient(namespace.NewWatcher(inner.Watcher, prefix)),
 	}
 }
 
+func (c *wrappedEtcdClient) Endpoints() []string {
+	return c.inner.Endpoints()
+}
+
+func (c *wrappedEtcdClient) ActiveConnection() *grpc.ClientConn {
+	return c.inner.ActiveConnection()
+}
+
 func (c *wrappedEtcdClient) Close() error {
-	return c.inner.Close()
+	c.Lease.Close()
+	c.Watcher.Close()
+	return nil
+}
+
+type wrappedLeaseClient struct {
+	sync.Mutex
+	leaseIDs map[clientv3.LeaseID]struct{}
+	inner    clientv3.Lease
+}
+
+func wrapLeaseClient(inner clientv3.Lease) clientv3.Lease {
+	return &wrappedLeaseClient{
+		inner:    inner,
+		leaseIDs: make(map[clientv3.LeaseID]struct{}),
+	}
+}
+
+func (c *wrappedLeaseClient) Grant(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) {
+	res, err := c.inner.Grant(ctx, ttl)
+	if err != nil {
+		return res, err
+	}
+	c.Lock()
+	defer c.Unlock()
+	c.leaseIDs[res.ID] = struct{}{}
+	return res, nil
+}
+
+func (c *wrappedLeaseClient) Revoke(ctx context.Context, id clientv3.LeaseID) (*clientv3.LeaseRevokeResponse, error) {
+	res, err := c.inner.Revoke(ctx, id)
+	if err != nil {
+		return res, err
+	}
+	c.Lock()
+	defer c.Unlock()
+	delete(c.leaseIDs, id)
+	return res, nil
+}
+
+func (c *wrappedLeaseClient) TimeToLive(ctx context.Context, id clientv3.LeaseID, opts ...clientv3.LeaseOption) (*clientv3.LeaseTimeToLiveResponse, error) {
+	return c.inner.TimeToLive(ctx, id, opts...)
+}
+
+func (c *wrappedLeaseClient) Leases(ctx context.Context) (*clientv3.LeaseLeasesResponse, error) {
+	resp, err := c.inner.Leases(ctx)
+	if err != nil {
+		return resp, err
+	}
+
+	c.Lock()
+	defer c.Unlock()
+	// Filter out leases that are not in our map
+	filteredLeases := make([]clientv3.LeaseStatus, 0, len(resp.Leases))
+	for _, lease := range resp.Leases {
+		if _, ok := c.leaseIDs[lease.ID]; ok {
+			filteredLeases = append(filteredLeases, lease)
+		}
+	}
+	resp.Leases = filteredLeases
+	return resp, nil
+}
+
+func (c *wrappedLeaseClient) KeepAlive(ctx context.Context, id clientv3.LeaseID) (<-chan *clientv3.LeaseKeepAliveResponse, error) {
+	return c.inner.KeepAlive(ctx, id)
+}
+
+func (c *wrappedLeaseClient) KeepAliveOnce(ctx context.Context, id clientv3.LeaseID) (*clientv3.LeaseKeepAliveResponse, error) {
+	return c.inner.KeepAliveOnce(ctx, id)
+}
+
+func (c *wrappedLeaseClient) Close() error {
+	c.Lock()
+	defer c.Unlock()
+	for id := range c.leaseIDs {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		_, err := c.inner.Revoke(ctx, id)
+		cancel()
+		if err != nil {
+			log.Warn("failed to revoke lease", zap.Int64("lease-id", int64(id)), zap.Error(err))
+		}
+	}
+	c.leaseIDs = make(map[clientv3.LeaseID]struct{})
+	return nil
+}
+
+type wrappedWatchClient struct {
+	inner clientv3.Watcher
+	sync.Mutex
+	cancels []context.CancelFunc
+}
+
+func wrapWatchClient(inner clientv3.Watcher) *wrappedWatchClient {
+	return &wrappedWatchClient{
+		inner: inner,
+	}
+}
+
+func (c *wrappedWatchClient) Watch(ctx context.Context, key string, opts ...clientv3.OpOption) clientv3.WatchChan {
+	c.Lock()
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancels = append(c.cancels, cancel)
+	c.Unlock()
+	return c.inner.Watch(ctx, key, opts...)
+}
+
+func (c *wrappedWatchClient) RequestProgress(ctx context.Context) error {
+	return c.inner.RequestProgress(ctx)
+}
+
+func (c *wrappedWatchClient) Close() error {
+	c.Lock()
+	defer c.Unlock()
+	for _, cancel := range c.cancels {
+		cancel()
+	}
+	c.cancels = nil
+	return nil
 }
