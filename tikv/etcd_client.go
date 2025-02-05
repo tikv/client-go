@@ -105,6 +105,7 @@ type EtcdClient interface {
 	clientv3.Auth
 	clientv3.Maintenance
 
+	Ctx() context.Context
 	ActiveConnection() *grpc.ClientConn
 	Endpoints() []string
 	Close() error
@@ -113,6 +114,8 @@ type EtcdClient interface {
 type wrappedEtcdClient struct {
 	inner  *clientv3.Client
 	prefix string
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	clientv3.Cluster
 	clientv3.Auth
@@ -124,8 +127,11 @@ type wrappedEtcdClient struct {
 }
 
 func newWrappedEtcdClient(inner *clientv3.Client) EtcdClient {
+	ctx, cancel := context.WithCancel(inner.Ctx())
 	return &wrappedEtcdClient{
 		inner:       inner,
+		ctx:         ctx,
+		cancel:      cancel,
 		Cluster:     inner.Cluster,
 		KV:          inner.KV,
 		Lease:       wrapLeaseClient(inner.Lease),
@@ -136,9 +142,12 @@ func newWrappedEtcdClient(inner *clientv3.Client) EtcdClient {
 }
 
 func newWrappedEtcdClientWithKeyPrefix(inner *clientv3.Client, prefix string) EtcdClient {
+	ctx, cancel := context.WithCancel(inner.Ctx())
 	return &wrappedEtcdClient{
 		inner:  inner,
 		prefix: prefix,
+		ctx:    ctx,
+		cancel: cancel,
 
 		Cluster:     inner.Cluster,
 		Auth:        inner.Auth,
@@ -150,6 +159,10 @@ func newWrappedEtcdClientWithKeyPrefix(inner *clientv3.Client, prefix string) Et
 	}
 }
 
+func (c *wrappedEtcdClient) Ctx() context.Context {
+	return c.ctx
+}
+
 func (c *wrappedEtcdClient) Endpoints() []string {
 	return c.inner.Endpoints()
 }
@@ -159,6 +172,7 @@ func (c *wrappedEtcdClient) ActiveConnection() *grpc.ClientConn {
 }
 
 func (c *wrappedEtcdClient) Close() error {
+	c.cancel()
 	c.Lease.Close()
 	c.Watcher.Close()
 	return nil
