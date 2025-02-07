@@ -1,18 +1,18 @@
 module integration_tests
 
-go 1.23.5
+go 1.23.6
 
 require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20250108041715-3b77f2c65c63
+	github.com/pingcap/kvproto v0.0.0-20250117122752-2b87602a94a1
 	github.com/pingcap/tidb v1.1.0-beta.0.20250123092444-cf4d252af8aa
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.8-0.20250117034919-61e09c6539bd
-	github.com/tikv/pd/client v0.0.0-20250107032658-5c4ab57d68de
+	github.com/tikv/pd/client v0.0.0-20250205134827-ac4e640fac03
 	go.uber.org/goleak v1.3.0
 )
 
@@ -113,6 +113,7 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+	github.com/pingcap/tidb => github.com/rleungx/tidb v1.1.0-beta.0.20250207063012-790a89ac9f1f
 
 	github.com/tikv/client-go/v2 => ../
 )
