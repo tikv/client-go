@@ -16,14 +16,14 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20241120071417-b5b7843d9037
+	github.com/pingcap/kvproto v0.0.0-20250117122752-2b87602a94a1
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20250107032658-5c4ab57d68de
+	github.com/tikv/pd/client v0.0.0-20250205134827-ac4e640fac03
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.10
 	go.etcd.io/etcd/client/v3 v3.5.10
