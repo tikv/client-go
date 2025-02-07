@@ -663,3 +663,8 @@ func (s *testAsyncCommitSuite) TestAsyncCommitLifecycleHooks() {
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
 }
+
+func (s *testAsyncCommitSuite) TestAsyncCommitUpdateLatestCommitInf() {
+	store := tikv.StoreProbe{KVStore: s.store}
+	testUpdateLatestCommitInfo(s.Require(), store, "async")
+}

@@ -120,6 +120,7 @@ type kvstore interface {
 	IsClose() bool
 	// Go run the function in a separate goroutine.
 	Go(f func()) error
+	storeCommitInfo
 }
 
 // twoPhaseCommitter executes a two-phase commit protocol.
@@ -1012,6 +1013,9 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *retry.Backoffer, action
 
 	// Already spawned a goroutine for async commit transaction.
 	if actionIsCommit && !actionCommit.retry && !c.isAsyncCommit() {
+		if !c.txn.IsPipelined() {
+			c.updateStoreCommitInfo()
+		}
 		secondaryBo := retry.NewBackofferWithVars(c.store.Ctx(), CommitSecondaryMaxBackoff, c.txn.vars)
 		if c.store.IsClose() {
 			logutil.Logger(bo.GetCtx()).Warn("the store is closed",
@@ -1880,6 +1884,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		logutil.Logger(ctx).Debug("1PC protocol is used to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("session", c.sessionID))
+		c.updateStoreCommitInfo()
 		return nil
 	}
 
@@ -1967,6 +1972,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	if c.isAsyncCommit() {
 		// For async commit protocol, the commit is considered success here.
 		c.txn.commitTS = c.commitTS
+		c.updateStoreCommitInfo()
 		logutil.Logger(ctx).Debug("2PC will use async commit protocol to commit this txn",
 			zap.Uint64("startTS", c.startTS), zap.Uint64("commitTS", c.commitTS),
 			zap.Uint64("sessionID", c.sessionID))
@@ -2383,4 +2389,40 @@ func (c *twoPhaseCommitter) mutationsOfKeys(keys [][]byte) CommitterMutations {
 		}
 	}
 	return &res
+}
+
+// updateStoreCommitInfo sets the commit info for the store.
+func (c *twoPhaseCommitter) updateStoreCommitInfo() {
+	c.store.SetLastCommitInfo(c.getCommitInfo())
+}
+
+func (c *twoPhaseCommitter) getCommitInfo() *util.CommitInfo {
+	var txnType string
+	if c.txn.isPipelined {
+		txnType = "pipelined"
+	} else if c.isAsyncCommit() {
+		txnType = "async"
+	} else if c.isOnePC() {
+		txnType = "1pc"
+	} else {
+		txnType = "2pc"
+	}
+	var mutationLen int
+	if !c.txn.isPipelined {
+		mutationLen = c.mutations.Len()
+	}
+	return &util.CommitInfo{
+		TxnType:     txnType,
+		StartTS:     c.startTS,
+		CommitTS:    atomic.LoadUint64(&c.commitTS),
+		MutationLen: mutationLen,
+		TxnSize:     c.txnSize,
+		Primary:     c.primaryKey,
+	}
+}
+
+type storeCommitInfo interface {
+	SetLastCommitInfo(*util.CommitInfo)
+	// GetLastCommitInfo get the last committed transaction's information.
+	GetLastCommitInfo() *util.CommitInfo
 }

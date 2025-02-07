@@ -36,18 +36,21 @@ package tikv_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func TestStore(t *testing.T) {
@@ -191,4 +194,59 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 	val, err := txn.Get(context.TODO(), []byte("key"))
 	s.Nil(err)
 	s.Equal(val, []byte("value"))
+}
+
+func testUpdateLatestCommitInfo(require *require.Assertions, store tikv.StoreProbe, mode string) {
+	doTxn := func() *util.CommitInfo {
+		var ops []tikv.TxnOption
+		if mode == "pipelined" {
+			ops = append(ops, tikv.WithPipelinedMemDB())
+		}
+		txn, err := store.Begin(ops...)
+		require.Nil(err)
+		switch mode {
+		case "async":
+			txn.SetEnableAsyncCommit(true)
+		case "1pc":
+			txn.SetEnable1PC(true)
+		case "2pc", "pipelined":
+			// do nothing
+		default:
+			require.FailNow("unknown mode:" + mode)
+		}
+		err = txn.Set([]byte("key"), []byte("value"))
+		require.Nil(err)
+		err = txn.Commit(context.Background())
+		require.Nil(err)
+		return txn.GetCommitter().GetCommitInfo()
+	}
+
+	txnSize := 8
+	mutationLen := 1
+	if mode == "pipelined" {
+		txnSize = 0
+		mutationLen = 0
+	}
+	commitInfo1 := doTxn()
+	require.Equal(commitInfo1, store.GetLastCommitInfo())
+	require.Equal(commitInfo1.MutationLen, mutationLen)
+	require.Equal(commitInfo1.TxnSize, txnSize)
+	require.Equal(commitInfo1.TxnType, mode)
+	commitInfo2 := doTxn()
+	lastInfo := store.GetLastCommitInfo()
+	require.NotEqual(commitInfo1, lastInfo)
+	require.Equal(commitInfo2, lastInfo)
+	require.Greater(lastInfo.CommitTS, commitInfo1.CommitTS)
+	require.GreaterOrEqual(lastInfo.StartTS, commitInfo1.CommitTS)
+
+	errMsg := fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: %d, TxnSize: %d, Primary: [107 101 121]",
+		lastInfo.StartTS, mode, lastInfo.StartTS, lastInfo.CommitTS, mutationLen, txnSize)
+	require.PanicsWithValue(errMsg, func() {
+		lastInfo.Verify(lastInfo.StartTS)
+	})
+	errMsg = fmt.Sprintf("Verified ts: %d, LastCommit: TxnType: %s, StartTS: %d, CommitTS: %d, MutationLen: %d, TxnSize: %d, Primary: [107 101 121]",
+		lastInfo.CommitTS-1, mode, lastInfo.StartTS, lastInfo.CommitTS, mutationLen, txnSize)
+	require.PanicsWithValue(errMsg, func() {
+		lastInfo.Verify(lastInfo.CommitTS - 1)
+	})
 }
