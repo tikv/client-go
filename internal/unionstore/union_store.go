@@ -162,11 +162,6 @@ func (us *KVUnionStore) SetEntrySizeLimit(entryLimit, bufferLimit uint64) {
 	us.memBuffer.SetEntrySizeLimit(entryLimit, bufferLimit)
 }
 
-type KvPair struct {
-	Key   []byte
-	Value []byte
-}
-
 // MemBuffer is an interface that stores mutations that written during transaction execution.
 // It now unifies MemDB and PipelinedMemDB.
 // The implementations should follow the transaction guarantees:

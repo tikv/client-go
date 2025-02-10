@@ -17,7 +17,6 @@ package unionstore
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"sync"
 
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -204,6 +203,7 @@ type snapshotBatchedIter struct {
 	lower                 []byte
 	upper                 []byte
 	reverse               bool
+	err                   error
 
 	// current batch
 	keys      [][]byte
@@ -230,10 +230,7 @@ func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse boo
 	}
 
 	iter.snapshot = db.GetSnapshot()
-	err := iter.fillBatch()
-	if err != nil {
-		logutil.BgLogger().Error("failed to fill batch for snapshotBatchedIter", zap.Error(err))
-	}
+	iter.err = iter.fillBatch()
 	return iter
 }
 
@@ -325,10 +322,14 @@ func (it *snapshotBatchedIter) fillBatch() error {
 
 func (it *snapshotBatchedIter) Valid() bool {
 	return it.snapshotTruncateSeqNo == it.db.SnapshotSeqNo &&
-		it.pos < len(it.keys)
+		it.pos < len(it.keys) &&
+		it.err == nil
 }
 
 func (it *snapshotBatchedIter) Next() error {
+	if it.err != nil {
+		return it.err
+	}
 	if it.snapshotTruncateSeqNo != it.db.SnapshotSeqNo {
 		return errors.New(
 			fmt.Sprintf(

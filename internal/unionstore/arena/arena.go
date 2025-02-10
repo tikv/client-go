@@ -39,10 +39,9 @@ import (
 	"math"
 
 	"github.com/tikv/client-go/v2/internal/logutil"
-	"go.uber.org/zap"
-
 	"github.com/tikv/client-go/v2/kv"
 	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 const (
