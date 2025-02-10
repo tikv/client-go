@@ -54,8 +54,8 @@ type ART struct {
 	missCount         atomic.Uint64
 
 	// The counter of every write operation, used to invalidate iterators that were created before the write operation.
-	SeqNo int
-	// increased by 1 when an operation that may affect the content returned by "snapshot iter" (i.e. stage[0]) happens.
+	WriteSeqNo int
+	// Increased by 1 when an operation that may affect the content returned by "snapshot iter" (i.e. stage[0]) happens.
 	// It's used to invalidate snapshot iterators.
 	// invariant: no concurrent access to it
 	SnapshotSeqNo int
@@ -122,7 +122,7 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 		}
 	}
 
-	t.SeqNo++
+	t.WriteSeqNo++
 	if len(t.stages) == 0 {
 		t.dirty = true
 	}
@@ -487,7 +487,7 @@ func (t *ART) RevertToCheckpoint(cp *arena.MemDBCheckpoint) {
 	t.allocator.vlogAllocator.RevertToCheckpoint(t, cp)
 	t.allocator.vlogAllocator.Truncate(cp)
 	t.allocator.vlogAllocator.OnMemChange()
-	t.SeqNo++
+	t.WriteSeqNo++
 	if len(t.stages) == 0 || t.stages[0].LessThan(cp) {
 		t.SnapshotSeqNo++
 	}
@@ -510,7 +510,7 @@ func (t *ART) Release(h int) {
 	if h != len(t.stages) {
 		panic("cannot release staging buffer")
 	}
-	t.SeqNo++
+	t.WriteSeqNo++
 	if h == 1 {
 		t.SnapshotSeqNo++
 		tail := t.checkpoint()
@@ -533,7 +533,7 @@ func (t *ART) Cleanup(h int) {
 		panic(fmt.Sprintf("cannot cleanup staging buffer, h=%v, len(tree.stages)=%v", h, len(t.stages)))
 	}
 
-	t.SeqNo++
+	t.WriteSeqNo++
 	if h == 1 {
 		t.SnapshotSeqNo++
 	}
@@ -562,7 +562,7 @@ func (t *ART) Reset() {
 	t.allocator.vlogAllocator.Reset()
 	t.lastTraversedNode.Store(arena.NullU64Addr)
 	t.SnapshotSeqNo++
-	t.SeqNo++
+	t.WriteSeqNo++
 }
 
 // DiscardValues releases the memory used by all values.

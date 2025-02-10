@@ -17,6 +17,7 @@ package unionstore
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -210,6 +211,9 @@ type snapshotBatchedIter struct {
 	pos       int
 	batchSize int
 	nextKey   []byte
+
+	// only used to check if the snapshot ever changes between batches. It is not supposed to change.
+	snapshot MemDBCheckpoint
 }
 
 func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
@@ -225,14 +229,29 @@ func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse boo
 		batchSize:             32,
 	}
 
-	iter.fillBatch()
+	iter.snapshot = db.GetSnapshot()
+	err := iter.fillBatch()
+	if err != nil {
+		logutil.BgLogger().Error("failed to fill batch for snapshotBatchedIter", zap.Error(err))
+	}
 	return iter
 }
 
 func (it *snapshotBatchedIter) fillBatch() error {
 	if it.snapshotTruncateSeqNo != it.db.SnapshotSeqNo {
-		return errors.New(fmt.Sprintf("invalid iter: truncation happened, iter's=%d, db's=%d",
-			it.snapshotTruncateSeqNo, it.db.SnapshotSeqNo))
+		return errors.Errorf(
+			"invalid iter: truncation happened, iter's=%d, db's=%d",
+			it.snapshotTruncateSeqNo,
+			it.db.SnapshotSeqNo,
+		)
+	}
+
+	if it.db.GetSnapshot() != it.snapshot {
+		return errors.Errorf(
+			"snapshot changed between batches, expected=%v, actual=%v",
+			it.snapshot,
+			it.db.GetSnapshot(),
+		)
 	}
 
 	it.db.RLock()

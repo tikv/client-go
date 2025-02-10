@@ -59,7 +59,7 @@ func (t *ART) iter(lowerBound, upperBound []byte, reverse, includeFlags bool) (*
 		// this avoids the initial value of currAddr equals to endAddr.
 		currAddr: arena.BadAddr,
 		endAddr:  arena.NullAddr,
-		seqNo:    t.SeqNo,
+		seqNo:    t.WriteSeqNo,
 	}
 	it.init(lowerBound, upperBound)
 	if !it.valid {
@@ -88,11 +88,11 @@ type Iterator struct {
 }
 
 func (it *Iterator) checkSeqNo() {
-	if it.seqNo != it.tree.SeqNo && !it.ignoreSeqNo {
+	if it.seqNo != it.tree.WriteSeqNo && !it.ignoreSeqNo {
 		logutil.BgLogger().Panic(
 			"seqNo mismatch",
 			zap.Int("it seqNo", it.seqNo),
-			zap.Int("art seqNo", it.tree.SeqNo),
+			zap.Int("art seqNo", it.tree.WriteSeqNo),
 			zap.Stack("stack"),
 		)
 	}

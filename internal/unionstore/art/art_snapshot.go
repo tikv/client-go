@@ -21,7 +21,9 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 )
 
-func (t *ART) getSnapshot() arena.MemDBCheckpoint {
+// GetSnapshot returns the "snapshot" for snapshotGetter or snapshotIterator, which is usually the snapshot
+// of stage[0]
+func (t *ART) GetSnapshot() arena.MemDBCheckpoint {
 	if len(t.stages) > 0 {
 		return t.stages[0]
 	}
@@ -32,7 +34,7 @@ func (t *ART) getSnapshot() arena.MemDBCheckpoint {
 func (t *ART) SnapshotGetter() *SnapGetter {
 	return &SnapGetter{
 		tree: t,
-		cp:   t.getSnapshot(),
+		cp:   t.GetSnapshot(),
 	}
 }
 
@@ -52,7 +54,7 @@ func (t *ART) newSnapshotIterator(start, end []byte, desc bool) *SnapIter {
 	inner.ignoreSeqNo = true
 	it := &SnapIter{
 		Iterator: inner,
-		cp:       t.getSnapshot(),
+		cp:       t.GetSnapshot(),
 	}
 	it.tree.allocator.snapshotInc()
 	for !it.setValue() && it.Valid() {

@@ -226,6 +226,7 @@ func (cp *MemDBCheckpoint) IsSamePosition(other *MemDBCheckpoint) bool {
 	return cp.blocks == other.blocks && cp.offsetInBlock == other.offsetInBlock
 }
 
+// LessThan compares two checkpoints.
 func (cp *MemDBCheckpoint) LessThan(cp2 *MemDBCheckpoint) bool {
 	if cp == nil || cp2 == nil {
 		logutil.BgLogger().Panic("unexpected nil checkpoint", zap.Any("cp", cp), zap.Any("cp2", cp2))
