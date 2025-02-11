@@ -417,7 +417,6 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		matchStoreLabels := s.mu.matchStoreLabels
 		replicaAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
-		req.TxnScope = scope
 		req.ReadReplicaScope = scope
 		if isStaleness {
 			req.EnableStaleRead()
@@ -639,7 +638,6 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	scope := s.mu.readReplicaScope
 	replicaAdjuster := s.mu.replicaReadAdjuster
 	s.mu.RUnlock()
-	req.TxnScope = scope
 	req.ReadReplicaScope = scope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
