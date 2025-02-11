@@ -203,7 +203,7 @@ func (db *rbtDBWithContext) SnapshotGetter() Getter {
 }
 
 func (db *rbtDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
-	// TODO: implement this
+	// TODO: implement *batched* iter
 	if reverse {
 		return db.SnapshotIterReverse(upper, lower)
 	} else {

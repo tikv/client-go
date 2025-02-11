@@ -55,7 +55,7 @@ type ART struct {
 
 	// The counter of every write operation, used to invalidate iterators that were created before the write operation.
 	WriteSeqNo int
-	// Increased by 1 when an operation that may affect the content returned by "snapshot iter" (i.e. stage[0]) happens.
+	// Increased by 1 when an operation that may affect the content returned by "snapshot" (i.e. stage[0]) happens.
 	// It's used to invalidate snapshot iterators.
 	// invariant: no concurrent access to it
 	SnapshotSeqNo int

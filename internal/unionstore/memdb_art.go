@@ -198,12 +198,12 @@ func (db *artDBWithContext) SnapshotGetter() Getter {
 }
 
 type snapshotBatchedIter struct {
-	db                    *artDBWithContext
-	snapshotTruncateSeqNo int
-	lower                 []byte
-	upper                 []byte
-	reverse               bool
-	err                   error
+	db            *artDBWithContext
+	snapshotSeqNo int
+	lower         []byte
+	upper         []byte
+	reverse       bool
+	err           error
 
 	// current batch
 	keys      [][]byte
@@ -211,9 +211,6 @@ type snapshotBatchedIter struct {
 	pos       int
 	batchSize int
 	nextKey   []byte
-
-	// only used to check if the snapshot ever changes between batches. It is not supposed to change.
-	snapshot MemDBCheckpoint
 }
 
 func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
@@ -221,33 +218,24 @@ func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse boo
 		logutil.BgLogger().Error("should not use BatchedSnapshotIter for a memdb without any staging buffer")
 	}
 	iter := &snapshotBatchedIter{
-		db:                    db,
-		snapshotTruncateSeqNo: db.SnapshotSeqNo,
-		lower:                 lower,
-		upper:                 upper,
-		reverse:               reverse,
-		batchSize:             32,
+		db:            db,
+		snapshotSeqNo: db.SnapshotSeqNo,
+		lower:         lower,
+		upper:         upper,
+		reverse:       reverse,
+		batchSize:     32,
 	}
 
-	iter.snapshot = db.GetSnapshot()
 	iter.err = iter.fillBatch()
 	return iter
 }
 
 func (it *snapshotBatchedIter) fillBatch() error {
-	if it.snapshotTruncateSeqNo != it.db.SnapshotSeqNo {
+	if it.snapshotSeqNo != it.db.SnapshotSeqNo {
 		return errors.Errorf(
-			"invalid iter: truncation happened, iter's=%d, db's=%d",
-			it.snapshotTruncateSeqNo,
+			"invalid iter: snapshotSeqNo changed, iter's=%d, db's=%d",
+			it.snapshotSeqNo,
 			it.db.SnapshotSeqNo,
-		)
-	}
-
-	if it.db.GetSnapshot() != it.snapshot {
-		return errors.Errorf(
-			"snapshot changed between batches, expected=%v, actual=%v",
-			it.snapshot,
-			it.db.GetSnapshot(),
 		)
 	}
 
@@ -321,7 +309,7 @@ func (it *snapshotBatchedIter) fillBatch() error {
 }
 
 func (it *snapshotBatchedIter) Valid() bool {
-	return it.snapshotTruncateSeqNo == it.db.SnapshotSeqNo &&
+	return it.snapshotSeqNo == it.db.SnapshotSeqNo &&
 		it.pos < len(it.keys) &&
 		it.err == nil
 }
@@ -330,11 +318,11 @@ func (it *snapshotBatchedIter) Next() error {
 	if it.err != nil {
 		return it.err
 	}
-	if it.snapshotTruncateSeqNo != it.db.SnapshotSeqNo {
+	if it.snapshotSeqNo != it.db.SnapshotSeqNo {
 		return errors.New(
 			fmt.Sprintf(
-				"invalid snapshotBatchedIter: truncation happened, iter's=%d, db's=%d",
-				it.snapshotTruncateSeqNo,
+				"invalid snapshotBatchedIter: snapshotSeqNo changed, iter's=%d, db's=%d",
+				it.snapshotSeqNo,
 				it.db.SnapshotSeqNo,
 			),
 		)
