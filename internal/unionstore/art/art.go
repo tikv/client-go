@@ -54,6 +54,9 @@ type ART struct {
 	missCount         atomic.Uint64
 
 	// The counter of every write operation, used to invalidate iterators that were created before the write operation.
+	// The purpose of the counter is to check interleaving of write and read operations (via iterator).
+	// It does not protect against data race. If it happens, there must be a bug in the caller code.
+	// invariant: no concurrent access to it
 	WriteSeqNo int
 	// Increased by 1 when an operation that may affect the content returned by "snapshot" (i.e. stage[0]) happens.
 	// It's used to invalidate snapshot iterators.
