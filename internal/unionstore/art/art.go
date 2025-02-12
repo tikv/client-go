@@ -52,6 +52,16 @@ type ART struct {
 	lastTraversedNode atomic.Uint64
 	hitCount          atomic.Uint64
 	missCount         atomic.Uint64
+
+	// The counter of every write operation, used to invalidate iterators that were created before the write operation.
+	// The purpose of the counter is to check interleaving of write and read operations (via iterator).
+	// It does not protect against data race. If it happens, there must be a bug in the caller code.
+	// invariant: no concurrent access to it
+	WriteSeqNo int
+	// Increased by 1 when an operation that may affect the content returned by "snapshot" (i.e. stage[0]) happens.
+	// It's used to invalidate snapshot iterators.
+	// invariant: no concurrent access to it
+	SnapshotSeqNo int
 }
 
 func New() *ART {
@@ -115,6 +125,7 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 		}
 	}
 
+	t.WriteSeqNo++
 	if len(t.stages) == 0 {
 		t.dirty = true
 	}
@@ -479,6 +490,10 @@ func (t *ART) RevertToCheckpoint(cp *arena.MemDBCheckpoint) {
 	t.allocator.vlogAllocator.RevertToCheckpoint(t, cp)
 	t.allocator.vlogAllocator.Truncate(cp)
 	t.allocator.vlogAllocator.OnMemChange()
+	t.WriteSeqNo++
+	if len(t.stages) == 0 || t.stages[0].LessThan(cp) {
+		t.SnapshotSeqNo++
+	}
 }
 
 func (t *ART) Stages() []arena.MemDBCheckpoint {
@@ -498,7 +513,9 @@ func (t *ART) Release(h int) {
 	if h != len(t.stages) {
 		panic("cannot release staging buffer")
 	}
+	t.WriteSeqNo++
 	if h == 1 {
+		t.SnapshotSeqNo++
 		tail := t.checkpoint()
 		if !t.stages[0].IsSamePosition(&tail) {
 			t.dirty = true
@@ -517,6 +534,11 @@ func (t *ART) Cleanup(h int) {
 	}
 	if h < len(t.stages) {
 		panic(fmt.Sprintf("cannot cleanup staging buffer, h=%v, len(tree.stages)=%v", h, len(t.stages)))
+	}
+
+	t.WriteSeqNo++
+	if h == 1 {
+		t.SnapshotSeqNo++
 	}
 
 	cp := &t.stages[h-1]
@@ -542,6 +564,8 @@ func (t *ART) Reset() {
 	t.allocator.nodeAllocator.Reset()
 	t.allocator.vlogAllocator.Reset()
 	t.lastTraversedNode.Store(arena.NullU64Addr)
+	t.SnapshotSeqNo++
+	t.WriteSeqNo++
 }
 
 // DiscardValues releases the memory used by all values.
