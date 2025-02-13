@@ -27,6 +27,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/namespace"
 	zap "go.uber.org/zap"
@@ -39,6 +40,8 @@ var etcdClients map[string]*clientv3.Client = make(map[string]*clientv3.Client)
 func getSharedEtcdClient(addrs []string) (*clientv3.Client, error) {
 	etcdMutex.Lock()
 	defer etcdMutex.Unlock()
+
+	logutil.BgLogger().Info("getSharedEtcdClient", zap.Strings("addrs", addrs), zap.Int("clients", len(etcdClients)))
 
 	key := addrsToKey(addrs)
 	if cli, ok := etcdClients[key]; ok {
