@@ -144,10 +144,7 @@ var pdRegionMetaCircuitBreaker = circuitbreaker.NewCircuitBreaker("region-meta",
 
 // wrap context with circuit breaker for PD region metadata calls
 func withPDCircuitBreaker(ctx context.Context) context.Context {
-	if pdRegionMetaCircuitBreaker.IsEnabled() {
-		return circuitbreaker.WithCircuitBreaker(ctx, pdRegionMetaCircuitBreaker)
-	}
-	return ctx
+	return circuitbreaker.WithCircuitBreaker(ctx, pdRegionMetaCircuitBreaker)
 }
 
 // ChangePDRegionMetaCircuitBreakerSettings changes circuit breaker changes for region metadata calls
