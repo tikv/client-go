@@ -7,12 +7,12 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20250117122752-2b87602a94a1
-	github.com/pingcap/tidb v1.1.0-beta.0.20250123092444-cf4d252af8aa
+	github.com/pingcap/tidb v1.1.0-beta.0.20250208075453-ad2c9f464fde
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.1
-	github.com/tikv/client-go/v2 v2.0.8-0.20250117034919-61e09c6539bd
-	github.com/tikv/pd/client v0.0.0-20250205134827-ac4e640fac03
+	github.com/tikv/client-go/v2 v2.0.8-0.20250207065327-ec9ad0fd70cf
+	github.com/tikv/pd/client v0.0.0-20250213082949-e8930327be42
 	go.uber.org/goleak v1.3.0
 )
 
@@ -98,9 +98,9 @@ require (
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
 	golang.org/x/net v0.34.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.29.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	golang.org/x/time v0.7.0 // indirect
+	golang.org/x/time v0.9.0 // indirect
 	golang.org/x/tools v0.29.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240318140521-94a12d6c2237 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240515191416-fc5f0ca64291 // indirect
@@ -113,7 +113,6 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/rleungx/tidb v1.1.0-beta.0.20250207063012-790a89ac9f1f
 
 	github.com/tikv/client-go/v2 => ../
 )
