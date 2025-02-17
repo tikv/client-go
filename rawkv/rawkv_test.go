@@ -573,6 +573,7 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 		key,
 		value,
 		newValue,
+		0,
 		SetColumnFamily(cf))
 	s.Error(err)
 
@@ -583,6 +584,7 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 		key,
 		newValue,
 		newValue,
+		0,
 		SetColumnFamily(cf))
 	s.Nil(err)
 	s.False(swapped)
@@ -595,6 +597,7 @@ func (s *testRawkvSuite) TestCompareAndSwap() {
 		key,
 		value,
 		newValue,
+		0,
 		SetColumnFamily(cf))
 	s.Nil(err)
 	s.True(swapped)
