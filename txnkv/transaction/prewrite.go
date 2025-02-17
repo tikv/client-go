@@ -487,6 +487,7 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 		// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 		if (lock.TxnID > handler.committer.startTS && !handler.committer.isPessimistic) ||
 			handler.committer.txn.prewriteEncounterLockPolicy == NoResolvePolicy {
+			metrics.LockResolverCountWithWriteConflict.Inc()
 			return nil, tikverr.NewErrWriteConflictWithArgs(
 				handler.committer.startTS,
 				lock.TxnID,
