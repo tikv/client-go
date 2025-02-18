@@ -2836,7 +2836,6 @@ func (ca *replicaSelectorAccessPathCase) buildRequest(s *testReplicaSelectorSuit
 	if ca.staleRead {
 		req.EnableStaleWithMixedReplicaRead()
 		req.ReadReplicaScope = oracle.GlobalTxnScope
-		req.TxnScope = oracle.GlobalTxnScope
 	} else {
 		req.ReplicaReadType = ca.readType
 		req.ReplicaRead = ca.readType.IsFollowerRead()

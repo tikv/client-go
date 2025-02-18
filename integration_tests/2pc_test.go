@@ -272,7 +272,7 @@ func (s *testCommitterSuite) TestPrewriteRollback() {
 		err = committer.PrewriteAllMutations(ctx)
 		s.Nil(err)
 	}
-	commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{})
 	s.Nil(err)
 	committer.SetCommitTS(commitTS)
 	err = committer.CommitMutations(ctx)
@@ -372,7 +372,7 @@ func (s *testCommitterSuite) mustGetRegionID(key []byte) uint64 {
 }
 
 func (s *testCommitterSuite) isKeyOptimisticLocked(key []byte) bool {
-	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ver, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), 500, nil)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
@@ -733,7 +733,7 @@ func (s *testCommitterSuite) TestPessimisticTTL() {
 	err = txn.LockKeys(context.Background(), lockCtx, key2)
 	s.Nil(err)
 	lockInfo := s.getLockInfo(key)
-	msBeforeLockExpired := s.store.GetOracle().UntilExpired(txn.StartTS(), lockInfo.LockTtl, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	msBeforeLockExpired := s.store.GetOracle().UntilExpired(txn.StartTS(), lockInfo.LockTtl, &oracle.Option{})
 	s.GreaterOrEqual(msBeforeLockExpired, int64(100))
 
 	lr := s.store.NewLockResolver()
@@ -746,7 +746,7 @@ func (s *testCommitterSuite) TestPessimisticTTL() {
 	check := func() bool {
 		lockInfoNew := s.getLockInfo(key)
 		if lockInfoNew.LockTtl > lockInfo.LockTtl {
-			currentTS, err := s.store.GetOracle().GetTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			currentTS, err := s.store.GetOracle().GetTimestamp(bo.GetCtx(), &oracle.Option{})
 			s.Nil(err)
 			// Check that the TTL is update to a reasonable range.
 			expire := oracle.ExtractPhysical(txn.StartTS()) + int64(lockInfoNew.LockTtl)
@@ -1272,7 +1272,7 @@ func (s *testCommitterSuite) TestAggressiveLockingInsert() {
 	s.Equal(txn2.CommitTS(), lockCtx.MaxLockedWithConflictTS)
 	s.Equal(txn2.CommitTS(), lockCtx.Values["k8"].LockedWithConflictTS)
 	// Update forUpdateTS to simulate a pessimistic retry.
-	newForUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	newForUpdateTS, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	s.GreaterOrEqual(newForUpdateTS, txn2.CommitTS())
 	lockCtx = &kv.LockCtx{ForUpdateTS: newForUpdateTS, WaitStartTime: time.Now()}
@@ -1583,7 +1583,7 @@ func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
 	s.True(txn.GetCommitter().IsTTLRunning())
 
 	// Get a new ts as the new forUpdateTS.
-	forUpdateTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	forUpdateTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 	s.NoError(err)
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
 	s.NoError(txn.LockKeys(context.Background(), lockCtx, []byte("k1")))
@@ -1662,7 +1662,7 @@ func (s *testCommitterSuite) testAggressiveLockingResetPrimaryAndTTLManagerAfter
 		return
 	}
 
-	forUpdateTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	forUpdateTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 	s.NoError(err)
 	lockCtx = &kv.LockCtx{ForUpdateTS: forUpdateTS, WaitStartTime: time.Now()}
 	key := []byte("k1")

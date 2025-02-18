@@ -120,7 +120,7 @@ func (s *testLockSuite) lockKey(key, value, primaryKey, primaryValue []byte, ttl
 	s.Nil(err)
 
 	if commitPrimary {
-		commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{})
 		s.Nil(err)
 		tpc.SetCommitTS(commitTS)
 		err = tpc.CommitMutations(ctx)
@@ -262,7 +262,7 @@ func (s *testLockSuite) TestCheckTxnStatusTTL() {
 
 	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
 	lr := s.store.NewLockResolver()
-	callerStartTS, err := s.store.GetOracle().GetTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	callerStartTS, err := s.store.GetOracle().GetTimestamp(bo.GetCtx(), &oracle.Option{})
 	s.Nil(err)
 
 	// Check the lock TTL of a transaction.
@@ -324,7 +324,7 @@ func (s *testLockSuite) TestCheckTxnStatus() {
 	s.prewriteTxnWithTTL(txn, 1000)
 
 	o := s.store.GetOracle()
-	currentTS, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	currentTS, err := o.GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	s.Greater(currentTS, txn.StartTS())
 
@@ -351,7 +351,7 @@ func (s *testLockSuite) TestCheckTxnStatus() {
 	s.Equal(timeBeforeExpire, int64(0))
 
 	// Then call getTxnStatus again and check the lock status.
-	currentTS, err = o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	currentTS, err = o.GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	status, err = s.store.NewLockResolver().GetTxnStatus(bo, txn.StartTS(), []byte("key"), currentTS, 0, true, false, nil)
 	s.Nil(err)
@@ -383,7 +383,7 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	s.Nil(err)
 
 	o := s.store.GetOracle()
-	currentTS, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	currentTS, err := o.GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
 	resolver := s.store.NewLockResolver()
@@ -412,7 +412,7 @@ func (s *testLockSuite) TestCheckTxnStatusNoWait() {
 	s.Nil(committer.CleanupMutations(context.Background()))
 
 	// Call getTxnStatusFromLock to cover TxnNotFound and retry timeout.
-	startTS, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	startTS, err := o.GetTimestamp(context.Background(), &oracle.Option{})
 	s.Nil(err)
 	lock = &txnkv.Lock{
 		Key:     []byte("second"),
@@ -443,7 +443,7 @@ func (s *testLockSuite) prewriteTxnWithTTL(txn transaction.TxnProbe, ttl uint64)
 }
 
 func (s *testLockSuite) mustGetLock(key []byte) *txnkv.Lock {
-	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ver, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
@@ -538,9 +538,9 @@ func (s *testLockSuite) TestBatchResolveLocks() {
 	}
 
 	// Locks may not expired
-	msBeforeLockExpired := s.store.GetOracle().UntilExpired(locks[0].TxnID, locks[1].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	msBeforeLockExpired := s.store.GetOracle().UntilExpired(locks[0].TxnID, locks[1].TTL, &oracle.Option{})
 	s.Greater(msBeforeLockExpired, int64(0))
-	msBeforeLockExpired = s.store.GetOracle().UntilExpired(locks[3].TxnID, locks[3].TTL, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	msBeforeLockExpired = s.store.GetOracle().UntilExpired(locks[3].TxnID, locks[3].TTL, &oracle.Option{})
 	s.Greater(msBeforeLockExpired, int64(0))
 
 	lr := s.store.NewLockResolver()
@@ -961,10 +961,10 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 		s.Nil(committer.PrewriteAllMutations(ctx))
 		committer.SetPrimaryKey([]byte("k66"))
 
-		readStartTS, err = s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		readStartTS, err = s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{})
 		s.Nil(err)
 
-		commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		commitTS, err := s.store.GetOracle().GetTimestamp(ctx, &oracle.Option{})
 		s.Nil(err)
 		s.Greater(commitTS, readStartTS)
 		committer.SetCommitTS(commitTS)
@@ -1044,7 +1044,7 @@ func (s *testLockWithTiKVSuite) cleanupLocks() {
 	// Cleanup possible left locks.
 	bo := tikv.NewBackofferWithVars(context.Background(), int(transaction.PrewriteMaxBackoff.Load()), nil)
 	ctx := context.WithValue(context.Background(), util.SessionID, uint64(1))
-	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	currentTS, err := s.store.CurrentTimestamp()
 	s.NoError(err)
 	remainingLocks, err := s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
 	s.NoError(err)
@@ -1358,7 +1358,7 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 		// There must be a new tso allocation before committing if any key is locked with conflict, otherwise
 		// async commit will become unsafe.
 		// In TiDB, there must be a tso allocation for updating forUpdateTS.
-		currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+		currentTS, err := s.store.CurrentTimestamp()
 		s.NoError(err)
 		lockCtx = kv.NewLockCtx(currentTS, 200, lockTime)
 		// k4: non-conflicting key but forUpdateTS updated
@@ -1429,7 +1429,7 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	// * k1: stale pessimistic lock, primary
 	// * k2: stale pessimistic lock, primary -> k1
 
-	forUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	forUpdateTS, err := s.store.CurrentTimestamp()
 	s.NoError(err)
 	lockCtx = kv.NewLockCtx(forUpdateTS, 200, time.Now())
 	err = txn.LockKeys(ctx, lockCtx, k3) // k3 becomes primary
@@ -1467,7 +1467,7 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	}
 
 	// Check data consistency
-	readTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	readTS, err := s.store.CurrentTimestamp()
 	s.NoError(err)
 	snapshot := s.store.GetSnapshot(readTS)
 	v, err := snapshot.Get(ctx, k3)
@@ -1520,7 +1520,7 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 
 	// k1 has txn1's stale pessimistic lock now.
 
-	forUpdateTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	forUpdateTS, err := s.store.CurrentTimestamp()
 	s.NoError(err)
 	lockCtx = kv.NewLockCtx(forUpdateTS, 200, time.Now())
 	s.NoError(txn1.LockKeys(ctx, lockCtx, k2, k3))
@@ -1540,7 +1540,7 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	s.NoError(txn2.Rollback())
 
 	// k4 has txn2's stale primary pessimistic lock now.
-	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	currentTS, err := s.store.CurrentTimestamp()
 
 	remainingLocks, err := s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
 	s.NoError(err)
@@ -1564,7 +1564,7 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	s.Empty(remainingLocks)
 
 	// Check data consistency
-	readTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	readTS, err := s.store.CurrentTimestamp()
 	snapshot := s.store.GetSnapshot(readTS)
 	_, err = snapshot.Get(ctx, k1)
 	s.Equal(tikverr.ErrNotExist, err)

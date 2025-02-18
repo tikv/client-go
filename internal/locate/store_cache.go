@@ -299,16 +299,6 @@ func (s *Store) IsStoreMatch(stores []uint64) bool {
 	return false
 }
 
-// GetLabelValue returns the value of the label
-func (s *Store) GetLabelValue(key string) (string, bool) {
-	for _, label := range s.labels {
-		if label.Key == key {
-			return label.Value, true
-		}
-	}
-	return "", false
-}
-
 // IsSameLabels returns whether the store have the same labels with target labels
 func (s *Store) IsSameLabels(labels []*metapb.StoreLabel) bool {
 	if len(s.labels) != len(labels) {

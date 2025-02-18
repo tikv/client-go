@@ -27,7 +27,6 @@ import (
 	"github.com/stretchr/testify/suite"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -187,7 +186,7 @@ func (s *testAssertionSuite) TestPrewriteAssertion() {
 	// When the test cases runs with TiKV, the TiKV cluster can be reused, thus there may be deleted versions caused by
 	// previous tests. This test case may meet different behavior if there are deleted versions. To avoid it, compose a
 	// key prefix with a timestamp to ensure the keys to be unique.
-	ts, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ts, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	prefix := fmt.Sprintf("test-prewrite-assertion-%d-", ts)
 	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Strict)
@@ -199,7 +198,7 @@ func (s *testAssertionSuite) TestFastAssertion() {
 	// When the test cases runs with TiKV, the TiKV cluster can be reused, thus there may be deleted versions caused by
 	// previous tests. This test case may meet different behavior if there are deleted versions. To avoid it, compose a
 	// key prefix with a timestamp to ensure the keys to be unique.
-	ts, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ts, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	prefix := fmt.Sprintf("test-fast-assertion-%d-", ts)
 	s.testAssertionImpl(prefix+"a", false, false, kvrpcpb.AssertionLevel_Fast)

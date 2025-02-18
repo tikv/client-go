@@ -47,7 +47,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -411,7 +410,7 @@ func (s *testSnapshotSuite) TestSnapshotCacheBypassMaxUint64() {
 	s.Nil(txn.Set([]byte("z"), []byte("z")))
 	s.Nil(txn.Commit(context.Background()))
 	// cache version < math.MaxUint64
-	startTS, err := s.store.GetTimestampWithRetry(tikv.NewNoopBackoff(context.Background()), oracle.GlobalTxnScope)
+	startTS, err := s.store.GetTimestampWithRetry(tikv.NewNoopBackoff(context.Background()))
 	s.Nil(err)
 	snapshot := s.store.GetSnapshot(startTS)
 	snapshot.Get(context.Background(), []byte("x"))

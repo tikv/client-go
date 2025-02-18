@@ -48,7 +48,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/kv"
-	"github.com/tikv/client-go/v2/oracle"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.
@@ -248,11 +247,9 @@ type Request struct {
 	Req interface{}
 	kvrpcpb.Context
 	ReadReplicaScope string
-	// remove txnScope after tidb removed txnScope
-	TxnScope        string
-	ReplicaReadType kv.ReplicaReadType // different from `kvrpcpb.Context.ReplicaRead`
-	ReplicaReadSeed *uint32            // pointer to follower read seed in snapshot/coprocessor
-	StoreTp         EndpointType
+	ReplicaReadType  kv.ReplicaReadType // different from `kvrpcpb.Context.ReplicaRead`
+	ReplicaReadSeed  *uint32            // pointer to follower read seed in snapshot/coprocessor
+	StoreTp          EndpointType
 	// ForwardedHost is the address of a store which will handle the request. It's different from
 	// the address the request sent to.
 	// If it's not empty, the store which receive the request will forward it to
@@ -313,14 +310,6 @@ func (req *Request) EnableStaleWithMixedReplicaRead() {
 func (req *Request) DisableStaleReadMeetLock() {
 	req.StaleRead = false
 	req.ReplicaReadType = kv.ReplicaReadLeader
-}
-
-// IsGlobalStaleRead checks if the request is a global stale read request.
-func (req *Request) IsGlobalStaleRead() bool {
-	return req.ReadReplicaScope == oracle.GlobalTxnScope &&
-		// remove txnScope after tidb remove it
-		req.TxnScope == oracle.GlobalTxnScope &&
-		req.GetStaleRead()
 }
 
 // IsDebugReq check whether the req is debug req.

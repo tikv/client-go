@@ -296,7 +296,7 @@ func (s *testSnapshotFailSuite) TestResetSnapshotTS() {
 }
 
 func (s *testSnapshotFailSuite) getLock(key []byte) *txnkv.Lock {
-	ver, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+	ver, err := s.store.CurrentTimestamp()
 	s.Nil(err)
 	bo := tikv.NewBackofferWithVars(context.Background(), getMaxBackoff, nil)
 	req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
