@@ -457,7 +457,6 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		matchStoreLabels := s.mu.matchStoreLabels
 		replicaAdjuster := s.mu.replicaReadAdjuster
 		s.mu.RUnlock()
-		req.TxnScope = scope
 		req.ReadReplicaScope = scope
 		if isStaleness {
 			req.EnableStaleWithMixedReplicaRead()
@@ -703,7 +702,6 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 	scope := s.mu.readReplicaScope
 	replicaAdjuster := s.mu.replicaReadAdjuster
 	s.mu.RUnlock()
-	req.TxnScope = scope
 	req.ReadReplicaScope = scope
 	var ops []locate.StoreSelectorOption
 	if isStaleness {
@@ -895,13 +893,6 @@ func (s *KVSnapshot) SetRuntimeStats(stats *SnapshotRuntimeStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mu.stats = stats
-}
-
-// SetTxnScope is same as SetReadReplicaScope, keep it in order to keep compatible for now.
-func (s *KVSnapshot) SetTxnScope(scope string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mu.readReplicaScope = scope
 }
 
 // SetReadReplicaScope set read replica scope

@@ -161,7 +161,7 @@ func (s *testOnePCSuite) Test1PCIsolation() {
 	// Make `txn`'s commitTs more likely to be less than `txn2`'s startTs if there's bug in commitTs
 	// calculation.
 	for i := 0; i < 10; i++ {
-		_, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		_, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
 		s.Nil(err)
 	}
 
@@ -242,29 +242,6 @@ func (s *testOnePCSuite) Test1PCLinearizability() {
 	commitTS1 := t1.GetCommitter().GetCommitTS()
 	commitTS2 := t2.GetCommitter().GetCommitTS()
 	s.Less(commitTS2, commitTS1)
-}
-
-func (s *testOnePCSuite) Test1PCWithMultiDC() {
-	// It requires setting placement rules to run with TiKV
-	if *withTiKV {
-		return
-	}
-
-	localTxn := s.begin1PC()
-	err := localTxn.Set([]byte("a"), []byte("a1"))
-	localTxn.SetScope("bj")
-	s.Nil(err)
-	err = localTxn.Commit(context.Background())
-	s.Nil(err)
-	s.False(localTxn.GetCommitter().IsOnePC())
-
-	globalTxn := s.begin1PC()
-	err = globalTxn.Set([]byte("b"), []byte("b1"))
-	globalTxn.SetScope(oracle.GlobalTxnScope)
-	s.Nil(err)
-	err = globalTxn.Commit(context.Background())
-	s.Nil(err)
-	s.True(globalTxn.GetCommitter().IsOnePC())
 }
 
 func (s *testOnePCSuite) TestTxnCommitCounter() {
