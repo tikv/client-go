@@ -732,6 +732,8 @@ func IsFakeRegionError(err *errorpb.Error) bool {
 
 const slowLogSendReqTime = 100 * time.Millisecond
 
+// sendReqState represents the state of sending request with retry, which allows us to construct a state and start to
+// retry from that state.
 type sendReqState struct {
 	*RegionRequestSender
 
@@ -745,6 +747,10 @@ type sendReqState struct {
 	}
 }
 
+// next encapsulates one iteration of the retry loop. calling `next` will handle send error (s.vars.err) or region error
+// (s.vars.regionErr) if one of them exists. When the error is retriable, `next` then constructs a new RPCContext and
+// sends the request again. `next` returns true if the retry loop should stop, either because the request is done or
+// exhausted (cannot complete by retrying).
 func (s *sendReqState) next(
 	bo *retry.Backoffer,
 	req *tikvrpc.Request,
