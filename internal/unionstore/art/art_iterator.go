@@ -19,12 +19,11 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/tikv/client-go/v2/internal/logutil"
-	"go.uber.org/zap"
-
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/kv"
+	"go.uber.org/zap"
 )
 
 func (t *ART) Iter(lowerBound, upperBound []byte) (*Iterator, error) {
@@ -81,7 +80,7 @@ type Iterator struct {
 	currAddr     arena.MemdbArenaAddr
 	endAddr      arena.MemdbArenaAddr
 
-	// only when seqNo == art.seqNo, the iterator is valid.
+	// only when seqNo == art.WriteSeqNo, the iterator is valid.
 	seqNo int
 	// ignoreSeqNo is used to ignore the seqNo check, used for snapshot iter before its full deprecation.
 	ignoreSeqNo bool

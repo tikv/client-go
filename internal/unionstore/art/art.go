@@ -128,6 +128,9 @@ func (t *ART) Set(key artKey, value []byte, ops ...kv.FlagsOp) error {
 	t.WriteSeqNo++
 	if len(t.stages) == 0 {
 		t.dirty = true
+
+		// note: there is no such usage in TiDB
+		t.SnapshotSeqNo++
 	}
 	// 1. create or search the existing leaf in the tree.
 	addr, leaf := t.traverse(key, true)

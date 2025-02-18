@@ -19,11 +19,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tikv/client-go/v2/internal/logutil"
-
 	"github.com/pingcap/errors"
-
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 	"github.com/tikv/client-go/v2/internal/unionstore/art"
 	"github.com/tikv/client-go/v2/kv"
