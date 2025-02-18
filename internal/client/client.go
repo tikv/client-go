@@ -586,6 +586,27 @@ func (c *RPCClient) closeConns() {
 	c.Unlock()
 }
 
+func (c *RPCClient) recycleIdleConnArray() {
+	start := time.Now()
+
+	var addrs []string
+	var vers []uint64
+	c.RLock()
+	for _, conn := range c.conns {
+		if conn.batchConn != nil && conn.isIdle() {
+			addrs = append(addrs, conn.target)
+			vers = append(vers, conn.ver)
+		}
+	}
+	c.RUnlock()
+
+	for i, addr := range addrs {
+		c.CloseAddrVer(addr, vers[i])
+	}
+
+	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
+}
+
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	tikvrpc.AttachContext(req, req.Context)
 

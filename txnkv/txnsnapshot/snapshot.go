@@ -324,9 +324,9 @@ func appendBatchKeysBySize(b []batchKeys, region locate.RegionVerID, keys [][]by
 
 //go:noinline
 func growStackForBatchGetWorker() {
-	// A batch get worker typically needs 8KB stack space. So we pre-allocate 4KB here to let the stack grow to 8KB
-	// directly (instead of 2KB to 4KB to 8KB).
-	var ballast [4096]byte
+	// A batch get worker typically needs 16KB stack space. So we pre-allocate 8KB here to let the stack grow to 16KB
+	// directly (instead of 2KB to 4KB to 8KB to 16KB).
+	var ballast [8192]byte
 	runtime.KeepAlive(ballast[:])
 }
 

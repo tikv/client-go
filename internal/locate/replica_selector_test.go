@@ -2144,7 +2144,7 @@ func TestReplicaReadAccessPathByStaleReadCase(t *testing.T) {
 			beforeRun: func() { /* don't resetStoreState */ },
 			expect: &accessPathResult{
 				accessPath: []string{
-					"{addr: store3, replica-read: true, stale-read: false}",
+					"{addr: store3, replica-read: false, stale-read: true}",
 				},
 				respErr:         "",
 				respRegionError: fakeEpochNotMatch,
