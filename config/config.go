@@ -75,6 +75,7 @@ type Config struct {
 	OpenTracingEnable     bool
 	Path                  string
 	EnableForwarding      bool
+	// FIXME: rename
 	TxnScope              string
 	EnableAsyncCommit     bool
 	Enable1PC             bool

@@ -1809,7 +1809,7 @@ func (s *RegionRequestSender) validateReadTS(ctx context.Context, req *tikvrpc.R
 	default:
 		return nil
 	}
-	return s.readTSValidator.ValidateReadTS(ctx, readTS, req.StaleRead, &oracle.Option{TxnScope: req.TxnScope})
+	return s.readTSValidator.ValidateReadTS(ctx, readTS, req.StaleRead, &oracle.Option{})
 }
 
 func patchRequestSource(req *tikvrpc.Request, replicaType string) {
