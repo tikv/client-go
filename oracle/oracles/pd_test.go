@@ -89,9 +89,7 @@ func (c *MockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
 }
 
 func (c *MockPdClient) WithCallerComponent(component caller.Component) pd.Client {
-	client := &MockPdClient{Client: c.Client.WithCallerComponent(component)}
-	client.logicalTimestamp.Store(c.logicalTimestamp.Load())
-	return client
+	return c
 }
 
 func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
