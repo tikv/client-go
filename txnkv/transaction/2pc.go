@@ -559,6 +559,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 
 	var err error
 	var assertionError error
+	toUpdatePrewriteOnly := make([][]byte, 0)
 	for it := memBuf.IterWithFlags(nil, nil); it.Valid(); err = it.Next() {
 		_ = err
 		key := it.Key()
@@ -607,7 +608,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 					// due to `Op_CheckNotExists` doesn't prewrite lock, so mark those keys should not be used in commit-phase.
 					op = kvrpcpb.Op_CheckNotExists
 					checkCnt++
-					memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
+					toUpdatePrewriteOnly = append(toUpdatePrewriteOnly, key)
 				} else {
 					if flags.HasNewlyInserted() {
 						// The delete-your-write keys in pessimistic transactions, only lock needed keys and skip
@@ -680,6 +681,10 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 		if len(c.primaryKey) == 0 && op != kvrpcpb.Op_CheckNotExists {
 			c.primaryKey = key
 		}
+	}
+
+	for _, key := range toUpdatePrewriteOnly {
+		memBuf.UpdateFlags(key, kv.SetPrewriteOnly)
 	}
 
 	if c.mutations.Len() == 0 {
@@ -1102,16 +1107,28 @@ func (c *twoPhaseCommitter) doActionOnBatches(
 		}
 		return nil
 	}
-	rateLim := len(batches)
+	rateLim := c.calcActionConcurrency(len(batches), action)
+	batchExecutor := newBatchExecutor(rateLim, c, action, bo)
+	return batchExecutor.process(batches)
+}
+
+func (c *twoPhaseCommitter) calcActionConcurrency(
+	numBatches int, action twoPhaseCommitAction,
+) int {
+	rateLim := numBatches
 	// Set rateLim here for the large transaction.
 	// If the rate limit is too high, tikv will report service is busy.
 	// If the rate limit is too low, we can't full utilize the tikv's throughput.
 	// TODO: Find a self-adaptive way to control the rate limit here.
-	if rateLim > config.GetGlobalConfig().CommitterConcurrency {
-		rateLim = config.GetGlobalConfig().CommitterConcurrency
+	switch action.(type) {
+	case actionPipelinedFlush:
+		rateLim = min(rateLim, max(1, c.txn.pipelinedFlushConcurrency))
+	default:
+		if rateLim > config.GetGlobalConfig().CommitterConcurrency {
+			rateLim = config.GetGlobalConfig().CommitterConcurrency
+		}
 	}
-	batchExecutor := newBatchExecutor(rateLim, c, action, bo)
-	return batchExecutor.process(batches)
+	return rateLim
 }
 
 func (c *twoPhaseCommitter) keyValueSize(key, value []byte) int {

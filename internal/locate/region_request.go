@@ -45,7 +45,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -62,6 +61,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/pd/client/errs"
@@ -860,7 +860,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			patchRequestSource(req, s.replicaSelector.replicaType())
 		}
-		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
+		// RPCClient.SendRequest will attach `req.Context` thus skip attaching here to reduce overhead.
+		if err := tikvrpc.SetContextNoAttach(req, rpcCtx.Meta, rpcCtx.Peer); err != nil {
 			return nil, nil, retryTimes, err
 		}
 		if s.replicaSelector != nil {

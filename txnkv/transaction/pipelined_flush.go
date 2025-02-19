@@ -454,7 +454,6 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 // resolveFlushedLocks resolves all locks in the given range [start, end) with the given status.
 // The resolve process is running in another goroutine so this function won't block.
 func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end []byte, commit bool) {
-	const RESOLVE_CONCURRENCY = 8
 	var resolved atomic.Uint64
 	handler, err := c.buildPipelinedResolveHandler(commit, &resolved)
 	commitTs := uint64(0)
@@ -481,10 +480,11 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		fmt.Sprintf("pipelined-dml-%s", status),
 		fmt.Sprintf("pipelined-dml-%s-%d", status, c.startTS),
 		c.store,
-		RESOLVE_CONCURRENCY,
+		c.txn.pipelinedResolveLockConcurrency,
 		handler,
 	)
 	runner.SetStatLogInterval(30 * time.Second)
+	runner.SetRegionsPerTask(1)
 
 	c.txn.spawnWithStorePool(func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {

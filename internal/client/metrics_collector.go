@@ -92,7 +92,6 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 		// ignore others
 		return
 	}
-	size += req.Context.Size()
 	isTiflashTarget := req.StoreTp == tikvrpc.TiFlash
 	var total, crossZone *int64
 	if isTiflashTarget {

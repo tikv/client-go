@@ -82,6 +82,10 @@ const (
 	// DCLabelKey indicates the key of label which represents the dc for Store.
 	DCLabelKey           = "zone"
 	safeTSUpdateInterval = time.Second * 2
+
+	defaultPipelinedFlushConcurrency       = 128
+	defaultPipelinedResolveLockConcurrency = 8
+	defaultPipelinedWriteThrottleRatio     = 0.0
 )
 
 func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, error) {
@@ -97,6 +101,12 @@ func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, erro
 		},
 	)
 	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+	defer cancel()
+	if err := cli.Sync(ctx); err != nil {
+		_ = cli.Close()
 		return nil, errors.WithStack(err)
 	}
 	return cli, nil
@@ -948,10 +958,31 @@ func WithStartTS(startTS uint64) TxnOption {
 	}
 }
 
-// WithPipelinedMemDB creates transaction with pipelined memdb.
-func WithPipelinedMemDB() TxnOption {
+// WithDefaultPipelinedTxn creates pipelined txn with default parameters
+func WithDefaultPipelinedTxn() TxnOption {
 	return func(st *transaction.TxnOptions) {
-		st.PipelinedMemDB = true
+		st.PipelinedTxn = transaction.PipelinedTxnOptions{
+			Enable:                 true,
+			FlushConcurrency:       defaultPipelinedFlushConcurrency,
+			ResolveLockConcurrency: defaultPipelinedResolveLockConcurrency,
+			WriteThrottleRatio:     defaultPipelinedWriteThrottleRatio,
+		}
+	}
+}
+
+// WithPipelinedTxn creates pipelined txn with specified parameters
+func WithPipelinedTxn(
+	flushConcurrency,
+	resolveLockConcurrency int,
+	writeThrottleRatio float64,
+) TxnOption {
+	return func(st *transaction.TxnOptions) {
+		st.PipelinedTxn = transaction.PipelinedTxnOptions{
+			Enable:                 true,
+			FlushConcurrency:       flushConcurrency,
+			ResolveLockConcurrency: resolveLockConcurrency,
+			WriteThrottleRatio:     writeThrottleRatio,
+		}
 	}
 }
 

@@ -168,6 +168,13 @@ type connArray struct {
 	done chan struct{}
 
 	monitor *connMonitor
+
+	metrics struct {
+		rpcLatHist        *rpcMetrics
+		rpcSrcLatSum      sync.Map
+		rpcNetLatExternal prometheus.Observer
+		rpcNetLatInternal prometheus.Observer
+	}
 }
 
 func newConnArray(maxSize uint, addr string, ver uint64, security config.Security,
@@ -181,6 +188,9 @@ func newConnArray(maxSize uint, addr string, ver uint64, security config.Securit
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
+	a.metrics.rpcLatHist = deriveRPCMetrics(metrics.TiKVSendReqHistogram.MustCurryWith(prometheus.Labels{metrics.LblStore: addr}))
+	a.metrics.rpcNetLatExternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "false")
+	a.metrics.rpcNetLatInternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "true")
 	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
 		return nil, err
 	}
@@ -363,7 +373,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				dialTimeout:      a.dialTimeout,
 				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
 				eventListener:    eventListener,
-				metrics:          &a.metrics,
+				metrics:          &a.batchConn.metrics,
 			}
 			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
 			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
@@ -398,6 +408,40 @@ func (a *connArray) Close() {
 	}
 
 	close(a.done)
+}
+
+func (a *connArray) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response, latency time.Duration) {
+	seconds := latency.Seconds()
+	stale := req.GetStaleRead()
+	source := req.GetRequestSource()
+	internal := util.IsInternalRequest(req.GetRequestSource())
+
+	a.metrics.rpcLatHist.get(req.Type, stale, internal).Observe(seconds)
+
+	srcLatSum, ok := a.metrics.rpcSrcLatSum.Load(source)
+	if !ok {
+		srcLatSum = deriveRPCMetrics(metrics.TiKVSendReqSummary.MustCurryWith(
+			prometheus.Labels{metrics.LblStore: a.target, metrics.LblSource: source}))
+		a.metrics.rpcSrcLatSum.Store(source, srcLatSum)
+	}
+	srcLatSum.(*rpcMetrics).get(req.Type, stale, internal).Observe(seconds)
+
+	if execDetail := resp.GetExecDetailsV2(); execDetail != nil {
+		var totalRpcWallTimeNs uint64
+		if execDetail.TimeDetailV2 != nil {
+			totalRpcWallTimeNs = execDetail.TimeDetailV2.TotalRpcWallTimeNs
+		} else if execDetail.TimeDetail != nil {
+			totalRpcWallTimeNs = execDetail.TimeDetail.TotalRpcWallTimeNs
+		}
+		if totalRpcWallTimeNs > 0 {
+			lat := latency - time.Duration(totalRpcWallTimeNs)
+			if internal {
+				a.metrics.rpcNetLatInternal.Observe(lat.Seconds())
+			} else {
+				a.metrics.rpcNetLatExternal.Observe(lat.Seconds())
+			}
+		}
+	}
 }
 
 type option struct {
@@ -542,115 +586,30 @@ func (c *RPCClient) closeConns() {
 	c.Unlock()
 }
 
-var (
-	sendReqHistCache       sync.Map
-	sendReqCounterCache    sync.Map
-	rpcNetLatencyHistCache sync.Map
-)
+func (c *RPCClient) recycleIdleConnArray() {
+	start := time.Now()
 
-type sendReqHistCacheKey struct {
-	tp         tikvrpc.CmdType
-	id         uint64
-	staleRad   bool
-	isInternal bool
-}
-
-type sendReqCounterCacheKey struct {
-	sendReqHistCacheKey
-	requestSource string
-}
-
-type rpcNetLatencyCacheKey struct {
-	storeID    uint64
-	isInternal bool
-}
-
-type sendReqCounterCacheValue struct {
-	counter     prometheus.Counter
-	timeCounter prometheus.Counter
-}
-
-func (c *RPCClient) updateSendReqHistogramAndExecStats(req *tikvrpc.Request, resp *tikvrpc.Response, start time.Time, staleRead bool, execDetails *util.ExecDetails) {
-	elapsed := time.Since(start)
-	secs := elapsed.Seconds()
-	storeID := req.Context.GetPeer().GetStoreId()
-	isInternal := util.IsInternalRequest(req.GetRequestSource())
-
-	histKey := sendReqHistCacheKey{
-		req.Type,
-		storeID,
-		staleRead,
-		isInternal,
-	}
-	counterKey := sendReqCounterCacheKey{
-		histKey,
-		req.GetRequestSource(),
-	}
-
-	reqType := req.Type.String()
-	var storeIDStr string
-
-	hist, ok := sendReqHistCache.Load(histKey)
-	if !ok {
-		if len(storeIDStr) == 0 {
-			storeIDStr = strconv.FormatUint(storeID, 10)
-		}
-		hist = metrics.TiKVSendReqHistogram.WithLabelValues(reqType, storeIDStr,
-			strconv.FormatBool(staleRead), strconv.FormatBool(isInternal))
-		sendReqHistCache.Store(histKey, hist)
-	}
-	counter, ok := sendReqCounterCache.Load(counterKey)
-	if !ok {
-		if len(storeIDStr) == 0 {
-			storeIDStr = strconv.FormatUint(storeID, 10)
-		}
-		counter = sendReqCounterCacheValue{
-			metrics.TiKVSendReqCounter.WithLabelValues(reqType, storeIDStr, strconv.FormatBool(staleRead),
-				counterKey.requestSource, strconv.FormatBool(isInternal)),
-			metrics.TiKVSendReqTimeCounter.WithLabelValues(reqType, storeIDStr,
-				strconv.FormatBool(staleRead), counterKey.requestSource, strconv.FormatBool(isInternal)),
-		}
-		sendReqCounterCache.Store(counterKey, counter)
-	}
-
-	hist.(prometheus.Observer).Observe(secs)
-	counter.(sendReqCounterCacheValue).counter.Inc()
-	counter.(sendReqCounterCacheValue).timeCounter.Add(secs)
-
-	if execDetail := resp.GetExecDetailsV2(); execDetail != nil {
-		var totalRpcWallTimeNs uint64
-		if execDetail.TimeDetailV2 != nil {
-			totalRpcWallTimeNs = execDetail.TimeDetailV2.TotalRpcWallTimeNs
-		} else if execDetail.TimeDetail != nil {
-			totalRpcWallTimeNs = execDetail.TimeDetail.TotalRpcWallTimeNs
-		}
-		if totalRpcWallTimeNs > 0 {
-			cacheKey := rpcNetLatencyCacheKey{
-				storeID,
-				isInternal,
-			}
-			latHist, ok := rpcNetLatencyHistCache.Load(cacheKey)
-			if !ok {
-				if len(storeIDStr) == 0 {
-					storeIDStr = strconv.FormatUint(storeID, 10)
-				}
-				latHist = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(storeIDStr, strconv.FormatBool(isInternal))
-				rpcNetLatencyHistCache.Store(cacheKey, latHist)
-			}
-			latency := elapsed - time.Duration(totalRpcWallTimeNs)*time.Nanosecond
-			latHist.(prometheus.Observer).Observe(latency.Seconds())
+	var addrs []string
+	var vers []uint64
+	c.RLock()
+	for _, conn := range c.conns {
+		if conn.batchConn != nil && conn.isIdle() {
+			addrs = append(addrs, conn.target)
+			vers = append(vers, conn.ver)
 		}
 	}
+	c.RUnlock()
 
-	execNetworkCollector := &networkCollector{}
-	// update execDetails
-	if execDetails != nil {
-		execNetworkCollector.onReq(req, execDetails)
-		execNetworkCollector.onResp(req, resp, execDetails)
+	for i, addr := range addrs {
+		c.CloseAddrVer(addr, vers[i])
 	}
+
+	metrics.TiKVBatchClientRecycle.Observe(time.Since(start).Seconds())
 }
 
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
+	tikvrpc.AttachContext(req, req.Context)
+
 	var spanRPC opentracing.Span
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		spanRPC = span.Tracer().StartSpan(fmt.Sprintf("rpcClient.SendRequest, region ID: %d, type: %s", req.RegionId, req.Type), opentracing.ChildOf(span.Context()))
@@ -675,15 +634,17 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 
 	start := time.Now()
-	staleRead := req.GetStaleRead()
 	defer func() {
-		stmtExec := ctx.Value(util.ExecDetailsKey)
-		var detail *util.ExecDetails
-		if stmtExec != nil {
-			detail = stmtExec.(*util.ExecDetails)
-			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
+		elapsed := time.Since(start)
+		connArray.updateRPCMetrics(req, resp, elapsed)
+
+		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
+			execDetails := stmtExec.(*util.ExecDetails)
+			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(elapsed))
+			execNetworkCollector := networkCollector{}
+			execNetworkCollector.onReq(req, execDetails)
+			execNetworkCollector.onResp(req, resp, execDetails)
 		}
-		c.updateSendReqHistogramAndExecStats(req, resp, start, staleRead, detail)
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {
@@ -1036,4 +997,54 @@ func buildSpanInfoFromResp(resp *tikvrpc.Response) *spanInfo {
 	}
 
 	return &spanRPC
+}
+
+func deriveRPCMetrics(root prometheus.ObserverVec) *rpcMetrics {
+	return &rpcMetrics{
+		root:        root,
+		latGet:      root.With(prometheus.Labels{metrics.LblType: tikvrpc.CmdGet.String(), metrics.LblStaleRead: "false", metrics.LblScope: "false"}),
+		latCop:      root.With(prometheus.Labels{metrics.LblType: tikvrpc.CmdCop.String(), metrics.LblStaleRead: "false", metrics.LblScope: "false"}),
+		latBatchGet: root.With(prometheus.Labels{metrics.LblType: tikvrpc.CmdBatchGet.String(), metrics.LblStaleRead: "false", metrics.LblScope: "false"}),
+	}
+}
+
+type rpcMetrics struct {
+	root prometheus.ObserverVec
+
+	// static metrics
+	latGet      prometheus.Observer
+	latCop      prometheus.Observer
+	latBatchGet prometheus.Observer
+
+	latOther sync.Map
+}
+
+func (m *rpcMetrics) get(cmd tikvrpc.CmdType, stale bool, internal bool) prometheus.Observer {
+	if !stale && !internal {
+		switch cmd {
+		case tikvrpc.CmdGet:
+			return m.latGet
+		case tikvrpc.CmdCop:
+			return m.latCop
+		case tikvrpc.CmdBatchGet:
+			return m.latBatchGet
+		}
+	}
+	key := uint64(cmd)
+	if stale {
+		key |= 1 << 16
+	}
+	if internal {
+		key |= 1 << 17
+	}
+	lat, ok := m.latOther.Load(key)
+	if !ok {
+		lat = m.root.With(prometheus.Labels{
+			metrics.LblType:      cmd.String(),
+			metrics.LblStaleRead: strconv.FormatBool(stale),
+			metrics.LblScope:     strconv.FormatBool(internal),
+		})
+		m.latOther.Store(key, lat)
+	}
+	return lat.(prometheus.Observer)
 }
