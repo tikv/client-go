@@ -53,7 +53,7 @@ func TestPDOracle_UntilExpired(t *testing.T) {
 	start := time.Now()
 	SetEmptyPDOracleLastTs(o, oracle.GoTimeToTS(start))
 	lockTs := oracle.GoTimeToTS(start.Add(time.Duration(lockAfter)*time.Millisecond)) + 1
-	waitTs := o.UntilExpired(lockTs, uint64(lockExp), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	waitTs := o.UntilExpired(lockTs, uint64(lockExp), &oracle.Option{})
 	assert.Equal(t, int64(lockAfter+lockExp), waitTs)
 }
 
@@ -352,7 +352,7 @@ func TestValidateReadTS(t *testing.T) {
 		defer o.Close()
 
 		ctx := context.Background()
-		opt := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
+		opt := &oracle.Option{}
 
 		// Always returns error for MaxUint64
 		err = o.ValidateReadTS(ctx, math.MaxUint64, staleRead, opt)
@@ -423,7 +423,7 @@ func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 	asyncValidate := func(ctx context.Context, readTS uint64) chan error {
 		ch := make(chan error, 1)
 		go func() {
-			err := o.ValidateReadTS(ctx, readTS, true, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+			err := o.ValidateReadTS(ctx, readTS, true, &oracle.Option{})
 			ch <- err
 		}()
 		return ch
@@ -521,7 +521,7 @@ func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
 	defer o.Close()
 
 	ctx := context.Background()
-	opt := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
+	opt := &oracle.Option{}
 
 	// Validating read ts for non-stale-read requests must not trigger updating the adaptive update interval of
 	// low resolution ts.
@@ -574,7 +574,7 @@ func TestSetLastTSAlwaysPushTS(t *testing.T) {
 					return
 				default:
 				}
-				ts, err := o.GetTimestamp(ctx, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+				ts, err := o.GetTimestamp(ctx, &oracle.Option{})
 				assert.NoError(t, err)
 				lastTS, found := o.getLastTS(oracle.GlobalTxnScope)
 				assert.True(t, found)

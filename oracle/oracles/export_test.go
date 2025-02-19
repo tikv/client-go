@@ -85,8 +85,7 @@ func StartTsUpdateLoop(o oracle.Oracle, ctx context.Context, wg *sync.WaitGroup)
 func SetEmptyPDOracleLastTs(oc oracle.Oracle, ts uint64) {
 	switch o := oc.(type) {
 	case *pdOracle:
-		lastTSInterface, _ := o.lastTSMap.LoadOrStore(oracle.GlobalTxnScope, &atomic.Pointer[lastTSO]{})
-		lastTSPointer := lastTSInterface.(*atomic.Pointer[lastTSO])
-		lastTSPointer.Store(&lastTSO{tso: ts, arrival: oracle.GetTimeFromTS(ts)})
+		o.lastTS = &atomic.Pointer[lastTSO]{}
+		o.lastTS.Store(&lastTSO{tso: ts, arrival: oracle.GetTimeFromTS(ts)})
 	}
 }

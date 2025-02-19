@@ -311,7 +311,7 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 		zap.String("size", units.HumanSize(float64(c.txn.GetMemBuffer().Size()))),
 		zap.Uint64("startTS", c.startTS),
 	)
-	commitTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
+	commitTS, err := c.store.GetTimestampWithRetry(bo)
 	if err != nil {
 		logutil.Logger(bo.GetCtx()).Warn("[pipelined dml] commit transaction get commitTS failed",
 			zap.Error(err),
