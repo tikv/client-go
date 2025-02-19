@@ -229,6 +229,8 @@ func (db *artDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse boo
 }
 
 func (it *snapshotBatchedIter) fillBatch() error {
+	// The check of sequence numbers don't have to be protected by the rwlock, as the invariant is that
+	// there cannot be concurrent writes to the seqNo variables.
 	if it.snapshotSeqNo != it.db.SnapshotSeqNo {
 		return errors.Errorf(
 			"invalid iter: snapshotSeqNo changed, iter's=%d, db's=%d",

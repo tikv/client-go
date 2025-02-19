@@ -47,8 +47,10 @@ type ART struct {
 	len             int
 	size            int
 
+	// These variables serve the caching mechanism, meaning they can be concurrently updated by read operations, thus
+	// they are protected by atomic operations.
 	// The lastTraversedNode stores addr in uint64 of the last traversed node, includes search and recursiveInsert.
-	// Compare to atomic.Pointer, atomic.Uint64 can avoid heap allocation, so it's more efficient.
+	// Compared with atomic.Pointer, atomic.Uint64 can avoid heap allocation, so it's more efficient.
 	lastTraversedNode atomic.Uint64
 	hitCount          atomic.Uint64
 	missCount         atomic.Uint64
@@ -56,11 +58,11 @@ type ART struct {
 	// The counter of every write operation, used to invalidate iterators that were created before the write operation.
 	// The purpose of the counter is to check interleaving of write and read operations (via iterator).
 	// It does not protect against data race. If it happens, there must be a bug in the caller code.
-	// invariant: no concurrent access to it
+	// invariant: no concurrent write/write or read/write access to it
 	WriteSeqNo int
 	// Increased by 1 when an operation that may affect the content returned by "snapshot" (i.e. stage[0]) happens.
 	// It's used to invalidate snapshot iterators.
-	// invariant: no concurrent access to it
+	// invariant: no concurrent write/write or read/write access to it
 	SnapshotSeqNo int
 }
 
