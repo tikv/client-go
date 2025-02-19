@@ -485,6 +485,7 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 		handler,
 	)
 	runner.SetStatLogInterval(30 * time.Second)
+	runner.SetRegionsPerTask(1)
 
 	c.txn.spawnWithStorePool(func() {
 		if err = runner.RunOnRange(bo.GetCtx(), start, end); err != nil {
