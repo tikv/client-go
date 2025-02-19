@@ -416,6 +416,10 @@ func (c *MockPDClientWithPause) Resume() {
 	c.mu.Unlock()
 }
 
+func (c *MockPDClientWithPause) WithCallerComponent(component caller.Component) pd.Client {
+	return c
+}
+
 func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 	pdClient := &MockPDClientWithPause{}
 	o, err := NewPdOracle(pdClient, &PDOracleOptions{
