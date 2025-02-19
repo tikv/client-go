@@ -1468,7 +1468,7 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		_ = db.Set([]byte{3}, []byte{3})
 		_ = db.Set([]byte{4}, []byte{4})
 		db.Release(h)
-		h = db.Staging()
+		_ = db.Staging()
 
 		// Forward iteration [2,4)
 		iter = db.BatchedSnapshotIter([]byte{2}, []byte{4}, false)
