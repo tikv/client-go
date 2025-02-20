@@ -49,6 +49,8 @@ import (
 
 var _ pd.Client = &CodecPDClient{}
 
+const componentName = "codec-pd-client"
+
 // CodecPDClient wraps a PD Client to decode the encoded keys in region meta.
 type CodecPDClient struct {
 	pd.Client
@@ -58,7 +60,7 @@ type CodecPDClient struct {
 // NewCodecPDClient creates a CodecPDClient in API v1.
 func NewCodecPDClient(mode apicodec.Mode, client pd.Client) *CodecPDClient {
 	codec := apicodec.NewCodecV1(mode)
-	return &CodecPDClient{client.WithCallerComponent("codec-pd-client"), codec}
+	return &CodecPDClient{client.WithCallerComponent(componentName), codec}
 }
 
 // NewCodecPDClientWithKeyspace creates a CodecPDClient in API v2 with keyspace name.
@@ -72,7 +74,7 @@ func NewCodecPDClientWithKeyspace(mode apicodec.Mode, client pd.Client, keyspace
 		return nil, err
 	}
 
-	return &CodecPDClient{client.WithCallerComponent("codec-pd-client"), codec}, nil
+	return &CodecPDClient{client.WithCallerComponent(componentName), codec}, nil
 }
 
 // GetKeyspaceID attempts to retrieve keyspace ID corresponding to the given keyspace name from PD.
