@@ -52,15 +52,19 @@ type Variables struct {
 
 	// DisableTxnFile specifies whether file-based txn is disabled.
 	DisableTxnFile bool
+
+	// EnableColumnarExecution specifies whether columnar execution is enabled.
+	EnableColumnarExecution bool
 }
 
 // NewVariables create a new Variables instance with default values.
 func NewVariables(killed *uint32) *Variables {
 	return &Variables{
-		BackoffLockFast: DefBackoffLockFast,
-		BackOffWeight:   DefBackOffWeight,
-		Killed:          killed,
-		DisableTxnFile:  false,
+		BackoffLockFast:         DefBackoffLockFast,
+		BackOffWeight:           DefBackOffWeight,
+		Killed:                  killed,
+		DisableTxnFile:          false,
+		EnableColumnarExecution: false,
 	}
 }
 
