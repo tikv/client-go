@@ -37,6 +37,7 @@ package locate
 import (
 	"context"
 	"fmt"
+	"github.com/tikv/client-go/v2/config"
 	"maps"
 	"math/rand"
 	"strconv"
@@ -105,17 +106,18 @@ func LoadShuttingDown() uint32 {
 // For other region errors, since region range have changed, the request may need to
 // split, so we simply return the error to caller.
 type RegionRequestSender struct {
-	regionCache       *RegionCache
-	apiVersion        kvrpcpb.APIVersion
-	client            client.Client
-	readTSValidator   oracle.ReadTSValidator
-	storeAddr         string
-	rpcError          error
-	replicaSelector   *replicaSelector
-	failStoreIDs      map[uint64]struct{}
-	failProxyStoreIDs map[uint64]struct{}
-	Stats             *RegionRequestRuntimeStats
-	AccessStats       *ReplicaAccessStats
+	regionCache           *RegionCache
+	apiVersion            kvrpcpb.APIVersion
+	client                client.Client
+	readTSValidator       oracle.ReadTSValidator
+	storeAddr             string
+	rpcError              error
+	replicaSelector       *replicaSelector
+	failStoreIDs          map[uint64]struct{}
+	failProxyStoreIDs     map[uint64]struct{}
+	Stats                 *RegionRequestRuntimeStats
+	AccessStats           *ReplicaAccessStats
+	enableReadTsValidator bool
 }
 
 func (s *RegionRequestSender) String() string {
@@ -402,6 +404,9 @@ func (s *ReplicaAccessStats) String() string {
 
 // NewRegionRequestSender creates a new sender.
 func NewRegionRequestSender(regionCache *RegionCache, client client.Client, readTSValidator oracle.ReadTSValidator) *RegionRequestSender {
+	if !config.GetGlobalConfig().EnableReadTSValidator {
+		readTSValidator = oracle.NoopReadTSValidator{}
+	}
 	return &RegionRequestSender{
 		regionCache:     regionCache,
 		apiVersion:      regionCache.codec.GetAPIVersion(),
