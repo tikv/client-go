@@ -45,6 +45,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tikv/client-go/v2/config"
+
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -402,6 +404,9 @@ func (s *ReplicaAccessStats) String() string {
 
 // NewRegionRequestSender creates a new sender.
 func NewRegionRequestSender(regionCache *RegionCache, client client.Client, readTSValidator oracle.ReadTSValidator) *RegionRequestSender {
+	if !config.GetGlobalConfig().EnableReadTSValidator {
+		readTSValidator = oracle.NoopReadTSValidator{}
+	}
 	return &RegionRequestSender{
 		regionCache:     regionCache,
 		apiVersion:      regionCache.codec.GetAPIVersion(),
