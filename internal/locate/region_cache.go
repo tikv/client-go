@@ -134,9 +134,9 @@ func nextTTL(ts int64) int64 {
 
 var pdRegionMetaCircuitBreaker = circuitbreaker.NewCircuitBreaker("region-meta",
 	circuitbreaker.Settings{
-		ErrorRateWindow:      30,
+		ErrorRateWindow:      30 * time.Second,
 		MinQPSForOpen:        10,
-		CoolDownInterval:     10,
+		CoolDownInterval:     10 * time.Second,
 		HalfOpenSuccessCount: 1,
 	})
 
