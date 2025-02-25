@@ -237,56 +237,6 @@ func TestAdaptiveUpdateTSInterval(t *testing.T) {
 	assert.Equal(t, adaptiveUpdateTSIntervalStateNormal, o.adaptiveUpdateIntervalState.state)
 }
 
-func TestValidateReadTS(t *testing.T) {
-	testImpl := func(staleRead bool) {
-		pdClient := MockPdClient{}
-		o, err := NewPdOracle(&pdClient, &PDOracleOptions{
-			UpdateInterval: time.Second * 2,
-		})
-		assert.NoError(t, err)
-		defer o.Close()
-
-		ctx := context.Background()
-		opt := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
-
-		// Always returns error for MaxUint64
-		err = o.ValidateReadTS(ctx, math.MaxUint64, staleRead, opt)
-		if staleRead {
-			assert.Error(t, err)
-		} else {
-			assert.NoError(t, err)
-		}
-
-		ts, err := o.GetTimestamp(ctx, opt)
-		assert.NoError(t, err)
-		assert.GreaterOrEqual(t, ts, uint64(1))
-
-		err = o.ValidateReadTS(ctx, 1, staleRead, opt)
-		assert.NoError(t, err)
-		ts, err = o.GetTimestamp(ctx, opt)
-		assert.NoError(t, err)
-		// The readTS exceeds the latest ts, so it first fails the check with the low resolution ts. Then it fallbacks to
-		// the fetching-from-PD path, and it can get the previous ts + 1, which can allow this validation to pass.
-		err = o.ValidateReadTS(ctx, ts+1, staleRead, opt)
-		assert.NoError(t, err)
-		// It can't pass if the readTS is newer than previous ts + 2.
-		ts, err = o.GetTimestamp(ctx, opt)
-		assert.NoError(t, err)
-		err = o.ValidateReadTS(ctx, ts+2, staleRead, opt)
-		assert.Error(t, err)
-
-		// Simulate other PD clients requests a timestamp.
-		ts, err = o.GetTimestamp(ctx, opt)
-		assert.NoError(t, err)
-		pdClient.logicalTimestamp.Add(2)
-		err = o.ValidateReadTS(ctx, ts+3, staleRead, opt)
-		assert.NoError(t, err)
-	}
-
-	testImpl(true)
-	testImpl(false)
-}
-
 type MockPDClientWithPause struct {
 	MockPdClient
 	mu sync.Mutex
@@ -436,9 +386,9 @@ func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
 	assert.NoError(t, err)
 	mustNoNotify()
 
-	// It loads `ts + 1` from the mock PD, and the check cannot pass.
+	// It loads `ts + 1` from the mock PD, and the check is skipped.
 	err = o.ValidateReadTS(ctx, ts+2, false, opt)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	mustNoNotify()
 
 	// Do the check again. It loads `ts + 2` from the mock PD, and the check passes.
