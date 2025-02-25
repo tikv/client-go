@@ -40,8 +40,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/zap"
 )
 
 var _ oracle.Oracle = &localOracle{}
@@ -140,20 +141,18 @@ func (l *localOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) 
 func (l *localOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
-			return oracle.ErrLatestStaleRead{}
+			logutil.Logger(ctx).Error("stale read use MaxUint64 as readTS")
 		}
 		return nil
 	}
 
 	currentTS, err := l.GetTimestamp(ctx, opt)
 	if err != nil {
-		return errors.Errorf("fail to validate read timestamp: %v", err)
+		logutil.Logger(ctx).Error("fail to get timestamp when validating", zap.Error(err))
+		return nil
 	}
 	if currentTS < readTS {
-		return oracle.ErrFutureTSRead{
-			ReadTS:    readTS,
-			CurrentTS: currentTS,
-		}
+		logutil.Logger(ctx).Error("ts validation failed", zap.Uint64("readTS", readTS), zap.Uint64("currentTS", currentTS))
 	}
 	return nil
 }

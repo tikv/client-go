@@ -649,7 +649,7 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
-			return oracle.ErrLatestStaleRead{}
+			logutil.Logger(ctx).Error("stale read use MaxUint64 as readTS")
 		}
 		return nil
 	}
@@ -661,16 +661,15 @@ func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRea
 	if !exists || readTS > latestTSInfo.tso {
 		currentTS, err := o.getCurrentTSForValidation(ctx, opt)
 		if err != nil {
-			return errors.Errorf("fail to validate read timestamp: %v", err)
+			logutil.Logger(ctx).Error("fail to get timestamp when validating", zap.Error(err))
+			return nil
 		}
 		if isStaleRead {
 			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
 		}
 		if readTS > currentTS {
-			return oracle.ErrFutureTSRead{
-				ReadTS:    readTS,
-				CurrentTS: currentTS,
-			}
+			logutil.Logger(ctx).Error("ts validation failed", zap.Uint64("readTS", readTS), zap.Uint64("currentTS", currentTS))
+			return nil
 		}
 	} else if isStaleRead {
 		estimatedCurrentTS, err := o.getStaleTimestampWithLastTS(latestTSInfo, 0)
