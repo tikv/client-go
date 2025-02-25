@@ -652,11 +652,11 @@ type ValidateReadTSForTidbSnapshot struct{}
 
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
 	// For a mistake we've seen
-	if readTS == math.MaxInt64 {
-		return errors.New("readTS is MaxInt64")
+	if readTS >= math.MaxInt64 {
+		return errors.Errorf("readTS >= MaxInt64, readTS=%v", readTS)
 	}
 
-	// For release branches, only check stale reads
+	// For release branches, only check stale reads and reads using `tidb_snapshot`
 	forTidbSnapshot := ctx.Value(ValidateReadTSForTidbSnapshot{}) != nil
 	if !forTidbSnapshot && !isStaleRead {
 		return nil
