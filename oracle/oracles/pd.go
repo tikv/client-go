@@ -646,10 +646,25 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 	}
 }
 
+// ValidateReadTSForTidbSnapshot is a flag in context, indicating whether the read ts is for tidb_snapshot.
+// This is a special approach for release branches to minimize code changes to reduce risks.
+type ValidateReadTSForTidbSnapshot struct{}
+
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
+	// For a mistake we've seen
+	if readTS == math.MaxInt64 {
+		return errors.New("readTS is MaxInt64")
+	}
+
+	// For release branches, only check stale reads
+	forTidbSnapshot := ctx.Value(ValidateReadTSForTidbSnapshot{}) != nil
+	if !forTidbSnapshot && !isStaleRead {
+		return nil
+	}
+
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
-			logutil.Logger(ctx).Error("stale read use MaxUint64 as readTS")
+			return oracle.ErrLatestStaleRead{}
 		}
 		return nil
 	}
@@ -661,15 +676,16 @@ func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRea
 	if !exists || readTS > latestTSInfo.tso {
 		currentTS, err := o.getCurrentTSForValidation(ctx, opt)
 		if err != nil {
-			logutil.Logger(ctx).Error("fail to get timestamp when validating", zap.Error(err))
-			return nil
+			return errors.Errorf("fail to validate read timestamp: %v", err)
 		}
 		if isStaleRead {
 			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
 		}
 		if readTS > currentTS {
-			logutil.Logger(ctx).Error("ts validation failed", zap.Uint64("readTS", readTS), zap.Uint64("currentTS", currentTS))
-			return nil
+			return oracle.ErrFutureTSRead{
+				ReadTS:    readTS,
+				CurrentTS: currentTS,
+			}
 		}
 	} else if isStaleRead {
 		estimatedCurrentTS, err := o.getStaleTimestampWithLastTS(latestTSInfo, 0)
