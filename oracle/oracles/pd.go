@@ -116,7 +116,7 @@ const (
 // pdOracle is an Oracle that uses a placement driver client as source.
 type pdOracle struct {
 	c      pd.Client
-	lastTS *atomic.Pointer[lastTSO]
+	lastTS atomic.Pointer[lastTSO]
 	quit   chan struct{}
 	// The configured interval to update the low resolution ts. Set by SetLowResolutionTimestampUpdateInterval.
 	// For TiDB, this is directly controlled by the system variable `tidb_low_resolution_tso_update_interval`.
@@ -281,8 +281,7 @@ func (o *pdOracle) setLastTS(ts uint64) {
 		tso:     ts,
 		arrival: time.Now(),
 	}
-	if o.lastTS == nil {
-		o.lastTS = &atomic.Pointer[lastTSO]{}
+	if o.lastTS.Load() == nil {
 		o.lastTS.Store(current)
 	}
 	for {
@@ -308,9 +307,6 @@ func (o *pdOracle) getLastTS() (uint64, bool) {
 }
 
 func (o *pdOracle) getLastTSWithArrivalTS() (*lastTSO, bool) {
-	if o.lastTS == nil {
-		return nil, false
-	}
 	last := o.lastTS.Load()
 	if last == nil {
 		return nil, false
