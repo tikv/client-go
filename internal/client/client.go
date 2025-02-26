@@ -268,7 +268,7 @@ func (a *connArray) monitoredDial(ctx context.Context, connName, target string, 
 	conn = &monitoredConn{
 		Name: connName,
 	}
-	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
+	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...) //nolint:staticcheck
 	if err != nil {
 		return nil, err
 	}
