@@ -36,7 +36,6 @@ package oracles
 
 import (
 	"context"
-	"math"
 	"sync"
 	"time"
 
@@ -128,23 +127,6 @@ func (o *MockOracle) SetLowResolutionTimestampUpdateInterval(time.Duration) erro
 }
 
 func (o *MockOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
-	if readTS == math.MaxUint64 {
-		if isStaleRead {
-			return oracle.ErrLatestStaleRead{}
-		}
-		return nil
-	}
-
-	currentTS, err := o.GetTimestamp(ctx, opt)
-	if err != nil {
-		return errors.Errorf("fail to validate read timestamp: %v", err)
-	}
-	if currentTS < readTS {
-		return oracle.ErrFutureTSRead{
-			ReadTS:    readTS,
-			CurrentTS: currentTS,
-		}
-	}
 	return nil
 }
 
