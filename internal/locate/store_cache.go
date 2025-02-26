@@ -775,7 +775,7 @@ func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, h
 		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
-	conn, err := grpc.DialContext(
+	conn, err := grpc.DialContext( //nolint:staticcheck
 		ctx,
 		addr,
 		opt,
