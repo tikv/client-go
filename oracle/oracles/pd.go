@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/tso"
 	"go.uber.org/zap"
@@ -661,6 +662,10 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 }
 
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
+	if val, err := util.EvalFailpoint("failOnValidateReadTS"); err == nil {
+		return errors.New(val.(string))
+	}
+
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
 			return oracle.ErrLatestStaleRead{}
@@ -695,6 +700,7 @@ func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRea
 			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, estimatedCurrentTS, time.Now())
 		}
 	}
+
 	return nil
 }
 

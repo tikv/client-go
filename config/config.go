@@ -81,7 +81,8 @@ type Config struct {
 	// RegionsRefreshInterval indicates the interval of loading regions info, the unit is second, if RegionsRefreshInterval == 0, it will be disabled.
 	RegionsRefreshInterval uint64
 	// EnablePreload indicates whether to preload region info when initializing the client.
-	EnablePreload bool
+	EnablePreload         bool
+	EnableReadTSValidator bool
 }
 
 // DefaultConfig returns the default configuration.
@@ -99,6 +100,7 @@ func DefaultConfig() Config {
 		TxnScope:              "",
 		EnableAsyncCommit:     false,
 		Enable1PC:             false,
+		EnableReadTSValidator: true,
 	}
 }
 
