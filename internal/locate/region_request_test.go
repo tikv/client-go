@@ -949,7 +949,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestValidateReadTS() 
 	}
 
 	getTS := func() uint64 {
-		ts, err := o.GetTimestamp(s.bo.GetCtx(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		ts, err := o.GetTimestamp(s.bo.GetCtx(), &oracle.Option{})
 		s.NoError(err)
 		return ts
 	}

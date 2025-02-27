@@ -143,8 +143,8 @@ type KVStore struct {
 	// it indicates the safe timestamp point that can be used to read consistent but may not the latest data.
 	safeTSMap sync.Map
 
-	// MinSafeTs stores the minimum ts value for each txnScope
-	minSafeTS sync.Map
+	// MinSafeTs stores the minimum ts value
+	minSafeTS atomic.Uint64
 
 	replicaReadSeed uint32 // this is used to load balance followers / learners when replica read is enabled
 
@@ -377,9 +377,6 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 		opt(options)
 	}
 
-	if options.TxnScope == "" {
-		options.TxnScope = oracle.GlobalTxnScope
-	}
 	var (
 		startTS uint64
 	)
@@ -387,7 +384,7 @@ func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 		startTS = *options.StartTS
 	} else {
 		bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-		startTS, err = s.getTimestampWithRetry(bo, options.TxnScope)
+		startTS, err = s.getTimestampWithRetry(bo)
 		if err != nil {
 			return nil, err
 		}
@@ -454,10 +451,10 @@ func (s *KVStore) UUID() string {
 	return s.uuid
 }
 
-// CurrentTimestamp returns current timestamp with the given txnScope (local or global).
-func (s *KVStore) CurrentTimestamp(txnScope string) (uint64, error) {
+// CurrentTimestamp returns current timestamp.
+func (s *KVStore) CurrentTimestamp() (uint64, error) {
 	bo := retry.NewBackofferWithVars(context.Background(), transaction.TsoMaxBackoff, nil)
-	startTS, err := s.getTimestampWithRetry(bo, txnScope)
+	startTS, err := s.getTimestampWithRetry(bo)
 	if err != nil {
 		return 0, err
 	}
@@ -475,11 +472,11 @@ func (s *KVStore) CurrentAllTSOKeyspaceGroupMinTs() (uint64, error) {
 }
 
 // GetTimestampWithRetry returns latest timestamp.
-func (s *KVStore) GetTimestampWithRetry(bo *Backoffer, scope string) (uint64, error) {
-	return s.getTimestampWithRetry(bo, scope)
+func (s *KVStore) GetTimestampWithRetry(bo *Backoffer) (uint64, error) {
+	return s.getTimestampWithRetry(bo)
 }
 
-func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64, error) {
+func (s *KVStore) getTimestampWithRetry(bo *Backoffer) (uint64, error) {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("TiKVStore.getTimestampWithRetry", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -487,7 +484,7 @@ func (s *KVStore) getTimestampWithRetry(bo *Backoffer, txnScope string) (uint64,
 	}
 
 	for {
-		startTS, err := s.oracle.GetTimestamp(bo.GetCtx(), &oracle.Option{TxnScope: txnScope})
+		startTS, err := s.oracle.GetTimestamp(bo.GetCtx(), &oracle.Option{})
 		// mockGetTSErrorInRetry should wait MockCommitErrorOnce first, then will run into retry() logic.
 		// Then mockGetTSErrorInRetry will return retryable error when first retry.
 		// Before PR #8743, we don't cleanup txn after meet error such as error like: PD server timeout
@@ -603,21 +600,18 @@ func (s *KVStore) GetTiKVClient() (client Client) {
 	return s.clientMu.client
 }
 
-// GetMinSafeTS return the minimal safeTS of the storage with given txnScope.
-func (s *KVStore) GetMinSafeTS(txnScope string) uint64 {
-	if val, ok := s.minSafeTS.Load(txnScope); ok {
-		return val.(uint64)
-	}
-	return 0
+// GetMinSafeTS return the minimal safeTS of the storage.
+func (s *KVStore) GetMinSafeTS() uint64 {
+	return s.minSafeTS.Load()
 }
 
-func (s *KVStore) setMinSafeTS(txnScope string, safeTS uint64) {
+func (s *KVStore) setMinSafeTS(safeTS uint64) {
 	// ensure safeTS is not set to max uint64
 	if safeTS == math.MaxUint64 {
-		logutil.AssertWarn(logutil.BgLogger(), "skip setting min-safe-ts to max uint64", zap.String("txnScope", txnScope), zap.Stack("stack"))
+		logutil.AssertWarn(logutil.BgLogger(), "skip setting min-safe-ts to max uint64", zap.Stack("stack"))
 		return
 	}
-	s.minSafeTS.Store(txnScope, safeTS)
+	s.minSafeTS.Store(safeTS)
 }
 
 // Ctx returns ctx.
@@ -663,13 +657,13 @@ func (s *KVStore) setSafeTS(storeID, safeTS uint64) {
 	s.safeTSMap.Store(storeID, safeTS)
 }
 
-func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
+func (s *KVStore) updateMinSafeTS(storeIDs []uint64) {
 	minSafeTS := uint64(math.MaxUint64)
 	// when there is no store, return 0 in order to let minStartTS become startTS directly
 	// actually storeIDs won't be empty since updateMinSafeTS is only called by updateSafeTS and updateSafeTS builds
 	// txnScopeMap with non-empty values. here we check it to make the logic more robust.
 	if len(storeIDs) < 1 {
-		s.setMinSafeTS(txnScope, 0)
+		s.setMinSafeTS(0)
 		return
 	}
 	for _, store := range storeIDs {
@@ -687,7 +681,7 @@ func (s *KVStore) updateMinSafeTS(txnScope string, storeIDs []uint64) {
 	if minSafeTS == math.MaxUint64 {
 		minSafeTS = 0
 	}
-	s.setMinSafeTS(txnScope, minSafeTS)
+	s.setMinSafeTS(minSafeTS)
 }
 
 func (s *KVStore) safeTSUpdater() {
@@ -712,7 +706,7 @@ func (s *KVStore) safeTSUpdater() {
 
 func (s *KVStore) updateSafeTS(ctx context.Context) {
 	// Try to get the cluster-level minimum resolved timestamp from PD first.
-	if s.updateGlobalTxnScopeTSFromPD(ctx) {
+	if s.updateTSFromPD(ctx) {
 		return
 	}
 
@@ -788,18 +782,12 @@ func (s *KVStore) updateSafeTS(ctx context.Context) {
 			metrics.TiKVMinSafeTSGapSeconds.WithLabelValues(storeIDStr).Set(time.Since(safeTSTime).Seconds())
 		}(ctx, wg, storeID, storeAddr)
 	}
-
-	txnScopeMap := make(map[string][]uint64)
+	storeIDs = make([]uint64, 0, len(stores))
 	for _, store := range stores {
-		txnScopeMap[oracle.GlobalTxnScope] = append(txnScopeMap[oracle.GlobalTxnScope], store.StoreID())
+		storeIDs = append(storeIDs, store.StoreID())
+	}
+	s.updateMinSafeTS(storeIDs)
 
-		if label, ok := store.GetLabelValue(DCLabelKey); ok {
-			txnScopeMap[label] = append(txnScopeMap[label], store.StoreID())
-		}
-	}
-	for txnScope, storeIDs := range txnScopeMap {
-		s.updateMinSafeTS(txnScope, storeIDs)
-	}
 	wg.Wait()
 }
 
@@ -837,9 +825,11 @@ var (
 	clusterMinSafeTSGap        = metrics.TiKVMinSafeTSGapSeconds.WithLabelValues("cluster")
 )
 
-// updateGlobalTxnScopeTSFromPD check whether it is needed to get cluster-level's min resolved ts from PD
-// to update min safe ts for global txn scope.
-func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
+// updateTSFromPD check whether it is needed to get cluster-level's min resolved ts from PD
+// to update min safe ts
+func (s *KVStore) updateTSFromPD(ctx context.Context) bool {
+	// TODO: confirm the logic here. Is the check condition txn_scope or "zone" label?
+	//isGlobal := true
 	isGlobal := config.GetTxnScopeFromConfig() == oracle.GlobalTxnScope
 	// Try to get the minimum resolved timestamp of the cluster from PD.
 	if s.pdHttpClient != nil && isGlobal {
@@ -848,7 +838,7 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 			logutil.BgLogger().Debug("get resolved TS from PD failed", zap.Error(err))
 		} else if isValidSafeTS(clusterMinSafeTS) {
 			// Update ts and metrics.
-			preClusterMinSafeTS := s.GetMinSafeTS(oracle.GlobalTxnScope)
+			preClusterMinSafeTS := s.GetMinSafeTS()
 			// preClusterMinSafeTS is guaranteed to be less than math.MaxUint64 (by this method and setMinSafeTS)
 			// related to https://github.com/tikv/client-go/issues/991
 			if preClusterMinSafeTS > clusterMinSafeTS {
@@ -856,7 +846,7 @@ func (s *KVStore) updateGlobalTxnScopeTSFromPD(ctx context.Context) bool {
 				preSafeTSTime := oracle.GetTimeFromTS(preClusterMinSafeTS)
 				clusterMinSafeTSGap.Set(time.Since(preSafeTSTime).Seconds())
 			} else {
-				s.setMinSafeTS(oracle.GlobalTxnScope, clusterMinSafeTS)
+				s.setMinSafeTS(clusterMinSafeTS)
 				successSafeTSUpdateCounter.Inc()
 				safeTSTime := oracle.GetTimeFromTS(clusterMinSafeTS)
 				clusterMinSafeTSGap.Set(time.Since(safeTSTime).Seconds())
@@ -943,13 +933,6 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...opt.C
 
 // TxnOption configures Transaction
 type TxnOption func(*transaction.TxnOptions)
-
-// WithTxnScope sets the TxnScope to txnScope
-func WithTxnScope(txnScope string) TxnOption {
-	return func(st *transaction.TxnOptions) {
-		st.TxnScope = txnScope
-	}
-}
 
 // WithStartTS sets the StartTS to startTS
 func WithStartTS(startTS uint64) TxnOption {
