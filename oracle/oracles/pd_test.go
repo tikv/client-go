@@ -431,7 +431,7 @@ func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 	assert.NoError(t, err)
 	defer o.Close()
 
-	assert.NoError(t, failpoint.Enable("tikvclient/validateReadTSRetryGetTS", `return("retry")`))
+	assert.NoError(t, failpoint.Enable("tikvclient/validateReadTSRetryGetTS", `return("skip")`))
 	defer func() {
 		assert.NoError(t, failpoint.Disable("tikvclient/validateReadTSRetryGetTS"))
 	}()
