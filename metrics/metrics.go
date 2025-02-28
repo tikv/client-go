@@ -46,7 +46,6 @@ var (
 	TiKVSendReqHistogram                           *prometheus.HistogramVec
 	TiKVSendReqSummary                             *prometheus.SummaryVec
 	TiKVRPCNetLatencyHistogram                     *prometheus.HistogramVec
-	TiKVCoprocessorHistogram                       *prometheus.HistogramVec
 	TiKVLockResolverCounter                        *prometheus.CounterVec
 	TiKVRegionErrorCounter                         *prometheus.CounterVec
 	TiKVRPCErrorCounter                            *prometheus.CounterVec
@@ -194,16 +193,6 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(5e-5, 2, 22), // 50us ~ 105s
 			ConstLabels: constLabels,
 		}, []string{LblStore, LblScope})
-
-	TiKVCoprocessorHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "cop_duration_seconds",
-			Help:        "Run duration of a single coprocessor task, includes backoff time.",
-			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
-			ConstLabels: constLabels,
-		}, []string{LblStore, LblStaleRead, LblScope})
 
 	TiKVLockResolverCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -884,7 +873,6 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVSendReqHistogram)
 	prometheus.MustRegister(TiKVSendReqSummary)
 	prometheus.MustRegister(TiKVRPCNetLatencyHistogram)
-	prometheus.MustRegister(TiKVCoprocessorHistogram)
 	prometheus.MustRegister(TiKVLockResolverCounter)
 	prometheus.MustRegister(TiKVRegionErrorCounter)
 	prometheus.MustRegister(TiKVRPCErrorCounter)
