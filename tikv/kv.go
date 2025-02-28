@@ -103,6 +103,12 @@ func createEtcdKV(addrs []string, tlsConfig *tls.Config) (*clientv3.Client, erro
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
+	defer cancel()
+	if err := cli.Sync(ctx); err != nil {
+		_ = cli.Close()
+		return nil, errors.WithStack(err)
+	}
 	return cli, nil
 }
 

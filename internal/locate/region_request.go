@@ -45,7 +45,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -62,6 +61,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/pd/client/errs"
@@ -732,6 +732,335 @@ func IsFakeRegionError(err *errorpb.Error) bool {
 
 const slowLogSendReqTime = 100 * time.Millisecond
 
+// sendReqState represents the state of sending request with retry, which allows us to construct a state and start to
+// retry from that state.
+type sendReqState struct {
+	*RegionRequestSender
+
+	vars struct {
+		rpcCtx    *RPCContext
+		resp      *tikvrpc.Response
+		regionErr *errorpb.Error
+		err       error
+		msg       string
+		sendTimes int
+	}
+}
+
+// next encapsulates one iteration of the retry loop. calling `next` will handle send error (s.vars.err) or region error
+// (s.vars.regionErr) if one of them exists. When the error is retriable, `next` then constructs a new RPCContext and
+// sends the request again. `next` returns true if the retry loop should stop, either because the request is done or
+// exhausted (cannot complete by retrying).
+func (s *sendReqState) next(
+	bo *retry.Backoffer,
+	req *tikvrpc.Request,
+	regionID RegionVerID,
+	timeout time.Duration,
+	et tikvrpc.EndpointType,
+	opts []StoreSelectorOption,
+) (done bool) {
+	// check whether the session/query is killed during the Next()
+	if err := bo.CheckKilled(); err != nil {
+		s.vars.resp, s.vars.err = nil, err
+		return true
+	}
+
+	// handle send error
+	if s.vars.err != nil {
+		if e := s.onSendFail(bo, s.vars.rpcCtx, req, s.vars.err); e != nil {
+			s.vars.rpcCtx, s.vars.resp = nil, nil
+			s.vars.msg = fmt.Sprintf("failed to handle send error: %v", s.vars.err)
+			return true
+		}
+		s.vars.err = nil
+	}
+
+	// handle region error
+	if s.vars.regionErr != nil {
+		retry, err := s.onRegionError(bo, s.vars.rpcCtx, req, s.vars.regionErr)
+		if err != nil {
+			s.vars.rpcCtx, s.vars.resp = nil, nil
+			s.vars.err = err
+			s.vars.msg = fmt.Sprintf("failed to handle region error: %v", err)
+			return true
+		}
+		if !retry {
+			s.vars.msg = fmt.Sprintf("met unretriable region error: %T", s.vars.regionErr)
+			return true
+		}
+		s.vars.regionErr = nil
+	}
+
+	s.vars.rpcCtx, s.vars.resp = nil, nil
+	if !req.IsRetryRequest && s.vars.sendTimes > 0 {
+		req.IsRetryRequest = true
+	}
+
+	s.vars.rpcCtx, s.vars.err = s.getRPCContext(bo, req, regionID, et, opts...)
+	if s.vars.err != nil {
+		return true
+	}
+
+	if _, err := util.EvalFailpoint("invalidCacheAndRetry"); err == nil {
+		// cooperate with tikvclient/setGcResolveMaxBackoff
+		if c := bo.GetCtx().Value("injectedBackoff"); c != nil {
+			s.vars.regionErr = &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+			s.vars.resp, s.vars.err = tikvrpc.GenRegionErrorResp(req, s.vars.regionErr)
+			return true
+		}
+	}
+
+	if s.vars.rpcCtx == nil {
+		// TODO(youjiali1995): remove it when using the replica selector for all requests.
+		// If the region is not found in cache, it must be out
+		// of date and already be cleaned up. We can skip the
+		// RPC by returning RegionError directly.
+
+		// TODO: Change the returned error to something like "region missing in cache",
+		// and handle this error like EpochNotMatch, which means to re-split the request and retry.
+		if s.replicaSelector != nil {
+			if s.vars.err = s.replicaSelector.backoffOnNoCandidate(bo); s.vars.err != nil {
+				return true
+			}
+		}
+		s.vars.regionErr = &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}
+		s.vars.resp, s.vars.err = tikvrpc.GenRegionErrorResp(req, s.vars.regionErr)
+		s.vars.msg = "throwing pseudo region error due to no replica available"
+		return true
+	}
+
+	if s.replicaSelector != nil &&
+		s.replicaSelector.target != nil &&
+		req.AccessLocation == kv.AccessUnknown &&
+		len(s.replicaSelector.option.labels) != 0 {
+		// patch the access location if it is not set under region request sender.
+		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
+			req.AccessLocation = kv.AccessLocalZone
+		} else {
+			req.AccessLocation = kv.AccessCrossZone
+		}
+	}
+
+	logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, s.vars.rpcCtx.Addr)
+	s.storeAddr = s.vars.rpcCtx.Addr
+
+	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
+	if req.InputRequestSource != "" && s.replicaSelector != nil {
+		patchRequestSource(req, s.replicaSelector.replicaType())
+	}
+	// RPCClient.SendRequest will attach `req.Context` thus skip attaching here to reduce overhead.
+	if s.vars.err = tikvrpc.SetContextNoAttach(req, s.vars.rpcCtx.Meta, s.vars.rpcCtx.Peer); s.vars.err != nil {
+		return true
+	}
+	if s.replicaSelector != nil {
+		if s.vars.err = s.replicaSelector.backoffOnRetry(s.vars.rpcCtx.Store, bo); s.vars.err != nil {
+			return true
+		}
+	}
+
+	if _, err := util.EvalFailpoint("beforeSendReqToRegion"); err == nil {
+		if hook := bo.GetCtx().Value("sendReqToRegionHook"); hook != nil {
+			h := hook.(func(*tikvrpc.Request))
+			h(req)
+		}
+	}
+
+	// judge the store limit switch.
+	if limit := kv.StoreLimit.Load(); limit > 0 {
+		if s.vars.err = s.getStoreToken(s.vars.rpcCtx.Store, limit); s.vars.err != nil {
+			return true
+		}
+		defer s.releaseStoreToken(s.vars.rpcCtx.Store)
+	}
+
+	sendCtx := s.send(bo, req, timeout)
+	s.vars.sendTimes++
+
+	if s.vars.err != nil {
+		// Because in rpc logic, context.Cancel() will be transferred to rpcContext.Cancel error. For rpcContext cancel,
+		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
+		// we shouldn't retry the request, it will go to backoff and hang in retry logic.
+		if sendCtx.Err() != nil && errors.Cause(sendCtx.Err()) == context.Canceled {
+			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(s.vars.rpcCtx)).Inc()
+			return true
+		}
+		if val, e := util.EvalFailpoint("noRetryOnRpcError"); e == nil && val.(bool) {
+			return true
+		}
+		// need to handle send error
+		return false
+	}
+
+	if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil && val.(bool) {
+		// force retry
+		return false
+	}
+
+	s.vars.regionErr, s.vars.err = s.vars.resp.GetRegionError()
+	if s.vars.err != nil {
+		s.vars.rpcCtx, s.vars.resp = nil, nil
+		return true
+	} else if s.vars.regionErr != nil {
+		// need to handle region error
+		return false
+	}
+
+	if s.replicaSelector != nil {
+		s.replicaSelector.onSendSuccess(req)
+	}
+
+	return true
+}
+
+func (s *sendReqState) send(bo *retry.Backoffer, req *tikvrpc.Request, timeout time.Duration) (ctx context.Context) {
+	rpcCtx := s.vars.rpcCtx
+	ctx = bo.GetCtx()
+	if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
+		defer cancel()
+	}
+
+	// sendToAddr is the first target address that will receive the request. If proxy is used, sendToAddr will point to
+	// the proxy that will forward the request to the final target.
+	sendToAddr := rpcCtx.Addr
+	if rpcCtx.ProxyStore == nil {
+		req.ForwardedHost = ""
+	} else {
+		req.ForwardedHost = rpcCtx.Addr
+		sendToAddr = rpcCtx.ProxyAddr
+	}
+
+	// Count the replica number as the RU cost factor.
+	req.ReplicaNumber = 1
+	if rpcCtx.Meta != nil && len(rpcCtx.Meta.GetPeers()) > 0 {
+		req.ReplicaNumber = 0
+		for _, peer := range rpcCtx.Meta.GetPeers() {
+			role := peer.GetRole()
+			if role == metapb.PeerRole_Voter || role == metapb.PeerRole_Learner {
+				req.ReplicaNumber++
+			}
+		}
+	}
+
+	var sessionID uint64
+	if v := bo.GetCtx().Value(util.SessionID); v != nil {
+		sessionID = v.(uint64)
+	}
+
+	injectFailOnSend := false
+	if val, e := util.EvalFailpoint("rpcFailOnSend"); e == nil {
+		inject := true
+		// Optional filters
+		if s, ok := val.(string); ok {
+			if s == "greengc" && !req.IsGreenGCRequest() {
+				inject = false
+			} else if s == "write" && !req.IsTxnWriteRequest() {
+				inject = false
+			}
+		} else if sessionID == 0 {
+			inject = false
+		}
+
+		if inject {
+			logutil.Logger(ctx).Info(
+				"[failpoint] injected RPC error on send", zap.Stringer("type", req.Type),
+				zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("ctx", &req.Context),
+			)
+			injectFailOnSend = true
+			s.vars.err = errors.New("injected RPC error on send")
+		}
+	}
+
+	if !injectFailOnSend {
+		start := time.Now()
+		s.vars.resp, s.vars.err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
+		rpcDuration := time.Since(start)
+		if s.replicaSelector != nil {
+			recordAttemptedTime(s.replicaSelector, rpcDuration)
+		}
+		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
+		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
+			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
+		}
+		if s.Stats != nil {
+			s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
+			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
+				if val.(bool) {
+					if req.Type == tikvrpc.CmdCop && bo.GetTotalSleep() == 0 {
+						s.vars.resp, s.vars.err = &tikvrpc.Response{
+							Resp: &coprocessor.Response{RegionError: &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
+						}, nil
+						return
+					}
+				}
+			}
+		}
+
+		if val, e := util.EvalFailpoint("rpcFailOnRecv"); e == nil {
+			inject := true
+			// Optional filters
+			if s, ok := val.(string); ok {
+				if s == "greengc" && !req.IsGreenGCRequest() {
+					inject = false
+				} else if s == "write" && !req.IsTxnWriteRequest() {
+					inject = false
+				}
+			} else if sessionID == 0 {
+				inject = false
+			}
+
+			if inject {
+				logutil.Logger(ctx).Info(
+					"[failpoint] injected RPC error on recv", zap.Stringer("type", req.Type),
+					zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("ctx", &req.Context),
+					zap.Error(s.vars.err), zap.String("extra response info", fetchRespInfo(s.vars.resp)),
+				)
+				s.vars.resp, s.vars.err = nil, errors.New("injected RPC error on recv")
+			}
+		}
+
+		if val, e := util.EvalFailpoint("rpcContextCancelErr"); e == nil {
+			if val.(bool) {
+				ctx1, cancel := context.WithCancel(context.Background())
+				cancel()
+				<-ctx1.Done()
+				ctx = ctx1
+				s.vars.resp, s.vars.err = nil, ctx.Err()
+			}
+		}
+
+		if _, e := util.EvalFailpoint("onRPCFinishedHook"); e == nil {
+			if hook := bo.GetCtx().Value("onRPCFinishedHook"); hook != nil {
+				h := hook.(func(*tikvrpc.Request, *tikvrpc.Response, error) (*tikvrpc.Response, error))
+				s.vars.resp, s.vars.err = h(req, s.vars.resp, s.vars.err)
+			}
+		}
+	}
+
+	if rpcCtx.ProxyStore != nil {
+		fromStore := strconv.FormatUint(rpcCtx.ProxyStore.storeID, 10)
+		toStore := strconv.FormatUint(rpcCtx.Store.storeID, 10)
+		result := "ok"
+		if s.vars.err != nil {
+			result = "fail"
+		}
+		metrics.TiKVForwardRequestCounter.WithLabelValues(fromStore, toStore, req.Type.String(), result).Inc()
+	}
+
+	if err := s.vars.err; err != nil {
+		if isRPCError(err) {
+			s.rpcError = err
+		}
+		if s.Stats != nil {
+			errStr := getErrMsg(err)
+			s.Stats.RecordRPCErrorStats(errStr)
+			s.recordRPCAccessInfo(req, s.vars.rpcCtx, errStr)
+		}
+	}
+	return
+}
+
 // SendReqCtx sends a request to tikv server and return response and RPCCtx of this RPC.
 func (s *RegionRequestSender) SendReqCtx(
 	bo *retry.Backoffer,
@@ -767,170 +1096,50 @@ func (s *RegionRequestSender) SendReqCtx(
 		req.Context.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
 	}
 
-	s.reset()
-	startTime := time.Now()
-	startBackOff := bo.GetTotalSleep()
-	retryTimes = 0
+	state := &sendReqState{RegionRequestSender: s}
 	defer func() {
-		if retryTimes > 0 {
+		if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-	}()
-
-	if req.StaleRead {
-		defer func() {
-			if retryTimes == 0 {
+		if req.StaleRead {
+			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
 			} else {
 				metrics.StaleReadMissCounter.Add(1)
 			}
-		}()
+		}
+	}()
+
+	s.reset()
+	startTime := time.Now()
+	startBackOff := bo.GetTotalSleep()
+
+	for !state.next(bo, req, regionID, timeout, et, opts) {
+		if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 && retryTimes%100 == 0 {
+			logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
+		}
 	}
 
-	for {
-		if retryTimes > 0 {
-			if retryTimes%100 == 0 {
-				logutil.Logger(bo.GetCtx()).Warn(
-					"retry",
-					zap.Uint64("region", regionID.GetID()),
-					zap.Int("times", retryTimes),
-				)
-			}
-		}
-
-		rpcCtx, err = s.getRPCContext(bo, req, regionID, et, opts...)
-		if err != nil {
-			return nil, nil, retryTimes, err
-		}
-
-		if _, err := util.EvalFailpoint("invalidCacheAndRetry"); err == nil {
-			// cooperate with tikvclient/setGcResolveMaxBackoff
-			if c := bo.GetCtx().Value("injectedBackoff"); c != nil {
-				resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
-				return resp, nil, retryTimes, err
-			}
-		}
-		if rpcCtx == nil {
-			// TODO(youjiali1995): remove it when using the replica selector for all requests.
-			// If the region is not found in cache, it must be out
-			// of date and already be cleaned up. We can skip the
-			// RPC by returning RegionError directly.
-
-			// TODO: Change the returned error to something like "region missing in cache",
-			// and handle this error like EpochNotMatch, which means to re-split the request and retry.
-			if s.replicaSelector != nil {
-				if err := s.replicaSelector.backoffOnNoCandidate(bo); err != nil {
-					return nil, nil, retryTimes, err
-				}
-				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
-					s.logSendReqError(bo, "throwing pseudo region error due to no replica available", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
-				}
-			}
-			resp, err = tikvrpc.GenRegionErrorResp(req, &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}})
-			return resp, nil, retryTimes, err
-		}
-		// patch the access location if it is not set under region request sender. which includes the coprocessor,
-		// txn relative tikv request.
-		// note: MPP not use this path. need specified in the MPP layer.
-		patchAccessLocation := func() {
-			if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
-				req.AccessLocation = kv.AccessLocalZone
-			} else {
-				req.AccessLocation = kv.AccessCrossZone
-			}
-		}
-		if s.replicaSelector != nil &&
-			s.replicaSelector.target != nil &&
-			req.AccessLocation == kv.AccessUnknown &&
-			len(s.replicaSelector.option.labels) != 0 {
-			// patch the access location if it is not set under region request sender.
-			patchAccessLocation()
-		}
-		logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, regionID.id, rpcCtx.Addr)
-		s.storeAddr = rpcCtx.Addr
-
-		if _, err := util.EvalFailpoint("beforeSendReqToRegion"); err == nil {
-			if hook := bo.GetCtx().Value("sendReqToRegionHook"); hook != nil {
-				h := hook.(func(*tikvrpc.Request))
-				h(req)
-			}
-		}
-
-		req.Context.ClusterId = rpcCtx.ClusterID
-		if req.InputRequestSource != "" && s.replicaSelector != nil {
-			patchRequestSource(req, s.replicaSelector.replicaType())
-		}
-		// RPCClient.SendRequest will attach `req.Context` thus skip attaching here to reduce overhead.
-		if err := tikvrpc.SetContextNoAttach(req, rpcCtx.Meta, rpcCtx.Peer); err != nil {
-			return nil, nil, retryTimes, err
-		}
-		if s.replicaSelector != nil {
-			if err := s.replicaSelector.backoffOnRetry(rpcCtx.Store, bo); err != nil {
-				return nil, nil, retryTimes, err
-			}
-		}
-
-		var retry bool
-		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
-		req.IsRetryRequest = true
-		if err != nil {
-			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
-				msg := fmt.Sprintf("send request failed, err: %v", err.Error())
-				s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
-			}
-			return nil, nil, retryTimes, err
-		}
-
-		if _, err1 := util.EvalFailpoint("afterSendReqToRegion"); err1 == nil {
-			if hook := bo.GetCtx().Value("sendReqToRegionFinishHook"); hook != nil {
-				h := hook.(func(*tikvrpc.Request, *tikvrpc.Response, error))
-				h(req, resp, err)
-			}
-		}
-
-		// recheck whether the session/query is killed during the Next()
-		if err2 := bo.CheckKilled(); err2 != nil {
-			return nil, nil, retryTimes, err2
-		}
-		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
-			if val.(bool) {
-				retry = true
-			}
-		}
-		if retry {
-			retryTimes++
-			continue
-		}
-
-		var regionErr *errorpb.Error
-		regionErr, err = resp.GetRegionError()
-		if err != nil {
-			return nil, nil, retryTimes, err
-		}
-		if regionErr != nil {
-			retry, err = s.onRegionError(bo, rpcCtx, req, regionErr)
-			if err != nil {
-				if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
-					msg := fmt.Sprintf("send request on region error failed, err: %v", err.Error())
-					s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
-				}
-				return nil, nil, retryTimes, err
-			}
-			if retry {
-				retryTimes++
-				continue
-			}
-			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
-				s.logSendReqError(bo, "send request meet region error without retry", regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
-			}
-		} else {
-			if s.replicaSelector != nil {
-				s.replicaSelector.onSendSuccess(req)
-			}
-		}
-
-		return resp, rpcCtx, retryTimes, nil
+	if state.vars.err == nil {
+		resp, rpcCtx = state.vars.resp, state.vars.rpcCtx
+	} else {
+		err = state.vars.err
 	}
+	if state.vars.sendTimes > 1 {
+		retryTimes = state.vars.sendTimes - 1
+	}
+
+	if len(state.vars.msg) > 0 || err != nil {
+		if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
+			msg := state.vars.msg
+			if len(msg) == 0 {
+				msg = fmt.Sprintf("send request failed: %v", err)
+			}
+			s.logSendReqError(bo, msg, regionID, retryTimes, req, cost, bo.GetTotalSleep()-startBackOff, timeout)
+		}
+	}
+
+	return
 }
 
 func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, regionID RegionVerID, retryTimes int, req *tikvrpc.Request, cost time.Duration, currentBackoffMs int, timeout time.Duration) {
@@ -1040,182 +1249,6 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 		}
 	}
 	return extraInfo
-}
-
-func (s *RegionRequestSender) sendReqToRegion(
-	bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration,
-) (resp *tikvrpc.Response, retry bool, err error) {
-	// judge the store limit switch.
-	if limit := kv.StoreLimit.Load(); limit > 0 {
-		if err := s.getStoreToken(rpcCtx.Store, limit); err != nil {
-			return nil, false, err
-		}
-		defer s.releaseStoreToken(rpcCtx.Store)
-	}
-
-	ctx := bo.GetCtx()
-	if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
-		defer cancel()
-	}
-
-	// sendToAddr is the first target address that will receive the request. If proxy is used, sendToAddr will point to
-	// the proxy that will forward the request to the final target.
-	sendToAddr := rpcCtx.Addr
-	if rpcCtx.ProxyStore == nil {
-		req.ForwardedHost = ""
-	} else {
-		req.ForwardedHost = rpcCtx.Addr
-		sendToAddr = rpcCtx.ProxyAddr
-	}
-
-	// Count the replica number as the RU cost factor.
-	req.ReplicaNumber = 1
-	if rpcCtx.Meta != nil && len(rpcCtx.Meta.GetPeers()) > 0 {
-		req.ReplicaNumber = 0
-		for _, peer := range rpcCtx.Meta.GetPeers() {
-			role := peer.GetRole()
-			if role == metapb.PeerRole_Voter || role == metapb.PeerRole_Learner {
-				req.ReplicaNumber++
-			}
-		}
-	}
-
-	var sessionID uint64
-	if v := bo.GetCtx().Value(util.SessionID); v != nil {
-		sessionID = v.(uint64)
-	}
-
-	injectFailOnSend := false
-	if val, e := util.EvalFailpoint("rpcFailOnSend"); e == nil {
-		inject := true
-		// Optional filters
-		if s, ok := val.(string); ok {
-			if s == "greengc" && !req.IsGreenGCRequest() {
-				inject = false
-			} else if s == "write" && !req.IsTxnWriteRequest() {
-				inject = false
-			}
-		} else if sessionID == 0 {
-			inject = false
-		}
-
-		if inject {
-			logutil.Logger(ctx).Info(
-				"[failpoint] injected RPC error on send", zap.Stringer("type", req.Type),
-				zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("ctx", &req.Context),
-			)
-			injectFailOnSend = true
-			err = errors.New("injected RPC error on send")
-		}
-	}
-
-	if !injectFailOnSend {
-		start := time.Now()
-		resp, err = s.client.SendRequest(ctx, sendToAddr, req, timeout)
-		rpcDuration := time.Since(start)
-		if s.replicaSelector != nil {
-			recordAttemptedTime(s.replicaSelector, rpcDuration)
-		}
-		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
-		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
-			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
-		}
-		if s.Stats != nil {
-			s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
-			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
-				if val.(bool) {
-					if req.Type == tikvrpc.CmdCop && bo.GetTotalSleep() == 0 {
-						return &tikvrpc.Response{
-							Resp: &coprocessor.Response{RegionError: &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{}}},
-						}, false, nil
-					}
-				}
-			}
-		}
-
-		if val, e := util.EvalFailpoint("rpcFailOnRecv"); e == nil {
-			inject := true
-			// Optional filters
-			if s, ok := val.(string); ok {
-				if s == "greengc" && !req.IsGreenGCRequest() {
-					inject = false
-				} else if s == "write" && !req.IsTxnWriteRequest() {
-					inject = false
-				}
-			} else if sessionID == 0 {
-				inject = false
-			}
-
-			if inject {
-				logutil.Logger(ctx).Info(
-					"[failpoint] injected RPC error on recv", zap.Stringer("type", req.Type),
-					zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("ctx", &req.Context),
-					zap.Error(err), zap.String("extra response info", fetchRespInfo(resp)),
-				)
-				err = errors.New("injected RPC error on recv")
-				resp = nil
-			}
-		}
-
-		if val, e := util.EvalFailpoint("rpcContextCancelErr"); e == nil {
-			if val.(bool) {
-				ctx1, cancel := context.WithCancel(context.Background())
-				cancel()
-				<-ctx1.Done()
-				ctx = ctx1
-				err = ctx.Err()
-				resp = nil
-			}
-		}
-
-		if _, e := util.EvalFailpoint("onRPCFinishedHook"); e == nil {
-			if hook := bo.GetCtx().Value("onRPCFinishedHook"); hook != nil {
-				h := hook.(func(*tikvrpc.Request, *tikvrpc.Response, error) (*tikvrpc.Response, error))
-				resp, err = h(req, resp, err)
-			}
-		}
-	}
-
-	if rpcCtx.ProxyStore != nil {
-		fromStore := strconv.FormatUint(rpcCtx.ProxyStore.storeID, 10)
-		toStore := strconv.FormatUint(rpcCtx.Store.storeID, 10)
-		result := "ok"
-		if err != nil {
-			result = "fail"
-		}
-		metrics.TiKVForwardRequestCounter.WithLabelValues(fromStore, toStore, req.Type.String(), result).Inc()
-	}
-
-	if err != nil {
-		if isRPCError(err) {
-			s.rpcError = err
-		}
-		if s.Stats != nil {
-			errStr := getErrMsg(err)
-			s.Stats.RecordRPCErrorStats(errStr)
-			s.recordRPCAccessInfo(req, rpcCtx, errStr)
-		}
-		// Because in rpc logic, context.Cancel() will be transferred to rpcContext.Cancel error. For rpcContext cancel,
-		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
-		// we shouldn't retry the request, it will go to backoff and hang in retry logic.
-		if ctx.Err() != nil && errors.Cause(ctx.Err()) == context.Canceled {
-			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(rpcCtx)).Inc()
-			return nil, false, errors.WithStack(ctx.Err())
-		}
-
-		if val, e := util.EvalFailpoint("noRetryOnRpcError"); e == nil {
-			if val.(bool) {
-				return nil, false, err
-			}
-		}
-		if e := s.onSendFail(bo, rpcCtx, req, err); e != nil {
-			return nil, false, err
-		}
-		return nil, true, nil
-	}
-	return
 }
 
 func isRPCError(err error) bool {

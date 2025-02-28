@@ -193,15 +193,45 @@ type MemBuffer interface {
 	Delete([]byte) error
 	// DeleteWithFlags deletes the key k in the MemBuffer with flags.
 	DeleteWithFlags([]byte, ...kv.FlagsOp) error
+
 	// Iter implements the Retriever interface.
+	// Any write operation to the memdb invalidates this iterator immediately after its creation.
+	// Attempting to use such an invalidated iterator will result in a panic.
 	Iter([]byte, []byte) (Iterator, error)
 	// IterReverse implements the Retriever interface.
+	// Any write operation to the memdb invalidates this iterator immediately after its creation.
+	// Attempting to use such an invalidated iterator will result in a panic.
 	IterReverse([]byte, []byte) (Iterator, error)
 	// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
+	// Deprecated: use ForEachInSnapshotRange or BatchedSnapshotIter instead.
 	SnapshotIter([]byte, []byte) Iterator
 	// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
+	// Deprecated: use ForEachInSnapshotRange or BatchedSnapshotIter instead.
 	SnapshotIterReverse([]byte, []byte) Iterator
-	// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
+
+	// ForEachInSnapshotRange scans the key-value pairs in the state[0] snapshot if it exists,
+	// otherwise it uses the current checkpoint as snapshot.
+	//
+	// NOTE: returned kv-pairs are only valid during the iteration. If you want to use them after the iteration,
+	// you need to make a copy.
+	//
+	// The method is protected by a RWLock to prevent potential iterator invalidation, i.e.
+	// You cannot modify the MemBuffer during the iteration.
+	//
+	// Use it when you need to scan the whole range, otherwise consider using BatchedSnapshotIter.
+	ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error
+
+	// BatchedSnapshotIter returns an iterator of the "snapshot", namely stage[0].
+	// It iterates in batches and prevents iterator invalidation.
+	//
+	// Use it when you need on-demand "next", otherwise consider using ForEachInSnapshotRange.
+	// NOTE: you should never use it when there are no stages.
+	//
+	// The iterator becomes invalid when any operation that may modify the "snapshot",
+	// e.g. RevertToCheckpoint or releasing stage[0].
+	BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator
+
+	//SnapshotGetter returns a Getter for a snapshot of MemBuffer.
 	SnapshotGetter() Getter
 	// InspectStage iterates all buffered keys and values in MemBuffer.
 	InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte))
