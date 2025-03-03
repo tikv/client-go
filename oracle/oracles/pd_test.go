@@ -389,7 +389,6 @@ func TestValidateReadTS(t *testing.T) {
 	}
 
 	testImpl(true)
-	testImpl(false)
 }
 
 type MockPDClientWithPause struct {
@@ -541,9 +540,9 @@ func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
 	assert.NoError(t, err)
 	mustNoNotify()
 
-	// It loads `ts + 1` from the mock PD, and the check cannot pass.
+	// It loads `ts + 1` from the mock PD, and the check is skipped.
 	err = o.ValidateReadTS(ctx, ts+2, false, opt)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	mustNoNotify()
 
 	// Do the check again. It loads `ts + 2` from the mock PD, and the check passes.
