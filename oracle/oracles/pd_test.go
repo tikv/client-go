@@ -49,6 +49,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {
@@ -89,6 +90,10 @@ type MockPdClient struct {
 
 func (c *MockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
 	return 0, c.logicalTimestamp.Add(1), nil
+}
+
+func (c *MockPdClient) WithCallerComponent(component caller.Component) pd.Client {
+	return c
 }
 
 func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
@@ -418,6 +423,10 @@ func (c *MockPDClientWithPause) Pause() {
 
 func (c *MockPDClientWithPause) Resume() {
 	c.mu.Unlock()
+}
+
+func (c *MockPDClientWithPause) WithCallerComponent(component caller.Component) pd.Client {
+	return c
 }
 
 func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {

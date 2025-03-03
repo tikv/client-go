@@ -69,6 +69,7 @@ const (
 	rawBatchPutSize = 16 * 1024
 	// rawBatchPairCount is the maximum limit for rawkv each batch get/delete request.
 	rawBatchPairCount = 512
+	componentName     = caller.Component("rawkv-client-go")
 )
 
 type rawOptions struct {
@@ -204,7 +205,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 	}
 
 	// Use an unwrapped PDClient to obtain keyspace meta.
-	pdCli, err := pd.NewClientWithContext(ctx, caller.Component("rawkv-client-go"), pdAddrs, pd.SecurityOption{
+	pdCli, err := pd.NewClientWithContext(ctx, componentName, pdAddrs, pd.SecurityOption{
 		CAPath:   opt.security.ClusterSSLCA,
 		CertPath: opt.security.ClusterSSLCert,
 		KeyPath:  opt.security.ClusterSSLKey,
@@ -240,7 +241,7 @@ func NewClientWithOpts(ctx context.Context, pdAddrs []string, opts ...ClientOpt)
 		apiVersion:  opt.apiVersion,
 		clusterID:   pdCli.GetClusterID(ctx),
 		regionCache: locate.NewRegionCache(pdCli),
-		pdClient:    pdCli,
+		pdClient:    pdCli.WithCallerComponent(componentName),
 		rpcClient:   rpcCli,
 	}, nil
 }

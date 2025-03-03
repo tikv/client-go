@@ -71,7 +71,7 @@ type storeCache interface {
 }
 
 func newStoreCache(pdClient pd.Client) *storeCacheImpl {
-	c := &storeCacheImpl{pdClient: pdClient}
+	c := &storeCacheImpl{pdClient: pdClient.WithCallerComponent("store-cache")}
 	c.notifyCheckCh = make(chan struct{}, 1)
 	c.storeMu.stores = make(map[uint64]*Store)
 	c.tiflashComputeStoreMu.needReload = true
