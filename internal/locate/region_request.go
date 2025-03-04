@@ -873,15 +873,14 @@ func (s *sendReqState) next(
 		defer s.releaseStoreToken(s.vars.rpcCtx.Store)
 	}
 
-	sendCtx := s.send(bo, req, timeout)
+	canceled := s.send(bo, req, timeout)
 	s.vars.sendTimes++
 
 	if s.vars.err != nil {
 		// Because in rpc logic, context.Cancel() will be transferred to rpcContext.Cancel error. For rpcContext cancel,
 		// we need to retry the request. But for context cancel active, for example, limitExec gets the required rows,
 		// we shouldn't retry the request, it will go to backoff and hang in retry logic.
-		if sendCtx.Err() != nil && errors.Cause(sendCtx.Err()) == context.Canceled {
-			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(s.vars.rpcCtx)).Inc()
+		if canceled {
 			return true
 		}
 		if val, e := util.EvalFailpoint("noRetryOnRpcError"); e == nil && val.(bool) {
@@ -912,9 +911,9 @@ func (s *sendReqState) next(
 	return true
 }
 
-func (s *sendReqState) send(bo *retry.Backoffer, req *tikvrpc.Request, timeout time.Duration) (ctx context.Context) {
+func (s *sendReqState) send(bo *retry.Backoffer, req *tikvrpc.Request, timeout time.Duration) (canceled bool) {
 	rpcCtx := s.vars.rpcCtx
-	ctx = bo.GetCtx()
+	ctx := bo.GetCtx()
 	if rawHook := ctx.Value(RPCCancellerCtxKey{}); rawHook != nil {
 		var cancel context.CancelFunc
 		ctx, cancel = rawHook.(*RPCCanceller).WithCancel(ctx)
@@ -1056,6 +1055,9 @@ func (s *sendReqState) send(bo *retry.Backoffer, req *tikvrpc.Request, timeout t
 			errStr := getErrMsg(err)
 			s.Stats.RecordRPCErrorStats(errStr)
 			s.recordRPCAccessInfo(req, s.vars.rpcCtx, errStr)
+		}
+		if canceled = ctx.Err() != nil && errors.Cause(ctx.Err()) == context.Canceled; canceled {
+			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(s.vars.rpcCtx)).Inc()
 		}
 	}
 	return
