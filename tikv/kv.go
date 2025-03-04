@@ -285,7 +285,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		clusterID:       pdClient.GetClusterID(context.TODO()),
 		uuid:            uuid,
 		oracle:          o,
-		pdClient:        pdClient,
+		pdClient:        pdClient.WithCallerComponent("kv-store"),
 		regionCache:     regionCache,
 		kv:              spkv,
 		safePoint:       0,
@@ -916,7 +916,7 @@ func NewLockResolver(etcdAddrs []string, security config.Security, opts ...opt.C
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	pdCli = util.InterceptedPDClient{Client: pdCli}
+	pdCli = util.NewInterceptedPDClient(pdCli)
 	uuid := fmt.Sprintf("tikv-%v", pdCli.GetClusterID(context.TODO()))
 
 	tlsConfig, err := security.ToTLSConfig()

@@ -687,7 +687,7 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	}
 
 	c := &RegionCache{
-		pdClient:                      pdClient,
+		pdClient:                      pdClient.WithCallerComponent("region-cache"),
 		requestHealthFeedbackCallback: options.requestHealthFeedbackCallback,
 	}
 
