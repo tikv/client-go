@@ -662,7 +662,22 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 	}
 }
 
+// ValidateReadTSForTidbSnapshot is a flag in context, indicating whether the read ts is for tidb_snapshot.
+// This is a special approach for release branches to minimize code changes to reduce risks.
+type ValidateReadTSForTidbSnapshot struct{}
+
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
+	// For a mistake we've seen
+	if readTS >= math.MaxInt64 && readTS < math.MaxUint64 {
+		return errors.Errorf("MaxInt64 <= readTS < MaxUint64, readTS=%v", readTS)
+	}
+
+	// only check stale reads and reads using `tidb_snapshot`
+	forTidbSnapshot := ctx.Value(ValidateReadTSForTidbSnapshot{}) != nil
+	if !forTidbSnapshot && !isStaleRead {
+		return nil
+	}
+
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
 			return oracle.ErrLatestStaleRead{}

@@ -403,7 +403,6 @@ func TestValidateReadTS(t *testing.T) {
 	}
 
 	testImpl(true)
-	testImpl(false)
 }
 
 type MockPDClientWithPause struct {
