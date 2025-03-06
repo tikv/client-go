@@ -281,9 +281,7 @@ func (o *pdOracle) setLastTS(ts uint64) {
 		tso:     ts,
 		arrival: time.Now(),
 	}
-	if o.lastTS.Load() == nil {
-		o.lastTS.Store(current)
-	}
+	o.lastTS.CompareAndSwap(nil, current)
 	for {
 		last := o.lastTS.Load()
 		if current.tso <= last.tso {
