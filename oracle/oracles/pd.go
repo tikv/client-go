@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/tso"
 	"go.uber.org/zap"
@@ -179,7 +180,7 @@ func NewPdOracle(pdClient pd.Client, options *PDOracleOptions) (oracle.Oracle, e
 	}
 
 	o := &pdOracle{
-		c:                    pdClient,
+		c:                    pdClient.WithCallerComponent("oracle"),
 		quit:                 make(chan struct{}),
 		lastTSUpdateInterval: atomic.Int64{},
 	}
@@ -647,6 +648,7 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 		// waiting for reusing the same result should not be canceled. So pass context.Background() instead of the
 		// current ctx.
 		res, err := o.GetTimestamp(context.Background(), opt)
+		_, _ = util.EvalFailpoint("getCurrentTSForValidationBeforeReturn")
 		return res, err
 	})
 	select {
@@ -660,7 +662,7 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 	}
 }
 
-func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) (errRet error) {
+func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
 			return oracle.ErrLatestStaleRead{}
@@ -668,34 +670,67 @@ func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRea
 		return nil
 	}
 
-	latestTSInfo, exists := o.getLastTSWithArrivalTS(opt.TxnScope)
-	// If we fail to get latestTSInfo or the readTS exceeds it, get a timestamp from PD to double-check.
-	// But we don't need to strictly fetch the latest TS. So if there are already concurrent calls to this function
-	// loading the latest TS, we can just reuse the same result to avoid too many concurrent GetTS calls.
-	if !exists || readTS > latestTSInfo.tso {
-		currentTS, err := o.getCurrentTSForValidation(ctx, opt)
-		if err != nil {
-			return errors.Errorf("fail to validate read timestamp: %v", err)
-		}
-		if isStaleRead {
-			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
-		}
-		if readTS > currentTS {
-			return oracle.ErrFutureTSRead{
-				ReadTS:    readTS,
-				CurrentTS: currentTS,
+	retrying := false
+	for {
+		latestTSInfo, exists := o.getLastTSWithArrivalTS(opt.TxnScope)
+		// If we fail to get latestTSInfo or the readTS exceeds it, get a timestamp from PD to double-check.
+		// But we don't need to strictly fetch the latest TS. So if there are already concurrent calls to this function
+		// loading the latest TS, we can just reuse the same result to avoid too many concurrent GetTS calls.
+		if !exists || readTS > latestTSInfo.tso {
+			currentTS, err := o.getCurrentTSForValidation(ctx, opt)
+			if err != nil {
+				return errors.Errorf("fail to validate read timestamp: %v", err)
+			}
+			if isStaleRead && !retrying {
+				// Trigger the adjustment at most once in a single invocation.
+				o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, currentTS, time.Now())
+			}
+			if readTS > currentTS {
+				// It's possible that the caller is checking a ts that's legal but not fetched from the current oracle
+				// object. In this case, it's possible that:
+				//   * The ts is not be cached by the low resolution ts (so that readTS > latestTSInfo.TSO);
+				//   * ... and then the getCurrentTSForValidation (which uses a singleflight internally) reuse a
+				//     previously-started call and returns an older ts
+				// so that it may cause the check false-positive.
+				// To handle this case, we do not fail immediately when the check doesn't at once; instead, retry one
+				// more time. In the retry:
+				//   * Considering that there can already be some other concurrent GetTimestamp operation that may have updated
+				//     the low resolution ts, so check it again. If it passes, then no need to get the next ts from PD,
+				//     which is slow.
+				//   * Then, call getCurrentTSForValidation and check again. As the current GetTimestamp operation
+				//     inside getCurrentTSForValidation must be started after finishing the previous one (while the
+				//     latter is finished after starting this invocation to ValidateReadTS), then we can conclude that
+				//     the next ts returned by getCurrentTSForValidation must be greater than any ts allocated by PD
+				//     before the current invocation to ValidateReadTS.
+				skipRetry := false
+				if val, err1 := util.EvalFailpoint("validateReadTSRetryGetTS"); err1 == nil {
+					if str, ok := val.(string); ok {
+						if str == "skip" {
+							skipRetry = true
+						}
+					}
+				}
+				if !retrying && !skipRetry {
+					retrying = true
+					continue
+				}
+				return oracle.ErrFutureTSRead{
+					ReadTS:    readTS,
+					CurrentTS: currentTS,
+				}
+			}
+		} else if !retrying && isStaleRead {
+			// Trigger the adjustment at most once in a single invocation.
+			estimatedCurrentTS, err := o.getStaleTimestampWithLastTS(latestTSInfo, 0)
+			if err != nil {
+				logutil.Logger(ctx).Warn("failed to estimate current ts by getSlateTimestamp for auto-adjusting update low resolution ts interval",
+					zap.Error(err), zap.Uint64("readTS", readTS), zap.String("txnScope", opt.TxnScope))
+			} else {
+				o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, estimatedCurrentTS, time.Now())
 			}
 		}
-	} else if isStaleRead {
-		estimatedCurrentTS, err := o.getStaleTimestampWithLastTS(latestTSInfo, 0)
-		if err != nil {
-			logutil.Logger(ctx).Warn("failed to estimate current ts by getSlateTimestamp for auto-adjusting update low resolution ts interval",
-				zap.Error(err), zap.Uint64("readTS", readTS), zap.String("txnScope", opt.TxnScope))
-		} else {
-			o.adjustUpdateLowResolutionTSIntervalWithRequestedStaleness(readTS, estimatedCurrentTS, time.Now())
-		}
+		return nil
 	}
-	return nil
 }
 
 // adjustUpdateLowResolutionTSIntervalWithRequestedStaleness triggers adjustments the update interval of low resolution
