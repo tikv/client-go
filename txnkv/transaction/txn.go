@@ -209,6 +209,9 @@ type KVTxn struct {
 	writeThrottleRatio              float64
 	// flushBatchDurationEWMA is read before each flush, and written after each flush => no race
 	flushBatchDurationEWMA ewma.MovingAverage
+	pipelinedProgressCallback PipelinedProgressCallbackType
+	// progressRecordInitiated is only updated in the flush process, which is single-threaded. No need to use atomic.
+	progressRecordInitiated bool
 
 	prewriteEncounterLockPolicy PrewriteEncounterLockPolicy
 }
@@ -573,6 +576,12 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")
 		}
+
+		if !txn.progressRecordInitiated && txn.pipelinedProgressCallback != nil {
+			txn.pipelinedProgressCallback(txn.startTS, PipelinedDMLExecuting, 0, false)
+			txn.progressRecordInitiated = true
+		}
+
 		startTime := time.Now()
 		defer func() {
 			if err != nil {
@@ -958,8 +967,16 @@ func (txn *KVTxn) Rollback() error {
 			},
 		)
 		if needCleanUpLocks {
+			// Notify resolving locks status
+			if txn.pipelinedProgressCallback != nil {
+				txn.pipelinedProgressCallback(txn.startTS, PipelinedDMLRollingBack, 0, false)
+			}
 			rollbackBo := retry.NewBackofferWithVars(txn.store.Ctx(), CommitSecondaryMaxBackoff, txn.vars)
 			txn.committer.resolveFlushedLocks(rollbackBo, pipelinedStart, pipelinedEnd, false)
+		}
+		// Notify completion status
+		if txn.pipelinedProgressCallback != nil {
+			txn.pipelinedProgressCallback(txn.startTS, PipelinedDMLRollingBack, 0, true)
 		}
 	}
 	txn.close()
@@ -1922,4 +1939,28 @@ func (txn *KVTxn) MemHookSet() bool {
 type LifecycleHooks struct {
 	Pre  func()
 	Post func()
+}
+
+// PipelinedDMLStatus is the status of a pipelined DML
+type PipelinedDMLStatus int
+
+const (
+	// PipelinedDMLExecuting means the transaction is executing
+	PipelinedDMLExecuting PipelinedDMLStatus = iota	
+	// PipelinedDMLRollingBack means the transaction is rolling back
+	PipelinedDMLRollingBack
+	// PipelinedDMLResolvingLocks means the transaction is resolving locks
+	PipelinedDMLResolvingLocks
+)
+
+// String returns the string representation of the pipelined DML status
+func (s PipelinedDMLStatus) String() string {
+	return []string{"Executing", "RollingBack", "ResolvingLocks"}[s]
+}
+
+type PipelinedProgressCallbackType func(startTS uint64, status PipelinedDMLStatus, completedRegions int64, done bool)
+
+// SetPipelinedProgressCallback sets the callback function for pipelined DML resolve lock progress
+func (txn *KVTxn) SetPipelinedProgressCallback(callback PipelinedProgressCallbackType) {
+    txn.pipelinedProgressCallback = callback
 }

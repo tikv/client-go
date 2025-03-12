@@ -367,6 +367,9 @@ func (c *twoPhaseCommitter) commitFlushedMutations(bo *retry.Backoffer) error {
 	return nil
 }
 
+// Minimum interval between callbacks
+const minProgressUpdateInterval = 5 * time.Second
+
 // buildPipelinedResolveHandler returns a function which resolves all locks for the given region.
 // If the region cache is stale, it reloads the region info and resolve the rest ranges.
 // The function also count resolved regions.
@@ -395,6 +398,10 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 			ResourceGroupName: c.resourceGroupName,
 		},
 	}
+	// Use time-based callback control
+	lastCallback := atomic.Value{}
+	lastCallback.Store(time.Now().Add(-minProgressUpdateInterval))
+	
 	return func(ctx context.Context, r kv.KeyRange) (rangetask.TaskStat, error) {
 		start := r.StartKey
 		res := rangetask.TaskStat{}
@@ -443,7 +450,29 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 			}
 			resolved.Add(1)
 			res.CompletedRegions++
-			if loc.EndKey == nil || bytes.Compare(loc.EndKey, r.EndKey) >= 0 {
+			
+			// Update progress periodically
+			if c.txn.pipelinedProgressCallback != nil {
+				now := time.Now()
+				last := lastCallback.Load().(time.Time)
+				timeSinceLastCallback := now.Sub(last)
+				if timeSinceLastCallback < 0 {
+					timeSinceLastCallback = minProgressUpdateInterval
+				}
+				if timeSinceLastCallback >= minProgressUpdateInterval && 
+				   lastCallback.CompareAndSwap(last, now) {
+					resolvedCount := int64(resolved.Load())
+					c.txn.pipelinedProgressCallback(
+						c.startTS,
+						PipelinedDMLResolvingLocks,
+						resolvedCount,
+						false,
+					)
+				}
+			}
+			
+			done := loc.EndKey == nil || bytes.Compare(loc.EndKey, r.EndKey) >= 0
+			if done {
 				return res, nil
 			}
 			start = loc.EndKey
@@ -505,6 +534,17 @@ func (c *twoPhaseCommitter) resolveFlushedLocks(bo *retry.Backoffer, start, end 
 				zap.Uint64("session", c.sessionID),
 			)
 
+			// Send the final callback after all ranges are processed
+			if c.txn.pipelinedProgressCallback != nil {
+				resolvedCount := int64(resolved.Load())
+				c.txn.pipelinedProgressCallback(
+					c.startTS,
+					PipelinedDMLResolvingLocks,
+					resolvedCount,
+					true,
+				)
+			}
+			
 			// wait a while before notifying txn_status_cache to evict the txn,
 			// which tolerates slow followers and avoids the situation that the
 			// txn is evicted before the follower catches up.
