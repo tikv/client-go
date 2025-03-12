@@ -201,7 +201,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "cop_duration_seconds",
 			Help:        "Run duration of a single coprocessor task, includes backoff time.",
-			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 24), // 0.5ms ~ 1.2h
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
 			ConstLabels: constLabels,
 		}, []string{LblStore, LblStaleRead, LblScope})
 
