@@ -105,7 +105,7 @@ func (s *testScanSuite) TestScan() {
 		for i := 0; i < rowNum; i++ {
 			k := scan.Key()
 			expectedKey := s.makeKey(i)
-			s.Equal(k, expectedKey, "i=%v,rowNum=%v,key=%v,val=%v,expected=%v,keyOnly=%v", i, rowNum, kv.StrKey(k), kv.StrKey(scan.Value()), kv.StrKey(expectedKey), keyOnly)
+			s.Equal(k, expectedKey, "i=%v,rowNum=%v,key=%v,val=%v,expected=%v,keyOnly=%v", i, rowNum, redact.Key(k), redact.Key(scan.Value()), redact.Key(expectedKey), keyOnly)
 			if !keyOnly {
 				v := scan.Value()
 				s.Equal(v, s.makeValue(i))

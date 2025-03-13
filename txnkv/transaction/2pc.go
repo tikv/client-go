@@ -65,6 +65,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	atomicutil "go.uber.org/atomic"
 	zap "go.uber.org/zap"
 )
@@ -697,7 +698,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	if c.mutations.Len() > logEntryCount || size > logSize {
 		logutil.BgLogger().Info("[BIG_TXN]",
 			zap.Uint64("session", c.sessionID),
-			zap.String("key sample", kv.StrKey(c.mutations.GetKey(0))),
+			zap.String("key sample", redact.Key(c.mutations.GetKey(0))),
 			zap.Int("size", size),
 			zap.Int("keys", c.mutations.Len()),
 			zap.Int("puts", putCnt),

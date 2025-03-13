@@ -66,6 +66,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
@@ -1126,7 +1127,7 @@ func (l *KeyLocation) Contains(key []byte) bool {
 
 // String implements fmt.Stringer interface.
 func (l *KeyLocation) String() string {
-	return fmt.Sprintf("region %s,startKey:%s,endKey:%s", l.Region.String(), kv.StrKey(l.StartKey), kv.StrKey(l.EndKey))
+	return fmt.Sprintf("region %s,startKey:%s,endKey:%s", l.Region.String(), redact.Key(l.StartKey), redact.Key(l.EndKey))
 }
 
 // GetBucketVersion gets the bucket version of the region.
