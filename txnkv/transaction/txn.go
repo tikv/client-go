@@ -208,7 +208,7 @@ type KVTxn struct {
 	pipelinedResolveLockConcurrency int
 	writeThrottleRatio              float64
 	// flushBatchDurationEWMA is read before each flush, and written after each flush => no race
-	flushBatchDurationEWMA ewma.MovingAverage
+	flushBatchDurationEWMA    ewma.MovingAverage
 	pipelinedProgressCallback PipelinedProgressCallbackType
 	// progressRecordInitiated is only updated in the flush process, which is single-threaded. No need to use atomic.
 	progressRecordInitiated bool
@@ -1946,7 +1946,7 @@ type PipelinedDMLStatus int
 
 const (
 	// PipelinedDMLExecuting means the transaction is executing
-	PipelinedDMLExecuting PipelinedDMLStatus = iota	
+	PipelinedDMLExecuting PipelinedDMLStatus = iota
 	// PipelinedDMLRollingBack means the transaction is rolling back
 	PipelinedDMLRollingBack
 	// PipelinedDMLResolvingLocks means the transaction is resolving locks
@@ -1962,5 +1962,5 @@ type PipelinedProgressCallbackType func(startTS uint64, status PipelinedDMLStatu
 
 // SetPipelinedProgressCallback sets the callback function for pipelined DML resolve lock progress
 func (txn *KVTxn) SetPipelinedProgressCallback(callback PipelinedProgressCallbackType) {
-    txn.pipelinedProgressCallback = callback
+	txn.pipelinedProgressCallback = callback
 }
