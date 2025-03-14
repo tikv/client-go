@@ -1806,6 +1806,7 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return errors.Errorf("unexpected empty pipelinedStart(%s) or pipelinedEnd(%s)",
 				c.pipelinedCommitInfo.pipelinedStart, c.pipelinedCommitInfo.pipelinedEnd)
 		}
+		util.EvalFailpoint("beforePipelinedCommit")
 		return c.commitFlushedMutations(bo)
 	}
 
