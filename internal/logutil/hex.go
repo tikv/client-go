@@ -36,13 +36,13 @@ package logutil
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
 
 	"github.com/golang/protobuf/proto" //nolint:staticcheck
+	"github.com/tikv/client-go/v2/util/redact"
 )
 
 // Hex defines a fmt.Stringer for proto.Message.
@@ -68,7 +68,7 @@ func prettyPrint(w io.Writer, val reflect.Value) {
 	case reflect.Slice:
 		elemType := tp.Elem()
 		if elemType.Kind() == reflect.Uint8 {
-			fmt.Fprintf(w, "%s", hex.EncodeToString(val.Bytes()))
+			fmt.Fprintf(w, "%s", redact.Key(val.Bytes()))
 		} else {
 			fmt.Fprintf(w, "%s", val.Interface())
 		}

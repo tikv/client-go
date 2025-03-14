@@ -35,7 +35,6 @@
 package error
 
 import (
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -45,6 +44,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -289,13 +289,13 @@ func (e *ErrAssertionFailed) Error() string {
 func (e *ErrLockOnlyIfExistsNoReturnValue) Error() string {
 	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but ReturnValues is not set, "+
 		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%v}.",
-		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
+		e.StartTS, e.ForUpdateTs, redact.Key(e.LockKey))
 }
 
 func (e *ErrLockOnlyIfExistsNoPrimaryKey) Error() string {
 	return fmt.Sprintf("LockOnlyIfExists is set for Lock Context, but primary key of current transaction is not set, "+
 		"StartTs is {%d}, ForUpdateTs is {%d}, one of lock keys is {%s}",
-		e.StartTS, e.ForUpdateTs, hex.EncodeToString(e.LockKey))
+		e.StartTS, e.ForUpdateTs, redact.Key(e.LockKey))
 }
 
 // ExtractKeyErr extracts a KeyError.

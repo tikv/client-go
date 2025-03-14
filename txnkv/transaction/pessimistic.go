@@ -35,7 +35,6 @@
 package transaction
 
 import (
-	"encoding/hex"
 	"math/rand"
 	"strings"
 	"sync/atomic"
@@ -55,6 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -172,7 +172,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			ttl = 1
 			keys := make([]string, 0, len(mutations))
 			for _, m := range mutations {
-				keys = append(keys, hex.EncodeToString(m.Key))
+				keys = append(keys, redact.Key(m.Key))
 			}
 			logutil.BgLogger().Debug(
 				"[failpoint] injected lock ttl = 1 on pessimistic lock",

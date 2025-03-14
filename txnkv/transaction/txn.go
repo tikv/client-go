@@ -37,7 +37,6 @@ package transaction
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -68,6 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"github.com/tikv/client-go/v2/txnkv/txnutil"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	atomicutil "go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -1635,7 +1635,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 				// If LockedWithConflictTS is not zero, it must indicate that there's a version of the key whose
 				// commitTS is greater than lockCtx.ForUpdateTS. Therefore, this branch should never be executed.
 				err = errors.Errorf("pessimistic lock request to key %v returns LockedWithConflictTS(%v) not greater than requested ForUpdateTS(%v)",
-					hex.EncodeToString(key), val.LockedWithConflictTS, lockCtx.ForUpdateTS)
+					redact.Key(key), val.LockedWithConflictTS, lockCtx.ForUpdateTS)
 			}
 			txn.aggressiveLockingContext.currentLockedKeys[keyStr] = tempLockBufferEntry{
 				HasReturnValue:        lockCtx.ReturnValues,

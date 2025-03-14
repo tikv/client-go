@@ -46,6 +46,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -159,15 +160,15 @@ func (s *Runner) RunOnRange(ctx context.Context, startKey, endKey []byte) error 
 	if len(endKey) != 0 && bytes.Compare(startKey, endKey) >= 0 {
 		logutil.Logger(ctx).Info("empty range task executed. ignored",
 			zap.String("name", s.identifier),
-			zap.String("startKey", kv.StrKey(startKey)),
-			zap.String("endKey", kv.StrKey(endKey)))
+			zap.String("startKey", redact.Key(startKey)),
+			zap.String("endKey", redact.Key(endKey)))
 		return nil
 	}
 
 	logutil.Logger(ctx).Info("range task started",
 		zap.String("name", s.identifier),
-		zap.String("startKey", kv.StrKey(startKey)),
-		zap.String("endKey", kv.StrKey(endKey)),
+		zap.String("startKey", redact.Key(startKey)),
+		zap.String("endKey", redact.Key(endKey)),
 		zap.Int("concurrency", s.concurrency))
 
 	// Periodically log the progress
@@ -208,8 +209,8 @@ Loop:
 		case <-statLogTicker.C:
 			logutil.Logger(ctx).Info("range task in progress",
 				zap.String("name", s.identifier),
-				zap.String("startKey", kv.StrKey(startKey)),
-				zap.String("endKey", kv.StrKey(endKey)),
+				zap.String("startKey", redact.Key(startKey)),
+				zap.String("endKey", redact.Key(endKey)),
 				zap.Int("concurrency", s.concurrency),
 				zap.Duration("cost time", time.Since(startTime)),
 				zap.Int("completed regions", s.CompletedRegions()))
@@ -222,9 +223,9 @@ Loop:
 		if err != nil {
 			logutil.Logger(ctx).Info("range task try to get range end key failure",
 				zap.String("name", s.identifier),
-				zap.String("startKey", kv.StrKey(startKey)),
-				zap.String("endKey", kv.StrKey(endKey)),
-				zap.String("loadRegionKey", kv.StrKey(key)),
+				zap.String("startKey", redact.Key(startKey)),
+				zap.String("endKey", redact.Key(endKey)),
+				zap.String("loadRegionKey", redact.Key(key)),
 				zap.Duration("cost time", time.Since(startTime)),
 				zap.Error(err))
 			return err
@@ -263,8 +264,8 @@ Loop:
 		if w.err != nil {
 			logutil.Logger(ctx).Info("range task failed",
 				zap.String("name", s.identifier),
-				zap.String("startKey", kv.StrKey(startKey)),
-				zap.String("endKey", kv.StrKey(endKey)),
+				zap.String("startKey", redact.Key(startKey)),
+				zap.String("endKey", redact.Key(endKey)),
 				zap.Duration("cost time", time.Since(startTime)),
 				zap.Int("completed regions", s.CompletedRegions()),
 				zap.Int("failed regions", s.FailedRegions()),
@@ -275,8 +276,8 @@ Loop:
 
 	logutil.Logger(ctx).Info("range task finished",
 		zap.String("name", s.identifier),
-		zap.String("startKey", kv.StrKey(startKey)),
-		zap.String("endKey", kv.StrKey(endKey)),
+		zap.String("startKey", redact.Key(startKey)),
+		zap.String("endKey", redact.Key(endKey)),
 		zap.Duration("cost time", time.Since(startTime)),
 		zap.Int("completed regions", s.CompletedRegions()))
 
@@ -346,8 +347,8 @@ func (w *rangeTaskWorker) run(ctx context.Context, cancel context.CancelFunc) {
 		if err != nil {
 			logutil.Logger(ctx).Info("canceling range task because of error",
 				zap.String("name", w.identifier),
-				zap.String("startKey", kv.StrKey(r.StartKey)),
-				zap.String("endKey", kv.StrKey(r.EndKey)),
+				zap.String("startKey", redact.Key(r.StartKey)),
+				zap.String("endKey", redact.Key(r.EndKey)),
 				zap.Error(err))
 			w.err = err
 			cancel()
