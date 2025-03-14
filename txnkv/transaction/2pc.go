@@ -37,7 +37,6 @@ package transaction
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	errors2 "errors"
 	"math"
 	"math/rand"
@@ -1513,7 +1512,7 @@ func sendTxnHeartBeat(
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.TxnHeartBeatResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
-			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, hex.EncodeToString(primary), tikverr.ExtractKeyErr(keyErr))
+			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, redact.Key(primary), tikverr.ExtractKeyErr(keyErr))
 		}
 		return cmdResp.GetLockTtl(), false, nil
 	}

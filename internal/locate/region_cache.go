@@ -37,7 +37,6 @@ package locate
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -1182,7 +1181,7 @@ func (l *KeyLocation) LocateBucket(key []byte) *Bucket {
 	}
 	// unreachable
 	logutil.Logger(context.Background()).Info(
-		"Unreachable place", zap.String("KeyLocation", l.String()), zap.String("Key", hex.EncodeToString(key)))
+		"Unreachable place", zap.String("KeyLocation", l.String()), zap.String("Key", redact.Key(key)))
 	panic("Unreachable")
 }
 
@@ -1548,8 +1547,8 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 		if err != nil {
 			// ignore error and use old region info.
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
-				zap.String("key", util.HexRegionKeyStr(key)), zap.Error(err),
-				zap.String("encode-key", util.HexRegionKeyStr(c.codec.EncodeRegionKey(key))))
+				zap.String("key", redact.Key(key)), zap.Error(err),
+				zap.String("encode-key", redact.Key(c.codec.EncodeRegionKey(key))))
 		} else {
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			reloadOnAccess := flags&needReloadOnAccess > 0
@@ -1802,8 +1801,8 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	}
 	if len(regions) == 0 {
 		err = errors.Errorf("PD returned no region, start_key: %q, end_key: %q, encode_start_key: %q, encode_end_key: %q",
-			util.HexRegionKeyStr(startKey), util.HexRegionKeyStr(endKey),
-			util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)))
+			redact.Key(startKey), redact.Key(endKey),
+			redact.Key(c.codec.EncodeRegionKey(startKey)), redact.Key(c.codec.EncodeRegionKey(endKey)))
 		return
 	}
 
@@ -2104,13 +2103,13 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool,
 		if err != nil {
 			if apicodec.IsDecodeError(err) {
 				return nil, errors.Errorf("failed to decode region range key, key: %q, err: %v, encode_key: %q",
-					util.HexRegionKeyStr(key), err, util.HexRegionKey(c.codec.EncodeRegionKey(key)))
+					redact.Key(key), err, redact.KeyBytes(c.codec.EncodeRegionKey(key)))
 			}
-			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", util.HexRegionKeyStr(key), err)
+			backoffErr = errors.Errorf("loadRegion from PD failed, key: %q, err: %v", redact.Key(key), err)
 			continue
 		}
 		if reg == nil || reg.Meta == nil {
-			backoffErr = errors.Errorf("region not found for key %q, encode_key: %q", util.HexRegionKeyStr(key), util.HexRegionKey(c.codec.EncodeRegionKey(key)))
+			backoffErr = errors.Errorf("region not found for key %q, encode_key: %q", redact.Key(key), redact.KeyBytes(c.codec.EncodeRegionKey(key)))
 			continue
 		}
 		if len(reg.Meta.Peers) == 0 {
