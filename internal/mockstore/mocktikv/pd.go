@@ -318,8 +318,8 @@ func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byt
 	return nil, nil
 }
 
-func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
-	return nil, nil
+func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, *pdpb.Member, *pdpb.Member, error) {
+	return nil, nil, nil, nil
 }
 
 func (c *pdClient) GetLeaderURL() string { return "mockpd" }
