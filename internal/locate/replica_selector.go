@@ -182,17 +182,21 @@ func (s *replicaSelector) nextForReplicaReadMixed(req *tikvrpc.Request) {
 	}
 	s.target = strategy.next(s)
 	if s.target != nil {
-		if s.isStaleRead && s.attempts == 1 {
-			// stale-read request first access.
-			if !s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID() {
-				// If the target replica's labels is not match and not leader, use replica read.
-				// This is for compatible with old version.
-				req.StaleRead = false
-				req.ReplicaRead = true
-			} else {
-				// use stale read.
+		if s.isStaleRead {
+			isStaleRead := true
+			if s.attempts != 1 || (!s.target.store.IsLabelsMatch(s.option.labels) && s.target.peer.Id != s.region.GetLeaderPeerID()) {
+				// retry or target replica's labels does not match and not leader
+				if strategy.canSendReplicaRead(s) {
+					// use replica read.
+					isStaleRead = false
+				}
+			}
+			if isStaleRead {
 				req.StaleRead = true
 				req.ReplicaRead = false
+			} else {
+				req.StaleRead = false
+				req.ReplicaRead = true
 			}
 		} else {
 			// always use replica.
@@ -298,6 +302,16 @@ func (s *ReplicaSelectMixedStrategy) next(selector *replicaSelector) *replica {
 	}
 	metrics.TiKVReplicaSelectorFailureCounter.WithLabelValues("exhausted").Inc()
 	return nil
+}
+
+func (s *ReplicaSelectMixedStrategy) canSendReplicaRead(selector *replicaSelector) bool {
+	replicas := selector.replicas
+	replica := replicas[s.leaderIdx]
+	if replica.hasFlag(deadlineErrUsingConfTimeoutFlag) || replica.hasFlag(serverIsBusyFlag) {
+		// don't overwhelm the leader if it is busy
+		return false
+	}
+	return true
 }
 
 func hasDeadlineExceededError(replicas []*replica) bool {
@@ -529,6 +543,9 @@ func (s *replicaSelector) onServerIsBusy(
 	backoffErr := errors.Errorf("server is busy, ctx: %v", ctx)
 	if s.canFastRetry() {
 		s.addPendingBackoff(store, retry.BoTiKVServerBusy, backoffErr)
+		if s.target != nil {
+			s.target.addFlag(serverIsBusyFlag)
+		}
 		return true, nil
 	}
 	err = bo.Backoff(retry.BoTiKVServerBusy, backoffErr)
