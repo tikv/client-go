@@ -36,15 +36,20 @@ package oracles
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func TestPDOracle_UntilExpired(t *testing.T) {
@@ -85,6 +90,10 @@ type MockPdClient struct {
 
 func (c *MockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
 	return 0, c.logicalTimestamp.Add(1), nil
+}
+
+func (c *MockPdClient) WithCallerComponent(component caller.Component) pd.Client {
+	return c
 }
 
 func TestPdOracle_SetLowResolutionTimestampUpdateInterval(t *testing.T) {
@@ -374,10 +383,15 @@ func TestValidateReadTS(t *testing.T) {
 		// the fetching-from-PD path, and it can get the previous ts + 1, which can allow this validation to pass.
 		err = o.ValidateReadTS(ctx, ts+1, staleRead, opt)
 		assert.NoError(t, err)
-		// It can't pass if the readTS is newer than previous ts + 2.
+		// It can also pass if the readTS is previous ts + 2, as it can perform a retry.
 		ts, err = o.GetTimestamp(ctx, opt)
 		assert.NoError(t, err)
 		err = o.ValidateReadTS(ctx, ts+2, staleRead, opt)
+		assert.NoError(t, err)
+		// As it retries at most once, it can't pass the check if the readTS is newer than previous ts + 3
+		ts, err = o.GetTimestamp(ctx, opt)
+		assert.NoError(t, err)
+		err = o.ValidateReadTS(ctx, ts+3, staleRead, opt)
 		assert.Error(t, err)
 
 		// Simulate other PD clients requests a timestamp.
@@ -389,7 +403,6 @@ func TestValidateReadTS(t *testing.T) {
 	}
 
 	testImpl(true)
-	testImpl(false)
 }
 
 type MockPDClientWithPause struct {
@@ -411,7 +424,13 @@ func (c *MockPDClientWithPause) Resume() {
 	c.mu.Unlock()
 }
 
+func (c *MockPDClientWithPause) WithCallerComponent(component caller.Component) pd.Client {
+	return c
+}
+
 func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
+	util.EnableFailpoints()
+
 	pdClient := &MockPDClientWithPause{}
 	o, err := NewPdOracle(pdClient, &PDOracleOptions{
 		UpdateInterval: time.Second * 2,
@@ -419,6 +438,11 @@ func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	defer o.Close()
+
+	assert.NoError(t, failpoint.Enable("tikvclient/validateReadTSRetryGetTS", `return("skip")`))
+	defer func() {
+		assert.NoError(t, failpoint.Disable("tikvclient/validateReadTSRetryGetTS"))
+	}()
 
 	asyncValidate := func(ctx context.Context, readTS uint64) chan error {
 		ch := make(chan error, 1)
@@ -429,21 +453,21 @@ func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 		return ch
 	}
 
-	noResult := func(ch chan error) {
+	noResult := func(ch chan error, additionalMsg ...interface{}) {
 		select {
 		case <-ch:
-			assert.FailNow(t, "a ValidateReadTS operation is not blocked while it's expected to be blocked")
+			assert.FailNow(t, "a ValidateReadTS operation is not blocked while it's expected to be blocked", additionalMsg...)
 		default:
 		}
 	}
 
 	cancelIndices := []int{-1, -1, 0, 1}
-	for i, ts := range []uint64{100, 200, 300, 400} {
+	for caseIndex, ts := range []uint64{100, 200, 300, 400} {
 		// Note: the ts is the result that the next GetTS will return. Any validation with readTS <= ts should pass, otherwise fail.
 
 		// We will cancel the cancelIndex-th validation call. This is for testing that canceling some of the calls
-		// doesn't affect other calls that are waiting
-		cancelIndex := cancelIndices[i]
+		// doesn't affect other calls that are waiting.
+		cancelIndex := cancelIndices[caseIndex]
 
 		pdClient.Pause()
 
@@ -541,13 +565,19 @@ func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
 	assert.NoError(t, err)
 	mustNoNotify()
 
-	// It loads `ts + 1` from the mock PD, and the check cannot pass.
+	// It loads `ts + 1` from the mock PD, and then retries `ts + 2` and passes.
 	err = o.ValidateReadTS(ctx, ts+2, false, opt)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	mustNoNotify()
 
-	// Do the check again. It loads `ts + 2` from the mock PD, and the check passes.
-	err = o.ValidateReadTS(ctx, ts+2, false, opt)
+	// It loads `ts + 3` and `ts + 4` from the mock PD, and the check cannot pass.
+	// Updated: 2025-03-12, the non-stale read check is temporarily skipped.
+	err = o.ValidateReadTS(ctx, ts+5, false, opt)
+	assert.NoError(t, err)
+	mustNoNotify()
+
+	// Do the check again. It loads `ts + 5` from the mock PD, and the check passes.
+	err = o.ValidateReadTS(ctx, ts+5, false, opt)
 	assert.NoError(t, err)
 	mustNoNotify()
 }
@@ -585,4 +615,72 @@ func TestSetLastTSAlwaysPushTS(t *testing.T) {
 	time.Sleep(time.Second)
 	close(cancel)
 	wg.Wait()
+}
+
+func TestValidateReadTSFromDifferentSource(t *testing.T) {
+	// Updated: 2025-03-12, the non-stale read check is temporarily skipped.
+	t.Skip()
+
+	// If a ts is fetched from a different client to the same cluster, the ts might not be cached by the low resolution
+	// ts. In this case, the validation should not be false positive.
+	util.EnableFailpoints()
+	pdClient := MockPdClient{}
+	o, err := NewPdOracle(&pdClient, &PDOracleOptions{
+		UpdateInterval: time.Second * 2,
+		NoUpdateTS:     true,
+	})
+	assert.NoError(t, err)
+	defer o.Close()
+
+	// Construct the situation that the low resolution ts is lower than the ts fetched from another client.
+	ts, err := o.GetTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	assert.NoError(t, err)
+	lowResolutionTS, err := o.GetLowResolutionTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	assert.NoError(t, err)
+	assert.Equal(t, ts, lowResolutionTS)
+
+	assert.NoError(t, failpoint.Enable("tikvclient/getCurrentTSForValidationBeforeReturn", "pause"))
+	defer func() {
+		assert.NoError(t, failpoint.Disable("tikvclient/getCurrentTSForValidationBeforeReturn"))
+	}()
+
+	// Trigger getting ts from PD for validation, which causes a previously-started concurrent call. We block it during
+	// getting the ts by the failpoint. So that when the second call starts, it will reuse the same singleflight
+	// for getting the ts, which return a older ts to it.
+	firstResCh := make(chan error)
+	go func() {
+		firstResCh <- o.ValidateReadTS(context.Background(), ts+1, false, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	}()
+
+	select {
+	case err = <-firstResCh:
+		assert.FailNow(t, fmt.Sprintf("expected to be blocked, but got result: %v", err))
+	case <-time.After(time.Millisecond * 50):
+	}
+
+	pdClient.logicalTimestamp.Add(10)
+	physical, logical, err := pdClient.GetTS(context.Background())
+	assert.NoError(t, err)
+	// The next ts should be the previous `ts + 1 (fetched by the ValidateReadTS call) + 10 (advanced manually) + 1`.
+	nextTS := oracle.ComposeTS(physical, logical)
+	// The low resolution ts is not updated since the validation.
+	nextLowResolutionTS, err := o.GetLowResolutionTimestamp(context.Background(), &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	assert.NoError(t, err)
+	assert.Equal(t, ts+1, nextLowResolutionTS)
+	assert.Equal(t, nextTS-11, nextLowResolutionTS)
+
+	// The second check reuses the singleflight to get the ts and the result can be older than `nextTS`.
+	secondResCh := make(chan error)
+	go func() {
+		secondResCh <- o.ValidateReadTS(context.Background(), nextTS, false, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+	}()
+	select {
+	case err = <-firstResCh:
+		assert.FailNow(t, fmt.Sprintf("expected to be blocked, but got result: %v", err))
+	case <-time.After(time.Millisecond * 50):
+	}
+
+	assert.NoError(t, failpoint.Disable("tikvclient/getCurrentTSForValidationBeforeReturn"))
+	require.NoError(t, <-firstResCh)
+	require.NoError(t, <-secondResCh)
 }

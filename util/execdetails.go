@@ -544,6 +544,14 @@ type WriteDetail struct {
 	ApplyWriteWalDuration time.Duration
 	// ApplyWriteMemtableNanos is the time spent on writing to the memtable of the KV RocksDB.
 	ApplyWriteMemtableDuration time.Duration
+	// SchedulerLatchWaitDuration is the time spent on waiting for acquiring latch in the scheduler layer.
+	SchedulerLatchWaitDuration time.Duration
+	// SchedulerProcessDuration is the time spent on processing for the write command in the scheduler layer.
+	SchedulerProcessDuration time.Duration
+	// SchedulerThrottleDuration is the time spent on waiting due to throttled in the scheduler layer.
+	SchedulerThrottleDuration time.Duration
+	// SchedulerPessimisticLockWaitDuration is the time spent on waiting for pessimistic locks in the scheduler layer.
+	SchedulerPessimisticLockWaitDuration time.Duration
 }
 
 // MergeFromWriteDetailPb merges WriteDetail protobuf into the current WriteDetail
@@ -562,6 +570,10 @@ func (wd *WriteDetail) MergeFromWriteDetailPb(pb *kvrpcpb.WriteDetail) {
 		wd.ApplyWriteLeaderWaitDuration += time.Duration(pb.ApplyWriteLeaderWaitNanos) * time.Nanosecond
 		wd.ApplyWriteWalDuration += time.Duration(pb.ApplyWriteWalNanos) * time.Nanosecond
 		wd.ApplyWriteMemtableDuration += time.Duration(pb.ApplyWriteMemtableNanos) * time.Nanosecond
+		wd.SchedulerLatchWaitDuration += time.Duration(pb.LatchWaitNanos) * time.Nanosecond
+		wd.SchedulerProcessDuration += time.Duration(pb.ProcessNanos) * time.Nanosecond
+		wd.SchedulerThrottleDuration += time.Duration(pb.ThrottleNanos) * time.Nanosecond
+		wd.SchedulerPessimisticLockWaitDuration += time.Duration(pb.PessimisticLockWaitNanos) * time.Nanosecond
 	}
 }
 
@@ -580,6 +592,10 @@ func (wd *WriteDetail) Merge(writeDetail *WriteDetail) {
 	atomic.AddInt64((*int64)(&wd.ApplyWriteLeaderWaitDuration), int64(writeDetail.ApplyWriteLeaderWaitDuration))
 	atomic.AddInt64((*int64)(&wd.ApplyWriteWalDuration), int64(writeDetail.ApplyWriteWalDuration))
 	atomic.AddInt64((*int64)(&wd.ApplyWriteMemtableDuration), int64(writeDetail.ApplyWriteMemtableDuration))
+	atomic.AddInt64((*int64)(&wd.SchedulerLatchWaitDuration), int64(writeDetail.SchedulerLatchWaitDuration))
+	atomic.AddInt64((*int64)(&wd.SchedulerProcessDuration), int64(writeDetail.SchedulerProcessDuration))
+	atomic.AddInt64((*int64)(&wd.SchedulerThrottleDuration), int64(writeDetail.SchedulerThrottleDuration))
+	atomic.AddInt64((*int64)(&wd.SchedulerPessimisticLockWaitDuration), int64(writeDetail.SchedulerPessimisticLockWaitDuration))
 }
 
 var zeroWriteDetail = WriteDetail{}
@@ -616,6 +632,20 @@ func (wd *WriteDetail) String() string {
 	buf.WriteString(FormatDuration(wd.ApplyWriteWalDuration))
 	buf.WriteString(", write_memtable: ")
 	buf.WriteString(FormatDuration(wd.ApplyWriteMemtableDuration))
+	buf.WriteString("}, scheduler: {process: ")
+	buf.WriteString(FormatDuration(wd.SchedulerProcessDuration))
+	if wd.SchedulerLatchWaitDuration > 0 {
+		buf.WriteString(", latch_wait: ")
+		buf.WriteString(FormatDuration(wd.SchedulerLatchWaitDuration))
+	}
+	if wd.SchedulerPessimisticLockWaitDuration > 0 {
+		buf.WriteString(", pessimistic_lock_wait: ")
+		buf.WriteString(FormatDuration(wd.SchedulerPessimisticLockWaitDuration))
+	}
+	if wd.SchedulerThrottleDuration > 0 {
+		buf.WriteString(", throttle: ")
+		buf.WriteString(FormatDuration(wd.SchedulerThrottleDuration))
+	}
 	buf.WriteString("}}")
 	return buf.String()
 }
