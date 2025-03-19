@@ -166,7 +166,7 @@ func (c *mockPDClient) disable() {
 	c.stop = true
 }
 
-func (c *mockPDClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
+func (c *mockPDClient) GetAllMembers(ctx context.Context) (*pdpb.GetMembersResponse, error) {
 	return nil, nil
 }
 
