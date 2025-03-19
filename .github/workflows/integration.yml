@@ -2,13 +2,13 @@ name: Integration Test
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 jobs:
-
   integration-local:
+    if: github.event.pull_request.labels.*.name != 'skip-integration-tests'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,6 +24,7 @@ jobs:
         working-directory: integration_tests
 
   integration-local-race:
+    if: github.event.pull_request.labels.*.name != 'skip-integration-tests'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -39,6 +40,7 @@ jobs:
         working-directory: integration_tests
 
   integration-tikv:
+    if: github.event.pull_request.labels.*.name != 'skip-integration-tests'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -78,6 +80,7 @@ jobs:
         working-directory: integration_tests
 
   integration-raw-tikv:
+    if: github.event.pull_request.labels.*.name != 'skip-integration-tests'
     runs-on: ubuntu-latest
     strategy:
       matrix:
