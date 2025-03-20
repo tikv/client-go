@@ -670,7 +670,7 @@ type TimeDetail struct {
 	// measured from receiving the request to the start of handling the request.
 	KvGrpcProcessTime time.Duration
 	// KvGrpcWaitTime is the time used in TiKV gRPC response waiting, measured
-	// from generating the response to the start of sending the response.
+	// from when the response is ready to when sending begins.
 	KvGrpcWaitTime time.Duration
 	// TotalRPCWallTime is Total wall clock time spent on this RPC in TiKV.
 	TotalRPCWallTime time.Duration
