@@ -666,6 +666,12 @@ type TimeDetail struct {
 	// KvReadWallTime is the time used in KV Scan/Get. For get/batch_get,
 	// this is total duration, which is almost the same with grpc duration.
 	KvReadWallTime time.Duration
+	// KvGrpcProcessTime is the time used in TiKV gRPC request processing,
+	// measured from receiving the request to the start of handling the request.
+	KvGrpcProcessTime time.Duration
+	// KvGrpcWaitTime is the time used in TiKV gRPC response waiting, measured
+	// from when the response is ready to when sending begins.
+	KvGrpcWaitTime time.Duration
 	// TotalRPCWallTime is Total wall clock time spent on this RPC in TiKV.
 	TotalRPCWallTime time.Duration
 }
@@ -701,6 +707,20 @@ func (td *TimeDetail) String() string {
 		buf.WriteString("total_kv_read_wall_time: ")
 		buf.WriteString(FormatDuration(td.KvReadWallTime))
 	}
+	if td.KvGrpcProcessTime > 0 {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString("tikv_grpc_process_time: ")
+		buf.WriteString(FormatDuration(td.KvGrpcProcessTime))
+	}
+	if td.KvGrpcWaitTime > 0 {
+		if buf.Len() > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString("tikv_grpc_wait_time: ")
+		buf.WriteString(FormatDuration(td.KvGrpcWaitTime))
+	}
 	if td.TotalRPCWallTime > 0 {
 		if buf.Len() > 0 {
 			buf.WriteString(", ")
@@ -722,6 +742,8 @@ func (td *TimeDetail) Merge(detail *TimeDetail) {
 		atomic.AddInt64((*int64)(&td.SuspendTime), int64(detail.SuspendTime))
 		atomic.AddInt64((*int64)(&td.WaitTime), int64(detail.WaitTime))
 		atomic.AddInt64((*int64)(&td.KvReadWallTime), int64(detail.KvReadWallTime))
+		atomic.AddInt64((*int64)(&td.KvGrpcProcessTime), int64(detail.KvGrpcProcessTime))
+		atomic.AddInt64((*int64)(&td.KvGrpcWaitTime), int64(detail.KvGrpcWaitTime))
 		atomic.AddInt64((*int64)(&td.TotalRPCWallTime), int64(detail.TotalRPCWallTime))
 	}
 }
@@ -733,6 +755,8 @@ func (td *TimeDetail) MergeFromTimeDetail(timeDetailV2 *kvrpcpb.TimeDetailV2, ti
 		td.ProcessTime += time.Duration(timeDetailV2.ProcessWallTimeNs) * time.Nanosecond
 		td.SuspendTime += time.Duration(timeDetailV2.ProcessSuspendWallTimeNs) * time.Nanosecond
 		td.KvReadWallTime += time.Duration(timeDetailV2.KvReadWallTimeNs) * time.Nanosecond
+		td.KvGrpcProcessTime += time.Duration(timeDetailV2.KvGrpcProcessTimeNs) * time.Nanosecond
+		td.KvGrpcWaitTime += time.Duration(timeDetailV2.KvGrpcWaitTimeNs) * time.Nanosecond
 		td.TotalRPCWallTime += time.Duration(timeDetailV2.TotalRpcWallTimeNs) * time.Nanosecond
 	} else if timeDetail != nil {
 		td.WaitTime += time.Duration(timeDetail.WaitWallTimeMs) * time.Millisecond
