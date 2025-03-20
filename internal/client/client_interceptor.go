@@ -19,10 +19,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/async"
 	resourceControlClient "github.com/tikv/pd/client/resource_group/controller"
 )
 
@@ -84,6 +87,60 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 	}
 
 	return resp, err
+}
+
+func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	cli, ok := r.Client.(ClientAsync)
+	if !ok {
+		cb.Invoke(nil, errors.Errorf("%T dose not implement ClientAsync interface", r.Client))
+		return
+	}
+
+	// since all async requests processed by one runloop share the same resource group, if the quota is exceeded, all
+	// requests/responses shall wait for the tokens, thus it's ok to call OnRequestWait/OnResponseWait synchronously.
+	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
+	if resourceControlInterceptor != nil {
+		consumption, penalty, waitDuration, priority, err := resourceControlInterceptor.OnRequestWait(ctx, resourceGroupName, reqInfo)
+		if err != nil {
+			cb.Invoke(nil, err)
+			return
+		}
+		req.GetResourceControlContext().Penalty = penalty
+		// override request priority with resource group priority if it's not set.
+		// Get the priority at tikv side has some performance issue, so we pass it
+		// at client side. See: https://github.com/tikv/tikv/issues/15994 for more details.
+		if req.GetResourceControlContext().OverridePriority == 0 {
+			req.GetResourceControlContext().OverridePriority = uint64(priority)
+		}
+
+		var ruDetails *util.RUDetails
+
+		if val := ctx.Value(util.RUDetailsCtxKey); val != nil {
+			ruDetails = val.(*util.RUDetails)
+			ruDetails.Update(consumption, waitDuration)
+		}
+
+		cb.Inject(func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+			if resp != nil {
+				respInfo := resourcecontrol.MakeResponseInfo(resp)
+				consumption, waitDuration, err := resourceControlInterceptor.OnResponseWait(ctx, resourceGroupName, reqInfo, respInfo)
+				if err != nil {
+					return nil, err
+				}
+				if ruDetails != nil {
+					ruDetails.Update(consumption, waitDuration)
+				}
+			}
+			return resp, err
+		})
+	}
+
+	if ctxInterceptor := interceptor.GetRPCInterceptorFromCtx(ctx); ctxInterceptor != nil {
+		// TODO(zyguan): AsyncRPCInterceptor
+		logutil.Logger(ctx).Warn("SendRequestAsync with interceptor is unsupported")
+	}
+
+	cli.SendRequestAsync(ctx, addr, req, cb)
 }
 
 var (
