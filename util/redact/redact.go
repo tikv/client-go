@@ -7,6 +7,9 @@ import (
 	"github.com/pingcap/errors"
 )
 
+// TODO: The error messages return from TiKV may contain key information.
+// For example, we cannot redact the key in *kvrpcpb.KeyError.
+
 // NeedRedact returns whether to redact log
 func NeedRedact() bool {
 	mode := errors.RedactLogEnabled.Load()
