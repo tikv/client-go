@@ -486,7 +486,7 @@ func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error 
 	c.txn.GetMemBuffer().RLock()
 	defer c.txn.GetMemBuffer().RUnlock()
 	if !c.txn.us.HasPresumeKeyNotExists(err.GetKey()) {
-		return errors.Errorf("session %d, existErr for key:%s should not be nil", c.sessionID, err.GetKey())
+		return errors.Errorf("session %d, existErr for key:%s should not be nil", c.sessionID, redact.Key(err.GetKey()))
 	}
 	return errors.WithStack(err)
 }
