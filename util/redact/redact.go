@@ -7,8 +7,7 @@ import (
 	"github.com/pingcap/errors"
 )
 
-// TODO: The error messages return from TiKV may contain key information.
-// For example, we cannot redact the key in *kvrpcpb.KeyError.
+// TODO: Redact the key info in *kvrpcpb.KeyError by changing the String implementation.
 
 // NeedRedact returns whether to redact log
 func NeedRedact() bool {
