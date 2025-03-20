@@ -46,6 +46,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/tso"
 	"go.uber.org/zap"
 )
 
@@ -110,7 +111,7 @@ func (o *pdOracle) GetMinTimestamp(ctx context.Context) (uint64, error) {
 }
 
 type tsFuture struct {
-	pd.TSFuture
+	tso.TSFuture
 	o        *pdOracle
 	txnScope string
 }
@@ -129,26 +130,12 @@ func (f *tsFuture) Wait() (uint64, error) {
 }
 
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
-	var ts pd.TSFuture
-	if opt.TxnScope == oracle.GlobalTxnScope || opt.TxnScope == "" {
-		ts = o.c.GetTSAsync(ctx)
-	} else {
-		ts = o.c.GetLocalTSAsync(ctx, opt.TxnScope)
-	}
-	return &tsFuture{ts, o, opt.TxnScope}
+	return &tsFuture{o.c.GetTSAsync(ctx), o, opt.TxnScope}
 }
 
 func (o *pdOracle) getTimestamp(ctx context.Context, txnScope string) (uint64, error) {
 	now := time.Now()
-	var (
-		physical, logical int64
-		err               error
-	)
-	if txnScope == oracle.GlobalTxnScope || txnScope == "" {
-		physical, logical, err = o.c.GetTS(ctx)
-	} else {
-		physical, logical, err = o.c.GetLocalTS(ctx, txnScope)
-	}
+	physical, logical, err := o.c.GetTS(ctx)
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}

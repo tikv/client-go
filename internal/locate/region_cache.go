@@ -64,6 +64,8 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	router "github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/opt"
 	atomic2 "go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
@@ -269,7 +271,7 @@ func (r *regionStore) filterStoreCandidate(aidx AccessIndex, op *storeSelectorOp
 	return s.IsLabelsMatch(op.labels) && (!op.preferLeader || (aidx == r.workTiKVIdx && !s.isSlow()))
 }
 
-func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *pd.Region) (*Region, error) {
+func newRegion(bo *retry.Backoffer, c *RegionCache, pdRegion *router.Region) (*Region, error) {
 	r := &Region{meta: pdRegion.Meta}
 	// regionStore pull used store from global store map
 	// to avoid acquire storeMu in later access.
@@ -1607,7 +1609,7 @@ func (c *RegionCache) GetAllStores() []*Store {
 	return append(stores, tiflashStores...)
 }
 
-func filterUnavailablePeers(region *pd.Region) {
+func filterUnavailablePeers(region *router.Region) {
 	if len(region.DownPeers) == 0 {
 		return
 	}
@@ -1648,12 +1650,12 @@ func (c *RegionCache) loadRegion(bo *retry.Backoffer, key []byte, isEndKey bool)
 			}
 		}
 		start := time.Now()
-		var reg *pd.Region
+		var reg *router.Region
 		var err error
 		if searchPrev {
-			reg, err = c.pdClient.GetPrevRegion(ctx, key, pd.WithBuckets())
+			reg, err = c.pdClient.GetPrevRegion(ctx, key, opt.WithBuckets())
 		} else {
-			reg, err = c.pdClient.GetRegion(ctx, key, pd.WithBuckets())
+			reg, err = c.pdClient.GetRegion(ctx, key, opt.WithBuckets())
 		}
 		metrics.LoadRegionCacheHistogramWhenCacheMiss.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -1702,7 +1704,7 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 			}
 		}
 		start := time.Now()
-		reg, err := c.pdClient.GetRegionByID(ctx, regionID, pd.WithBuckets())
+		reg, err := c.pdClient.GetRegionByID(ctx, regionID, opt.WithBuckets())
 		metrics.LoadRegionCacheHistogramWithRegionByID.Observe(time.Since(start).Seconds())
 		if err != nil {
 			metrics.RegionCacheCounterWithGetRegionByIDError.Inc()
@@ -1805,6 +1807,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 		}
 		start := time.Now()
+		//nolint:staticcheck
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {
@@ -2026,7 +2029,7 @@ func (c *RegionCache) OnRegionEpochNotMatch(bo *retry.Backoffer, ctx *RPCContext
 	for _, meta := range currentRegions {
 		// TODO(youjiali1995): new regions inherit old region's buckets now. Maybe we should make EpochNotMatch error
 		// carry buckets information. Can it bring much overhead?
-		region, err := newRegion(bo, c, &pd.Region{Meta: meta, Buckets: buckets})
+		region, err := newRegion(bo, c, &router.Region{Meta: meta, Buckets: buckets})
 		if err != nil {
 			return false, err
 		}

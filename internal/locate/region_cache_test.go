@@ -54,7 +54,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
-	pd "github.com/tikv/pd/client"
+	router "github.com/tikv/pd/client/clients/router"
 )
 
 func TestRegionCache(t *testing.T) {
@@ -1301,7 +1301,7 @@ func (s *testRegionCacheSuite) TestPeersLenChange() {
 		Peers:       make([]*metapb.Peer, len(ctx.Meta.Peers)),
 	}
 	copy(cpMeta.Peers, ctx.Meta.Peers)
-	cpRegion := &pd.Region{
+	cpRegion := &router.Region{
 		Meta:      cpMeta,
 		DownPeers: []*metapb.Peer{{Id: s.peer1, StoreId: s.store1}},
 	}
@@ -1341,7 +1341,7 @@ func (s *testRegionCacheSuite) TestPeersLenChangedByWitness() {
 			peer.IsWitness = true
 		}
 	}
-	cpRegion := &pd.Region{Meta: cpMeta}
+	cpRegion := &router.Region{Meta: cpMeta}
 	region, err := newRegion(s.bo, s.cache, cpRegion)
 	s.Nil(err)
 	s.cache.insertRegionToCache(region, true)
