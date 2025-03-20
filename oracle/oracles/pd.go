@@ -46,6 +46,7 @@ import (
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/tso"
 	"go.uber.org/zap"
 )
 
@@ -110,7 +111,7 @@ func (o *pdOracle) GetMinTimestamp(ctx context.Context) (uint64, error) {
 }
 
 type tsFuture struct {
-	pd.TSFuture
+	tso.TSFuture
 	o        *pdOracle
 	txnScope string
 }
@@ -129,7 +130,7 @@ func (f *tsFuture) Wait() (uint64, error) {
 }
 
 func (o *pdOracle) GetTimestampAsync(ctx context.Context, opt *oracle.Option) oracle.Future {
-	var ts pd.TSFuture
+	var ts tso.TSFuture
 	if opt.TxnScope == oracle.GlobalTxnScope || opt.TxnScope == "" {
 		ts = o.c.GetTSAsync(ctx)
 	} else {
