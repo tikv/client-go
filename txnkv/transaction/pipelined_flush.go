@@ -228,7 +228,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 			if err1 != nil {
 				if tikverr.IsErrWriteConflict(errors.Cause(err1)) {
-					metrics.TiKvTxnWriteConflictCounter.Inc()
+					metrics.TiKVTxnWriteConflictCounter.Inc()
 				}
 				return err1
 			}
@@ -248,7 +248,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			// TiKV will return a PessimisticLockNotFound error directly if it encounters a different lock. Otherwise,
 			// TiKV returns lock.TTL = 0, and we still need to resolve the lock.
 			if lock.TxnID > c.startTS && !c.isPessimistic {
-				metrics.TiKvTxnWriteConflictCounter.Inc()
+				metrics.TiKVTxnWriteConflictCounter.Inc()
 				return tikverr.NewErrWriteConflictWithArgs(
 					c.startTS,
 					lock.TxnID,
