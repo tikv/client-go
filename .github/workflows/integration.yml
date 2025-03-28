@@ -17,7 +17,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Test
         run: go test ./...
@@ -33,7 +33,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Test
         run: go test ./... -race
@@ -49,7 +49,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
@@ -92,7 +92,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
