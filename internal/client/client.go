@@ -70,7 +70,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip"
-	"google.golang.org/grpc/experimental"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
@@ -268,6 +267,9 @@ func (a *connArray) monitoredDial(ctx context.Context, connName, target string, 
 	conn = &monitoredConn{
 		Name: connName,
 	}
+	// grpc.NewClient doesn't support timeout options, so we have to use grpc.DialContext here.
+	// This API will be supported throughout 1.x
+	//nolint:staticcheck
 	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
 	if err != nil {
 		return nil, err
@@ -342,9 +344,6 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
 			}),
 		}, opts...)
-		if cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
-		}
 		conn, err := a.monitoredDial(
 			ctx,
 			fmt.Sprintf("%s-%d", a.target, i),
