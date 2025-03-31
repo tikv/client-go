@@ -5,9 +5,8 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 )
-
-// TODO: Redact the key info in *kvrpcpb.KeyError by changing the String implementation.
 
 // NeedRedact returns whether to redact log
 func NeedRedact() bool {
@@ -66,4 +65,77 @@ func toUpperASCIIInplace(s []byte) []byte {
 		s[i] = c
 	}
 	return s
+}
+
+// RedactKeyErrIfNecessary redact the key in *kvrpcpb.KeyError.
+func RedactKeyErrIfNecessary(err *kvrpcpb.KeyError) {
+	if !NeedRedact() {
+		return
+	}
+	redactMarker := []byte{'?'}
+	if e := err.Locked; e != nil {
+		if len(e.PrimaryLock) > 0 {
+			e.PrimaryLock = redactMarker
+		}
+		if len(e.Key) > 0 {
+			e.Key = redactMarker
+		}
+		for i := range e.Secondaries {
+			e.Secondaries[i] = redactMarker
+		}
+	}
+	if e := err.Conflict; e != nil {
+		if len(e.Key) > 0 {
+			e.Key = redactMarker
+		}
+		if len(e.Primary) > 0 {
+			e.Primary = redactMarker
+		}
+	}
+	if e := err.AlreadyExist; e != nil {
+		if len(e.Key) > 0 {
+			e.Key = redactMarker
+		}
+	}
+	if e := err.Deadlock; e != nil {
+		if len(e.LockKey) > 0 {
+			e.LockKey = redactMarker
+		}
+		if len(e.DeadlockKey) > 0 {
+			e.DeadlockKey = redactMarker
+		}
+		for i := range e.WaitChain {
+			if len(e.WaitChain[i].Key) > 0 {
+				e.WaitChain[i].Key = redactMarker
+			}
+		}
+	}
+	if e := err.CommitTsExpired; e != nil {
+		if len(e.Key) > 0 {
+			e.Key = redactMarker
+		}
+	}
+	if e := err.TxnNotFound; e != nil {
+		if len(e.PrimaryKey) > 0 {
+			e.PrimaryKey = redactMarker
+		}
+	}
+	if e := err.AssertionFailed; e != nil {
+		if len(e.Key) > 0 {
+			e.Key = redactMarker
+		}
+	}
+	if mismatchErr := err.PrimaryMismatch; mismatchErr != nil {
+		if e := mismatchErr.LockInfo; e != nil {
+			if len(e.PrimaryLock) > 0 {
+				e.PrimaryLock = redactMarker
+			}
+			if len(e.Key) > 0 {
+				e.Key = redactMarker
+			}
+			for i := range e.Secondaries {
+				e.Secondaries[i] = redactMarker
+			}
+		}
+	}
 }

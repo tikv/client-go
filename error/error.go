@@ -307,6 +307,8 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 		}
 	}
 
+	redact.RedactKeyErrIfNecessary(keyErr)
+
 	if keyErr.Conflict != nil {
 		return errors.WithStack(&ErrWriteConflict{WriteConflict: keyErr.GetConflict()})
 	}
