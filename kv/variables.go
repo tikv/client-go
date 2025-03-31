@@ -53,6 +53,10 @@ type Variables struct {
 	// DisableTxnFile specifies whether file-based txn is disabled.
 	DisableTxnFile bool
 
+	// TxnFileMinMutationSize is the minimum size of mutations to use file-based txn.
+	// When its value is 0, use the config of "txn-file-min-mutation-size".
+	TxnFileMinMutationSize uint64
+
 	// EnableColumnarExecution specifies whether columnar execution is enabled.
 	EnableColumnarExecution bool
 }
@@ -64,6 +68,7 @@ func NewVariables(killed *uint32) *Variables {
 		BackOffWeight:           DefBackOffWeight,
 		Killed:                  killed,
 		DisableTxnFile:          false,
+		TxnFileMinMutationSize:  0,
 		EnableColumnarExecution: false,
 	}
 }
