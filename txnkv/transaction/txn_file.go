@@ -931,12 +931,16 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	conf := config.GetGlobalConfig()
+	minMutationSize := c.txn.vars.TxnFileMinMutationSize
+	if minMutationSize == 0 {
+		minMutationSize = conf.TiKVClient.TxnFileMinMutationSize
+	}
 	// Don't use txn file for internal request to avoid affect system tables or metadata before it is stable enough.
 	// TODO: use txn file for internal TTL & DDL tasks.
 	if c.txn.isPessimistic ||
 		c.txn.isInternal() ||
 		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 ||
-		uint64(c.txn.GetMemBuffer().Size()) < conf.TiKVClient.TxnFileMinMutationSize {
+		uint64(c.txn.GetMemBuffer().Size()) < minMutationSize {
 		return false, nil
 	}
 	return true, nil
