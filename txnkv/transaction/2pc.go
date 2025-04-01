@@ -37,7 +37,6 @@ package transaction
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	errors2 "errors"
 	"math"
 	"math/rand"
@@ -65,6 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	atomicutil "go.uber.org/atomic"
 	zap "go.uber.org/zap"
 )
@@ -486,7 +486,7 @@ func (c *twoPhaseCommitter) extractKeyExistsErr(err *tikverr.ErrKeyExist) error 
 	c.txn.GetMemBuffer().RLock()
 	defer c.txn.GetMemBuffer().RUnlock()
 	if !c.txn.us.HasPresumeKeyNotExists(err.GetKey()) {
-		return errors.Errorf("session %d, existErr for key:%s should not be nil", c.sessionID, err.GetKey())
+		return errors.Errorf("session %d, existErr for key:%s should not be nil", c.sessionID, redact.Key(err.GetKey()))
 	}
 	return errors.WithStack(err)
 }
@@ -692,7 +692,7 @@ func (c *twoPhaseCommitter) initKeysAndMutations(ctx context.Context) error {
 	if c.mutations.Len() > logEntryCount || size > logSize {
 		logutil.BgLogger().Info("[BIG_TXN]",
 			zap.Uint64("session", c.sessionID),
-			zap.String("key sample", kv.StrKey(c.mutations.GetKey(0))),
+			zap.String("key sample", redact.Key(c.mutations.GetKey(0))),
 			zap.Int("size", size),
 			zap.Int("keys", c.mutations.Len()),
 			zap.Int("puts", putCnt),
@@ -1495,7 +1495,7 @@ func sendTxnHeartBeat(
 		}
 		cmdResp := resp.Resp.(*kvrpcpb.TxnHeartBeatResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
-			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, hex.EncodeToString(primary), tikverr.ExtractKeyErr(keyErr))
+			return 0, true, errors.Errorf("txn %d heartbeat fail, primary key = %v, err = %s", startTS, redact.Key(primary), tikverr.ExtractKeyErr(keyErr))
 		}
 		return cmdResp.GetLockTtl(), false, nil
 	}

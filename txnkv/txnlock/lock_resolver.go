@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"sync"
@@ -37,6 +36,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -181,9 +181,9 @@ type Lock struct {
 func (l *Lock) String() string {
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
 	buf.WriteString("key: ")
-	buf.WriteString(hex.EncodeToString(l.Key))
+	buf.WriteString(redact.Key(l.Key))
 	buf.WriteString(", primary: ")
-	buf.WriteString(hex.EncodeToString(l.Primary))
+	buf.WriteString(redact.Key(l.Primary))
 	return fmt.Sprintf("%s, txnStartTS: %d, lockForUpdateTS:%d, minCommitTs:%d, ttl: %d, type: %s, UseAsyncCommit: %t, txnSize: %d",
 		buf.String(), l.TxnID, l.LockForUpdateTS, l.MinCommitTS, l.TTL, l.LockType, l.UseAsyncCommit, l.TxnSize)
 }
