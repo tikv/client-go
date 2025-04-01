@@ -153,19 +153,27 @@ func (db *artDBWithContext) IterReverse(upper, lower []byte) (Iterator, error) {
 	return db.ART.IterReverse(upper, lower)
 }
 
+// SnapshotGetter implements the Getter interface, by wrapping GetSnapshot.
+func (db *artDBWithContext) SnapshotGetter() Getter {
+	return db.ART.GetSnapshot()
+}
+
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
-	return db.ART.SnapshotIter(lower, upper)
+	return db.ART.GetSnapshot().NewSnapshotIterator(lower, upper, false)
 }
 
-// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
+// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *artDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
-	return db.ART.SnapshotIterReverse(upper, lower)
+	return db.ART.GetSnapshot().NewSnapshotIterator(upper, lower, true)
 }
 
-// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *artDBWithContext) SnapshotGetter() Getter {
-	return db.ART.SnapshotGetter()
+type artSnapshot struct {
+	*art.Snapshot
+}
+
+func (a *artSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Iterator {
+	return a.Snapshot.NewSnapshotIterator(start, end, reverse)
 }
 
 func (db *artDBWithContext) GetSnapshot() MemBufferSnapshot {
@@ -183,10 +191,9 @@ func (db *artDBWithContext) GetSnapshot() MemBufferSnapshot {
 		}
 		return nil
 	}
-	return &SnapshotWithMutex{
+	return &SnapshotWithMutex[*artSnapshot]{
 		mu:       &db.RWMutex,
 		seqCheck: seqCheck,
-		db:       db,
-		getter:   db.SnapshotGetter(),
+		snapshot: &artSnapshot{db.ART.GetSnapshot()},
 	}
 }

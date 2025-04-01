@@ -189,17 +189,17 @@ func (db *rbtDBWithContext) ForEachInSnapshotRange(lower []byte, upper []byte, f
 
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 func (db *rbtDBWithContext) SnapshotIter(lower, upper []byte) Iterator {
-	return db.RBT.SnapshotIter(lower, upper)
+	return db.RBT.GetSnapshot().SnapshotIter(lower, upper)
 }
 
 // SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
 func (db *rbtDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
-	return db.RBT.SnapshotIterReverse(upper, lower)
+	return db.RBT.GetSnapshot().SnapshotIterReverse(upper, lower)
 }
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
 func (db *rbtDBWithContext) SnapshotGetter() Getter {
-	return db.RBT.SnapshotGetter()
+	return db.RBT.GetSnapshot()
 }
 
 func (db *rbtDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
@@ -211,14 +211,25 @@ func (db *rbtDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse boo
 	}
 }
 
+type rbtSnapshot struct {
+	*rbt.Snapshot
+}
+
+func (a *rbtSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Iterator {
+	if reverse {
+		return a.Snapshot.SnapshotIterReverse(start, end)
+	} else {
+		return a.Snapshot.SnapshotIter(start, end)
+	}
+}
+
 func (db *rbtDBWithContext) GetSnapshot() MemBufferSnapshot {
 	seqCheck := func() error {
 		return nil
 	}
-	return &SnapshotWithMutex{
+	return &SnapshotWithMutex[*rbtSnapshot]{
 		mu:       &db.RWMutex,
 		seqCheck: seqCheck,
-		db:       db,
-		getter:   db.SnapshotGetter(),
+		snapshot: &rbtSnapshot{db.RBT.GetSnapshot()},
 	}
 }

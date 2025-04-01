@@ -41,38 +41,43 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 )
 
-// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (db *RBT) SnapshotGetter() *rbtSnapGetter {
-	return &rbtSnapGetter{
+type Snapshot struct {
+	db *RBT
+	cp arena.MemDBCheckpoint
+}
+
+// GetSnapshot returns a snapshot of MemBuffer.
+func (db *RBT) GetSnapshot() *Snapshot {
+	return &Snapshot{
 		db: db,
 		cp: db.getSnapshot(),
 	}
 }
 
 // SnapshotIter returns an Iterator for a snapshot of MemBuffer.
-func (db *RBT) SnapshotIter(start, end []byte) *rbtSnapIter {
+func (snap *Snapshot) SnapshotIter(start, end []byte) *rbtSnapIter {
 	it := &rbtSnapIter{
 		RBTIterator: &RBTIterator{
-			db:    db,
+			db:    snap.db,
 			start: start,
 			end:   end,
 		},
-		cp: db.getSnapshot(),
+		cp: snap.db.getSnapshot(),
 	}
 	it.init()
 	return it
 }
 
 // SnapshotIterReverse returns a reverse Iterator for a snapshot of MemBuffer.
-func (db *RBT) SnapshotIterReverse(k, lowerBound []byte) *rbtSnapIter {
+func (snap *Snapshot) SnapshotIterReverse(k, lowerBound []byte) *rbtSnapIter {
 	it := &rbtSnapIter{
 		RBTIterator: &RBTIterator{
-			db:      db,
+			db:      snap.db,
 			start:   lowerBound,
 			end:     k,
 			reverse: true,
 		},
-		cp: db.getSnapshot(),
+		cp: snap.db.getSnapshot(),
 	}
 	it.init()
 	return it
@@ -85,12 +90,7 @@ func (db *RBT) getSnapshot() arena.MemDBCheckpoint {
 	return db.vlog.Checkpoint()
 }
 
-type rbtSnapGetter struct {
-	db *RBT
-	cp arena.MemDBCheckpoint
-}
-
-func (snap *rbtSnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (snap *Snapshot) Get(ctx context.Context, key []byte) ([]byte, error) {
 	x := snap.db.traverse(key, false)
 	if x.isNull() {
 		return nil, tikverr.ErrNotExist
@@ -160,33 +160,3 @@ func (i *rbtSnapIter) init() {
 		_ = err // memdbIterator will never fail
 	}
 }
-
-func (db *RBT) Snapshot() *Snapshot {
-	return &Snapshot{
-		db: db,
-		cp: db.getSnapshot(),
-	}
-}
-
-type Snapshot struct {
-	db *RBT
-	cp arena.MemDBCheckpoint
-}
-
-func (snap *Snapshot) Get(ctx context.Context, key []byte) ([]byte, error) {
-	x := snap.db.traverse(key, false)
-	if x.isNull() {
-		return nil, tikverr.ErrNotExist
-	}
-	if x.vptr.IsNull() {
-		// A flag only key, act as value not exists
-		return nil, tikverr.ErrNotExist
-	}
-	v, ok := snap.db.vlog.GetSnapshotValue(x.vptr, &snap.cp)
-	if !ok {
-		return nil, tikverr.ErrNotExist
-	}
-	return v, nil
-}
-
-func (snap *Snapshot) Close() {}

@@ -203,15 +203,17 @@ type MemBuffer interface {
 	// Any write operation to the memdb invalidates this iterator immediately after its creation.
 	// Attempting to use such an invalidated iterator will result in a panic.
 	IterReverse([]byte, []byte) (Iterator, error)
+
 	// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
 	// Deprecated: use GetSnapshot instead.
 	SnapshotIter([]byte, []byte) Iterator
 	// SnapshotIterReverse returns a reversed Iterator for a snapshot of MemBuffer.
 	// Deprecated: use GetSnapshot instead.
 	SnapshotIterReverse([]byte, []byte) Iterator
-
 	// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
+	// Deprecated: use GetSnapshot instead.
 	SnapshotGetter() Getter
+
 	// InspectStage iterates all buffered keys and values in MemBuffer.
 	InspectStage(handle int, f func([]byte, kv.KeyFlags, []byte))
 	// SetEntrySizeLimit sets the size limit for each entry and total buffer.
@@ -249,7 +251,13 @@ type MemBuffer interface {
 	FlushWait() error
 	// GetMetrics returns the metrics related to flushing
 	GetMetrics() Metrics
+
 	// GetSnapshot returns a snapshot of the MemBuffer.
+	// The snapshot returned by this function is protected by an RWLock to ensure thread safety.
+	// And this snapshot can fully replace SnapshotGetter, SnapshotIter, and SnapshotIterReverse.
+	// Additionally, it provides two iteration methods: ForEachInSnapshotRange and BatchedSnapshotIter,
+	// which tolerate interleaving reads and writes for using them simply.
+	// The snapshot also verifies the snapshot sequence number to prevent reading from an invalid snapshot.
 	GetSnapshot() MemBufferSnapshot
 }
 
@@ -265,6 +273,11 @@ var (
 	_ MemBuffer = &rbtDBWithContext{}
 	_ MemBuffer = &artDBWithContext{}
 )
+
+type memdbSnapshot interface {
+	Getter
+	NewSnapshotIterator(start, end []byte, desc bool) Iterator
+}
 
 type MemBufferSnapshot interface {
 	Getter
@@ -295,25 +308,25 @@ type MemBufferSnapshot interface {
 	Close()
 }
 
-type SnapshotWithMutex struct {
+type SnapshotWithMutex[S memdbSnapshot] struct {
 	mu       *sync.RWMutex
 	seqCheck func() error
-	db       MemBuffer
-	getter   Getter
+	snapshot S
 }
 
-func (s *SnapshotWithMutex) Get(ctx context.Context, k []byte) ([]byte, error) {
+func (s *SnapshotWithMutex[_]) Get(ctx context.Context, k []byte) ([]byte, error) {
 	if err := s.seqCheck(); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.getter.Get(ctx, k)
+	return s.snapshot.Get(ctx, k)
 }
 
-type snapshotBatchedIter struct {
+type snapshotBatchedIter[S memdbSnapshot] struct {
+	mu       *sync.RWMutex
 	seqCheck func() error
-	db       MemBuffer
+	snapshot S
 	lower    []byte
 	upper    []byte
 	reverse  bool
@@ -327,10 +340,11 @@ type snapshotBatchedIter struct {
 	nextKey   []byte
 }
 
-func (s *SnapshotWithMutex) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
-	iter := &snapshotBatchedIter{
+func (s *SnapshotWithMutex[S]) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
+	iter := &snapshotBatchedIter[S]{
+		mu:        s.mu,
 		seqCheck:  s.seqCheck,
-		db:        s.db,
+		snapshot:  s.snapshot,
 		lower:     lower,
 		upper:     upper,
 		reverse:   reverse,
@@ -341,15 +355,15 @@ func (s *SnapshotWithMutex) BatchedSnapshotIter(lower, upper []byte, reverse boo
 	return iter
 }
 
-func (it *snapshotBatchedIter) fillBatch() error {
+func (it *snapshotBatchedIter[_]) fillBatch() error {
 	// The check of sequence numbers don't have to be protected by the rwlock, as the invariant is that
 	// there cannot be concurrent writes to the seqNo variables.
 	if err := it.seqCheck(); err != nil {
 		return err
 	}
 
-	it.db.RLock()
-	defer it.db.RUnlock()
+	it.mu.RLock()
+	defer it.mu.RUnlock()
 
 	if it.keys == nil || it.values == nil || cap(it.keys) < it.batchSize || cap(it.values) < it.batchSize {
 		it.keys = make([][]byte, 0, it.batchSize)
@@ -365,13 +379,13 @@ func (it *snapshotBatchedIter) fillBatch() error {
 		if it.nextKey != nil {
 			searchUpper = it.nextKey
 		}
-		snapshotIter = it.db.SnapshotIterReverse(searchUpper, it.lower)
+		snapshotIter = it.snapshot.NewSnapshotIterator(searchUpper, it.lower, true)
 	} else {
 		searchLower := it.lower
 		if it.nextKey != nil {
 			searchLower = it.nextKey
 		}
-		snapshotIter = it.db.SnapshotIter(searchLower, it.upper)
+		snapshotIter = it.snapshot.NewSnapshotIterator(searchLower, it.upper, false)
 	}
 	defer snapshotIter.Close()
 
@@ -417,13 +431,13 @@ func (it *snapshotBatchedIter) fillBatch() error {
 	return nil
 }
 
-func (it *snapshotBatchedIter) Valid() bool {
+func (it *snapshotBatchedIter[_]) Valid() bool {
 	return it.seqCheck() == nil &&
 		it.pos < len(it.keys) &&
 		it.err == nil
 }
 
-func (it *snapshotBatchedIter) Next() error {
+func (it *snapshotBatchedIter[_]) Next() error {
 	if it.err != nil {
 		return it.err
 	}
@@ -438,34 +452,34 @@ func (it *snapshotBatchedIter) Next() error {
 	return nil
 }
 
-func (it *snapshotBatchedIter) Key() []byte {
+func (it *snapshotBatchedIter[_]) Key() []byte {
 	if !it.Valid() {
 		return nil
 	}
 	return it.keys[it.pos]
 }
 
-func (it *snapshotBatchedIter) Value() []byte {
+func (it *snapshotBatchedIter[_]) Value() []byte {
 	if !it.Valid() {
 		return nil
 	}
 	return it.values[it.pos]
 }
 
-func (it *snapshotBatchedIter) Close() {
+func (it *snapshotBatchedIter[_]) Close() {
 	it.keys = nil
 	it.values = nil
 	it.nextKey = nil
 }
 
-func (s *SnapshotWithMutex) ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error {
-	s.db.RLock()
-	defer s.db.RUnlock()
+func (s *SnapshotWithMutex[_]) ForEachInSnapshotRange(lower []byte, upper []byte, f func(k, v []byte) (stop bool, err error), reverse bool) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var iter Iterator
 	if reverse {
-		iter = s.db.SnapshotIterReverse(upper, lower)
+		iter = s.snapshot.NewSnapshotIterator(upper, lower, true)
 	} else {
-		iter = s.db.SnapshotIter(lower, upper)
+		iter = s.snapshot.NewSnapshotIterator(lower, upper, false)
 	}
 	defer iter.Close()
 	for iter.Valid() {
@@ -484,4 +498,4 @@ func (s *SnapshotWithMutex) ForEachInSnapshotRange(lower []byte, upper []byte, f
 	return nil
 }
 
-func (s *SnapshotWithMutex) Close() {}
+func (s *SnapshotWithMutex[_]) Close() {}
