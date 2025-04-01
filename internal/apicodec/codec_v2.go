@@ -3,7 +3,6 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"sync"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
@@ -14,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -704,8 +704,8 @@ func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	// return out of bound error.
 	if !bytes.HasPrefix(encodedKey, c.prefix) {
 		logutil.BgLogger().Warn("key not in keyspace",
-			zap.String("keyspacePrefix", hex.EncodeToString(c.prefix)),
-			zap.String("key", hex.EncodeToString(encodedKey)),
+			zap.String("keyspacePrefix", redact.Key(c.prefix)),
+			zap.String("key", redact.Key(encodedKey)),
 			zap.Stack("stack"))
 		return nil, errKeyOutOfBound
 	}
