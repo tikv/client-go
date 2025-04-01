@@ -215,6 +215,7 @@ type rbtSnapshot struct {
 	*rbt.Snapshot
 }
 
+// NewSnapshotIterator wraps `RBT.SnapshotIterReverse` and `RBT.SnapshotIter` and cast the result into an `Iterator`.
 func (a *rbtSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Iterator {
 	if reverse {
 		return a.Snapshot.SnapshotIterReverse(start, end)
@@ -223,7 +224,9 @@ func (a *rbtSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Itera
 	}
 }
 
+// GetSnapshot returns a snapshot of the RBT.
 func (db *rbtDBWithContext) GetSnapshot() MemBufferSnapshot {
+	// The RBT doesn't maintain the sequence number, so the seqCheck is a noop function.
 	seqCheck := func() error {
 		return nil
 	}

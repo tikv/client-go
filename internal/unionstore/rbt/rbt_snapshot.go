@@ -46,11 +46,18 @@ type Snapshot struct {
 	cp arena.MemDBCheckpoint
 }
 
+func (db *RBT) getSnapshotCheckpoint() arena.MemDBCheckpoint {
+	if len(db.stages) > 0 {
+		return db.stages[0]
+	}
+	return db.vlog.Checkpoint()
+}
+
 // GetSnapshot returns a snapshot of MemBuffer.
 func (db *RBT) GetSnapshot() *Snapshot {
 	return &Snapshot{
 		db: db,
-		cp: db.getSnapshot(),
+		cp: db.getSnapshotCheckpoint(),
 	}
 }
 
@@ -62,7 +69,7 @@ func (snap *Snapshot) SnapshotIter(start, end []byte) *rbtSnapIter {
 			start: start,
 			end:   end,
 		},
-		cp: snap.db.getSnapshot(),
+		cp: snap.cp,
 	}
 	it.init()
 	return it
@@ -77,17 +84,10 @@ func (snap *Snapshot) SnapshotIterReverse(k, lowerBound []byte) *rbtSnapIter {
 			end:     k,
 			reverse: true,
 		},
-		cp: snap.db.getSnapshot(),
+		cp: snap.cp,
 	}
 	it.init()
 	return it
-}
-
-func (db *RBT) getSnapshot() arena.MemDBCheckpoint {
-	if len(db.stages) > 0 {
-		return db.stages[0]
-	}
-	return db.vlog.Checkpoint()
 }
 
 func (snap *Snapshot) Get(ctx context.Context, key []byte) ([]byte, error) {

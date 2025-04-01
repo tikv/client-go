@@ -198,7 +198,8 @@ func BenchmarkSnapshotIter(b *testing.B) {
 	}
 
 	b.Run("RBT-SnapshotIter", func(b *testing.B) { f(b, newRbtDBWithContext()) })
-	// unimplemented for RBT
+	b.Run("RBT-BatchedSnapshotIter", func(b *testing.B) { fBatched(b, newRbtDBWithContext()) })
+	b.Run("ART-ForEachInSnapshot", func(b *testing.B) { fForEach(b, newRbtDBWithContext()) })
 	b.Run("ART-SnapshotIter", func(b *testing.B) { f(b, newArtDBWithContext()) })
 	b.Run("ART-BatchedSnapshotIter", func(b *testing.B) { fBatched(b, newArtDBWithContext()) })
 	b.Run("ART-ForEachInSnapshot", func(b *testing.B) { fForEach(b, newArtDBWithContext()) })

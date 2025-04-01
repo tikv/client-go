@@ -26,17 +26,18 @@ type Snapshot struct {
 	cp   arena.MemDBCheckpoint
 }
 
+func (t *ART) getSnapshotCheckpoint() arena.MemDBCheckpoint {
+	if len(t.stages) > 0 {
+		return t.stages[0]
+	}
+	return t.checkpoint()
+}
+
 // GetSnapshot returns a Getter for a snapshot of MemBuffer's stage[0]
 func (t *ART) GetSnapshot() *Snapshot {
-	var cp arena.MemDBCheckpoint
-	if len(t.stages) > 0 {
-		cp = t.stages[0]
-	} else {
-		cp = t.checkpoint()
-	}
 	return &Snapshot{
 		tree: t,
-		cp:   cp,
+		cp:   t.getSnapshotCheckpoint(),
 	}
 }
 

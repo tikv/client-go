@@ -172,10 +172,12 @@ type artSnapshot struct {
 	*art.Snapshot
 }
 
+// NewSnapshotIterator wraps `ART.NewSnapshotIterator` and cast the result into an `Iterator`.
 func (a *artSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Iterator {
 	return a.Snapshot.NewSnapshotIterator(start, end, reverse)
 }
 
+// GetSnapshot returns a snapshot of the ART.
 func (db *artDBWithContext) GetSnapshot() MemBufferSnapshot {
 	if len(db.Stages()) == 0 {
 		logutil.BgLogger().Error("should not use BatchedSnapshotIter for a memdb without any staging buffer")
