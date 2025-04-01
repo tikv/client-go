@@ -1360,18 +1360,6 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 		} else {
 			metrics.TxnCmdHistogramWithLockKeysGeneral.Observe(time.Since(startTime).Seconds())
 		}
-		if err == nil {
-			if lockCtx.PessimisticLockWaited != nil {
-				if atomic.LoadInt32(lockCtx.PessimisticLockWaited) > 0 {
-					timeWaited := time.Since(lockCtx.WaitStartTime)
-					atomic.StoreInt64(lockCtx.LockKeysDuration, int64(timeWaited))
-					metrics.TiKVPessimisticLockKeysDuration.Observe(timeWaited.Seconds())
-				}
-			}
-		}
-		if lockCtx.LockKeysCount != nil {
-			*lockCtx.LockKeysCount += int32(len(keys))
-		}
 		if lockCtx.Stats != nil {
 			lockCtx.Stats.TotalTime = time.Since(startTime)
 			ctxValue := ctx.Value(util.LockKeysDetailCtxKey)

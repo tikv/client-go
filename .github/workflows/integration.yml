@@ -2,13 +2,13 @@ name: Integration Test
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 jobs:
-
   integration-local:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -17,13 +17,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Test
         run: go test ./...
         working-directory: integration_tests
 
   integration-local-race:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,13 +33,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Test
         run: go test ./... -race
         working-directory: integration_tests
 
   integration-tikv:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,7 +49,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
@@ -78,6 +80,7 @@ jobs:
         working-directory: integration_tests
 
   integration-raw-tikv:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -89,7 +92,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: 1.23.2
+          go-version: 1.24.1
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1

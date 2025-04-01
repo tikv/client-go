@@ -382,7 +382,7 @@ func (c *pdClient) SplitAndScatterRegions(ctx context.Context, splitKeys [][]byt
 	return nil, nil
 }
 
-func (c *pdClient) GetAllMembers(ctx context.Context) ([]*pdpb.Member, error) {
+func (c *pdClient) GetAllMembers(ctx context.Context) (*pdpb.GetMembersResponse, error) {
 	return nil, nil
 }
 

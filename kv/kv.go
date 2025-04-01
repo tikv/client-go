@@ -61,9 +61,6 @@ type LockCtx struct {
 	ForUpdateTS             uint64
 	lockWaitTime            *lockWaitTimeInMs
 	WaitStartTime           time.Time
-	PessimisticLockWaited   *int32
-	LockKeysDuration        *int64
-	LockKeysCount           *int32
 	ReturnValues            bool
 	CheckExistence          bool
 	LockOnlyIfExists        bool
