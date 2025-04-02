@@ -672,12 +672,6 @@ func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRea
 		return errors.Errorf("MaxInt64 <= readTS < MaxUint64, readTS=%v", readTS)
 	}
 
-	// only check stale reads and reads using `tidb_snapshot`
-	forTidbSnapshot := ctx.Value(ValidateReadTSForTidbSnapshot{}) != nil
-	if !forTidbSnapshot && !isStaleRead {
-		return nil
-	}
-
 	if readTS == math.MaxUint64 {
 		if isStaleRead {
 			return oracle.ErrLatestStaleRead{}
