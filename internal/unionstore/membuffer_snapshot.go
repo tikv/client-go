@@ -31,6 +31,8 @@ type SnapshotWithMutex[S memdbSnapshot] struct {
 	snapshot S
 }
 
+var _ MemBufferSnapshot = (*SnapshotWithMutex[memdbSnapshot])(nil)
+
 func (s *SnapshotWithMutex[_]) Get(ctx context.Context, k []byte) ([]byte, error) {
 	if err := s.seqCheck(); err != nil {
 		return nil, err
