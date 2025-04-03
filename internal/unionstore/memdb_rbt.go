@@ -199,7 +199,10 @@ func (db *rbtDBWithContext) SnapshotIterReverse(upper, lower []byte) Iterator {
 
 // SnapshotGetter returns a Getter for a snapshot of MemBuffer.
 func (db *rbtDBWithContext) SnapshotGetter() Getter {
-	return db.RBT.SnapshotGetter()
+	return &SnapshotGetter{
+		mu:     &db.RWMutex,
+		getter: db.RBT.SnapshotGetter(),
+	}
 }
 
 func (db *rbtDBWithContext) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
