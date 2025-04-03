@@ -21,32 +21,35 @@ import (
 	"github.com/tikv/client-go/v2/internal/unionstore/arena"
 )
 
-// getSnapshot returns the "snapshot" for snapshotGetter or snapshotIterator, which is usually the snapshot
-// of stage[0]
-func (t *ART) getSnapshot() arena.MemDBCheckpoint {
+type Snapshot struct {
+	tree *ART
+	cp   arena.MemDBCheckpoint
+}
+
+func (t *ART) getSnapshotCheckpoint() arena.MemDBCheckpoint {
 	if len(t.stages) > 0 {
 		return t.stages[0]
 	}
 	return t.checkpoint()
 }
 
-// SnapshotGetter returns a Getter for a snapshot of MemBuffer.
-func (t *ART) SnapshotGetter() *SnapGetter {
-	return &SnapGetter{
+// GetSnapshot returns a Getter for a snapshot of MemBuffer's stage[0]
+func (t *ART) GetSnapshot() *Snapshot {
+	return &Snapshot{
 		tree: t,
-		cp:   t.getSnapshot(),
+		cp:   t.getSnapshotCheckpoint(),
 	}
 }
 
-func (t *ART) newSnapshotIterator(start, end []byte, desc bool) *SnapIter {
+func (s *Snapshot) NewSnapshotIterator(start, end []byte, desc bool) *SnapIter {
 	var (
 		inner *Iterator
 		err   error
 	)
 	if desc {
-		inner, err = t.IterReverse(start, end)
+		inner, err = s.tree.IterReverse(start, end)
 	} else {
-		inner, err = t.Iter(start, end)
+		inner, err = s.tree.Iter(start, end)
 	}
 	if err != nil {
 		panic(err)
@@ -54,44 +57,13 @@ func (t *ART) newSnapshotIterator(start, end []byte, desc bool) *SnapIter {
 	inner.ignoreSeqNo = true
 	it := &SnapIter{
 		Iterator: inner,
-		cp:       t.getSnapshot(),
+		cp:       s.cp,
 	}
 	it.tree.allocator.snapshotInc()
 	for !it.setValue() && it.Valid() {
 		_ = it.Next()
 	}
 	return it
-}
-
-// SnapshotIter returns an Iterator for a snapshot of MemBuffer.
-func (t *ART) SnapshotIter(start, end []byte) *SnapIter {
-	return t.newSnapshotIterator(start, end, false)
-}
-
-// SnapshotIterReverse returns a reverse Iterator for a snapshot of MemBuffer.
-func (t *ART) SnapshotIterReverse(k, lowerBound []byte) *SnapIter {
-	return t.newSnapshotIterator(k, lowerBound, true)
-}
-
-type SnapGetter struct {
-	tree *ART
-	cp   arena.MemDBCheckpoint
-}
-
-func (snap *SnapGetter) Get(ctx context.Context, key []byte) ([]byte, error) {
-	addr, lf := snap.tree.traverse(key, false)
-	if addr.IsNull() {
-		return nil, tikverr.ErrNotExist
-	}
-	if lf.vLogAddr.IsNull() {
-		// A flags only key, act as value not exists
-		return nil, tikverr.ErrNotExist
-	}
-	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vLogAddr, &snap.cp)
-	if !ok {
-		return nil, tikverr.ErrNotExist
-	}
-	return v, nil
 }
 
 type SnapIter struct {
@@ -134,3 +106,21 @@ func (i *SnapIter) setValue() bool {
 	}
 	return false
 }
+
+func (snap *Snapshot) Get(ctx context.Context, key []byte) ([]byte, error) {
+	addr, lf := snap.tree.traverse(key, false)
+	if addr.IsNull() {
+		return nil, tikverr.ErrNotExist
+	}
+	if lf.vLogAddr.IsNull() {
+		// A flags only key, act as value not exists
+		return nil, tikverr.ErrNotExist
+	}
+	v, ok := snap.tree.allocator.vlogAllocator.GetSnapshotValue(lf.vLogAddr, &snap.cp)
+	if !ok {
+		return nil, tikverr.ErrNotExist
+	}
+	return v, nil
+}
+
+func (snap *Snapshot) Close() {}

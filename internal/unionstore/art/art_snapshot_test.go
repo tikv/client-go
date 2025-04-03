@@ -39,7 +39,7 @@ func TestSnapshotIteratorPreventFreeNode(t *testing.T) {
 		default:
 			panic("unsupported num")
 		}
-		it := tree.SnapshotIter(nil, nil)
+		it := tree.GetSnapshot().NewSnapshotIterator(nil, nil, false)
 		require.Equal(t, 0, len(*unusedNodeSlice))
 		tree.Set([]byte{0, byte(num)}, []byte{0, byte(num)})
 		require.Equal(t, 1, len(*unusedNodeSlice))
@@ -60,7 +60,7 @@ func TestConcurrentSnapshotIterNoRace(t *testing.T) {
 		}
 
 		const concurrency = 100
-		it := tree.SnapshotIter(nil, nil)
+		it := tree.GetSnapshot().NewSnapshotIterator(nil, nil, false)
 
 		tree.Set([]byte{0, byte(num)}, []byte{0, byte(num)})
 
@@ -72,7 +72,7 @@ func TestConcurrentSnapshotIterNoRace(t *testing.T) {
 		}()
 		for i := 1; i < concurrency; i++ {
 			go func(it *SnapIter) {
-				concurrentIt := tree.SnapshotIter(nil, nil)
+				concurrentIt := tree.GetSnapshot().NewSnapshotIterator(nil, nil, false)
 				concurrentIt.Close()
 				wg.Done()
 			}(it)

@@ -60,3 +60,6 @@ type MemDBCheckpoint = unionstore.MemDBCheckpoint
 
 // Metrics is the metrics of unionstore.
 type Metrics = unionstore.Metrics
+
+// MemBufferSnapshot is the snapshot of MemBuffer.
+type MemBufferSnapshot = unionstore.MemBufferSnapshot

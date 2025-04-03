@@ -1373,9 +1373,11 @@ func TestBatchedSnapshotIter(t *testing.T) {
 		}
 		h := db.Staging()
 		defer db.Release(h)
+		snapshot := db.GetSnapshot()
+		defer snapshot.Close()
 
 		// Create iterator - should be positioned at first key
-		iter := db.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, false)
+		iter := snapshot.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, false)
 		defer iter.Close()
 
 		// Should be able to read first key immediately
@@ -1405,8 +1407,10 @@ func TestBatchedSnapshotIter(t *testing.T) {
 		}
 		h := db.Staging()
 		defer db.Release(h)
+		snapshot := db.GetSnapshot()
+		defer snapshot.Close()
 
-		iter := db.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, true)
+		iter := snapshot.BatchedSnapshotIter([]byte{0, 0}, []byte{0, 255}, true)
 		defer iter.Close()
 
 		// Should be positioned at last key
@@ -1442,21 +1446,24 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 	t.Run("EdgeCases", func(t *testing.T) {
 		db := newArtDBWithContext()
 		h := db.Staging()
+		snapshot := db.GetSnapshot()
 		// invalid range - should be invalid immediately
-		iter := db.BatchedSnapshotIter([]byte{1}, []byte{1}, false)
+		iter := snapshot.BatchedSnapshotIter([]byte{1}, []byte{1}, false)
 		require.False(t, iter.Valid())
 		iter.Close()
 
 		// empty range - should be invalid immediately
-		iter = db.BatchedSnapshotIter([]byte{0}, []byte{1}, false)
+		iter = snapshot.BatchedSnapshotIter([]byte{0}, []byte{1}, false)
 		require.False(t, iter.Valid())
 		iter.Close()
+		snapshot.Close()
 
 		// Single element range
 		_ = db.Set([]byte{1}, []byte{1})
 		db.Release(h)
 		h = db.Staging()
-		iter = db.BatchedSnapshotIter([]byte{1}, []byte{2}, false)
+		snapshot = db.GetSnapshot()
+		iter = snapshot.BatchedSnapshotIter([]byte{1}, []byte{2}, false)
 		require.True(t, iter.Valid())
 		require.Equal(t, []byte{1}, iter.Key())
 		require.NoError(t, iter.Next())
@@ -1467,11 +1474,13 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		_ = db.Set([]byte{2}, []byte{2})
 		_ = db.Set([]byte{3}, []byte{3})
 		_ = db.Set([]byte{4}, []byte{4})
+		snapshot.Close()
 		db.Release(h)
 		_ = db.Staging()
 
 		// Forward iteration [2,4)
-		iter = db.BatchedSnapshotIter([]byte{2}, []byte{4}, false)
+		snapshot = db.GetSnapshot()
+		iter = snapshot.BatchedSnapshotIter([]byte{2}, []byte{4}, false)
 		vals := []byte{}
 		for iter.Valid() {
 			vals = append(vals, iter.Key()[0])
@@ -1481,7 +1490,7 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		iter.Close()
 
 		// Reverse iteration [2,4)
-		iter = db.BatchedSnapshotIter([]byte{2}, []byte{4}, true)
+		iter = snapshot.BatchedSnapshotIter([]byte{2}, []byte{4}, true)
 		vals = []byte{}
 		for iter.Valid() {
 			vals = append(vals, iter.Key()[0])
@@ -1503,7 +1512,9 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		// lower bound included
 		h := db.Staging()
 		defer db.Release(h)
-		iter := db.BatchedSnapshotIter([]byte{1, 2}, []byte{1, 9}, false)
+		snapshot := db.GetSnapshot()
+		defer snapshot.Close()
+		iter := snapshot.BatchedSnapshotIter([]byte{1, 2}, []byte{1, 9}, false)
 		vals := []byte{}
 		for iter.Valid() {
 			vals = append(vals, iter.Key()[1])
@@ -1513,7 +1524,7 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		iter.Close()
 
 		// upper bound excluded
-		iter = db.BatchedSnapshotIter([]byte{1, 0}, []byte{1, 6}, false)
+		iter = snapshot.BatchedSnapshotIter([]byte{1, 0}, []byte{1, 6}, false)
 		vals = []byte{}
 		for iter.Valid() {
 			vals = append(vals, iter.Key()[1])
@@ -1523,7 +1534,7 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		iter.Close()
 
 		// reverse
-		iter = db.BatchedSnapshotIter([]byte{1, 0}, []byte{1, 6}, true)
+		iter = snapshot.BatchedSnapshotIter([]byte{1, 0}, []byte{1, 6}, true)
 		vals = []byte{}
 		for iter.Valid() {
 			vals = append(vals, iter.Key()[1])
@@ -1546,8 +1557,10 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		}
 		h := db.Staging()
 		defer db.Release(h)
+		snapshot := db.GetSnapshot()
+		defer snapshot.Close()
 		// forward
-		iter := db.BatchedSnapshotIter([]byte{2}, []byte{3}, false)
+		iter := snapshot.BatchedSnapshotIter([]byte{2}, []byte{3}, false)
 		count := 0
 		for iter.Valid() {
 			require.Equal(t, keys[count], iter.Key())
@@ -1558,7 +1571,7 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		iter.Close()
 
 		// reverse
-		iter = db.BatchedSnapshotIter([]byte{2}, []byte{3}, true)
+		iter = snapshot.BatchedSnapshotIter([]byte{2}, []byte{3}, true)
 		count = len(keys) - 1
 		for iter.Valid() {
 			require.Equal(t, keys[count], iter.Key())
@@ -1577,8 +1590,10 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		}
 		h := db.Staging()
 		defer db.Release(h)
+		snapshot := db.GetSnapshot()
+		defer snapshot.Close()
 		// forward
-		iter := db.BatchedSnapshotIter([]byte{3, 0}, []byte{3, 255}, false)
+		iter := snapshot.BatchedSnapshotIter([]byte{3, 0}, []byte{3, 255}, false)
 		count := 0
 		for iter.Valid() {
 			require.Equal(t, []byte{3, byte(count)}, iter.Key())
@@ -1589,7 +1604,7 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		iter.Close()
 
 		// reverse
-		iter = db.BatchedSnapshotIter([]byte{3, 0}, []byte{3, 255}, true)
+		iter = snapshot.BatchedSnapshotIter([]byte{3, 0}, []byte{3, 255}, true)
 		count = 99
 		for iter.Valid() {
 			require.Equal(t, []byte{3, byte(count)}, iter.Key())
@@ -1604,8 +1619,10 @@ func TestBatchedSnapshotIterEdgeCase(t *testing.T) {
 		db := newArtDBWithContext()
 		_ = db.Set([]byte{0}, []byte{0})
 		h := db.Staging()
+		snapshot := db.GetSnapshot()
+		defer snapshot.Close()
 		_ = db.Set([]byte{byte(1)}, []byte{byte(1)})
-		iter := db.BatchedSnapshotIter([]byte{0}, []byte{255}, false)
+		iter := snapshot.BatchedSnapshotIter([]byte{0}, []byte{255}, false)
 		require.True(t, iter.Valid())
 		require.NoError(t, iter.Next())
 		db.Release(h)
