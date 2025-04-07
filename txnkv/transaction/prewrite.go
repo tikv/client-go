@@ -467,7 +467,7 @@ func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyEr
 		// Extract lock from key error
 		lock, err1 := txnlock.ExtractLockFromKeyErr(keyErr)
 		if err1 != nil {
-			if tikverr.IsErrWriteConflict(errors.Cause(err1)) {
+			if tikverr.IsErrWriteConflict(err1) {
 				metrics.TiKVTxnWriteConflictCounter.Inc()
 			}
 			return nil, err1
