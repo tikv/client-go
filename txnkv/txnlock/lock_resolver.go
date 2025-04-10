@@ -243,7 +243,7 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	txnInfos := make(map[uint64]uint64)
 	startTime := time.Now()
 	for _, l := range expiredLocks {
-		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling lock", zap.Stringer("lock", l))
+		logutil.Logger(bo.GetCtx()).Debug("BatchResolveLocks handling locks", zap.Stringer("lock", l))
 
 		if _, ok := txnInfos[l.TxnID]; ok {
 			continue
