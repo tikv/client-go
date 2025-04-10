@@ -139,7 +139,7 @@ func (b *Backoffer) BackoffWithMaxSleepTxnLockFast(maxSleepMs int, err error) er
 // and never sleep more than maxSleepMs for each sleep.
 func (b *Backoffer) BackoffWithCfgAndMaxSleep(cfg *Config, maxSleepMs int, err error) error {
 	if strings.Contains(err.Error(), tikverr.MismatchClusterID) {
-		logutil.Logger(b.ctx).Fatal("critical errors", zap.Error(err))
+		logutil.Logger(b.ctx).Fatal("critical erro", zap.Error(err))
 	}
 	select {
 	case <-b.ctx.Done():
