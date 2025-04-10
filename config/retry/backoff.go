@@ -74,6 +74,12 @@ type Backoffer struct {
 	parent         *Backoffer
 }
 
+// ErrWithBo wraps err with Backoffer pointer
+type ErrWithBo struct {
+	Error error
+	Bo    *Backoffer
+}
+
 type txnStartCtxKeyType struct{}
 
 // TxnStartKey is a key for transaction start_ts info in context.Context.
