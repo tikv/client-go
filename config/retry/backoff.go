@@ -300,6 +300,9 @@ func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 // MergeForked merged back forked Backoffer's status
 // Note: Make sure forked is no longer used after this, because b reuses forked's errors/backoffSleepMS/backoffTimes fields
 func (b *Backoffer) MergeForked(forked *Backoffer) {
+	if forked == nil || forked.parent != b {
+		return
+	}
 	b.totalSleep = forked.totalSleep
 	b.excludedSleep = forked.excludedSleep
 	b.errors = forked.errors
