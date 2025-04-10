@@ -291,6 +291,19 @@ func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 	}, cancel
 }
 
+// MergeForked merged back forked Backoffer's status
+// Note: Make sure forked is no longer used after this, because b reuses forked's errors/backoffSleepMS/backoffTimes fields
+func (b *Backoffer) MergeForked(forked *Backoffer) {
+	if forked == nil {
+		return
+	}
+	b.totalSleep = forked.totalSleep
+	b.excludedSleep = forked.excludedSleep
+	b.errors = forked.errors
+	b.backoffSleepMS = forked.backoffSleepMS
+	b.backoffTimes = forked.backoffTimes
+}
+
 // GetVars returns the binded vars.
 func (b *Backoffer) GetVars() *kv.Variables {
 	return b.vars
