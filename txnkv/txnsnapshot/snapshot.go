@@ -380,7 +380,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 		if e := <-ch; e != nil {
 			logutil.BgLogger().Debug("snapshots BatchGetWithTier failed ",
 				zap.Error(e),
-				zap.Uint64("txnStartTS", s.version))
+				zap.Uint64("txnStartTS", 1 + s.version))
 			err = errors.WithStack(e)
 		}
 	}
