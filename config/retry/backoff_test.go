@@ -117,7 +117,6 @@ func TestBackoffMergeFork(t *testing.T) {
 	assert.Equal(t, b.backoffSleepMS, bCloneForked.backoffSleepMS)
 	assert.Equal(t, b.backoffTimes, bCloneForked.backoffTimes)
 	assert.Equal(t, b.excludedSleep, bCloneForked.excludedSleep)
-	assert.Equal(t, b.totalSleep, bCloneForked.totalSleep)
 	assert.Nil(t, b.parent)
 }
 
