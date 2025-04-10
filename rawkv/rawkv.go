@@ -722,6 +722,12 @@ func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, 
 	}
 }
 
+// batchResultWithBo wraps kvrpc.BatchResult with Backoffer
+type batchResultWithBo struct {
+	result kvrpc.BatchResult
+	bo     *retry.Backoffer
+}
+
 func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOptions, cmdType tikvrpc.CmdType) (*tikvrpc.Response, error) { // split the keys
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
@@ -732,14 +738,17 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	for regionID, groupKeys := range groups {
 		batches = kvrpc.AppendKeyBatches(batches, regionID, groupKeys, rawBatchPairCount)
 	}
-	bo, cancel := bo.Fork()
-	ches := make(chan kvrpc.BatchResult, len(batches))
+	forkedBo, cancel := bo.Fork()
+	ches := make(chan batchResultWithBo, len(batches))
 	for _, batch := range batches {
 		batch1 := batch
 		go func() {
-			singleBatchBackoffer, singleBatchCancel := bo.Fork()
+			singleBatchBackoffer, singleBatchCancel := forkedBo.Fork()
 			defer singleBatchCancel()
-			ches <- c.doBatchReq(singleBatchBackoffer, batch1, options, cmdType)
+			var batchResultWithBo batchResultWithBo
+			batchResultWithBo.result = c.doBatchReq(singleBatchBackoffer, batch1, options, cmdType)
+			batchResultWithBo.bo = singleBatchBackoffer
+			ches <- batchResultWithBo
 		}()
 	}
 
@@ -751,17 +760,20 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	case tikvrpc.CmdRawBatchDelete:
 		resp = &tikvrpc.Response{Resp: &kvrpcpb.RawBatchDeleteResponse{}}
 	}
-	for i := 0; i < len(batches); i++ {
-		singleResp, ok := <-ches
-		if ok {
-			if singleResp.Error != nil {
+	for i := range batches {
+		if singleResp, ok := <-ches; ok {
+			if singleResp.result.Error != nil {
 				if firstError == nil {
-					firstError = errors.WithStack(singleResp.Error)
+					firstError = errors.WithStack(singleResp.result.Error)
 					cancel()
 				}
 			} else if cmdType == tikvrpc.CmdRawBatchGet {
-				cmdResp := singleResp.Resp.(*kvrpcpb.RawBatchGetResponse)
+				cmdResp := singleResp.result.Resp.(*kvrpcpb.RawBatchGetResponse)
 				resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs = append(resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs, cmdResp.Pairs...)
+			}
+			// Use the slowest execution's bo to replace the original bo
+			if i+1 == len(batches) {
+				bo.MergeForked(singleResp.bo)
 			}
 		}
 	}
@@ -894,23 +906,32 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 	for regionID, groupKeys := range groups {
 		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyToTTL, rawBatchPutSize)
 	}
-	bo, cancel := bo.Fork()
-	ch := make(chan error, len(batches))
+	newBo, cancel := bo.Fork()
+	ch := make(chan retry.ErrWithBo, len(batches))
 	for _, batch := range batches {
 		batch1 := batch
 		go func() {
-			singleBatchBackoffer, singleBatchCancel := bo.Fork()
+			singleBatchBackoffer, singleBatchCancel := newBo.Fork()
 			defer singleBatchCancel()
-			ch <- c.doBatchPut(singleBatchBackoffer, batch1, opts)
+			var ewb retry.ErrWithBo
+			ewb.Error = c.doBatchPut(singleBatchBackoffer, batch1, opts)
+			ewb.Bo = singleBatchBackoffer
+			ch <- ewb
 		}()
 	}
 
-	for i := 0; i < len(batches); i++ {
-		if e := <-ch; e != nil {
-			// catch the first error
-			if err == nil {
-				err = errors.WithStack(e)
-				cancel()
+	for i := range batches {
+		if ewb, ok := <-ch; ok {
+			if ewb.Error != nil {
+				// catch the first error
+				if err == nil {
+					err = errors.WithStack(ewb.Error)
+					cancel()
+				}
+			}
+			// Use the slowest execution's bo to replace the original bo
+			if i+1 == len(batches) {
+				bo.MergeForked(ewb.Bo)
 			}
 		}
 	}

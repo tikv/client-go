@@ -361,28 +361,37 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 	if len(batches) == 1 {
 		return s.batchGetSingleRegion(bo, batches[0], readTier, collectF)
 	}
-	ch := make(chan error, len(batches))
-	bo, cancel := bo.Fork()
+	ch := make(chan retry.ErrWithBo, len(batches))
+	forkedBo, cancel := bo.Fork()
 	defer cancel()
 	for i, batch1 := range batches {
 		var backoffer *retry.Backoffer
 		if i == 0 {
-			backoffer = bo
+			backoffer = forkedBo
 		} else {
-			backoffer = bo.Clone()
+			backoffer = forkedBo.Clone()
 		}
 		batch := batch1
 		go func() {
 			growStackForBatchGetWorker()
-			ch <- s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
+			var ewb retry.ErrWithBo
+			ewb.Error = s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
+			ewb.Bo = backoffer
+			ch <- ewb
 		}()
 	}
-	for i := 0; i < len(batches); i++ {
-		if e := <-ch; e != nil {
-			logutil.BgLogger().Debug("snapshot BatchGetWithTier failed",
-				zap.Error(e),
-				zap.Uint64("txnStartTS", s.version))
-			err = errors.WithStack(e)
+	for i := range batches {
+		if ewb, ok := <-ch; ok {
+			if ewb.Error != nil {
+				logutil.BgLogger().Debug("snapshot BatchGetWithTier failed",
+					zap.Error(ewb.Error),
+					zap.Uint64("txnStartTS", s.version))
+				err = errors.WithStack(ewb.Error)
+			}
+			// Use the slowest execution's bo to replace the original bo
+			if i+1 == len(batches) {
+				bo.MergeForked(ewb.Bo)
+			}
 		}
 	}
 	return err

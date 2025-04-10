@@ -64,6 +64,13 @@ func equalRegionStartKey(key, regionStartKey []byte) bool {
 	return bytes.Equal(key, regionStartKey)
 }
 
+// batchResultWithBoAndFlag wraps kvrpc.BatchResult with Backoffer
+type batchResultWithBoAndFlag struct {
+	result  kvrpc.BatchResult
+	bo      *retry.Backoffer
+	boValid bool
+}
+
 func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter bool, tableID *int64) (*tikvrpc.Response, error) {
 	// equalRegionStartKey is used to filter split keys.
 	// If the split key is equal to the start key of the region, then the key has been split, we need to skip the split key.
@@ -92,41 +99,55 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 		resp := s.batchSendSingleRegion(bo, batches[0], scatter, tableID)
 		return resp.Response, resp.Error
 	}
-	ch := make(chan kvrpc.BatchResult, len(batches))
+	ch := make(chan batchResultWithBoAndFlag, len(batches))
 	for _, batch1 := range batches {
 		go func(b kvrpc.Batch) {
 			backoffer, cancel := bo.Fork()
 			defer cancel()
 
 			util.WithRecovery(func() {
+				var wrappedBatchResult batchResultWithBoAndFlag
+				wrappedBatchResult.result = s.batchSendSingleRegion(backoffer, b, scatter, tableID)
+				wrappedBatchResult.bo = backoffer
+				wrappedBatchResult.boValid = true
 				select {
-				case ch <- s.batchSendSingleRegion(backoffer, b, scatter, tableID):
+				case ch <- wrappedBatchResult:
 				case <-bo.GetCtx().Done():
-					ch <- kvrpc.BatchResult{Error: bo.GetCtx().Err()}
+					wrappedBatchResult.result = kvrpc.BatchResult{Error: bo.GetCtx().Err()}
+					wrappedBatchResult.boValid = false
+					ch <- wrappedBatchResult
 				}
 			}, func(r interface{}) {
 				if r != nil {
-					ch <- kvrpc.BatchResult{Error: errors.Errorf("%v", r)}
+					var wrappedBatchResult batchResultWithBoAndFlag
+					wrappedBatchResult.result = kvrpc.BatchResult{Error: errors.Errorf("%v", r)}
+					wrappedBatchResult.boValid = false
+					ch <- wrappedBatchResult
 				}
 			})
 		}(batch1)
 	}
 
 	srResp := &kvrpcpb.SplitRegionResponse{Regions: make([]*metapb.Region, 0, len(keys)*2)}
-	for i := 0; i < len(batches); i++ {
-		batchResp := <-ch
-		if batchResp.Error != nil {
-			logutil.BgLogger().Info("batch split regions failed", zap.Error(batchResp.Error))
+	for i := range batches {
+		wrappedBatchResp := <-ch
+		if wrappedBatchResp.result.Error != nil {
+			logutil.BgLogger().Info("batch split regions failed", zap.Error(wrappedBatchResp.result.Error))
 			if err == nil {
-				err = batchResp.Error
+				err = wrappedBatchResp.result.Error
 			}
 		}
 
 		// If the split succeeds and the scatter fails, we also need to add the region IDs.
-		if batchResp.Response != nil {
-			spResp := batchResp.Resp.(*kvrpcpb.SplitRegionResponse)
+		if wrappedBatchResp.result.Response != nil {
+			spResp := wrappedBatchResp.result.Resp.(*kvrpcpb.SplitRegionResponse)
 			regions := spResp.GetRegions()
 			srResp.Regions = append(srResp.Regions, regions...)
+		}
+
+		// Use the slowest execution's bo to replace the original bo
+		if i+1 == len(batches) && wrappedBatchResp.boValid {
+			bo.MergeForked(wrappedBatchResp.bo)
 		}
 	}
 	return &tikvrpc.Response{Resp: srResp}, err

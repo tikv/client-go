@@ -971,7 +971,7 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 	if err != nil {
 		return err
 	}
-	errChan := make(chan error, len(keysByRegion))
+	errChan := make(chan retry.ErrWithBo, len(keysByRegion))
 	// Resolve every lock in the transaction.
 	for region, locks := range keysByRegion {
 		curLocks := locks
@@ -980,15 +980,23 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		defer cancel()
 
 		go func() {
-			errChan <- lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
+			var ewb retry.ErrWithBo
+			ewb.Error = lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
+			ewb.Bo = resolveBo
+			errChan <- ewb
 		}()
 	}
 
 	var errs []string
-	for range keysByRegion {
-		err1 := <-errChan
-		if err1 != nil {
-			errs = append(errs, err1.Error())
+	for i := range len(keysByRegion) {
+		if ewb, ok := <-errChan; ok {
+			if ewb.Error != nil {
+				errs = append(errs, ewb.Error.Error())
+			}
+			// Use the slowest execution's bo to replace the original bo
+			if i+1 == len(keysByRegion) {
+				bo.MergeForked(ewb.Bo)
+			}
 		}
 	}
 
@@ -1045,7 +1053,7 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		missingLock: false,
 	}
 
-	errChan := make(chan error, len(regions))
+	errChan := make(chan retry.ErrWithBo, len(regions))
 	for regionID, keys := range regions {
 		curRegionID := regionID
 		curKeys := keys
@@ -1053,14 +1061,22 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		defer cancel()
 
 		go func() {
-			errChan <- lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
+			var ewb retry.ErrWithBo
+			ewb.Error = lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
+			ewb.Bo = checkBo
+			errChan <- ewb
 		}()
 	}
 
-	for range regions {
-		err := <-errChan
-		if err != nil {
-			return nil, err
+	for i := range len(regions) {
+		if ewb, ok := <-errChan; ok {
+			// Use the slowest execution's bo to replace the original bo
+			if i+1 == len(regions) {
+				bo.MergeForked(ewb.Bo)
+			}
+			if ewb.Error != nil {
+				return nil, ewb.Error
+			}
 		}
 	}
 
