@@ -754,7 +754,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	case tikvrpc.CmdRawBatchDelete:
 		resp = &tikvrpc.Response{Resp: &kvrpcpb.RawBatchDeleteResponse{}}
 	}
-	for i := 0; i < len(batches); i++ {
+	for _ := range batched {
 		singleResp, ok := <-ches
 		if ok {
 			if singleResp.Error != nil {
@@ -898,35 +898,27 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyToTTL, rawBatchPutSize)
 	}
 	newBo, cancel := bo.Fork()
-	ch := make(chan retry.ErrWithBo, len(batches))
+	ch := make(chan error, len(batches))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	for _, batch := range batches {
 		batch1 := batch
 		go func() {
 			singleBatchBackoffer, singleBatchCancel := newBo.Fork()
 			defer singleBatchCancel()
-			var ewb retry.ErrWithBo
-			ewb.Error = c.doBatchPut(singleBatchBackoffer, batch1, opts)
-			ewb.Bo = singleBatchBackoffer
-			ch <- ewb
+			ch <- c.doBatchPut(singleBatchBackoffer, batch1, opts)
+			lastForkedBo.Store(singleBatchBackoffer)
 		}()
 	}
-
-	for i := range batches {
-		if ewb, ok := <-ch; ok {
-			if ewb.Error != nil {
-				// catch the first error
-				if err == nil {
-					err = errors.WithStack(ewb.Error)
-					cancel()
-				}
-			}
-			// Use the slowest execution's bo to replace the original bo
-			if i+1 == len(batches) {
-				bo.UpdateUsingForked(ewb.Bo)
+	for _ := range batches {
+		if e := <-ch; e != nil {
+			// catch the first error
+			if err == nil {
+				err = errors.WithStack(e)
+				cancel()
 			}
 		}
 	}
-
+	bo.UpdateUsingForked(lastForkedBo.Load())
 	if err == nil {
 		cancel()
 	}
