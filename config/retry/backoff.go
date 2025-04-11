@@ -307,7 +307,7 @@ func (b *Backoffer) UpdateUsingForked(forked *Backoffer) {
 	// Strictly, we should only check forkedParent == b here. However, there are existing cases that we need to
 	// update bo with its grand child's status, thus we checked forkedParent == b || forkedParent.parent == b here 
 	if forkedParent == nil || (forkedParent != b && forkedParent.parent != b) {
-		return nil
+		return
 	}
 	b.totalSleep = forked.totalSleep
 	b.excludedSleep = forked.excludedSleep
