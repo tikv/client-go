@@ -754,7 +754,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	case tikvrpc.CmdRawBatchDelete:
 		resp = &tikvrpc.Response{Resp: &kvrpcpb.RawBatchDeleteResponse{}}
 	}
-	for _ := range batched {
+	for range batched {
 		singleResp, ok := <-ches
 		if ok {
 			if singleResp.Error != nil {
@@ -909,7 +909,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 			lastForkedBo.Store(singleBatchBackoffer)
 		}()
 	}
-	for _ := range batches {
+	for range batches {
 		if e := <-ch; e != nil {
 			// catch the first error
 			if err == nil {
