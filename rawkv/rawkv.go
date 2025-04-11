@@ -741,7 +741,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	}
 	forkedBo, cancel := bo.Fork()
 	var lastForkedBo atomic.Pointer[retry.Backoffer]
-	ches := make(chan batchResultWithBo, len(batches))
+	ches := make(chan kvrpc.BatchResult, len(batches))
 	for _, batch := range batches {
 		batch1 := batch
 		go func() {
