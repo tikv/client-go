@@ -723,12 +723,6 @@ func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, 
 	}
 }
 
-// batchResultWithBo wraps kvrpc.BatchResult with Backoffer
-type batchResultWithBo struct {
-	result kvrpc.BatchResult
-	bo     *retry.Backoffer
-}
-
 func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOptions, cmdType tikvrpc.CmdType) (*tikvrpc.Response, error) { // split the keys
 	groups, _, err := c.regionCache.GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
