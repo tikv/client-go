@@ -74,6 +74,12 @@ type Backoffer struct {
 	parent         *Backoffer
 }
 
+// ErrWithBo wraps err with Backoffer pointer
+type ErrWithBo struct {
+	Error error
+	Bo    *Backoffer
+}
+
 type txnStartCtxKeyType struct{}
 
 // TxnStartKey is a key for transaction start_ts info in context.Context.
@@ -289,6 +295,25 @@ func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 		vars:           b.vars,
 		parent:         b,
 	}, cancel
+}
+
+// UpdateUsingForked updates self with forked Backoffer's status
+// Note: Make sure forked is no longer used after this, because b reuses forked's errors/backoffSleepMS/backoffTimes fields
+func (b *Backoffer) UpdateUsingForked(forked *Backoffer) {
+	if forked == nil {
+		return
+	}
+	forkedParent := forked.parent
+	// Strictly, we should only check forkedParent == b here. However, there are existing cases that we need to
+	// update bo with its grand child's status, thus we checked forkedParent == b || forkedParent.parent == b here 
+	if forkedParent == nil || (forkedParent != b && forkedParent.parent != b) {
+		return
+	}
+	b.totalSleep = forked.totalSleep
+	b.excludedSleep = forked.excludedSleep
+	b.errors = forked.errors
+	b.backoffSleepMS = forked.backoffSleepMS
+	b.backoffTimes = forked.backoffTimes
 }
 
 // GetVars returns the binded vars.
