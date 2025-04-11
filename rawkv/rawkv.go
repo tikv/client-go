@@ -37,6 +37,7 @@ package rawkv
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -739,16 +740,15 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 		batches = kvrpc.AppendKeyBatches(batches, regionID, groupKeys, rawBatchPairCount)
 	}
 	forkedBo, cancel := bo.Fork()
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	ches := make(chan batchResultWithBo, len(batches))
 	for _, batch := range batches {
 		batch1 := batch
 		go func() {
 			singleBatchBackoffer, singleBatchCancel := forkedBo.Fork()
 			defer singleBatchCancel()
-			var batchResultWithBo batchResultWithBo
-			batchResultWithBo.result = c.doBatchReq(singleBatchBackoffer, batch1, options, cmdType)
-			batchResultWithBo.bo = singleBatchBackoffer
-			ches <- batchResultWithBo
+			ches <- c.doBatchReq(singleBatchBackoffer, batch1, options, cmdType)
+			lastForkedBo.Store(singleBatchBackoffer)
 		}()
 	}
 
@@ -760,24 +760,21 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	case tikvrpc.CmdRawBatchDelete:
 		resp = &tikvrpc.Response{Resp: &kvrpcpb.RawBatchDeleteResponse{}}
 	}
-	for i := range batches {
-		if singleResp, ok := <-ches; ok {
-			if singleResp.result.Error != nil {
+	for i := 0; i < len(batches); i++ {
+		singleResp, ok := <-ches
+		if ok {
+			if singleResp.Error != nil {
 				if firstError == nil {
-					firstError = errors.WithStack(singleResp.result.Error)
+					firstError = errors.WithStack(singleResp.Error)
 					cancel()
 				}
 			} else if cmdType == tikvrpc.CmdRawBatchGet {
-				cmdResp := singleResp.result.Resp.(*kvrpcpb.RawBatchGetResponse)
+				cmdResp := singleResp.Resp.(*kvrpcpb.RawBatchGetResponse)
 				resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs = append(resp.Resp.(*kvrpcpb.RawBatchGetResponse).Pairs, cmdResp.Pairs...)
-			}
-			// Use the slowest execution's bo to replace the original bo
-			if i+1 == len(batches) {
-				bo.MergeForked(singleResp.bo)
 			}
 		}
 	}
-
+	bo.MergeStats(lastForkedBo.Load())
 	if firstError == nil {
 		cancel()
 	}
@@ -931,7 +928,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 			}
 			// Use the slowest execution's bo to replace the original bo
 			if i+1 == len(batches) {
-				bo.MergeForked(ewb.Bo)
+				bo.UpdateUsingForked(ewb.Bo)
 			}
 		}
 	}

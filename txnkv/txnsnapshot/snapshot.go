@@ -390,7 +390,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 			}
 			// Use the slowest execution's bo to replace the original bo
 			if i+1 == len(batches) {
-				bo.MergeForked(ewb.Bo)
+				bo.UpdateUsingForked(ewb.Bo)
 			}
 		}
 	}

@@ -297,11 +297,17 @@ func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 	}, cancel
 }
 
-// MergeForked merged back forked Backoffer's status
+// UpdateUsingForked updates self with forked Backoffer's status
 // Note: Make sure forked is no longer used after this, because b reuses forked's errors/backoffSleepMS/backoffTimes fields
-func (b *Backoffer) MergeForked(forked *Backoffer) {
+func (b *Backoffer) UpdateUsingForked(forked *Backoffer) {
 	if forked == nil {
 		return
+	}
+	forkedParent := forked.parent
+	// Strictly, we should only check forkedParent == b here. However, there are existing cases that we need to
+	// update bo with its grand child's status, thus we checked forkedParent == b || forkedParent.parent == b here 
+	if forkedParent == nil || (forkedParent != b && forkedParent.parent != b) {
+		return nil
 	}
 	b.totalSleep = forked.totalSleep
 	b.excludedSleep = forked.excludedSleep

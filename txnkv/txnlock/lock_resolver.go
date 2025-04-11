@@ -995,7 +995,7 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 			}
 			// Use the slowest execution's bo to replace the original bo
 			if i+1 == len(keysByRegion) {
-				bo.MergeForked(ewb.Bo)
+				bo.UpdateUsingForked(ewb.Bo)
 			}
 		}
 	}
@@ -1072,7 +1072,7 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		if ewb, ok := <-errChan; ok {
 			// Use the slowest execution's bo to replace the original bo
 			if i+1 == len(regions) {
-				bo.MergeForked(ewb.Bo)
+				bo.UpdateUsingForked(ewb.Bo)
 			}
 			if ewb.Error != nil {
 				return nil, ewb.Error
