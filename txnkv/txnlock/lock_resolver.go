@@ -1027,7 +1027,7 @@ func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, sta
 		// Only do checkAllSecondaries if the transaction status is undetermined.
 		// The async commit transaction is regarded as committed if `resolveData.commitTS` is not 0,
 		// otherwise it is regarded as rolled back. The transaction status should be determined if the
-		// `checkAllSecondaries` finishes wih no errors.
+		// `checkAllSecondaries` finishes with no errors.
 		resolveData, err := lr.checkAllSecondaries(bo, l, &status)
 		if err != nil {
 			return TxnStatus{}, err
