@@ -774,7 +774,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 			}
 		}
 	}
-	bo.MergeStats(lastForkedBo.Load())
+	bo.UpdateUsingForked(lastForkedBo.Load())
 	if firstError == nil {
 		cancel()
 	}
