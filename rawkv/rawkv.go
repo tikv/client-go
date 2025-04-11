@@ -754,7 +754,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	case tikvrpc.CmdRawBatchDelete:
 		resp = &tikvrpc.Response{Resp: &kvrpcpb.RawBatchDeleteResponse{}}
 	}
-	for range batched {
+	for range batches {
 		singleResp, ok := <-ches
 		if ok {
 			if singleResp.Error != nil {
