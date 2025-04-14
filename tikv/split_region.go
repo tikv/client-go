@@ -147,7 +147,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 
 		// Use the slowest execution's bo to replace the original bo
 		if i+1 == len(batches) && wrappedBatchResp.boValid {
-			bo.MergeForked(wrappedBatchResp.bo)
+			bo.UpdateUsingForked(wrappedBatchResp.bo)
 		}
 	}
 	return &tikvrpc.Response{Resp: srResp}, err

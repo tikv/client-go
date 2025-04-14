@@ -773,7 +773,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 			}
 			// Use the slowest execution's bo to replace the original bo
 			if i+1 == len(batches) {
-				bo.MergeForked(singleResp.bo)
+				bo.UpdateUsingForked(singleResp.bo)
 			}
 		}
 	}
@@ -931,7 +931,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 			}
 			// Use the slowest execution's bo to replace the original bo
 			if i+1 == len(batches) {
-				bo.MergeForked(ewb.Bo)
+				bo.UpdateUsingForked(ewb.Bo)
 			}
 		}
 	}

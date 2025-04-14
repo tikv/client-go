@@ -112,7 +112,7 @@ func TestBackoffMergeFork(t *testing.T) {
 	defer cancel()
 	bForked.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
 	bCloneForked := bForked.Clone()
-	b.MergeForked(bForked)
+	b.UpdateUsingForked(bForked)
 	assert.Equal(t, b.errors, bCloneForked.errors)
 	assert.Equal(t, b.backoffSleepMS, bCloneForked.backoffSleepMS)
 	assert.Equal(t, b.backoffTimes, bCloneForked.backoffTimes)
