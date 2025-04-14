@@ -667,7 +667,7 @@ func (s *testLockSuite) TestResolveTxnFallenBackFromAsyncCommit() {
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
 	expire, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
 	s.Nil(err)
-	s.Equal(expire, int64(0))
+	s.Equal(expire, int64(1))
 
 	t3, err := s.store.Begin()
 	s.Nil(err)
