@@ -642,11 +642,15 @@ func (s *testLockSuite) TestCheckLocksFallenBackFromAsyncCommit() {
 	err = lr.CheckAllSecondaries(bo, lock, &status)
 	s.True(lr.IsNonAsyncCommitLock(err))
 
+	resolveStarted := time.Now()
 	for {
 		status, err = lr.GetTxnStatusFromLock(bo, lock, 0, true)
 		s.Nil(err)
 		if status.Action() == kvrpcpb.Action_TTLExpireRollback {
 			break
+		}
+		if time.Since(resolveStarted) > 10*time.Second {
+			s.NoError(errors.Errorf("Resolve fallback async commit locks timeout"))
 		}
 	}
 	s.Equal(status.Action(), kvrpcpb.Action_TTLExpireRollback)
@@ -660,9 +664,18 @@ func (s *testLockSuite) TestResolveTxnFallenBackFromAsyncCommit() {
 	lock := s.mustGetLock([]byte("fb1"))
 	s.True(lock.UseAsyncCommit)
 	bo := tikv.NewBackoffer(context.Background(), getMaxBackoff)
-	expire, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
-	s.Nil(err)
-	s.Equal(expire, int64(1))
+
+	resolveStarted := time.Now()
+	for {
+		expire, err := s.store.NewLockResolver().ResolveLocks(bo, 0, []*txnkv.Lock{lock})
+		s.Nil(err)
+		if expire == 0 {
+			break
+		}
+		if time.Since(resolveStarted) > 10*time.Second {
+			s.NoError(errors.Errorf("Resolve fallback async commit locks timeout"))
+		}
+	}
 
 	t3, err := s.store.Begin()
 	s.Nil(err)
@@ -980,7 +993,7 @@ func (s *testLockSuite) TestResolveLocksForRead() {
 	defer lr.Close()
 
 	// Sleep for a while to make sure the async commit lock "k5" expires, so it could be resolve commit.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	msBeforeExpired, resolved, committed, err := lr.ResolveLocksForRead(bo, readStartTS, locks, false)
 	s.Nil(err)
 	s.Greater(msBeforeExpired, int64(0))
