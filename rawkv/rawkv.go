@@ -921,18 +921,17 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 	}
 
 	for i := range batches {
-		if ewb, ok := <-ch; ok {
-			if ewb.Error != nil {
-				// catch the first error
-				if err == nil {
-					err = errors.WithStack(ewb.Error)
-					cancel()
-				}
+		ewb := <-ch
+		if ewb.Error != nil {
+			// catch the first error
+			if err == nil {
+				err = errors.WithStack(ewb.Error)
+				cancel()
 			}
-			// Use the slowest execution's bo to replace the original bo
-			if i+1 == len(batches) {
-				bo.UpdateUsingForked(ewb.Bo)
-			}
+		}
+		// Use the slowest execution's bo to replace the original bo
+		if i+1 == len(batches) {
+			bo.UpdateUsingForked(ewb.Bo)
 		}
 	}
 
