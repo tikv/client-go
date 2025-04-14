@@ -501,8 +501,8 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		} else if err != nil {
 			return TxnStatus{}, err
 		}
-		expiredAsyncCommitLocks := status.primaryLock != nil && status.primaryLock.UseAsyncCommit && !forceSyncCommit &&
-			lr.store.GetOracle().IsExpired(l.TxnID, status.ttl, &oracle.Option{TxnScope: oracle.GlobalTxnScope})
+		ttlExpired := (lr.store == nil) || (lr.store.GetOracle().IsExpired(l.TxnID, status.ttl, &oracle.Option{TxnScope: oracle.GlobalTxnScope}))
+		expiredAsyncCommitLocks := status.primaryLock != nil && status.primaryLock.UseAsyncCommit && !forceSyncCommit && ttlExpired
 		if status.ttl != 0 && !expiredAsyncCommitLocks {
 			return status, nil
 		}
