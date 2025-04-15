@@ -220,6 +220,11 @@ func NewLock(l *kvrpcpb.LockInfo) *Lock {
 }
 
 func (lr *LockResolver) saveResolved(txnID uint64, status TxnStatus) {
+	if !status.IsStatusDetermined() {
+		logutil.BgLogger().Error("unexpected undetermined status saved to cache",
+			zap.Uint64("txnID", txnID), zap.Stringer("status", status), zap.Stack("stack"))
+		panic("unexpected undetermined status saved to cache")
+	}
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 
