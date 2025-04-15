@@ -2285,7 +2285,10 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 			}
 		}
 		start := time.Now()
-		pdOpts := []opt.GetRegionOption{opt.WithAllowFollowerHandle()}
+		pdOpts := []opt.GetRegionOption{
+			opt.WithAllowFollowerHandle(),
+			opt.WithOutputMustContainAllKeyRange(),
+		}
 		if batchOpt.needBuckets {
 			pdOpts = append(pdOpts, opt.WithBuckets())
 		}
