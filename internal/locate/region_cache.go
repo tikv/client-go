@@ -2343,7 +2343,8 @@ func (c *RegionCache) batchScanRegions(bo *retry.Backoffer, keyRanges []router.K
 
 // regionsHaveGapInRanges checks if the loaded regions can fully cover the key ranges.
 // If there are any gaps between the regions, it returns true, then the requests might be retried.
-// TODO: remove this function after PD client supports gap detection and handling it.
+// TODO: PD client now supports gap detection. Currently retained it as double verification.
+// Remove this function after validation completes.
 func regionsHaveGapInRanges(ranges []router.KeyRange, regionsInfo []*router.Region, limit int) bool {
 	if len(ranges) == 0 {
 		return false
