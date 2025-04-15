@@ -252,9 +252,36 @@ type MemBuffer interface {
 	GetMetrics() Metrics
 
 	// GetSnapshot returns a snapshot of the MemBuffer.
-	// The snapshot returned by this function is protected by an RWLock to ensure thread safety.
-	// And this snapshot can fully replace SnapshotGetter, SnapshotIter, and SnapshotIterReverse.
-	// Additionally, it provides two iteration methods: ForEachInSnapshotRange and BatchedSnapshotIter,
+	// The snapshot acquired using this function represents a version without any staging data written.
+	// The snapshot is valid until all the exist stagings are cleaned up or released.
+	// e.g.
+	//   ┌───────────┐
+	//   │ MemBuffer │
+	//   │  (k, v1)  │
+	//   └─────┬─────┘
+	//      staging
+	//         │
+	//         │  GetSnapshot ┌────────┐
+	//         ├─────────────►│snapshot│
+	//         │              └────┬───┘
+	//    set(k, v2)               │
+	//         │                   │
+	// ┌───────▼───────┐           │
+	// │   MemBuffer   │           │
+	// │    (k, v1)    │           │
+	// │staging(k, v2) │      ┌────▼───┐ get(k)    ┌──────┐
+	// └───────┬───────┘      │snapshot├──────────►│  v1  │
+	//         │              └────┬───┘           └──────┘
+	//      release                │
+	//      staging                │
+	//         │                   │
+	//   ┌─────▼─────┐        ┌────▼───┐ get(k)    ┌──────┐
+	//   │ MemBuffer │        │invalid │──────────►│error │
+	//   │  (k, v2)  │        │snapshot│           └──────┘
+	//   └───────────┘        └────────┘
+	// Snapshot returned by this function is protected by an `RWLock` to ensure thread safety.
+	// And this snapshot can fully replace `SnapshotGetter`, `SnapshotIter`, and `SnapshotIterReverse`.
+	// Additionally, it provides two iteration methods: `ForEachInSnapshotRange` and `BatchedSnapshotIter`,
 	// which tolerate interleaving reads and writes for using them simply.
 	// The snapshot also verifies the snapshot sequence number to prevent reading from an invalid snapshot.
 	GetSnapshot() MemBufferSnapshot
