@@ -971,7 +971,8 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 	if err != nil {
 		return err
 	}
-	errChan := make(chan retry.ErrWithBo, len(keysByRegion))
+	errChan := make(chan error, len(keysByRegion))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	// Resolve every lock in the transaction.
 	for region, locks := range keysByRegion {
 		curLocks := locks
@@ -980,25 +981,19 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		defer cancel()
 
 		go func() {
-			var ewb retry.ErrWithBo
-			ewb.Error = lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
-			ewb.Bo = resolveBo
-			errChan <- ewb
+			e := lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
+			lastForkedBo.Store(resolveBo)
+			errChan <- e
 		}()
 	}
 
 	var errs []string
-	for i := range len(keysByRegion) {
-		if ewb, ok := <-errChan; ok {
-			if ewb.Error != nil {
-				errs = append(errs, ewb.Error.Error())
-			}
-			// Use the slowest execution's bo to replace the original bo
-			if i+1 == len(keysByRegion) {
-				bo.UpdateUsingForked(ewb.Bo)
-			}
+	for range len(keysByRegion) {
+		if err1 := <-errChan; err1 != nil {
+			errs = append(errs, err1.Error())
 		}
 	}
+	bo.UpdateUsingForked(lastForkedBo.Load())
 
 	if len(errs) > 0 {
 		return errors.Errorf("async commit recovery (sending ResolveLock) finished with errors: %v", errs)
@@ -1053,7 +1048,8 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		missingLock: false,
 	}
 
-	errChan := make(chan retry.ErrWithBo, len(regions))
+	errChan := make(chan error, len(regions))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	for regionID, keys := range regions {
 		curRegionID := regionID
 		curKeys := keys
@@ -1061,25 +1057,19 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		defer cancel()
 
 		go func() {
-			var ewb retry.ErrWithBo
-			ewb.Error = lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
-			ewb.Bo = checkBo
-			errChan <- ewb
+			e := lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
+			lastForkedBo.Store(checkBo)
+			errChan <- e
 		}()
 	}
 
-	for i := range len(regions) {
-		if ewb, ok := <-errChan; ok {
-			// Use the slowest execution's bo to replace the original bo
-			if i+1 == len(regions) {
-				bo.UpdateUsingForked(ewb.Bo)
-			}
-			if ewb.Error != nil {
-				return nil, ewb.Error
-			}
+	for range len(regions) {
+		if e := <-errChan; e != nil {
+			bo.UpdateUsingForked(lastForkedBo.Load())
+			return nil, e
 		}
 	}
-
+	bo.UpdateUsingForked(lastForkedBo.Load())
 	return &shared, nil
 }
 
