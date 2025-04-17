@@ -972,6 +972,7 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		return err
 	}
 	errChan := make(chan error, len(keysByRegion))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	// Resolve every lock in the transaction.
 	for region, locks := range keysByRegion {
 		curLocks := locks
@@ -980,17 +981,19 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		defer cancel()
 
 		go func() {
-			errChan <- lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
+			e := lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
+			lastForkedBo.Store(resolveBo)
+			errChan <- e
 		}()
 	}
 
 	var errs []string
-	for range keysByRegion {
-		err1 := <-errChan
-		if err1 != nil {
+	for range len(keysByRegion) {
+		if err1 := <-errChan; err1 != nil {
 			errs = append(errs, err1.Error())
 		}
 	}
+	bo.UpdateUsingForked(lastForkedBo.Load())
 
 	if len(errs) > 0 {
 		return errors.Errorf("async commit recovery (sending ResolveLock) finished with errors: %v", errs)
@@ -1046,6 +1049,7 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 	}
 
 	errChan := make(chan error, len(regions))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	for regionID, keys := range regions {
 		curRegionID := regionID
 		curKeys := keys
@@ -1053,17 +1057,19 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		defer cancel()
 
 		go func() {
-			errChan <- lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
+			e := lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
+			lastForkedBo.Store(checkBo)
+			errChan <- e
 		}()
 	}
 
-	for range regions {
-		err := <-errChan
-		if err != nil {
-			return nil, err
+	for range len(regions) {
+		if e := <-errChan; e != nil {
+			bo.UpdateUsingForked(lastForkedBo.Load())
+			return nil, e
 		}
 	}
-
+	bo.UpdateUsingForked(lastForkedBo.Load())
 	return &shared, nil
 }
 
