@@ -35,10 +35,10 @@
 package mocktikv
 
 import (
-	"encoding/hex"
 	"fmt"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/util/redact"
 )
 
 // ErrLocked is returned when trying to Read/Write on a locked key. Client should
@@ -98,7 +98,7 @@ type ErrAlreadyRollbacked struct {
 }
 
 func (e *ErrAlreadyRollbacked) Error() string {
-	return fmt.Sprintf("txn=%v on key=%s is already rolled back", e.startTS, hex.EncodeToString(e.key))
+	return fmt.Sprintf("txn=%v on key=%s is already rolled back", e.startTS, redact.Key(e.key))
 }
 
 // ErrConflict is returned when the commitTS of key in the DB is greater than startTS.
@@ -154,5 +154,5 @@ type ErrAssertionFailed struct {
 
 func (e *ErrAssertionFailed) Error() string {
 	return fmt.Sprintf("AssertionFailed { StartTS: %v, Key: %v, Assertion: %v, ExistingStartTS: %v, ExistingCommitTS: %v }",
-		e.StartTS, hex.EncodeToString(e.Key), e.Assertion.String(), e.ExistingStartTS, e.ExistingCommitTS)
+		e.StartTS, redact.Key(e.Key), e.Assertion.String(), e.ExistingStartTS, e.ExistingCommitTS)
 }
