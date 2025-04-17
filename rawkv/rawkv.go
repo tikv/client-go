@@ -906,9 +906,9 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 		go func() {
 			singleBatchBackoffer, singleBatchCancel := newBo.Fork()
 			defer singleBatchCancel()
-			err := c.doBatchPut(singleBatchBackoffer, batch1, opts)
+			e := c.doBatchPut(singleBatchBackoffer, batch1, opts)
 			lastForkedBo.Store(singleBatchBackoffer)
-			ch <- err
+			ch <- e
 		}()
 	}
 
