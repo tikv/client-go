@@ -246,12 +246,14 @@ func (e *ErrPDServerTimeout) Error() string {
 
 // ErrGCTooEarly is the error that GC life time is shorter than transaction duration
 type ErrGCTooEarly struct {
-	TxnStartTS  time.Time
-	GCSafePoint time.Time
+	TxnStartTS       uint64
+	TxnStartTSTime   time.Time
+	TxnSafePoint     uint64
+	TxnSafePointTime time.Time
 }
 
 func (e *ErrGCTooEarly) Error() string {
-	return fmt.Sprintf("GC life time is shorter than transaction duration, transaction starts at %v, GC safe point is %v", e.TxnStartTS, e.GCSafePoint)
+	return fmt.Sprintf("GC life time is shorter than transaction duration, transaction start ts is %v (%v), GC safe point is %v (%v)", e.TxnStartTS, e.TxnStartTSTime, e.TxnSafePoint, e.TxnSafePointTime)
 }
 
 // ErrTokenLimit is the error that token is up to the limit.

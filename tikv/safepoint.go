@@ -55,12 +55,13 @@ const (
 	// This is almost the same as 'tikv_gc_safe_point' in the table 'mysql.tidb',
 	// save this to pd instead of tikv, because we can't use interface of table
 	// if the safepoint on tidb is expired.
+	// Deprecated: All use this is no longer recommended and should be replaced by using the txn safe point.
 	GcSavedSafePoint = "/tidb/store/gcworker/saved_safe_point"
 
-	GcSafePointCacheInterval       = time.Second * 100
-	gcCPUTimeInaccuracyBound       = time.Second
-	gcSafePointUpdateInterval      = time.Second * 10
-	gcSafePointQuickRepeatInterval = time.Second
+	GcSafePointCacheInterval            = time.Second * 100
+	gcCPUTimeInaccuracyBound            = time.Second * 10
+	pollTxnSafePointInterval            = time.Second * 10
+	pollTxnSafePointQuickRepeatInterval = time.Second
 )
 
 // SafePointKV is used for a seamingless integration for mockTest and runtime.
@@ -205,6 +206,7 @@ func saveSafePoint(kv SafePointKV, t uint64) error {
 	return nil
 }
 
+// Deprecated: Do not use
 func loadSafePoint(kv SafePointKV) (uint64, error) {
 	str, err := kv.Get(GcSavedSafePoint)
 
