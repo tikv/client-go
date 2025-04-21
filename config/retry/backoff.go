@@ -297,17 +297,16 @@ func (b *Backoffer) UpdateUsingForked(forked *Backoffer) {
 	if forked == nil {
 		return
 	}
-	forkedParent := forked.parent
-	// We should check forkedParent == b here to only update bo with bo's child. However, in our existing code,
-	// we sometimes fork a already forked backoffer, so we need to update using the grand child backoffer.
-	if forkedParent == nil || (forkedParent != b && forkedParent.parent != b) {
-		return
+	for bo := forked.parent; bo != nil; bo = bo.parent {
+		if bo == b {
+			b.totalSleep = forked.totalSleep
+			b.excludedSleep = forked.excludedSleep
+			b.errors = forked.errors
+			b.backoffSleepMS = forked.backoffSleepMS
+			b.backoffTimes = forked.backoffTimes
+			break
+		}
 	}
-	b.totalSleep = forked.totalSleep
-	b.excludedSleep = forked.excludedSleep
-	b.errors = forked.errors
-	b.backoffSleepMS = forked.backoffSleepMS
-	b.backoffTimes = forked.backoffTimes
 }
 
 // GetVars returns the binded vars.

@@ -100,7 +100,7 @@ func TestBackoffDeepCopy(t *testing.T) {
 	}
 }
 
-func TestBackoffMergeFork(t *testing.T) {
+func TestBackoffUpdateUsingFork(t *testing.T) {
 	var err error
 	b := NewBackofferWithVars(context.TODO(), 4, nil)
 	// 700 ms sleep in total and the backoffer will return an error next time.
