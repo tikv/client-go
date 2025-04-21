@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	pdgc "github.com/tikv/pd/client/clients/gc"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
@@ -83,12 +84,13 @@ func WithDelay(delay *atomic.Bool) MockPDOption {
 
 type pdClient struct {
 	cluster *Cluster
-	// SafePoint set by `UpdateGCSafePoint`. Not to be confused with SafePointKV.
+
+	// GC safe point set by `UpdateGCSafePoint`(deprecated) and `AdvanceGCSafePoint`. Not to be confused with SafePointKV.
 	gcSafePoint uint64
-	// Represents the current safePoint of all services including TiDB, representing how much data they want to retain
-	// in GC.
-	serviceSafePoints map[string]uint64
-	gcSafePointMu     sync.Mutex
+	// Represents the GC barriers for blocking GC from advancing.
+	gcBarriers map[string]uint64
+	// As there are still usages of SafePointKV, the txn safe point will still be put in the SavePointKV.
+	gcStatesMu sync.Mutex
 
 	externalTimestamp atomic.Uint64
 
@@ -101,9 +103,9 @@ type pdClient struct {
 // from a Cluster.
 func NewPDClient(cluster *Cluster, ops ...MockPDOption) *pdClient {
 	mockCli := &pdClient{
-		cluster:           cluster,
-		serviceSafePoints: make(map[string]uint64),
-		groups:            make(map[string]*rmpb.ResourceGroup),
+		cluster:    cluster,
+		gcBarriers: make(map[string]uint64),
+		groups:     make(map[string]*rmpb.ResourceGroup),
 	}
 
 	mockCli.groups[defaultResourceGroupName] = &rmpb.ResourceGroup{
@@ -317,8 +319,8 @@ func (c *pdClient) GetAllStores(ctx context.Context, opts ...opt.GetStoreOption)
 }
 
 func (c *pdClient) UpdateGCSafePoint(ctx context.Context, safePoint uint64) (uint64, error) {
-	c.gcSafePointMu.Lock()
-	defer c.gcSafePointMu.Unlock()
+	c.gcStatesMu.Lock()
+	defer c.gcStatesMu.Unlock()
 
 	if safePoint > c.gcSafePoint {
 		c.gcSafePoint = safePoint
@@ -327,27 +329,27 @@ func (c *pdClient) UpdateGCSafePoint(ctx context.Context, safePoint uint64) (uin
 }
 
 func (c *pdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	c.gcSafePointMu.Lock()
-	defer c.gcSafePointMu.Unlock()
+	c.gcStatesMu.Lock()
+	defer c.gcStatesMu.Unlock()
 
 	if ttl == 0 {
-		delete(c.serviceSafePoints, serviceID)
+		delete(c.gcBarriers, serviceID)
 	} else {
 		var minSafePoint uint64 = math.MaxUint64
-		for _, ssp := range c.serviceSafePoints {
+		for _, ssp := range c.gcBarriers {
 			if ssp < minSafePoint {
 				minSafePoint = ssp
 			}
 		}
 
-		if len(c.serviceSafePoints) == 0 || minSafePoint <= safePoint {
-			c.serviceSafePoints[serviceID] = safePoint
+		if len(c.gcBarriers) == 0 || minSafePoint <= safePoint {
+			c.gcBarriers[serviceID] = safePoint
 		}
 	}
 
 	// The minSafePoint may have changed. Reload it.
 	var minSafePoint uint64 = math.MaxUint64
-	for _, ssp := range c.serviceSafePoints {
+	for _, ssp := range c.gcBarriers {
 		if ssp < minSafePoint {
 			minSafePoint = ssp
 		}
@@ -464,16 +466,24 @@ func (c *pdClient) Put(ctx context.Context, key []byte, value []byte, opts ...op
 	return nil, nil
 }
 
-func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
+func (c *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGroup, int64, error) {
 	return nil, 0, nil
 }
 
-func (m *pdClient) GetServiceDiscovery() sd.ServiceDiscovery { return nil }
+func (c *pdClient) GetServiceDiscovery() sd.ServiceDiscovery { return nil }
 
-func (m *pdClient) WithCallerComponent(caller.Component) pd.Client { return m }
+func (c *pdClient) WithCallerComponent(caller.Component) pd.Client { return c }
 
 func enforceCircuitBreakerFor(name string, ctx context.Context) {
 	if circuitbreaker.FromContext(ctx) == nil {
 		panic(fmt.Errorf("CircuitBreaker must be configured for %s", name))
 	}
+}
+
+func (c *pdClient) GetGCInternalController(keyspaceID uint32) pdgc.InternalController {
+	panic("unimplemented")
+}
+
+func (c *pdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
+	panic("unimplemented")
 }
