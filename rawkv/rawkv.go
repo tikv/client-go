@@ -37,6 +37,7 @@ package rawkv
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -732,14 +733,17 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	for regionID, groupKeys := range groups {
 		batches = kvrpc.AppendKeyBatches(batches, regionID, groupKeys, rawBatchPairCount)
 	}
-	bo, cancel := bo.Fork()
+	forkedBo, cancel := bo.Fork()
 	ches := make(chan kvrpc.BatchResult, len(batches))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	for _, batch := range batches {
 		batch1 := batch
 		go func() {
-			singleBatchBackoffer, singleBatchCancel := bo.Fork()
+			singleBatchBackoffer, singleBatchCancel := forkedBo.Fork()
 			defer singleBatchCancel()
-			ches <- c.doBatchReq(singleBatchBackoffer, batch1, options, cmdType)
+			batchResult := c.doBatchReq(singleBatchBackoffer, batch1, options, cmdType)
+			lastForkedBo.Store(singleBatchBackoffer)
+			ches <- batchResult
 		}()
 	}
 
@@ -751,9 +755,8 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 	case tikvrpc.CmdRawBatchDelete:
 		resp = &tikvrpc.Response{Resp: &kvrpcpb.RawBatchDeleteResponse{}}
 	}
-	for i := 0; i < len(batches); i++ {
-		singleResp, ok := <-ches
-		if ok {
+	for range batches {
+		if singleResp, ok := <-ches; ok {
 			if singleResp.Error != nil {
 				if firstError == nil {
 					firstError = errors.WithStack(singleResp.Error)
@@ -765,6 +768,7 @@ func (c *Client) sendBatchReq(bo *retry.Backoffer, keys [][]byte, options *rawOp
 			}
 		}
 	}
+	bo.UpdateUsingForked(lastForkedBo.Load())
 
 	if firstError == nil {
 		cancel()
@@ -894,18 +898,21 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 	for regionID, groupKeys := range groups {
 		batches = kvrpc.AppendBatches(batches, regionID, groupKeys, keyToValue, keyToTTL, rawBatchPutSize)
 	}
-	bo, cancel := bo.Fork()
+	newBo, cancel := bo.Fork()
 	ch := make(chan error, len(batches))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	for _, batch := range batches {
 		batch1 := batch
 		go func() {
-			singleBatchBackoffer, singleBatchCancel := bo.Fork()
+			singleBatchBackoffer, singleBatchCancel := newBo.Fork()
 			defer singleBatchCancel()
-			ch <- c.doBatchPut(singleBatchBackoffer, batch1, opts)
+			e := c.doBatchPut(singleBatchBackoffer, batch1, opts)
+			lastForkedBo.Store(singleBatchBackoffer)
+			ch <- e
 		}()
 	}
 
-	for i := 0; i < len(batches); i++ {
+	for range batches {
 		if e := <-ch; e != nil {
 			// catch the first error
 			if err == nil {
@@ -914,6 +921,7 @@ func (c *Client) sendBatchPut(bo *retry.Backoffer, keys, values [][]byte, ttls [
 			}
 		}
 	}
+	bo.UpdateUsingForked(lastForkedBo.Load())
 
 	if err == nil {
 		cancel()

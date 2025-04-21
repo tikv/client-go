@@ -362,22 +362,25 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 		return s.batchGetSingleRegion(bo, batches[0], readTier, collectF)
 	}
 	ch := make(chan error, len(batches))
-	bo, cancel := bo.Fork()
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
+	forkedBo, cancel := bo.Fork()
 	defer cancel()
 	for i, batch1 := range batches {
 		var backoffer *retry.Backoffer
 		if i == 0 {
-			backoffer = bo
+			backoffer = forkedBo
 		} else {
-			backoffer = bo.Clone()
+			backoffer = forkedBo.Clone()
 		}
 		batch := batch1
 		go func() {
 			growStackForBatchGetWorker()
-			ch <- s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
+			e := s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
+			lastForkedBo.Store(backoffer)
+			ch <- e
 		}()
 	}
-	for i := 0; i < len(batches); i++ {
+	for range batches {
 		if e := <-ch; e != nil {
 			logutil.BgLogger().Debug("snapshot BatchGetWithTier failed",
 				zap.Error(e),
@@ -385,6 +388,7 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 			err = errors.WithStack(e)
 		}
 	}
+	bo.UpdateUsingForked(lastForkedBo.Load())
 	return err
 }
 

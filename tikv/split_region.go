@@ -39,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync/atomic"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -93,14 +94,17 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 		return resp.Response, resp.Error
 	}
 	ch := make(chan kvrpc.BatchResult, len(batches))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	for _, batch1 := range batches {
 		go func(b kvrpc.Batch) {
 			backoffer, cancel := bo.Fork()
 			defer cancel()
 
 			util.WithRecovery(func() {
+				batchResult := s.batchSendSingleRegion(backoffer, b, scatter, tableID)
+				lastForkedBo.Store(backoffer)
 				select {
-				case ch <- s.batchSendSingleRegion(backoffer, b, scatter, tableID):
+				case ch <- batchResult:
 				case <-bo.GetCtx().Done():
 					ch <- kvrpc.BatchResult{Error: bo.GetCtx().Err()}
 				}
@@ -113,7 +117,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 	}
 
 	srResp := &kvrpcpb.SplitRegionResponse{Regions: make([]*metapb.Region, 0, len(keys)*2)}
-	for i := 0; i < len(batches); i++ {
+	for range batches {
 		batchResp := <-ch
 		if batchResp.Error != nil {
 			logutil.BgLogger().Info("batch split regions failed", zap.Error(batchResp.Error))
@@ -129,6 +133,7 @@ func (s *KVStore) splitBatchRegionsReq(bo *Backoffer, keys [][]byte, scatter boo
 			srResp.Regions = append(srResp.Regions, regions...)
 		}
 	}
+	bo.UpdateUsingForked(lastForkedBo.Load())
 	return &tikvrpc.Response{Resp: srResp}, err
 }
 

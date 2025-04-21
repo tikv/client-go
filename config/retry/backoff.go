@@ -291,6 +291,24 @@ func (b *Backoffer) Fork() (*Backoffer, context.CancelFunc) {
 	}, cancel
 }
 
+// UpdateUsingForked updates Backoffer's status using forked one's
+// Note: Make sure forked is no longer used after this, because b reuses forked's errors/backoffSleepMS/backoffTimes fields
+func (b *Backoffer) UpdateUsingForked(forked *Backoffer) {
+	if forked == nil {
+		return
+	}
+	for bo := forked.parent; bo != nil; bo = bo.parent {
+		if bo == b {
+			b.totalSleep = forked.totalSleep
+			b.excludedSleep = forked.excludedSleep
+			b.errors = forked.errors
+			b.backoffSleepMS = forked.backoffSleepMS
+			b.backoffTimes = forked.backoffTimes
+			break
+		}
+	}
+}
+
 // GetVars returns the binded vars.
 func (b *Backoffer) GetVars() *kv.Variables {
 	return b.vars
