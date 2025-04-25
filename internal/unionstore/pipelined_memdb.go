@@ -558,3 +558,7 @@ func (p *PipelinedMemDB) MemHookSet() bool {
 func (p *PipelinedMemDB) BatchedSnapshotIter(lower, upper []byte, reverse bool) Iterator {
 	panic("BatchedSnapshotIter is not supported for PipelinedMemDB")
 }
+
+func (*PipelinedMemDB) GetSnapshot() MemBufferSnapshot {
+	panic("GetSnapshot is not supported for PipelinedMemDB")
+}

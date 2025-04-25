@@ -171,7 +171,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "request_seconds",
 			Help:        "Bucketed histogram of sending request duration.",
-			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 24), // 0.5ms ~ 1.2h
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope})
 
@@ -190,7 +190,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "rpc_net_latency_seconds",
 			Help:        "Bucketed histogram of time difference between TiDB and TiKV.",
-			Buckets:     prometheus.ExponentialBuckets(5e-5, 2, 22), // 50us ~ 105s
+			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 52s
 			ConstLabels: constLabels,
 		}, []string{LblStore, LblScope})
 
@@ -515,16 +515,6 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "Bucketed histogram of the txn ttl manager lifetime duration.",
 			ConstLabels: constLabels,
 			Buckets:     prometheus.ExponentialBuckets(1, 2, 20), // 1s ~ 524288s
-		})
-
-	TiKVPessimisticLockKeysDuration = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace:   namespace,
-			Subsystem:   subsystem,
-			Name:        "pessimistic_lock_keys_duration",
-			Buckets:     prometheus.ExponentialBuckets(0.001, 2, 24), // 1ms ~ 8389s
-			Help:        "tidb txn pessimistic lock keys duration",
-			ConstLabels: constLabels,
 		})
 
 	TiKVTTLLifeTimeReachCounter = prometheus.NewCounter(
@@ -907,7 +897,6 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVTokenWaitDuration)
 	prometheus.MustRegister(TiKVTxnHeartBeatHistogram)
 	prometheus.MustRegister(TiKVTTLManagerHistogram)
-	prometheus.MustRegister(TiKVPessimisticLockKeysDuration)
 	prometheus.MustRegister(TiKVTTLLifeTimeReachCounter)
 	prometheus.MustRegister(TiKVNoAvailableConnectionCounter)
 	prometheus.MustRegister(TiKVTwoPCTxnCounter)
