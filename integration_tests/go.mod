@@ -117,6 +117,6 @@ replace (
 	github.com/tikv/client-go/v2 => ../
 )
 
-replace github.com/pingcap/kvproto => github.com/MyonKeminta/kvproto v0.0.0-20250311094808-d79890a8c4af
+replace github.com/pingcap/kvproto => github.com/MyonKeminta/kvproto v0.0.0-20250422131702-6653a56d7ef8
 
 replace github.com/tikv/pd/client => github.com/MyonKeminta/pd/client v0.0.0-20250417085901-68c5cb78d5bb

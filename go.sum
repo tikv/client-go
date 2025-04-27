@@ -1,8 +1,8 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 github.com/BurntSushi/toml v0.3.1 h1:WXkYYl6Yr3qBf1K79EBnL4mak0OimBfB0XUf9Vl28OQ=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/MyonKeminta/kvproto v0.0.0-20250311094808-d79890a8c4af h1:rt65qOERyrAhujeDu6iTm1sdi9Pa10KMNYnBB3avfA0=
-github.com/MyonKeminta/kvproto v0.0.0-20250311094808-d79890a8c4af/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
+github.com/MyonKeminta/kvproto v0.0.0-20250422131702-6653a56d7ef8 h1:lWRC7jXKjT9jlOf3isCsMHNMuvfOeQNLDl56bJ/dq+Q=
+github.com/MyonKeminta/kvproto v0.0.0-20250422131702-6653a56d7ef8/go.mod h1:rXxWk2UnwfUhLXha1jxRWPADw9eMZGWEWCg92Tgmb/8=
 github.com/MyonKeminta/pd/client v0.0.0-20250417085901-68c5cb78d5bb h1:G+VSt5U5z7G4z120abUMK7/zVi/r6TR9JGOxFY88sC0=
 github.com/MyonKeminta/pd/client v0.0.0-20250417085901-68c5cb78d5bb/go.mod h1:CFIxUay+Ru4j7F56fBCqCoThyjT6M+zKPIR6StdW8WM=
 github.com/VividCortex/ewma v1.2.0 h1:f58SaIzcDXrSy3kWaHNvuJgJ3Nmz59Zji6XoJR/q1ow=
