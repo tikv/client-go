@@ -67,6 +67,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/async"
 	pd "github.com/tikv/pd/client"
 	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
@@ -136,6 +137,13 @@ func (f *fnClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Re
 	return f.fn(ctx, addr, req, timeout)
 }
 
+func (f *fnClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	go func() {
+		tikvrpc.AttachContext(req, req.Context)
+		cb.Schedule(f.fn(ctx, addr, req, 0))
+	}()
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
@@ -146,7 +154,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 	s.NotNil(region)
 
 	// test stale command retry.
-	func() {
+	test := func() {
 		oc := s.regionRequestSender.client
 		defer func() {
 			s.regionRequestSender.client = oc
@@ -163,7 +171,13 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 		s.NotNil(resp)
 		regionErr, _ := resp.GetRegionError()
 		s.NotNil(regionErr)
-	}()
+	}
+
+	s.Run("Default", test)
+
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.Run("AsyncAPI", test)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrottled() {
@@ -176,7 +190,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrot
 	s.NotNil(region)
 
 	// test ErrClientResourceGroupThrottled handled by regionRequestSender
-	func() {
+	test := func() {
 		oc := s.regionRequestSender.client
 		defer func() {
 			s.regionRequestSender.client = oc
@@ -194,10 +208,26 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrot
 		s.Equal(epoch, storeNew.epoch)
 		// no rpc error if the error is ErrClientResourceGroupThrottled
 		s.Nil(s.regionRequestSender.rpcError)
-	}()
+	}
+
+	s.Run("Default", test)
+
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.Run("AsyncAPI", test)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart() {
+	s.testOnSendFailedWithStoreRestart()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestartUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testOnSendFailedWithStoreRestart()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testOnSendFailedWithStoreRestart() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -232,6 +262,16 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart()
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStoreThenUseNewOne() {
+	s.testOnSendFailedWithCloseKnownStoreThenUseNewOne()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStoreThenUseNewOneUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testOnSendFailedWithCloseKnownStoreThenUseNewOne()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testOnSendFailedWithCloseKnownStoreThenUseNewOne() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -285,6 +325,16 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqCtx() {
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
+	s.testOnSendFailedWithCancelled()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelledUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testOnSendFailedWithCancelled()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testOnSendFailedWithCancelled() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -315,6 +365,16 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionWhenCtxCanceled() {
+	s.testNoReloadRegionWhenCtxCanceled()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionWhenCtxCanceledUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testNoReloadRegionWhenCtxCanceled()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testNoReloadRegionWhenCtxCanceled() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),

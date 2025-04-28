@@ -1326,10 +1326,11 @@ func (s *sendReqState) toResponesExt() (*tikvrpc.ResponseExt, error) {
 	if s.vars.resp == nil {
 		return nil, errors.New("invalid state: response is nil")
 	}
-	return &tikvrpc.ResponseExt{
-		Response: *s.vars.resp,
-		Addr:     s.vars.rpcCtx.Addr,
-	}, nil
+	resp := &tikvrpc.ResponseExt{Response: *s.vars.resp}
+	if s.vars.rpcCtx != nil {
+		resp.Addr = s.vars.rpcCtx.Addr
+	}
+	return resp, nil
 }
 
 // SendReqCtx sends a request to tikv server and return response and RPCCtx of this RPC.
@@ -1346,6 +1347,27 @@ func (s *RegionRequestSender) SendReqCtx(
 	retryTimes int,
 	err error,
 ) {
+	if et == tikvrpc.TiKV {
+		if _, err := util.EvalFailpoint("useSendReqAsync"); err == nil {
+			complete := false
+			rl := async.NewRunLoop()
+			cb := async.NewCallback(rl, func(r *tikvrpc.ResponseExt, e error) {
+				if r != nil {
+					resp = &r.Response
+				}
+				err = e
+				complete = true
+			})
+			s.SendReqAsync(bo, req, regionID, timeout, cb, opts...)
+			for !complete {
+				if _, e := rl.Exec(bo.GetCtx()); e != nil {
+					return nil, nil, 0, e
+				}
+			}
+			return resp, nil, 0, err
+		}
+	}
+
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("regionRequest.SendReqCtx", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
