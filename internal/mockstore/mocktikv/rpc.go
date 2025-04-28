@@ -1079,6 +1079,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	return resp, nil
 }
 
+// SendRequestAsync sends a request to mock cluster asynchronously.
 func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
 	go func() {
 		cb.Schedule(c.SendRequest(ctx, addr, req, 0))
