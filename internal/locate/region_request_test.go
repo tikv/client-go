@@ -920,6 +920,8 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestStats() {
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestValidateReadTS() {
+	oracles.EnableTSValidation.Store(true)
+	defer oracles.EnableTSValidation.Store(false)
 	o, err := oracles.NewPdOracle(s.pdCli, &oracles.PDOracleOptions{
 		UpdateInterval: time.Second * 2,
 	})
@@ -962,8 +964,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestRegionRequestValidateReadTS() 
 	testImpl(getTS, true, nil)
 	testImpl(func() uint64 { return addTS(getTS(), -time.Minute) }, false, nil)
 	testImpl(func() uint64 { return addTS(getTS(), -time.Minute) }, true, nil)
-	// check is skipped for normal read
-	testImpl(func() uint64 { return addTS(getTS(), +time.Minute) }, false, nil)
+	testImpl(func() uint64 { return addTS(getTS(), +time.Minute) }, false, oracle.ErrFutureTSRead{})
 	testImpl(func() uint64 { return addTS(getTS(), +time.Minute) }, true, oracle.ErrFutureTSRead{})
 	testImpl(func() uint64 { return math.MaxUint64 }, false, nil)
 	testImpl(func() uint64 { return math.MaxUint64 }, true, oracle.ErrLatestStaleRead{})

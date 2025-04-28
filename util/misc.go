@@ -36,12 +36,10 @@ package util
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
@@ -160,55 +158,6 @@ func BytesToString(numBytes int64) string {
 	}
 
 	return fmt.Sprintf("%v Bytes", numBytes)
-}
-
-// String converts slice of bytes to string without copy.
-func String(b []byte) (s string) {
-	if len(b) == 0 {
-		return ""
-	}
-	return unsafe.String(unsafe.SliceData(b), len(b))
-}
-
-// ToUpperASCIIInplace bytes.ToUpper but zero-cost
-func ToUpperASCIIInplace(s []byte) []byte {
-	hasLower := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		hasLower = hasLower || ('a' <= c && c <= 'z')
-	}
-
-	if !hasLower {
-		return s
-	}
-	var c byte
-	for i := 0; i < len(s); i++ {
-		c = s[i]
-		if 'a' <= c && c <= 'z' {
-			c -= 'a' - 'A'
-		}
-		s[i] = c
-	}
-	return s
-}
-
-// EncodeToString overrides hex.EncodeToString implementation. Difference: returns []byte, not string
-func EncodeToString(src []byte) []byte {
-	dst := make([]byte, hex.EncodedLen(len(src)))
-	hex.Encode(dst, src)
-	return dst
-}
-
-// HexRegionKey converts region key to hex format. Used for formating region in
-// logs.
-func HexRegionKey(key []byte) []byte {
-	return ToUpperASCIIInplace(EncodeToString(key))
-}
-
-// HexRegionKeyStr converts region key to hex format. Used for formating region in
-// logs.
-func HexRegionKeyStr(key []byte) string {
-	return String(HexRegionKey(key))
 }
 
 type Option[T interface{}] struct {
