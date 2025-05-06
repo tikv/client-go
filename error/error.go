@@ -35,6 +35,7 @@
 package error
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -354,4 +355,22 @@ func Log(err error) {
 	if err != nil {
 		log.Error("encountered error", zap.Error(err), zap.Stack("stack"))
 	}
+}
+
+// ExtractDebugInfoStrFromKeyErr extracts the debug info from key error
+func ExtractDebugInfoStrFromKeyErr(keyErr *kvrpcpb.KeyError) string {
+	if keyErr.DebugInfo == nil {
+		return ""
+	}
+
+	if redact.NeedRedact() {
+		return "?"
+	}
+
+	debugStr, err := json.Marshal(keyErr.DebugInfo)
+	if err != nil {
+		log.Error("encountered error when extracting debug info for keyError", zap.Error(err), zap.Stack("stack"))
+		return ""
+	}
+	return string(debugStr)
 }
