@@ -182,7 +182,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 		req.PessimisticLock().LockTtl = ttl
 		if _, err := util.EvalFailpoint("PessimisticLockErrWriteConflict"); err == nil {
 			time.Sleep(300 * time.Millisecond)
-			return errors.WithStack(&tikverr.ErrWriteConflict{WriteConflict: nil})
+			return errors.WithStack(tikverr.NewErrWriteConflict(nil))
 		}
 		sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 		startTime := time.Now()

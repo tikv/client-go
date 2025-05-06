@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
@@ -173,16 +174,21 @@ func IsErrWriteConflict(err error) bool {
 	return errors.As(err, &e)
 }
 
+// NewErrWriteConflict generates an ErrWriteConflict with conflict and increase the TiKVTxnWriteConflictCounter metrics.
+func NewErrWriteConflict(conflict *kvrpcpb.WriteConflict) *ErrWriteConflict {
+	metrics.TiKVTxnWriteConflictCounter.Inc()
+	return &ErrWriteConflict{WriteConflict: conflict}
+}
+
 // NewErrWriteConflictWithArgs generates an ErrWriteConflict with args.
 func NewErrWriteConflictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte, reason kvrpcpb.WriteConflict_Reason) *ErrWriteConflict {
-	conflict := kvrpcpb.WriteConflict{
+	return NewErrWriteConflict(&kvrpcpb.WriteConflict{
 		StartTs:          startTs,
 		ConflictTs:       conflictTs,
 		Key:              key,
 		ConflictCommitTs: conflictCommitTs,
 		Reason:           reason,
-	}
-	return &ErrWriteConflict{WriteConflict: &conflict}
+	})
 }
 
 // ErrWriteConflictInLatch is the error when the commit meets an write conflict error when local latch is enabled.
@@ -310,7 +316,7 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 	redact.RedactKeyErrIfNecessary(keyErr)
 
 	if keyErr.Conflict != nil {
-		return errors.WithStack(&ErrWriteConflict{WriteConflict: keyErr.GetConflict()})
+		return errors.WithStack(NewErrWriteConflict(keyErr.GetConflict()))
 	}
 
 	if keyErr.Retryable != "" {
