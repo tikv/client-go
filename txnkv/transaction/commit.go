@@ -73,10 +73,18 @@ func (action actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 
 func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	keys := batch.mutations.GetKeys()
+	var commitRole kvrpcpb.CommitRole
+	if batch.isPrimary {
+		commitRole = kvrpcpb.CommitRole_Primary
+	} else {
+		commitRole = kvrpcpb.CommitRole_Secondary
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		StartVersion:  c.startTS,
 		Keys:          keys,
+		PrimaryKey:    c.primary(),
 		CommitVersion: c.commitTS,
+		CommitRole:    commitRole,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
@@ -212,13 +220,18 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 					zap.Error(err),
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Uint64("commitTS", c.commitTS),
-					zap.Strings("keys", hexBatchKeys(keys)))
+					zap.Strings("keys", hexBatchKeys(keys)),
+					zap.Uint64("sessionID", c.sessionID),
+					zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)))
 				return err
 			}
 			// The transaction maybe rolled back by concurrent transactions.
 			logutil.Logger(bo.GetCtx()).Debug("2PC failed commit primary key",
 				zap.Error(err),
-				zap.Uint64("txnStartTS", c.startTS))
+				zap.Uint64("txnStartTS", c.startTS),
+				zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID),
+			)
 			return err
 		}
 		break

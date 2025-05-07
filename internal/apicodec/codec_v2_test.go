@@ -50,21 +50,65 @@ func (suite *testCodecV2Suite) SetupSuite() {
 
 func (suite *testCodecV2Suite) TestEncodeRequest() {
 	re := suite.Require()
-	req := &tikvrpc.Request{
-		Type: tikvrpc.CmdRawGet,
-		Req: &kvrpcpb.RawGetRequest{
-			Key: []byte("key"),
+	requests := []struct {
+		name     string
+		req      *tikvrpc.Request
+		validate func(*tikvrpc.Request)
+	}{
+		{
+			name: "CmdRawGet",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdRawGet,
+				Req: &kvrpcpb.RawGetRequest{
+					Key: []byte("key"),
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Equal(append(keyspacePrefix, []byte("key")...), encoded.RawGet().Key)
+			},
+		},
+		{
+			name: "CmdCommitWithOutPrimaryKey",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCommit,
+				Req: &kvrpcpb.CommitRequest{
+					Keys: [][]byte{[]byte("key1"), []byte("key2")},
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Equal([][]byte{
+					append(keyspacePrefix, []byte("key1")...),
+					append(keyspacePrefix, []byte("key2")...),
+				}, encoded.Commit().Keys)
+				re.Empty(encoded.Commit().PrimaryKey)
+			},
+		},
+		{
+			name: "CmdCommitWithPrimaryKey",
+			req: &tikvrpc.Request{
+				Type: tikvrpc.CmdCommit,
+				Req: &kvrpcpb.CommitRequest{
+					Keys:       [][]byte{[]byte("key1"), []byte("key2")},
+					PrimaryKey: []byte("key1"),
+				},
+			},
+			validate: func(encoded *tikvrpc.Request) {
+				re.Equal([][]byte{
+					append(keyspacePrefix, []byte("key1")...),
+					append(keyspacePrefix, []byte("key2")...),
+				}, encoded.Commit().Keys)
+				re.Equal(append(keyspacePrefix, []byte("key1")...), encoded.Commit().PrimaryKey)
+			},
 		},
 	}
-	req.ApiVersion = kvrpcpb.APIVersion_V2
 
-	r, err := suite.codec.EncodeRequest(req)
-	re.NoError(err)
-	re.Equal(append(keyspacePrefix, []byte("key")...), r.RawGet().Key)
-
-	r, err = suite.codec.EncodeRequest(req)
-	re.NoError(err)
-	re.Equal(append(keyspacePrefix, []byte("key")...), r.RawGet().Key)
+	for _, req := range requests {
+		suite.Run(req.name, func() {
+			encoded, err := suite.codec.EncodeRequest(req.req)
+			re.NoError(err)
+			req.validate(encoded)
+		})
+	}
 }
 
 func (suite *testCodecV2Suite) TestEncodeV2KeyRanges() {
@@ -275,6 +319,55 @@ func (suite *testCodecV2Suite) TestDecodeEpochNotMatch() {
 	re.NoError(err)
 	for i := range result.EpochNotMatch.CurrentRegions {
 		re.Equal(expected.EpochNotMatch.CurrentRegions[i], result.EpochNotMatch.CurrentRegions[i], "index: %d", i)
+	}
+}
+
+func (suite *testCodecV2Suite) TestDecodeKeyError() {
+	re := suite.Require()
+	errors := []struct {
+		name     string
+		err      *kvrpcpb.KeyError
+		validate func(*kvrpcpb.KeyError)
+	}{
+		{
+			name: "TxnLockNotFound",
+			err: &kvrpcpb.KeyError{
+				TxnLockNotFound: &kvrpcpb.TxnLockNotFound{
+					Key: append(keyspacePrefix, []byte("key1")...),
+				},
+			},
+			validate: func(decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("key1"), decoded.TxnLockNotFound.Key)
+			},
+		},
+		{
+			name: "MvccDebugInfo",
+			err: &kvrpcpb.KeyError{
+				TxnLockNotFound: &kvrpcpb.TxnLockNotFound{
+					Key: append(keyspacePrefix, []byte("key1")...),
+				},
+				DebugInfo: &kvrpcpb.DebugInfo{
+					MvccInfo: []*kvrpcpb.MvccDebugInfo{
+						{
+							Key:  append(keyspacePrefix, []byte("key1")...),
+							Mvcc: &kvrpcpb.MvccInfo{},
+						},
+					},
+				},
+			},
+			validate: func(decoded *kvrpcpb.KeyError) {
+				re.Equal([]byte("key1"), decoded.TxnLockNotFound.Key)
+				re.Equal(1, len(decoded.DebugInfo.MvccInfo))
+				re.Equal([]byte("key1"), decoded.DebugInfo.MvccInfo[0].Key)
+			},
+		},
+	}
+
+	codec := suite.codec
+	for _, keyErr := range errors {
+		decoded, err := codec.decodeKeyError(keyErr.err)
+		re.NoError(err)
+		keyErr.validate(decoded)
 	}
 }
 
