@@ -438,7 +438,13 @@ func (c *twoPhaseCommitter) buildPipelinedResolveHandler(commit bool, resolved *
 			cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 			if keyErr := cmdResp.GetError(); keyErr != nil {
 				err = errors.Errorf("unexpected resolve err: %s", keyErr)
-				logutil.BgLogger().Error("resolveLock error", zap.Error(err))
+				logutil.BgLogger().Error(
+					"resolveLock error",
+					zap.Error(err),
+					zap.Uint64("startVer", lreq.StartVersion),
+					zap.Uint64("commitVer", lreq.CommitVersion),
+					zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+				)
 				return res, err
 			}
 			resolved.Add(1)

@@ -344,7 +344,13 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	}
 	cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 	if keyErr := cmdResp.GetError(); keyErr != nil {
-		return false, errors.Errorf("unexpected resolve err: %s", keyErr)
+		err = errors.Errorf("unexpected resolve err: %s", keyErr)
+		logutil.BgLogger().Error(
+			"resolveLock error",
+			zap.Error(err),
+			zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+		)
+		return false, err
 	}
 
 	logutil.BgLogger().Info("BatchResolveLocks: resolve locks in a batch",
@@ -1124,10 +1130,13 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 	if keyErr := cmdResp.GetError(); keyErr != nil {
 		err = errors.Errorf("unexpected resolve err: %s, lock: %v", keyErr, l)
-		logutil.BgLogger().Error("resolveLock error", zap.Error(err))
+		logutil.BgLogger().Error("resolveLock error",
+			zap.Error(err),
+			zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+		)
 	}
 
-	return nil
+	return err
 }
 
 func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
@@ -1190,7 +1199,11 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
 			err = errors.Errorf("unexpected resolve err: %s, lock: %v", keyErr, l)
-			logutil.BgLogger().Error("resolveLock error", zap.Error(err))
+			logutil.BgLogger().Error(
+				"resolveLock error",
+				zap.Error(err),
+				zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+			)
 			return err
 		}
 		if !resolveLite {
