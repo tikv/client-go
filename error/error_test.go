@@ -26,6 +26,12 @@ func TestExtractDebugInfoStrFromKeyErr(t *testing.T) {
 					Lock: &kvrpcpb.MvccLock{
 						Type:    kvrpcpb.Op_Del,
 						StartTs: 128,
+						Primary: []byte("k1"),
+						Secondaries: [][]byte{
+							[]byte("k1"),
+							[]byte("k2"),
+						},
+						ShortValue: []byte("v1"),
 					},
 					Writes: []*kvrpcpb.MvccWrite{
 						{
@@ -46,7 +52,7 @@ func TestExtractDebugInfoStrFromKeyErr(t *testing.T) {
 		},
 	}
 
-	expectedStr := `{"mvcc_info":[{"key":"Ynl0ZQ==","mvcc":{"lock":{"type":1,"start_ts":128},"writes":[{"type":4,"start_ts":64,"commit_ts":86,"short_value":"AQIDBAUG"}],"values":[{"start_ts":64,"value":"ERI="}]}}]}`
+	expectedStr := `{"mvcc_info":[{"key":"Ynl0ZQ==","mvcc":{"lock":{"type":1,"start_ts":128,"primary":"azE=","short_value":"djE=","secondaries":["azE=","azI="]},"writes":[{"type":4,"start_ts":64,"commit_ts":86,"short_value":"AQIDBAUG"}],"values":[{"start_ts":64,"value":"ERI="}]}}]}`
 	assert.Equal(t, expectedStr, ExtractDebugInfoStrFromKeyErr(&kvrpcpb.KeyError{
 		TxnLockNotFound: &kvrpcpb.TxnLockNotFound{Key: []byte("byte")},
 		DebugInfo:       debugInfo,
@@ -54,7 +60,8 @@ func TestExtractDebugInfoStrFromKeyErr(t *testing.T) {
 
 	// redact log enabled
 	errors.RedactLogEnabled.Store(errors.RedactLogEnable)
-	assert.Equal(t, "?", ExtractDebugInfoStrFromKeyErr(&kvrpcpb.KeyError{
+	expectedStr = `{"mvcc_info":[{"key":"Pw==","mvcc":{"lock":{"type":1,"start_ts":128,"primary":"Pw==","short_value":"Pw==","secondaries":["Pw==","Pw=="]},"writes":[{"type":4,"start_ts":64,"commit_ts":86,"short_value":"Pw=="}],"values":[{"start_ts":64,"value":"Pw=="}]}}]}`
+	assert.Equal(t, expectedStr, ExtractDebugInfoStrFromKeyErr(&kvrpcpb.KeyError{
 		TxnLockNotFound: &kvrpcpb.TxnLockNotFound{Key: []byte("byte")},
 		DebugInfo:       debugInfo,
 	}))

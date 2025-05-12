@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/log"
@@ -363,11 +364,37 @@ func ExtractDebugInfoStrFromKeyErr(keyErr *kvrpcpb.KeyError) string {
 		return ""
 	}
 
+	debugInfoToMarshal := keyErr.DebugInfo
 	if redact.NeedRedact() {
-		return "?"
+		redactMarker := []byte{'?'}
+		debugInfoToMarshal = proto.Clone(debugInfoToMarshal).(*kvrpcpb.DebugInfo)
+		for _, mvccInfo := range debugInfoToMarshal.MvccInfo {
+			mvccInfo.Key = redactMarker
+			if mvcc := mvccInfo.Mvcc; mvcc != nil {
+				if lock := mvcc.Lock; lock != nil {
+					lock.Primary = redactMarker
+					lock.ShortValue = redactMarker
+					for i := range lock.Secondaries {
+						lock.Secondaries[i] = redactMarker
+					}
+				}
+
+				for _, write := range mvcc.Writes {
+					if write != nil {
+						write.ShortValue = redactMarker
+					}
+				}
+
+				for _, value := range mvcc.Values {
+					if value != nil {
+						value.Value = redactMarker
+					}
+				}
+			}
+		}
 	}
 
-	debugStr, err := json.Marshal(keyErr.DebugInfo)
+	debugStr, err := json.Marshal(debugInfoToMarshal)
 	if err != nil {
 		log.Error("encountered error when extracting debug info for keyError", zap.Error(err), zap.Stack("stack"))
 		return ""
