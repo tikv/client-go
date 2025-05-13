@@ -534,7 +534,7 @@ func (s *RegionRequestSender) SendReqAsync(
 	})
 
 	if !state.initForAsyncRequest() {
-		cb.Invoke(state.toResponesExt())
+		cb.Invoke(state.toResponseExt())
 		return
 	}
 
@@ -545,7 +545,7 @@ func (s *RegionRequestSender) SendReqAsync(
 	)
 	if limit := kv.StoreLimit.Load(); limit > 0 {
 		if state.vars.err = s.getStoreToken(state.vars.rpcCtx.Store, limit); state.vars.err != nil {
-			cb.Invoke(state.toResponesExt())
+			cb.Invoke(state.toResponseExt())
 			return
 		}
 		cancels = append(cancels, func() { s.releaseStoreToken(state.vars.rpcCtx.Store) })
@@ -574,7 +574,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		state.vars.sendTimes++
 		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
 		if state.handleAsyncResponse(startTime, canceled, resp, err, cancels...) {
-			cb.Invoke(state.toResponesExt())
+			cb.Invoke(state.toResponseExt())
 			return
 		}
 		// retry
@@ -584,7 +584,7 @@ func (s *RegionRequestSender) SendReqAsync(
 					logutil.Logger(bo.GetCtx()).Warn("retry", zap.Uint64("region", regionID.GetID()), zap.Int("times", retryTimes))
 				}
 			}
-			cb.Schedule(state.toResponesExt())
+			cb.Schedule(state.toResponseExt())
 		})
 	}))
 }
@@ -1318,8 +1318,8 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	return true
 }
 
-// toResponesExt converts the state to a ResponseExt .
-func (s *sendReqState) toResponesExt() (*tikvrpc.ResponseExt, error) {
+// toResponseExt converts the state to a ResponseExt .
+func (s *sendReqState) toResponseExt() (*tikvrpc.ResponseExt, error) {
 	if s.vars.err != nil {
 		return nil, s.vars.err
 	}
