@@ -117,6 +117,7 @@ var (
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
 	TiKVStaleRegionFromPDCounter                   prometheus.Counter
 	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
+	TiKVTxnWriteConflictCounter                    prometheus.Counter
 )
 
 // Label constants.
@@ -171,7 +172,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "request_seconds",
 			Help:        "Bucketed histogram of sending request duration.",
-			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 29), // 0.5ms ~ 1.5days
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 24), // 0.5ms ~ 1.2h
 			ConstLabels: constLabels,
 		}, []string{LblType, LblStore, LblStaleRead, LblScope})
 
@@ -190,7 +191,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Subsystem:   subsystem,
 			Name:        "rpc_net_latency_seconds",
 			Help:        "Bucketed histogram of time difference between TiDB and TiKV.",
-			Buckets:     prometheus.ExponentialBuckets(5e-5, 2, 22), // 50us ~ 105s
+			Buckets:     prometheus.ExponentialBuckets(0.0001, 2, 20), // 0.1ms ~ 52s
 			ConstLabels: constLabels,
 		}, []string{LblStore, LblScope})
 
@@ -838,6 +839,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
 		})
 
+	TiKVTxnWriteConflictCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "txn_write_conflict_counter",
+			Help:      "Counter of txn write conflict",
+		})
+
 	initShortcuts()
 }
 
@@ -933,6 +942,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
 	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
 	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
+	prometheus.MustRegister(TiKVTxnWriteConflictCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.

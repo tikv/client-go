@@ -100,6 +100,27 @@ func TestBackoffDeepCopy(t *testing.T) {
 	}
 }
 
+func TestBackoffUpdateUsingFork(t *testing.T) {
+	var err error
+	b := NewBackofferWithVars(context.TODO(), 4, nil)
+	// 700 ms sleep in total and the backoffer will return an error next time.
+	for i := 0; i < 3; i++ {
+		err = b.Backoff(BoMaxRegionNotInitialized, errors.New("region not initialized"))
+		assert.Nil(t, err)
+	}
+	bForked, cancel := b.Fork()
+	defer cancel()
+	bForked.Backoff(BoTiKVRPC, errors.New("tikv rpc"))
+	bCloneForked := bForked.Clone()
+	b.UpdateUsingForked(bForked)
+	assert.Equal(t, b.errors, bCloneForked.errors)
+	assert.Equal(t, b.backoffSleepMS, bCloneForked.backoffSleepMS)
+	assert.Equal(t, b.backoffTimes, bCloneForked.backoffTimes)
+	assert.Equal(t, b.excludedSleep, bCloneForked.excludedSleep)
+	assert.Equal(t, b.totalSleep, bCloneForked.totalSleep)
+	assert.Nil(t, b.parent)
+}
+
 func TestBackoffWithMaxExcludedExceed(t *testing.T) {
 	setBackoffExcluded(BoTiKVServerBusy.name, 1)
 	b := NewBackofferWithVars(context.TODO(), 1, nil)

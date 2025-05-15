@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"sync"
@@ -37,6 +36,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -181,9 +181,9 @@ type Lock struct {
 func (l *Lock) String() string {
 	buf := bytes.NewBuffer(make([]byte, 0, 128))
 	buf.WriteString("key: ")
-	buf.WriteString(hex.EncodeToString(l.Key))
+	buf.WriteString(redact.Key(l.Key))
 	buf.WriteString(", primary: ")
-	buf.WriteString(hex.EncodeToString(l.Primary))
+	buf.WriteString(redact.Key(l.Primary))
 	return fmt.Sprintf("%s, txnStartTS: %d, lockForUpdateTS:%d, minCommitTs:%d, ttl: %d, type: %s, UseAsyncCommit: %t, txnSize: %d",
 		buf.String(), l.TxnID, l.LockForUpdateTS, l.MinCommitTS, l.TTL, l.LockType, l.UseAsyncCommit, l.TxnSize)
 }
@@ -344,7 +344,13 @@ func (lr *LockResolver) BatchResolveLocks(bo *retry.Backoffer, locks []*Lock, lo
 	}
 	cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 	if keyErr := cmdResp.GetError(); keyErr != nil {
-		return false, errors.Errorf("unexpected resolve err: %s", keyErr)
+		err = errors.Errorf("unexpected resolve err: %s", keyErr)
+		logutil.BgLogger().Error(
+			"resolveLock error",
+			zap.Error(err),
+			zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+		)
+		return false, err
 	}
 
 	logutil.BgLogger().Info("BatchResolveLocks: resolve locks in a batch",
@@ -972,6 +978,7 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		return err
 	}
 	errChan := make(chan error, len(keysByRegion))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	// Resolve every lock in the transaction.
 	for region, locks := range keysByRegion {
 		curLocks := locks
@@ -980,17 +987,19 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 		defer cancel()
 
 		go func() {
-			errChan <- lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
+			e := lr.resolveRegionLocks(resolveBo, l, curRegion, curLocks, status)
+			lastForkedBo.Store(resolveBo)
+			errChan <- e
 		}()
 	}
 
 	var errs []string
-	for range keysByRegion {
-		err1 := <-errChan
-		if err1 != nil {
+	for range len(keysByRegion) {
+		if err1 := <-errChan; err1 != nil {
 			errs = append(errs, err1.Error())
 		}
 	}
+	bo.UpdateUsingForked(lastForkedBo.Load())
 
 	if len(errs) > 0 {
 		return errors.Errorf("async commit recovery (sending ResolveLock) finished with errors: %v", errs)
@@ -1046,6 +1055,7 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 	}
 
 	errChan := make(chan error, len(regions))
+	var lastForkedBo atomic.Pointer[retry.Backoffer]
 	for regionID, keys := range regions {
 		curRegionID := regionID
 		curKeys := keys
@@ -1053,17 +1063,19 @@ func (lr *LockResolver) checkAllSecondaries(bo *retry.Backoffer, l *Lock, status
 		defer cancel()
 
 		go func() {
-			errChan <- lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
+			e := lr.checkSecondaries(checkBo, l.TxnID, curKeys, curRegionID, &shared)
+			lastForkedBo.Store(checkBo)
+			errChan <- e
 		}()
 	}
 
-	for range regions {
-		err := <-errChan
-		if err != nil {
-			return nil, err
+	for range len(regions) {
+		if e := <-errChan; e != nil {
+			bo.UpdateUsingForked(lastForkedBo.Load())
+			return nil, e
 		}
 	}
-
+	bo.UpdateUsingForked(lastForkedBo.Load())
 	return &shared, nil
 }
 
@@ -1118,10 +1130,13 @@ func (lr *LockResolver) resolveRegionLocks(bo *retry.Backoffer, l *Lock, region 
 	cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 	if keyErr := cmdResp.GetError(); keyErr != nil {
 		err = errors.Errorf("unexpected resolve err: %s, lock: %v", keyErr, l)
-		logutil.BgLogger().Error("resolveLock error", zap.Error(err))
+		logutil.BgLogger().Error("resolveLock error",
+			zap.Error(err),
+			zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+		)
 	}
 
-	return nil
+	return err
 }
 
 func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStatus, lite bool, cleanRegions map[locate.RegionVerID]struct{}) error {
@@ -1184,7 +1199,11 @@ func (lr *LockResolver) resolveLock(bo *retry.Backoffer, l *Lock, status TxnStat
 		cmdResp := resp.Resp.(*kvrpcpb.ResolveLockResponse)
 		if keyErr := cmdResp.GetError(); keyErr != nil {
 			err = errors.Errorf("unexpected resolve err: %s, lock: %v", keyErr, l)
-			logutil.BgLogger().Error("resolveLock error", zap.Error(err))
+			logutil.BgLogger().Error(
+				"resolveLock error",
+				zap.Error(err),
+				zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)),
+			)
 			return err
 		}
 		if !resolveLite {

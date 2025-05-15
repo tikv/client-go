@@ -352,6 +352,8 @@ func TestAdaptiveUpdateTSInterval(t *testing.T) {
 }
 
 func TestValidateReadTS(t *testing.T) {
+	EnableTSValidation.Store(true)
+	defer EnableTSValidation.Store(false)
 	testImpl := func(staleRead bool) {
 		pdClient := MockPdClient{}
 		o, err := NewPdOracle(&pdClient, &PDOracleOptions{
@@ -429,6 +431,8 @@ func (c *MockPDClientWithPause) WithCallerComponent(component caller.Component) 
 }
 
 func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
+	EnableTSValidation.Store(true)
+	defer EnableTSValidation.Store(false)
 	util.EnableFailpoints()
 
 	pdClient := &MockPDClientWithPause{}
@@ -536,6 +540,8 @@ func TestValidateReadTSForStaleReadReusingGetTSResult(t *testing.T) {
 }
 
 func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
+	EnableTSValidation.Store(true)
+	defer EnableTSValidation.Store(false)
 	oracleInterface, err := NewPdOracle(&MockPdClient{}, &PDOracleOptions{
 		UpdateInterval: time.Second * 2,
 		NoUpdateTS:     true,
@@ -573,7 +579,7 @@ func TestValidateReadTSForNormalReadDoNotAffectUpdateInterval(t *testing.T) {
 	// It loads `ts + 3` and `ts + 4` from the mock PD, and the check cannot pass.
 	// Updated: 2025-03-12, the non-stale read check is temporarily skipped.
 	err = o.ValidateReadTS(ctx, ts+5, false, opt)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	mustNoNotify()
 
 	// Do the check again. It loads `ts + 5` from the mock PD, and the check passes.
@@ -618,9 +624,8 @@ func TestSetLastTSAlwaysPushTS(t *testing.T) {
 }
 
 func TestValidateReadTSFromDifferentSource(t *testing.T) {
-	// Updated: 2025-03-12, the non-stale read check is temporarily skipped.
-	t.Skip()
-
+	EnableTSValidation.Store(true)
+	defer EnableTSValidation.Store(false)
 	// If a ts is fetched from a different client to the same cluster, the ts might not be cached by the low resolution
 	// ts. In this case, the validation should not be false positive.
 	util.EnableFailpoints()

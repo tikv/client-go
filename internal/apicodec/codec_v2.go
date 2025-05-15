@@ -3,7 +3,6 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"sync"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
@@ -14,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -149,6 +149,11 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 	case tikvrpc.CmdCommit:
 		r := *req.Commit()
 		r.Keys = c.encodeKeys(r.Keys)
+		if len(r.PrimaryKey) > 0 {
+			// Only encode the primary key if it is not empty.
+			// Otherwise, it means `PrimaryKey` is not set, left it as empty to indicate it is not set in RPC.
+			r.PrimaryKey = c.EncodeKey(r.PrimaryKey)
+		}
 		req.Req = &r
 	case tikvrpc.CmdCleanup:
 		r := *req.Cleanup()
@@ -281,7 +286,7 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 		req.Req = &r
 	case tikvrpc.CmdMvccGetByKey:
 		r := *req.MvccGetByKey()
-		r.Key = c.EncodeRegionKey(r.Key)
+		r.Key = c.EncodeKey(r.Key)
 		req.Req = &r
 	case tikvrpc.CmdSplitRegion:
 		r := *req.SplitRegion()
@@ -704,8 +709,8 @@ func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	// return out of bound error.
 	if !bytes.HasPrefix(encodedKey, c.prefix) {
 		logutil.BgLogger().Warn("key not in keyspace",
-			zap.String("keyspacePrefix", hex.EncodeToString(c.prefix)),
-			zap.String("key", hex.EncodeToString(encodedKey)),
+			zap.String("keyspacePrefix", redact.Key(c.prefix)),
+			zap.String("key", redact.Key(encodedKey)),
 			zap.Stack("stack"))
 		return nil, errKeyOutOfBound
 	}
@@ -936,6 +941,19 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 		keyError.AssertionFailed.Key, err = c.DecodeKey(keyError.AssertionFailed.Key)
 		if err != nil {
 			return nil, err
+		}
+	}
+	if keyError.TxnLockNotFound != nil {
+		keyError.TxnLockNotFound.Key, err = c.DecodeKey(keyError.TxnLockNotFound.Key)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if debugInfo := keyError.DebugInfo; debugInfo != nil {
+		for _, mvccInfo := range debugInfo.MvccInfo {
+			if mvccInfo.Key, err = c.DecodeKey(mvccInfo.Key); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return keyError, nil

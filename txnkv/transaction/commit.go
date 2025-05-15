@@ -36,7 +36,6 @@ package transaction
 
 import (
 	"bytes"
-	"encoding/hex"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
@@ -50,6 +49,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -73,10 +73,18 @@ func (action actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 
 func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
 	keys := batch.mutations.GetKeys()
+	var commitRole kvrpcpb.CommitRole
+	if batch.isPrimary {
+		commitRole = kvrpcpb.CommitRole_Primary
+	} else {
+		commitRole = kvrpcpb.CommitRole_Secondary
+	}
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		StartVersion:  c.startTS,
 		Keys:          keys,
+		PrimaryKey:    c.primary(),
 		CommitVersion: c.commitTS,
+		CommitRole:    commitRole,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
 		SyncLog:                c.syncLog,
@@ -165,8 +173,8 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				if !batch.isPrimary || !bytes.Equal(rejected.Key, c.primary()) {
 					logutil.Logger(bo.GetCtx()).Error("2PC commitTS rejected by TiKV, but the key is not the primary key",
 						zap.Uint64("txnStartTS", c.startTS),
-						zap.String("key", hex.EncodeToString(rejected.Key)),
-						zap.String("primary", hex.EncodeToString(c.primary())),
+						zap.String("key", redact.Key(rejected.Key)),
+						zap.String("primary", redact.Key(c.primary())),
 						zap.Bool("batchIsPrimary", batch.isPrimary))
 					return errors.New("2PC commitTS rejected by TiKV, but the key is not the primary key")
 				}
@@ -204,7 +212,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				hexBatchKeys := func(keys [][]byte) []string {
 					var res []string
 					for _, k := range keys {
-						res = append(res, hex.EncodeToString(k))
+						res = append(res, redact.Key(k))
 					}
 					return res
 				}
@@ -212,13 +220,18 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 					zap.Error(err),
 					zap.Uint64("txnStartTS", c.startTS),
 					zap.Uint64("commitTS", c.commitTS),
-					zap.Strings("keys", hexBatchKeys(keys)))
+					zap.Strings("keys", hexBatchKeys(keys)),
+					zap.Uint64("sessionID", c.sessionID),
+					zap.String("debugInfo", tikverr.ExtractDebugInfoStrFromKeyErr(keyErr)))
 				return err
 			}
 			// The transaction maybe rolled back by concurrent transactions.
 			logutil.Logger(bo.GetCtx()).Debug("2PC failed commit primary key",
 				zap.Error(err),
-				zap.Uint64("txnStartTS", c.startTS))
+				zap.Uint64("txnStartTS", c.startTS),
+				zap.Uint64("commitTS", c.commitTS),
+				zap.Uint64("sessionID", c.sessionID),
+			)
 			return err
 		}
 		break

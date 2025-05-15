@@ -60,6 +60,8 @@ const slowDist = 30 * time.Millisecond
 
 type adaptiveUpdateTSIntervalState int
 
+var EnableTSValidation atomic.Bool
+
 const (
 	adaptiveUpdateTSIntervalStateNone adaptiveUpdateTSIntervalState = iota
 	// adaptiveUpdateTSIntervalStateNormal represents the state that the adaptive update ts interval is synced with the
@@ -667,15 +669,13 @@ func (o *pdOracle) getCurrentTSForValidation(ctx context.Context, opt *oracle.Op
 type ValidateReadTSForTidbSnapshot struct{}
 
 func (o *pdOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
+	if !EnableTSValidation.Load() {
+		return nil
+	}
+
 	// For a mistake we've seen
 	if readTS >= math.MaxInt64 && readTS < math.MaxUint64 {
 		return errors.Errorf("MaxInt64 <= readTS < MaxUint64, readTS=%v", readTS)
-	}
-
-	// only check stale reads and reads using `tidb_snapshot`
-	forTidbSnapshot := ctx.Value(ValidateReadTSForTidbSnapshot{}) != nil
-	if !forTidbSnapshot && !isStaleRead {
-		return nil
 	}
 
 	if readTS == math.MaxUint64 {

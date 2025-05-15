@@ -285,9 +285,15 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	regionCache := locate.NewRegionCache(pdClient, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
-		return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
-	}))
+	var opts []locate.RegionCacheOpt
+	if config.NextGen {
+		opts = append(opts, locate.RegionCacheNoHealthTick)
+	} else {
+		opts = append(opts, locate.WithRequestHealthFeedbackCallback(func(ctx context.Context, addr string) error {
+			return requestHealthFeedbackFromKVClient(ctx, addr, tikvclient)
+		}))
+	}
+	regionCache := locate.NewRegionCache(pdClient, opts...)
 	store := &KVStore{
 		clusterID:       pdClient.GetClusterID(context.TODO()),
 		uuid:            uuid,

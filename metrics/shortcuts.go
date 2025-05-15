@@ -103,7 +103,6 @@ var (
 	LockResolverCountWithResolve                  prometheus.Counter
 	LockResolverCountWithResolveForWrite          prometheus.Counter
 	LockResolverCountWithResolveAsync             prometheus.Counter
-	LockResolverCountWithWriteConflict            prometheus.Counter
 	LockResolverCountWithQueryTxnStatus           prometheus.Counter
 	LockResolverCountWithQueryTxnStatusCommitted  prometheus.Counter
 	LockResolverCountWithQueryTxnStatusRolledBack prometheus.Counter
@@ -244,7 +243,6 @@ func initShortcuts() {
 	LockResolverCountWithResolve = TiKVLockResolverCounter.WithLabelValues("resolve")
 	LockResolverCountWithResolveForWrite = TiKVLockResolverCounter.WithLabelValues("resolve_for_write")
 	LockResolverCountWithResolveAsync = TiKVLockResolverCounter.WithLabelValues("resolve_async_commit")
-	LockResolverCountWithWriteConflict = TiKVLockResolverCounter.WithLabelValues("write_conflict")
 	LockResolverCountWithQueryTxnStatus = TiKVLockResolverCounter.WithLabelValues("query_txn_status")
 	LockResolverCountWithQueryTxnStatusCommitted = TiKVLockResolverCounter.WithLabelValues("query_txn_status_committed")
 	LockResolverCountWithQueryTxnStatusRolledBack = TiKVLockResolverCounter.WithLabelValues("query_txn_status_rolled_back")
