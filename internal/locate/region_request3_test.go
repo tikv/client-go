@@ -720,7 +720,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqWithReplicaSelector() {
 		if err != nil {
 			return false
 		}
-		return IsFakeRegionError(regionErr)
+		return retry.IsFakeRegionError(regionErr)
 	}
 
 	// Normal
@@ -1167,7 +1167,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestSendReqFirstTimeout() {
 			s.Nil(err)
 			regionErr, err := resp.GetRegionError()
 			s.Nil(err)
-			s.True(IsFakeRegionError(regionErr))
+			s.True(retry.IsFakeRegionError(regionErr))
 			s.Equal(1, s.regionRequestSender.Stats.GetRPCStatsCount())
 			s.Equal(uint32(3), s.regionRequestSender.Stats.GetCmdRPCCount(tikvrpc.CmdGet)) // 3 rpc
 			s.Equal(3, len(reqTargetAddrs))                                                // each rpc to a different store.
@@ -1491,7 +1491,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestPreferLeader() {
 	s.NoError(err)
 	regionErr, err = resp.GetRegionError()
 	s.NoError(err)
-	s.True(IsFakeRegionError(regionErr))
+	s.True(retry.IsFakeRegionError(regionErr))
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestLeaderStuck() {
