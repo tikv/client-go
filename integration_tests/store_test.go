@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikv"
@@ -191,4 +192,15 @@ func (s *testStoreSuite) TestFailBusyServerKV() {
 	val, err := txn.Get(context.TODO(), []byte("key"))
 	s.Nil(err)
 	s.Equal(val, []byte("value"))
+}
+
+func (s *testStoreSuite) TestFailUndeterminedResult() {
+	txn, err := s.store.Begin()
+	s.Require().Nil(err)
+	err = txn.Set([]byte("key"), []byte("value"))
+	s.Nil(err)
+	s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("PrewriteUndeterminedResult")->return("")`))
+	err = txn.Commit(context.Background())
+	s.NotNil(err)
+	s.True(tikverr.IsErrorUndetermined(err))
 }

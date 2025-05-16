@@ -772,7 +772,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, _ := resp.GetRegionError()
-	s.True(IsFakeRegionError(regionErr))
+	s.True(retry.IsFakeRegionError(regionErr))
 	s.Equal(0, bo.GetTotalBackoffTimes()) // use kv read timeout will do fast retry, so backoff times should be 0.
 }
 

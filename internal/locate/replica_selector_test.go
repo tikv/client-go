@@ -3225,7 +3225,7 @@ func TestTiKVClientReadTimeout(t *testing.T) {
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, _ := resp.GetRegionError()
-	s.True(IsFakeRegionError(regionErr))
+	s.True(retry.IsFakeRegionError(regionErr))
 	s.Equal(0, bo.GetTotalBackoffTimes())
 	s.Equal([]string{
 		"store1", "{addr: store1, replica-read: false, stale-read: false, timeout: 1}",

@@ -155,14 +155,8 @@ func (action actionPipelinedFlush) handleSingleBatch(
 			return err
 		}
 		if regionErr != nil {
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return err
-				}
+			if err = retry.MayBackoffOrFailFastForRegionError(regionErr, bo); err != nil {
+				return err
 			}
 			if regionErr.GetDiskFull() != nil {
 				storeIds := regionErr.GetDiskFull().GetStoreId()
