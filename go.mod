@@ -1,6 +1,8 @@
 module github.com/tikv/client-go/v2
 
-go 1.23
+go 1.23.0
+
+toolchain go1.24.1
 
 require (
 	github.com/VividCortex/ewma v1.2.0
@@ -16,7 +18,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989
-	github.com/pingcap/kvproto v0.0.0-20250427115124-e89bec5a53cc
+	github.com/pingcap/kvproto v0.0.0-20250512085210-1174a93e5067
 	github.com/pingcap/log v1.1.1-0.20221110025148-ca232912c9f3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
@@ -30,7 +32,7 @@ require (
 	go.uber.org/atomic v1.11.0
 	go.uber.org/goleak v1.2.0
 	go.uber.org/zap v1.26.0
-	golang.org/x/sync v0.10.0
+	golang.org/x/sync v0.12.0
 	google.golang.org/grpc v1.63.2
 )
 
@@ -50,12 +52,14 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.10 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/net v0.33.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240304212257-790db918fca8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240401170217-c3f982113cda // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/tikv/pd/client => github.com/MyonKeminta/pd/client v0.0.0-20250515091007-22756d835b72

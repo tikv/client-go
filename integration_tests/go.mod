@@ -6,7 +6,7 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20241219054535-6b8c588c3122
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20250427115124-e89bec5a53cc
+	github.com/pingcap/kvproto v0.0.0-20250512085210-1174a93e5067
 	github.com/pingcap/tidb v1.1.0-beta.0.20250328040912-206ce6a49cac
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
@@ -96,7 +96,7 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
-	golang.org/x/net v0.37.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
@@ -116,3 +116,5 @@ replace (
 
 	github.com/tikv/client-go/v2 => ../
 )
+
+replace github.com/tikv/pd/client => github.com/MyonKeminta/pd/client v0.0.0-20250515091007-22756d835b72
