@@ -725,11 +725,6 @@ func (s *RegionRequestSender) reset() {
 	s.failProxyStoreIDs = nil
 }
 
-// IsFakeRegionError returns true if err is fake region error.
-func IsFakeRegionError(err *errorpb.Error) bool {
-	return err != nil && err.GetEpochNotMatch() != nil && len(err.GetEpochNotMatch().CurrentRegions) == 0
-}
-
 const slowLogSendReqTime = 100 * time.Millisecond
 
 // sendReqState represents the state of sending request with retry, which allows us to construct a state and start to
@@ -1977,7 +1972,19 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 				err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
 				return
 			}
+		case "UndeterminedResult":
+			if req.Type == tikvrpc.CmdPrewrite {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.PrewriteResponse{RegionError: &errorpb.Error{
+						UndeterminedResult: &errorpb.UndeterminedResult{
+							Message: "undetermined result",
+						},
+					}},
+				}
+				return
+			}
 		}
+
 	}
 	return
 }

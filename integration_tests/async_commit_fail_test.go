@@ -264,3 +264,13 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitContextCancelCausingUndetermin
 	s.NotNil(err)
 	s.NotNil(txn.GetCommitter().GetUndeterminedErr())
 }
+
+func (s *testAsyncCommitFailSuite) TestPrewriteFailWithUndeterminedResult() {
+	txn := s.beginAsyncCommit()
+	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	// prewrite fail for an undetermined result in async commit should return undetermined error.
+	s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("UndeterminedResult")->return("")`))
+	err := txn.Commit(context.Background())
+	s.NotNil(err)
+	s.True(tikverr.IsErrorUndetermined(err))
+}

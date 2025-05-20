@@ -2769,3 +2769,28 @@ func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
 	wg.Wait()
 	s.Equal(reachedPost.Load(), true)
 }
+
+func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
+	txn := s.begin()
+	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	// prewrite fail for an undetermined result in commit should retry
+	s.Nil(failpoint.Enable(
+		"tikvclient/tikvStoreSendReqResult",
+		// prewrite fail, but retry success
+		`1*return("UndeterminedResult")->return("")`,
+	))
+	err := txn.Commit(context.Background())
+	s.Nil(err)
+
+	// commit primary fail for an undetermined result should return undetermined error
+	txn = s.begin()
+	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	// prewrite fail for an undetermined result in commit should retry
+	s.Nil(failpoint.Enable(
+		"tikvclient/tikvStoreSendReqResult",
+		// prewrite success, but the first commit fail
+		`1*return("")->1*return("UndeterminedResult")->return("")`,
+	))
+	err = txn.Commit(context.Background())
+	s.Nil(err)
+}
