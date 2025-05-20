@@ -2775,9 +2775,9 @@ func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
 	s.Nil(txn.Set([]byte("key"), []byte("value")))
 	// prewrite fail for an undetermined result in commit should retry
 	s.Nil(failpoint.Enable(
-		"tikvclient/tikvStoreSendReqResult",
+		"tikvclient/rpcPrewriteResult",
 		// prewrite fail, but retry success
-		`1*return("UndeterminedResult")->return("")`,
+		`1*return("undeterminedResult")->return("")`,
 	))
 	err := txn.Commit(context.Background())
 	s.Nil(err)
@@ -2787,10 +2787,11 @@ func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
 	s.Nil(txn.Set([]byte("key"), []byte("value")))
 	// prewrite fail for an undetermined result in commit should retry
 	s.Nil(failpoint.Enable(
-		"tikvclient/tikvStoreSendReqResult",
+		"tikvclient/rpcCommitResult",
 		// prewrite success, but the first commit fail
-		`1*return("")->1*return("UndeterminedResult")->return("")`,
+		`1*return("undeterminedResult")->return("")`,
 	))
 	err = txn.Commit(context.Background())
-	s.Nil(err)
+	s.NotNil(err)
+	s.True(tikverr.IsErrorUndetermined(err))
 }

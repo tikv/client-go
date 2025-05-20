@@ -266,10 +266,13 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitContextCancelCausingUndetermin
 }
 
 func (s *testAsyncCommitFailSuite) TestPrewriteFailWithUndeterminedResult() {
+	if *withTiKV {
+		s.T().Skip("not supported in real TiKV")
+	}
 	txn := s.beginAsyncCommit()
 	s.Nil(txn.Set([]byte("key"), []byte("value")))
 	// prewrite fail for an undetermined result in async commit should return undetermined error.
-	s.Nil(failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("UndeterminedResult")->return("")`))
+	s.Nil(failpoint.Enable("tikvclient/rpcPrewriteResult", `1*return("undeterminedResult")->return("")`))
 	err := txn.Commit(context.Background())
 	s.NotNil(err)
 	s.True(tikverr.IsErrorUndetermined(err))

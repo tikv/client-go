@@ -1466,6 +1466,8 @@ func regionErrorToLabel(e *errorpb.Error) string {
 		return "bucket_version_not_match"
 	} else if isInvalidMaxTsUpdate(e) {
 		return "invalid_max_ts_update"
+	} else if e.GetUndeterminedResult() != nil {
+		return "undetermined_result"
 	}
 	return "unknown"
 }
@@ -1492,6 +1494,11 @@ func (s *RegionRequestSender) onRegionError(
 	if s.Stats != nil {
 		s.Stats.RecordRPCErrorStats(regionErrLabel)
 		s.recordRPCAccessInfo(req, ctx, regionErrorToLogging(regionErr, regionErrLabel))
+	}
+
+	if regionErr.GetUndeterminedResult() != nil {
+		// should not retry for `UndeterminedResult` because this error should be processed by the caller.
+		return false, nil
 	}
 
 	// NOTE: Please add the region error handler in the same order of errorpb.Error.
@@ -1972,19 +1979,7 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 				err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
 				return
 			}
-		case "UndeterminedResult":
-			if req.Type == tikvrpc.CmdPrewrite {
-				resp = &tikvrpc.Response{
-					Resp: &kvrpcpb.PrewriteResponse{RegionError: &errorpb.Error{
-						UndeterminedResult: &errorpb.UndeterminedResult{
-							Message: "undetermined result",
-						},
-					}},
-				}
-				return
-			}
 		}
-
 	}
 	return
 }

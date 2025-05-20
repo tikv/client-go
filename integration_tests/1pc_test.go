@@ -40,6 +40,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/suite"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -309,15 +310,17 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 }
 
 func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
-	// commit primary fail for an undetermined result should return undetermined error
-	txn := s.begin()
+	if *withTiKV {
+		s.T().Skip("not supported in real TiKV")
+	}
+	txn := s.begin1PC()
 	s.Nil(txn.Set([]byte("key"), []byte("value")))
-	// prewrite fail for an undetermined result in commit should retry
 	s.Nil(failpoint.Enable(
-		"tikvclient/tikvStoreSendReqResult",
-		// prewrite success, but the first commit fail
-		`1*return("UndeterminedResult")->return("")`,
+		"tikvclient/rpcPrewriteResult",
+		// it will make the prewrite in 1pc fail.
+		`1*return("undeterminedResult")->return("")`,
 	))
 	err := txn.Commit(context.Background())
-	s.Nil(err)
+	s.NotNil(err)
+	s.True(tikverr.IsErrorUndetermined(err))
 }
