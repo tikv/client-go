@@ -42,7 +42,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/assert"
-	tikverr "github.com/tikv/client-go/v2/error"
 )
 
 func TestBackoffWithMax(t *testing.T) {
@@ -136,7 +135,7 @@ func TestBackoffWithMaxExcludedExceed(t *testing.T) {
 	assert.Greater(t, b.excludedSleep, b.maxSleep)
 }
 
-func TestMayBackoffOrFailFastForRegionError(t *testing.T) {
+func TestMayBackoffForRegionError(t *testing.T) {
 	// errors should retry without backoff
 	for _, regionErr := range []*errorpb.Error{
 		{
@@ -146,7 +145,7 @@ func TestMayBackoffOrFailFastForRegionError(t *testing.T) {
 		},
 	} {
 		b := NewBackofferWithVars(context.TODO(), 1, nil)
-		err := MayBackoffOrFailFastForRegionError(regionErr, b)
+		err := MayBackoffForRegionError(regionErr, b)
 		assert.NoError(t, err, regionErr)
 		assert.Zero(t, b.totalSleep, regionErr)
 	}
@@ -170,30 +169,14 @@ func TestMayBackoffOrFailFastForRegionError(t *testing.T) {
 		// backoff succeeds
 		ctx, cancel := context.WithCancel(context.TODO())
 		b := NewBackofferWithVars(ctx, 1, nil)
-		err := MayBackoffOrFailFastForRegionError(regionErr, b)
+		err := MayBackoffForRegionError(regionErr, b)
 		assert.NoError(t, err, regionErr)
 		assert.Greater(t, b.totalSleep, 0, regionErr)
 
 		// backoff fails
 		cancel()
 		b = NewBackofferWithVars(ctx, 1, nil)
-		err = MayBackoffOrFailFastForRegionError(regionErr, b)
+		err = MayBackoffForRegionError(regionErr, b)
 		assert.EqualError(t, err, regionErr.String())
-	}
-
-	// should fail fast without a retry
-	for _, regionErr := range []*errorpb.Error{
-		{
-			UndeterminedResult: &errorpb.UndeterminedResult{Message: "test"},
-		},
-	} {
-		b := NewBackofferWithVars(context.TODO(), 1, nil)
-		err := MayBackoffOrFailFastForRegionError(regionErr, b)
-		assert.NotNil(t, err, regionErr)
-		assert.Zero(t, b.totalSleep, regionErr)
-		if regionErr.UndeterminedResult != nil {
-			// undetermined result should return `ErrResultUndetermined`
-			assert.True(t, tikverr.IsErrorUndetermined(err), regionErr)
-		}
 	}
 }

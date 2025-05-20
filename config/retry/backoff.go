@@ -420,19 +420,12 @@ func IsFakeRegionError(err *errorpb.Error) bool {
 	return err != nil && err.GetEpochNotMatch() != nil && len(err.GetEpochNotMatch().CurrentRegions) == 0
 }
 
-// MayBackoffOrFailFastForRegionError handles the region error for some cases:
-// - If the `regionError` should not retry, returns an error.
-// - If the `regionError` can retry immediately, it returns nil.
-// - If the `regionError` can retry but need to do backoff, it backoff first and returns nil.
-// - If the backoff in the above case fails (.i.e reaches the max backoff limit), it returns the error.
-func MayBackoffOrFailFastForRegionError(regionErr *errorpb.Error, bo *Backoffer) error {
+// MayBackoffForRegionError do some backoff if needed.
+// If the `regionError` can retry but need to backoff, it backoff first and returns the result of the method `Backoff`.
+// Otherwise, it returns nil.
+func MayBackoffForRegionError(regionErr *errorpb.Error, bo *Backoffer) error {
 	if regionErr == nil {
 		return nil
-	}
-
-	if regionErr.GetUndeterminedResult() != nil {
-		// For undetermined result, we fail fast without a retry.
-		return errors.WithStack(tikverr.ErrResultUndetermined)
 	}
 
 	if regionErr.GetEpochNotMatch() == nil || IsFakeRegionError(regionErr) {

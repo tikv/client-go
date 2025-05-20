@@ -494,7 +494,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		readType = req.ReadType
 		if regionErr != nil {
-			if err = retry.MayBackoffOrFailFastForRegionError(regionErr, bo); err != nil {
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 				return err
 			}
 			same, err := batch.relocate(bo, cli.regionCache)
@@ -743,7 +743,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			return nil, err
 		}
 		if regionErr != nil {
-			if err = retry.MayBackoffOrFailFastForRegionError(regionErr, bo); err != nil {
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 				return nil, err
 			}
 			continue

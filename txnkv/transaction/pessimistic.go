@@ -220,7 +220,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 func (action actionPessimisticLock) handleRegionError(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch *batchMutations, regionErr *errorpb.Error,
 ) (finished bool, err error) {
-	if err := retry.MayBackoffOrFailFastForRegionError(regionErr, bo); err != nil {
+	if err := retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 		return true, err
 	}
 	same, err := batch.relocate(bo, c.store.GetRegionCache())

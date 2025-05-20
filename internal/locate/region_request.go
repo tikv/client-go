@@ -1972,7 +1972,7 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 				err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
 				return
 			}
-		case "PrewriteUndeterminedResult":
+		case "UndeterminedResult":
 			if req.Type == tikvrpc.CmdPrewrite {
 				resp = &tikvrpc.Response{
 					Resp: &kvrpcpb.PrewriteResponse{RegionError: &errorpb.Error{
@@ -1984,6 +1984,7 @@ func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
 				return
 			}
 		}
+
 	}
 	return
 }

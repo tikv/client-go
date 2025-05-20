@@ -274,7 +274,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 		if regionErr != nil {
 			logutil.BgLogger().Debug("scanner getData failed",
 				zap.Stringer("regionErr", regionErr))
-			if err = retry.MayBackoffOrFailFastForRegionError(regionErr, bo); err != nil {
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 				return err
 			}
 			continue

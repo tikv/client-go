@@ -1496,7 +1496,7 @@ func sendTxnHeartBeat(
 			return 0, false, err
 		}
 		if regionErr != nil {
-			if err = retry.MayBackoffOrFailFastForRegionError(regionErr, bo); err != nil {
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 				return 0, false, err
 			}
 			continue

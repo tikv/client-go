@@ -38,6 +38,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
@@ -305,4 +306,18 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 	s.Equal(diff.TwoPC, int64(1))
 	s.Equal(diff.AsyncCommit, int64(1))
 	s.Equal(diff.OnePC, int64(1))
+}
+
+func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
+	// commit primary fail for an undetermined result should return undetermined error
+	txn := s.begin()
+	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	// prewrite fail for an undetermined result in commit should retry
+	s.Nil(failpoint.Enable(
+		"tikvclient/tikvStoreSendReqResult",
+		// prewrite success, but the first commit fail
+		`1*return("UndeterminedResult")->return("")`,
+	))
+	err := txn.Commit(context.Background())
+	s.Nil(err)
 }

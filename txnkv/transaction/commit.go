@@ -133,7 +133,15 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 			return err
 		}
 		if regionErr != nil {
-			if err = retry.MayBackoffOrFailFastForRegionError(regionErr, bo); err != nil {
+			if regionErr.GetUndeterminedResult() != nil && !c.isAsyncCommit() && batch.isPrimary {
+				// If the current transaction is not async, and commit fails with error `UndeterminedResult`,
+				// it means the transaction's commit state is unknown.
+				// We should return the error `ErrResultUndetermined` to the caller
+				// to do the further handling (.i.e disconnect the connection).
+				return errors.WithStack(tikverr.ErrResultUndetermined)
+			}
+
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
 				return err
 			}
 			same, err := batch.relocate(bo, c.store.GetRegionCache())
