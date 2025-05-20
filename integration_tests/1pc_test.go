@@ -310,6 +310,9 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 }
 
 func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
+	if *withTiKV {
+		s.T().Skip("not supported in real TiKV")
+	}
 	txn := s.begin1PC()
 	s.Nil(txn.Set([]byte("key"), []byte("value")))
 	s.Nil(failpoint.Enable(

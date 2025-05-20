@@ -266,6 +266,9 @@ func (s *testAsyncCommitFailSuite) TestAsyncCommitContextCancelCausingUndetermin
 }
 
 func (s *testAsyncCommitFailSuite) TestPrewriteFailWithUndeterminedResult() {
+	if *withTiKV {
+		s.T().Skip("not supported in real TiKV")
+	}
 	txn := s.beginAsyncCommit()
 	s.Nil(txn.Set([]byte("key"), []byte("value")))
 	// prewrite fail for an undetermined result in async commit should return undetermined error.
