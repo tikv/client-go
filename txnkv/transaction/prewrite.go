@@ -416,7 +416,7 @@ func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err 
 //     doActionOnMutations directly and return retryable false regardless of success or failure.
 //  2. Other region errors.
 func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Error) (retryable bool, err error) {
-	if regionErr.GetUndeterminedResult() != nil && handler.committer.isAsyncCommit() {
+	if regionErr.GetUndeterminedResult() != nil && (handler.committer.isAsyncCommit() || handler.committer.isOnePC()) {
 		// If the current transaction is async commit and prewrite fails for `UndeterminedResult`,
 		// It means the transaction's commit state is unknown.
 		// We should return the error `ErrResultUndetermined` to the caller
