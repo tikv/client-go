@@ -424,7 +424,7 @@ func (c *pdClient) ModifyResourceGroup(ctx context.Context, metaGroup *rmpb.Reso
 	return "", nil
 }
 
-func (c *pdClient) DeleteResourceGroup(ctx context.Context, resourceGroupName string) (string, error) {
+func (c *pdClient) DeleteResourceGroup(ctx context.Context, resourceGroupName string, opts ...pd.DeleteResourceGroupOption) (string, error) {
 	return "", nil
 }
 
