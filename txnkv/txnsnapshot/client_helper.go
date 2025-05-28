@@ -44,6 +44,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 // ClientHelper wraps LockResolver and RegionRequestSender.
@@ -148,4 +149,20 @@ func (ch *ClientHelper) SendReqCtx(bo *retry.Backoffer, req *tikvrpc.Request, re
 	req.Context.CommittedLocks = ch.committedLocks.GetAll()
 	resp, ctx, _, err := sender.SendReqCtx(bo, req, regionID, timeout, et, opts...)
 	return resp, ctx, sender.GetStoreAddr(), err
+}
+
+// SendReqAsync wraps the SendReqAsync function and use the resolved lock result in the kvrpcpb.Context.
+func (ch *ClientHelper) SendReqAsync(
+	bo *retry.Backoffer,
+	req *tikvrpc.Request,
+	regionID locate.RegionVerID,
+	timeout time.Duration,
+	cb async.Callback[*tikvrpc.ResponseExt],
+	opts ...locate.StoreSelectorOption,
+) {
+	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client, ch.oracle)
+	sender.Stats = ch.Stats
+	req.Context.ResolvedLocks = ch.resolvedLocks.GetAll()
+	req.Context.CommittedLocks = ch.committedLocks.GetAll()
+	sender.SendReqAsync(bo, req, regionID, timeout, cb, opts...)
 }

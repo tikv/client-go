@@ -118,6 +118,7 @@ var (
 	TiKVStaleRegionFromPDCounter                   prometheus.Counter
 	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
 	TiKVTxnWriteConflictCounter                    prometheus.Counter
+	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
 )
 
 // Label constants.
@@ -847,6 +848,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "Counter of txn write conflict",
 		})
 
+	TiKVAsyncBatchGetCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "async_batch_get_total",
+			Help:      "Counter of batch get that uses async api.",
+		}, []string{LblResult})
+
 	initShortcuts()
 }
 
@@ -943,6 +952,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
 	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
 	prometheus.MustRegister(TiKVTxnWriteConflictCounter)
+	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
 }
 
 // readCounter reads the value of a prometheus.Counter.

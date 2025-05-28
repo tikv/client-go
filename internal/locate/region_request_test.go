@@ -520,7 +520,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			s.NotNil(resp)
 			regionErr, err := resp.GetRegionError()
 			s.Nil(err)
-			s.True(IsFakeRegionError(regionErr))
+			s.True(retry.IsFakeRegionError(regionErr))
 			complete = true
 		}))
 		for !complete {
