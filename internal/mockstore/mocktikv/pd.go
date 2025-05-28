@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/gc"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
@@ -471,6 +472,14 @@ func (m *pdClient) LoadResourceGroups(ctx context.Context) ([]*rmpb.ResourceGrou
 func (m *pdClient) GetServiceDiscovery() sd.ServiceDiscovery { return nil }
 
 func (m *pdClient) WithCallerComponent(caller.Component) pd.Client { return m }
+
+func (m *pdClient) GetGCInternalController(keyspaceID uint32) gc.InternalController {
+	return nil
+}
+
+func (m *pdClient) GetGCStatesClient(keyspaceID uint32) gc.GCStatesClient {
+	return nil
+}
 
 func enforceCircuitBreakerFor(name string, ctx context.Context) {
 	if circuitbreaker.FromContext(ctx) == nil {

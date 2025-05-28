@@ -520,7 +520,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
 			s.NotNil(resp)
 			regionErr, err := resp.GetRegionError()
 			s.Nil(err)
-			s.True(IsFakeRegionError(regionErr))
+			s.True(retry.IsFakeRegionError(regionErr))
 			complete = true
 		}))
 		for !complete {
@@ -650,6 +650,11 @@ func (s *mockTikvGrpcServer) Coprocessor(context.Context, *coprocessor.Request) 
 func (s *mockTikvGrpcServer) BatchCoprocessor(*coprocessor.BatchRequest, tikvpb.Tikv_BatchCoprocessorServer) error {
 	return errors.New("unreachable")
 }
+
+func (s *mockTikvGrpcServer) DelegateCoprocessor(context.Context, *coprocessor.DelegateRequest) (*coprocessor.DelegateResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) RawCoprocessor(context.Context, *kvrpcpb.RawCoprocessorRequest) (*kvrpcpb.RawCoprocessorResponse, error) {
 	return nil, errors.New("unreachable")
 }
