@@ -176,6 +176,11 @@ var (
 	BatchRequestDurationSend prometheus.Observer
 	BatchRequestDurationRecv prometheus.Observer
 	BatchRequestDurationDone prometheus.Observer
+
+	AsyncBatchGetCounterWithOK          prometheus.Counter
+	AsyncBatchGetCounterWithRegionError prometheus.Counter
+	AsyncBatchGetCounterWithLockError   prometheus.Counter
+	AsyncBatchGetCounterWithOtherError  prometheus.Counter
 )
 
 func initShortcuts() {
@@ -321,4 +326,9 @@ func initShortcuts() {
 	StaleReadLocalOutBytes = TiKVStaleReadBytes.WithLabelValues("local", "out")
 	StaleReadRemoteInBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "in")
 	StaleReadRemoteOutBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "out")
+
+	AsyncBatchGetCounterWithOK = TiKVAsyncBatchGetCounter.WithLabelValues("ok")
+	AsyncBatchGetCounterWithRegionError = TiKVAsyncBatchGetCounter.WithLabelValues("region_error")
+	AsyncBatchGetCounterWithLockError = TiKVAsyncBatchGetCounter.WithLabelValues("lock_error")
+	AsyncBatchGetCounterWithOtherError = TiKVAsyncBatchGetCounter.WithLabelValues("other_error")
 }
