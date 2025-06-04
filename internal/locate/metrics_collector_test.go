@@ -85,8 +85,6 @@ func TestNetworkCollectorOnReq(t *testing.T) {
 }
 
 func TestNetworkCollectorOnResp(t *testing.T) {
-	// Initialize the collector and dependencies
-
 	// Construct requests and responses
 	reqs := []*tikvrpc.Request{
 		tikvrpc.NewRequest(
@@ -139,6 +137,7 @@ func TestNetworkCollectorOnResp(t *testing.T) {
 	for _, cas := range testCases {
 		// Call the method
 		cas.req.AccessLocation = kv.AccessLocalZone
+		// Initialize the collector and dependencies
 		collector := &networkCollector{}
 		if cas.req.StaleRead {
 			collector.staleReadMetricsCollector = &staleReadMetricsCollector{}

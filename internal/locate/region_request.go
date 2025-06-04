@@ -1251,7 +1251,6 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 
 	if s.replicaSelector != nil &&
 		s.replicaSelector.target != nil &&
-		//req.AccessLocation == kv.AccessUnknown &&
 		len(s.replicaSelector.option.labels) != 0 {
 		// patch the access location if it is not set under region request sender.
 		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
