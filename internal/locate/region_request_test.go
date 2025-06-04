@@ -60,13 +60,16 @@ import (
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/client/mockserver"
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/async"
 	pd "github.com/tikv/pd/client"
 	pderr "github.com/tikv/pd/client/errs"
 	"google.golang.org/grpc"
@@ -136,6 +139,13 @@ func (f *fnClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Re
 	return f.fn(ctx, addr, req, timeout)
 }
 
+func (f *fnClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	go func() {
+		tikvrpc.AttachContext(req, req.Context)
+		cb.Schedule(f.fn(ctx, addr, req, 0))
+	}()
+}
+
 func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
@@ -146,7 +156,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 	s.NotNil(region)
 
 	// test stale command retry.
-	func() {
+	test := func() {
 		oc := s.regionRequestSender.client
 		defer func() {
 			s.regionRequestSender.client = oc
@@ -163,7 +173,13 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnRegionError() {
 		s.NotNil(resp)
 		regionErr, _ := resp.GetRegionError()
 		s.NotNil(regionErr)
-	}()
+	}
+
+	s.Run("Default", test)
+
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.Run("AsyncAPI", test)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrottled() {
@@ -176,7 +192,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrot
 	s.NotNil(region)
 
 	// test ErrClientResourceGroupThrottled handled by regionRequestSender
-	func() {
+	test := func() {
 		oc := s.regionRequestSender.client
 		defer func() {
 			s.regionRequestSender.client = oc
@@ -194,10 +210,26 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailByResourceGroupThrot
 		s.Equal(epoch, storeNew.epoch)
 		// no rpc error if the error is ErrClientResourceGroupThrottled
 		s.Nil(s.regionRequestSender.rpcError)
-	}()
+	}
+
+	s.Run("Default", test)
+
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.Run("AsyncAPI", test)
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart() {
+	s.testOnSendFailedWithStoreRestart()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestartUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testOnSendFailedWithStoreRestart()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testOnSendFailedWithStoreRestart() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -232,6 +264,16 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithStoreRestart()
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStoreThenUseNewOne() {
+	s.testOnSendFailedWithCloseKnownStoreThenUseNewOne()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStoreThenUseNewOneUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testOnSendFailedWithCloseKnownStoreThenUseNewOne()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testOnSendFailedWithCloseKnownStoreThenUseNewOne() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -265,26 +307,17 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCloseKnownStor
 	s.NotNil(resp.Resp)
 }
 
-func (s *testRegionRequestToSingleStoreSuite) TestSendReqCtx() {
-	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
-		Key:   []byte("key"),
-		Value: []byte("value"),
-	})
-	region, err := s.cache.LocateRegionByID(s.bo, s.region)
-	s.Nil(err)
-	s.NotNil(region)
-	resp, ctx, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
-	s.Nil(err)
-	s.NotNil(resp.Resp)
-	s.NotNil(ctx)
-	req.ReplicaRead = true
-	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
-	s.Nil(err)
-	s.NotNil(resp.Resp)
-	s.NotNil(ctx)
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
+	s.testOnSendFailedWithCancelled()
 }
 
-func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
+func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelledUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testOnSendFailedWithCancelled()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testOnSendFailedWithCancelled() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -315,6 +348,16 @@ func (s *testRegionRequestToSingleStoreSuite) TestOnSendFailedWithCancelled() {
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionWhenCtxCanceled() {
+	s.testNoReloadRegionWhenCtxCanceled()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionWhenCtxCanceledUsingAsyncAPI() {
+	failpoint.Enable("tikvclient/useSendReqAsync", `return(true)`)
+	defer failpoint.Disable("tikvclient/useSendReqAsync")
+	s.testNoReloadRegionWhenCtxCanceled()
+}
+
+func (s *testRegionRequestToSingleStoreSuite) testNoReloadRegionWhenCtxCanceled() {
 	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
 		Key:   []byte("key"),
 		Value: []byte("value"),
@@ -333,6 +376,158 @@ func (s *testRegionRequestToSingleStoreSuite) TestNoReloadRegionWhenCtxCanceled(
 	r, expired := sender.regionCache.searchCachedRegionByID(s.region)
 	s.False(expired)
 	s.NotNil(r)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestSendReqCtx() {
+	req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+		Key:   []byte("key"),
+		Value: []byte("value"),
+	})
+	region, err := s.cache.LocateRegionByID(s.bo, s.region)
+	s.Nil(err)
+	s.NotNil(region)
+	resp, ctx, _, err := s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+	s.Nil(err)
+	s.NotNil(resp.Resp)
+	s.NotNil(ctx)
+	req.ReplicaRead = true
+	resp, ctx, _, err = s.regionRequestSender.SendReqCtx(s.bo, req, region.Region, time.Second, tikvrpc.TiKV)
+	s.Nil(err)
+	s.NotNil(resp.Resp)
+	s.NotNil(ctx)
+}
+
+func (s *testRegionRequestToSingleStoreSuite) TestSendReqAsync() {
+	reachable.injectConstantLiveness(s.regionRequestSender.regionCache.stores)
+
+	ctx := context.Background()
+	rl := async.NewRunLoop()
+
+	s.Run("Basic", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		region, err := s.cache.LocateRegionByID(s.bo, s.region)
+		s.Nil(err)
+		s.NotNil(region)
+
+		complete := false
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Nil(err)
+			s.NotNil(resp.Resp)
+			s.NotEmpty(resp.Addr)
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(ctx)
+			s.Require().NoError(err)
+		}
+	})
+
+	s.Run("StoreLimit", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		region, err := s.cache.LocateRegionByID(s.bo, s.region)
+		s.Nil(err)
+		s.NotNil(region)
+
+		store := s.cache.stores.getOrInsertDefault(s.store)
+
+		defer func(storeLimit int64, tokenCount int64) {
+			kv.StoreLimit.Store(storeLimit)
+			store.tokenCount.Store(tokenCount)
+		}(kv.StoreLimit.Load(), store.tokenCount.Load())
+		kv.StoreLimit.Store(100)
+		store.tokenCount.Store(100)
+
+		complete := false
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Nil(resp)
+			s.NotNil(err)
+			e, ok := errors.Cause(err).(*tikverr.ErrTokenLimit)
+			s.True(ok)
+			s.Equal(s.store, e.StoreID)
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(ctx)
+			s.Require().NoError(err)
+		}
+	})
+
+	s.Run("RPCCancel", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdRawPut, &kvrpcpb.RawPutRequest{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+		})
+		region, err := s.cache.LocateRegionByID(s.bo, s.region)
+		s.Nil(err)
+		s.NotNil(region)
+
+		defer func(ctx context.Context, cli client.Client) {
+			s.bo.SetCtx(ctx)
+			s.regionRequestSender.client = cli
+		}(s.bo.GetCtx(), s.regionRequestSender.client)
+
+		var once sync.Once
+		rpcCanceller := NewRPCanceller()
+		s.bo.SetCtx(context.WithValue(s.bo.GetCtx(), RPCCancellerCtxKey{}, rpcCanceller))
+		s.regionRequestSender.client = &fnClient{
+			fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+				once.Do(func() { rpcCanceller.CancelAll() })
+				return nil, context.Canceled
+			},
+		}
+
+		complete := false
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, time.Second, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Nil(resp)
+			s.ErrorIs(err, context.Canceled)
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(ctx)
+			s.Require().NoError(err)
+		}
+	})
+
+	s.Run("Timeout", func() {
+		req := tikvrpc.NewRequest(tikvrpc.CmdGet, &kvrpcpb.GetRequest{
+			Key:     []byte("key"),
+			Version: math.MaxUint64,
+		})
+		region, err := s.cache.LocateRegionByID(s.bo, s.region)
+		s.Nil(err)
+		s.NotNil(region)
+
+		defer func(cli client.Client) {
+			s.regionRequestSender.client = cli
+		}(s.regionRequestSender.client)
+
+		s.regionRequestSender.client = &fnClient{
+			fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+
+		complete := false
+		s.regionRequestSender.SendReqAsync(s.bo, req, region.Region, 100*time.Millisecond, async.NewCallback(rl, func(resp *tikvrpc.ResponseExt, err error) {
+			s.Nil(err)
+			s.NotNil(resp)
+			regionErr, err := resp.GetRegionError()
+			s.Nil(err)
+			s.True(retry.IsFakeRegionError(regionErr))
+			complete = true
+		}))
+		for !complete {
+			_, err := rl.Exec(ctx)
+			s.Require().NoError(err)
+		}
+	})
 }
 
 // cancelContextClient wraps rpcClient and always cancels context before sending requests.
@@ -455,6 +650,11 @@ func (s *mockTikvGrpcServer) Coprocessor(context.Context, *coprocessor.Request) 
 func (s *mockTikvGrpcServer) BatchCoprocessor(*coprocessor.BatchRequest, tikvpb.Tikv_BatchCoprocessorServer) error {
 	return errors.New("unreachable")
 }
+
+func (s *mockTikvGrpcServer) DelegateCoprocessor(context.Context, *coprocessor.DelegateRequest) (*coprocessor.DelegateResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
 func (s *mockTikvGrpcServer) RawCoprocessor(context.Context, *kvrpcpb.RawCoprocessorRequest) (*kvrpcpb.RawCoprocessorResponse, error) {
 	return nil, errors.New("unreachable")
 }
@@ -772,7 +972,7 @@ func (s *testRegionRequestToSingleStoreSuite) TestKVReadTimeoutWithDisableBatchC
 	s.Nil(err)
 	s.NotNil(resp)
 	regionErr, _ := resp.GetRegionError()
-	s.True(IsFakeRegionError(regionErr))
+	s.True(retry.IsFakeRegionError(regionErr))
 	s.Equal(0, bo.GetTotalBackoffTimes()) // use kv read timeout will do fast retry, so backoff times should be 0.
 }
 

@@ -494,14 +494,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		readType = req.ReadType
 		if regionErr != nil {
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return err
-				}
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
+				return err
 			}
 			same, err := batch.relocate(bo, cli.regionCache)
 			if err != nil {
@@ -749,14 +743,8 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 			return nil, err
 		}
 		if regionErr != nil {
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return nil, err
-				}
+			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
+				return nil, err
 			}
 			continue
 		}

@@ -416,14 +416,16 @@ func (handler *prewrite1BatchReqHandler) sendReqAndCheck() (retryable bool, err 
 //     doActionOnMutations directly and return retryable false regardless of success or failure.
 //  2. Other region errors.
 func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Error) (retryable bool, err error) {
-	// For other region error and the fake region error, backoff because
-	// there's something wrong.
-	// For the real EpochNotMatch error, don't backoff.
-	if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-		err := handler.bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-		if err != nil {
-			return false, err
-		}
+	if regionErr.GetUndeterminedResult() != nil && (handler.committer.isAsyncCommit() || handler.committer.isOnePC()) {
+		// If the current transaction is async commit and prewrite fails for `UndeterminedResult`,
+		// It means the transaction's commit state is unknown.
+		// We should return the error `ErrResultUndetermined` to the caller
+		// to for further handling (.i.e disconnect the connection).
+		return false, errors.WithStack(tikverr.ErrResultUndetermined)
+	}
+
+	if err = retry.MayBackoffForRegionError(regionErr, handler.bo); err != nil {
+		return false, err
 	}
 	if regionErr.GetDiskFull() != nil {
 		storeIds := regionErr.GetDiskFull().GetStoreId()

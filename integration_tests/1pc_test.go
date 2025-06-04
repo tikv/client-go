@@ -38,7 +38,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/suite"
+	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -305,4 +307,20 @@ func (s *testOnePCSuite) TestTxnCommitCounter() {
 	s.Equal(diff.TwoPC, int64(1))
 	s.Equal(diff.AsyncCommit, int64(1))
 	s.Equal(diff.OnePC, int64(1))
+}
+
+func (s *testOnePCSuite) TestFailWithUndeterminedResult() {
+	if *withTiKV {
+		s.T().Skip("not supported in real TiKV")
+	}
+	txn := s.begin1PC()
+	s.Nil(txn.Set([]byte("key"), []byte("value")))
+	s.Nil(failpoint.Enable(
+		"tikvclient/rpcPrewriteResult",
+		// it will make the prewrite in 1pc fail.
+		`1*return("undeterminedResult")->return("")`,
+	))
+	err := txn.Commit(context.Background())
+	s.NotNil(err)
+	s.True(tikverr.IsErrorUndetermined(err))
 }

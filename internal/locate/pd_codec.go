@@ -131,7 +131,7 @@ func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	startKey, endKey = c.codec.EncodeRegionRange(startKey, endKey)
-	//nolint:staticcheck
+	// TODO: ScanRegions has been deprecated in favor of BatchScanRegions.
 	regions, err := c.Client.ScanRegions(ctx, startKey, endKey, limit, opts...)
 	if err != nil {
 		return nil, errors.WithStack(err)

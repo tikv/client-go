@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -41,6 +42,12 @@ func (c fpClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Req
 			case "writeConflict":
 				return &tikvrpc.Response{
 					Resp: &kvrpcpb.PrewriteResponse{Errors: []*kvrpcpb.KeyError{{Conflict: &kvrpcpb.WriteConflict{}}}},
+				}, nil
+			case "undeterminedResult":
+				return &tikvrpc.Response{
+					Resp: &kvrpcpb.PrewriteResponse{RegionError: &errorpb.Error{
+						UndeterminedResult: &errorpb.UndeterminedResult{},
+					}},
 				}, nil
 			}
 		}
@@ -78,6 +85,17 @@ func (c fpClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Req
 							TxnSize:     1,
 							LockType:    kvrpcpb.Op_Put,
 						},
+					}},
+				}, nil
+			}
+		}
+	case tikvrpc.CmdCommit:
+		if val, err := util.EvalFailpoint("rpcCommitResult"); err == nil && val != nil {
+			switch val.(string) {
+			case "undeterminedResult":
+				return &tikvrpc.Response{
+					Resp: &kvrpcpb.CommitResponse{RegionError: &errorpb.Error{
+						UndeterminedResult: &errorpb.UndeterminedResult{},
 					}},
 				}, nil
 			}

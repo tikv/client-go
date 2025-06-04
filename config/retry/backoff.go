@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/log"
 	"github.com/pkg/errors"
 	tikverr "github.com/tikv/client-go/v2/error"
@@ -411,5 +412,29 @@ func (b *Backoffer) CheckKilled() error {
 			return errors.WithStack(tikverr.ErrQueryInterruptedWithSignal{Signal: killed})
 		}
 	}
+	return nil
+}
+
+// IsFakeRegionError returns true if err is fake region error.
+func IsFakeRegionError(err *errorpb.Error) bool {
+	return err != nil && err.GetEpochNotMatch() != nil && len(err.GetEpochNotMatch().CurrentRegions) == 0
+}
+
+// MayBackoffForRegionError do some backoff if needed.
+// If the `regionError` can retry but need to backoff, it backoff first and returns the result of the method `Backoff`.
+// Otherwise, it returns nil.
+func MayBackoffForRegionError(regionErr *errorpb.Error, bo *Backoffer) error {
+	if regionErr == nil {
+		return nil
+	}
+
+	if regionErr.GetEpochNotMatch() == nil || IsFakeRegionError(regionErr) {
+		// For other region error and the fake region error, backoff because
+		// there's something wrong.
+		return bo.Backoff(BoRegionMiss, errors.New(regionErr.String()))
+	}
+
+	// Here `regionErr.GetEpochNotMatch() != nil`
+	// For the real EpochNotMatch error, don't backoff and retry immediately.
 	return nil
 }

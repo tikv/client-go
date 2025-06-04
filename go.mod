@@ -2,8 +2,6 @@ module github.com/tikv/client-go/v2
 
 go 1.23.0
 
-toolchain go1.24.1
-
 require (
 	github.com/VividCortex/ewma v1.2.0
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
@@ -25,7 +23,7 @@ require (
 	github.com/prometheus/client_model v0.6.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a
-	github.com/tikv/pd/client v0.0.0-20250530134205-67b518dbb195
+	github.com/tikv/pd/client v0.0.0-20250528071146-6cd8a77df2fa
 	github.com/twmb/murmur3 v1.1.3
 	go.etcd.io/etcd/api/v3 v3.5.10
 	go.etcd.io/etcd/client/v3 v3.5.10
