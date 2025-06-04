@@ -499,6 +499,9 @@ func (s *RegionRequestSender) SendReqAsync(
 			et:       tikvrpc.TiKV,
 			opts:     opts,
 		},
+		invariants: reqInvariants{
+			staleRead: req.StaleRead,
+		},
 	}
 
 	cb.Inject(func(resp *tikvrpc.ResponseExt, err error) (*tikvrpc.ResponseExt, error) {
@@ -522,7 +525,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		if retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		if req.StaleRead {
+		if state.invariants.staleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
 			} else {
@@ -571,6 +574,16 @@ func (s *RegionRequestSender) SendReqAsync(
 	}
 
 	cli.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
+		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
+			execDetails := stmtExec.(*util.ExecDetails)
+			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(time.Since(startTime)))
+			collector := networkCollector{}
+			if state.invariants.staleRead {
+				collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
+			}
+			collector.onReq(req, execDetails)
+			collector.onResp(req, resp, execDetails)
+		}
 		state.vars.sendTimes++
 		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
 		if state.handleAsyncResponse(startTime, canceled, resp, err, cancels...) {
@@ -885,6 +898,15 @@ type sendReqState struct {
 		msg       string
 		sendTimes int
 	}
+
+	invariants reqInvariants
+}
+
+// reqInvariants holds the input state of the request.
+// If the tikvrpc.Request is changed during the retries or other operations.
+// the reqInvariants can tell the initial state.
+type reqInvariants struct {
+	staleRead bool
 }
 
 // next encapsulates one iteration of the retry loop. calling `next` will handle send error (s.vars.err) or region error
@@ -966,7 +988,6 @@ func (s *sendReqState) next() (done bool) {
 
 	if s.replicaSelector != nil &&
 		s.replicaSelector.target != nil &&
-		req.AccessLocation == kv.AccessUnknown &&
 		len(s.replicaSelector.option.labels) != 0 {
 		// patch the access location if it is not set under region request sender.
 		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
@@ -1114,6 +1135,18 @@ func (s *sendReqState) send() (canceled bool) {
 		if s.replicaSelector != nil {
 			recordAttemptedTime(s.replicaSelector, rpcDuration)
 		}
+
+		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
+			execDetails := stmtExec.(*util.ExecDetails)
+			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
+			collector := networkCollector{}
+			if s.invariants.staleRead {
+				collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
+			}
+			collector.onReq(req, execDetails)
+			collector.onResp(req, s.vars.resp, execDetails)
+		}
+
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
@@ -1218,7 +1251,7 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 
 	if s.replicaSelector != nil &&
 		s.replicaSelector.target != nil &&
-		req.AccessLocation == kv.AccessUnknown &&
+		//req.AccessLocation == kv.AccessUnknown &&
 		len(s.replicaSelector.option.labels) != 0 {
 		// patch the access location if it is not set under region request sender.
 		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
@@ -1394,13 +1427,16 @@ func (s *RegionRequestSender) SendReqCtx(
 			et:       et,
 			opts:     opts,
 		},
+		invariants: reqInvariants{
+			staleRead: req.StaleRead,
+		},
 	}
 
 	defer func() {
 		if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		if req.StaleRead {
+		if state.invariants.staleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
 			} else {

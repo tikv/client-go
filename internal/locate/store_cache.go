@@ -30,6 +30,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	"github.com/tikv/client-go/v2/internal/logutil"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
@@ -328,6 +329,22 @@ func (s *Store) IsLabelsMatch(labels []*metapb.StoreLabel) bool {
 		}
 	}
 	return true
+}
+
+func (s *Store) AccessLocationType(labels []*metapb.StoreLabel) kv.AccessLocationType {
+	for _, storeLabel := range s.labels {
+		if storeLabel.GetKey() == "zone" {
+			for _, targetLabel := range labels {
+				if targetLabel.GetKey() == "zone" {
+					if storeLabel.GetValue() == targetLabel.GetValue() {
+						return kv.AccessLocalZone
+					}
+					return kv.AccessCrossZone
+				}
+			}
+		}
+	}
+	return kv.AccessUnknown
 }
 
 // GetHealthStatus returns the health status of the store. This is exported for test purpose.

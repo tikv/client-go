@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package locate
 
 import (
 	"sync/atomic"
@@ -86,7 +86,6 @@ func TestNetworkCollectorOnReq(t *testing.T) {
 
 func TestNetworkCollectorOnResp(t *testing.T) {
 	// Initialize the collector and dependencies
-	collector := &networkCollector{}
 
 	// Construct requests and responses
 	reqs := []*tikvrpc.Request{
@@ -140,6 +139,10 @@ func TestNetworkCollectorOnResp(t *testing.T) {
 	for _, cas := range testCases {
 		// Call the method
 		cas.req.AccessLocation = kv.AccessLocalZone
+		collector := &networkCollector{}
+		if cas.req.StaleRead {
+			collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
+		}
 		collector.onResp(cas.req, cas.resp, details)
 
 		// Verify metrics

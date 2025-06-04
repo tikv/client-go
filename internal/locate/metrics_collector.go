@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package locate
 
 import (
 	"sync/atomic"
@@ -31,25 +31,24 @@ type staleReadMetricsCollector struct {
 
 func (s *staleReadMetricsCollector) onReq(size float64, isCrossZoneTraffic bool) {
 	if isCrossZoneTraffic {
-		metrics.StaleReadRemoteOutBytes.Add(float64(size))
+		metrics.StaleReadRemoteOutBytes.Add(size)
 		metrics.StaleReadReqCrossZoneCounter.Add(1)
-
 	} else {
-		metrics.StaleReadLocalOutBytes.Add(float64(size))
+		metrics.StaleReadLocalOutBytes.Add(size)
 		metrics.StaleReadReqLocalCounter.Add(1)
 	}
 }
 
 func (s *staleReadMetricsCollector) onResp(size float64, isCrossZoneTraffic bool) {
 	if isCrossZoneTraffic {
-		metrics.StaleReadRemoteInBytes.Add(float64(size))
+		metrics.StaleReadRemoteInBytes.Add(size)
 	} else {
-		metrics.StaleReadLocalInBytes.Add(float64(size))
+		metrics.StaleReadLocalInBytes.Add(size)
 	}
 }
 
 type networkCollector struct {
-	staleReadMetricsCollector
+	*staleReadMetricsCollector
 }
 
 func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails) {
@@ -108,7 +107,7 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 		atomic.AddInt64(crossZone, int64(size))
 	}
 	// stale read metrics
-	if req.StaleRead {
+	if s.staleReadMetricsCollector != nil {
 		s.staleReadMetricsCollector.onReq(float64(size), isCrossZoneTraffic)
 	}
 }
@@ -176,17 +175,7 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 		atomic.AddInt64(crossZone, int64(size))
 	}
 	// stale read metrics
-	if req.StaleRead {
+	if s.staleReadMetricsCollector != nil {
 		s.staleReadMetricsCollector.onResp(float64(size), isCrossZoneTraffic)
 	}
-}
-
-// MockNetworkCollector is a mock function to collect network metrics for testing purposes.
-func MockNetworkCollector(req *tikvrpc.Request, resp *tikvrpc.Response, details *util.ExecDetails) {
-	if req == nil || details == nil {
-		return
-	}
-	collector := networkCollector{}
-	collector.onReq(req, details)
-	collector.onResp(req, resp, details)
 }

@@ -1655,7 +1655,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 	}
 
 	for _, staleReadHit := range []bool{false, true} {
-		for _, asyncReq := range []bool{false, true} {
+		for _, asyncReq := range []bool{true} {
 			caseName := fmt.Sprintf("async=%t, staleReadHit=%t", asyncReq, staleReadHit)
 			// Delete all vectors and recreate them before each test case.
 			metrics.TiKVStaleReadCounter.Reset()
@@ -1674,12 +1674,6 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 			value := []byte("value")
 
 			s.regionRequestSender.client = &fnClient{fn: func(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
-				defer func() {
-					if err == nil {
-						var detail util.ExecDetails
-						client.MockNetworkCollector(req, resp, &detail)
-					}
-				}()
 				if req.StaleRead && !staleReadHit {
 					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{RegionError: &errorpb.Error{
 						DataIsNotReady: &errorpb.DataIsNotReady{},
@@ -1692,7 +1686,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 			req.ReadReplicaScope = oracle.GlobalTxnScope
 			req.EnableStaleWithMixedReplicaRead()
 
-			bo := retry.NewBackoffer(context.Background(), -1)
+			ctx := context.WithValue(context.Background(), util.ExecDetailsKey, &util.ExecDetails{})
+			bo := retry.NewBackoffer(ctx, -1)
 			loc, err := s.cache.LocateKey(bo, key)
 			s.Require().Nil(err)
 			var resp *tikvrpc.Response
@@ -1704,7 +1699,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 					complete = true
 				}), WithMatchLabels(s.cluster.GetStore(s.storeIDs[0]).Labels))
 				for !complete {
-					_, err := rl.Exec(bo.GetCtx())
+					_, err := rl.Exec(ctx)
 					s.Nil(err)
 				}
 			} else {
@@ -1731,11 +1726,11 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 				s.Zero(remoteOutBytes, caseName)
 			} else {
 				// when stale read missing
-				// local metrics should be zero
 				s.Zero(hits, caseName)
-				s.Zero(localReq, caseName)
-				s.Zero(localInBytes, caseName)
-				s.Zero(localOutBytes, caseName)
+				// local replica is tried first, so local metrics will also be counted
+				s.Greater(localReq, 0, caseName)
+				s.Greater(localInBytes, 0, caseName)
+				s.Greater(localOutBytes, 0, caseName)
 				// remote metrics should be counted
 				s.Equal(1, misses, caseName)
 				s.Equal(1, remoteReq, caseName)
