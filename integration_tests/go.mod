@@ -117,4 +117,3 @@ replace (
 	github.com/tikv/client-go/v2 => ../
 )
 
-replace github.com/tikv/pd/client => github.com/MyonKeminta/pd/client v0.0.0-20250515091007-22756d835b72
