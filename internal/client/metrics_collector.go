@@ -180,3 +180,13 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 		s.staleReadMetricsCollector.onResp(float64(size), isCrossZoneTraffic)
 	}
 }
+
+// MockNetworkCollector is a mock function to collect network metrics for testing purposes.
+func MockNetworkCollector(req *tikvrpc.Request, resp *tikvrpc.Response, details *util.ExecDetails) {
+	if req == nil || details == nil {
+		return
+	}
+	collector := networkCollector{}
+	collector.onReq(req, details)
+	collector.onResp(req, resp, details)
+}
