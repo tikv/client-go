@@ -62,8 +62,9 @@ var (
 	TiKVLocalLatchWaitTimeHistogram                prometheus.Histogram
 	TiKVStatusDuration                             *prometheus.HistogramVec
 	TiKVStatusCounter                              *prometheus.CounterVec
-	TiKVBatchSendTailLatency                       prometheus.Histogram
+	TiKVBatchSendTailLatency                       *prometheus.HistogramVec
 	TiKVBatchSendLoopDuration                      *prometheus.SummaryVec
+	TiKVBatchRecvTailLatency                       *prometheus.HistogramVec
 	TiKVBatchRecvLoopDuration                      *prometheus.SummaryVec
 	TiKVBatchHeadArrivalInterval                   *prometheus.SummaryVec
 	TiKVBatchBestSize                              *prometheus.SummaryVec
@@ -346,15 +347,15 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblResult})
 
-	TiKVBatchSendTailLatency = prometheus.NewHistogram(
+	TiKVBatchSendTailLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
 			Name:        "batch_send_tail_latency_seconds",
-			Buckets:     prometheus.ExponentialBuckets(0.005, 2, 10), // 5ms ~ 2.56s
+			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
 			Help:        "batch send tail latency",
 			ConstLabels: constLabels,
-		})
+		}, []string{"store"})
 
 	TiKVBatchSendLoopDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -364,6 +365,16 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "batch send loop duration breakdown by steps",
 			ConstLabels: constLabels,
 		}, []string{"store", "step"})
+
+	TiKVBatchRecvTailLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "batch_recv_tail_latency_seconds",
+			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
+			Help:        "batch recv tail latency",
+			ConstLabels: constLabels,
+		}, []string{"store"})
 
 	TiKVBatchRecvLoopDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -889,6 +900,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStatusDuration)
 	prometheus.MustRegister(TiKVStatusCounter)
 	prometheus.MustRegister(TiKVBatchSendTailLatency)
+	prometheus.MustRegister(TiKVBatchRecvTailLatency)
 	prometheus.MustRegister(TiKVBatchSendLoopDuration)
 	prometheus.MustRegister(TiKVBatchRecvLoopDuration)
 	prometheus.MustRegister(TiKVBatchHeadArrivalInterval)
