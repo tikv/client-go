@@ -51,6 +51,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/gc"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
@@ -467,6 +468,14 @@ func (c *mockPDClient) WatchGCSafePointV2(ctx context.Context, revision int64) (
 }
 
 func (c *mockPDClient) GetServiceDiscovery() sd.ServiceDiscovery {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) GetGCInternalController(keyspaceID uint32) gc.InternalController {
+	panic("unimplemented")
+}
+
+func (c *mockPDClient) GetGCStatesClient(keyspaceID uint32) gc.GCStatesClient {
 	panic("unimplemented")
 }
 
