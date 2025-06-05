@@ -183,14 +183,14 @@ func (s *KVStore) CheckVisibility(startTS uint64) error {
 	s.gcStateCacheMu.RUnlock()
 	diff := time.Since(lastCacheTime)
 
-	if diff > (GcSafePointCacheInterval - gcCPUTimeInaccuracyBound) {
+	if diff > (GcStateCacheInterval - gcCPUTimeInaccuracyBound) {
 		return tikverr.NewErrPDServerTimeout("start timestamp may fall behind safe point")
 	}
 
 	if startTS < cachedTxnSafePoint {
 		t1 := oracle.GetTimeFromTS(startTS)
 		t2 := oracle.GetTimeFromTS(cachedTxnSafePoint)
-		return &tikverr.ErrGCTooEarly{
+		return &tikverr.ErrTxnAbortedByGC{
 			TxnStartTS:       startTS,
 			TxnStartTSTime:   t1,
 			TxnSafePoint:     cachedTxnSafePoint,

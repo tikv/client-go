@@ -58,7 +58,7 @@ const (
 	// Deprecated: All use this is no longer recommended and should be replaced by using the txn safe point.
 	GcSavedSafePoint = "/tidb/store/gcworker/saved_safe_point"
 
-	GcSafePointCacheInterval            = time.Second * 100
+	GcStateCacheInterval                = time.Second * 100
 	gcCPUTimeInaccuracyBound            = time.Second * 10
 	pollTxnSafePointInterval            = time.Second * 10
 	pollTxnSafePointQuickRepeatInterval = time.Second

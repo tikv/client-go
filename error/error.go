@@ -253,15 +253,32 @@ func (e *ErrPDServerTimeout) Error() string {
 }
 
 // ErrGCTooEarly is the error that GC life time is shorter than transaction duration
+// For compatibility concerns of exported interfaces, keep the old error type.
+// Deprecated: use ErrTxnAbortedByGC instead.
 type ErrGCTooEarly struct {
+	TxnStartTS  time.Time
+	GCSafePoint time.Time
+}
+
+func (e *ErrGCTooEarly) Error() string {
+	return fmt.Sprintf("GC life time is shorter than transaction duration, transaction starts at %v, GC safe point is %v", e.TxnStartTS, e.GCSafePoint)
+}
+
+// ErrTxnAbortedByGC is the error that GC progress has advanced to a state in which the txn is no longer safe to
+// continue.
+type ErrTxnAbortedByGC struct {
 	TxnStartTS       uint64
 	TxnStartTSTime   time.Time
 	TxnSafePoint     uint64
 	TxnSafePointTime time.Time
 }
 
-func (e *ErrGCTooEarly) Error() string {
-	return fmt.Sprintf("GC life time is shorter than transaction duration, transaction start ts is %v (%v), GC safe point is %v (%v)", e.TxnStartTS, e.TxnStartTSTime, e.TxnSafePoint, e.TxnSafePointTime)
+func (e *ErrTxnAbortedByGC) Error() string {
+	// In most cases, the error is caused by the transaction runs too long, instead of improper GC life time
+	// configuration. This means the description of this error is not accurate.
+	// However, as this error message is already widely acknowledged and might have become part of our diagnosing
+	// process, we keep the error message unchanged.
+	return fmt.Sprintf("GC life time is shorter than transaction duration, transaction start ts is %v (%v), txn safe point is %v (%v)", e.TxnStartTS, e.TxnStartTSTime, e.TxnSafePoint, e.TxnSafePointTime)
 }
 
 // ErrTokenLimit is the error that token is up to the limit.
