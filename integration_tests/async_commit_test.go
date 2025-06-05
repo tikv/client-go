@@ -85,7 +85,7 @@ func (s *testAsyncCommitCommon) setUpTest() {
 		return
 	}
 
-	client, pdClient, cluster, err := unistore.New("", nil)
+	client, pdClient, cluster, err := unistore.New("", nil, nil)
 	s.Require().Nil(err)
 
 	unistore.BootstrapWithSingleStore(cluster)
