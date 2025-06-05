@@ -504,22 +504,22 @@ type gcInternalController struct {
 	keyspaceID uint32
 }
 
-func (g gcInternalController) AdvanceTxnSafePoint(ctx context.Context, target uint64) (pdgc.AdvanceTxnSafePointResult, error) {
-	if g.keyspaceID != constants.NullKeyspaceID {
+func (c gcInternalController) AdvanceTxnSafePoint(ctx context.Context, target uint64) (pdgc.AdvanceTxnSafePointResult, error) {
+	if c.keyspaceID != constants.NullKeyspaceID {
 		panic("unimplemented")
 	}
 
-	g.inner.gcStatesMu.Lock()
-	defer g.inner.gcStatesMu.Unlock()
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
 
-	if target < g.inner.txnSafePoint {
+	if target < c.inner.txnSafePoint {
 		return pdgc.AdvanceTxnSafePointResult{},
 			errors.Errorf("trying to update txn safe point to a smaller value, current value: %v, given: %v",
-				g.inner.txnSafePoint, target)
+				c.inner.txnSafePoint, target)
 	}
 
 	res := pdgc.AdvanceTxnSafePointResult{
-		OldTxnSafePoint:    g.inner.txnSafePoint,
+		OldTxnSafePoint:    c.inner.txnSafePoint,
 		Target:             target,
 		NewTxnSafePoint:    target,
 		BlockerDescription: "",
@@ -527,7 +527,7 @@ func (g gcInternalController) AdvanceTxnSafePoint(ctx context.Context, target ui
 
 	minGCBarrierName := ""
 	var minGCBarrierTS uint64 = 0
-	for name, ts := range g.inner.gcBarriers {
+	for name, ts := range c.inner.gcBarriers {
 		if ts == 0 {
 			panic("found 0 in barrier ts of GC barriers")
 		}
@@ -552,38 +552,38 @@ func (g gcInternalController) AdvanceTxnSafePoint(ctx context.Context, target ui
 			zap.String("blocker", res.BlockerDescription))
 	}
 
-	g.inner.txnSafePoint = res.NewTxnSafePoint
+	c.inner.txnSafePoint = res.NewTxnSafePoint
 
 	return res, nil
 }
 
-func (g gcInternalController) AdvanceGCSafePoint(ctx context.Context, target uint64) (pdgc.AdvanceGCSafePointResult, error) {
-	if g.keyspaceID != constants.NullKeyspaceID {
+func (c gcInternalController) AdvanceGCSafePoint(ctx context.Context, target uint64) (pdgc.AdvanceGCSafePointResult, error) {
+	if c.keyspaceID != constants.NullKeyspaceID {
 		panic("unimplemented")
 	}
 
-	g.inner.gcStatesMu.Lock()
-	defer g.inner.gcStatesMu.Unlock()
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
 
-	if target < g.inner.gcSafePoint {
+	if target < c.inner.gcSafePoint {
 		return pdgc.AdvanceGCSafePointResult{},
 			errors.Errorf("trying to update gc safe point to a smaller value, current value: %v, given: %v",
-				g.inner.gcSafePoint, target)
+				c.inner.gcSafePoint, target)
 	}
 
-	if target > g.inner.txnSafePoint {
+	if target > c.inner.txnSafePoint {
 		return pdgc.AdvanceGCSafePointResult{},
 			errors.Errorf("trying to update GC safe point to a too large value that exceeds the txn safe point, current value: %v, given: %v, current txn safe point: %v",
-				g.inner.gcSafePoint, target, g.inner.txnSafePoint)
+				c.inner.gcSafePoint, target, c.inner.txnSafePoint)
 	}
 
 	res := pdgc.AdvanceGCSafePointResult{
-		OldGCSafePoint: g.inner.gcSafePoint,
+		OldGCSafePoint: c.inner.gcSafePoint,
 		Target:         target,
 		NewGCSafePoint: target,
 	}
 
-	g.inner.gcSafePoint = res.NewGCSafePoint
+	c.inner.gcSafePoint = res.NewGCSafePoint
 
 	return res, nil
 }
@@ -593,15 +593,15 @@ type gcStatesClient struct {
 	keyspaceID uint32
 }
 
-func (g gcStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
-	if g.keyspaceID != constants.NullKeyspaceID {
+func (c gcStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
+	if c.keyspaceID != constants.NullKeyspaceID {
 		panic("unimplemented")
 	}
 
 	startTime := time.Now()
 
-	g.inner.gcStatesMu.Lock()
-	defer g.inner.gcStatesMu.Unlock()
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
 
 	if barrierTS == 0 || barrierID == "" || ttl <= 0 {
 		return nil, errors.New("invalid arguments")
@@ -609,53 +609,53 @@ func (g gcStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barr
 
 	// TTL is unimplemented here.
 
-	if barrierTS < g.inner.txnSafePoint {
-		return nil, errors.Errorf("trying to set a GC barrier on ts %d which is already behind the txn safe point %d", barrierTS, g.inner.txnSafePoint)
+	if barrierTS < c.inner.txnSafePoint {
+		return nil, errors.Errorf("trying to set a GC barrier on ts %d which is already behind the txn safe point %d", barrierTS, c.inner.txnSafePoint)
 	}
 
 	res := pdgc.NewGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime)
-	g.inner.gcBarriers[barrierID] = barrierTS
+	c.inner.gcBarriers[barrierID] = barrierTS
 	return res, nil
 }
 
-func (g gcStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
-	if g.keyspaceID != constants.NullKeyspaceID {
+func (c gcStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
+	if c.keyspaceID != constants.NullKeyspaceID {
 		panic("unimplemented")
 	}
 
 	startTime := time.Now()
 
-	g.inner.gcStatesMu.Lock()
-	defer g.inner.gcStatesMu.Unlock()
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
 
-	barrierTS, exists := g.inner.gcBarriers[barrierID]
+	barrierTS, exists := c.inner.gcBarriers[barrierID]
 
 	if !exists {
 		return nil, nil
 	}
 
-	delete(g.inner.gcBarriers, barrierID)
+	delete(c.inner.gcBarriers, barrierID)
 	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime), nil
 }
 
-func (g gcStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	if g.keyspaceID != constants.NullKeyspaceID {
+func (c gcStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+	if c.keyspaceID != constants.NullKeyspaceID {
 		panic("unimplemented")
 	}
 
 	startTime := time.Now()
 
-	g.inner.gcStatesMu.Lock()
-	defer g.inner.gcStatesMu.Unlock()
+	c.inner.gcStatesMu.Lock()
+	defer c.inner.gcStatesMu.Unlock()
 
 	res := pdgc.GCState{
-		KeyspaceID:   g.keyspaceID,
-		TxnSafePoint: g.inner.txnSafePoint,
-		GCSafePoint:  g.inner.gcSafePoint,
+		KeyspaceID:   c.keyspaceID,
+		TxnSafePoint: c.inner.txnSafePoint,
+		GCSafePoint:  c.inner.gcSafePoint,
 	}
 
-	gcBarriers := make([]*pdgc.GCBarrierInfo, 0, len(g.inner.gcBarriers))
-	for barrierID, barrierTS := range g.inner.gcBarriers {
+	gcBarriers := make([]*pdgc.GCBarrierInfo, 0, len(c.inner.gcBarriers))
+	for barrierID, barrierTS := range c.inner.gcBarriers {
 		gcBarriers = append(gcBarriers, pdgc.NewGCBarrierInfo(barrierID, barrierTS, pdgc.TTLNeverExpire, startTime))
 	}
 	res.GCBarriers = gcBarriers
