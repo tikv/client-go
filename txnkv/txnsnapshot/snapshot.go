@@ -102,6 +102,8 @@ type kvstore interface {
 	SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error)
 	// GetOracle gets a timestamp oracle client.
 	GetOracle() oracle.Oracle
+	// Go schedules a function to be run in the goroutine pool.
+	Go(func()) error
 }
 
 // ReplicaReadAdjuster is a function that adjust the StoreSelectorOption and ReplicaReadType

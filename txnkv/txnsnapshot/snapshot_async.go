@@ -28,6 +28,18 @@ import (
 	"go.uber.org/zap"
 )
 
+type poolWrapper struct {
+	pool interface{ Go(func()) error }
+}
+
+func (p *poolWrapper) Go(f func()) {
+	err := p.pool.Go(f)
+	if err != nil {
+		// fallback to native go
+		go f()
+	}
+}
+
 func (s *KVSnapshot) asyncBatchGetByRegions(
 	bo *retry.Backoffer,
 	batches []batchKeys,
@@ -39,6 +51,7 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 		completed    = 0
 		lastForkedBo *retry.Backoffer
 	)
+	runloop.Pool = &poolWrapper{pool: s.store}
 	forkedBo, cancel := bo.Fork()
 	defer cancel()
 	for i, batch1 := range batches {
