@@ -1646,12 +1646,12 @@ func (s *testRegionRequestToThreeStoresSuite) TestTiKVRecoveredFromDown() {
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
-	readMetric := func(col prometheus.Collector) float64 {
+	readMetric := func(col prometheus.Collector) int {
 		ch := make(chan prometheus.Metric, 1)
 		col.Collect(ch)
 		var m dto.Metric
 		s.Nil((<-ch).Write(&m))
-		return *m.Counter.Value
+		return int(*m.Counter.Value + 0.000001) // round to int and avoid floating point precision issues
 	}
 
 	for _, staleReadHit := range []bool{false, true} {
@@ -1708,10 +1708,10 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 			s.Require().Nil(err)
 			s.Equal(value, resp.Resp.(*kvrpcpb.GetResponse).Value)
 
-			hits, misses := int(readMetric(metrics.StaleReadHitCounter)), int(readMetric(metrics.StaleReadMissCounter))
-			localReq, remoteReq := int(readMetric(metrics.StaleReadReqLocalCounter)), int(readMetric(metrics.StaleReadReqCrossZoneCounter))
-			localInBytes, localOutBytes := int(readMetric(metrics.StaleReadLocalInBytes)), int(readMetric(metrics.StaleReadLocalOutBytes))
-			remoteInBytes, remoteOutBytes := int(readMetric(metrics.StaleReadRemoteInBytes)), int(readMetric(metrics.StaleReadRemoteOutBytes))
+			hits, misses := readMetric(metrics.StaleReadHitCounter), readMetric(metrics.StaleReadMissCounter)
+			localReq, remoteReq := readMetric(metrics.StaleReadReqLocalCounter), readMetric(metrics.StaleReadReqCrossZoneCounter)
+			localInBytes, localOutBytes := readMetric(metrics.StaleReadLocalInBytes), readMetric(metrics.StaleReadLocalOutBytes)
+			remoteInBytes, remoteOutBytes := readMetric(metrics.StaleReadRemoteInBytes), readMetric(metrics.StaleReadRemoteOutBytes)
 			if staleReadHit {
 				// when stale read hitting
 				// local metrics should be counted

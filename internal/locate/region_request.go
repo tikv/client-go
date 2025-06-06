@@ -574,19 +574,13 @@ func (s *RegionRequestSender) SendReqAsync(
 	}
 
 	cli.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
-		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
-			execDetails := stmtExec.(*util.ExecDetails)
-			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(time.Since(startTime)))
-			collector := networkCollector{}
-			if state.invariants.staleRead {
-				collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
-			}
-			collector.onReq(req, execDetails)
-			collector.onResp(req, resp, execDetails)
-		}
 		state.vars.sendTimes++
 		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
-		if state.handleAsyncResponse(startTime, canceled, resp, err, cancels...) {
+		var execDetails *util.ExecDetails
+		if val := ctx.Value(util.ExecDetailsKey); val != nil {
+			execDetails = val.(*util.ExecDetails)
+		}
+		if state.handleAsyncResponse(startTime, canceled, resp, err, execDetails, cancels...) {
 			cb.Invoke(state.toResponseExt())
 			return
 		}
@@ -1283,7 +1277,7 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 }
 
 // handleAsyncResponse handles the response of an async request.
-func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp *tikvrpc.Response, err error, cancels ...context.CancelFunc) (done bool) {
+func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp *tikvrpc.Response, err error, execDetails *util.ExecDetails, cancels ...context.CancelFunc) (done bool) {
 	if len(cancels) > 0 {
 		defer func() {
 			for i := len(cancels) - 1; i >= 0; i-- {
@@ -1300,6 +1294,16 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	if s.Stats != nil {
 		s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
 	}
+	if execDetails != nil {
+		atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
+	}
+	collector := networkCollector{}
+	if s.invariants.staleRead {
+		collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
+	}
+	collector.onReq(req, execDetails)
+	collector.onResp(req, resp, execDetails)
+
 	if s.vars.rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 		s.vars.rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 	}
