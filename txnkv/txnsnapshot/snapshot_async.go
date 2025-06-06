@@ -79,7 +79,7 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 			break
 		}
 	}
-	if lastForkedBo == nil {
+	if lastForkedBo != nil {
 		bo.UpdateUsingForked(lastForkedBo)
 	}
 	return err
