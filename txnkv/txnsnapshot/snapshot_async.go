@@ -62,6 +62,8 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 		}
 		batch := batch1
 		s.tryBatchGetSingleRegionUsingAsyncAPI(backoffer, batch, readTier, collectF, async.NewCallback(runloop, func(_ struct{}, e error) {
+			// The callback is designed to be executed in the runloop's goroutine thus it should be safe to update the
+			// following variables without locks.
 			completed++
 			lastForkedBo = backoffer
 			if e != nil {
