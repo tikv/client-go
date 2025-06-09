@@ -7,7 +7,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20250521074834-db74bf0e3ac1
-	github.com/pingcap/tidb v1.1.0-beta.0.20250604120526-b159f56cd452
+	github.com/pingcap/tidb v1.1.0-beta.0.20250609033843-a165d9fd7c01
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.4
@@ -116,5 +116,3 @@ replace (
 
 	github.com/tikv/client-go/v2 => ../
 )
-
-replace github.com/pingcap/tidb => github.com/MyonKeminta/tidb v1.1.0-alpha.1.0.20250605085500-2ee956b05efb

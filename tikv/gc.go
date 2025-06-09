@@ -33,6 +33,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/rangetask"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/pd/client/constants"
 	zap "go.uber.org/zap"
 )
 
@@ -40,21 +41,26 @@ import (
 const GCScanLockLimit = txnlock.ResolvedCacheSize / 2
 
 // GC does garbage collection (GC) of the TiKV cluster.
-// GC deletes MVCC records whose timestamp is lower than the given `safepoint`. We must guarantee
-//
-//	that all transactions started before this timestamp had committed. We can keep an active
-//
+// GC deletes MVCC records whose timestamp is lower than the given `expectedGCSafePoint`. We must guarantee
+// that all transactions started before this timestamp had committed. We can keep an active
 // transaction list in application to decide which is the minimal start timestamp of them.
 //
-// For each key, the last mutation record (unless it's a deletion) before `safepoint` is retained.
+// For each key, the last mutation record (unless it's a deletion) before `expectedGCSafePoint` is retained.
+//
+// It's possible that GC is finally executed with a lower GC safe point, if the system found that it's not
+// possible to push the GC progress to the specified value while guaranteeing the safety of the data.
 //
 // GC is performed by:
-// 1. resolving all locks with timestamp <= `safepoint`
-// 2. updating PD's known safepoint
+//  1. Try to advance the txn safe point to the specified `expectedGCSafePoint`.
+//  2. Check the result of advancing the txn safe point. If it can't be advanced to the specified value,
+//     use the actual new txn safe point as the safe point value for the following steps. Note that in this case,
+//     `AdvanceTxnSafePoint` tries to advance the txn safe point as much as possible.
+//  3. Resolve all locks with timestamp <= new txn safe point.
+//  4. Advance the GC safe point to the same value as the new txn safe point.
 //
 // GC is a simplified version of [GC in TiDB](https://docs.pingcap.com/tidb/stable/garbage-collection-overview).
 // We skip the second step "delete ranges" which is an optimization for TiDB.
-func (s *KVStore) GC(ctx context.Context, safepoint uint64, opts ...GCOpt) (newSafePoint uint64, err error) {
+func (s *KVStore) GC(ctx context.Context, expectedSafePoint uint64, opts ...GCOpt) (newGCSafePoint uint64, err error) {
 	// default concurrency 8
 	opt := &gcOption{concurrency: 8}
 	// Apply gc options.
@@ -62,12 +68,30 @@ func (s *KVStore) GC(ctx context.Context, safepoint uint64, opts ...GCOpt) (newS
 		o(opt)
 	}
 
-	err = s.resolveLocks(ctx, safepoint, opt.concurrency)
+	controller := s.pdClient.GetGCInternalController(constants.NullKeyspaceID)
+	res, err := controller.AdvanceTxnSafePoint(ctx, expectedSafePoint)
+	if err != nil {
+		return 0, err
+	}
+
+	txnSafePoint := expectedSafePoint
+	if res.NewTxnSafePoint < txnSafePoint {
+		logutil.Logger(ctx).Info("GC: txn safe point is blocked",
+			zap.Uint64("expectedTxnSafePoint", txnSafePoint),
+			zap.Uint64("oldTxnSafePoint", res.OldTxnSafePoint),
+			zap.Uint64("newTxnSafePoint", res.NewTxnSafePoint),
+			zap.String("blocker", res.BlockerDescription))
+		txnSafePoint = res.NewTxnSafePoint
+	}
+
+	err = s.resolveLocks(ctx, txnSafePoint, opt.concurrency)
 	if err != nil {
 		return
 	}
 
-	return s.pdClient.UpdateGCSafePoint(ctx, safepoint)
+	gcSafePoint := txnSafePoint
+
+	return s.pdClient.UpdateGCSafePoint(ctx, gcSafePoint)
 }
 
 type gcOption struct {
