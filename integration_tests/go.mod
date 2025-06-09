@@ -7,7 +7,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20250521074834-db74bf0e3ac1
-	github.com/pingcap/tidb v1.1.0-beta.0.20250604120526-b159f56cd452
+	github.com/pingcap/tidb v1.1.0-beta.0.20250609033843-a165d9fd7c01
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/gjson v1.14.4
@@ -66,7 +66,7 @@ require (
 	github.com/pingcap/log v1.1.1-0.20250514022801-14f3b4ca066e // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20241113070546-23b50de46fd3 // indirect
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20250604120526-b159f56cd452 // indirect
-	github.com/pingcap/tipb v0.0.0-20250513092957-b555ca3fc078 // indirect
+	github.com/pingcap/tipb v0.0.0-20250529123214-bb8180a479ec // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
 	github.com/prometheus/client_golang v1.22.0 // indirect

@@ -761,92 +761,103 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 
 	TiKVStaleReadCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_read_counter",
-			Help:      "Counter of stale read hit/miss",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_read_counter",
+			Help:        "Counter of stale read hit/miss",
+			ConstLabels: constLabels,
 		}, []string{LblResult})
 
 	TiKVStaleReadReqCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_read_req_counter",
-			Help:      "Counter of stale read requests",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_read_req_counter",
+			Help:        "Counter of stale read requests",
+			ConstLabels: constLabels,
 		}, []string{LblType})
 
 	TiKVStaleReadBytes = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_read_bytes",
-			Help:      "Counter of stale read requests bytes",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_read_bytes",
+			Help:        "Counter of stale read requests bytes",
+			ConstLabels: constLabels,
 		}, []string{LblResult, LblDirection})
 
 	TiKVPipelinedFlushLenHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "pipelined_flush_len",
-			Help:      "Bucketed histogram of length of pipelined flushed memdb",
-			Buckets:   prometheus.ExponentialBuckets(1000, 2, 16), // 1K ~ 32M
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "pipelined_flush_len",
+			Help:        "Bucketed histogram of length of pipelined flushed memdb",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(1000, 2, 16), // 1K ~ 32M
 		})
 
 	TiKVPipelinedFlushSizeHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "pipelined_flush_size",
-			Help:      "Bucketed histogram of size of pipelined flushed memdb",
-			Buckets:   prometheus.ExponentialBuckets(16*1024*1024, 1.2, 13), // 16M ~ 142M
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "pipelined_flush_size",
+			Help:        "Bucketed histogram of size of pipelined flushed memdb",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(16*1024*1024, 1.2, 13), // 16M ~ 142M
 		})
 
 	TiKVPipelinedFlushDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "pipelined_flush_duration",
-			Help:      "Flush time of pipelined memdb.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "pipelined_flush_duration",
+			Help:        "Flush time of pipelined memdb.",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
 		})
 
 	TiKVValidateReadTSFromPDCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "validate_read_ts_from_pd_count",
-			Help:      "Counter of validating read ts by getting a timestamp from PD",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "validate_read_ts_from_pd_count",
+			Help:        "Counter of validating read ts by getting a timestamp from PD",
+			ConstLabels: constLabels,
 		})
 
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "low_resolution_tso_update_interval_seconds",
-			Help:      "The actual working update interval for the low resolution TSO. As there are adaptive mechanism internally, this value may differ from the config.",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "low_resolution_tso_update_interval_seconds",
+			Help:        "The actual working update interval for the low resolution TSO. As there are adaptive mechanism internally, this value may differ from the config.",
+			ConstLabels: constLabels,
 		})
 	TiKVStaleRegionFromPDCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "stale_region_from_pd",
-			Help:      "Counter of stale region from PD",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "stale_region_from_pd",
+			Help:        "Counter of stale region from PD",
+			ConstLabels: constLabels,
 		})
 	TiKVPipelinedFlushThrottleSecondsHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "pipelined_flush_throttle_seconds",
-			Help:      "Throttle durations of pipelined flushes.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "pipelined_flush_throttle_seconds",
+			Help:        "Throttle durations of pipelined flushes.",
+			ConstLabels: constLabels,
+			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 18h
 		})
 
 	TiKVTxnWriteConflictCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: namespace,
-			Subsystem: subsystem,
-			Name:      "txn_write_conflict_counter",
-			Help:      "Counter of txn write conflict",
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_write_conflict_counter",
+			Help:        "Counter of txn write conflict",
+			ConstLabels: constLabels,
 		})
 
 	TiKVAsyncSendReqCounter = prometheus.NewCounterVec(
