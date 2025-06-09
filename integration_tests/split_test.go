@@ -46,7 +46,6 @@ import (
 	rmpb "github.com/pingcap/kvproto/pkg/resource_manager"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
@@ -116,10 +115,6 @@ func (s *testSplitSuite) TestSplitBatchGet() {
 }
 
 func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
-	defer config.UpdateGlobal(func(conf *config.Config) {
-		conf.EnableAsyncBatchGet = true
-	})()
-
 	// init data
 	txn := s.begin()
 	s.Nil(txn.Set([]byte("a"), []byte("a")))

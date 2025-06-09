@@ -101,7 +101,7 @@ func DefaultConfig() Config {
 		TxnScope:              "",
 		EnableAsyncCommit:     false,
 		Enable1PC:             false,
-		EnableAsyncBatchGet:   false,
+		EnableAsyncBatchGet:   true,
 	}
 }
 
