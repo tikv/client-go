@@ -501,15 +501,11 @@ func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, 
 	}
 }
 
-func (s *KVSnapshot) handleBatchGetRegionError(bo *retry.Backoffer, batch batchKeys, regionCache *locate.RegionCache, regionError *errorpb.Error) (retriable bool, err error) {
+func (s *KVSnapshot) handleBatchGetRegionError(bo *retry.Backoffer, batch *batchKeys, regionCache *locate.RegionCache, regionError *errorpb.Error) (retriable bool, err error) {
 	if err = retry.MayBackoffForRegionError(regionError, bo); err != nil {
 		return false, err
 	}
-	same, err := batch.relocate(bo, regionCache)
-	if err != nil {
-		return false, err
-	}
-	return same, nil
+	return batch.relocate(bo, regionCache)
 }
 
 func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGetLockInfo, cli *ClientHelper) error {
@@ -601,7 +597,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		readType = req.ReadType
 		if regionErr != nil {
-			retriable, err := s.handleBatchGetRegionError(bo, batch, cli.regionCache, regionErr)
+			retriable, err := s.handleBatchGetRegionError(bo, &batch, cli.regionCache, regionErr)
 			if err != nil {
 				return err
 			}

@@ -202,7 +202,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 	)
 	for {
 		if regionErr != nil {
-			retriable, err := s.handleBatchGetRegionError(bo, batch, cli.regionCache, regionErr)
+			retriable, err := s.handleBatchGetRegionError(bo, &batch, cli.regionCache, regionErr)
 			if err != nil {
 				return err
 			}
