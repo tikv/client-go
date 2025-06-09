@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
@@ -500,6 +501,37 @@ func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, 
 	}
 }
 
+func (s *KVSnapshot) handleBatchGetRegionError(bo *retry.Backoffer, batch batchKeys, regionCache *locate.RegionCache, regionError *errorpb.Error) (retriable bool, err error) {
+	if err = retry.MayBackoffForRegionError(regionError, bo); err != nil {
+		return false, err
+	}
+	same, err := batch.relocate(bo, regionCache)
+	if err != nil {
+		return false, err
+	}
+	return same, nil
+}
+
+func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGetLockInfo, cli *ClientHelper) error {
+	resolveLocksOpts := txnlock.ResolveLocksOptions{
+		CallerStartTS: s.version,
+		Locks:         lockInfo.locks,
+		Detail:        s.GetResolveLockDetail(),
+	}
+	resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
+	msBeforeExpired := resolveLocksRes.TTL
+	if err != nil {
+		return err
+	}
+	if msBeforeExpired > 0 {
+		err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("BatchGetWithTier lockedKeys: %d", len(lockInfo.lockedKeys)))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, readTier int, collectF func(k, v []byte)) error {
 	cli := NewClientHelper(s.store, &s.resolvedLocks, &s.committedLocks, false)
 	s.mu.RLock()
@@ -569,17 +601,14 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		readType = req.ReadType
 		if regionErr != nil {
-			if err = retry.MayBackoffForRegionError(regionErr, bo); err != nil {
-				return err
-			}
-			same, err := batch.relocate(bo, cli.regionCache)
+			retriable, err := s.handleBatchGetRegionError(bo, batch, cli.regionCache, regionErr)
 			if err != nil {
 				return err
 			}
-			if same {
-				continue
+			if !retriable {
+				return s.batchGetKeysByRegions(bo, pending, readTier, false, collectF)
 			}
-			return s.batchGetKeysByRegions(bo, pending, readTier, false, collectF)
+			continue
 		}
 
 		lockInfo, err := collectBatchGetResponseData(resp, collectF, s.mergeExecDetail)
@@ -599,21 +628,8 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 				isStaleness = false
 				busyThresholdMs = 0
 			}
-			resolveLocksOpts := txnlock.ResolveLocksOptions{
-				CallerStartTS: s.version,
-				Locks:         lockInfo.locks,
-				Detail:        s.GetResolveLockDetail(),
-			}
-			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
-			msBeforeExpired := resolveLocksRes.TTL
-			if err != nil {
+			if err := s.handleBatchGetLocks(bo, lockInfo, cli); err != nil {
 				return err
-			}
-			if msBeforeExpired > 0 {
-				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("BatchGetWithTier lockedKeys: %d", len(lockInfo.lockedKeys)))
-				if err != nil {
-					return err
-				}
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
 			// lockedKeys may be incomplete.

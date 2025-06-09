@@ -23,7 +23,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 )
@@ -203,14 +202,11 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 	)
 	for {
 		if regionErr != nil {
-			if err := retry.MayBackoffForRegionError(regionErr, bo); err != nil {
-				return err
-			}
-			same, err := batch.relocate(bo, cli.regionCache)
+			retriable, err := s.handleBatchGetRegionError(bo, batch, cli.regionCache, regionErr)
 			if err != nil {
 				return err
 			}
-			if !same {
+			if !retriable {
 				return s.batchGetKeysByRegions(bo, batch.keys, readTier, false, collectF)
 			}
 		} else if lockInfo != nil && len(lockInfo.lockedKeys) > 0 {
@@ -222,21 +218,8 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 				cli.UpdateResolvingLocks(lockInfo.locks, s.version, *resolvingRecordToken)
 			}
 			readAfterResolveLocks = true
-			resolveLocksOpts := txnlock.ResolveLocksOptions{
-				CallerStartTS: s.version,
-				Locks:         lockInfo.locks,
-				Detail:        s.GetResolveLockDetail(),
-			}
-			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
-			msBeforeExpired := resolveLocksRes.TTL
-			if err != nil {
+			if err := s.handleBatchGetLocks(bo, lockInfo, cli); err != nil {
 				return err
-			}
-			if msBeforeExpired > 0 {
-				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("BatchGetWithTier lockedKeys: %d", len(lockInfo.lockedKeys)))
-				if err != nil {
-					return err
-				}
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
 			// lockedKeys may be incomplete.
