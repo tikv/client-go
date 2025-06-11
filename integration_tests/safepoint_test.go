@@ -89,7 +89,7 @@ func (s *testSafePointSuite) waitUntilErrorPlugIn(t uint64) {
 		cachedTime := time.Now()
 		newSafePoint, err := s.store.LoadSafePoint()
 		if err == nil {
-			s.store.UpdateSPCache(newSafePoint, cachedTime)
+			s.store.UpdateTxnSafePointCache(newSafePoint, cachedTime)
 			break
 		}
 		time.Sleep(time.Second)
@@ -117,7 +117,7 @@ func (s *testSafePointSuite) TestSafePoint() {
 	_, geterr2 := txn2.Get(context.TODO(), encodeKey(s.prefix, s08d("key", 0)))
 	s.NotNil(geterr2)
 
-	_, isFallBehind := errors.Cause(geterr2).(*error.ErrGCTooEarly)
+	_, isFallBehind := errors.Cause(geterr2).(*error.ErrTxnAbortedByGC)
 	isMayFallBehind := strings.Contains(geterr2.Error(), "start timestamp may fall behind safe point")
 	isBehind := isFallBehind || isMayFallBehind
 	s.True(isBehind)
@@ -129,7 +129,7 @@ func (s *testSafePointSuite) TestSafePoint() {
 
 	_, seekerr := txn3.Iter(encodeKey(s.prefix, ""), nil)
 	s.NotNil(seekerr)
-	_, isFallBehind = errors.Cause(geterr2).(*error.ErrGCTooEarly)
+	_, isFallBehind = errors.Cause(geterr2).(*error.ErrTxnAbortedByGC)
 	isMayFallBehind = strings.Contains(geterr2.Error(), "start timestamp may fall behind safe point")
 	isBehind = isFallBehind || isMayFallBehind
 	s.True(isBehind)
@@ -142,7 +142,7 @@ func (s *testSafePointSuite) TestSafePoint() {
 
 	_, batchgeterr := toTiDBTxn(&txn4).BatchGet(context.Background(), toTiDBKeys(keys))
 	s.NotNil(batchgeterr)
-	_, isFallBehind = errors.Cause(geterr2).(*error.ErrGCTooEarly)
+	_, isFallBehind = errors.Cause(geterr2).(*error.ErrTxnAbortedByGC)
 	isMayFallBehind = strings.Contains(geterr2.Error(), "start timestamp may fall behind safe point")
 	isBehind = isFallBehind || isMayFallBehind
 	s.True(isBehind)
