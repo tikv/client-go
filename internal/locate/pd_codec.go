@@ -42,7 +42,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	pd "github.com/tikv/pd/client"
-	router "github.com/tikv/pd/client/clients/router"
+	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
 )
 
@@ -141,7 +141,6 @@ func (c *CodecPDClient) GetRegionByID(ctx context.Context, regionID uint64, opts
 // returned StartKey && EndKey from pd-server.
 func (c *CodecPDClient) ScanRegions(ctx context.Context, startKey []byte, endKey []byte, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
 	startKey, endKey = c.codec.EncodeRegionRange(startKey, endKey)
-	//nolint:staticcheck
 	regions, err := c.Client.ScanRegions(ctx, startKey, endKey, limit, opts...)
 	if err != nil {
 		return nil, errors.WithStack(err)
