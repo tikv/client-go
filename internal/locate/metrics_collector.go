@@ -24,7 +24,8 @@ import (
 )
 
 type networkCollector struct {
-	staleRead bool
+	staleRead       bool
+	replicaReadType kv.ReplicaReadType
 }
 
 func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails) {
@@ -51,9 +52,23 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 			atomic.AddInt64(crossZone, int64(size))
 		}
 	}
+
 	// stale read metrics
 	if s.staleRead {
 		s.onReqStaleRead(float64(size), isCrossZoneTraffic)
+	}
+
+	// replica read metrics
+	switch req.AccessLocation {
+	case kv.AccessLocalZone:
+		if s.replicaReadType == kv.ReplicaReadFollower || s.replicaReadType == kv.ReplicaReadMixed {
+			metrics.QueryBytesFollowerLocalOutBytes.Observe(float64(size))
+		}
+	case kv.AccessCrossZone:
+		if s.replicaReadType == kv.ReplicaReadLeader {
+			metrics.QueryBytesLeaderRemoteOutBytes.Observe(float64(size))
+		}
+	case kv.AccessUnknown:
 	}
 }
 
@@ -88,6 +103,19 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	// stale read metrics
 	if s.staleRead {
 		s.onRespStaleRead(float64(size), isCrossZoneTraffic)
+	}
+
+	// replica read metrics
+	switch req.AccessLocation {
+	case kv.AccessLocalZone:
+		if s.replicaReadType == kv.ReplicaReadFollower || s.replicaReadType == kv.ReplicaReadMixed {
+			metrics.QueryBytesFollowerLocalInBytes.Observe(float64(size))
+		}
+	case kv.AccessCrossZone:
+		if s.replicaReadType == kv.ReplicaReadLeader {
+			metrics.QueryBytesLeaderRemoteInBytes.Observe(float64(size))
+		}
+	case kv.AccessUnknown:
 	}
 }
 
