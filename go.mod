@@ -61,4 +61,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/tikv/pd/client => github.com/ystaticy/pd/client v0.0.0-20250610141340-1acf52483330
+replace github.com/tikv/pd/client => github.com/ystaticy/pd/client v0.0.0-20250611092743-30d17f69b5c1
