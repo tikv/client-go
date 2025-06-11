@@ -26,29 +26,8 @@ import (
 	"github.com/tikv/client-go/v2/util"
 )
 
-type staleReadMetricsCollector struct {
-}
-
-func (s *staleReadMetricsCollector) onReq(size float64, isCrossZoneTraffic bool) {
-	if isCrossZoneTraffic {
-		metrics.StaleReadRemoteOutBytes.Add(size)
-		metrics.StaleReadReqCrossZoneCounter.Add(1)
-	} else {
-		metrics.StaleReadLocalOutBytes.Add(size)
-		metrics.StaleReadReqLocalCounter.Add(1)
-	}
-}
-
-func (s *staleReadMetricsCollector) onResp(size float64, isCrossZoneTraffic bool) {
-	if isCrossZoneTraffic {
-		metrics.StaleReadRemoteInBytes.Add(size)
-	} else {
-		metrics.StaleReadLocalInBytes.Add(size)
-	}
-}
-
 type networkCollector struct {
-	*staleReadMetricsCollector
+	staleRead bool
 }
 
 func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails) {
@@ -108,8 +87,8 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 		}
 	}
 	// stale read metrics
-	if s.staleReadMetricsCollector != nil {
-		s.staleReadMetricsCollector.onReq(float64(size), isCrossZoneTraffic)
+	if s.staleRead {
+		s.onReqStaleRead(float64(size), isCrossZoneTraffic)
 	}
 }
 
@@ -181,7 +160,25 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	}
 
 	// stale read metrics
-	if s.staleReadMetricsCollector != nil {
-		s.staleReadMetricsCollector.onResp(float64(size), isCrossZoneTraffic)
+	if s.staleRead {
+		s.onRespStaleRead(float64(size), isCrossZoneTraffic)
+	}
+}
+
+func (s *networkCollector) onReqStaleRead(size float64, isCrossZoneTraffic bool) {
+	if isCrossZoneTraffic {
+		metrics.StaleReadRemoteOutBytes.Add(size)
+		metrics.StaleReadReqCrossZoneCounter.Add(1)
+	} else {
+		metrics.StaleReadLocalOutBytes.Add(size)
+		metrics.StaleReadReqLocalCounter.Add(1)
+	}
+}
+
+func (s *networkCollector) onRespStaleRead(size float64, isCrossZoneTraffic bool) {
+	if isCrossZoneTraffic {
+		metrics.StaleReadRemoteInBytes.Add(size)
+	} else {
+		metrics.StaleReadLocalInBytes.Add(size)
 	}
 }

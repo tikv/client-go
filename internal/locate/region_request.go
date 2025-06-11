@@ -1133,9 +1133,8 @@ func (s *sendReqState) send() (canceled bool) {
 		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
 			execDetails := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
-			collector := networkCollector{}
-			if s.invariants.staleRead {
-				collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
+			collector := networkCollector{
+				staleRead: s.invariants.staleRead,
 			}
 			collector.onReq(req, execDetails)
 			collector.onResp(req, s.vars.resp, execDetails)
@@ -1297,9 +1296,8 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	if execDetails != nil {
 		atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
 	}
-	collector := networkCollector{}
-	if s.invariants.staleRead {
-		collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
+	collector := networkCollector{
+		staleRead: s.invariants.staleRead,
 	}
 	collector.onReq(req, execDetails)
 	collector.onResp(req, resp, execDetails)

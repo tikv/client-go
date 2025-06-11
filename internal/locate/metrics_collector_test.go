@@ -138,9 +138,8 @@ func TestNetworkCollectorOnResp(t *testing.T) {
 		// Call the method
 		cas.req.AccessLocation = kv.AccessLocalZone
 		// Initialize the collector and dependencies
-		collector := &networkCollector{}
-		if cas.req.StaleRead {
-			collector.staleReadMetricsCollector = &staleReadMetricsCollector{}
+		collector := &networkCollector{
+			staleRead: cas.req.StaleRead,
 		}
 		collector.onResp(cas.req, cas.resp, details)
 
