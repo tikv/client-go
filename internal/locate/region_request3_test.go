@@ -1655,7 +1655,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 	}
 
 	for _, staleReadHit := range []bool{false, true} {
-		for _, asyncReq := range []bool{true} {
+		for _, asyncReq := range []bool{false, true} {
 			caseName := fmt.Sprintf("async=%t, staleReadHit=%t", asyncReq, staleReadHit)
 			// Delete all vectors and recreate them before each test case.
 			metrics.TiKVStaleReadCounter.Reset()

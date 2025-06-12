@@ -1130,15 +1130,16 @@ func (s *sendReqState) send() (canceled bool) {
 			recordAttemptedTime(s.replicaSelector, rpcDuration)
 		}
 
+		var execDetails *util.ExecDetails
 		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
 			execDetails := stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
-			collector := networkCollector{
-				staleRead: s.invariants.staleRead,
-			}
-			collector.onReq(req, execDetails)
-			collector.onResp(req, s.vars.resp, execDetails)
 		}
+		collector := networkCollector{
+			staleRead: s.invariants.staleRead,
+		}
+		collector.onReq(req, execDetails)
+		collector.onResp(req, s.vars.resp, execDetails)
 
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
