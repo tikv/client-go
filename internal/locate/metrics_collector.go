@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/mpp"
+	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -94,6 +95,9 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 
 func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, details *util.ExecDetails) {
 	if resp == nil {
+		return
+	}
+	if _, ok := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); ok {
 		return
 	}
 	size := 0
