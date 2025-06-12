@@ -101,6 +101,9 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 }
 
 func (s *apiTestSuite) TestGetStoresMinResolvedTS() {
+	if config.NextGen {
+		return
+	}
 	util.EnableFailpoints()
 	require := s.Require()
 	mockClient := newStoreSafeTsMockClient(s.store.GetTiKVClient())
