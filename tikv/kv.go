@@ -133,10 +133,13 @@ type KVStore struct {
 
 	mock bool
 
-	kv        SafePointKV
-	safePoint uint64
-	spTime    time.Time
-	spMutex   sync.RWMutex // this is used to update safePoint and spTime
+	kv SafePointKV
+
+	gcStateCacheMu struct {
+		sync.RWMutex
+		cachedTxnSafePoint uint64
+		lastCacheTime      time.Time
+	}
 
 	// storeID -> safeTS, stored as map[uint64]uint64
 	// safeTS here will be used during the Stale Read process,
@@ -162,32 +165,36 @@ func (s *KVStore) Go(f func()) error {
 	return s.gP.Run(f)
 }
 
-// UpdateSPCache updates cached safepoint.
-func (s *KVStore) UpdateSPCache(cachedSP uint64, cachedTime time.Time) {
-	s.spMutex.Lock()
-	s.safePoint = cachedSP
-	s.spTime = cachedTime
-	s.spMutex.Unlock()
+// UpdateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
+// operations to prevent accessing GC-ed inconsistent data.
+func (s *KVStore) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
+	s.gcStateCacheMu.Lock()
+	defer s.gcStateCacheMu.Unlock()
+
+	s.gcStateCacheMu.lastCacheTime = now
+	s.gcStateCacheMu.cachedTxnSafePoint = txnSafePoint
 }
 
 // CheckVisibility checks if it is safe to read using given ts.
-func (s *KVStore) CheckVisibility(startTime uint64) error {
-	s.spMutex.RLock()
-	cachedSafePoint := s.safePoint
-	cachedTime := s.spTime
-	s.spMutex.RUnlock()
-	diff := time.Since(cachedTime)
+func (s *KVStore) CheckVisibility(startTS uint64) error {
+	s.gcStateCacheMu.RLock()
+	lastCacheTime := s.gcStateCacheMu.lastCacheTime
+	cachedTxnSafePoint := s.gcStateCacheMu.cachedTxnSafePoint
+	s.gcStateCacheMu.RUnlock()
+	diff := time.Since(lastCacheTime)
 
-	if diff > (GcSafePointCacheInterval - gcCPUTimeInaccuracyBound) {
+	if diff > (GcStateCacheInterval - gcCPUTimeInaccuracyBound) {
 		return tikverr.NewErrPDServerTimeout("start timestamp may fall behind safe point")
 	}
 
-	if startTime < cachedSafePoint {
-		t1 := oracle.GetTimeFromTS(startTime)
-		t2 := oracle.GetTimeFromTS(cachedSafePoint)
-		return &tikverr.ErrGCTooEarly{
-			TxnStartTS:  t1,
-			GCSafePoint: t2,
+	if startTS < cachedTxnSafePoint {
+		t1 := oracle.GetTimeFromTS(startTS)
+		t2 := oracle.GetTimeFromTS(cachedTxnSafePoint)
+		return &tikverr.ErrTxnAbortedByGC{
+			TxnStartTS:       startTS,
+			TxnStartTSTime:   t1,
+			TxnSafePoint:     cachedTxnSafePoint,
+			TxnSafePointTime: t2,
 		}
 	}
 
@@ -294,13 +301,12 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		pdClient:        pdClient.WithCallerComponent("kv-store"),
 		regionCache:     regionCache,
 		kv:              spkv,
-		safePoint:       0,
-		spTime:          time.Now(),
 		replicaReadSeed: rand.Uint32(),
 		ctx:             ctx,
 		cancel:          cancel,
 		gP:              NewSpool(128, 10*time.Second),
 	}
+	store.gcStateCacheMu.lastCacheTime = time.Now()
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
@@ -308,7 +314,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	loadOption(store, opt...)
 
 	store.wg.Add(2)
-	go store.runSafePointChecker()
+	go store.runTxnSafePointUpdater()
 	go store.safeTSUpdater()
 
 	return store, nil
@@ -353,26 +359,31 @@ func (s *KVStore) IsLatchEnabled() bool {
 	return s.txnLatches != nil
 }
 
-func (s *KVStore) runSafePointChecker() {
+func (s *KVStore) runTxnSafePointUpdater() {
 	defer s.wg.Done()
-	d := gcSafePointUpdateInterval
+	d := pollTxnSafePointInterval
+	gcStatesClient := s.pdClient.GetGCStatesClient(uint32(s.getCodec().GetKeyspaceID()))
 	for {
 		select {
-		case spCachedTime := <-time.After(d):
-			cachedSafePoint, err := loadSafePoint(s.GetSafePointKV())
+		case now := <-time.After(d):
+			gcStates, err := gcStatesClient.GetGCState(context.Background())
 			if err == nil {
 				metrics.TiKVLoadSafepointCounter.WithLabelValues("ok").Inc()
-				s.UpdateSPCache(cachedSafePoint, spCachedTime)
-				d = gcSafePointUpdateInterval
+				s.UpdateTxnSafePointCache(gcStates.TxnSafePoint, now)
+				d = pollTxnSafePointInterval
 			} else {
 				metrics.TiKVLoadSafepointCounter.WithLabelValues("fail").Inc()
-				logutil.BgLogger().Error("fail to load safepoint from pd", zap.Error(err))
-				d = gcSafePointQuickRepeatInterval
+				logutil.BgLogger().Error("fail to load txn safe point from pd", zap.Error(err))
+				d = pollTxnSafePointQuickRepeatInterval
 			}
 		case <-s.ctx.Done():
 			return
 		}
 	}
+}
+
+func (s *KVStore) getCodec() Codec {
+	return s.pdClient.(*CodecPDClient).GetCodec()
 }
 
 // Begin a global transaction.
