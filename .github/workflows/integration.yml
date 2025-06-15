@@ -121,3 +121,60 @@ jobs:
       - name: Test
         run: go test --with-tikv
         working-directory: integration_tests/raw
+
+  integration-next-gen-tikv:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-integration-tests') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.24.1
+
+      - name: Fetch PD
+        uses: shrink/actions-docker-extract@v1
+        id: extract-pd
+        with:
+          image: pingcap/pd:nightly
+          path: /pd-server
+
+      - name: Fetch Next-Gen TiKV
+        uses: shrink/actions-docker-extract@v1
+        id: extract-tikv
+        with:
+          image: gcr.io/pingcap-public/dbaas/tikv:dedicated-next-gen
+          path: /tikv-server
+
+      - name: Run MinIO, PD & Next-Gen TiKV
+        run: |
+          mkdir -p tikv-data
+          # Install and run minio for S3 backend
+          curl -Lo minio https://dl.min.io/server/minio/release/linux-amd64/minio
+          chmod +x minio
+          mkdir -p $HOME/serverless_s3/cse-test
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin ./minio server $HOME/serverless_s3 > minio.log 2>&1 &
+          sleep 5
+          # Move binaries and run servers
+          mv ../${{steps.extract-pd.outputs.destination}}/pd-server .
+          mv ../${{steps.extract-tikv.outputs.destination}}/tikv-server .
+          ./pd-server --config pd_next_gen.toml > pd.log 2>&1 &
+          sleep 5
+          ./tikv-server -C tikv_next_gen.toml --pd-endpoints="127.0.0.1:2379" --addr="127.0.0.1:20160" --data-dir=${{ github.workspace }}/integration_tests/tikv-data > tikv.log 2>&1 &
+          
+          echo "Waiting for servers to start..."
+          sleep 15
+
+          echo "--- MinIO Log ---"
+          cat minio.log || echo "minio.log not found"
+          echo "--- PD Log ---"
+          cat pd.log || echo "pd.log not found"
+          echo "--- TiKV Log ---"
+          cat tikv.log || echo "tikv.log not found"
+        working-directory: integration_tests
+
+      - name: Test
+        run: go test -v -tags=nextgen --with-tikv --keyspace-name='keyspace1'
+        working-directory: integration_tests
