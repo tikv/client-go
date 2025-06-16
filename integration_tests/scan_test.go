@@ -40,6 +40,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
@@ -183,6 +184,10 @@ func (s *testScanSuite) TestScan() {
 		err = committer4.PrewriteAllMutations(context.Background())
 		s.Nil(err)
 		txn5 := s.beginTxn()
+		if config.NextGen {
+			// NextGen doesn't support RC yet, skip this rest part
+			return;
+		}
 		txn5.GetSnapshot().SetIsolationLevel(txnsnapshot.RC)
 		var meetLocks []*txnkv.Lock
 		resolver := tikv.NewLockResolverProb(s.store.GetLockResolver())
