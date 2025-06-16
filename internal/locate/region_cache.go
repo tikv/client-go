@@ -1833,6 +1833,14 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 				util.HexRegionKeyStr(c.codec.EncodeRegionKey(startKey)), util.HexRegionKeyStr(c.codec.EncodeRegionKey(endKey)),
 			)
 		}
+
+		if regionsHaveGapInRange(startKey, endKey, regionsInfo, limit) {
+			backoffErr = errors.Errorf(
+				"PD returned regions have gaps, startKey: %q, endKey: %q, limit: %d",
+				startKey, endKey, limit,
+			)
+			continue
+		}
 		regions := make([]*Region, 0, len(regionsInfo))
 		for _, r := range regionsInfo {
 			// Leader id = 0 indicates no leader.
@@ -1849,11 +1857,52 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			return nil, errors.New("receive Regions with no peer")
 		}
 		if len(regions) < len(regionsInfo) {
-			logutil.Logger(context.Background()).Debug(
+			logutil.Logger(context.Background()).Warn(
 				"regionCache: scanRegion finished but some regions has no leader.")
 		}
 		return regions, nil
 	}
+}
+
+// regionsHaveGapInRange checks if the loaded regions can fully cover the key ranges.
+// If there are any gaps between the regions, it returns true, then the requests might be retried.
+// TODO: remove this function after PD client supports gap detection and handling it.
+func regionsHaveGapInRange(start, end []byte, regionsInfo []*pd.Region, limit int) bool {
+	if len(regionsInfo) == 0 {
+		return true
+	}
+	var lastEndKey []byte
+	for i, r := range regionsInfo {
+		if r.Meta == nil {
+			return true
+		}
+		if i == 0 {
+			if bytes.Compare(r.Meta.StartKey, start) > 0 {
+				// there is a gap between first returned region's start_key and start key.
+				return true
+			}
+		}
+		if i > 0 && bytes.Compare(r.Meta.StartKey, lastEndKey) > 0 {
+			// there is a gap between two regions.
+			return true
+		}
+		if len(r.Meta.EndKey) == 0 {
+			// the current region contains all the rest ranges.
+			return false
+		}
+		// note lastEndKey never be empty.
+		lastEndKey = r.Meta.EndKey
+	}
+	if limit > 0 && len(regionsInfo) == limit {
+		// the regionsInfo is limited by the limit, so there may be some ranges not covered.
+		// The rest range will be loaded in the next scanRegions call.
+		return false
+	}
+	if len(end) == 0 {
+		// the end key of the range is empty, but we can't cover it.
+		return true
+	}
+	return bytes.Compare(lastEndKey, end) < 0
 }
 
 // GetCachedRegionWithRLock returns region with lock.
@@ -2650,7 +2699,10 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := &Store{storeID: s.storeID, addr: addr, peerAddr: store.GetPeerAddress(), saddr: store.GetStatusAddress(), storeType: storeType, labels: store.GetLabels(), state: uint64(resolved)}
 		newStore.livenessState = atomic.LoadUint32(&s.livenessState)
-		newStore.unreachableSince = s.unreachableSince
+		if newStore.getLivenessState() != reachable {
+			newStore.unreachableSince = s.unreachableSince
+			go newStore.checkUntilHealth(c, newStore.getLivenessState(), storeReResolveInterval)
+		}
 		c.storeMu.Lock()
 		if s.addr == addr {
 			newStore.slowScore = s.slowScore
@@ -2658,6 +2710,14 @@ func (s *Store) reResolve(c *RegionCache) (bool, error) {
 		c.storeMu.stores[newStore.storeID] = newStore
 		c.storeMu.Unlock()
 		s.setResolveState(deleted)
+		logutil.BgLogger().Info("store address or labels changed, add new store and mark old store deleted",
+			zap.Uint64("store", s.storeID),
+			zap.String("old-addr", s.addr),
+			zap.Any("old-labels", s.labels),
+			zap.String("old-liveness", s.getLivenessState().String()),
+			zap.String("new-addr", newStore.addr),
+			zap.Any("new-labels", newStore.labels),
+			zap.String("new-liveness", newStore.getLivenessState().String()))
 		return false, nil
 	}
 	s.changeResolveStateTo(needCheck, resolved)
@@ -2809,6 +2869,8 @@ func (s livenessState) String() string {
 	}
 }
 
+var storeReResolveInterval = 30 * time.Second
+
 func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessState) {
 	// This mechanism doesn't support non-TiKV stores currently.
 	if s.storeType != tikvrpc.TiKV {
@@ -2820,7 +2882,7 @@ func (s *Store) startHealthCheckLoopIfNeeded(c *RegionCache, liveness livenessSt
 	// It may be already started by another thread.
 	if atomic.CompareAndSwapUint32(&s.livenessState, uint32(reachable), uint32(liveness)) {
 		s.unreachableSince = time.Now()
-		reResolveInterval := 30 * time.Second
+		reResolveInterval := storeReResolveInterval
 		if val, err := util.EvalFailpoint("injectReResolveInterval"); err == nil {
 			if dur, err := time.ParseDuration(val.(string)); err == nil {
 				reResolveInterval = dur
@@ -2848,6 +2910,10 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
+			if s.getResolveState() == deleted {
+				logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
+				return
+			}
 			if time.Since(lastCheckPDTime) > reResolveInterval {
 				lastCheckPDTime = time.Now()
 
@@ -2855,19 +2921,7 @@ func (s *Store) checkUntilHealth(c *RegionCache, liveness livenessState, reResol
 				if err != nil {
 					logutil.BgLogger().Warn("[health check] failed to re-resolve unhealthy store", zap.Error(err))
 				} else if !valid {
-					if s.getResolveState() == deleted {
-						// if the store is deleted, a new store with same id must be inserted (guaranteed by reResolve).
-						c.storeMu.RLock()
-						newStore := c.storeMu.stores[s.storeID]
-						c.storeMu.RUnlock()
-						logutil.BgLogger().Info("[health check] store meta changed",
-							zap.Uint64("storeID", s.storeID),
-							zap.String("oldAddr", s.addr),
-							zap.String("oldLabels", fmt.Sprintf("%v", s.labels)),
-							zap.String("newAddr", newStore.addr),
-							zap.String("newLabels", fmt.Sprintf("%v", newStore.labels)))
-						go newStore.checkUntilHealth(c, liveness, reResolveInterval)
-					}
+					logutil.BgLogger().Info("[health check] store meta deleted, stop checking", zap.Uint64("storeID", s.storeID), zap.String("addr", s.addr), zap.String("state", s.getResolveState().String()))
 					return
 				}
 			}

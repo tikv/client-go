@@ -212,7 +212,7 @@ func (s *apiTestSuite) TestInitClusterMinResolvedTSZero() {
 	// Try to get the minimum resolved timestamp of the cluster from PD.
 	require.NoError(failpoint.Enable("tikvclient/InjectMinResolvedTS", `return(100)`))
 	retryCount = 0
-	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) == math.MaxUint64 {
+	for s.store.GetMinSafeTS(oracle.GlobalTxnScope) == 0 {
 		time.Sleep(100 * time.Millisecond)
 		if retryCount > 5 {
 			break
