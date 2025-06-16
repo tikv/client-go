@@ -19,8 +19,11 @@ jobs:
         with:
           go-version: 1.24.1
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
       - name: Test
-        run: go test ./...
+        run: gotestsum --format short-verbose -- ./...
         working-directory: integration_tests
 
   integration-local-race:
@@ -35,8 +38,11 @@ jobs:
         with:
           go-version: 1.24.1
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
       - name: Test
-        run: go test ./... -race
+        run: gotestsum --format short-verbose -- ./... -race
         working-directory: integration_tests
 
   integration-tikv:
@@ -50,6 +56,9 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: 1.24.1
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
@@ -76,7 +85,7 @@ jobs:
         working-directory: integration_tests
 
       - name: Test
-        run: go test --with-tikv
+        run: gotestsum --format short-verbose -- --with-tikv
         working-directory: integration_tests
 
   integration-raw-tikv:
@@ -93,6 +102,9 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: 1.24.1
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
@@ -119,7 +131,7 @@ jobs:
         working-directory: integration_tests/raw
 
       - name: Test
-        run: go test --with-tikv
+        run: gotestsum --format short-verbose -- --with-tikv
         working-directory: integration_tests/raw
 
   integration-next-gen-tikv:
@@ -133,6 +145,9 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: 1.24.1
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
 
       - name: Fetch PD
         uses: shrink/actions-docker-extract@v1
@@ -168,13 +183,13 @@ jobs:
           sleep 15
 
           echo "--- MinIO Log ---"
-          cat minio.log || echo "minio.log not found"
+          tail minio.log || echo "minio.log not found"
           echo "--- PD Log ---"
-          cat pd.log || echo "pd.log not found"
+          tail pd.log || echo "pd.log not found"
           echo "--- TiKV Log ---"
-          cat tikv.log || echo "tikv.log not found"
+          tail tikv.log || echo "tikv.log not found"
         working-directory: integration_tests
 
       - name: Test
-        run: go test -v -tags=nextgen --with-tikv --keyspace-name='keyspace1'
+        run: gotestsum --format short-verbose -- -parallel 1 -tags=nextgen --with-tikv --keyspace-name='keyspace1'
         working-directory: integration_tests
