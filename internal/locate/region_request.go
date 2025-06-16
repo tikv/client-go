@@ -1289,6 +1289,9 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	if err := s.vars.err; err != nil {
 		if isRPCError(err) {
 			s.rpcError = err
+			metrics.AsyncSendReqCounterWithRPCError.Inc()
+		} else {
+			metrics.AsyncSendReqCounterWithSendError.Inc()
 		}
 		if s.Stats != nil {
 			errStr := getErrMsg(err)
@@ -1297,17 +1300,18 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 		}
 		if canceled {
 			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(s.vars.rpcCtx)).Inc()
-			return true
 		}
-		return false
+		return canceled
 	}
 
 	s.vars.regionErr, s.vars.err = s.vars.resp.GetRegionError()
 	if s.vars.err != nil {
 		s.vars.rpcCtx, s.vars.resp = nil, nil
+		metrics.AsyncSendReqCounterWithOtherError.Inc()
 		return true
 	} else if s.vars.regionErr != nil {
 		// need to handle region error
+		metrics.AsyncSendReqCounterWithRegionError.Inc()
 		return false
 	}
 
@@ -1315,6 +1319,7 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 		s.replicaSelector.onSendSuccess(req)
 	}
 
+	metrics.AsyncSendReqCounterWithOK.Inc()
 	return true
 }
 

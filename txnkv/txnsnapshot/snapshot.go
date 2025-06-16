@@ -45,9 +45,11 @@ import (
 	"time"
 
 	"github.com/opentracing/opentracing-go"
+	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -101,6 +103,8 @@ type kvstore interface {
 	SendReq(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration) (*tikvrpc.Response, error)
 	// GetOracle gets a timestamp oracle client.
 	GetOracle() oracle.Oracle
+	// Go schedules a function to be run in the goroutine pool.
+	Go(func()) error
 }
 
 // ReplicaReadAdjuster is a function that adjust the StoreSelectorOption and ReplicaReadType
@@ -256,7 +260,7 @@ func (s *KVSnapshot) BatchGetWithTier(ctx context.Context, keys [][]byte, readTi
 	s.mu.RUnlock()
 	// Create a map to collect key-values from region servers.
 	var mu sync.Mutex
-	err := s.batchGetKeysByRegions(bo, keys, readTier, func(k, v []byte) {
+	err := s.batchGetKeysByRegions(bo, keys, readTier, config.GetGlobalConfig().EnableAsyncBatchGet, func(k, v []byte) {
 		// when read buffer tier, empty value means a delete record, should also collect it.
 		if len(v) == 0 && readTier != BatchGetBufferTier {
 			return
@@ -323,6 +327,75 @@ func appendBatchKeysBySize(b []batchKeys, region locate.RegionVerID, keys [][]by
 	return b
 }
 
+type batchGetLockInfo struct {
+	lockedKeys [][]byte
+	locks      []*txnlock.Lock
+	keyErr     *kvrpcpb.KeyError
+}
+
+func collectBatchGetResponseData(
+	resp *tikvrpc.Response,
+	onKvPair func([]byte, []byte),
+	onDetails func(*kvrpcpb.ExecDetailsV2),
+) (*batchGetLockInfo, error) {
+	if resp.Resp == nil {
+		return nil, errors.WithStack(tikverr.ErrBodyMissing)
+	}
+	var (
+		data    = &batchGetLockInfo{}
+		pairs   []*kvrpcpb.KvPair
+		details *kvrpcpb.ExecDetailsV2
+	)
+	switch v := resp.Resp.(type) {
+	case *kvrpcpb.BatchGetResponse:
+		data.keyErr = v.GetError()
+		pairs = v.Pairs
+		details = v.GetExecDetailsV2()
+	case *kvrpcpb.BufferBatchGetResponse:
+		data.keyErr = v.GetError()
+		pairs = v.Pairs
+		details = v.GetExecDetailsV2()
+	default:
+		return nil, errors.Errorf("unknown response %T", v)
+	}
+	if data.keyErr != nil {
+		// If a response-level error happens, skip reading pairs.
+		lock, err := txnlock.ExtractLockFromKeyErr(data.keyErr)
+		if err != nil {
+			return nil, err
+		}
+		data.lockedKeys = append(data.lockedKeys, lock.Key)
+		data.locks = append(data.locks, lock)
+	} else {
+		for _, pair := range pairs {
+			keyErr := pair.GetError()
+			if keyErr == nil {
+				onKvPair(pair.GetKey(), pair.GetValue())
+				continue
+			}
+			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
+			if err != nil {
+				return nil, err
+			}
+			data.lockedKeys = append(data.lockedKeys, lock.Key)
+			data.locks = append(data.locks, lock)
+		}
+	}
+	if details != nil {
+		readKeys := len(pairs)
+		var readTime float64
+		if timeDetail := details.GetTimeDetailV2(); timeDetail != nil {
+			readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
+		} else if timeDetail := details.GetTimeDetail(); timeDetail != nil {
+			readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
+		}
+		readSize := float64(details.GetScanDetailV2().GetProcessedVersionsSize())
+		metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
+		onDetails(details)
+	}
+	return data, nil
+}
+
 //go:noinline
 func growStackForBatchGetWorker() {
 	// A batch get worker typically needs 8KB stack space. So we pre-allocate 4KB here to let the stack grow to 8KB
@@ -331,7 +404,7 @@ func growStackForBatchGetWorker() {
 	runtime.KeepAlive(ballast[:])
 }
 
-func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, readTier int, collectF func(k, v []byte)) error {
+func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, readTier int, tryAsyncAPI bool, collectF func(k, v []byte)) error {
 	defer func(start time.Time) {
 		if s.IsInternal() {
 			metrics.TxnCmdHistogramWithBatchGetInternal.Observe(time.Since(start).Seconds())
@@ -360,6 +433,9 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 	}
 	if len(batches) == 1 {
 		return s.batchGetSingleRegion(bo, batches[0], readTier, collectF)
+	}
+	if tryAsyncAPI {
+		return s.asyncBatchGetByRegions(bo, batches, readTier, collectF)
 	}
 	ch := make(chan error, len(batches))
 	bo, cancel := bo.Fork()
@@ -419,6 +495,39 @@ func (s *KVSnapshot) buildBatchGetRequest(keys [][]byte, busyThresholdMs int64, 
 	default:
 		return nil, errors.Errorf("unknown read tier %d", readTier)
 	}
+}
+
+func (s *KVSnapshot) handleBatchGetRegionError(bo *retry.Backoffer, batch *batchKeys, regionCache *locate.RegionCache, regionError *errorpb.Error) (retriable bool, err error) {
+	// For other region error and the fake region error, backoff because
+	// there's something wrong.
+	// For the real EpochNotMatch error, don't backoff.
+	if regionError.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionError) {
+		err = bo.Backoff(retry.BoRegionMiss, errors.New(regionError.String()))
+		if err != nil {
+			return false, err
+		}
+	}
+	return batch.relocate(bo, regionCache)
+}
+
+func (s *KVSnapshot) handleBatchGetLocks(bo *retry.Backoffer, lockInfo *batchGetLockInfo, cli *ClientHelper) error {
+	resolveLocksOpts := txnlock.ResolveLocksOptions{
+		CallerStartTS: s.version,
+		Locks:         lockInfo.locks,
+		Detail:        s.GetResolveLockDetail(),
+	}
+	resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
+	msBeforeExpired := resolveLocksRes.TTL
+	if err != nil {
+		return err
+	}
+	if msBeforeExpired > 0 {
+		err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("BatchGetWithTier lockedKeys: %d", len(lockInfo.lockedKeys)))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, readTier int, collectF func(k, v []byte)) error {
@@ -488,115 +597,40 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 		}
 		readType = req.ReadType
 		if regionErr != nil {
-			// For other region error and the fake region error, backoff because
-			// there's something wrong.
-			// For the real EpochNotMatch error, don't backoff.
-			if regionErr.GetEpochNotMatch() == nil || locate.IsFakeRegionError(regionErr) {
-				err = bo.Backoff(retry.BoRegionMiss, errors.New(regionErr.String()))
-				if err != nil {
-					return err
-				}
-			}
-			same, err := batch.relocate(bo, cli.regionCache)
+			retriable, err := s.handleBatchGetRegionError(bo, &batch, cli.regionCache, regionErr)
 			if err != nil {
 				return err
 			}
-			if same {
-				continue
+			if !retriable {
+				return s.batchGetKeysByRegions(bo, pending, readTier, false, collectF)
 			}
-			return s.batchGetKeysByRegions(bo, pending, readTier, collectF)
+			continue
 		}
-		if resp.Resp == nil {
-			return errors.WithStack(tikverr.ErrBodyMissing)
-		}
-		var (
-			lockedKeys [][]byte
-			locks      []*txnlock.Lock
 
-			keyErr  *kvrpcpb.KeyError
-			pairs   []*kvrpcpb.KvPair
-			details *kvrpcpb.ExecDetailsV2
-		)
-		switch v := resp.Resp.(type) {
-		case *kvrpcpb.BatchGetResponse:
-			keyErr = v.GetError()
-			pairs = v.Pairs
-			details = v.GetExecDetailsV2()
-		case *kvrpcpb.BufferBatchGetResponse:
-			keyErr = v.GetError()
-			pairs = v.Pairs
-			details = v.GetExecDetailsV2()
-		default:
-			return errors.Errorf("unknown response %T", v)
+		lockInfo, err := collectBatchGetResponseData(resp, collectF, s.mergeExecDetail)
+		if err != nil {
+			return err
 		}
-		if keyErr != nil {
-			// If a response-level error happens, skip reading pairs.
-			lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
-			if err != nil {
-				return err
-			}
-			lockedKeys = append(lockedKeys, lock.Key)
-			locks = append(locks, lock)
-		} else {
-			for _, pair := range pairs {
-				keyErr := pair.GetError()
-				if keyErr == nil {
-					collectF(pair.GetKey(), pair.GetValue())
-					continue
-				}
-				lock, err := txnlock.ExtractLockFromKeyErr(keyErr)
-				if err != nil {
-					return err
-				}
-				lockedKeys = append(lockedKeys, lock.Key)
-				locks = append(locks, lock)
-			}
-		}
-		if details != nil {
-			readKeys := len(pairs)
-			var readTime float64
-			if timeDetail := details.GetTimeDetailV2(); timeDetail != nil {
-				readTime = float64(timeDetail.GetKvReadWallTimeNs()) / 1000000000.
-			} else if timeDetail := details.GetTimeDetail(); timeDetail != nil {
-				readTime = float64(timeDetail.GetKvReadWallTimeMs()) / 1000.
-			}
-			readSize := float64(details.GetScanDetailV2().GetProcessedVersionsSize())
-			metrics.ObserveReadSLI(uint64(readKeys), readTime, readSize)
-			s.mergeExecDetail(details)
-		}
-		if len(lockedKeys) > 0 {
+		if len(lockInfo.lockedKeys) > 0 {
 			if resolvingRecordToken == nil {
-				token := cli.RecordResolvingLocks(locks, s.version)
+				token := cli.RecordResolvingLocks(lockInfo.locks, s.version)
 				resolvingRecordToken = &token
 				defer cli.ResolveLocksDone(s.version, *resolvingRecordToken)
 			} else {
-				cli.UpdateResolvingLocks(locks, s.version, *resolvingRecordToken)
+				cli.UpdateResolvingLocks(lockInfo.locks, s.version, *resolvingRecordToken)
 			}
 			// we need to read from leader after resolving the lock.
 			if isStaleness {
 				isStaleness = false
 				busyThresholdMs = 0
 			}
-			resolveLocksOpts := txnlock.ResolveLocksOptions{
-				CallerStartTS: s.version,
-				Locks:         locks,
-				Detail:        s.GetResolveLockDetail(),
-			}
-			resolveLocksRes, err := cli.ResolveLocksWithOpts(bo, resolveLocksOpts)
-			msBeforeExpired := resolveLocksRes.TTL
-			if err != nil {
+			if err := s.handleBatchGetLocks(bo, lockInfo, cli); err != nil {
 				return err
-			}
-			if msBeforeExpired > 0 {
-				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("BatchGetWithTier lockedKeys: %d", len(lockedKeys)))
-				if err != nil {
-					return err
-				}
 			}
 			// Only reduce pending keys when there is no response-level error. Otherwise,
 			// lockedKeys may be incomplete.
-			if keyErr == nil {
-				pending = lockedKeys
+			if lockInfo.keyErr == nil {
+				pending = lockInfo.lockedKeys
 			}
 			continue
 		}
