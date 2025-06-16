@@ -121,15 +121,6 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		// rpc metrics
 		connArray.updateRPCMetrics(req, resp, elapsed)
 
-		// resource control
-		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
-			execDetails := stmtExec.(*util.ExecDetails)
-			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(elapsed))
-			execNetworkCollector := networkCollector{}
-			execNetworkCollector.onReq(req, execDetails)
-			execNetworkCollector.onResp(req, resp, execDetails)
-		}
-
 		// tracing
 		if spanRPC != nil {
 			if util.TraceExecDetailsEnabled(ctx) {

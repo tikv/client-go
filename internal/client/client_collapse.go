@@ -40,6 +40,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util/async"
@@ -136,6 +137,9 @@ func (r reqCollapse) collapse(ctx context.Context, key string, sf *singleflight.
 	addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
 	// because the request may be used by other goroutines, copy the request to avoid data race.
 	copyReq := *req
+	if req.Type == tikvrpc.CmdResolveLock && req.Req != nil {
+		copyReq.Req = proto.Clone(req.ResolveLock())
+	}
 	rsC := sf.DoChan(key, func() (interface{}, error) {
 		return r.Client.SendRequest(context.Background(), addr, &copyReq, ReadTimeoutShort) // use resolveLock timeout.
 	})

@@ -638,14 +638,6 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		elapsed := time.Since(start)
 		connArray.updateRPCMetrics(req, resp, elapsed)
 
-		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
-			execDetails := stmtExec.(*util.ExecDetails)
-			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(elapsed))
-			execNetworkCollector := networkCollector{}
-			execNetworkCollector.onReq(req, execDetails)
-			execNetworkCollector.onResp(req, resp, execDetails)
-		}
-
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {
 				si.addTo(spanRPC, start)
