@@ -103,6 +103,10 @@ func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Ba
 	return nil
 }
 
+func (actionCleanup) isInterruptable() bool {
+	return false
+}
+
 func (c *twoPhaseCommitter) cleanupMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
 	return c.doActionOnMutations(bo, actionCleanup{isInternal: c.txn.isInternal()}, mutations)
 }
