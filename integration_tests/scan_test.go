@@ -186,7 +186,7 @@ func (s *testScanSuite) TestScan() {
 		txn5 := s.beginTxn()
 		if config.NextGen {
 			// NextGen doesn't support RC yet, skip this rest part
-			return;
+			return
 		}
 		txn5.GetSnapshot().SetIsolationLevel(txnsnapshot.RC)
 		var meetLocks []*txnkv.Lock

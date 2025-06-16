@@ -59,7 +59,7 @@ func TestSnapshotFail(t *testing.T) {
 
 type testSnapshotFailSuite struct {
 	suite.Suite
-	store tikv.StoreProbe
+	store  tikv.StoreProbe
 	prefix string
 }
 
