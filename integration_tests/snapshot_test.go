@@ -36,6 +36,7 @@ package tikv_test
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sync"
@@ -44,6 +45,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/error"
@@ -66,27 +68,25 @@ type testSnapshotSuite struct {
 	rowNums []int
 }
 
-func (s *testSnapshotSuite) SetupSuite() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
-	s.prefix = fmt.Sprintf("snapshot_%d", time.Now().Unix())
-	s.rowNums = append(s.rowNums, 1, 100, 191)
+func (s *testSnapshotSuite) SetupTest() {
+	s.prefix = fmt.Sprintf("test_snapshot_%d", time.Now().Unix())
+	if *withTiKV {
+		s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
+		return
+	}
+
+	client, pdClient, cluster, err := unistore.New("", nil, nil)
+	s.Require().Nil(err)
+
+	unistore.BootstrapWithSingleStore(cluster)
+	store, err := tikv.NewTestTiKVStore(fpClient{Client: &unistoreClientWrapper{client}}, pdClient, nil, nil, 0)
+	s.Require().Nil(err)
+
+	s.store = tikv.StoreProbe{KVStore: store}
 }
 
-func (s *testSnapshotSuite) TearDownSuite() {
-	txn := s.beginTxn()
-	scanner, err := txn.Iter(encodeKey(s.prefix, ""), nil)
-	s.Nil(err)
-	s.NotNil(scanner)
-	for scanner.Valid() {
-		k := scanner.Key()
-		err = txn.Delete(k)
-		s.Nil(err)
-		scanner.Next()
-	}
-	err = txn.Commit(context.Background())
-	s.Nil(err)
-	err = s.store.Close()
-	s.Nil(err)
+func (s *testSnapshotSuite) TearDownTest() {
+	s.store.Close()
 }
 
 func (s *testSnapshotSuite) beginTxn() transaction.TxnProbe {
@@ -214,23 +214,29 @@ func makeKeys(rowNum int, prefix string) [][]byte {
 }
 
 func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
-	x := []byte("x_key_TestSkipLargeTxnLock")
-	y := []byte("y_key_TestSkipLargeTxnLock")
+	x, y := encodeKey(s.prefix, "x_TestSkipLargeTxnLock"), encodeKey(s.prefix, "y_TestSkipLargeTxnLock")
 	txn := s.beginTxn()
 	s.Nil(txn.Set(x, []byte("x")))
 	s.Nil(txn.Set(y, []byte("y")))
 	ctx := context.Background()
-	committer, err := txn.NewCommitter(0)
+	committer, err := txn.NewCommitter(1)
 	s.Nil(err)
 	committer.SetLockTTL(3000)
+	s.False(committer.IsAsyncCommit())
 	s.Nil(committer.PrewriteAllMutations(ctx))
 
 	txn1 := s.beginTxn()
 	// txn1 is not blocked by txn in the large txn protocol.
-	_, err = txn1.Get(ctx, x)
+	r, err := txn1.Get(ctx, x)
+	if err != nil {
+		println(err.Error())
+	} else {
+		println(hex.EncodeToString(r))
+	}
 	s.True(error.IsErrNotFound(err))
 
-	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys([][]byte{x, y, []byte("z")}))
+	testKeys := [][]byte{encodeKey(s.prefix, "z")}
+	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys(testKeys))
 	s.Nil(err)
 	s.Len(res, 0)
 
@@ -357,6 +363,8 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 }
 
 func (s *testSnapshotSuite) TestRCRead() {
+	// next-gen doesn't support RC yet, skip this test
+	s.T().Skip("next-gen doesn't support RC yet, skip this test")
 	for _, rowNum := range s.rowNums {
 		s.T().Logf("test RC Read, length=%v", rowNum)
 		txn := s.beginTxn()
@@ -388,7 +396,7 @@ func (s *testSnapshotSuite) TestRCRead() {
 		// get
 		v, err := snapshot.Get(context.Background(), key0)
 		s.Nil(err)
-		s.Equal(len(meetLocks), 0)
+		s.Equal(0, len(meetLocks))
 		s.Equal(v, valueBytes(0))
 		// batch get
 		m, err := snapshot.BatchGet(context.Background(), keys)

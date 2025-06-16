@@ -102,7 +102,7 @@ func (c *storeSafeTsMockClient) CloseAddr(addr string) error {
 
 func (s *apiTestSuite) TestGetStoresMinResolvedTS() {
 	if config.NextGen {
-		return
+		s.T().Skip("NextGen does not support resolved ts yet")
 	}
 	util.EnableFailpoints()
 	require := s.Require()
