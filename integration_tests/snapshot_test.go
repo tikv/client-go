@@ -447,6 +447,7 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 			// check the replica read type
 			fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+					// when the request is fallback to leader read, the ReplicaRead should be false to avoid read-index in store.
 					s.Equal(hit, req.ReplicaRead)
 					if hit {
 						s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
@@ -473,6 +474,7 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 			})
 			txn.Get(context.Background(), []byte("x"))
 			txn.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+			txn.Rollback()
 		}
 	}
 }
