@@ -2707,6 +2707,34 @@ func (s *testCommitterSuite) TestKillSignal() {
 	s.ErrorContains(err, "query interrupted")
 }
 
+func (s *testCommitterSuite) TestRollbackOnKill() {
+	s.Run("PrewriteLock", func() {
+		var killed uint32 = 0
+		txn := s.begin()
+		txn.SetVars(kv.NewVariables(&killed))
+		err := txn.Set([]byte("k1"), []byte("v1"))
+		s.NoError(err)
+		committer, err := txn.NewCommitter(0)
+		s.NoError(err)
+		err = committer.PrewriteAllMutations(context.Background())
+		s.NoError(err)
+		atomic.StoreUint32(&killed, 2)
+		s.NoError(committer.CleanupMutations(context.Background()))
+	})
+	s.Run("PessimisticLock", func() {
+		var killed uint32 = 0
+		txn := s.begin()
+		txn.SetVars(kv.NewVariables(&killed))
+		txn.SetPessimistic(true)
+		err := txn.LockKeys(context.Background(), kv.NewLockCtx(txn.StartTS(), kv.LockNoWait, time.Now()), []byte("k2"))
+		s.NoError(err)
+		atomic.StoreUint32(&killed, 2)
+		committer, err := txn.NewCommitter(0)
+		s.NoError(err)
+		s.NoError(committer.PessimisticRollbackMutations(context.Background(), committer.GetMutations()))
+	})
+}
+
 func (s *testCommitterSuite) Test2PCLifecycleHooks() {
 	reachedPre := atomic.Bool{}
 	reachedPost := atomic.Bool{}
