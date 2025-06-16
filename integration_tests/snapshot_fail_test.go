@@ -36,6 +36,7 @@ package tikv_test
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -43,6 +44,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -58,29 +60,17 @@ func TestSnapshotFail(t *testing.T) {
 type testSnapshotFailSuite struct {
 	suite.Suite
 	store tikv.StoreProbe
+	prefix string
 }
 
-func (s *testSnapshotFailSuite) SetupSuite() {
+func (s *testSnapshotFailSuite) SetupTest() {
+	s.prefix = fmt.Sprintf("test_snapshot_fail_%d", time.Now().Unix())
 	store := NewTestUniStore(s.T())
 	s.store = tikv.StoreProbe{KVStore: store}
 }
 
-func (s *testSnapshotFailSuite) TearDownSuite() {
-	s.store.Close()
-}
-
 func (s *testSnapshotFailSuite) TearDownTest() {
-	txn, err := s.store.Begin()
-	s.Require().Nil(err)
-	iter, err := txn.Iter([]byte(""), []byte(""))
-	s.Require().Nil(err)
-	for iter.Valid() {
-		err = txn.Delete(iter.Key())
-		s.Require().Nil(err)
-		err = iter.Next()
-		s.Require().Nil(err)
-	}
-	s.Require().Nil(txn.Commit(context.TODO()))
+	s.store.Close()
 }
 
 func (s *testSnapshotFailSuite) TestBatchGetResponseKeyError() {
@@ -110,11 +100,14 @@ func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
 	// Put two KV pairs
 	txn, err := s.store.Begin()
 	s.Require().Nil(err)
-	err = txn.Set([]byte("k1"), []byte("v1"))
+	k1 := encodeKey(s.prefix, "k1")
+	k2 := encodeKey(s.prefix, "k2")
+	k3 := encodeKey(s.prefix, "k3")
+	err = txn.Set(k1, []byte("v1"))
 	s.Nil(err)
-	err = txn.Set([]byte("k2"), []byte("v2"))
+	err = txn.Set(k2, []byte("v2"))
 	s.Nil(err)
-	err = txn.Set([]byte("k3"), []byte("v3"))
+	err = txn.Set(k3, []byte("v3"))
 	s.Nil(err)
 	err = txn.Commit(context.Background())
 	s.Nil(err)
@@ -122,15 +115,15 @@ func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
 	s.Require().Nil(failpoint.Enable("tikvclient/rpcScanResult", `1*return("keyError")`))
 	txn, err = s.store.Begin()
 	s.Require().Nil(err)
-	iter, err := txn.Iter([]byte("a"), []byte("z"))
+	iter, err := txn.Iter(encodeKey(s.prefix, "a"), encodeKey(s.prefix, "z"))
 	s.Nil(err)
-	s.Equal(iter.Key(), []byte("k1"))
+	s.Equal(iter.Key(), k1)
 	s.Equal(iter.Value(), []byte("v1"))
 	s.Nil(iter.Next())
-	s.Equal(iter.Key(), []byte("k2"))
+	s.Equal(iter.Key(), k2)
 	s.Equal(iter.Value(), []byte("v2"))
 	s.Nil(iter.Next())
-	s.Equal(iter.Key(), []byte("k3"))
+	s.Equal(iter.Key(), k3)
 	s.Equal(iter.Value(), []byte("v3"))
 	s.Nil(iter.Next())
 	s.False(iter.Valid())
@@ -139,12 +132,12 @@ func (s *testSnapshotFailSuite) TestScanResponseKeyError() {
 	s.Require().Nil(failpoint.Enable("tikvclient/rpcScanResult", `1*return("keyError")`))
 	txn, err = s.store.Begin()
 	s.Require().Nil(err)
-	iter, err = txn.Iter([]byte("k2"), []byte("k4"))
+	iter, err = txn.Iter(k2, encodeKey(s.prefix, "k4"))
 	s.Nil(err)
-	s.Equal(iter.Key(), []byte("k2"))
+	s.Equal(iter.Key(), k2)
 	s.Equal(iter.Value(), []byte("v2"))
 	s.Nil(iter.Next())
-	s.Equal(iter.Key(), []byte("k3"))
+	s.Equal(iter.Key(), k3)
 	s.Equal(iter.Value(), []byte("v3"))
 	s.Nil(iter.Next())
 	s.False(iter.Valid())
@@ -320,6 +313,9 @@ func (s *testSnapshotFailSuite) getLock(key []byte) *txnkv.Lock {
 }
 
 func (s *testSnapshotFailSuite) TestSnapshotUseResolveForRead() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support read through locks")
+	}
 	s.Nil(failpoint.Enable("tikvclient/resolveLock", "sleep(500)"))
 	s.Nil(failpoint.Enable("tikvclient/resolveAsyncResolveData", "sleep(500)"))
 	defer func() {
