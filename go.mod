@@ -7,14 +7,12 @@ toolchain go1.23.3
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
-	github.com/docker/go-units v0.5.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/gogo/status v1.1.1
 	github.com/golang/protobuf v1.5.3
 	github.com/google/btree v1.1.2
 	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0
-	github.com/ninedraft/israce v0.0.3
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
