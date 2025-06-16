@@ -17,6 +17,7 @@ import (
 	"github.com/tikv/client-go/v2/rawkv"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/pkg/caller"
 )
 
 func TestAPI(t *testing.T) {
@@ -86,7 +87,7 @@ func (s *apiTestSuite) wrapPDClient(pdCli pd.Client, addrs []string) pd.Client {
 func (s *apiTestSuite) SetupTest() {
 	addrs := strings.Split(*pdAddrs, ",")
 
-	pdClient, err := pd.NewClient(addrs, pd.SecurityOption{})
+	pdClient, err := pd.NewClient(caller.TestComponent, addrs, pd.SecurityOption{})
 	s.Nil(err)
 	s.apiVersion = s.getApiVersion(pdClient)
 
