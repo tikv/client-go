@@ -1226,6 +1226,9 @@ storeIter:
 }
 
 func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
+	if config.NextGen {
+		s.T().Skip("NextGen does not support fair locking")
+	}
 	test := func(asyncCommit bool, onePC bool, causalConsistency bool) {
 		k1 := []byte("k1")
 		k2 := []byte("k2")
@@ -1541,6 +1544,9 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 
 	// k4 has txn2's stale primary pessimistic lock now.
 	currentTS, err := s.store.CurrentTimestamp(oracle.GlobalTxnScope)
+
+	// sleep a while for pipelined pessimistic locks
+	time.Sleep(time.Millisecond * 100)
 
 	remainingLocks, err := s.store.ScanLocks(ctx, []byte("k"), []byte("l"), currentTS)
 	s.NoError(err)
