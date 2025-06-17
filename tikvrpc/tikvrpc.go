@@ -667,6 +667,46 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 	return nil
 }
 
+// GetSize return the data size of the request.
+func (req *Request) GetSize() int {
+	size := 0
+	switch req.Type {
+	case CmdGet:
+		size = req.Get().Size()
+	case CmdBatchGet:
+		size = req.BatchGet().Size()
+	case CmdScan:
+		size = req.Scan().Size()
+	case CmdCop:
+		size = req.Cop().Size()
+	case CmdPrewrite:
+		size = req.Prewrite().Size()
+	case CmdCommit:
+		size = req.Commit().Size()
+	case CmdPessimisticLock:
+		size = req.PessimisticLock().Size()
+	case CmdPessimisticRollback:
+		size = req.PessimisticRollback().Size()
+	case CmdBatchRollback:
+		size = req.BatchRollback().Size()
+	case CmdCheckSecondaryLocks:
+		size = req.CheckSecondaryLocks().Size()
+	case CmdScanLock:
+		size = req.ScanLock().Size()
+	case CmdResolveLock:
+		size = req.ResolveLock().Size()
+	case CmdFlush:
+		size = req.Flush().Size()
+	case CmdCheckTxnStatus:
+		size = req.CheckTxnStatus().Size()
+	case CmdMPPTask:
+		size = req.DispatchMPPTask().Size()
+	default:
+		// ignore others
+	}
+	return size
+}
+
 // Response wraps all kv/coprocessor responses.
 type Response struct {
 	Resp interface{}
@@ -1052,6 +1092,47 @@ func (resp *Response) GetExecDetailsV2() *kvrpcpb.ExecDetailsV2 {
 		return nil
 	}
 	return details.GetExecDetailsV2()
+}
+
+func (resp *Response) GetSize() int {
+	size := 0
+	switch r := resp.Resp.(type) {
+	case *kvrpcpb.GetResponse:
+		size = r.Size()
+	case *kvrpcpb.BatchGetResponse:
+		size = r.Size()
+	case *kvrpcpb.ScanResponse:
+		size = r.Size()
+	case *coprocessor.Response:
+		size = r.Size()
+	case *kvrpcpb.PrewriteResponse:
+		size = r.Size()
+	case *kvrpcpb.CommitResponse:
+		size = r.Size()
+	case *kvrpcpb.PessimisticLockResponse:
+		size = r.Size()
+	case *kvrpcpb.PessimisticRollbackResponse:
+		size = r.Size()
+	case *kvrpcpb.BatchRollbackResponse:
+		size = r.Size()
+	case *kvrpcpb.CheckSecondaryLocksResponse:
+		size = r.Size()
+	case *kvrpcpb.ScanLockResponse:
+		size = r.Size()
+	case *kvrpcpb.ResolveLockResponse:
+		size = r.Size()
+	case *kvrpcpb.FlushResponse:
+		size = r.Size()
+	case *kvrpcpb.CheckTxnStatusResponse:
+		size = r.Size()
+	case *mpp.MPPDataPacket:
+		size = r.Size()
+	case *mpp.DispatchTaskResponse:
+		size = r.Size()
+	default:
+		// ignore others
+	}
+	return size
 }
 
 // CallRPC launches a rpc call.
