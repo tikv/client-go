@@ -895,13 +895,13 @@ type emptyClient struct {
 
 func (s *testRegionRequestToSingleStoreSuite) TestClientExt() {
 	var cli client.Client = client.NewRPCClient()
-	sender := NewRegionRequestSender(s.cache, cli)
+	sender := NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{})
 	s.NotNil(sender.client)
 	s.NotNil(sender.getClientExt())
 	cli.Close()
 
 	cli = &emptyClient{}
-	sender = NewRegionRequestSender(s.cache, cli)
+	sender = NewRegionRequestSender(s.cache, cli, oracle.NoopReadTSValidator{})
 	s.NotNil(sender.client)
 	s.Nil(sender.getClientExt())
 }
