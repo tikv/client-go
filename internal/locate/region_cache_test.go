@@ -56,7 +56,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
-	pd "github.com/tikv/pd/client"
 	router "github.com/tikv/pd/client/clients/router"
 )
 
@@ -1883,9 +1882,9 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
 	check := func(ranges []string, regions []string, limit int, expect bool) {
 		s.Len(ranges, 2)
-		rgs := make([]*pd.Region, 0, len(regions))
+		rgs := make([]*router.Region, 0, len(regions))
 		for i := 0; i < len(regions); i += 2 {
-			rgs = append(rgs, &pd.Region{Meta: &metapb.Region{
+			rgs = append(rgs, &router.Region{Meta: &metapb.Region{
 				StartKey: []byte(regions[i]),
 				EndKey:   []byte(regions[i+1]),
 			}})
