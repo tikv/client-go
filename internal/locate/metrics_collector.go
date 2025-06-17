@@ -17,10 +17,6 @@ package locate
 import (
 	"sync/atomic"
 
-	"github.com/pingcap/kvproto/pkg/coprocessor"
-	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/kvproto/pkg/mpp"
-	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -35,40 +31,8 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 	if req == nil {
 		return
 	}
-	size := 0
-	switch req.Type {
-	case tikvrpc.CmdGet:
-		size = req.Get().Size()
-	case tikvrpc.CmdBatchGet:
-		size = req.BatchGet().Size()
-	case tikvrpc.CmdScan:
-		size = req.Scan().Size()
-	case tikvrpc.CmdCop:
-		size = req.Cop().Size()
-	case tikvrpc.CmdPrewrite:
-		size = req.Prewrite().Size()
-	case tikvrpc.CmdCommit:
-		size = req.Commit().Size()
-	case tikvrpc.CmdPessimisticLock:
-		size = req.PessimisticLock().Size()
-	case tikvrpc.CmdPessimisticRollback:
-		size = req.PessimisticRollback().Size()
-	case tikvrpc.CmdBatchRollback:
-		size = req.BatchRollback().Size()
-	case tikvrpc.CmdCheckSecondaryLocks:
-		size = req.CheckSecondaryLocks().Size()
-	case tikvrpc.CmdScanLock:
-		size = req.ScanLock().Size()
-	case tikvrpc.CmdResolveLock:
-		size = req.ResolveLock().Size()
-	case tikvrpc.CmdFlush:
-		size = req.Flush().Size()
-	case tikvrpc.CmdCheckTxnStatus:
-		size = req.CheckTxnStatus().Size()
-	case tikvrpc.CmdMPPTask:
-		size = req.DispatchMPPTask().Size()
-	default:
-		// ignore others
+	size := req.GetSize()
+	if size == 0 {
 		return
 	}
 	isCrossZoneTraffic := req.AccessLocation == kv.AccessCrossZone
@@ -97,55 +61,13 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	if resp == nil {
 		return
 	}
-	if _, ok := resp.Resp.(*tikvpb.BatchCommandsEmptyResponse); ok {
-		return
-	}
-	size := 0
-	switch req.Type {
-	case tikvrpc.CmdGet:
-		size += resp.Resp.(*kvrpcpb.GetResponse).Size()
-	case tikvrpc.CmdBatchGet:
-		size += resp.Resp.(*kvrpcpb.BatchGetResponse).Size()
-	case tikvrpc.CmdScan:
-		size += resp.Resp.(*kvrpcpb.ScanResponse).Size()
-	case tikvrpc.CmdCop:
-		size += resp.Resp.(*coprocessor.Response).Size()
-	case tikvrpc.CmdPrewrite:
-		size += resp.Resp.(*kvrpcpb.PrewriteResponse).Size()
-	case tikvrpc.CmdCommit:
-		size += resp.Resp.(*kvrpcpb.CommitResponse).Size()
-	case tikvrpc.CmdPessimisticLock:
-		size += resp.Resp.(*kvrpcpb.PessimisticLockResponse).Size()
-	case tikvrpc.CmdPessimisticRollback:
-		size += resp.Resp.(*kvrpcpb.PessimisticRollbackResponse).Size()
-	case tikvrpc.CmdBatchRollback:
-		size += resp.Resp.(*kvrpcpb.BatchRollbackResponse).Size()
-	case tikvrpc.CmdCheckSecondaryLocks:
-		size += resp.Resp.(*kvrpcpb.CheckSecondaryLocksResponse).Size()
-	case tikvrpc.CmdScanLock:
-		size += resp.Resp.(*kvrpcpb.ScanLockResponse).Size()
-	case tikvrpc.CmdResolveLock:
-		size += resp.Resp.(*kvrpcpb.ResolveLockResponse).Size()
-	case tikvrpc.CmdFlush:
-		size += resp.Resp.(*kvrpcpb.FlushResponse).Size()
-	case tikvrpc.CmdCheckTxnStatus:
-		size += resp.Resp.(*kvrpcpb.CheckTxnStatusResponse).Size()
-	case tikvrpc.CmdMPPTask:
-		// if is MPPDataPacket
-		if resp1, ok := resp.Resp.(*mpp.MPPDataPacket); ok && resp1 != nil {
-			size += resp1.Size()
-		}
-		// if is DispatchTaskResponse
-		if resp1, ok := resp.Resp.(*mpp.DispatchTaskResponse); ok && resp1 != nil {
-			size += resp1.Size()
-		}
-	default:
-		// ignore others
+
+	size := resp.GetSize()
+	if size == 0 {
 		return
 	}
 
 	isCrossZoneTraffic := req.AccessLocation == kv.AccessCrossZone
-
 	// exec details
 	if details != nil {
 		var total, crossZone *int64

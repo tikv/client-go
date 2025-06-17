@@ -20,8 +20,10 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/pd/client/resource_group/controller"
 )
 
 // RequestInfo contains information about a request that is able to calculate the RU cost
@@ -33,9 +35,22 @@ type RequestInfo struct {
 	writeBytes    int64
 	storeID       uint64
 	replicaNumber int64
+	requestSize   uint64
+	accessType    controller.AccessLocationType
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
 	bypass bool
+}
+
+func toPDAccessLocationType(accessType kv.AccessLocationType) controller.AccessLocationType {
+	switch accessType {
+	case kv.AccessLocalZone:
+		return controller.AccessLocalZone
+	case kv.AccessCrossZone:
+		return controller.AccessCrossZone
+	default:
+		return controller.AccessUnknown
+	}
 }
 
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
@@ -49,7 +64,13 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	}
 	storeID := req.Context.GetPeer().GetStoreId()
 	if !req.IsTxnWriteRequest() && !req.IsRawWriteRequest() {
-		return &RequestInfo{writeBytes: -1, storeID: storeID, bypass: bypass}
+		return &RequestInfo{
+			writeBytes:  -1,
+			storeID:     storeID,
+			bypass:      bypass,
+			requestSize: uint64(req.GetSize()),
+			accessType:  toPDAccessLocationType(req.AccessLocation),
+		}
 	}
 
 	var writeBytes int64
@@ -67,7 +88,14 @@ func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 			writeBytes += int64(len(k))
 		}
 	}
-	return &RequestInfo{writeBytes: writeBytes, storeID: storeID, replicaNumber: req.ReplicaNumber, bypass: bypass}
+	return &RequestInfo{
+		writeBytes:    writeBytes,
+		storeID:       storeID,
+		replicaNumber: req.ReplicaNumber,
+		bypass:        bypass,
+		requestSize:   uint64(req.GetSize()),
+		accessType:    toPDAccessLocationType(req.AccessLocation),
+	}
 }
 
 // IsWrite returns whether the request is a write request.
@@ -97,6 +125,14 @@ func (req *RequestInfo) StoreID() uint64 {
 	return req.storeID
 }
 
+func (req *RequestInfo) RequestSize() uint64 {
+	return req.requestSize
+}
+
+func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
+	return req.accessType
+}
+
 // ResponseInfo contains information about a response that is able to calculate the RU cost
 // after the response is received. Specifically, the read bytes RU cost of a read request
 // could be calculated by its response size, and the KV CPU time RU cost of a request could
@@ -104,6 +140,7 @@ func (req *RequestInfo) StoreID() uint64 {
 type ResponseInfo struct {
 	readBytes uint64
 	kvCPU     time.Duration
+	respSize  uint64
 }
 
 // MakeResponseInfo extracts the relevant information from a BatchResponse.
@@ -146,7 +183,11 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	}
 	// Get the KV CPU time in milliseconds from the execution time details.
 	kvCPU := getKVCPU(detailsV2, details)
-	return &ResponseInfo{readBytes: readBytes, kvCPU: kvCPU}
+	return &ResponseInfo{
+		readBytes: readBytes,
+		kvCPU:     kvCPU,
+		respSize:  uint64(resp.GetSize()),
+	}
 }
 
 // TODO: find out a more accurate way to get the actual KV CPU time.
@@ -177,4 +218,8 @@ func (res *ResponseInfo) KVCPU() time.Duration {
 // Todo: to fit https://github.com/tikv/pd/pull/5941
 func (res *ResponseInfo) Succeed() bool {
 	return true
+}
+
+func (res *ResponseInfo) ResponseSize() uint64 {
+	return res.respSize
 }

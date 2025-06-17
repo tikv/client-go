@@ -55,6 +55,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -980,16 +981,8 @@ func (s *sendReqState) next() (done bool) {
 		return true
 	}
 
-	if s.replicaSelector != nil &&
-		s.replicaSelector.target != nil &&
-		len(s.replicaSelector.option.labels) != 0 {
-		// patch the access location if it is not set under region request sender.
-		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
-			req.AccessLocation = kv.AccessLocalZone
-		} else {
-			req.AccessLocation = kv.AccessCrossZone
-		}
-	}
+	// should reset the access location after shifting to the next store.
+	s.setReqAccessLocation(req)
 
 	logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, s.args.regionID.id, s.vars.rpcCtx.Addr)
 	s.storeAddr = s.vars.rpcCtx.Addr
@@ -1243,16 +1236,8 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 
 	s.storeAddr = s.vars.rpcCtx.Addr
 
-	if s.replicaSelector != nil &&
-		s.replicaSelector.target != nil &&
-		len(s.replicaSelector.option.labels) != 0 {
-		// patch the access location if it is not set under region request sender.
-		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
-			req.AccessLocation = kv.AccessLocalZone
-		} else {
-			req.AccessLocation = kv.AccessCrossZone
-		}
-	}
+	// set access location based on source and target "zone" label.
+	s.setReqAccessLocation(req)
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
@@ -1274,6 +1259,24 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 	}
 
 	return true
+}
+
+// setReqAccessLocation set the AccessLocation value of kv request based on
+// target store "zone" label.
+func (s *sendReqState) setReqAccessLocation(req *tikvrpc.Request) {
+	// set access location based on source and target "zone" label.
+	if s.replicaSelector != nil && s.replicaSelector.target != nil {
+		selfZoneLabel := config.GetGlobalConfig().ZoneLabel
+		targetZoneLabel, _ := s.replicaSelector.target.store.GetLabelValue("zone")
+		// if either "zone" label is "", we actually don't known if it involves cross AZ traffic.
+		if selfZoneLabel == "" || targetZoneLabel == "" {
+			req.AccessLocation = kv.AccessUnknown
+		} else if selfZoneLabel == targetZoneLabel {
+			req.AccessLocation = kv.AccessLocalZone
+		} else {
+			req.AccessLocation = kv.AccessCrossZone
+		}
+	}
 }
 
 // handleAsyncResponse handles the response of an async request.
