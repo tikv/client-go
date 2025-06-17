@@ -280,10 +280,6 @@ func (o *pdOracle) getMinTimestamp(ctx context.Context) (uint64, error) {
 	return oracle.ComposeTS(physical, logical), nil
 }
 
-func (o *pdOracle) getArrivalTimestamp() uint64 {
-	return oracle.GoTimeToTS(time.Now())
-}
-
 func (o *pdOracle) setLastTS(ts uint64, txnScope string) {
 	if txnScope == "" {
 		txnScope = oracle.GlobalTxnScope
