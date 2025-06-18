@@ -44,9 +44,6 @@ import (
 // It should not be used after calling Close().
 type Client = client.Client
 
-// ClientAsync is a client that can send RPC asynchronously.
-type ClientAsync = client.ClientAsync
-
 // ClientEventListener is a listener to handle events produced by `Client`.
 type ClientEventListener = client.ClientEventListener
 
