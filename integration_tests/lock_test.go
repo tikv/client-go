@@ -1209,7 +1209,6 @@ storeIter:
 	}
 }
 
-/*
 func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test := func(asyncCommit bool, onePC bool, causalConsistency bool) {
 		k1 := []byte("k1")
@@ -1375,7 +1374,6 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test(true, true, false)
 	test(true, false, true)
 }
-*/
 
 func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
