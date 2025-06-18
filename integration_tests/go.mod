@@ -14,7 +14,7 @@ require (
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.8-0.20250331090556-cb0dc9a7b339
-	github.com/tikv/pd/client v0.0.0-20250617095436-fedff62afa75
+	github.com/tikv/pd/client v0.0.0-20250618095709-971fc9a80727
 	go.uber.org/goleak v1.3.0
 )
 
@@ -120,7 +120,7 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/oh-my-tidb/tidb v1.1.0-beta.0.20250617060139-449ec9142c87
-	github.com/pingcap/tidb/pkg/parser => github.com/oh-my-tidb/tidb/pkg/parser v0.0.0-20250617060139-449ec9142c87
+	github.com/pingcap/tidb => github.com/ystaticy/tidb v0.0.0-20250618103312-24cad90f34b2
+	github.com/pingcap/tidb/pkg/parser => github.com/ystaticy/tidb/pkg/parser v0.0.0-20250618103312-24cad90f34b2
 	github.com/tikv/client-go/v2 => ../
 )
