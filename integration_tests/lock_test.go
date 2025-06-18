@@ -1466,7 +1466,6 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	s.Equal([]byte("v1-1"), v)
 }
 
-/*
 func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	if *withTiKV {
 		recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", false)
@@ -1562,4 +1561,3 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	s.NoError(err)
 	s.Equal(v3, v)
 }
-*/
