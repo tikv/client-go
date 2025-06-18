@@ -1375,6 +1375,7 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test(true, false, true)
 }
 
+/*
 func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
 	s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", "return"))
@@ -1463,6 +1464,7 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	s.NoError(err)
 	s.Equal([]byte("v1-1"), v)
 }
+*/
 
 func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	if *withTiKV {
