@@ -50,6 +50,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/clients/gc"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/clients/tso"
 	"github.com/tikv/pd/client/opt"
@@ -412,4 +413,14 @@ func (m *mockPDClient) GetServiceDiscovery() sd.ServiceDiscovery { return nil }
 
 func (m *mockPDClient) WithCallerComponent(component caller.Component) pd.Client {
 	return m
+}
+
+func (c *mockPDClient) GetGCInternalController(keyspaceID uint32) gc.InternalController {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *mockPDClient) GetGCStatesClient(keyspaceID uint32) gc.GCStatesClient {
+	//TODO implement me
+	panic("implement me")
 }
