@@ -438,7 +438,7 @@ func (s *KVSnapshot) batchGetSingleRegion(bo *retry.Backoffer, batch batchKeys, 
 			if op != nil {
 				ops = append(ops, op)
 			}
-			req.ReplicaReadType = readType
+			req.SetReplicaReadType(readType)
 		}
 		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, timeout, tikvrpc.TiKV, "", ops...)
 		if err != nil {
@@ -659,7 +659,7 @@ func (s *KVSnapshot) get(ctx context.Context, bo *retry.Backoffer, k []byte) ([]
 		if op != nil {
 			ops = append(ops, op)
 		}
-		req.ReplicaReadType = readType
+		req.SetReplicaReadType(readType)
 	}
 
 	var firstLock *txnlock.Lock
