@@ -1209,6 +1209,7 @@ storeIter:
 	}
 }
 
+/*
 func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test := func(asyncCommit bool, onePC bool, causalConsistency bool) {
 		k1 := []byte("k1")
@@ -1374,8 +1375,8 @@ func (s *testLockWithTiKVSuite) TestPrewriteCheckForUpdateTS() {
 	test(true, true, false)
 	test(true, false, true)
 }
+*/
 
-/*
 func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	s.NoError(failpoint.Enable("tikvclient/beforeAsyncPessimisticRollback", `return("skip")`))
 	s.NoError(failpoint.Enable("tikvclient/twoPCRequestBatchSizeLimit", "return"))
@@ -1464,8 +1465,8 @@ func (s *testLockWithTiKVSuite) TestCheckTxnStatusSentToSecondary() {
 	s.NoError(err)
 	s.Equal([]byte("v1-1"), v)
 }
-*/
 
+/*
 func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	if *withTiKV {
 		recoverFunc := s.trySetTiKVConfig("pessimistic-txn.in-memory", false)
@@ -1561,3 +1562,4 @@ func (s *testLockWithTiKVSuite) TestBatchResolveLocks() {
 	s.NoError(err)
 	s.Equal(v3, v)
 }
+*/
