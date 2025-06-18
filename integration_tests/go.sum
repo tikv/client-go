@@ -550,10 +550,10 @@ github.com/xitongsys/parquet-go v1.5.5-0.20201110004701-b09c49d6d457 h1:tBbuFCty
 github.com/xitongsys/parquet-go v1.5.5-0.20201110004701-b09c49d6d457/go.mod h1:pheqtXeHQFzxJk45lRQ0UIGIivKnLXvialZSFWs81A8=
 github.com/xordataexchange/crypt v0.0.3-0.20170626215501-b2862e3d0a77/go.mod h1:aYKd//L2LvnjZzWKhF00oedf4jCCReLcmhLdhm1A27Q=
 github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0/go.mod h1:/LWChgwKmvncFJFHJ7Gvn9wZArjbV5/FppcK2fKk/tI=
-github.com/ystaticy/tidb v0.0.0-20250618103312-24cad90f34b2 h1:2E/UxuyeDUlPCqchc/INwlUzXfEf/kctxKac2DkOslA=
-github.com/ystaticy/tidb v0.0.0-20250618103312-24cad90f34b2/go.mod h1:NoWXd/M3/saSdTDmGKEqNsOrC6Rb4tiXJ+6N30PeVO8=
-github.com/ystaticy/tidb/pkg/parser v0.0.0-20250618103312-24cad90f34b2 h1:RJt9A+8x1bawYnMK8kMgYRPRuoUhaBq/cEMSxwukhWM=
-github.com/ystaticy/tidb/pkg/parser v0.0.0-20250618103312-24cad90f34b2/go.mod h1:RmcX+Z2h6Ke2aEvAHADBigd0RD6yjohtsHrk0jH4p7Q=
+github.com/ystaticy/tidb v0.0.0-20250618114601-27b3182608a2 h1:QXzEv+/yLp0wdSejJsiw/N8gN4p1ewwQapT5MAK3X9E=
+github.com/ystaticy/tidb v0.0.0-20250618114601-27b3182608a2/go.mod h1:d5efY+KBjyTCKojV/ie+B9QhC3DV094HWaf4uEYTU1E=
+github.com/ystaticy/tidb/pkg/parser v0.0.0-20250618114601-27b3182608a2 h1:nbUX9ERGhDCkX8mOZ1L68SE5Wqfu2cg1cDBmRFHBjDM=
+github.com/ystaticy/tidb/pkg/parser v0.0.0-20250618114601-27b3182608a2/go.mod h1:RmcX+Z2h6Ke2aEvAHADBigd0RD6yjohtsHrk0jH4p7Q=
 github.com/yudai/gojsondiff v1.0.0/go.mod h1:AY32+k2cwILAkW1fbgxQ5mUmMiZFgLIV+FBNExI05xg=
 github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82/go.mod h1:lgjkn3NuSvDfVJdfcVVdX+jpBxNmX4rDAzaS45IcYoM=
 github.com/yudai/pp v2.0.1+incompatible/go.mod h1:PuxR/8QJ7cyCkFp/aUDS+JY727OFEZkTdatxwunjIkc=
