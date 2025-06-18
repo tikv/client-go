@@ -2,7 +2,7 @@ module github.com/tikv/client-go/v2
 
 go 1.23.0
 
-toolchain go1.24.4
+toolchain go1.23.3
 
 require (
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
