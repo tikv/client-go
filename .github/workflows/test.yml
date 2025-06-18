@@ -49,8 +49,12 @@ jobs:
           go generate ./...
           git diff --exit-code
 
+      - name: Go generate and check diff
+        run: |
+          go generate ./...
+          git diff --exit-code
+
       - name: Lint
         uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.61.0
-          skip-pkg-cache: true
+          version: v1.55.2

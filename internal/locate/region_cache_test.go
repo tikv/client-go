@@ -47,6 +47,7 @@ import (
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/stretchr/testify/suite"
@@ -54,6 +55,8 @@ import (
 	"github.com/tikv/client-go/v2/internal/mockstore/mocktikv"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/oracle"
+	pd "github.com/tikv/pd/client"
 	router "github.com/tikv/pd/client/clients/router"
 )
 
@@ -1054,7 +1057,7 @@ func (s *testRegionCacheSuite) TestRegionEpochOnTiFlash() {
 	s.Equal(ctxTiFlash.Peer.Id, s.peer1)
 	ctxTiFlash.Peer.Role = metapb.PeerRole_Learner
 	r := ctxTiFlash.Meta
-	reqSend := NewRegionRequestSender(s.cache, nil)
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	regionErr := &errorpb.Error{EpochNotMatch: &errorpb.EpochNotMatch{CurrentRegions: []*metapb.Region{r}}}
 	reqSend.onRegionError(s.bo, ctxTiFlash, nil, regionErr)
 
@@ -1690,7 +1693,7 @@ func (s *testRegionCacheSuite) TestShouldNotRetryFlashback() {
 	ctx, err := s.cache.GetTiKVRPCContext(retry.NewBackofferWithVars(context.Background(), 100, nil), loc.Region, kv.ReplicaReadLeader, 0)
 	s.NotNil(ctx)
 	s.NoError(err)
-	reqSend := NewRegionRequestSender(s.cache, nil)
+	reqSend := NewRegionRequestSender(s.cache, nil, oracle.NoopReadTSValidator{})
 	shouldRetry, err := reqSend.onRegionError(s.bo, ctx, nil, &errorpb.Error{FlashbackInProgress: &errorpb.FlashbackInProgress{}})
 	s.Error(err)
 	s.False(shouldRetry)
@@ -1875,4 +1878,151 @@ func (s *testRegionCacheSuite) TestHealthCheckWithStoreReplace() {
 	s.Eventually(func() bool {
 		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
 	}, 3*time.Second, time.Second)
+}
+
+func (s *testRegionCacheSuite) TestRangesAreCoveredCheck() {
+	check := func(ranges []string, regions []string, limit int, expect bool) {
+		s.Len(ranges, 2)
+		rgs := make([]*pd.Region, 0, len(regions))
+		for i := 0; i < len(regions); i += 2 {
+			rgs = append(rgs, &pd.Region{Meta: &metapb.Region{
+				StartKey: []byte(regions[i]),
+				EndKey:   []byte(regions[i+1]),
+			}})
+		}
+		s.Equal(expect, regionsHaveGapInRange([]byte(ranges[0]), []byte(ranges[1]), rgs, limit))
+	}
+
+	boundCase := []string{"a", "c"}
+	// positive
+	check(boundCase, []string{"a", "c"}, -1, false)
+	check(boundCase, []string{"a", ""}, -1, false)
+	check(boundCase, []string{"", "c"}, -1, false)
+	// negative
+	check(boundCase, []string{"a", "b"}, -1, true)
+	check(boundCase, []string{"b", "c"}, -1, true)
+	check(boundCase, []string{"b", ""}, -1, true)
+	check(boundCase, []string{"", "b"}, -1, true)
+	// positive
+	check(boundCase, []string{"a", "b", "b", "c"}, -1, false)
+	check(boundCase, []string{"", "b", "b", "c"}, -1, false)
+	check(boundCase, []string{"a", "b", "b", ""}, -1, false)
+	check(boundCase, []string{"", "b", "b", ""}, -1, false)
+	// negative
+	check(boundCase, []string{"a", "b", "b1", "c"}, -1, true)
+	check(boundCase, []string{"", "b", "b1", "c"}, -1, true)
+	check(boundCase, []string{"a", "b", "b1", ""}, -1, true)
+	check(boundCase, []string{"", "b", "b1", ""}, -1, true)
+	check(boundCase, []string{}, -1, true)
+
+	unboundCase := []string{"", ""}
+	// positive
+	check(unboundCase, []string{"", ""}, -1, false)
+	// negative
+	check(unboundCase, []string{"a", "c"}, -1, true)
+	check(unboundCase, []string{"a", ""}, -1, true)
+	check(unboundCase, []string{"", "c"}, -1, true)
+	// positive
+	check(unboundCase, []string{"", "b", "b", ""}, -1, false)
+	// negative
+	check(unboundCase, []string{"", "b", "b1", ""}, -1, true)
+	check(unboundCase, []string{"a", "b", "b", ""}, -1, true)
+	check(unboundCase, []string{"", "b", "b", "c"}, -1, true)
+	check(unboundCase, []string{}, -1, true)
+
+	// test half bounded ranges
+	check([]string{"", "b"}, []string{"", "a"}, -1, true)
+	check([]string{"", "b"}, []string{"", "a"}, 1, false) // it's just limitation reached
+	check([]string{"", "b"}, []string{"", "a"}, 2, true)
+	check([]string{"a", ""}, []string{"b", ""}, -1, true)
+	check([]string{"a", ""}, []string{"b", ""}, 1, true)
+	check([]string{"a", ""}, []string{"b", "c"}, 1, true)
+	check([]string{"a", ""}, []string{"a", ""}, -1, false)
+}
+
+func (s *testRegionCacheSuite) TestScanRegionsWithGaps() {
+	// Split at "a", "c", "e"
+	// nil --- 'a' --- 'c' --- 'e' --- nil
+	// <-  0  -> <- 1 -> <- 2 -> <- 3 -->
+	regions := s.cluster.AllocIDs(3)
+	regions = append([]uint64{s.region1}, regions...)
+
+	peers := [][]uint64{{s.peer1, s.peer2}}
+	for i := 0; i < 3; i++ {
+		peers = append(peers, s.cluster.AllocIDs(2))
+	}
+
+	for i := 0; i < 3; i++ {
+		s.cluster.Split(regions[i], regions[i+1], []byte{'a' + 2*byte(i)}, peers[i+1], peers[i+1][0])
+	}
+
+	// the last region is not reported to PD yet
+	getRegionIDsWithInject := func(fn func() ([]*Region, error)) []uint64 {
+		s.cache.clear()
+		err := failpoint.Enable("tikvclient/mockSplitRegionNotReportToPD", fmt.Sprintf(`return(%d)`, regions[2]))
+		s.Nil(err)
+		resCh := make(chan []*Region)
+		errCh := make(chan error)
+		go func() {
+			rs, err := fn()
+			errCh <- err
+			resCh <- rs
+		}()
+		time.Sleep(time.Second)
+		failpoint.Disable("tikvclient/mockSplitRegionNotReportToPD")
+		s.Nil(<-errCh)
+		rs := <-resCh
+		regionIDs := make([]uint64, 0, len(rs))
+		for _, r := range rs {
+			regionIDs = append(regionIDs, r.GetID())
+		}
+		return regionIDs
+	}
+
+	scanRegionRes := getRegionIDsWithInject(func() ([]*Region, error) {
+		return s.cache.BatchLoadRegionsWithKeyRange(s.bo, []byte(""), []byte(""), 10)
+	})
+	s.Equal(scanRegionRes, regions)
+}
+
+func (s *testRegionCacheSuite) TestIssue1401() {
+	// init region cache
+	s.cache.LocateKey(s.bo, []byte("a"))
+
+	store1 := s.cache.getStoreByStoreID(s.store1)
+	s.Require().NotNil(store1)
+	s.Require().Equal(resolved, store1.getResolveState())
+	// change store1 label.
+	labels := store1.labels
+	labels = append(labels, &metapb.StoreLabel{Key: "host", Value: "0.0.0.0:20161"})
+	s.cluster.UpdateStoreAddr(store1.storeID, store1.addr, labels...)
+
+	// mark the store is unreachable and need check.
+	atomic.StoreUint32(&store1.livenessState, uint32(unreachable))
+	store1.setResolveState(needCheck)
+
+	// setup mock liveness func
+	tf := func(s *Store, bo *retry.Backoffer) livenessState {
+		return reachable
+	}
+	s.cache.testingKnobs.mockRequestLiveness.Store((*livenessFunc)(&tf))
+
+	// start health check loop
+	go store1.checkUntilHealth(s.cache, unreachable, time.Second*30)
+
+	// mock asyncCheckAndResolveLoop worker to check and resolve store.
+	s.cache.checkAndResolve(nil, func(s *Store) bool {
+		return s.getResolveState() == needCheck
+	})
+
+	// assert that the old store should be deleted.
+	s.Eventually(func() bool {
+		return store1.getResolveState() == deleted
+	}, 3*time.Second, time.Second)
+	// assert the new store should be added and it should be resolved and reachable.
+	newStore1 := s.cache.getStoreByStoreID(s.store1)
+	s.Eventually(func() bool {
+		return newStore1.getResolveState() == resolved && newStore1.getLivenessState() == reachable
+	}, 3*time.Second, time.Second)
+	s.Require().True(isStoreContainLabel(newStore1.labels, "host", "0.0.0.0:20161"))
 }

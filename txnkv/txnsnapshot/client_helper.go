@@ -40,6 +40,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/client"
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
@@ -62,7 +63,8 @@ type ClientHelper struct {
 	committedLocks *util.TSSet
 	client         client.Client
 	resolveLite    bool
-	locate.RegionRequestRuntimeStats
+	oracle         oracle.Oracle
+	Stats          *locate.RegionRequestRuntimeStats
 }
 
 // NewClientHelper creates a helper instance.
@@ -74,6 +76,7 @@ func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, committedLocks *u
 		committedLocks: committedLocks,
 		client:         store.GetTiKVClient(),
 		resolveLite:    resolveLite,
+		oracle:         store.GetOracle(),
 	}
 }
 
@@ -81,7 +84,7 @@ func NewClientHelper(store kvstore, resolvedLocks *util.TSSet, committedLocks *u
 func (ch *ClientHelper) ResolveLocksWithOpts(bo *retry.Backoffer, opts txnlock.ResolveLocksOptions) (txnlock.ResolveLockResult, error) {
 	if ch.Stats != nil {
 		defer func(start time.Time) {
-			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
+			ch.Stats.RecordRPCRuntimeStats(tikvrpc.CmdResolveLock, time.Since(start))
 		}(time.Now())
 	}
 	opts.ForRead = true
@@ -103,7 +106,7 @@ func (ch *ClientHelper) ResolveLocksWithOpts(bo *retry.Backoffer, opts txnlock.R
 func (ch *ClientHelper) ResolveLocks(bo *retry.Backoffer, callerStartTS uint64, locks []*txnlock.Lock) (int64, error) {
 	if ch.Stats != nil {
 		defer func(start time.Time) {
-			locate.RecordRegionRequestRuntimeStats(ch.Stats, tikvrpc.CmdResolveLock, time.Since(start))
+			ch.Stats.RecordRPCRuntimeStats(tikvrpc.CmdResolveLock, time.Since(start))
 		}(time.Now())
 	}
 	msBeforeTxnExpired, resolvedLocks, committedLocks, err := ch.lockResolver.ResolveLocksForRead(bo, callerStartTS, locks, ch.resolveLite)
@@ -136,7 +139,7 @@ func (ch *ClientHelper) ResolveLocksDone(callerStartTS uint64, token int) {
 
 // SendReqCtx wraps the SendReqCtx function and use the resolved lock result in the kvrpcpb.Context.
 func (ch *ClientHelper) SendReqCtx(bo *retry.Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration, et tikvrpc.EndpointType, directStoreAddr string, opts ...locate.StoreSelectorOption) (*tikvrpc.Response, *locate.RPCContext, string, error) {
-	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client)
+	sender := locate.NewRegionRequestSender(ch.regionCache, ch.client, ch.oracle)
 	if len(directStoreAddr) > 0 {
 		sender.SetStoreAddr(directStoreAddr)
 	}
