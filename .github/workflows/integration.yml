@@ -75,7 +75,7 @@ jobs:
         working-directory: integration_tests
 
       - name: Test
-        run: echo "::warning ::intergation-tikv is not stable, please run it locally"
+        run: go test --with-tikv
         working-directory: integration_tests
 
   integration-raw-tikv:
