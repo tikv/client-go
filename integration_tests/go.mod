@@ -8,13 +8,13 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20250224053625-b6a98c6bf02d
+	github.com/pingcap/kvproto v0.0.0-20250521074834-db74bf0e3ac1
 	github.com/pingcap/tidb v1.1.0-beta.0.20231025055903-f3dfd896b5e6
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.8-0.20250331090556-cb0dc9a7b339
-	github.com/tikv/pd/client v0.0.0-20250319102635-e5687bff864a
+	github.com/tikv/pd/client v0.0.0-20250618095709-971fc9a80727
 	go.uber.org/goleak v1.3.0
 )
 
@@ -100,12 +100,12 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.26.0 // indirect
-	golang.org/x/crypto v0.31.0 // indirect
+	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20230711005742-c3f37128e5a4 // indirect
-	golang.org/x/net v0.33.0 // indirect
-	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/sync v0.12.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
 	google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 // indirect
@@ -120,7 +120,7 @@ require (
 
 replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tidb => github.com/oh-my-tidb/tidb v1.1.0-beta.0.20250617060139-449ec9142c87
-	github.com/pingcap/tidb/pkg/parser => github.com/oh-my-tidb/tidb/pkg/parser v0.0.0-20250617060139-449ec9142c87
+	github.com/pingcap/tidb => github.com/ystaticy/tidb v0.0.0-20250618114601-27b3182608a2
+	github.com/pingcap/tidb/pkg/parser => github.com/ystaticy/tidb/pkg/parser v0.0.0-20250618114601-27b3182608a2
 	github.com/tikv/client-go/v2 => ../
 )
