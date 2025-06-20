@@ -466,7 +466,7 @@ func TestReplicaReadAccessPathByCase(t *testing.T) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store3, replica-read: false, stale-read: false}",  // try new leader in store3, but got DeadLineExceededErr, and this store's liveness will be mock to unreachable in test case running.
+				"{addr: store3, replica-read: false, stale-read: false}", // try new leader in store3, but got DeadLineExceededErr, and this store's liveness will be mock to unreachable in test case running.
 				"{addr: store2, replica-read: false, stale-read: false}"}, // try remaining replica in store2.
 			respErr:         "",
 			respRegionError: nil,
@@ -2326,7 +2326,7 @@ func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: true, stale-read: false}",
-				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
 			},
 			respErr:         "",
 			respRegionError: nil,
@@ -2359,7 +2359,7 @@ func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
 			accessPath: []string{
 				"{addr: store1, replica-read: true, stale-read: false}",
 				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store1, replica-read: true, stale-read: false}",
+				"{addr: store1, replica-read: false, stale-read: false}",
 			},
 			respErr:         "region 0 is in flashback progress, FlashbackStartTS is 0",
 			respRegionError: nil,
