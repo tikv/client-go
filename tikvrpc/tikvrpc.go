@@ -286,6 +286,14 @@ func NewReplicaReadRequest(typ CmdType, pointer interface{}, replicaReadType kv.
 	return req
 }
 
+func (req *Request) SetReplicaReadType(replicaReadType kv.ReplicaReadType) {
+	if req == nil {
+		return
+	}
+	req.ReplicaRead = replicaReadType.IsFollowerRead()
+	req.ReplicaReadType = replicaReadType
+}
+
 // GetReplicaReadSeed returns ReplicaReadSeed pointer.
 func (req *Request) GetReplicaReadSeed() *uint32 {
 	if req != nil {

@@ -468,7 +468,7 @@ func (s *replicaSelectorV2) onFlashbackInProgress(ctx *RPCContext, req *tikvrpc.
 		req.BusyThresholdMs = 0
 		s.busyThreshold = 0
 		s.replicaReadType = kv.ReplicaReadLeader
-		req.ReplicaReadType = kv.ReplicaReadLeader
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
 		return true
 	}
 	return false

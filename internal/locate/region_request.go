@@ -2717,7 +2717,7 @@ func (s *RegionRequestSender) onFlashbackInProgressRegionError(ctx *RPCContext, 
 		}
 		if req.ReplicaReadType.IsFollowerRead() {
 			s.replicaSelector = nil
-			req.ReplicaReadType = kv.ReplicaReadLeader
+			req.SetReplicaReadType(kv.ReplicaReadLeader)
 			return true
 		}
 	case *replicaSelectorV2:
