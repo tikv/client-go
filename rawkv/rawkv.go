@@ -48,6 +48,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
@@ -689,7 +690,7 @@ func (c *Client) CompareAndSwap(ctx context.Context, key, previousValue, newValu
 
 func (c *Client) sendReq(ctx context.Context, key []byte, req *tikvrpc.Request, reverse bool) (*tikvrpc.Response, *locate.KeyLocation, error) {
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	for {
 		var loc *locate.KeyLocation
 		var err error
@@ -786,7 +787,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *raw
 		})
 	}
 
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
 
@@ -836,7 +837,7 @@ func (c *Client) doBatchReq(bo *retry.Backoffer, batch kvrpc.Batch, options *raw
 // TODO: Is there any better way to avoid duplicating code with func `sendReq` ?
 func (c *Client) sendDeleteRangeReq(ctx context.Context, startKey []byte, endKey []byte, opts *rawOptions) (*tikvrpc.Response, []byte, error) {
 	bo := retry.NewBackofferWithVars(ctx, rawkvMaxBackoff, nil)
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	for {
 		loc, err := c.regionCache.LocateKey(bo, startKey)
 		if err != nil {
@@ -938,7 +939,7 @@ func (c *Client) doBatchPut(bo *retry.Backoffer, batch kvrpc.Batch, opts *rawOpt
 			Ttl:    ttl,
 		})
 
-	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient)
+	sender := locate.NewRegionRequestSender(c.regionCache, c.rpcClient, oracle.NoopReadTSValidator{})
 	req.MaxExecutionDurationMs = uint64(client.MaxWriteExecutionTime.Milliseconds())
 	req.ApiVersion = c.apiVersion
 	resp, _, err := sender.SendReq(bo, req, batch.RegionID, client.ReadTimeoutShort)
