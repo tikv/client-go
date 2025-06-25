@@ -87,7 +87,7 @@ type Config struct {
 	// the "zone" label of the tidb instance. It is used to determine whether a request involves cross AZ traffic, etc.
 	//
 	// NOTE: The value of "TxnScope" is also the "zone" label, but since the feaute "txn-scope" is to be deprecated
-	//       (See: https://github.com/pingcap/tidb/issues/58838), we use an separate field to make its meaning clearer.
+	//       (See: https://github.com/pingcap/tidb/issues/58838), we use a separate field to make its meaning clearer.
 	ZoneLabel string
 }
 
