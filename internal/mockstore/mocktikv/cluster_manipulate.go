@@ -61,10 +61,6 @@ func BootstrapWithMultiStores(cluster *Cluster, n int) (storeIDs, peerIDs []uint
 				Key:   "id",
 				Value: fmt.Sprintf("%v", storeID),
 			},
-			{
-				Key:   "zone",
-				Value: fmt.Sprintf("zone%d", storeID),
-			},
 		}
 		cluster.AddStore(storeID, fmt.Sprintf("store%d", storeID), labels...)
 	}

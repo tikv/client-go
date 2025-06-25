@@ -1655,26 +1655,28 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 		return int(*m.Counter.Value + 0.000001) // round to int and avoid floating point precision issues
 	}
 
-	// try set the global config zone label to the first store's zone.
-	var localZone string
-	for _, label := range s.cluster.GetStore(s.storeIDs[0]).Labels {
-		if label.Key == "zone" {
-			localZone = label.Value
-			break
-		}
-	}
-	if localZone != "" {
-		var oldZoneLabel string
-		config.UpdateGlobal(func(cfg *config.Config) {
-			oldZoneLabel = cfg.ZoneLabel
-			cfg.ZoneLabel = localZone
+	// set the "zone" label for all stores.
+	for _, storeID := range s.storeIDs {
+		s.cluster.UpdateStoreLabels(storeID, []*metapb.StoreLabel{
+			{
+				Key:   "zone",
+				Value: fmt.Sprintf("zone%d", storeID),
+			},
 		})
-		defer func() {
-			config.UpdateGlobal(func(cfg *config.Config) {
-				cfg.ZoneLabel = oldZoneLabel
-			})
-		}()
 	}
+
+	// set the global config zone label to the first store's zone.
+	localZone := fmt.Sprintf("zone%d", s.storeIDs[0])
+	var oldZoneLabel string
+	config.UpdateGlobal(func(cfg *config.Config) {
+		oldZoneLabel = cfg.ZoneLabel
+		cfg.ZoneLabel = localZone
+	})
+	defer func() {
+		config.UpdateGlobal(func(cfg *config.Config) {
+			cfg.ZoneLabel = oldZoneLabel
+		})
+	}()
 
 	for _, staleReadHit := range []bool{false, true} {
 		for _, asyncReq := range []bool{false, true} {
