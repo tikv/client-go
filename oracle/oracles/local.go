@@ -144,3 +144,8 @@ func (l *localOracle) SetExternalTimestamp(ctx context.Context, newTimestamp uin
 func (l *localOracle) GetExternalTimestamp(ctx context.Context) (uint64, error) {
 	return l.getExternalTimestamp(ctx)
 }
+
+func (l *localOracle) ValidateReadTS(ctx context.Context, readTS uint64, isStaleRead bool, opt *oracle.Option) error {
+	// local oracle is not supposed to be used
+	return nil
+}

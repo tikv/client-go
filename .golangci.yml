@@ -4,6 +4,7 @@ linters:
   disable-all: true
   enable:
     - bodyclose
+    #- depguard
     - exportloopref
     - gofmt
     - goimports
