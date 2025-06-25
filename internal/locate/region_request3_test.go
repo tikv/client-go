@@ -53,6 +53,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/suite"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
@@ -1652,6 +1653,27 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadMetrics() {
 		var m dto.Metric
 		s.Nil((<-ch).Write(&m))
 		return int(*m.Counter.Value + 0.000001) // round to int and avoid floating point precision issues
+	}
+
+	// try set the global config zone label to the first store's zone.
+	var localZone string
+	for _, label := range s.cluster.GetStore(s.storeIDs[0]).Labels {
+		if label.Key == "zone" {
+			localZone = label.Value
+			break
+		}
+	}
+	if localZone != "" {
+		var oldZoneLabel string
+		config.UpdateGlobal(func(cfg *config.Config) {
+			oldZoneLabel = cfg.ZoneLabel
+			cfg.ZoneLabel = localZone
+		})
+		defer func() {
+			config.UpdateGlobal(func(cfg *config.Config) {
+				cfg.ZoneLabel = oldZoneLabel
+			})
+		}()
 	}
 
 	for _, staleReadHit := range []bool{false, true} {
