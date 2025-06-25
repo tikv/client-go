@@ -82,6 +82,11 @@ type Config struct {
 	RegionsRefreshInterval uint64
 	// EnablePreload indicates whether to preload region info when initializing the client.
 	EnablePreload bool
+	// the "zone" label of the tidb instance. It is used to determine whether a request involves cross AZ traffic, etc.
+	//
+	// NOTE: The value of "TxnScope" is also the "zone" label, but since the feaute "txn-scope" is to be deprecated
+	//       (See: https://github.com/pingcap/tidb/issues/58838), we use a separate field to make its meaning clearer.
+	ZoneLabel string
 }
 
 // DefaultConfig returns the default configuration.
@@ -99,6 +104,7 @@ func DefaultConfig() Config {
 		TxnScope:              "",
 		EnableAsyncCommit:     false,
 		Enable1PC:             false,
+		ZoneLabel:             "",
 	}
 }
 

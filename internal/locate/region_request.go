@@ -55,6 +55,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -847,7 +848,13 @@ func (s *RegionRequestSender) SendReqCtx(
 		// txn relative tikv request.
 		// note: MPP not use this path. need specified in the MPP layer.
 		patchAccessLocation := func() {
-			if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
+			// set access location based on source and target "zone" label.
+			selfZoneLabel := config.GetGlobalConfig().ZoneLabel
+			targetZoneLabel, _ := s.replicaSelector.target.store.GetLabelValue(DCLabelKey)
+			// if either "zone" label is "", we actually don't know if it involves cross AZ traffic.
+			if selfZoneLabel == "" || targetZoneLabel == "" {
+				req.AccessLocation = kv.AccessUnknown
+			} else if selfZoneLabel == targetZoneLabel {
 				req.AccessLocation = kv.AccessLocalZone
 			} else {
 				req.AccessLocation = kv.AccessCrossZone
