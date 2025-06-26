@@ -139,7 +139,7 @@ func (s *KVSnapshot) tryBatchGetSingleRegionUsingAsyncAPI(
 		if op != nil {
 			ops = append(ops, op)
 		}
-		req.ReplicaReadType = readType
+		req.SetReplicaReadType(readType)
 	}
 
 	onResp := func(resp *tikvrpc.ResponseExt, err error) {
@@ -271,7 +271,7 @@ func (s *KVSnapshot) retryBatchGetSingleRegionAfterAsyncAPI(
 			if op != nil {
 				ops = append(ops, op)
 			}
-			req.ReplicaReadType = readType
+			req.SetReplicaReadType(readType)
 		}
 		resp, _, _, err := cli.SendReqCtx(bo, req, batch.region, timeout, tikvrpc.TiKV, "", ops...)
 		if err != nil {
