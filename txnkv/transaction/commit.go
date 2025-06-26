@@ -248,7 +248,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 }
 
 func (actionCommit) isInterruptable() bool {
-	return true
+	return false
 }
 
 func (c *twoPhaseCommitter) commitMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
