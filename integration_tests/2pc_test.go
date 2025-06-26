@@ -2707,8 +2707,8 @@ func (s *testCommitterSuite) TestKillSignal() {
 	s.ErrorContains(err, "query interrupted")
 }
 
-func (s *testCommitterSuite) TestRollbackOnKill() {
-	s.Run("PrewriteLock", func() {
+func (s *testCommitterSuite) TestUninterruptableAction() {
+	s.Run("Cleanup", func() {
 		var killed uint32 = 0
 		txn := s.begin()
 		txn.SetVars(kv.NewVariables(&killed))
@@ -2721,7 +2721,7 @@ func (s *testCommitterSuite) TestRollbackOnKill() {
 		atomic.StoreUint32(&killed, 2)
 		s.NoError(committer.CleanupMutations(context.Background()))
 	})
-	s.Run("PessimisticLock", func() {
+	s.Run("PessimisticRollback", func() {
 		var killed uint32 = 0
 		txn := s.begin()
 		txn.SetVars(kv.NewVariables(&killed))
@@ -2732,6 +2732,22 @@ func (s *testCommitterSuite) TestRollbackOnKill() {
 		committer, err := txn.NewCommitter(0)
 		s.NoError(err)
 		s.NoError(committer.PessimisticRollbackMutations(context.Background(), committer.GetMutations()))
+	})
+	s.Run("Commit", func() {
+		var killed uint32 = 0
+		txn := s.begin()
+		txn.SetVars(kv.NewVariables(&killed))
+		err := txn.Set([]byte("k1"), []byte("v1"))
+		s.NoError(err)
+		committer, err := txn.NewCommitter(0)
+		s.NoError(err)
+		err = committer.PrewriteAllMutations(context.Background())
+		s.NoError(err)
+		atomic.StoreUint32(&killed, 2)
+		commitTS, err := s.store.GetOracle().GetTimestamp(context.Background(), &oracle.Option{})
+		s.NoError(err)
+		committer.SetCommitTS(commitTS)
+		s.NoError(committer.CommitMutations(context.Background()))
 	})
 }
 
