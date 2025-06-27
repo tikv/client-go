@@ -493,6 +493,10 @@ func (action actionPrewrite) handleSingleBatch(
 	}
 }
 
+func (actionPrewrite) isInterruptible() bool {
+	return true
+}
+
 func (c *twoPhaseCommitter) prewriteMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("twoPhaseCommitter.prewriteMutations", opentracing.ChildOf(span.Context()))
