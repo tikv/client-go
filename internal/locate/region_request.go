@@ -912,7 +912,7 @@ func (s *sendReqState) next() (done bool) {
 	bo, req := s.args.bo, s.args.req
 
 	// check whether the session/query is killed during the Next()
-	if req.IsInterruptable() {
+	if req.IsInterruptible() {
 		if err := bo.CheckKilled(); err != nil {
 			s.vars.resp, s.vars.err = nil, err
 			return true

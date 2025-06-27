@@ -284,7 +284,7 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	}
 }
 
-func (actionPipelinedFlush) isInterruptable() bool {
+func (actionPipelinedFlush) isInterruptible() bool {
 	return true
 }
 

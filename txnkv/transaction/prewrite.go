@@ -282,7 +282,7 @@ func (action actionPrewrite) handleSingleBatchFailpoint(c *twoPhaseCommitter, bo
 	return nil
 }
 
-func (actionPrewrite) isInterruptable() bool {
+func (actionPrewrite) isInterruptible() bool {
 	return true
 }
 

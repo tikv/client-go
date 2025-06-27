@@ -2707,7 +2707,7 @@ func (s *testCommitterSuite) TestKillSignal() {
 	s.ErrorContains(err, "query interrupted")
 }
 
-func (s *testCommitterSuite) TestUninterruptableAction() {
+func (s *testCommitterSuite) TestUninterruptibleAction() {
 	s.Run("Cleanup", func() {
 		var killed uint32 = 0
 		txn := s.begin()

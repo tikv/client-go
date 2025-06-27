@@ -75,7 +75,7 @@ const slowRequestThreshold = time.Minute
 type twoPhaseCommitAction interface {
 	handleSingleBatch(*twoPhaseCommitter, *retry.Backoffer, batchMutations) error
 	tiKVTxnRegionsNumHistogram() prometheus.Observer
-	isInterruptable() bool
+	isInterruptible() bool
 	String() string
 }
 
@@ -1071,9 +1071,9 @@ func (c *twoPhaseCommitter) doActionOnBatches(
 	if c.txn != nil && c.txn.vars != nil && c.txn.vars.Killed != nil {
 		// Do not reset the killed flag here. Let the upper layer reset the flag.
 		// Before it resets, any request is considered valid to be killed if the
-		// corresponding action is interruptable.
+		// corresponding action is interruptible.
 		status := atomic.LoadUint32(c.txn.vars.Killed)
-		if status != 0 && action.isInterruptable() {
+		if status != 0 && action.isInterruptible() {
 			logutil.BgLogger().Info(
 				"query is killed", zap.Uint32(
 					"signal",

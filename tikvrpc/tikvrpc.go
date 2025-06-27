@@ -340,8 +340,8 @@ func (req *Request) IsDebugReq() bool {
 	return false
 }
 
-// IsInterruptable checks if the request can be interrupted when the query is killed.
-func (req *Request) IsInterruptable() bool {
+// IsInterruptible checks if the request can be interrupted when the query is killed.
+func (req *Request) IsInterruptible() bool {
 	switch req.Type {
 	case CmdPessimisticRollback, CmdBatchRollback, CmdCommit:
 		return false

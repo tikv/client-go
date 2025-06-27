@@ -525,7 +525,7 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	return true, nil
 }
 
-func (actionPessimisticLock) isInterruptable() bool {
+func (actionPessimisticLock) isInterruptible() bool {
 	return true
 }
 
@@ -564,7 +564,7 @@ func (actionPessimisticRollback) handleSingleBatch(
 	return nil
 }
 
-func (actionPessimisticRollback) isInterruptable() bool {
+func (actionPessimisticRollback) isInterruptible() bool {
 	return false
 }
 

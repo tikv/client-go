@@ -103,7 +103,7 @@ func (action actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Ba
 	return nil
 }
 
-func (actionCleanup) isInterruptable() bool {
+func (actionCleanup) isInterruptible() bool {
 	return false
 }
 

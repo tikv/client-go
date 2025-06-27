@@ -247,7 +247,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 	return nil
 }
 
-func (actionCommit) isInterruptable() bool {
+func (actionCommit) isInterruptible() bool {
 	return false
 }
 
