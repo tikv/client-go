@@ -340,6 +340,16 @@ func (req *Request) IsDebugReq() bool {
 	return false
 }
 
+// IsInterruptible checks if the request can be interrupted when the query is killed.
+func (req *Request) IsInterruptible() bool {
+	switch req.Type {
+	case CmdPessimisticRollback, CmdBatchRollback, CmdCommit:
+		return false
+	default:
+		return true
+	}
+}
+
 // Get returns GetRequest in request.
 func (req *Request) Get() *kvrpcpb.GetRequest {
 	return req.Req.(*kvrpcpb.GetRequest)

@@ -525,6 +525,10 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	return true, nil
 }
 
+func (actionPessimisticLock) isInterruptible() bool {
+	return true
+}
+
 func (actionPessimisticRollback) handleSingleBatch(
 	c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations,
 ) error {
@@ -558,6 +562,10 @@ func (actionPessimisticRollback) handleSingleBatch(
 		return c.pessimisticRollbackMutations(bo, batch.mutations)
 	}
 	return nil
+}
+
+func (actionPessimisticRollback) isInterruptible() bool {
+	return false
 }
 
 func (c *twoPhaseCommitter) pessimisticLockMutations(
