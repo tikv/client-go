@@ -404,6 +404,7 @@ func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int) []*pd.Region {
 			Meta:      proto.Clone(region.Meta).(*metapb.Region),
 			Leader:    leader,
 			DownPeers: c.getDownPeers(region),
+			Buckets:   proto.Clone(region.Buckets).(*metapb.Buckets),
 		}
 		result = append(result, r)
 	}
