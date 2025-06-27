@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/resourcecontrol"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -90,12 +89,6 @@ func (r interceptedClient) SendRequest(ctx context.Context, addr string, req *ti
 }
 
 func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
-	cli, ok := r.Client.(ClientAsync)
-	if !ok {
-		cb.Invoke(nil, errors.Errorf("%T dose not implement ClientAsync interface", r.Client))
-		return
-	}
-
 	// since all async requests processed by one runloop share the same resource group, if the quota is exceeded, all
 	// requests/responses shall wait for the tokens, thus it's ok to call OnRequestWait/OnResponseWait synchronously.
 	resourceGroupName, resourceControlInterceptor, reqInfo := getResourceControlInfo(ctx, req)
@@ -136,11 +129,11 @@ func (r interceptedClient) SendRequestAsync(ctx context.Context, addr string, re
 	}
 
 	if ctxInterceptor := interceptor.GetRPCInterceptorFromCtx(ctx); ctxInterceptor != nil {
-		// TODO(zyguan): AsyncRPCInterceptor
+		// TODO(zyguan): support AsyncRPCInterceptor
 		logutil.Logger(ctx).Warn("SendRequestAsync with interceptor is unsupported")
 	}
 
-	cli.SendRequestAsync(ctx, addr, req, cb)
+	r.Client.SendRequestAsync(ctx, addr, req, cb)
 }
 
 var (

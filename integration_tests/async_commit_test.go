@@ -58,6 +58,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 func TestAsyncCommit(t *testing.T) {
@@ -75,6 +76,12 @@ type testAsyncCommitCommon struct {
 // TODO(youjiali1995): remove it after updating TiDB.
 type unistoreClientWrapper struct {
 	*unistore.RPCClient
+}
+
+func (c *unistoreClientWrapper) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	go func() {
+		cb.Schedule(c.RPCClient.SendRequest(ctx, addr, req, tikv.ReadTimeoutShort))
+	}()
 }
 
 func (c *unistoreClientWrapper) SetEventListener(listener tikv.ClientEventListener) {}
