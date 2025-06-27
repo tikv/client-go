@@ -232,6 +232,10 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 	return nil
 }
 
+func (actionCommit) isInterruptible() bool {
+	return false
+}
+
 func (c *twoPhaseCommitter) commitMutations(bo *retry.Backoffer, mutations CommitterMutations) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("twoPhaseCommitter.commitMutations", opentracing.ChildOf(span.Context()))
