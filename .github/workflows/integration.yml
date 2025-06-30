@@ -40,7 +40,6 @@ jobs:
 
   integration-tikv:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -75,7 +74,7 @@ jobs:
         working-directory: integration_tests
 
       - name: Test
-        run: echo "::warning ::intergation-tikv is not stable, please run it locally"
+        run: go test --with-tikv
         working-directory: integration_tests
 
   integration-raw-tikv:
