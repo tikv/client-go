@@ -24,7 +24,6 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
-	"github.com/tikv/pd/client/resource_group/controller"
 	"go.uber.org/zap"
 )
 
@@ -37,8 +36,6 @@ type RequestInfo struct {
 	writeBytes    int64
 	storeID       uint64
 	replicaNumber int64
-	requestSize   uint64
-	accessType    controller.AccessLocationType
 	// bypass indicates whether the request should be bypassed.
 	// some internal request should be bypassed, such as Privilege request.
 	bypass bool
@@ -107,14 +104,6 @@ func (req *RequestInfo) StoreID() uint64 {
 	return req.storeID
 }
 
-func (req *RequestInfo) RequestSize() uint64 {
-	return req.requestSize
-}
-
-func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
-	return req.accessType
-}
-
 // ResponseInfo contains information about a response that is able to calculate the RU cost
 // after the response is received. Specifically, the read bytes RU cost of a read request
 // could be calculated by its response size, and the KV CPU time RU cost of a request could
@@ -122,7 +111,6 @@ func (req *RequestInfo) AccessLocationType() controller.AccessLocationType {
 type ResponseInfo struct {
 	readBytes uint64
 	kvCPU     time.Duration
-	respSize  uint64
 }
 
 // MakeResponseInfo extracts the relevant information from a BatchResponse.
@@ -197,8 +185,4 @@ func (res *ResponseInfo) KVCPU() time.Duration {
 // Todo: to fit https://github.com/tikv/pd/pull/5941
 func (res *ResponseInfo) Succeed() bool {
 	return true
-}
-
-func (res *ResponseInfo) ResponseSize() uint64 {
-	return res.respSize
 }

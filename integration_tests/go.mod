@@ -8,13 +8,13 @@ require (
 	github.com/ninedraft/israce v0.0.3
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20250616075548-d951fb623bb3
+	github.com/pingcap/kvproto v0.0.0-20250521074834-db74bf0e3ac1
 	github.com/pingcap/tidb v1.1.0-beta.0.20231025055903-f3dfd896b5e6
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/gjson v1.14.1
 	github.com/tikv/client-go/v2 v2.0.8-0.20250331090556-cb0dc9a7b339
-	github.com/tikv/pd/client v0.0.0-20250627094706-de8c69d81d3a
+	github.com/tikv/pd/client v0.0.0-20250618095709-971fc9a80727
 	go.uber.org/goleak v1.3.0
 )
 

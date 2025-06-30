@@ -92,11 +92,3 @@ func (r ReplicaReadType) String() string {
 		return fmt.Sprintf("unknown-%v", byte(r))
 	}
 }
-
-type AccessLocationType byte
-
-const (
-	AccessUnknown AccessLocationType = iota
-	AccessLocalZone
-	AccessCrossZone
-)
