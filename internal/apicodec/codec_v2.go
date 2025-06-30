@@ -941,6 +941,13 @@ func (c *codecV2) decodeKeyError(keyError *kvrpcpb.KeyError) (*kvrpcpb.KeyError,
 			return nil, err
 		}
 	}
+	if keyError.PrimaryMismatch != nil {
+		keyError.PrimaryMismatch.LockInfo, err = c.decodeLockInfo(keyError.PrimaryMismatch.LockInfo)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return keyError, nil
 }
 
