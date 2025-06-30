@@ -2316,7 +2316,7 @@ func (s *RegionRequestSender) onRegionError(
 			}
 			if req.ReplicaReadType.IsFollowerRead() {
 				s.replicaSelector = nil
-				req.ReplicaReadType = kv.ReplicaReadLeader
+				req.SetReplicaReadType(kv.ReplicaReadLeader)
 				return true, nil
 			}
 		}

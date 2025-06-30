@@ -44,11 +44,14 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/error"
+	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
@@ -164,7 +167,7 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	s.Nil(err)
 
 	_, err = snapshot.Get(ctx, []byte("y"))
-	s.True(error.IsErrNotFound(err))
+	s.True(tikverr.IsErrNotFound(err))
 
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
 }
@@ -212,7 +215,7 @@ func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
 	txn1 := s.beginTxn()
 	// txn1 is not blocked by txn in the large txn protocol.
 	_, err = txn1.Get(ctx, x)
-	s.True(error.IsErrNotFound(err))
+	s.True(tikverr.IsErrNotFound(err))
 
 	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys([][]byte{x, y, []byte("z")}))
 	s.Nil(err)
@@ -244,7 +247,7 @@ func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
 	s.Equal(committer.GetPrimaryKey(), x)
 	// Point get secondary key. Shouldn't be blocked by the lock and read old data.
 	_, err = snapshot.Get(ctx, y)
-	s.True(error.IsErrNotFound(err))
+	s.True(tikverr.IsErrNotFound(err))
 	s.Less(time.Since(start), 500*time.Millisecond)
 
 	// Commit the primary key
@@ -387,5 +390,45 @@ func (s *testSnapshotSuite) TestRCRead() {
 
 		committer1.Cleanup(context.Background())
 		s.deleteKeys(keys)
+	}
+}
+
+func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
+	_, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
+	s.Nil(err)
+	for _, hit := range []bool{true, false} {
+		txn := s.beginTxn()
+
+		// check the replica read type
+		fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+			return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+				// when the request is fallback to leader read, the ReplicaRead should be false to avoid read-index in store.
+				s.Equal(hit, req.ReplicaRead)
+				if hit {
+					s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
+				} else {
+					s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+				}
+				return next(target, req)
+			}
+		}
+		txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("check-req", fn))
+
+		// set up the replica read and adaptive read
+		txn.GetSnapshot().SetReplicaRead(kv.ReplicaReadMixed)
+		txn.GetSnapshot().SetReplicaReadAdjuster(func(int) (tikv.StoreSelectorOption, kv.ReplicaReadType) {
+			if hit {
+				return tikv.WithMatchLabels([]*metapb.StoreLabel{
+					{
+						Key:   tikv.DCLabelKey,
+						Value: "dc1",
+					},
+				}), kv.ReplicaReadMixed
+			}
+			return nil, kv.ReplicaReadLeader
+		})
+		txn.Get(context.Background(), []byte("x"))
+		txn.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+		txn.Rollback()
 	}
 }
