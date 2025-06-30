@@ -1807,6 +1807,7 @@ func (c *RegionCache) scanRegions(bo *retry.Backoffer, startKey, endKey []byte, 
 			}
 		}
 		start := time.Now()
+		//nolint:staticcheck
 		regionsInfo, err := c.pdClient.ScanRegions(ctx, startKey, endKey, limit)
 		metrics.LoadRegionCacheHistogramWithRegions.Observe(time.Since(start).Seconds())
 		if err != nil {

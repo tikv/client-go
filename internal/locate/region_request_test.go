@@ -304,10 +304,6 @@ type mockTikvGrpcServer struct{}
 
 var _ tikvpb.TikvServer = &mockTikvGrpcServer{}
 
-func (s *mockTikvGrpcServer) DelegateCoprocessor(ctx context.Context, request *coprocessor.DelegateRequest) (*coprocessor.DelegateResponse, error) {
-	return nil, errors.New("unreachable")
-}
-
 // KvGet commands with mvcc/txn supported.
 func (s *mockTikvGrpcServer) KvGet(context.Context, *kvrpcpb.GetRequest) (*kvrpcpb.GetResponse, error) {
 	return nil, errors.New("unreachable")
