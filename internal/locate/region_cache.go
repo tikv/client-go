@@ -1052,6 +1052,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
+		logutil.Logger(bo.GetCtx()).Info("cachedRegion is invalid", zap.String("id", id.String()))
 		return nil, nil
 	}
 
@@ -1072,10 +1073,12 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		}
 		addr, err := c.getStoreAddr(bo, cachedRegion, store)
 		if err != nil {
+			logutil.Logger(bo.GetCtx()).Info("Fail to get store addr", zap.String("addr", store.GetAddr()), zap.String("id", id.String()))
 			return nil, err
 		}
 		if len(addr) == 0 {
 			cachedRegion.invalidate(StoreNotFound)
+			logutil.Logger(bo.GetCtx()).Info("address length is 0", zap.String("addr", store.GetAddr()), zap.String("id", id.String()))
 			return nil, nil
 		}
 		if store.getResolveState() == needCheck {
@@ -1107,6 +1110,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	}
 
 	cachedRegion.invalidate(Other)
+	logutil.Logger(bo.GetCtx()).Info("At the end", zap.Int64("access store num", int64(regionStore.accessStoreNum(tiFlashOnly))))
 	return nil, nil
 }
 
