@@ -46,6 +46,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/internal/mockstore/cluster"
+	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/pd/client/clients/router"
 	"github.com/tikv/pd/client/opt"
 )
@@ -376,6 +377,15 @@ func (c *Cluster) ScanRegions(startKey, endKey []byte, limit int, opts ...opt.Ge
 		})
 		if endPos > 0 {
 			regions = regions[:endPos]
+		}
+	}
+	if rid, err := util.EvalFailpoint("mockSplitRegionNotReportToPD"); err == nil {
+		notReportRegionID := uint64(rid.(int))
+		for i, r := range regions {
+			if r.Meta.Id == notReportRegionID {
+				regions = append(regions[:i], regions[i+1:]...)
+				break
+			}
 		}
 	}
 	if limit > 0 && len(regions) > limit {
