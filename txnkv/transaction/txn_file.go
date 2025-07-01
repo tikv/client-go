@@ -387,9 +387,7 @@ func (a txnFilePrewriteAction) String() string {
 	return "txnFilePrewrite"
 }
 
-type txnFileCommitAction struct {
-	commitTS uint64
-}
+type txnFileCommitAction struct{}
 
 var _ txnFileAction = (*txnFileCommitAction)(nil)
 
@@ -397,7 +395,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		Keys:          batch.getSampleKeys(), // To help detect duplicated request.
 		StartVersion:  c.startTS,
-		CommitVersion: a.commitTS,
+		CommitVersion: c.commitTS,
 		IsTxnFile:     true,
 	}, kvrpcpb.Context{
 		Priority:               c.priority,
@@ -607,7 +605,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{commitTS: c.commitTS})
+	err = c.executeTxnFileAction(commitBo, c.txnFileCtx.slice, txnFileCommitAction{})
 	stepDone("commit")
 	if err != nil {
 		return
