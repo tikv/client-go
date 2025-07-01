@@ -122,5 +122,6 @@ replace (
 	github.com/go-ldap/ldap/v3 => github.com/YangKeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	github.com/pingcap/tidb => github.com/oh-my-tidb/tidb v1.1.0-beta.0.20250617060139-449ec9142c87
 	github.com/pingcap/tidb/pkg/parser => github.com/oh-my-tidb/tidb/pkg/parser v0.0.0-20250617060139-449ec9142c87
+	github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20250701024007-b22e096997e0
 	github.com/tikv/client-go/v2 => ../
 )
