@@ -66,7 +66,6 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/client-go/v2/util/async"
-	"github.com/tikv/pd/client/errs"
 	pderr "github.com/tikv/pd/client/errs"
 )
 
@@ -482,8 +481,8 @@ func (s *RegionRequestSender) SendReqAsync(
 		return
 	}
 
-	if req.Context.MaxExecutionDurationMs == 0 {
-		req.Context.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
+	if req.MaxExecutionDurationMs == 0 {
+		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
 	}
 
 	s.reset()
@@ -989,7 +988,7 @@ func (s *sendReqState) next() (done bool) {
 	logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, s.args.regionID.id, s.vars.rpcCtx.Addr)
 	s.storeAddr = s.vars.rpcCtx.Addr
 
-	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
+	req.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
 	}
@@ -1240,7 +1239,7 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 
 	// set access location based on source and target "zone" label.
 	s.setReqAccessLocation(req)
-	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
+	req.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
 	}
@@ -1425,8 +1424,8 @@ func (s *RegionRequestSender) SendReqCtx(
 
 	// If the MaxExecutionDurationMs is not set yet, we set it to be the RPC timeout duration
 	// so TiKV can give up the requests whose response TiDB cannot receive due to timeout.
-	if req.Context.MaxExecutionDurationMs == 0 {
-		req.Context.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
+	if req.MaxExecutionDurationMs == 0 {
+		req.MaxExecutionDurationMs = uint64(timeout.Milliseconds())
 	}
 
 	state := &sendReqState{
@@ -1513,7 +1512,7 @@ func (s *RegionRequestSender) logSendReqError(bo *retry.Backoffer, msg string, r
 	builder.WriteString(", timeout: ")
 	builder.WriteString(util.FormatDuration(timeout))
 	builder.WriteString(", req-max-exec-timeout: ")
-	builder.WriteString(util.FormatDuration(time.Duration(int64(req.Context.MaxExecutionDurationMs) * int64(time.Millisecond))))
+	builder.WriteString(util.FormatDuration(time.Duration(int64(req.MaxExecutionDurationMs) * int64(time.Millisecond))))
 	builder.WriteString(", retry-times: ")
 	builder.WriteString(strconv.Itoa(retryTimes))
 	if s.AccessStats != nil {
@@ -1600,7 +1599,7 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 
 func isRPCError(err error) bool {
 	// exclude ErrClientResourceGroupThrottled
-	return err != nil && errs.ErrClientResourceGroupThrottled.NotEqual(err)
+	return err != nil && pderr.ErrClientResourceGroupThrottled.NotEqual(err)
 }
 
 func storeIDLabel(rpcCtx *RPCContext) string {

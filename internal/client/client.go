@@ -310,7 +310,7 @@ func (a *connArray) Init(addr string, security config.Security, idleNotify *uint
 	allowBatch := (cfg.TiKVClient.MaxBatchSize > 0) && enableBatch
 	if allowBatch {
 		a.batchConn = newBatchConn(uint(len(a.v)), cfg.TiKVClient.MaxBatchSize, idleNotify)
-		a.batchConn.initMetrics(a.target)
+		a.initMetrics(a.target)
 	}
 	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
 	for i := range a.v {
@@ -723,7 +723,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	// Put the lease object to the timeout channel, so it would be checked periodically.
 	copStream := resp.Resp.(*tikvrpc.CopStreamResponse)
 	copStream.Timeout = timeout
-	copStream.Lease.Cancel = cancel
+	copStream.Cancel = cancel
 	connArray.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -758,7 +758,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	// Put the lease object to the timeout channel, so it would be checked periodically.
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
-	copStream.Lease.Cancel = cancel
+	copStream.Cancel = cancel
 	connArray.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
@@ -792,7 +792,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	// Put the lease object to the timeout channel, so it would be checked periodically.
 	copStream := resp.Resp.(*tikvrpc.MPPStreamResponse)
 	copStream.Timeout = timeout
-	copStream.Lease.Cancel = cancel
+	copStream.Cancel = cancel
 	connArray.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.

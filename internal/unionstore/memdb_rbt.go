@@ -218,9 +218,9 @@ type rbtSnapshot struct {
 // NewSnapshotIterator wraps `RBT.SnapshotIterReverse` and `RBT.SnapshotIter` and cast the result into an `Iterator`.
 func (a *rbtSnapshot) NewSnapshotIterator(start, end []byte, reverse bool) Iterator {
 	if reverse {
-		return a.Snapshot.SnapshotIterReverse(start, end)
+		return a.SnapshotIterReverse(start, end)
 	} else {
-		return a.Snapshot.SnapshotIter(start, end)
+		return a.SnapshotIter(start, end)
 	}
 }
 

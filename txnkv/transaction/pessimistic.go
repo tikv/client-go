@@ -138,7 +138,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 		}, kvrpcpb.Context{
 			Priority:               c.priority,
 			SyncLog:                c.syncLog,
-			ResourceGroupTag:       action.LockCtx.ResourceGroupTag,
+			ResourceGroupTag:       action.ResourceGroupTag,
 			MaxExecutionDurationMs: uint64(client.MaxWriteExecutionTime.Milliseconds()),
 			RequestSource:          c.txn.GetRequestSource(),
 			ResourceControlContext: &kvrpcpb.ResourceControlContext{
@@ -146,8 +146,8 @@ func (action actionPessimisticLock) handleSingleBatch(
 			},
 		},
 	)
-	if action.LockCtx.ResourceGroupTag == nil && action.LockCtx.ResourceGroupTagger != nil {
-		req.ResourceGroupTag = action.LockCtx.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
+	if action.ResourceGroupTag == nil && action.ResourceGroupTagger != nil {
+		req.ResourceGroupTag = action.ResourceGroupTagger(req.Req.(*kvrpcpb.PessimisticLockRequest))
 	}
 	lockWaitStartTime := action.WaitStartTime
 	diagCtx := diagnosticContext{}
@@ -189,15 +189,16 @@ func (action actionPessimisticLock) handleSingleBatch(
 		resp, _, err := sender.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 		diagCtx.reqDuration = time.Since(startTime)
 		diagCtx.sender = sender
-		if action.LockCtx.Stats != nil {
-			atomic.AddInt64(&action.LockCtx.Stats.LockRPCTime, int64(diagCtx.reqDuration))
-			atomic.AddInt64(&action.LockCtx.Stats.LockRPCCount, 1)
+		if action.Stats != nil {
+			atomic.AddInt64(&action.Stats.LockRPCTime, int64(diagCtx.reqDuration))
+			atomic.AddInt64(&action.Stats.LockRPCCount, 1)
 		}
 		if err != nil {
 			return err
 		}
 
-		if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal {
+		switch action.wakeUpMode {
+		case kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeNormal:
 			finished, err := action.handlePessimisticLockResponseNormalMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -205,7 +206,7 @@ func (action actionPessimisticLock) handleSingleBatch(
 			if finished {
 				return nil
 			}
-		} else if action.wakeUpMode == kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock {
+		case kvrpcpb.PessimisticLockWakeUpMode_WakeUpModeForceLock:
 			finished, err := action.handlePessimisticLockResponseForceLockMode(c, bo, &batch, mutations, resp, &diagCtx)
 			if err != nil {
 				return err
@@ -295,8 +296,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 	keyErrs := lockResp.GetErrors()
 	if len(keyErrs) == 0 {
 
-		if action.LockCtx.Stats != nil {
-			action.LockCtx.Stats.MergeReqDetails(
+		if action.Stats != nil {
+			action.Stats.MergeReqDetails(
 				diagCtx.reqDuration,
 				batch.region.GetID(),
 				diagCtx.sender.GetStoreAddr(),
@@ -354,8 +355,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseNormalMode(
 		Locks:                    locks,
 		PessimisticRegionResolve: true,
 	}
-	if action.LockCtx.Stats != nil {
-		resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
+	if action.Stats != nil {
+		resolveLockOpts.Detail = &action.Stats.ResolveLock
 	}
 	resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 	if err != nil {
@@ -446,8 +447,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 	}
 
 	if len(lockResp.Results) > 0 && !isMutationFailed {
-		if action.LockCtx.Stats != nil {
-			action.LockCtx.Stats.MergeReqDetails(
+		if action.Stats != nil {
+			action.Stats.MergeReqDetails(
 				diagCtx.reqDuration,
 				batch.region.GetID(),
 				diagCtx.sender.GetStoreAddr(),
@@ -480,8 +481,8 @@ func (action actionPessimisticLock) handlePessimisticLockResponseForceLockMode(
 				Locks:                    locks,
 				PessimisticRegionResolve: true,
 			}
-			if action.LockCtx.Stats != nil {
-				resolveLockOpts.Detail = &action.LockCtx.Stats.ResolveLock
+			if action.Stats != nil {
+				resolveLockOpts.Detail = &action.Stats.ResolveLock
 			}
 			resolveLockRes, err := c.store.GetLockResolver().ResolveLocksWithOpts(bo, resolveLockOpts)
 			if err != nil {
@@ -578,14 +579,15 @@ func (c *twoPhaseCommitter) pessimisticLockMutations(
 			// `return("delay,fail")`. Then they will be executed sequentially at once.
 			if v, ok := val.(string); ok {
 				for _, action := range strings.Split(v, ",") {
-					if action == "delay" {
+					switch action {
+					case "delay":
 						duration := time.Duration(rand.Int63n(int64(time.Second) * 5))
 						logutil.Logger(bo.GetCtx()).Info(
 							"[failpoint] injected delay at pessimistic lock",
 							zap.Uint64("txnStartTS", c.startTS), zap.Duration("duration", duration),
 						)
 						time.Sleep(duration)
-					} else if action == "fail" {
+					case "fail":
 						logutil.Logger(bo.GetCtx()).Info(
 							"[failpoint] injected failure at pessimistic lock",
 							zap.Uint64("txnStartTS", c.startTS),
