@@ -107,7 +107,10 @@ type TiKVClient struct {
 	TxnFileMinMutationSize uint64 `toml:"txn-file-min-mutation-size" json:"txn-file-min-mutation-size"`
 	// TxnFileRUDiscountRatio is the discount ratio of resource unit for file-based txn.
 	// Will be ignored if it's <= 0 or >= 1.
-	TxnFileRUDiscountRatio float64
+	TxnFileRUDiscountRatio float64 `toml:"txn-file-ru-discount-ratio" json:"txn-file-ru-discount-ratio"`
+	// TxnFileRequestSourceWhitelist is the whitelist of request source types (RequestSource.RequestSourceType) that can use file-based txn.
+	// For internal requests only. External requests can always use file-based txn.
+	TxnFileRequestSourceWhitelist []string `toml:"txn-file-request-source-whitelist" json:"txn-file-request-source-whitelist"`
 }
 
 // AsyncCommit is the config for the async commit feature. The switch to enable it is a system variable.
@@ -184,6 +187,9 @@ func DefaultTiKVClient() TiKVClient {
 		TxnChunkMaxSize:           128 * 1024 * 1024,
 		TxnFileMinMutationSize:    16 * 1024 * 1024,
 		TxnFileRUDiscountRatio:    0.125, // filed-based txn costs 1/8 RU of normal txn.
+		TxnFileRequestSourceWhitelist: []string{
+			"ddl_modify_column",
+		},
 	}
 }
 

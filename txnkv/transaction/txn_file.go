@@ -23,6 +23,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -933,15 +934,36 @@ func (c *twoPhaseCommitter) useTxnFile(ctx context.Context) (bool, error) {
 	if minMutationSize == 0 {
 		minMutationSize = conf.TiKVClient.TxnFileMinMutationSize
 	}
-	// Don't use txn file for internal request to avoid affect system tables or metadata before it is stable enough.
-	// TODO: use txn file for internal TTL & DDL tasks.
+	if c.txn.isInternal() {
+		// Relax the requirement for internal requests.
+		minMutationSize = minMutationSize / 2
+	}
+
 	if c.txn.isPessimistic ||
-		c.txn.isInternal() ||
 		len(conf.TiKVClient.TxnChunkWriterAddr) == 0 ||
-		uint64(c.txn.GetMemBuffer().Size()) < minMutationSize {
+		uint64(c.txn.GetMemBuffer().Size()) < minMutationSize ||
+		!IsRequestSourceUseTxnFile(c.txn.RequestSource, conf) {
 		return false, nil
 	}
+
+	logutil.Logger(ctx).Debug("transaction use txn file",
+		zap.Uint64("startTS", c.startTS),
+		zap.Int("size", c.txn.GetMemBuffer().Size()),
+		zap.Int("len", c.mutations.Len()),
+		zap.String("reqSource", c.txn.GetRequestSource()),
+	)
 	return true, nil
+}
+
+// IsRequestSourceUseTxnFile checks if the request source is allowed to use file-based txn on the configuration.
+func IsRequestSourceUseTxnFile(reqSource *util.RequestSource, conf *config.Config) bool {
+	if reqSource.RequestSourceInternal {
+		return slices.Contains(
+			conf.TiKVClient.TxnFileRequestSourceWhitelist,
+			reqSource.RequestSourceType,
+		)
+	}
+	return true
 }
 
 func (c *twoPhaseCommitter) preSplitTxnFileRegions(bo *retry.Backoffer) error {
