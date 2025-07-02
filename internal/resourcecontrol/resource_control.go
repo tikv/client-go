@@ -41,7 +41,7 @@ type RequestInfo struct {
 // MakeRequestInfo extracts the relevant information from a BatchRequest.
 func MakeRequestInfo(req *tikvrpc.Request) *RequestInfo {
 	var bypass bool
-	requestSource := req.Context.GetRequestSource()
+	requestSource := req.GetRequestSource()
 	if len(requestSource) > 0 {
 		if strings.Contains(requestSource, util.InternalRequestPrefix+util.InternalTxnOthers) {
 			bypass = true
@@ -125,8 +125,8 @@ func MakeResponseInfo(resp *tikvrpc.Response) *ResponseInfo {
 	case *tikvrpc.CopStreamResponse:
 		// Streaming request returns `io.EOF``, so the first `CopStreamResponse.Response`` may be nil.
 		if r.Response != nil {
-			detailsV2 = r.Response.GetExecDetailsV2()
-			details = r.Response.GetExecDetails()
+			detailsV2 = r.GetExecDetailsV2()
+			details = r.GetExecDetails()
 		}
 		readBytes = uint64(r.Data.Size())
 	case *kvrpcpb.GetResponse:

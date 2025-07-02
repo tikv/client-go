@@ -100,15 +100,15 @@ func setAPICtx(c Codec, r *tikvrpc.Request) {
 		mpp := *r.DispatchMPPTask()
 		// Shallow copy the meta to avoid concurrent modification.
 		meta := *mpp.Meta
-		meta.KeyspaceId = r.Context.KeyspaceId
-		meta.ApiVersion = r.Context.ApiVersion
+		meta.KeyspaceId = r.KeyspaceId
+		meta.ApiVersion = r.ApiVersion
 		mpp.Meta = &meta
 		r.Req = &mpp
 
 	case tikvrpc.CmdCompact:
 		compact := *r.Compact()
-		compact.KeyspaceId = r.Context.KeyspaceId
-		compact.ApiVersion = r.Context.ApiVersion
+		compact.KeyspaceId = r.KeyspaceId
+		compact.ApiVersion = r.ApiVersion
 		r.Req = &compact
 	}
 }

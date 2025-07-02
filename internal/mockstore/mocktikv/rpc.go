@@ -773,7 +773,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
 			switch val.(string) {
 			case "true":
-				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+				if req.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
 						Resp: &kvrpcpb.PrewriteResponse{
 							RegionError: &errorpb.Error{
@@ -818,7 +818,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		if val, err := util.EvalFailpoint("rpcAllowedOnAlmostFull"); err == nil {
 			switch val.(string) {
 			case "true":
-				if req.Context.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
+				if req.DiskFullOpt != kvrpcpb.DiskFullOpt_AllowedOnAlmostFull {
 					return &tikvrpc.Response{
 						Resp: &kvrpcpb.CommitResponse{
 							RegionError: &errorpb.Error{

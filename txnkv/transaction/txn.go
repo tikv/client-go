@@ -513,13 +513,13 @@ func (txn *KVTxn) InitPipelinedMemDB() error {
 	pipelinedMemDB := unionstore.NewPipelinedMemDB(func(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
 		return txn.snapshot.BatchGetWithTier(ctx, keys, txnsnapshot.BatchGetBufferTier)
 	}, func(generation uint64, memdb *unionstore.MemDB) (err error) {
-		if atomic.LoadUint32((*uint32)(&txn.committer.ttlManager.state)) == uint32(stateClosed) {
+		if atomic.LoadUint32((*uint32)(&txn.committer.state)) == uint32(stateClosed) {
 			return errors.New("ttl manager is closed")
 		}
 		startTime := time.Now()
 		defer func() {
 			if err != nil {
-				txn.committer.ttlManager.close()
+				txn.committer.close()
 			}
 			flushedKeys += memdb.Len()
 			flushedSize += memdb.Size()
@@ -717,7 +717,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 	committer.SetTxnSource(txn.txnSource)
 	txn.committer.forUpdateTSConstraints = txn.forUpdateTSChecks
 
-	defer committer.ttlManager.close()
+	defer committer.close()
 
 	if !txn.isPipelined {
 		initRegion := trace.StartRegion(ctx, "InitKeys")
@@ -829,7 +829,7 @@ func (txn *KVTxn) Rollback() error {
 		if !skipPessimisticRollback {
 			err = txn.rollbackPessimisticLocks()
 		}
-		txn.committer.ttlManager.close()
+		txn.committer.close()
 		if err != nil {
 			logutil.BgLogger().Error(err.Error())
 		}
@@ -838,7 +838,7 @@ func (txn *KVTxn) Rollback() error {
 		// wait all flush to finish, this avoids data race.
 		txn.pipelinedCancel()
 		txn.GetMemBuffer().FlushWait()
-		txn.committer.ttlManager.close()
+		txn.committer.close()
 		// no need to clean up locks when no flush triggered.
 		pipelinedStart, pipelinedEnd := txn.committer.pipelinedCommitInfo.pipelinedStart, txn.committer.pipelinedCommitInfo.pipelinedEnd
 		needCleanUpLocks := len(pipelinedStart) != 0 && len(pipelinedEnd) != 0
@@ -1082,7 +1082,7 @@ func (txn *KVTxn) DoneAggressiveLocking(ctx context.Context) {
 	// If finally no key locked and ttlManager is just started during the current fair locking procedure, reset the
 	// ttlManager as no key will be the primary.
 	if txn.aggressiveLockingContext.lastAssignedPrimaryKey && !txn.aggressiveLockingContext.assignedPrimaryKey {
-		txn.committer.ttlManager.reset()
+		txn.committer.reset()
 	}
 
 	txn.cleanupAggressiveLockingRedundantLocks(context.Background())
@@ -1452,7 +1452,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 			for _, key := range unmarkKeys {
 				txn.us.UnmarkPresumeKeyNotExists(key)
 			}
-			keyMayBeLocked := !(tikverr.IsErrWriteConflict(err) || tikverr.IsErrKeyExist(err))
+			keyMayBeLocked := !tikverr.IsErrWriteConflict(err) && !tikverr.IsErrKeyExist(err)
 			// If there is only 1 key and lock fails, no need to do pessimistic rollback.
 			if len(keys) > 1 || keyMayBeLocked {
 				dl, isDeadlock := errors.Cause(err).(*tikverr.ErrDeadlock)
@@ -1577,7 +1577,7 @@ func (txn *KVTxn) lockKeys(ctx context.Context, lockCtx *tikv.LockCtx, fn func()
 func (txn *KVTxn) resetPrimary(keepTTLManager bool) {
 	txn.committer.primaryKey = nil
 	if !keepTTLManager {
-		txn.committer.ttlManager.reset()
+		txn.committer.reset()
 	}
 }
 
@@ -1600,7 +1600,7 @@ func (txn *KVTxn) resetTTLManagerForAggressiveLockingMode(hasNewLockToAcquire bo
 	//     as the ttlManager is already running.
 	//   * If the primary key is changed, the ttlManager will need to run on the new primary key instead. Reset it.
 	if hasNewLockToAcquire && !bytes.Equal(txn.aggressiveLockingContext.primaryKey, txn.aggressiveLockingContext.lastPrimaryKey) {
-		txn.committer.ttlManager.reset()
+		txn.committer.reset()
 	}
 }
 
@@ -1655,7 +1655,7 @@ func (txn *KVTxn) unsetPrimaryKeyIfNeeded(lockCtx *tikv.LockCtx) {
 	if val, ok := lockCtx.Values[string(txn.committer.primaryKey)]; ok {
 		if !val.Exists {
 			txn.committer.primaryKey = nil
-			txn.committer.ttlManager.reset()
+			txn.committer.reset()
 		}
 	}
 }
@@ -1703,12 +1703,13 @@ func (txn *KVTxn) asyncPessimisticRollback(ctx context.Context, keys [][]byte, s
 		defer txn.store.WaitGroup().Done()
 		if val, err := util.EvalFailpoint("beforeAsyncPessimisticRollback"); err == nil {
 			if s, ok := val.(string); ok {
-				if s == "skip" {
+				switch s {
+				case "skip":
 					logutil.Logger(ctx).Info("[failpoint] injected skip async pessimistic rollback",
 						zap.Uint64("txnStartTS", txn.startTS))
 					wg.Done()
 					return
-				} else if s == "delay" {
+				case "delay":
 					duration := time.Duration(rand.Int63n(int64(time.Second) * 2))
 					logutil.Logger(ctx).Info("[failpoint] injected delay before async pessimistic rollback",
 						zap.Uint64("txnStartTS", txn.startTS), zap.Duration("duration", duration))
@@ -1737,7 +1738,7 @@ func hashInKeys(deadlockKeyHash uint64, keys [][]byte) bool {
 
 // IsReadOnly checks if the transaction has only performed read operations.
 func (txn *KVTxn) IsReadOnly() bool {
-	return !(txn.us.GetMemBuffer().Dirty() || txn.aggressiveLockingDirty.Load())
+	return !txn.us.GetMemBuffer().Dirty() && !txn.aggressiveLockingDirty.Load()
 }
 
 // StartTS returns the transaction start timestamp.
