@@ -861,7 +861,7 @@ func testReplicaReadAccessPathByCase2(s *testReplicaSelectorSuite) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store1, replica-read: true, stale-read: false}"},
+				"{addr: store1, replica-read: false, stale-read: false}"},
 			respErr:         "",
 			respRegionError: nil,
 			backoffCnt:      0,
@@ -2864,18 +2864,36 @@ func (ca *replicaSelectorAccessPathCase) run(s *testReplicaSelectorSuite) *Regio
 				s.NotNil(rc)
 				regionErr, err := ca.genAccessErr(s.cache, rc, ca.accessErr[idx])
 				if regionErr != nil {
-					return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-						RegionError: regionErr,
-					}}, nil
+					switch req.Type {
+					case tikvrpc.CmdGet:
+						return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+							RegionError: regionErr,
+						}}, nil
+					case tikvrpc.CmdPrewrite:
+						return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{
+							RegionError: regionErr,
+						}}, nil
+					default:
+						s.FailNow("unsupported reqType " + req.Type.String())
+						return nil, fmt.Errorf("unsupported reqType %v", req.Type)
+					}
 				}
 				if err != nil {
 					return nil, err
 				}
 			}
 		}
-		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
-			Value: []byte("hello world"),
-		}}, nil
+		switch req.Type {
+		case tikvrpc.CmdGet:
+			return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{
+				Value: []byte("hello world"),
+			}}, nil
+		case tikvrpc.CmdPrewrite:
+			return &tikvrpc.Response{Resp: &kvrpcpb.PrewriteResponse{}}, nil
+		default:
+			s.FailNow("unsupported reqType " + req.Type.String())
+			return nil, fmt.Errorf("unsupported reqType %v", req.Type)
+		}
 	}}
 	sender := NewRegionRequestSender(s.cache, fnClient, oracle.NoopReadTSValidator{})
 	req, opts, timeout := ca.buildRequest(s)

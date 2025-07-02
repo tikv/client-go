@@ -55,6 +55,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/client"
@@ -499,6 +500,9 @@ func (s *RegionRequestSender) SendReqAsync(
 			et:       tikvrpc.TiKV,
 			opts:     opts,
 		},
+		invariants: reqInvariants{
+			staleRead: req.StaleRead,
+		},
 	}
 
 	cb.Inject(func(resp *tikvrpc.ResponseExt, err error) (*tikvrpc.ResponseExt, error) {
@@ -522,7 +526,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		if retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		if req.StaleRead {
+		if state.invariants.staleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
 			} else {
@@ -573,7 +577,11 @@ func (s *RegionRequestSender) SendReqAsync(
 	cli.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
 		state.vars.sendTimes++
 		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
-		if state.handleAsyncResponse(startTime, canceled, resp, err, cancels...) {
+		var execDetails *util.ExecDetails
+		if val := ctx.Value(util.ExecDetailsKey); val != nil {
+			execDetails = val.(*util.ExecDetails)
+		}
+		if state.handleAsyncResponse(startTime, canceled, resp, err, execDetails, cancels...) {
 			cb.Invoke(state.toResponseExt())
 			return
 		}
@@ -885,6 +893,15 @@ type sendReqState struct {
 		msg       string
 		sendTimes int
 	}
+
+	invariants reqInvariants
+}
+
+// reqInvariants holds the input state of the request.
+// If the tikvrpc.Request is changed during the retries or other operations.
+// the reqInvariants can tell the initial state.
+type reqInvariants struct {
+	staleRead bool
 }
 
 // next encapsulates one iteration of the retry loop. calling `next` will handle send error (s.vars.err) or region error
@@ -895,9 +912,11 @@ func (s *sendReqState) next() (done bool) {
 	bo, req := s.args.bo, s.args.req
 
 	// check whether the session/query is killed during the Next()
-	if err := bo.CheckKilled(); err != nil {
-		s.vars.resp, s.vars.err = nil, err
-		return true
+	if req.IsInterruptible() {
+		if err := bo.CheckKilled(); err != nil {
+			s.vars.resp, s.vars.err = nil, err
+			return true
+		}
 	}
 
 	// handle send error
@@ -964,17 +983,8 @@ func (s *sendReqState) next() (done bool) {
 		return true
 	}
 
-	if s.replicaSelector != nil &&
-		s.replicaSelector.target != nil &&
-		req.AccessLocation == kv.AccessUnknown &&
-		len(s.replicaSelector.option.labels) != 0 {
-		// patch the access location if it is not set under region request sender.
-		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
-			req.AccessLocation = kv.AccessLocalZone
-		} else {
-			req.AccessLocation = kv.AccessCrossZone
-		}
-	}
+	// should reset the access location after shifting to the next store.
+	s.setReqAccessLocation(req)
 
 	logutil.Eventf(bo.GetCtx(), "send %s request to region %d at %s", req.Type, s.args.regionID.id, s.vars.rpcCtx.Addr)
 	s.storeAddr = s.vars.rpcCtx.Addr
@@ -1114,6 +1124,18 @@ func (s *sendReqState) send() (canceled bool) {
 		if s.replicaSelector != nil {
 			recordAttemptedTime(s.replicaSelector, rpcDuration)
 		}
+
+		var execDetails *util.ExecDetails
+		if stmtExec := ctx.Value(util.ExecDetailsKey); stmtExec != nil {
+			execDetails := stmtExec.(*util.ExecDetails)
+			atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
+		}
+		collector := networkCollector{
+			staleRead: s.invariants.staleRead,
+		}
+		collector.onReq(req, execDetails)
+		collector.onResp(req, s.vars.resp, execDetails)
+
 		// Record timecost of external requests on related Store when `ReplicaReadMode == "PreferLeader"`.
 		if rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 			rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
@@ -1216,17 +1238,8 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 
 	s.storeAddr = s.vars.rpcCtx.Addr
 
-	if s.replicaSelector != nil &&
-		s.replicaSelector.target != nil &&
-		req.AccessLocation == kv.AccessUnknown &&
-		len(s.replicaSelector.option.labels) != 0 {
-		// patch the access location if it is not set under region request sender.
-		if s.replicaSelector.target.store.IsLabelsMatch(s.replicaSelector.option.labels) {
-			req.AccessLocation = kv.AccessLocalZone
-		} else {
-			req.AccessLocation = kv.AccessCrossZone
-		}
-	}
+	// set access location based on source and target "zone" label.
+	s.setReqAccessLocation(req)
 	req.Context.ClusterId = s.vars.rpcCtx.ClusterID
 	if req.InputRequestSource != "" && s.replicaSelector != nil {
 		patchRequestSource(req, s.replicaSelector.replicaType())
@@ -1250,8 +1263,26 @@ func (s *sendReqState) initForAsyncRequest() (ok bool) {
 	return true
 }
 
+// setReqAccessLocation set the AccessLocation value of kv request based on
+// target store "zone" label.
+func (s *sendReqState) setReqAccessLocation(req *tikvrpc.Request) {
+	// set access location based on source and target "zone" label.
+	if s.replicaSelector != nil && s.replicaSelector.target != nil {
+		selfZoneLabel := config.GetGlobalConfig().ZoneLabel
+		targetZoneLabel, _ := s.replicaSelector.target.store.GetLabelValue("zone")
+		// if either "zone" label is "", we actually don't known if it involves cross AZ traffic.
+		if selfZoneLabel == "" || targetZoneLabel == "" {
+			req.AccessLocation = kv.AccessUnknown
+		} else if selfZoneLabel == targetZoneLabel {
+			req.AccessLocation = kv.AccessLocalZone
+		} else {
+			req.AccessLocation = kv.AccessCrossZone
+		}
+	}
+}
+
 // handleAsyncResponse handles the response of an async request.
-func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp *tikvrpc.Response, err error, cancels ...context.CancelFunc) (done bool) {
+func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp *tikvrpc.Response, err error, execDetails *util.ExecDetails, cancels ...context.CancelFunc) (done bool) {
 	if len(cancels) > 0 {
 		defer func() {
 			for i := len(cancels) - 1; i >= 0; i-- {
@@ -1268,6 +1299,15 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	if s.Stats != nil {
 		s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
 	}
+	if execDetails != nil {
+		atomic.AddInt64(&execDetails.WaitKVRespDuration, int64(rpcDuration))
+	}
+	collector := networkCollector{
+		staleRead: s.invariants.staleRead,
+	}
+	collector.onReq(req, execDetails)
+	collector.onResp(req, resp, execDetails)
+
 	if s.vars.rpcCtx.Store != nil && req.ReplicaReadType == kv.ReplicaReadPreferLeader && !util.IsInternalRequest(req.RequestSource) {
 		s.vars.rpcCtx.Store.healthStatus.recordClientSideSlowScoreStat(rpcDuration)
 	}
@@ -1284,6 +1324,9 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 	if err := s.vars.err; err != nil {
 		if isRPCError(err) {
 			s.rpcError = err
+			metrics.AsyncSendReqCounterWithRPCError.Inc()
+		} else {
+			metrics.AsyncSendReqCounterWithSendError.Inc()
 		}
 		if s.Stats != nil {
 			errStr := getErrMsg(err)
@@ -1292,17 +1335,18 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 		}
 		if canceled {
 			metrics.TiKVRPCErrorCounter.WithLabelValues("context-canceled", storeIDLabel(s.vars.rpcCtx)).Inc()
-			return true
 		}
-		return false
+		return canceled
 	}
 
 	s.vars.regionErr, s.vars.err = s.vars.resp.GetRegionError()
 	if s.vars.err != nil {
 		s.vars.rpcCtx, s.vars.resp = nil, nil
+		metrics.AsyncSendReqCounterWithOtherError.Inc()
 		return true
 	} else if s.vars.regionErr != nil {
 		// need to handle region error
+		metrics.AsyncSendReqCounterWithRegionError.Inc()
 		return false
 	}
 
@@ -1310,6 +1354,7 @@ func (s *sendReqState) handleAsyncResponse(start time.Time, canceled bool, resp 
 		s.replicaSelector.onSendSuccess(req)
 	}
 
+	metrics.AsyncSendReqCounterWithOK.Inc()
 	return true
 }
 
@@ -1394,13 +1439,16 @@ func (s *RegionRequestSender) SendReqCtx(
 			et:       et,
 			opts:     opts,
 		},
+		invariants: reqInvariants{
+			staleRead: req.StaleRead,
+		},
 	}
 
 	defer func() {
 		if retryTimes := state.vars.sendTimes - 1; retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
 		}
-		if req.StaleRead {
+		if state.invariants.staleRead {
 			if state.vars.sendTimes == 1 {
 				metrics.StaleReadHitCounter.Add(1)
 			} else {
