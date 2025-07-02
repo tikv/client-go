@@ -1804,6 +1804,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 		return
 	}
 	if len(regions) == 0 {
+		logutil.BgLogger().Info("tcmsdebug no region")
 		err = errors.Errorf("PD returned no region, start_key: %q, end_key: %q, encode_start_key: %q, encode_end_key: %q",
 			redact.Key(startKey), redact.Key(endKey),
 			redact.Key(c.codec.EncodeRegionKey(startKey)), redact.Key(c.codec.EncodeRegionKey(endKey)))
@@ -1813,12 +1814,16 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	debugInfo := "tcmsdebug for regions: "
 	// TODO(youjiali1995): scanRegions always fetch regions from PD and these regions don't contain buckets information
 	// for less traffic, so newly inserted regions in region cache don't have buckets information. We should improve it.
 	for _, region := range regions {
 		c.insertRegionToCache(region, true, false)
+		vid := region.VerID()
+		debugInfo = fmt.Sprintf("%s <region: %d, ver: %d, conf-ver: %d>", debugInfo, vid.GetID(), vid.GetVer(), vid.GetConfVer())
 	}
 
+	logutil.BgLogger().Info(debugInfo)
 	return
 }
 
@@ -1928,7 +1933,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	// So we should check the epoch.
 	if ok && (oldVer.GetVer() > newVer.GetVer() || oldVer.GetConfVer() > newVer.GetConfVer()) {
 		metrics.TiKVStaleRegionFromPDCounter.Inc()
-		logutil.BgLogger().Debug("get stale region",
+		logutil.BgLogger().Info("tcmsdebug get stale region",
 			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
 			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
 		return false
