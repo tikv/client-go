@@ -336,7 +336,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:        "duration for kv status api.",
 			Buckets:     prometheus.ExponentialBuckets(0.0005, 2, 20), // 0.5ms ~ 262s
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVStatusCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -355,7 +355,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
 			Help:        "batch send tail latency",
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVBatchSendLoopDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -364,7 +364,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_send_loop_duration_seconds",
 			Help:        "batch send loop duration breakdown by steps",
 			ConstLabels: constLabels,
-		}, []string{"store", "step"})
+		}, []string{LblStore, "step"})
 
 	TiKVBatchRecvTailLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -374,7 +374,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 8), // 20ms ~ 2.56s
 			Help:        "batch recv tail latency",
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVBatchRecvLoopDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -383,7 +383,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_recv_loop_duration_seconds",
 			Help:        "batch recv loop duration breakdown by steps",
 			ConstLabels: constLabels,
-		}, []string{"store", "step"})
+		}, []string{LblStore, "step"})
 
 	TiKVBatchHeadArrivalInterval = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -392,7 +392,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_head_arrival_interval_seconds",
 			Help:        "arrival interval of the head request in batch",
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVBatchBestSize = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -401,7 +401,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_best_size",
 			Help:        "best batch size estimated by the batch client",
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVBatchMoreRequests = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -410,7 +410,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Name:        "batch_more_requests_total",
 			Help:        "number of requests batched by extra fetch",
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVBatchWaitOverLoad = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -429,7 +429,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(1, 2, 11), // 1 ~ 1024
 			Help:        "number of requests pending in the batch channel",
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVBatchRequests = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -439,7 +439,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Buckets:     prometheus.ExponentialBuckets(1, 2, 11), // 1 ~ 1024
 			Help:        "number of requests in one batch",
 			ConstLabels: constLabels,
-		}, []string{"store"})
+		}, []string{LblStore})
 
 	TiKVBatchRequestDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
