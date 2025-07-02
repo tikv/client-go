@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/util"
 )
 
 func TestChunkSliceSortAndDedup(t *testing.T) {
@@ -57,5 +59,51 @@ func TestChunkSliceSortAndDedup(t *testing.T) {
 		for i, id := range expected {
 			assert.Equal(fmt.Sprintf("k%04d", id), string(chunkSlice.chunkRanges[i].smallest))
 		}
+	}
+}
+
+func TestIsRequestSourceUseTxnFile(t *testing.T) {
+	assert := assert.New(t)
+
+	cases := []struct {
+		reqSource *util.RequestSource
+		whitelist []string
+		expected  bool
+	}{
+		{
+			reqSource: &util.RequestSource{RequestSourceInternal: false},
+			whitelist: []string{},
+			expected:  true,
+		},
+		{
+			reqSource: &util.RequestSource{RequestSourceType: "ddl_modify_column", RequestSourceInternal: true},
+			whitelist: []string{"ddl_modify_column"},
+			expected:  true,
+		},
+		{
+			reqSource: &util.RequestSource{RequestSourceType: "ddl_modify_column", RequestSourceInternal: true},
+			whitelist: []string{"ddl_alter_partition", "ddl_modify_column"},
+			expected:  true,
+		},
+		{
+			reqSource: &util.RequestSource{RequestSourceType: "ddl_modify_column", RequestSourceInternal: true},
+			whitelist: []string{},
+			expected:  false,
+		},
+		{
+			reqSource: &util.RequestSource{RequestSourceType: "ddl_modify_column", RequestSourceInternal: true},
+			whitelist: []string{"ddl_alter_partition"},
+			expected:  false,
+		},
+	}
+
+	for _, c := range cases {
+		conf := &config.Config{
+			TiKVClient: config.TiKVClient{
+				TxnFileRequestSourceWhitelist: c.whitelist,
+			},
+		}
+		result := IsRequestSourceUseTxnFile(c.reqSource, conf)
+		assert.Equal(c.expected, result, "Expected %v for request source %v with whitelist %v", c.expected, c.reqSource.RequestSourceType, c.whitelist)
 	}
 }
