@@ -2,20 +2,33 @@ name: Unit Test
 
 on:
   push:
-    branches: [master, tidb-cse-7.5]
+    branches: [master, release-7.5-keyspace]
   pull_request:
-    branches: [master, tidb-cse-7.5]
+    branches: [master, release-7.5-keyspace]
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GOPRIVATE: "github.com/tidbcloud"
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GIT_ACTION_BOT }}  # set the GitHub token
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: 1.23.3
+
+      - name: Configure git for private modules
+        env:
+          TOKEN: ${{ secrets.GIT_ACTION_BOT }}  # set the GitHub token
+        run: |
+          git config --global url."https://${TOKEN}@github.com/".insteadOf "https://github.com/"
+          # check config
+          git config --global --get url."https://${TOKEN}@github.com/".insteadOf
 
       - name: Test
         run: go test ./...
@@ -23,12 +36,23 @@ jobs:
   race-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GIT_ACTION_BOT }}  # set the GitHub token
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: 1.23.3
+
+      - name: Configure git for private modules
+        env:
+          TOKEN: ${{ secrets.GIT_ACTION_BOT }}  # set the GitHub token
+        run: |
+          git config --global url."https://${TOKEN}@github.com/".insteadOf "https://github.com/"
+          # check config
+          git config --global --get url."https://${TOKEN}@github.com/".insteadOf
 
       - name: Test with race
         run: go test -race ./...
@@ -37,12 +61,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GIT_ACTION_BOT }}  # set the GitHub token
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: 1.23.3
+
+      - name: Configure git for private modules
+        env:
+          TOKEN: ${{ secrets.GIT_ACTION_BOT }}  # set the GitHub token
+        run: |
+          git config --global url."https://${TOKEN}@github.com/".insteadOf "https://github.com/"
+          # check config
+          git config --global --get url."https://${TOKEN}@github.com/".insteadOf
 
       - name: Go generate and check diff
         run: |
