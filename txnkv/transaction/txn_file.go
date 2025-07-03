@@ -287,7 +287,7 @@ func (a txnFilePrewriteAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
-	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	var resolvingRecordToken *int
 	for {
 		resp, _, err := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutMedium)
@@ -410,7 +410,7 @@ func (a txnFileCommitAction) executeBatch(c *twoPhaseCommitter, bo *retry.Backof
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
-	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	for {
 		resp, _, err := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutMedium)
 		if batch.isPrimary && sender.GetRPCError() != nil {
@@ -499,7 +499,7 @@ func (a txnFileRollbackAction) executeBatch(c *twoPhaseCommitter, bo *retry.Back
 			ResourceGroupName: c.resourceGroupName,
 		},
 	})
-	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(c.store.GetRegionCache(), c.store.GetTiKVClient(), c.store.GetOracle())
 	resp, _, err1 := sender.SendReq(bo, req, batch.region.Region, client.ReadTimeoutShort)
 	if err1 != nil {
 		return nil, err1

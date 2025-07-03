@@ -221,7 +221,9 @@ func loadOption(store *KVStore, opt ...Option) {
 
 // NewKVStore creates a new TiKV store instance.
 func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Client, opt ...Option) (*KVStore, error) {
-	o, err := oracles.NewPdOracle(pdClient, time.Duration(oracleUpdateInterval)*time.Millisecond)
+	o, err := oracles.NewPdOracle(pdClient, &oracles.PDOracleOptions{
+		UpdateInterval: time.Duration(oracleUpdateInterval) * time.Millisecond,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +505,7 @@ func (s *KVStore) SupportDeleteRange() (supported bool) {
 func (s *KVStore) SendReq(
 	bo *Backoffer, req *tikvrpc.Request, regionID locate.RegionVerID, timeout time.Duration,
 ) (*tikvrpc.Response, error) {
-	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient())
+	sender := locate.NewRegionRequestSender(s.regionCache, s.GetTiKVClient(), s.oracle)
 	resp, _, err := sender.SendReq(bo, req, regionID, timeout)
 	return resp, err
 }

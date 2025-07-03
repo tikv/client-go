@@ -39,6 +39,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -164,8 +165,17 @@ func BytesToString(numBytes int64) string {
 }
 
 // String converts slice of bytes to string without copy.
-func String(b []byte) string {
-	return unsafe.String(unsafe.SliceData(b), len(b))
+func String(b []byte) (s string) {
+	if len(b) == 0 {
+		return ""
+	}
+	//nolint: staticcheck
+	pbytes := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	//nolint: staticcheck
+	pstring := (*reflect.StringHeader)(unsafe.Pointer(&s))
+	pstring.Data = pbytes.Data
+	pstring.Len = pbytes.Len
+	return
 }
 
 // ToUpperASCIIInplace bytes.ToUpper but zero-cost
