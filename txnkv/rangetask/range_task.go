@@ -37,6 +37,7 @@ package rangetask
 import (
 	"bytes"
 	"context"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -219,7 +220,7 @@ Loop:
 
 		bo := NewLocateRegionBackoffer(ctx)
 
-		rangeEndKey, err := s.store.GetRegionCache().BatchLoadRegionsFromKey(bo, key, s.regionsPerTask)
+		rangeEndKey, err := s.store.GetRegionCache().BatchLoadRegionsFromKey(bo, key, s.regionsPerTask, locate.WithInvalidateOldRegion(false))
 		if err != nil {
 			logutil.Logger(ctx).Info("range task try to get range end key failure",
 				zap.String("name", s.identifier),

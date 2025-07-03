@@ -498,7 +498,7 @@ func (s *testRegionCacheSuite) TestReturnRegionWithNoLeader() {
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())
 
-	returnedRegions, err = s.cache.batchScanRegions(bo, []router.KeyRange{{StartKey: nil, EndKey: nil}}, 100, WithNeedRegionHasLeaderPeer())
+	returnedRegions, err = s.cache.batchScanRegions(bo, []router.KeyRange{{StartKey: nil, EndKey: nil}}, 100, defaultLocateRegionOption())
 	s.Nil(err)
 	s.Equal(len(returnedRegions), 1)
 	s.Equal(returnedRegions[0].meta.GetId(), region.GetID())

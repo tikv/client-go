@@ -238,8 +238,11 @@ var LabelFilterAllNode = locate.LabelFilterAllNode
 // KeyRange represents a range where StartKey <= key < EndKey.
 type KeyRange = kv.KeyRange
 
-// BatchLocateKeyRangesOpt is the option for BatchLocateKeyRanges.
-type BatchLocateKeyRangesOpt = locate.BatchLocateKeyRangesOpt
+// LocateRegionOpt is the option for LocateRegion.
+type LocateRegionOpt = locate.LocateRegionOpt
+
+// BatchLocateKeyRangesOpt is the option for BatchLocateKeyRanges, alias of LocateRegionOpt.
+type BatchLocateKeyRangesOpt = LocateRegionOpt
 
 var (
 	// WithNeedBuckets indicates that the request needs to contain bucket info.
@@ -248,4 +251,8 @@ var (
 	// Note the leader peer existence is not guaranteed is not related to the election status,
 	// the region info contains old leader during the election, this variable affects nothing in most time.
 	WithNeedRegionHasLeaderPeer = locate.WithNeedRegionHasLeaderPeer
+	// WithInvalidateOldRegion indicates that the request should invalidate old region cache.
+	WithInvalidateOldRegion = locate.WithInvalidateOldRegion
+	// WithRegionsPerBatch indicates that the request should return regions per batch.
+	WithRegionsPerBatch = locate.WithRegionsPerBatch
 )
