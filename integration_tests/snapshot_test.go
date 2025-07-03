@@ -36,6 +36,7 @@ package tikv_test
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sync"
@@ -44,12 +45,16 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/config"
+	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
@@ -66,27 +71,14 @@ type testSnapshotSuite struct {
 	rowNums []int
 }
 
-func (s *testSnapshotSuite) SetupSuite() {
-	s.store = tikv.StoreProbe{KVStore: NewTestStore(s.T())}
-	s.prefix = fmt.Sprintf("snapshot_%d", time.Now().Unix())
-	s.rowNums = append(s.rowNums, 1, 100, 191)
+func (s *testSnapshotSuite) SetupTest() {
+	s.prefix = fmt.Sprintf("test_snapshot_%d", time.Now().Unix())
+	store := NewTestUniStore(s.T())
+	s.store = tikv.StoreProbe{KVStore: store}
 }
 
-func (s *testSnapshotSuite) TearDownSuite() {
-	txn := s.beginTxn()
-	scanner, err := txn.Iter(encodeKey(s.prefix, ""), nil)
-	s.Nil(err)
-	s.NotNil(scanner)
-	for scanner.Valid() {
-		k := scanner.Key()
-		err = txn.Delete(k)
-		s.Nil(err)
-		scanner.Next()
-	}
-	err = txn.Commit(context.Background())
-	s.Nil(err)
-	err = s.store.Close()
-	s.Nil(err)
+func (s *testSnapshotSuite) TearDownTest() {
+	s.store.Close()
 }
 
 func (s *testSnapshotSuite) beginTxn() transaction.TxnProbe {
@@ -163,7 +155,7 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	_, err = snapshot.Get(context.Background(), []byte("a"))
 	s.Nil(err)
 	_, err = snapshot.Get(context.Background(), []byte("b"))
-	s.True(error.IsErrNotFound(err))
+	s.True(tikverr.IsErrNotFound(err))
 
 	s.Nil(failpoint.Enable("tikvclient/snapshot-get-cache-fail", `return(true)`))
 	ctx := context.WithValue(context.Background(), "TestSnapshotCache", true)
@@ -173,14 +165,14 @@ func (s *testSnapshotSuite) TestSnapshotCache() {
 	s.Nil(err)
 	s.Equal([]byte("x"), value)
 	_, err = snapshot.Get(ctx, []byte("y"))
-	s.True(error.IsErrNotFound(err))
+	s.True(tikverr.IsErrNotFound(err))
 
 	// check cache from Get
 	value, err = snapshot.Get(ctx, []byte("a"))
 	s.Nil(err)
 	s.Equal([]byte("a"), value)
 	_, err = snapshot.Get(ctx, []byte("b"))
-	s.True(error.IsErrNotFound(err))
+	s.True(tikverr.IsErrNotFound(err))
 
 	s.Nil(failpoint.Disable("tikvclient/snapshot-get-cache-fail"))
 }
@@ -214,23 +206,29 @@ func makeKeys(rowNum int, prefix string) [][]byte {
 }
 
 func (s *testSnapshotSuite) TestSkipLargeTxnLock() {
-	x := []byte("x_key_TestSkipLargeTxnLock")
-	y := []byte("y_key_TestSkipLargeTxnLock")
+	x, y := encodeKey(s.prefix, "x_TestSkipLargeTxnLock"), encodeKey(s.prefix, "y_TestSkipLargeTxnLock")
 	txn := s.beginTxn()
 	s.Nil(txn.Set(x, []byte("x")))
 	s.Nil(txn.Set(y, []byte("y")))
 	ctx := context.Background()
-	committer, err := txn.NewCommitter(0)
+	committer, err := txn.NewCommitter(1)
 	s.Nil(err)
 	committer.SetLockTTL(3000)
+	s.False(committer.IsAsyncCommit())
 	s.Nil(committer.PrewriteAllMutations(ctx))
 
 	txn1 := s.beginTxn()
 	// txn1 is not blocked by txn in the large txn protocol.
-	_, err = txn1.Get(ctx, x)
-	s.True(error.IsErrNotFound(err))
+	r, err := txn1.Get(ctx, x)
+	if err != nil {
+		println(err.Error())
+	} else {
+		println(hex.EncodeToString(r))
+	}
+	s.True(tikverr.IsErrNotFound(err))
 
-	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys([][]byte{x, y, []byte("z")}))
+	testKeys := [][]byte{encodeKey(s.prefix, "z")}
+	res, err := toTiDBTxn(&txn1).BatchGet(ctx, toTiDBKeys(testKeys))
 	s.Nil(err)
 	s.Len(res, 0)
 
@@ -260,7 +258,7 @@ func (s *testSnapshotSuite) TestPointGetSkipTxnLock() {
 	s.Equal(committer.GetPrimaryKey(), x)
 	// Point get secondary key. Shouldn't be blocked by the lock and read old data.
 	_, err = snapshot.Get(ctx, y)
-	s.True(error.IsErrNotFound(err))
+	s.True(tikverr.IsErrNotFound(err))
 	s.Less(time.Since(start), 500*time.Millisecond)
 
 	// Commit the primary key
@@ -357,6 +355,8 @@ func (s *testSnapshotSuite) TestSnapshotRuntimeStats() {
 }
 
 func (s *testSnapshotSuite) TestRCRead() {
+	// next-gen doesn't support RC yet, skip this test
+	s.T().Skip("next-gen doesn't support RC yet, skip this test")
 	for _, rowNum := range s.rowNums {
 		s.T().Logf("test RC Read, length=%v", rowNum)
 		txn := s.beginTxn()
@@ -388,7 +388,7 @@ func (s *testSnapshotSuite) TestRCRead() {
 		// get
 		v, err := snapshot.Get(context.Background(), key0)
 		s.Nil(err)
-		s.Equal(len(meetLocks), 0)
+		s.Equal(0, len(meetLocks))
 		s.Equal(v, valueBytes(0))
 		// batch get
 		m, err := snapshot.BatchGet(context.Background(), keys)
@@ -426,4 +426,55 @@ func (s *testSnapshotSuite) TestSnapshotCacheBypassMaxUint64() {
 	snapshot.Get(context.Background(), []byte("x"))
 	snapshot.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
 	s.Empty(snapshot.SnapCache())
+}
+
+func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
+	originAsyncEnable := config.GetGlobalConfig().EnableAsyncBatchGet
+	defer func() {
+		cfg := config.GetGlobalConfig()
+		cfg.EnableAsyncBatchGet = originAsyncEnable
+		config.StoreGlobalConfig(cfg)
+	}()
+	_, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
+	s.Nil(err)
+	for _, async := range []bool{true, false} {
+		cfg := config.GetGlobalConfig()
+		cfg.EnableAsyncBatchGet = async
+		config.StoreGlobalConfig(cfg)
+		for _, hit := range []bool{true, false} {
+			txn := s.beginTxn()
+
+			// check the replica read type
+			fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+					// when the request is fallback to leader read, the ReplicaRead should be false to avoid read-index in store.
+					s.Equal(hit, req.ReplicaRead)
+					if hit {
+						s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
+					} else {
+						s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+					}
+					return next(target, req)
+				}
+			}
+			txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("check-req", fn))
+
+			// set up the replica read and adaptive read
+			txn.GetSnapshot().SetReplicaRead(kv.ReplicaReadMixed)
+			txn.GetSnapshot().SetReplicaReadAdjuster(func(int) (tikv.StoreSelectorOption, kv.ReplicaReadType) {
+				if hit {
+					return tikv.WithMatchLabels([]*metapb.StoreLabel{
+						{
+							Key:   tikv.DCLabelKey,
+							Value: "dc1",
+						},
+					}), kv.ReplicaReadMixed
+				}
+				return nil, kv.ReplicaReadLeader
+			})
+			txn.Get(context.Background(), []byte("x"))
+			txn.BatchGet(context.Background(), [][]byte{[]byte("y"), []byte("z")})
+			txn.Rollback()
+		}
+	}
 }

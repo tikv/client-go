@@ -756,6 +756,11 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	return c
 }
 
+// ForceRefreshAllStores get all stores from PD and refresh store cache.
+func (c *RegionCache) ForceRefreshAllStores(ctx context.Context) {
+	refreshFullStoreList(ctx, c.stores)
+}
+
 // Try to refresh full store list. Errors are ignored.
 func refreshFullStoreList(ctx context.Context, stores storeCache) {
 	storeList, err := stores.fetchAllStores(ctx)

@@ -861,7 +861,7 @@ func testReplicaReadAccessPathByCase2(s *testReplicaSelectorSuite) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store2, replica-read: true, stale-read: false}",
-				"{addr: store1, replica-read: true, stale-read: false}"},
+				"{addr: store1, replica-read: false, stale-read: false}"},
 			respErr:         "",
 			respRegionError: nil,
 			backoffCnt:      0,

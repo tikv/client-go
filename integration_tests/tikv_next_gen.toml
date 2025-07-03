@@ -1,0 +1,18 @@
+[storage]
+reserve-space = "1MB"
+api-version = 2
+enable-ttl = true
+
+[dfs]
+prefix = "tikv"
+s3-endpoint = "127.0.0.1:9000"
+s3-key-id = "minioadmin"
+s3-secret-key = "minioadmin"
+s3-bucket = "cse-test"
+s3-region = "local"
+
+[rocksdb]
+max-open-files = 10000
+
+[raftdb]
+max-open-files = 10000

@@ -284,6 +284,10 @@ func (action actionPipelinedFlush) handleSingleBatch(
 	}
 }
 
+func (actionPipelinedFlush) isInterruptible() bool {
+	return true
+}
+
 func (c *twoPhaseCommitter) pipelinedFlushMutations(bo *retry.Backoffer, mutations CommitterMutations, generation uint64) error {
 	if span := opentracing.SpanFromContext(bo.GetCtx()); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("twoPhaseCommitter.pipelinedFlushMutations", opentracing.ChildOf(span.Context()))
