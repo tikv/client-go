@@ -37,13 +37,13 @@ package rangetask
 import (
 	"bytes"
 	"context"
-	"github.com/tikv/client-go/v2/internal/locate"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/config/retry"
+	"github.com/tikv/client-go/v2/internal/locate"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
