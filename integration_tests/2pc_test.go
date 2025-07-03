@@ -2512,8 +2512,6 @@ func (s *testCommitterSuite) TestKillSignal() {
 	err = txn.Commit(context.Background())
 	s.ErrorContains(err, "query interrupted")
 }
-<<<<<<< HEAD
-=======
 
 func (s *testCommitterSuite) TestUninterruptibleAction() {
 	s.Run("Cleanup", func() {
@@ -2558,93 +2556,3 @@ func (s *testCommitterSuite) TestUninterruptibleAction() {
 		s.NoError(committer.CommitMutations(context.Background()))
 	})
 }
-
-func (s *testCommitterSuite) Test2PCLifecycleHooks() {
-	reachedPre := atomic.Bool{}
-	reachedPost := atomic.Bool{}
-
-	var wg sync.WaitGroup
-
-	t1 := s.begin()
-	t1.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
-		Pre: func() {
-			wg.Add(1)
-
-			reachedPre.Store(true)
-		},
-		Post: func() {
-			s.Equal(reachedPre.Load(), true)
-			reachedPost.Store(true)
-
-			wg.Done()
-		},
-	})
-	t1.Set([]byte("a"), []byte("a"))
-	t1.Set([]byte("z"), []byte("z"))
-	s.Nil(t1.Commit(context.Background()))
-
-	s.Equal(reachedPre.Load(), true)
-	s.Equal(reachedPost.Load(), false)
-	wg.Wait()
-	s.Equal(reachedPost.Load(), true)
-}
-
-func (s *testCommitterSuite) Test2PCCleanupLifecycleHooks() {
-	reachedPre := atomic.Bool{}
-	reachedPost := atomic.Bool{}
-
-	var wg sync.WaitGroup
-
-	t1 := s.begin()
-	t1.SetBackgroundGoroutineLifecycleHooks(transaction.LifecycleHooks{
-		Pre: func() {
-			wg.Add(1)
-
-			reachedPre.Store(true)
-		},
-		Post: func() {
-			s.Equal(reachedPre.Load(), true)
-			reachedPost.Store(true)
-
-			wg.Done()
-		},
-	})
-	t1.Set([]byte("a"), []byte("a"))
-	t1.Set([]byte("z"), []byte("z"))
-	committer, err := t1.NewCommitter(0)
-	s.Nil(err)
-
-	committer.CleanupWithoutWait(context.Background())
-
-	s.Equal(reachedPre.Load(), true)
-	s.Equal(reachedPost.Load(), false)
-	wg.Wait()
-	s.Equal(reachedPost.Load(), true)
-}
-
-func (s *testCommitterSuite) TestFailWithUndeterminedResult() {
-	txn := s.begin()
-	s.Nil(txn.Set([]byte("key"), []byte("value")))
-	// prewrite fail for an undetermined result in commit should retry
-	s.Nil(failpoint.Enable(
-		"tikvclient/rpcPrewriteResult",
-		// prewrite fail, but retry success
-		`1*return("undeterminedResult")->return("")`,
-	))
-	err := txn.Commit(context.Background())
-	s.Nil(err)
-
-	// commit primary fail for an undetermined result should return undetermined error
-	txn = s.begin()
-	s.Nil(txn.Set([]byte("key"), []byte("value")))
-	// prewrite fail for an undetermined result in commit should retry
-	s.Nil(failpoint.Enable(
-		"tikvclient/rpcCommitResult",
-		// prewrite success, but the first commit fail
-		`1*return("undeterminedResult")->return("")`,
-	))
-	err = txn.Commit(context.Background())
-	s.NotNil(err)
-	s.True(tikverr.IsErrorUndetermined(err))
-}
->>>>>>> b7e019d3 (txnkv: prevent some actions from being interrupted by kill (#1665))
