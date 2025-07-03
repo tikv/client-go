@@ -1057,6 +1057,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
+		logutil.Logger(bo.GetCtx()).Info("tcmsdebug GetTiFlashRPCContext cachedRegion is invalid", zap.String("id", id.String()))
 		return nil, nil
 	}
 
@@ -1077,10 +1078,12 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		}
 		addr, err := c.getStoreAddr(bo, cachedRegion, store)
 		if err != nil {
+			logutil.Logger(bo.GetCtx()).Info("tcmsdebug GetTiFlashRPCContext Fail to get store addr", zap.String("addr", store.GetAddr()), zap.String("id", id.String()))
 			return nil, err
 		}
 		if len(addr) == 0 {
 			cachedRegion.invalidate(StoreNotFound)
+			logutil.Logger(bo.GetCtx()).Info("tcmsdebug GetTiFlashRPCContext address length is 0", zap.String("addr", store.GetAddr()), zap.String("id", id.String()))
 			return nil, nil
 		}
 		if store.getResolveState() == needCheck {
@@ -1112,6 +1115,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	}
 
 	cachedRegion.invalidate(Other)
+	logutil.Logger(bo.GetCtx()).Info("At the end", zap.Int64("access store num", int64(regionStore.accessStoreNum(tiFlashOnly))))
 	return nil, nil
 }
 
@@ -1805,6 +1809,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 		return
 	}
 	if len(regions) == 0 {
+		logutil.BgLogger().Info("tcmsdebug no region")
 		err = errors.Errorf("PD returned no region, start_key: %q, end_key: %q, encode_start_key: %q, encode_end_key: %q",
 			redact.Key(startKey), redact.Key(endKey),
 			redact.Key(c.codec.EncodeRegionKey(startKey)), redact.Key(c.codec.EncodeRegionKey(endKey)))
@@ -1814,12 +1819,16 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	debugInfo := "tcmsdebug for regions: "
 	// TODO(youjiali1995): scanRegions always fetch regions from PD and these regions don't contain buckets information
 	// for less traffic, so newly inserted regions in region cache don't have buckets information. We should improve it.
 	for _, region := range regions {
 		c.insertRegionToCache(region, true, false)
+		vid := region.VerID()
+		debugInfo = fmt.Sprintf("%s <region: %d, ver: %d, conf-ver: %d>", debugInfo, vid.GetID(), vid.GetVer(), vid.GetConfVer())
 	}
 
+	logutil.BgLogger().Info(debugInfo)
 	return
 }
 
@@ -1929,7 +1938,7 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 	// So we should check the epoch.
 	if ok && (oldVer.GetVer() > newVer.GetVer() || oldVer.GetConfVer() > newVer.GetConfVer()) {
 		metrics.TiKVStaleRegionFromPDCounter.Inc()
-		logutil.BgLogger().Debug("get stale region",
+		logutil.BgLogger().Info("tcmsdebug get stale region",
 			zap.Uint64("region", newVer.GetID()), zap.Uint64("new-ver", newVer.GetVer()), zap.Uint64("new-conf", newVer.GetConfVer()),
 			zap.Uint64("old-ver", oldVer.GetVer()), zap.Uint64("old-conf", oldVer.GetConfVer()))
 		return false
