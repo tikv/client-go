@@ -306,7 +306,13 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		cancel:          cancel,
 		gP:              NewSpool(128, 10*time.Second),
 	}
-	store.gcStateCacheMu.lastCacheTime = time.Now()
+
+	keyspaceID := pdClient.(*CodecPDClient).GetCodec().GetKeyspaceID()
+	gcStates, err := pdClient.GetGCStatesClient(uint32(keyspaceID)).GetGCState(context.Background())
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	store.UpdateTxnSafePointCache(gcStates.TxnSafePoint, time.Now())
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
