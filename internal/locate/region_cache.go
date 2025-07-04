@@ -782,14 +782,14 @@ func refreshFullStoreList(ctx context.Context, stores storeCache) {
 		if addr == "" {
 			continue
 		}
-		newStore := newUninitializedStore(store.GetId())
-		newStore.addr = addr
-		newStore.peerAddr = store.GetPeerAddress()
-		newStore.saddr = store.GetStatusAddress()
-		newStore.storeType = tikvrpc.GetStoreTypeByMeta(store)
-		newStore.labels = store.GetLabels()
-		newStore.changeResolveStateTo(unresolved, resolved)
-		stores.put(newStore)
+		s := newUninitializedStore(store.GetId())
+		s.addr = addr
+		s.peerAddr = store.GetPeerAddress()
+		s.saddr = store.GetStatusAddress()
+		s.storeType = tikvrpc.GetStoreTypeByMeta(store)
+		s.labels = store.GetLabels()
+		s.changeResolveStateTo(unresolved, resolved)
+		stores.put(s)
 	}
 }
 
