@@ -170,10 +170,7 @@ func (s TxnStatus) Action() kvrpcpb.Action { return s.action }
 //	 `action` equals `Action::NoAction` or `Action::LockNotExistRollback` or `Action::TtlExpireRollback`.
 //	 Refer to the tikv `CheckTxnStatus` handling logic for more information.
 func (s TxnStatus) StatusCacheable() bool {
-	if s.IsCommitted() || s.IsRolledBack() {
-		return true
-	}
-	return false
+	return s.IsStatusDetermined()
 }
 
 func (s TxnStatus) String() string {
