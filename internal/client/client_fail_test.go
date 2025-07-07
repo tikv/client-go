@@ -64,7 +64,7 @@ func TestPanicInRecvLoop(t *testing.T) {
 	rpcClient.option.dialTimeout = time.Second / 3
 
 	// Start batchRecvLoop, and it should panic in `failPendingRequests`.
-	_, err := rpcClient.getConnArray(addr, true, func(cfg *config.TiKVClient) { cfg.GrpcConnectionCount = 1 })
+	_, err := rpcClient.getConnPool(addr, true, func(cfg *config.TiKVClient) { cfg.GrpcConnectionCount = 1 })
 	assert.Nil(t, err, "cannot establish local connection due to env problems(e.g. heavy load in test machine), please retry again")
 
 	req := tikvrpc.NewRequest(tikvrpc.CmdEmpty, &tikvpb.BatchCommandsEmptyRequest{})
@@ -103,13 +103,13 @@ func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
 		_, err := rpcClient.SendRequest(context.Background(), addr, prewriteReq, 10*time.Second)
 		assert.Nil(t, err)
 	}
-	connArray, err := rpcClient.getConnArray(addr, true)
-	assert.NotNil(t, connArray)
+	connPool, err := rpcClient.getConnPool(addr, true)
+	assert.NotNil(t, connPool)
 	assert.Nil(t, err)
-	batchConn := connArray.batchConn
+	batchConn := connPool.batchConn
 	assert.NotNil(t, batchConn)
-	assert.Equal(t, len(batchConn.batchCommandsClients), 1)
-	batchClient := batchConn.batchCommandsClients[0]
+	assert.Equal(t, len(batchConn.batchCommandsConns), 1)
+	batchClient := batchConn.batchCommandsConns[0]
 	assert.NotNil(t, batchClient.client)
 	assert.Equal(t, batchClient.client.forwardedHost, "")
 	assert.Equal(t, len(batchClient.forwardedClients), 3)

@@ -761,7 +761,7 @@ func invokeKVStatusAPI(addr string, timeout time.Duration) (l livenessState) {
 func createKVHealthClient(ctx context.Context, addr string) (*grpc.ClientConn, healthpb.HealthClient, error) {
 	// Temporarily directly load the config from the global config, however it's not a good idea to let RegionCache to
 	// access it.
-	// TODO: Pass the config in a better way, or use the connArray inner the client directly rather than creating new
+	// TODO: Pass the config in a better way, or use the connPool inner the client directly rather than creating new
 	// connection.
 
 	cfg := config.GetGlobalConfig()
