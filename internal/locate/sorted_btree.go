@@ -149,3 +149,15 @@ func (s *SortedRegions) ValidRegionsInBtree(ts int64) (len int) {
 	})
 	return
 }
+
+func (s *SortedRegions) getByRegionID(id RegionVerID) *Region {
+	var region *Region
+	s.b.Descend(func(item *btreeItem) bool {
+		if item.cachedRegion.VerID() == id {
+			region = item.cachedRegion
+			return false
+		}
+		return true
+	})
+	return region
+}

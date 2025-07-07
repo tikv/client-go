@@ -1052,7 +1052,25 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 
 	cachedRegion := c.GetCachedRegionWithRLock(id)
 	if !cachedRegion.isValid() {
-		logutil.Logger(bo.GetCtx()).Info("tcmsdebug GetTiFlashRPCContext cachedRegion is invalid", zap.String("id", id.String()))
+		isNil := cachedRegion == nil
+		syncFlag := false
+		expired := false
+		if !isNil {
+			syncFlag = cachedRegion.checkSyncFlags(needReloadOnAccess)
+			expired = !cachedRegion.checkRegionCacheTTL(time.Now().Unix())
+		}
+		logutil.Logger(bo.GetCtx()).Info("tcmsdebug GetTiFlashRPCContext cachedRegion is invalid", zap.String("id", id.String()),
+			zap.Bool("isNil", isNil), zap.Bool("syncFlag", syncFlag), zap.Bool("expired", expired))
+		if isNil {
+			c.mu.RLock()
+			tryGetRegion := c.mu.sorted.getByRegionID(id)
+			c.mu.RUnlock()
+			if tryGetRegion != nil {
+				verID := tryGetRegion.VerID()
+				logutil.Logger(bo.GetCtx()).Warn("tcmsdebug get by region id in sorted is not nil", zap.String("id", id.String()),
+					zap.String("find_id", verID.String()))
+			}
+		}
 		return nil, nil
 	}
 
@@ -1313,6 +1331,8 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 			uncachedRanges = append(uncachedRanges, router.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
 			continue
 		}
+		verID := r.VerID()
+		logutil.Logger(bo.GetCtx()).Info("tcmsdebug tryFindRegionByKey get region", zap.String("id", verID.String()))
 		// region cache hit, add the region to cachedRegions.
 		cachedRegions = append(cachedRegions, r)
 		if r.ContainsByEnd(keyRange.EndKey) {
