@@ -782,14 +782,16 @@ func refreshFullStoreList(ctx context.Context, stores storeCache) {
 		if addr == "" {
 			continue
 		}
-		s := newUninitializedStore(store.GetId())
+		s := stores.getOrInsertDefault(store.GetId())
+		// TODO: maybe refactor this, together with other places initializing Store
+		stores.storeMu.Lock()
 		s.addr = addr
 		s.peerAddr = store.GetPeerAddress()
 		s.saddr = store.GetStatusAddress()
 		s.storeType = tikvrpc.GetStoreTypeByMeta(store)
 		s.labels = store.GetLabels()
 		s.changeResolveStateTo(unresolved, resolved)
-		stores.put(s)
+		stores.storeMu.Unlock()
 	}
 }
 
