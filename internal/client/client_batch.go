@@ -238,6 +238,11 @@ func newBatchCommandsBuilder(maxBatchSize uint) *batchCommandsBuilder {
 	}
 }
 
+const (
+	batchSendTailLatThreshold = 20 * time.Millisecond
+	batchRecvTailLatThreshold = 20 * time.Millisecond
+)
+
 type batchConnMetrics struct {
 	pendingRequests prometheus.Observer
 	batchSize       prometheus.Observer
@@ -248,6 +253,9 @@ type batchConnMetrics struct {
 
 	recvLoopRecvDur    prometheus.Observer
 	recvLoopProcessDur prometheus.Observer
+
+	batchSendTailLat prometheus.Observer
+	batchRecvTailLat prometheus.Observer
 
 	headArrivalInterval prometheus.Observer
 	batchMoreRequests   prometheus.Observer
@@ -658,7 +666,11 @@ func (c *batchCommandsClient) batchRecvLoop(cfg config.TiKVClient, tikvTransport
 		recvLoopStartTime := time.Now()
 		resp, err := streamClient.recv()
 		respRecvTime := time.Now()
-		connMetrics.recvLoopRecvDur.Observe(respRecvTime.Sub(recvLoopStartTime).Seconds())
+		recvDur := respRecvTime.Sub(recvLoopStartTime)
+		connMetrics.recvLoopRecvDur.Observe(recvDur.Seconds())
+		if recvDur > batchRecvTailLatThreshold {
+			c.metrics.batchRecvTailLat.Observe(recvDur.Seconds())
+		}
 		if err != nil {
 			if c.isStopped() {
 				return

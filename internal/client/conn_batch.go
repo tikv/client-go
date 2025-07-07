@@ -73,6 +73,8 @@ func (a *batchConn) initMetrics(target string) {
 	a.metrics.sendLoopSendDur = metrics.TiKVBatchSendLoopDuration.WithLabelValues(target, "send")
 	a.metrics.recvLoopRecvDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "recv")
 	a.metrics.recvLoopProcessDur = metrics.TiKVBatchRecvLoopDuration.WithLabelValues(target, "process")
+	a.metrics.batchSendTailLat = metrics.TiKVBatchSendTailLatency.WithLabelValues(target)
+	a.metrics.batchRecvTailLat = metrics.TiKVBatchRecvTailLatency.WithLabelValues(target)
 	a.metrics.headArrivalInterval = metrics.TiKVBatchHeadArrivalInterval.WithLabelValues(target)
 	a.metrics.batchMoreRequests = metrics.TiKVBatchMoreRequests.WithLabelValues(target)
 	a.metrics.bestBatchSize = metrics.TiKVBatchBestSize.WithLabelValues(target)
@@ -247,8 +249,8 @@ func (a *batchConn) batchSendLoop(cfg config.TiKVClient) {
 
 		sendLoopEndTime := time.Now()
 		a.metrics.sendLoopSendDur.Observe(sendLoopEndTime.Sub(sendLoopStartTime).Seconds())
-		if dur := sendLoopEndTime.Sub(headRecvTime); dur > 5*time.Millisecond {
-			metrics.TiKVBatchSendTailLatency.Observe(dur.Seconds())
+		if dur := sendLoopEndTime.Sub(headRecvTime); dur > batchSendTailLatThreshold {
+			a.metrics.batchSendTailLat.Observe(dur.Seconds())
 		}
 	}
 }

@@ -124,6 +124,14 @@ func DefaultPDClient() PDClient {
 	}
 }
 
+// Valid returns true if the configuration is valid.
+func (p *PDClient) Valid() error {
+	if p.PDServerTimeout == 0 {
+		return fmt.Errorf("pd-server-timeout can not be 0")
+	}
+	return nil
+}
+
 // TxnLocalLatches is the TxnLocalLatches section of the config.
 type TxnLocalLatches struct {
 	Enabled  bool `toml:"-" json:"-"`
