@@ -225,7 +225,14 @@ func (lr *LockResolver) saveResolved(txnID uint64, status TxnStatus) {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 
-	if _, ok := lr.mu.resolved[txnID]; ok {
+	if savedStatus, ok := lr.mu.resolved[txnID]; ok {
+		// The saved determined status should always equal to the new one.
+		if !(savedStatus.TTL() == status.TTL() && savedStatus.CommitTS() == status.CommitTS() && savedStatus.Action() == status.Action()) {
+			logutil.BgLogger().Error("unexpected txn status saving to the cache, the existing status is not equal to the new one",
+				zap.String("existing status", savedStatus.String()),
+				zap.String("new status", status.String()))
+			panic("unexpected txn status saved to cache with existing different entry")
+		}
 		return
 	}
 	lr.mu.resolved[txnID] = status
