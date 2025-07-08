@@ -70,25 +70,18 @@ func (c *CodecClient) SendRequest(ctx context.Context, addr string, req *tikvrpc
 }
 
 func (c *CodecClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
-	cli, ok := c.Client.(ClientAsync)
-	if ok {
-		req, err := c.codec.EncodeRequest(req)
-		if err != nil {
-			cb.Invoke(nil, err)
-			return
-		}
-		cb.Inject(func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
-			if err != nil {
-				return nil, err
-			}
-			return c.codec.DecodeResponse(req, resp)
-		})
-		cli.SendRequestAsync(ctx, addr, req, cb)
-	} else {
-		go func() {
-			cb.Schedule(c.SendRequest(ctx, addr, req, 0))
-		}()
+	req, err := c.codec.EncodeRequest(req)
+	if err != nil {
+		cb.Invoke(nil, err)
+		return
 	}
+	cb.Inject(func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
+		if err != nil {
+			return nil, err
+		}
+		return c.codec.DecodeResponse(req, resp)
+	})
+	c.Client.SendRequestAsync(ctx, addr, req, cb)
 }
 
 // NewTestTiKVStore creates a test store with Option
