@@ -470,12 +470,6 @@ func (s *RegionRequestSender) SendReqAsync(
 	cb async.Callback[*tikvrpc.ResponseExt],
 	opts ...StoreSelectorOption,
 ) {
-	cli, ok := s.client.(client.ClientAsync)
-	if !ok {
-		cb.Invoke(nil, errors.Errorf("%T dose not implement ClientAsync interface", s.client))
-		return
-	}
-
 	if err := s.validateReadTS(bo.GetCtx(), req); err != nil {
 		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		cb.Invoke(nil, err)
@@ -574,7 +568,7 @@ func (s *RegionRequestSender) SendReqAsync(
 		sendToAddr = state.vars.rpcCtx.ProxyAddr
 	}
 
-	cli.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
+	s.client.SendRequestAsync(ctx, sendToAddr, req, async.NewCallback(cb.Executor(), func(resp *tikvrpc.Response, err error) {
 		state.vars.sendTimes++
 		canceled := err != nil && hookCtx.Err() != nil && errors.Cause(hookCtx.Err()) == context.Canceled
 		var execDetails *util.ExecDetails
