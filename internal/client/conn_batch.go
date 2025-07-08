@@ -36,7 +36,7 @@ type batchConn struct {
 
 	// batchCommandsCh used for batch commands.
 	batchCommandsCh        chan *batchCommandsEntry
-	batchCommandsConns     []*batchCommandsClient
+	batchCommandsClients   []*batchCommandsClient
 	tikvTransportLayerLoad uint64
 	closed                 chan struct{}
 
@@ -56,7 +56,7 @@ type batchConn struct {
 func newBatchConn(connCount, maxBatchSize uint, idleNotify *uint32) *batchConn {
 	return &batchConn{
 		batchCommandsCh:        make(chan *batchCommandsEntry, maxBatchSize),
-		batchCommandsConns:     make([]*batchCommandsClient, 0, connCount),
+		batchCommandsClients:   make([]*batchCommandsClient, 0, connCount),
 		tikvTransportLayerLoad: 0,
 		closed:                 make(chan struct{}),
 		reqBuilder:             newBatchCommandsBuilder(maxBatchSize),
@@ -274,11 +274,11 @@ func (a *batchConn) getClientAndSend() {
 	)
 	reasons := make([]string, 0)
 	hasHighPriorityTask := a.reqBuilder.hasHighPriorityTask()
-	for i := 0; i < len(a.batchCommandsConns); i++ {
-		a.index = (a.index + 1) % uint32(len(a.batchCommandsConns))
-		target = a.batchCommandsConns[a.index].target
+	for i := 0; i < len(a.batchCommandsClients); i++ {
+		a.index = (a.index + 1) % uint32(len(a.batchCommandsClients))
+		target = a.batchCommandsClients[a.index].target
 		// The lock protects the batchCommandsClient from been closed while it's in use.
-		c := a.batchCommandsConns[a.index]
+		c := a.batchCommandsClients[a.index]
 		if hasHighPriorityTask || c.available() > 0 {
 			if c.tryLockForSend() {
 				cli = c
@@ -328,7 +328,7 @@ func (a *batchConn) getClientAndSend() {
 
 func (a *batchConn) Close() {
 	// Close all batchRecvLoop.
-	for _, c := range a.batchCommandsConns {
+	for _, c := range a.batchCommandsClients {
 		// After connections are closed, `batchRecvLoop`s will check the flag.
 		atomic.StoreInt32(&c.closed, 1)
 	}

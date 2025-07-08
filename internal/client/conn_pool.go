@@ -186,7 +186,7 @@ func (a *connPool) Init(addr string, security config.Security, idleNotify *uint3
 				metrics:          &a.batchConn.metrics,
 			}
 			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
-			a.batchCommandsConns = append(a.batchCommandsConns, batchClient)
+			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
 		}
 	}
 	go tikvrpc.CheckStreamTimeoutLoop(a.streamTimeout, a.done)

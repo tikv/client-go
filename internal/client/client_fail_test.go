@@ -108,8 +108,8 @@ func TestRecvErrorInMultipleRecvLoops(t *testing.T) {
 	assert.Nil(t, err)
 	batchConn := connPool.batchConn
 	assert.NotNil(t, batchConn)
-	assert.Equal(t, len(batchConn.batchCommandsConns), 1)
-	batchClient := batchConn.batchCommandsConns[0]
+	assert.Equal(t, len(batchConn.batchCommandsClients), 1)
+	batchClient := batchConn.batchCommandsClients[0]
 	assert.NotNil(t, batchClient.client)
 	assert.Equal(t, batchClient.client.forwardedHost, "")
 	assert.Equal(t, len(batchClient.forwardedClients), 3)
