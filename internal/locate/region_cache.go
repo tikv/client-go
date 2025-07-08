@@ -1865,8 +1865,11 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRang
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	debugInfo := "tcmsdebug for regions: "
 	for _, region := range regions {
 		c.insertRegionToCache(region, true, false)
+		vid := region.VerID()
+		debugInfo = fmt.Sprintf("%s <region: %d, ver: %d, conf-ver: %d>", debugInfo, vid.GetID(), vid.GetVer(), vid.GetConfVer())
 	}
 	return
 }
