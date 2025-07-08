@@ -3050,7 +3050,7 @@ func (s *testRegionCacheSuite) TestRegionCacheValidAfterLoading() {
 			s.Nil(err)
 		},
 		func() {
-			_, err := s.cache.BatchLoadRegionsWithKeyRanges(s.bo, []router.KeyRange{{StartKey: []byte("a"), EndKey: []byte("e")}}, 10)
+			_, err := s.cache.BatchLoadRegionsWithKeyRanges(s.bo, []pd.KeyRange{{StartKey: []byte("a"), EndKey: []byte("e")}}, 10)
 			s.Nil(err)
 		},
 		func() {
