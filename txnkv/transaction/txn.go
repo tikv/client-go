@@ -161,6 +161,9 @@ type KVTxn struct {
 	aggressiveLockingDirty   atomic.Bool
 
 	forUpdateTSChecks map[string]uint64
+
+	// disableTxnFile indicates this transaction should NOT use file-based txn.
+	disableTxnFile bool
 }
 
 // NewTiKVTxn creates a new KVTxn.
@@ -402,6 +405,10 @@ func (txn *KVTxn) GetScope() string {
 	return txn.scope
 }
 
+func (txn *KVTxn) DisableTxnFile() {
+	txn.disableTxnFile = true
+}
+
 // Commit commits the transaction operations to KV store.
 func (txn *KVTxn) Commit(ctx context.Context) error {
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
@@ -502,9 +509,13 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 			}
 		}
 	}()
-	useTxnFile, err := committer.useTxnFile(ctx)
-	if err != nil {
-		return err
+
+	useTxnFile := !txn.disableTxnFile
+	if useTxnFile {
+		useTxnFile, err = committer.useTxnFile(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	if useTxnFile {
 		err = committer.executeTxnFile(ctx)
@@ -514,6 +525,7 @@ func (txn *KVTxn) Commit(ctx context.Context) error {
 		}
 		return err
 	}
+
 	// latches disabled
 	// pessimistic transaction should also bypass latch.
 	if txn.store.TxnLatches() == nil || txn.IsPessimistic() {
