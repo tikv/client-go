@@ -1061,14 +1061,18 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 		}
 		logutil.Logger(bo.GetCtx()).Info("tcmsdebug GetTiFlashRPCContext cachedRegion is invalid", zap.String("id", id.String()),
 			zap.Bool("isNil", isNil), zap.Bool("syncFlag", syncFlag), zap.Bool("expired", expired))
+		c.mu.RLock()
+		tryGetRegion := c.mu.sorted.getByRegionID(id)
+		c.mu.RUnlock()
 		if isNil {
-			c.mu.RLock()
-			tryGetRegion := c.mu.sorted.getByRegionID(id)
-			c.mu.RUnlock()
 			if tryGetRegion != nil {
 				verID := tryGetRegion.VerID()
 				logutil.Logger(bo.GetCtx()).Warn("tcmsdebug get by region id in sorted is not nil", zap.String("id", id.String()),
 					zap.String("find_id", verID.String()))
+			}
+		} else {
+			if tryGetRegion != cachedRegion {
+				logutil.Logger(bo.GetCtx()).Info("tcmsdebug region in sorted and regions is different", zap.Bool("is_valid", tryGetRegion.isValid()))
 			}
 		}
 		return nil, nil
