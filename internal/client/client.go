@@ -292,10 +292,10 @@ func (c *RPCClient) recycleIdleConnArray() {
 	var addrs []string
 	var vers []uint64
 	c.RLock()
-	for _, conn := range c.connPools {
-		if conn.batchConn != nil && conn.isIdle() {
-			addrs = append(addrs, conn.target)
-			vers = append(vers, conn.ver)
+	for _, pool := range c.connPools {
+		if pool.batchConn != nil && pool.isIdle() {
+			addrs = append(addrs, pool.target)
+			vers = append(vers, pool.ver)
 		}
 	}
 	c.RUnlock()
