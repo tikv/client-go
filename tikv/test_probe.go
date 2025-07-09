@@ -168,7 +168,7 @@ func (l LockResolverProbe) ForceResolveLock(ctx context.Context, lock *txnlock.L
 	bo := retry.NewBackofferWithVars(ctx, transaction.ConfigProbe{}.GetPessimisticLockMaxBackoff(), nil)
 	// make use of forcing resolving lock
 	lock.TTL = 0
-	_, err := l.LockResolverProbe.ResolveLocks(bo, 0, []*txnlock.Lock{lock})
+	_, err := l.ResolveLocks(bo, 0, []*txnlock.Lock{lock})
 	return err
 }
 

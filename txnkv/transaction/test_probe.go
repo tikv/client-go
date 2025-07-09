@@ -335,19 +335,19 @@ func (c CommitterProbe) GetOnePCCommitTS() uint64 {
 
 // IsTTLUninitialized returns if the TTL manager is uninitialized.
 func (c CommitterProbe) IsTTLUninitialized() bool {
-	state := atomic.LoadUint32((*uint32)(&c.ttlManager.state))
+	state := atomic.LoadUint32((*uint32)(&c.state))
 	return state == uint32(stateUninitialized)
 }
 
 // IsTTLRunning returns if the TTL manager is running state.
 func (c CommitterProbe) IsTTLRunning() bool {
-	state := atomic.LoadUint32((*uint32)(&c.ttlManager.state))
+	state := atomic.LoadUint32((*uint32)(&c.state))
 	return state == uint32(stateRunning)
 }
 
 // CloseTTLManager closes the TTL manager.
 func (c CommitterProbe) CloseTTLManager() {
-	c.ttlManager.close()
+	c.close()
 }
 
 // GetUndeterminedErr returns the encountered undetermined error (if any).
