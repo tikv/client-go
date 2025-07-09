@@ -153,7 +153,7 @@ func TestSendRequestAsyncTimeout(t *testing.T) {
 		var received atomic.Bool
 		handle := func(req *tikvpb.BatchCommandsRequest) (*tikvpb.BatchCommandsResponse, error) {
 			received.Store(true)
-			<-sendCtx.Done()
+			cancel()
 			return makeBatchResponse(req), nil
 		}
 		srv.OnBatchCommandsRequest.Store(&handle)
@@ -168,7 +168,6 @@ func TestSendRequestAsyncTimeout(t *testing.T) {
 			require.ErrorIs(t, err, context.Canceled)
 		})
 		cli.SendRequestAsync(sendCtx, addr, req, cb)
-		time.AfterFunc(time.Millisecond, cancel)
 		rl.Exec(ctx)
 		require.True(t, received.Load())
 		require.True(t, called)
