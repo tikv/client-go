@@ -142,6 +142,9 @@ func TestExecCancelWhileWaiting(t *testing.T) {
 }
 
 func TestExecConcurrent(t *testing.T) {
+	defaultMaxProcs := runtime.GOMAXPROCS(0)
+	defer runtime.GOMAXPROCS(defaultMaxProcs)
+	runtime.GOMAXPROCS(1)
 	l := NewRunLoop()
 	l.Append(func() {
 		time.Sleep(time.Millisecond)
