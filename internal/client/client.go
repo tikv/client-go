@@ -47,7 +47,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/debugpb"
@@ -57,7 +56,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/config"
-	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/internal/apicodec"
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/metrics"
@@ -66,13 +64,7 @@ import (
 	"github.com/tikv/client-go/v2/util/async"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/encoding/gzip"
-	"google.golang.org/grpc/experimental"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -144,306 +136,14 @@ func (e *ErrConn) Unwrap() error {
 	return e.Err
 }
 
-func WrapErrConn(err error, conn *connArray) error {
+func WrapErrConn(err error, pool *connPool) error {
 	if err == nil {
 		return nil
 	}
 	return &ErrConn{
 		Err:  err,
-		Addr: conn.target,
-		Ver:  conn.ver,
-	}
-}
-
-type connArray struct {
-	// The target host.
-	target string
-	// version of the connection array, increase by 1 when reconnect.
-	ver uint64
-
-	index uint32
-	v     []*monitoredConn
-	// streamTimeout binds with a background goroutine to process coprocessor streaming timeout.
-	streamTimeout chan *tikvrpc.Lease
-	dialTimeout   time.Duration
-	// batchConn is not null when batch is enabled.
-	*batchConn
-	done chan struct{}
-
-	monitor *connMonitor
-
-	metrics struct {
-		rpcLatHist        *rpcMetrics
-		rpcSrcLatSum      sync.Map
-		rpcNetLatExternal prometheus.Observer
-		rpcNetLatInternal prometheus.Observer
-	}
-}
-
-func newConnArray(maxSize uint, addr string, ver uint64, security config.Security,
-	idleNotify *uint32, enableBatch bool, dialTimeout time.Duration, m *connMonitor, eventListener *atomic.Pointer[ClientEventListener], opts []grpc.DialOption) (*connArray, error) {
-	a := &connArray{
-		ver:           ver,
-		index:         0,
-		v:             make([]*monitoredConn, maxSize),
-		streamTimeout: make(chan *tikvrpc.Lease, 1024),
-		done:          make(chan struct{}),
-		dialTimeout:   dialTimeout,
-		monitor:       m,
-	}
-	a.metrics.rpcLatHist = deriveRPCMetrics(metrics.TiKVSendReqHistogram.MustCurryWith(prometheus.Labels{metrics.LblStore: addr}))
-	a.metrics.rpcNetLatExternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "false")
-	a.metrics.rpcNetLatInternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "true")
-	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
-		return nil, err
-	}
-	return a, nil
-}
-
-type connMonitor struct {
-	m        sync.Map
-	loopOnce sync.Once
-	stopOnce sync.Once
-	stop     chan struct{}
-}
-
-func (c *connMonitor) AddConn(conn *monitoredConn) {
-	c.m.Store(conn.Name, conn)
-}
-
-func (c *connMonitor) RemoveConn(conn *monitoredConn) {
-	c.m.Delete(conn.Name)
-	for state := connectivity.Idle; state <= connectivity.Shutdown; state++ {
-		metrics.TiKVGrpcConnectionState.WithLabelValues(conn.Name, conn.Target(), state.String()).Set(0)
-	}
-}
-
-func (c *connMonitor) Start() {
-	c.loopOnce.Do(
-		func() {
-			c.stop = make(chan struct{})
-			go c.start()
-		},
-	)
-}
-
-func (c *connMonitor) Stop() {
-	c.stopOnce.Do(
-		func() {
-			if c.stop != nil {
-				close(c.stop)
-			}
-		},
-	)
-}
-
-func (c *connMonitor) start() {
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			c.m.Range(func(_, value interface{}) bool {
-				conn := value.(*monitoredConn)
-				nowState := conn.GetState()
-				for state := connectivity.Idle; state <= connectivity.Shutdown; state++ {
-					if state == nowState {
-						metrics.TiKVGrpcConnectionState.WithLabelValues(conn.Name, conn.Target(), nowState.String()).Set(1)
-					} else {
-						metrics.TiKVGrpcConnectionState.WithLabelValues(conn.Name, conn.Target(), state.String()).Set(0)
-					}
-				}
-				return true
-			})
-		case <-c.stop:
-			return
-		}
-	}
-}
-
-type monitoredConn struct {
-	*grpc.ClientConn
-	Name string
-}
-
-func (a *connArray) monitoredDial(ctx context.Context, connName, target string, opts ...grpc.DialOption) (conn *monitoredConn, err error) {
-	conn = &monitoredConn{
-		Name: connName,
-	}
-	conn.ClientConn, err = grpc.DialContext(ctx, target, opts...)
-	if err != nil {
-		return nil, err
-	}
-	a.monitor.AddConn(conn)
-	return conn, nil
-}
-
-func (c *monitoredConn) Close() error {
-	if c.ClientConn != nil {
-		err := c.ClientConn.Close()
-		logutil.BgLogger().Debug("close gRPC connection", zap.String("target", c.Name), zap.Error(err))
-		return err
-	}
-	return nil
-}
-
-func (a *connArray) Init(addr string, security config.Security, idleNotify *uint32, enableBatch bool, eventListener *atomic.Pointer[ClientEventListener], opts ...grpc.DialOption) error {
-	a.target = addr
-
-	opt := grpc.WithTransportCredentials(insecure.NewCredentials())
-	if len(security.ClusterSSLCA) != 0 {
-		tlsConfig, err := security.ToTLSConfig()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		opt = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
-	}
-
-	cfg := config.GetGlobalConfig()
-	var (
-		unaryInterceptor  grpc.UnaryClientInterceptor
-		streamInterceptor grpc.StreamClientInterceptor
-	)
-	if cfg.OpenTracingEnable {
-		unaryInterceptor = grpc_opentracing.UnaryClientInterceptor()
-		streamInterceptor = grpc_opentracing.StreamClientInterceptor()
-	}
-
-	allowBatch := (cfg.TiKVClient.MaxBatchSize > 0) && enableBatch
-	if allowBatch {
-		a.batchConn = newBatchConn(uint(len(a.v)), cfg.TiKVClient.MaxBatchSize, idleNotify)
-		a.batchConn.initMetrics(a.target)
-	}
-	keepAlive := cfg.TiKVClient.GrpcKeepAliveTime
-	for i := range a.v {
-		ctx, cancel := context.WithTimeout(context.Background(), a.dialTimeout)
-		var callOptions []grpc.CallOption
-		callOptions = append(callOptions, grpc.MaxCallRecvMsgSize(MaxRecvMsgSize))
-		if cfg.TiKVClient.GrpcCompressionType == gzip.Name {
-			callOptions = append(callOptions, grpc.UseCompressor(gzip.Name))
-		}
-
-		opts = append([]grpc.DialOption{
-			opt,
-			grpc.WithInitialWindowSize(cfg.TiKVClient.GrpcInitialWindowSize),
-			grpc.WithInitialConnWindowSize(cfg.TiKVClient.GrpcInitialConnWindowSize),
-			grpc.WithUnaryInterceptor(unaryInterceptor),
-			grpc.WithStreamInterceptor(streamInterceptor),
-			grpc.WithDefaultCallOptions(callOptions...),
-			grpc.WithConnectParams(grpc.ConnectParams{
-				Backoff: backoff.Config{
-					BaseDelay:  100 * time.Millisecond, // Default was 1s.
-					Multiplier: 1.6,                    // Default
-					Jitter:     0.2,                    // Default
-					MaxDelay:   3 * time.Second,        // Default was 120s.
-				},
-				MinConnectTimeout: a.dialTimeout,
-			}),
-			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:    time.Duration(keepAlive) * time.Second,
-				Timeout: cfg.TiKVClient.GetGrpcKeepAliveTimeout(),
-			}),
-		}, opts...)
-		if cfg.TiKVClient.GrpcSharedBufferPool {
-			opts = append(opts, experimental.WithRecvBufferPool(grpc.NewSharedBufferPool()))
-		}
-		conn, err := a.monitoredDial(
-			ctx,
-			fmt.Sprintf("%s-%d", a.target, i),
-			addr,
-			opts...,
-		)
-
-		cancel()
-		if err != nil {
-			// Cleanup if the initialization fails.
-			a.Close()
-			return errors.WithStack(err)
-		}
-		a.v[i] = conn
-
-		if allowBatch {
-			batchClient := &batchCommandsClient{
-				target:           a.target,
-				conn:             conn.ClientConn,
-				forwardedClients: make(map[string]*batchCommandsStream),
-				batched:          sync.Map{},
-				epoch:            0,
-				closed:           0,
-				tikvClientCfg:    cfg.TiKVClient,
-				tikvLoad:         &a.tikvTransportLayerLoad,
-				dialTimeout:      a.dialTimeout,
-				tryLock:          tryLock{sync.NewCond(new(sync.Mutex)), false},
-				eventListener:    eventListener,
-				metrics:          &a.batchConn.metrics,
-			}
-			batchClient.maxConcurrencyRequestLimit.Store(cfg.TiKVClient.MaxConcurrencyRequestLimit)
-			a.batchCommandsClients = append(a.batchCommandsClients, batchClient)
-		}
-	}
-	go tikvrpc.CheckStreamTimeoutLoop(a.streamTimeout, a.done)
-	if allowBatch {
-		go a.batchSendLoop(cfg.TiKVClient)
-	}
-
-	return nil
-}
-
-func (a *connArray) Get() *grpc.ClientConn {
-	next := atomic.AddUint32(&a.index, 1) % uint32(len(a.v))
-	return a.v[next].ClientConn
-}
-
-func (a *connArray) Close() {
-	if a.batchConn != nil {
-		a.batchConn.Close()
-	}
-
-	for _, c := range a.v {
-		if c != nil {
-			err := c.Close()
-			tikverr.Log(err)
-			if err == nil {
-				a.monitor.RemoveConn(c)
-			}
-		}
-	}
-
-	close(a.done)
-}
-
-func (a *connArray) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response, latency time.Duration) {
-	seconds := latency.Seconds()
-	stale := req.GetStaleRead()
-	source := req.GetRequestSource()
-	internal := util.IsInternalRequest(req.GetRequestSource())
-
-	a.metrics.rpcLatHist.get(req.Type, stale, internal).Observe(seconds)
-
-	srcLatSum, ok := a.metrics.rpcSrcLatSum.Load(source)
-	if !ok {
-		srcLatSum = deriveRPCMetrics(metrics.TiKVSendReqSummary.MustCurryWith(
-			prometheus.Labels{metrics.LblStore: a.target, metrics.LblSource: source}))
-		a.metrics.rpcSrcLatSum.Store(source, srcLatSum)
-	}
-	srcLatSum.(*rpcMetrics).get(req.Type, stale, internal).Observe(seconds)
-
-	if execDetail := resp.GetExecDetailsV2(); execDetail != nil {
-		var totalRpcWallTimeNs uint64
-		if execDetail.TimeDetailV2 != nil {
-			totalRpcWallTimeNs = execDetail.TimeDetailV2.TotalRpcWallTimeNs
-		} else if execDetail.TimeDetail != nil {
-			totalRpcWallTimeNs = execDetail.TimeDetail.TotalRpcWallTimeNs
-		}
-		if totalRpcWallTimeNs > 0 {
-			lat := latency - time.Duration(totalRpcWallTimeNs)
-			if internal {
-				a.metrics.rpcNetLatInternal.Observe(lat.Seconds())
-			} else {
-				a.metrics.rpcNetLatExternal.Observe(lat.Seconds())
-			}
-		}
+		Addr: pool.target,
+		Ver:  pool.ver,
 	}
 }
 
@@ -485,9 +185,9 @@ func WithCodec(codec apicodec.Codec) Opt {
 type RPCClient struct {
 	sync.RWMutex
 
-	conns  map[string]*connArray
-	vers   map[string]uint64
-	option *option
+	connPools map[string]*connPool
+	vers      map[string]uint64
+	option    *option
 
 	idleNotify uint32
 
@@ -505,8 +205,8 @@ var _ Client = &RPCClient{}
 // NewRPCClient creates a client that manages connections and rpc calls with tikv-servers.
 func NewRPCClient(opts ...Opt) *RPCClient {
 	cli := &RPCClient{
-		conns: make(map[string]*connArray),
-		vers:  make(map[string]uint64),
+		connPools: make(map[string]*connPool),
+		vers:      make(map[string]uint64),
 		option: &option{
 			dialTimeout: dialTimeout,
 		},
@@ -520,35 +220,35 @@ func NewRPCClient(opts ...Opt) *RPCClient {
 	return cli
 }
 
-func (c *RPCClient) getConnArray(addr string, enableBatch bool, opt ...func(cfg *config.TiKVClient)) (*connArray, error) {
+func (c *RPCClient) getConnPool(addr string, enableBatch bool, opt ...func(cfg *config.TiKVClient)) (*connPool, error) {
 	c.RLock()
 	if c.isClosed {
 		c.RUnlock()
 		return nil, errors.Errorf("rpcClient is closed")
 	}
-	array, ok := c.conns[addr]
+	pool, ok := c.connPools[addr]
 	c.RUnlock()
 	if !ok {
 		var err error
-		array, err = c.createConnArray(addr, enableBatch, opt...)
+		pool, err = c.createConnPool(addr, enableBatch, opt...)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// An idle connArray will not change to active again, this avoid the race condition
+	// An idle connPool will not change to active again, this avoid the race condition
 	// that recycling idle connection close an active connection unexpectedly (idle -> active).
-	if array.batchConn != nil && array.isIdle() {
+	if pool.batchConn != nil && pool.isIdle() {
 		return nil, errors.Errorf("rpcClient is idle")
 	}
 
-	return array, nil
+	return pool, nil
 }
 
-func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(cfg *config.TiKVClient)) (*connArray, error) {
+func (c *RPCClient) createConnPool(addr string, enableBatch bool, opts ...func(cfg *config.TiKVClient)) (*connPool, error) {
 	c.Lock()
 	defer c.Unlock()
-	array, ok := c.conns[addr]
+	pool, ok := c.connPools[addr]
 	if !ok {
 		var err error
 		client := config.GetGlobalConfig().TiKVClient
@@ -556,7 +256,7 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 			opt(&client)
 		}
 		ver := c.vers[addr] + 1
-		array, err = newConnArray(
+		pool, err = newConnPool(
 			client.GrpcConnectionCount,
 			addr,
 			ver,
@@ -571,10 +271,10 @@ func (c *RPCClient) createConnArray(addr string, enableBatch bool, opts ...func(
 		if err != nil {
 			return nil, err
 		}
-		c.conns[addr] = array
+		c.connPools[addr] = pool
 		c.vers[addr] = ver
 	}
-	return array, nil
+	return pool, nil
 }
 
 func (c *RPCClient) closeConns() {
@@ -582,8 +282,8 @@ func (c *RPCClient) closeConns() {
 	if !c.isClosed {
 		c.isClosed = true
 		// close all connections
-		for _, array := range c.conns {
-			array.Close()
+		for _, pool := range c.connPools {
+			pool.Close()
 		}
 	}
 	c.Unlock()
@@ -595,10 +295,10 @@ func (c *RPCClient) recycleIdleConnArray() {
 	var addrs []string
 	var vers []uint64
 	c.RLock()
-	for _, conn := range c.conns {
-		if conn.batchConn != nil && conn.isIdle() {
-			addrs = append(addrs, conn.target)
-			vers = append(vers, conn.ver)
+	for _, pool := range c.connPools {
+		if pool.batchConn != nil && pool.isIdle() {
+			addrs = append(addrs, pool.target)
+			vers = append(vers, pool.ver)
 		}
 	}
 	c.RUnlock()
@@ -627,19 +327,19 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	// TiDB will not send batch commands to TiFlash, to resolve the conflict with Batch Cop Request.
 	// tiflash/tiflash_mpp/tidb don't use BatchCommand.
 	enableBatch := req.StoreTp == tikvrpc.TiKV
-	connArray, err := c.getConnArray(addr, enableBatch)
+	connPool, err := c.getConnPool(addr, enableBatch)
 	if err != nil {
 		return nil, err
 	}
 
 	wrapErrConn := func(resp *tikvrpc.Response, err error) (*tikvrpc.Response, error) {
-		return resp, WrapErrConn(err, connArray)
+		return resp, WrapErrConn(err, connPool)
 	}
 
 	start := time.Now()
 	defer func() {
 		elapsed := time.Since(start)
-		connArray.updateRPCMetrics(req, resp, elapsed)
+		connPool.updateRPCMetrics(req, resp, elapsed)
 
 		if spanRPC != nil && util.TraceExecDetailsEnabled(ctx) {
 			if si := buildSpanInfoFromResp(resp); si != nil {
@@ -654,11 +354,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	if config.GetGlobalConfig().TiKVClient.MaxBatchSize > 0 && enableBatch {
 		if batchReq := req.ToBatchCommandsRequest(); batchReq != nil {
 			defer trace.StartRegion(ctx, req.Type.String()).End()
-			return wrapErrConn(sendBatchRequest(ctx, addr, req.ForwardedHost, connArray.batchConn, batchReq, timeout, pri))
+			return wrapErrConn(sendBatchRequest(ctx, addr, req.ForwardedHost, connPool.batchConn, batchReq, timeout, pri))
 		}
 	}
 
-	clientConn := connArray.Get()
+	clientConn := connPool.Get()
 	if state := clientConn.GetState(); state == connectivity.TransientFailure {
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
 		metrics.TiKVGRPCConnTransientFailureCounter.WithLabelValues(addr, storeID).Inc()
@@ -679,11 +379,11 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	}
 	switch req.Type {
 	case tikvrpc.CmdBatchCop:
-		return wrapErrConn(c.getBatchCopStreamResponse(ctx, client, req, timeout, connArray))
+		return wrapErrConn(c.getBatchCopStreamResponse(ctx, client, req, timeout, connPool))
 	case tikvrpc.CmdCopStream:
-		return wrapErrConn(c.getCopStreamResponse(ctx, client, req, timeout, connArray))
+		return wrapErrConn(c.getCopStreamResponse(ctx, client, req, timeout, connPool))
 	case tikvrpc.CmdMPPConn:
-		return wrapErrConn(c.getMPPStreamResponse(ctx, client, req, timeout, connArray))
+		return wrapErrConn(c.getMPPStreamResponse(ctx, client, req, timeout, connPool))
 	}
 	// Or else it's a unary call.
 	ctx1, cancel := context.WithTimeout(ctx, timeout)
@@ -710,7 +410,7 @@ func (c *RPCClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	return codec.DecodeResponse(req, resp)
 }
 
-func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {
+func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connPool *connPool) (*tikvrpc.Response, error) {
 	// Coprocessor streaming request.
 	// Use context to support timeout for grpc streaming client.
 	ctx1, cancel := context.WithCancel(ctx)
@@ -727,7 +427,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.CopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Lease.Cancel = cancel
-	connArray.streamTimeout <- &copStream.Lease
+	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
 	// This can make error handling much easier, because SendReq() retry on
@@ -745,7 +445,7 @@ func (c *RPCClient) getCopStreamResponse(ctx context.Context, client tikvpb.Tikv
 
 }
 
-func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {
+func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connPool *connPool) (*tikvrpc.Response, error) {
 	// Coprocessor streaming request.
 	// Use context to support timeout for grpc streaming client.
 	ctx1, cancel := context.WithCancel(ctx)
@@ -762,7 +462,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	copStream := resp.Resp.(*tikvrpc.BatchCopStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Lease.Cancel = cancel
-	connArray.streamTimeout <- &copStream.Lease
+	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
 	// This can make error handling much easier, because SendReq() retry on
@@ -779,7 +479,7 @@ func (c *RPCClient) getBatchCopStreamResponse(ctx context.Context, client tikvpb
 	return resp, nil
 }
 
-func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connArray *connArray) (*tikvrpc.Response, error) {
+func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.TikvClient, req *tikvrpc.Request, timeout time.Duration, connPool *connPool) (*tikvrpc.Response, error) {
 	// MPP streaming request.
 	// Use context to support timeout for grpc streaming client.
 	ctx1, cancel := context.WithCancel(ctx)
@@ -796,7 +496,7 @@ func (c *RPCClient) getMPPStreamResponse(ctx context.Context, client tikvpb.Tikv
 	copStream := resp.Resp.(*tikvrpc.MPPStreamResponse)
 	copStream.Timeout = timeout
 	copStream.Lease.Cancel = cancel
-	connArray.streamTimeout <- &copStream.Lease
+	connPool.streamTimeout <- &copStream.Lease
 
 	// Read the first streaming response to get CopStreamResponse.
 	// This can make error handling much easier, because SendReq() retry on
@@ -831,20 +531,20 @@ func (c *RPCClient) CloseAddrVer(addr string, ver uint64) error {
 		c.Unlock()
 		return nil
 	}
-	conn, ok := c.conns[addr]
+	pool, ok := c.connPools[addr]
 	if ok {
-		if conn.ver <= ver {
-			delete(c.conns, addr)
-			logutil.BgLogger().Debug("close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("conn.ver", conn.ver))
+		if pool.ver <= ver {
+			delete(c.connPools, addr)
+			logutil.BgLogger().Debug("close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
 		} else {
-			logutil.BgLogger().Debug("ignore close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("conn.ver", conn.ver))
-			conn = nil
+			logutil.BgLogger().Debug("ignore close connection", zap.String("target", addr), zap.Uint64("ver", ver), zap.Uint64("pool.ver", pool.ver))
+			pool = nil
 		}
 	}
 	c.Unlock()
 
-	if conn != nil {
-		conn.Close()
+	if pool != nil {
+		pool.Close()
 	}
 	return nil
 }

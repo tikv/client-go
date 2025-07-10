@@ -74,28 +74,28 @@ func TestConn(t *testing.T) {
 	defer client.Close()
 
 	addr := "127.0.0.1:6379"
-	conn1, err := client.getConnArray(addr, true)
+	conn1, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 
-	conn2, err := client.getConnArray(addr, true)
+	conn2, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	assert.False(t, conn2.Get() == conn1.Get())
 
 	ver := conn2.ver
 	assert.Nil(t, client.CloseAddrVer(addr, ver-1))
-	_, ok := client.conns[addr]
+	_, ok := client.connPools[addr]
 	assert.True(t, ok)
 	assert.Nil(t, client.CloseAddrVer(addr, ver))
-	_, ok = client.conns[addr]
+	_, ok = client.connPools[addr]
 	assert.False(t, ok)
 
-	conn3, err := client.getConnArray(addr, true)
+	conn3, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	assert.NotNil(t, conn3)
 	assert.Equal(t, ver+1, conn3.ver)
 
 	client.Close()
-	conn4, err := client.getConnArray(addr, true)
+	conn4, err := client.getConnPool(addr, true)
 	assert.NotNil(t, err)
 	assert.Nil(t, conn4)
 }
@@ -105,10 +105,10 @@ func TestGetConnAfterClose(t *testing.T) {
 	defer client.Close()
 
 	addr := "127.0.0.1:6379"
-	connArray, err := client.getConnArray(addr, true)
+	connPool, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	assert.Nil(t, client.CloseAddr(addr))
-	conn := connArray.Get()
+	conn := connPool.Get()
 	state := conn.GetState()
 	assert.True(t, state == connectivity.Shutdown)
 }
@@ -139,7 +139,7 @@ func TestSendWhenReconnect(t *testing.T) {
 		restoreFn()
 	}()
 	addr := server.Addr()
-	conn, err := rpcClient.getConnArray(addr, true)
+	conn, err := rpcClient.getConnPool(addr, true)
 	assert.Nil(t, err)
 
 	// Suppose all connections are re-establishing.
@@ -680,7 +680,7 @@ func TestBatchClientRecoverAfterServerRestart(t *testing.T) {
 	}()
 
 	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
-	conn, err := client.getConnArray(addr, true)
+	conn, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	// send some request, it should be success.
 	for i := 0; i < 100; i++ {
@@ -855,7 +855,7 @@ func TestBatchClientReceiveHealthFeedback(t *testing.T) {
 	client := NewRPCClient()
 	defer client.Close()
 
-	conn, err := client.getConnArray(addr, true)
+	conn, err := client.getConnPool(addr, true)
 	assert.NoError(t, err)
 	tikvClient := tikvpb.NewTikvClient(conn.Get())
 
@@ -944,7 +944,7 @@ func TestRandomRestartStoreAndForwarding(t *testing.T) {
 		}
 	}()
 
-	conn, err := client1.getConnArray(addr1, true)
+	conn, err := client1.getConnPool(addr1, true)
 	assert.Nil(t, err)
 	for j := 0; j < concurrency; j++ {
 		wg.Add(1)
@@ -1040,7 +1040,7 @@ func TestFastFailWhenNoAvailableConn(t *testing.T) {
 	}()
 
 	req := &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Coprocessor{Coprocessor: &coprocessor.Request{}}}
-	conn, err := client.getConnArray(addr, true)
+	conn, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	_, err = sendBatchRequest(context.Background(), addr, "", conn.batchConn, req, time.Second, 0)
 	require.NoError(t, err)
@@ -1060,7 +1060,7 @@ func TestFastFailWhenNoAvailableConn(t *testing.T) {
 func TestConcurrentCloseConnPanic(t *testing.T) {
 	client := NewRPCClient()
 	addr := "127.0.0.1:6379"
-	_, err := client.getConnArray(addr, true)
+	_, err := client.getConnPool(addr, true)
 	assert.Nil(t, err)
 	var wg sync.WaitGroup
 	wg.Add(2)
