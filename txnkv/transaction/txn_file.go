@@ -533,6 +533,22 @@ func (s step) String() string {
 }
 
 func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
+	if val, err := util.EvalFailpoint("injectErrorOnExecTxnFile"); err == nil {
+		errVal := val.(string)
+		if errVal == "writeConflict" {
+			err = tikverr.NewErrWriteConflictWithArgs(
+				c.startTS,
+				c.startTS+1,
+				0,
+				c.primaryKey,
+				kvrpcpb.WriteConflict_Optimistic,
+			)
+		} else {
+			err = errors.New("injected error in executeTxnFile: " + errVal)
+		}
+		return err
+	}
+
 	start := time.Now()
 	steps := make([]step, 0)
 	stepDone := func(name string) {
