@@ -3084,3 +3084,25 @@ func (s *testRegionCacheSuite) TestRegionCacheValidAfterLoading() {
 		s.True(region.isValid())
 	}
 }
+
+func (s *testRegionCacheSuite) TestBatchLoadLimitRanges() {
+	ranges := make([]kv.KeyRange, 0, 100000)
+	for i := 0; i < 100000; i++ {
+		startKey := make([]byte, 8)
+		endKey := make([]byte, 8)
+		binary.BigEndian.PutUint64(startKey, uint64(i*2))
+		binary.BigEndian.PutUint64(endKey, uint64(i*2+1))
+		ranges = append(ranges, kv.KeyRange{StartKey: startKey, EndKey: endKey})
+	}
+
+	originalBatchScanRegions := s.cache.pdClient.BatchScanRegions
+	s.cache.pdClient = &inspectedPDClient{
+		Client: s.cache.pdClient,
+		batchScanRegions: func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+			s.LessOrEqual(len(keyRanges), 16*defaultRegionsPerBatch)
+			return originalBatchScanRegions(ctx, keyRanges, limit, opts...)
+		},
+	}
+	_, err := s.cache.BatchLocateKeyRanges(s.bo, ranges)
+	s.Nil(err)
+}
