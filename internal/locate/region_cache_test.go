@@ -3098,7 +3098,7 @@ func (s *testRegionCacheSuite) TestBatchLoadLimitRanges() {
 	originalBatchScanRegions := s.cache.pdClient.BatchScanRegions
 	s.cache.pdClient = &inspectedPDClient{
 		Client: s.cache.pdClient,
-		batchScanRegions: func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
+		batchScanRegions: func(ctx context.Context, keyRanges []pd.KeyRange, limit int, opts ...pd.GetRegionOption) ([]*pd.Region, error) {
 			s.LessOrEqual(len(keyRanges), 16*defaultRegionsPerBatch)
 			return originalBatchScanRegions(ctx, keyRanges, limit, opts...)
 		},

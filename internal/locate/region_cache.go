@@ -1332,7 +1332,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		// If we send too many ranges to PD, it may exceed the size of grpc limitation or cause a timeout error.
 		// So we limit the number of ranges per batch to avoid this issue.
 		maxRangesPerBatch := 16 * defaultRegionsPerBatch
-		var toBeSentRanges []router.KeyRange
+		var toBeSentRanges []pd.KeyRange
 		if len(uncachedRanges) > maxRangesPerBatch {
 			toBeSentRanges = uncachedRanges[:maxRangesPerBatch]
 		} else {
