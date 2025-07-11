@@ -1679,8 +1679,10 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		// recheck whether the session/query is killed during the Next()
-		if err2 := bo.CheckKilled(); err2 != nil {
-			return nil, nil, retryTimes, err2
+		if req.IsInterruptible() {
+			if err2 := bo.CheckKilled(); err2 != nil {
+				return nil, nil, retryTimes, err2
+			}
 		}
 		if val, err := util.EvalFailpoint("mockRetrySendReqToRegion"); err == nil {
 			if val.(bool) {
