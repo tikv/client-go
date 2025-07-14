@@ -571,9 +571,9 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 					logutil.Logger(ctx).Error("txn file: rollback on error failed", zap.Error(err1))
 				}
 			}
-			metrics.TwoPCTxnCounterError.Inc()
+			c.reportFailureMetrics()
 		} else {
-			metrics.TwoPCTxnCounterOk.Inc()
+			c.reportSuccessMetrics(steps)
 		}
 		c.txn.commitTS = c.commitTS
 
@@ -1082,6 +1082,32 @@ func (c *twoPhaseCommitter) afterExecuteTxnFile(rcInterceptor *resourceControlCl
 	}
 
 	return nil
+}
+
+func (c *twoPhaseCommitter) reportSuccessMetrics(steps []step) {
+	metrics.TwoPCTxnCounterOk.Inc()
+	metrics.TxnFileRequestsOk.Inc()
+
+	mutationBytes := c.txn.GetMemBuffer().Size()
+	var dur time.Duration
+	for _, step := range steps {
+		dur += step.dur
+	}
+
+	if c.txn.isInternal() {
+		metrics.TxnFileWriteBytesInternal.Add(float64(mutationBytes))
+		metrics.TxnFileMutationSizeInternal.Observe(float64(mutationBytes))
+		metrics.TxnFileDurationInternal.Observe(dur.Seconds())
+	} else {
+		metrics.TxnFileWriteBytesGeneral.Add(float64(mutationBytes))
+		metrics.TxnFileMutationSizeGeneral.Observe(float64(mutationBytes))
+		metrics.TxnFileDurationGeneral.Observe(dur.Seconds())
+	}
+}
+
+func (c *twoPhaseCommitter) reportFailureMetrics() {
+	metrics.TwoPCTxnCounterError.Inc()
+	metrics.TxnFileRequestsError.Inc()
 }
 
 type chunkWriterClient struct {

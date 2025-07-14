@@ -170,6 +170,15 @@ var (
 	StaleReadLocalOutBytes  prometheus.Counter
 	StaleReadRemoteInBytes  prometheus.Counter
 	StaleReadRemoteOutBytes prometheus.Counter
+
+	TxnFileRequestsOk           prometheus.Counter
+	TxnFileRequestsError        prometheus.Counter
+	TxnFileWriteBytesInternal   prometheus.Counter
+	TxnFileWriteBytesGeneral    prometheus.Counter
+	TxnFileMutationSizeInternal prometheus.Observer
+	TxnFileMutationSizeGeneral  prometheus.Observer
+	TxnFileDurationInternal     prometheus.Observer
+	TxnFileDurationGeneral      prometheus.Observer
 )
 
 func initShortcuts() {
@@ -312,4 +321,13 @@ func initShortcuts() {
 	StaleReadLocalOutBytes = TiKVStaleReadBytes.WithLabelValues("local", "out")
 	StaleReadRemoteInBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "in")
 	StaleReadRemoteOutBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "out")
+
+	TxnFileRequestsOk = TiKVTxnFileRequestCounter.WithLabelValues("ok")
+	TxnFileRequestsError = TiKVTxnFileRequestCounter.WithLabelValues("err")
+	TxnFileWriteBytesInternal = TiKVTxnFileWriteBytes.WithLabelValues(LblInternal)
+	TxnFileWriteBytesGeneral = TiKVTxnFileWriteBytes.WithLabelValues(LblGeneral)
+	TxnFileMutationSizeInternal = TiKVTxnFileMutationSizeHistogram.WithLabelValues(LblInternal)
+	TxnFileMutationSizeGeneral = TiKVTxnFileMutationSizeHistogram.WithLabelValues(LblGeneral)
+	TxnFileDurationInternal = TiKVTxnFileDuration.WithLabelValues(LblInternal)
+	TxnFileDurationGeneral = TiKVTxnFileDuration.WithLabelValues(LblGeneral)
 }

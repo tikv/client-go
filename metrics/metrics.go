@@ -107,6 +107,11 @@ var (
 	TiKVStaleReadBytes                             *prometheus.CounterVec
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
+
+	TiKVTxnFileRequestCounter        *prometheus.CounterVec
+	TiKVTxnFileWriteBytes            *prometheus.CounterVec
+	TiKVTxnFileMutationSizeHistogram *prometheus.HistogramVec
+	TiKVTxnFileDuration              *prometheus.HistogramVec
 )
 
 // Label constants.
@@ -757,6 +762,44 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "The actual working update interval for the low resolution TSO. As there are adaptive mechanism internally, this value may differ from the config.",
 		})
 
+	TiKVTxnFileRequestCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_requests",
+			Help:        "Counter of file-based transactions requests.",
+			ConstLabels: constLabels,
+		}, []string{LblType})
+
+	TiKVTxnFileWriteBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_write_bytes",
+			Help:        "Counter of file-based transactions write bytes.",
+			ConstLabels: constLabels,
+		}, []string{LblScope})
+
+	TiKVTxnFileMutationSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_mutation_size",
+			Buckets:     prometheus.ExponentialBuckets(1<<20, 2, 17), // 1MB ~ 64GB
+			Help:        "Histogram of file-based transactions mutation bytes.",
+			ConstLabels: constLabels,
+		}, []string{LblScope})
+
+	TiKVTxnFileDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   namespace,
+			Subsystem:   subsystem,
+			Name:        "txn_file_duration",
+			Buckets:     prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms ~ 524s
+			Help:        "Duration of executing file-based transactions.",
+			ConstLabels: constLabels,
+		}, []string{LblScope})
+
 	initShortcuts()
 }
 
@@ -843,6 +886,11 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVStaleReadBytes)
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
+
+	prometheus.MustRegister(TiKVTxnFileRequestCounter)
+	prometheus.MustRegister(TiKVTxnFileWriteBytes)
+	prometheus.MustRegister(TiKVTxnFileMutationSizeHistogram)
+	prometheus.MustRegister(TiKVTxnFileDuration)
 }
 
 // readCounter reads the value of a prometheus.Counter.
