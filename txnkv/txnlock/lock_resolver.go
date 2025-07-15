@@ -166,7 +166,7 @@ func (s TxnStatus) Action() kvrpcpb.Action { return s.action }
 //		    resp.set_commit_version(commit_ts.into_inner())
 //		}
 //
-//	 So the transaction is regarded as committed if the commit_ts is not 0, and rollback if the
+//	 So the transaction is regarded as committed if the commit_ts is not 0, and rolled back if the
 //	 `action` equals `Action::NoAction` or `Action::LockNotExistRollback` or `Action::TtlExpireRollback`.
 //	 Refer to the tikv `CheckTxnStatus` handling logic for more information.
 func (s TxnStatus) StatusCacheable() bool {
