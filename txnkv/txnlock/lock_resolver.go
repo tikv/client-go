@@ -173,9 +173,9 @@ func (s TxnStatus) StatusCacheable() bool {
 	return s.IsStatusDetermined()
 }
 
-// StatusEqual checks whether the current status is equal to another status if the
+// HasSameDeterminedStatus checks whether the current status is equal to another status if the
 // transaction status is determined.
-func (s TxnStatus) StatusEqual(other TxnStatus) bool {
+func (s TxnStatus) HasSameDeterminedStatus(other TxnStatus) bool {
 	return (s.IsCommitted() && other.IsCommitted() && s.CommitTS() == other.CommitTS()) ||
 		(s.IsRolledBack() && other.IsRolledBack())
 }
@@ -234,7 +234,7 @@ func (lr *LockResolver) saveResolved(txnID uint64, status TxnStatus) {
 
 	if savedStatus, ok := lr.mu.resolved[txnID]; ok {
 		// The saved determined status should always equal to the new one.
-		if !(savedStatus.StatusEqual(status)) {
+		if !(savedStatus.HasSameDeterminedStatus(status)) {
 			logutil.BgLogger().Error("unexpected txn status saving to the cache, the existing status is not equal to the new one",
 				zap.Uint64("txnID", txnID),
 				zap.String("existing status", savedStatus.String()),
