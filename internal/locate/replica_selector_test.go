@@ -476,7 +476,7 @@ func testReplicaReadAccessPathByCase(s *testReplicaSelectorSuite) {
 		expect: &accessPathResult{
 			accessPath: []string{
 				"{addr: store1, replica-read: false, stale-read: false}",
-				"{addr: store3, replica-read: false, stale-read: false}", // try new leader in store3, but got DeadLineExceededErr, and this store's liveness will be mock to unreachable in test case running.
+				"{addr: store3, replica-read: false, stale-read: false}",  // try new leader in store3, but got DeadLineExceededErr, and this store's liveness will be mock to unreachable in test case running.
 				"{addr: store2, replica-read: false, stale-read: false}"}, // try remaining replica in store2.
 			respErr:         "",
 			respRegionError: nil,
