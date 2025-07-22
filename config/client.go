@@ -183,13 +183,11 @@ func DefaultTiKVClient() TiKVClient {
 
 		ResolveLockLiteThreshold: 16,
 
-		TxnChunkWriterConcurrency: 4,
-		TxnChunkMaxSize:           128 * 1024 * 1024,
-		TxnFileMinMutationSize:    16 * 1024 * 1024,
-		TxnFileRUDiscountRatio:    0.125, // filed-based txn costs 1/8 RU of normal txn.
-		TxnFileRequestSourceWhitelist: []string{
-			"ddl_modify_column",
-		},
+		TxnChunkWriterConcurrency:     4,
+		TxnChunkMaxSize:               128 * 1024 * 1024,
+		TxnFileMinMutationSize:        16 * 1024 * 1024,
+		TxnFileRUDiscountRatio:        0.125, // filed-based txn costs 1/8 RU of normal txn.
+		TxnFileRequestSourceWhitelist: []string{},
 	}
 }
 
