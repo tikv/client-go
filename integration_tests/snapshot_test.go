@@ -439,12 +439,24 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
 	s.Nil(err)
 	for _, regionID := range regionIDs {
-		loc, err := s.store.GetRegionCache().LocateRegionByID(retry.NewNoopBackoff(context.Background()), regionID)
-		s.Nil(err)
+		var loc *tikv.KeyLocation
+		s.Eventually(func() bool {
+			loc, err = s.store.GetRegionCache().LocateRegionByID(retry.NewNoopBackoff(context.Background()), regionID)
+			return err == nil
+		}, 5*time.Second, time.Millisecond)
 		region := s.store.GetRegionCache().GetCachedRegionWithRLock(loc.Region)
 		s.NotNil(region)
 		s.Equal(region.GetLeaderStoreID(), uint64(1))
 	}
+	stores := s.store.GetRegionCache().GetAllStores()
+	var leaderStoreAddr string
+	for _, store := range stores {
+		if store.StoreID() == 1 {
+			leaderStoreAddr = store.GetAddr()
+			break
+		}
+	}
+	s.NotEqual(leaderStoreAddr, "")
 	for _, async := range []bool{true, false} {
 		cfg := config.GetGlobalConfig()
 		cfg.EnableAsyncBatchGet = async
@@ -457,7 +469,7 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 					// When the request falls back to leader read or when the target replica is the leader,
 					// ReplicaRead should be set to false to avoid read-index operations on the leader.
-					s.Equal(hit && target != "store1", req.ReplicaRead)
+					s.Equal(hit && target != leaderStoreAddr, req.ReplicaRead)
 					if hit {
 						s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
 					} else {
