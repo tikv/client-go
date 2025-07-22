@@ -37,6 +37,7 @@ package unionstore
 import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -143,7 +144,7 @@ func (iter *UnionIter) updateCur() error {
 				// record from dirty comes first
 				if len(iter.dirtyIt.Value()) == 0 {
 					logutil.BgLogger().Warn("delete a record not exists?",
-						zap.String("key", kv.StrKey(iter.dirtyIt.Key())))
+						zap.String("key", redact.Key(iter.dirtyIt.Key())))
 					// jump over this deletion
 					if err := iter.dirtyNext(); err != nil {
 						return err

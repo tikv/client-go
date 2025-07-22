@@ -35,7 +35,6 @@
 package transaction
 
 import (
-	"encoding/hex"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
@@ -49,6 +48,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -193,7 +193,7 @@ func (action actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Bac
 				hexBatchKeys := func(keys [][]byte) []string {
 					var res []string
 					for _, k := range keys {
-						res = append(res, hex.EncodeToString(k))
+						res = append(res, redact.Key(k))
 					}
 					return res
 				}
