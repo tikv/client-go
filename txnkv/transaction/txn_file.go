@@ -581,6 +581,7 @@ func (c *twoPhaseCommitter) executeTxnFile(ctx context.Context) (err error) {
 			zap.Uint64("startTS", c.startTS),
 			zap.Uint64("commitTS", c.commitTS),
 			zap.Error(err),
+			zap.String("requestSource", c.txn.GetRequestSource()),
 			zap.Stringers("steps", steps))
 	}()
 
