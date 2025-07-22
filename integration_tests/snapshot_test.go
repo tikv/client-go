@@ -47,6 +47,11 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
+<<<<<<< HEAD
+=======
+	"github.com/tikv/client-go/v2/config"
+	"github.com/tikv/client-go/v2/config/retry"
+>>>>>>> 6fbcc3db (replica selector: do not send replica-read to leader (#1719))
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
@@ -394,6 +399,7 @@ func (s *testSnapshotSuite) TestRCRead() {
 }
 
 func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
+<<<<<<< HEAD
 	_, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
 	s.Nil(err)
 	for _, hit := range []bool{true, false} {
@@ -404,6 +410,61 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 			return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 				// when the request is fallback to leader read, the ReplicaRead should be false to avoid read-index in store.
 				s.Equal(hit, req.ReplicaRead)
+=======
+	originAsyncEnable := config.GetGlobalConfig().EnableAsyncBatchGet
+	defer func() {
+		cfg := config.GetGlobalConfig()
+		cfg.EnableAsyncBatchGet = originAsyncEnable
+		config.StoreGlobalConfig(cfg)
+	}()
+	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
+	s.Nil(err)
+	for _, regionID := range regionIDs {
+		var loc *tikv.KeyLocation
+		s.Eventually(func() bool {
+			loc, err = s.store.GetRegionCache().LocateRegionByID(retry.NewNoopBackoff(context.Background()), regionID)
+			return err == nil
+		}, 5*time.Second, time.Millisecond)
+		region := s.store.GetRegionCache().GetCachedRegionWithRLock(loc.Region)
+		s.NotNil(region)
+		s.Equal(region.GetLeaderStoreID(), uint64(1))
+	}
+	stores := s.store.GetRegionCache().GetAllStores()
+	var leaderStoreAddr string
+	for _, store := range stores {
+		if store.StoreID() == 1 {
+			leaderStoreAddr = store.GetAddr()
+			break
+		}
+	}
+	s.NotEqual(leaderStoreAddr, "")
+	for _, async := range []bool{true, false} {
+		cfg := config.GetGlobalConfig()
+		cfg.EnableAsyncBatchGet = async
+		config.StoreGlobalConfig(cfg)
+		for _, hit := range []bool{true, false} {
+			txn := s.beginTxn()
+
+			// check the replica read type
+			fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+					// When the request falls back to leader read or when the target replica is the leader,
+					// ReplicaRead should be set to false to avoid read-index operations on the leader.
+					s.Equal(hit && target != leaderStoreAddr, req.ReplicaRead)
+					if hit {
+						s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
+					} else {
+						s.Equal(kv.ReplicaReadLeader, req.ReplicaReadType)
+					}
+					return next(target, req)
+				}
+			}
+			txn.SetRPCInterceptor(interceptor.NewRPCInterceptor("check-req", fn))
+
+			// set up the replica read and adaptive read
+			txn.GetSnapshot().SetReplicaRead(kv.ReplicaReadMixed)
+			txn.GetSnapshot().SetReplicaReadAdjuster(func(int) (tikv.StoreSelectorOption, kv.ReplicaReadType) {
+>>>>>>> 6fbcc3db (replica selector: do not send replica-read to leader (#1719))
 				if hit {
 					s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
 				} else {
