@@ -38,6 +38,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/tikv/client-go/v2/config/retry"
 	"math"
 	"sync"
 	"testing"
@@ -435,8 +436,15 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 		cfg.EnableAsyncBatchGet = originAsyncEnable
 		config.StoreGlobalConfig(cfg)
 	}()
-	_, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
+	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
 	s.Nil(err)
+	for _, regionID := range regionIDs {
+		loc, err := s.store.GetRegionCache().LocateRegionByID(retry.NewNoopBackoff(context.Background()), regionID)
+		s.Nil(err)
+		region := s.store.GetRegionCache().GetCachedRegionWithRLock(loc.Region)
+		s.NotNil(region)
+		s.Equal(region.GetLeaderStoreID(), uint64(1))
+	}
 	for _, async := range []bool{true, false} {
 		cfg := config.GetGlobalConfig()
 		cfg.EnableAsyncBatchGet = async
@@ -447,8 +455,9 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 			// check the replica read type
 			fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 				return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-					// when the request is fallback to leader read, the ReplicaRead should be false to avoid read-index in store.
-					s.Equal(hit, req.ReplicaRead)
+					// When the request falls back to leader read or when the target replica is the leader,
+					// ReplicaRead should be set to false to avoid read-index operations on the leader.
+					s.Equal(hit && target != "store1", req.ReplicaRead)
 					if hit {
 						s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
 					} else {
