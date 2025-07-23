@@ -188,10 +188,10 @@ var (
 	AsyncBatchGetCounterWithLockError   prometheus.Counter
 	AsyncBatchGetCounterWithOtherError  prometheus.Counter
 
-	QueryBytesLeaderRemoteInBytes   prometheus.Observer
-	QueryBytesLeaderRemoteOutBytes  prometheus.Observer
-	QueryBytesFollowerLocalInBytes  prometheus.Observer
-	QueryBytesFollowerLocalOutBytes prometheus.Observer
+	ReadRequestLeaderLocalBytes    prometheus.Observer
+	ReadRequestLeaderRemoteBytes   prometheus.Observer
+	ReadRequestFollowerLocalBytes  prometheus.Observer
+	ReadRequestFollowerRemoteBytes prometheus.Observer
 )
 
 func initShortcuts() {
@@ -349,8 +349,8 @@ func initShortcuts() {
 	AsyncBatchGetCounterWithLockError = TiKVAsyncBatchGetCounter.WithLabelValues("lock_error")
 	AsyncBatchGetCounterWithOtherError = TiKVAsyncBatchGetCounter.WithLabelValues("other_error")
 
-	QueryBytesLeaderRemoteInBytes = TiKVQueryReadBytes.WithLabelValues("leader", "cross-zone", "in")
-	QueryBytesLeaderRemoteOutBytes = TiKVQueryReadBytes.WithLabelValues("leader", "cross-zone", "out")
-	QueryBytesFollowerLocalInBytes = TiKVQueryReadBytes.WithLabelValues("follower", "local", "in")
-	QueryBytesFollowerLocalOutBytes = TiKVQueryReadBytes.WithLabelValues("follower", "local", "out")
+	ReadRequestLeaderLocalBytes = TiKVReadRequestBytes.WithLabelValues("leader", "local")
+	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
+	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
+	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
 }

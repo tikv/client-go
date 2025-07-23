@@ -17,6 +17,7 @@ package locate
 import (
 	"sync/atomic"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -57,19 +58,6 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 	if s.staleRead {
 		s.onReqStaleRead(float64(size), isCrossZoneTraffic)
 	}
-
-	// replica read metrics
-	switch req.AccessLocation {
-	case kv.AccessLocalZone:
-		if s.replicaReadType == kv.ReplicaReadFollower || s.replicaReadType == kv.ReplicaReadMixed {
-			metrics.QueryBytesFollowerLocalOutBytes.Observe(float64(size))
-		}
-	case kv.AccessCrossZone:
-		if s.replicaReadType == kv.ReplicaReadLeader {
-			metrics.QueryBytesLeaderRemoteOutBytes.Observe(float64(size))
-		}
-	case kv.AccessUnknown:
-	}
 }
 
 func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, details *util.ExecDetails) {
@@ -106,16 +94,26 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	}
 
 	// replica read metrics
-	switch req.AccessLocation {
-	case kv.AccessLocalZone:
-		if s.replicaReadType == kv.ReplicaReadFollower || s.replicaReadType == kv.ReplicaReadMixed {
-			metrics.QueryBytesFollowerLocalInBytes.Observe(float64(size))
+	if isReadReq(req.Type) {
+		var observer prometheus.Observer
+		switch req.AccessLocation {
+		case kv.AccessLocalZone:
+			if req.ReplicaRead {
+				observer = metrics.ReadRequestFollowerLocalBytes
+			} else {
+				observer = metrics.ReadRequestLeaderLocalBytes
+			}
+		case kv.AccessCrossZone:
+			if req.ReplicaRead {
+				observer = metrics.ReadRequestFollowerRemoteBytes
+			} else {
+				observer = metrics.ReadRequestLeaderRemoteBytes
+			}
+		case kv.AccessUnknown:
 		}
-	case kv.AccessCrossZone:
-		if s.replicaReadType == kv.ReplicaReadLeader {
-			metrics.QueryBytesLeaderRemoteInBytes.Observe(float64(size))
+		if observer != nil {
+			observer.Observe(float64(size + req.GetSize()))
 		}
-	case kv.AccessUnknown:
 	}
 }
 
