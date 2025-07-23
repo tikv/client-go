@@ -2734,9 +2734,9 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 		if inflight {
 			return
 		}
-		go func() {
+		c.bg.run(func(ctx context.Context) {
 			defer c.inflightUpdateBuckets.Delete(regionID.id)
-			bo := retry.NewBackoffer(context.Background(), 20000)
+			bo := retry.NewBackoffer(ctx, 20000)
 			observeLoadRegion("ByID", r, false, 0, loadRegionReasonUpdateBuckets)
 			new, err := c.loadRegionByID(bo, regionID.id)
 			if err != nil {
@@ -2748,7 +2748,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 			c.mu.Lock()
 			c.insertRegionToCache(new, true, true)
 			c.mu.Unlock()
-		}()
+		})
 	}
 }
 
