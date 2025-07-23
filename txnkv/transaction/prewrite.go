@@ -35,7 +35,6 @@
 package transaction
 
 import (
-	"encoding/hex"
 	"math"
 	"strconv"
 	"sync/atomic"
@@ -56,6 +55,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/util"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -152,7 +152,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 			ttl = 1
 			keys := make([]string, 0, len(mutations))
 			for _, m := range mutations {
-				keys = append(keys, hex.EncodeToString(m.Key))
+				keys = append(keys, redact.Key(m.Key))
 			}
 			logutil.BgLogger().Info(
 				"[failpoint] injected lock ttl = 1 on prewrite",

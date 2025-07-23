@@ -49,6 +49,7 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
+	"github.com/tikv/client-go/v2/util/redact"
 	"go.uber.org/zap"
 )
 
@@ -193,8 +194,8 @@ func (s *Scanner) resolveCurrentLock(bo *retry.Backoffer, current *kvrpcpb.KvPai
 
 func (s *Scanner) getData(bo *retry.Backoffer) error {
 	logutil.BgLogger().Debug("txn getData",
-		zap.String("nextStartKey", kv.StrKey(s.nextStartKey)),
-		zap.String("nextEndKey", kv.StrKey(s.nextEndKey)),
+		zap.String("nextStartKey", redact.Key(s.nextStartKey)),
+		zap.String("nextEndKey", redact.Key(s.nextEndKey)),
 		zap.Bool("reverse", s.reverse),
 		zap.Uint64("txnStartTS", s.startTS()))
 	sender := locate.NewRegionRequestSender(s.snapshot.store.GetRegionCache(), s.snapshot.store.GetTiKVClient(), s.snapshot.store.GetOracle())
@@ -314,6 +315,7 @@ func (s *Scanner) getData(bo *retry.Backoffer) error {
 				return err
 			}
 			if msBeforeExpired > 0 {
+				redact.RedactKeyErrIfNecessary(keyErr)
 				err = bo.BackoffWithMaxSleepTxnLockFast(int(msBeforeExpired), errors.Errorf("key is locked during scanning"))
 				if err != nil {
 					return err
