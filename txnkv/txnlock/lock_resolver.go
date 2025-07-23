@@ -524,8 +524,15 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 			return status, nil
 		}
 
-		// If the lock is committed or rolled back, resolve lock.
-		// If the lock is regarded as an expired pessimistic lock, pessimistic rollback it.
+		// If the lock is non-async-commit type:
+		// - It is committed or rolled back, resolve lock accordingly.
+		// - It does not expire, return TTL and backoff wait.
+		// - It is regarded as an expired pessimistic lock, pessimistic rollback it.
+		//
+		// Else if the lock is an async-commit lock:
+		// - It does not expire, return TTL and backoff wait.
+		// - Otherwise, try to trigger the `resolveAsyncCommitLock` process to determine the status of
+		//   corresponding async commit transaction.
 		metrics.LockResolverCountWithExpired.Inc()
 		cleanRegions, exists := cleanTxns[l.TxnID]
 		if !exists {
