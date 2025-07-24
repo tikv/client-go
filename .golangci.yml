@@ -9,7 +9,6 @@ linters:
     - exportloopref
     - gofmt
     - goimports
-    - golint
     - goprintffuncname
     - gosimple
     - govet
@@ -17,6 +16,7 @@ linters:
     - misspell
     - noctx
     - nolintlint
+    - revive
     - rowserrcheck
     - staticcheck
     - structcheck
