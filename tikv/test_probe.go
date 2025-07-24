@@ -152,6 +152,10 @@ outerLoop:
 	return result, nil
 }
 
+func (s StoreProbe) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
+	s.KVStore.updateTxnSafePointCache(txnSafePoint, now)
+}
+
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.
 type LockResolverProbe struct {
 	*txnlock.LockResolverProbe
