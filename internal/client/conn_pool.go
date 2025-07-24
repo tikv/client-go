@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,7 +57,8 @@ type connPool struct {
 	monitor *connMonitor
 
 	metrics struct {
-		rpcLatHist        *rpcMetrics
+		rpcLatHistByStore prometheus.ObserverVec
+		rpcLatHistByType  *rpcMetrics
 		rpcSrcLatSum      sync.Map
 		rpcNetLatExternal prometheus.Observer
 		rpcNetLatInternal prometheus.Observer
@@ -74,7 +76,8 @@ func newConnPool(maxSize uint, addr string, ver uint64, security config.Security
 		dialTimeout:   dialTimeout,
 		monitor:       m,
 	}
-	a.metrics.rpcLatHist = deriveRPCMetrics(metrics.TiKVSendReqHistogram.MustCurryWith(prometheus.Labels{metrics.LblStore: addr}))
+	a.metrics.rpcLatHistByStore = metrics.TiKVSendReqHistogramByStore.MustCurryWith(prometheus.Labels{metrics.LblStore: addr})
+	a.metrics.rpcLatHistByType = deriveRPCMetrics(metrics.TiKVSendReqHistogramByType)
 	a.metrics.rpcNetLatExternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "false")
 	a.metrics.rpcNetLatInternal = metrics.TiKVRPCNetLatencyHistogram.WithLabelValues(addr, "true")
 	if err := a.Init(addr, security, idleNotify, enableBatch, eventListener, opts...); err != nil {
@@ -226,7 +229,10 @@ func (a *connPool) updateRPCMetrics(req *tikvrpc.Request, resp *tikvrpc.Response
 	source := req.GetRequestSource()
 	internal := util.IsInternalRequest(req.GetRequestSource())
 
-	a.metrics.rpcLatHist.get(req.Type, stale, internal).Observe(seconds)
+	a.metrics.rpcLatHistByType.get(req.Type, stale, internal).Observe(seconds)
+	a.metrics.rpcLatHistByStore.With(prometheus.Labels{
+		metrics.LblStaleRead: strconv.FormatBool(stale),
+		metrics.LblScope:     strconv.FormatBool(internal)}).Observe(seconds)
 
 	srcLatSum, ok := a.metrics.rpcSrcLatSum.Load(source)
 	if !ok {
