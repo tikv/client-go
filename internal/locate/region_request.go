@@ -978,9 +978,8 @@ func (state *accessFollower) IsLeaderExhausted(leader *replica) bool {
 	// 4. The leader peer should be retried again using snapshot read.
 	if state.isStaleRead && state.option.leaderOnly {
 		return leader.isExhausted(2)
-	} else {
-		return leader.isExhausted(1)
 	}
+	return leader.isExhausted(1)
 }
 
 func (state *accessFollower) onSendFailure(bo *retry.Backoffer, selector *replicaSelector, cause error) {
@@ -1530,6 +1529,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
 		}
+		req.ApiVersion = s.apiVersion
 		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 			return nil, nil, err
 		}
@@ -1710,8 +1710,6 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 }
 
 func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, retry bool, err error) {
-	req.ApiVersion = s.apiVersion
-
 	// judge the store limit switch.
 	if limit := kv.StoreLimit.Load(); limit > 0 {
 		if err := s.getStoreToken(rpcCtx.Store, limit); err != nil {

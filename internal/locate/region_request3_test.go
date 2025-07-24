@@ -1020,7 +1020,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	req.EnableStaleRead()
 	req.ReplicaReadType = kv.ReplicaReadFollower
 
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	bo := retry.NewBackoffer(ctx, -1)
 	s.Nil(err)
 	resp, err := s.regionRequestSender.SendReq(bo, req, regionLoc.Region, time.Second)
@@ -1032,6 +1032,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaReadFallbackToLeaderReg
 	s.Nil(regionErr.GetEpochNotMatch())
 	// after region error returned, the region should be invalidated.
 	s.False(region.isValid())
+	cancel()
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestAccessFollowerAfter1TiKVDown() {
@@ -1165,7 +1166,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Leader() {
 	var ops []StoreSelectorOption
 	ops = append(ops, WithMatchLabels(leaderLabel))
 
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	bo := retry.NewBackoffer(ctx, -1)
 	s.Nil(err)
 	resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
@@ -1190,6 +1191,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Leader() {
 	s.NotNil(regionErr)
 	s.NotNil(regionErr.GetEpochNotMatch())
 	s.Nil(regionErr.GetDiskFull())
+	cancel()
 }
 
 func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
@@ -1201,9 +1203,9 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 		},
 	}
 	var followerID *uint64
-	for _, storeID := range s.storeIDs {
+	for i, storeID := range s.storeIDs {
 		if storeID != leaderStore.storeID {
-			followerID = &storeID
+			followerID = &s.storeIDs[i]
 			break
 		}
 	}
@@ -1262,7 +1264,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 				ops = append(ops, WithMatchLabels(followerLabel))
 			}
 
-			ctx, _ := context.WithTimeout(context.Background(), 10000*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Second)
 			bo := retry.NewBackoffer(ctx, -1)
 			s.Nil(err)
 			resp, _, err := s.regionRequestSender.SendReqCtx(bo, req, regionLoc.Region, time.Second, tikvrpc.TiKV, ops...)
@@ -1278,6 +1280,7 @@ func (s *testRegionRequestToThreeStoresSuite) TestStaleReadFallback2Follower() {
 			} else {
 				s.Equal(getResp.Value, []byte("store"+followerLabel[0].Value))
 			}
+			cancel()
 		}
 	}
 }
@@ -1553,9 +1556,8 @@ func (s *testRegionRequestToThreeStoresSuite) TestReplicaSelectorExperimentalOpt
 		if addr == follower.addr {
 			if req.StaleRead {
 				return errRespDataNotReady, nil
-			} else {
-				return errRespTimeout, nil
 			}
+			return errRespTimeout, nil
 		}
 		return &tikvrpc.Response{Resp: &kvrpcpb.GetResponse{Value: []byte(addr)}}, nil
 	}

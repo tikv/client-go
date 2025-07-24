@@ -44,8 +44,14 @@ jobs:
         with:
           go-version: 1.18
 
+      - name: Go generate and check diff
+        run: |
+          go generate ./...
+          git diff --exit-code
+
       - name: Lint
-        uses: golangci/golangci-lint-action@v2.5.2
+        uses: golangci/golangci-lint-action@v3.7.1
         with:
           version: v1.47.3
+          install-mode: goinstall
 

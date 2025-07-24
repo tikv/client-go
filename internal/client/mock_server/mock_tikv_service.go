@@ -18,7 +18,7 @@
 // https://github.com/pingcap/tidb/tree/cc5e161ac06827589c4966674597c137cc9e809c/store/tikv/client/mock_tikv_service_test.go
 //
 
-package mock_server
+package mock_server //nolint:revive
 
 import (
 	"context"

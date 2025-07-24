@@ -98,7 +98,7 @@ func BootstrapWithMultiZones(cluster *Cluster, n, m int) (storeIDs, peerIDs []ui
 			},
 			{
 				Key:   "zone",
-				Value: fmt.Sprintf(zone),
+				Value: zone,
 			},
 		}
 		cluster.AddStore(storeID, fmt.Sprintf("store%d", storeID), labels...)

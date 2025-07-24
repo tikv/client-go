@@ -794,7 +794,7 @@ type noCauseError struct {
 	error
 }
 
-func (_ noCauseError) Cause() error {
+func (noCauseError) Cause() error {
 	return nil
 }
 
