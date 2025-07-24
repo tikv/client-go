@@ -105,7 +105,7 @@ type KVStore struct {
 		client Client
 	}
 	pdClient     pd.Client
-	pdHttpClient *util.PDHTTPClient
+	pdHttpClient *util.PDHTTPClient //nolint:revive
 	regionCache  *locate.RegionCache
 	lockResolver *txnlock.LockResolver
 	txnLatches   *latch.LatchesScheduler
