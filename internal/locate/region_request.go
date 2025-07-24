@@ -1529,6 +1529,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		if req.InputRequestSource != "" && s.replicaSelector != nil {
 			s.replicaSelector.patchRequestSource(req, rpcCtx)
 		}
+		req.ApiVersion = s.apiVersion
 		if e := tikvrpc.SetContext(req, rpcCtx.Meta, rpcCtx.Peer); e != nil {
 			return nil, nil, err
 		}
@@ -1709,8 +1710,6 @@ func fetchRespInfo(resp *tikvrpc.Response) string {
 }
 
 func (s *RegionRequestSender) sendReqToRegion(bo *retry.Backoffer, rpcCtx *RPCContext, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, retry bool, err error) {
-	req.ApiVersion = s.apiVersion
-
 	// judge the store limit switch.
 	if limit := kv.StoreLimit.Load(); limit > 0 {
 		if err := s.getStoreToken(rpcCtx.Store, limit); err != nil {
