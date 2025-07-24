@@ -46,6 +46,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnlock"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
+	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
 // StoreProbe wraps KVStore and exposes internal states for testing purpose.
@@ -154,6 +155,14 @@ outerLoop:
 
 func (s StoreProbe) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
 	s.KVStore.updateTxnSafePointCache(txnSafePoint, now)
+}
+
+func (s StoreProbe) GetGCStatesClient() pdgc.GCStatesClient {
+	return s.gcStatesClient
+}
+
+func (s StoreProbe) ReplaceGCStatesClient(c pdgc.GCStatesClient) {
+	s.KVStore.gcStatesClient = c
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.

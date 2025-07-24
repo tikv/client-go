@@ -327,6 +327,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		pdClient:                     pdClient.WithCallerComponent("kv-store"),
 		regionCache:                  regionCache,
 		kv:                           spkv,
+		gcStatesClient:               pdClient.GetGCStatesClient(uint32(codec.GetKeyspaceID())),
 		compatibleTxnSafePointLoader: newCompatibleTxnSafePointLoader(codec, etcdAddrs, etcdTlsCfg),
 		replicaReadSeed:              rand.Uint32(),
 		ctx:                          ctx,
@@ -334,12 +335,11 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 		gP:                           NewSpool(128, 10*time.Second),
 	}
 
-	keyspaceID := pdClient.(*CodecPDClient).GetCodec().GetKeyspaceID()
-	gcStates, err := pdClient.GetGCStatesClient(uint32(keyspaceID)).GetGCState(context.Background())
+	txnSafePoint, err := store.loadTxnSafePoint(context.Background())
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	store.updateTxnSafePointCache(gcStates.TxnSafePoint, time.Now())
+	store.updateTxnSafePointCache(txnSafePoint, time.Now())
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
@@ -395,14 +395,13 @@ func (s *KVStore) IsLatchEnabled() bool {
 func (s *KVStore) runTxnSafePointUpdater() {
 	defer s.wg.Done()
 	d := pollTxnSafePointInterval
-	gcStatesClient := s.pdClient.GetGCStatesClient(uint32(s.getCodec().GetKeyspaceID()))
 	for {
 		select {
 		case now := <-time.After(d):
-			gcStates, err := gcStatesClient.GetGCState(context.Background())
+			txnSafePoint, err := s.loadTxnSafePoint(context.Background())
 			if err == nil {
 				metrics.TiKVLoadSafepointCounter.WithLabelValues("ok").Inc()
-				s.updateTxnSafePointCache(gcStates.TxnSafePoint, now)
+				s.updateTxnSafePointCache(txnSafePoint, now)
 				d = pollTxnSafePointInterval
 			} else {
 				metrics.TiKVLoadSafepointCounter.WithLabelValues("fail").Inc()
