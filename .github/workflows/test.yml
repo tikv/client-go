@@ -50,7 +50,8 @@ jobs:
           git diff --exit-code
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v2.5.2
+        uses: golangci/golangci-lint-action@v3.7.1
         with:
-          version: v1.49.0
+          version: v1.47.3
+          install-mode: goinstall
 
