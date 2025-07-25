@@ -423,7 +423,7 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 			return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 				// When the request falls back to leader read or when the target replica is the leader,
 				// ReplicaRead should be set to false to avoid read-index operations on the leader.
-				s.Equal(hit && target != leaderStoreAddr, req.ReplicaRead, target+" | "+leaderStoreAddr)
+				s.Equal(hit && target != leaderStoreAddr, req.ReplicaRead)
 				if hit {
 					s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
 				} else {

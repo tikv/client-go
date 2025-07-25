@@ -971,6 +971,10 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		staleRead := false
 		rpcCtx.contextPatcher.staleRead = &staleRead
 	}
+	if !state.isStaleRead {
+		replicaRead := selector.targetIdx != state.leaderIdx
+		rpcCtx.contextPatcher.replicaRead = &replicaRead
+	}
 	return rpcCtx, nil
 }
 
