@@ -2325,10 +2325,7 @@ func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
 		accessErr: []RegionErrorType{FlashbackInProgressErr},
 		expect: &accessPathResult{
 			accessPath: []string{
-<<<<<<< HEAD
-				"{addr: store1, replica-read: true, stale-read: false}",
-=======
->>>>>>> 6fbcc3db (replica selector: do not send replica-read to leader (#1719))
+				"{addr: store1, replica-read: false, stale-read: false}",
 				"{addr: store1, replica-read: false, stale-read: false}",
 			},
 			respErr:         "",
@@ -2341,7 +2338,7 @@ func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
 	s.True(s.runCase(ca, false))
 	ca.expect = &accessPathResult{
 		accessPath: []string{
-			"{addr: store1, replica-read: true, stale-read: false}",
+			"{addr: store1, replica-read: false, stale-read: false}",
 		},
 		respErr:         "region 0 is in flashback progress, FlashbackStartTS is 0",
 		respRegionError: nil,
@@ -2374,7 +2371,7 @@ func TestReplicaReadAccessPathByFlashbackInProgressCase(t *testing.T) {
 	s.True(s.runCase(ca, false))
 	ca.expect = &accessPathResult{
 		accessPath: []string{
-			"{addr: store1, replica-read: true, stale-read: false}",
+			"{addr: store1, replica-read: false, stale-read: false}",
 			"{addr: store2, replica-read: true, stale-read: false}",
 			"{addr: store3, replica-read: true, stale-read: false}",
 		},

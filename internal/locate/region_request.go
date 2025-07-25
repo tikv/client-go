@@ -780,7 +780,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		return rpcCtx, err
 	}
 	if !state.fromAccessKnownLeader {
-		replicaRead := true
+		replicaRead := selector.targetIdx != state.leaderIdx
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
 	staleRead := false
@@ -1058,6 +1058,11 @@ func (state *accessFollower) next(bo *retry.Backoffer, selector *replicaSelector
 		staleRead := false
 		rpcCtx.contextPatcher.staleRead = &staleRead
 	}
+	if !state.isStaleRead {
+		replicaRead := selector.targetIdx != state.leaderIdx
+		rpcCtx.contextPatcher.replicaRead = &replicaRead
+	}
+
 	return rpcCtx, nil
 }
 
@@ -2707,17 +2712,17 @@ func (s *RegionRequestSender) onRegionError(
 func (s *RegionRequestSender) onFlashbackInProgressRegionError(ctx *RPCContext, req *tikvrpc.Request) bool {
 	switch selector := s.replicaSelector.(type) {
 	case *replicaSelector:
+		if req.ReplicaReadType.IsFollowerRead() {
+			s.replicaSelector = nil
+			req.SetReplicaReadType(kv.ReplicaReadLeader)
+			return true
+		}
 		// if the failure is caused by replica read, we can retry it with leader safely.
 		if ctx.contextPatcher.replicaRead != nil && *ctx.contextPatcher.replicaRead {
 			req.BusyThresholdMs = 0
 			selector.busyThreshold = 0
 			ctx.contextPatcher.replicaRead = nil
 			ctx.contextPatcher.busyThreshold = nil
-			return true
-		}
-		if req.ReplicaReadType.IsFollowerRead() {
-			s.replicaSelector = nil
-			req.SetReplicaReadType(kv.ReplicaReadLeader)
 			return true
 		}
 	case *replicaSelectorV2:
