@@ -212,6 +212,7 @@ func (w *EtcdSafePointKV) extractConnectionInfo() (endpoints []string, tlsConfig
 	return w.addrs, w.tlsConfig
 }
 
+// Deprecated: Do not use
 func saveSafePoint(kv SafePointKV, t uint64) error {
 	s := strconv.FormatUint(t, 10)
 	err := kv.Put(GcSavedSafePoint, s)

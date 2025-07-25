@@ -92,14 +92,18 @@ func (s StoreProbe) SendTxnHeartbeat(ctx context.Context, key []byte, startTS ui
 	return newTTL, err
 }
 
-// LoadSafePoint from safepoint kv.
-func (s StoreProbe) LoadSafePoint() (uint64, error) {
+// LoadSafePointFromSafePointKV from safepoint kv.
+func (s StoreProbe) LoadSafePointFromSafePointKV() (uint64, error) {
 	return loadSafePoint(s.GetSafePointKV())
 }
 
-// SaveSafePoint saves safepoint to kv.
-func (s StoreProbe) SaveSafePoint(v uint64) error {
+// SaveSafePointToSafePointKV saves safepoint to kv.
+func (s StoreProbe) SaveSafePointToSafePointKV(v uint64) error {
 	return saveSafePoint(s.GetSafePointKV(), v)
+}
+
+func (s StoreProbe) LoadTxnSafePoint(ctx context.Context) (uint64, error) {
+	return s.KVStore.loadTxnSafePoint(ctx)
 }
 
 // SetRegionCacheStore is used to set a store in region cache, for testing only

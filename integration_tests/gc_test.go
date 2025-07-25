@@ -11,15 +11,18 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/tidb/pkg/keyspace"
-	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
+	"github.com/tikv/pd/client/constants"
 	"github.com/tikv/pd/client/pkg/caller"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type hookedGCStatesClient struct {
@@ -42,6 +45,13 @@ func (c *hookedGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, er
 	return c.inner.GetGCState(ctx)
 }
 
+func hookGCStatesClientForStore(store *tikv.StoreProbe, getGCStatesHook func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error)) {
+	store.ReplaceGCStatesClient(&hookedGCStatesClient{
+		inner:           store.GetGCStatesClient(),
+		getGCStatesHook: getGCStatesHook,
+	})
+}
+
 var _ = pdgc.GCStatesClient(&hookedGCStatesClient{})
 
 func TestGCWithTiKVSuite(t *testing.T) {
@@ -50,10 +60,12 @@ func TestGCWithTiKVSuite(t *testing.T) {
 
 type testGCWithTiKVSuite struct {
 	suite.Suite
-	pd    pd.Client
-	addrs []string
-	pdCli *tikv.CodecPDClient
-	store *tikv.StoreProbe
+	globalPDCli pd.Client
+	addrs       []string
+
+	pdClis    []*tikv.CodecPDClient
+	stores    []*tikv.StoreProbe
+	keyspaces []*keyspacepb.KeyspaceMeta
 }
 
 func (s *testGCWithTiKVSuite) SetupTest() {
@@ -61,13 +73,24 @@ func (s *testGCWithTiKVSuite) SetupTest() {
 		s.T().Skip("Cannot run without real tikv cluster")
 	}
 	s.addrs = strings.Split(*pdAddrs, ",")
-	s.pdCli, s.store = s.createClient(nil)
+	var err error
+	s.globalPDCli, err = pd.NewClient(caller.TestComponent, s.addrs, pd.SecurityOption{})
+	s.Require().NoError(err)
 }
 
 func (s *testGCWithTiKVSuite) TearDownTest() {
-	if s.pd != nil {
-		s.pd.Close()
-		s.Require().NoError(s.store.Close())
+	re := s.Require()
+	s.globalPDCli.Close()
+	for _, pdCli := range s.pdClis {
+		pdCli.Close()
+	}
+	for _, store := range s.stores {
+		re.NoError(store.Close())
+	}
+	for _, keyspaceMeta := range s.keyspaces {
+		if keyspaceMeta == nil {
+			s.dropKeyspace(keyspaceMeta)
+		}
 	}
 }
 
@@ -122,14 +145,22 @@ func (s *testGCWithTiKVSuite) createKeyspace(name string, keyspaceLevelGC bool) 
 	re.NoError(err)
 	re.Equal(http.StatusOK, resp.StatusCode, "Failed to create keyspace %s, response: %s", name, err)
 
-	meta, err := s.pdCli.LoadKeyspace(context.Background(), name)
+	meta, err := s.globalPDCli.LoadKeyspace(context.Background(), name)
 	re.NoError(err)
 	return meta
 }
 
+type storeKeyspaceType int
+
+const (
+	storeNullKeyspace storeKeyspaceType = iota
+	storeKeyspaceLevelGCKeyspace
+	storeUnifiedGCKeyspace
+)
+
 func (s *testGCWithTiKVSuite) dropKeyspace(keyspaceMeta *keyspacepb.KeyspaceMeta) {
 	re := s.Require()
-	_, err := s.pdCli.UpdateKeyspaceState(context.Background(), keyspaceMeta.Id, keyspacepb.KeyspaceState_ARCHIVED)
+	_, err := s.globalPDCli.UpdateKeyspaceState(context.Background(), keyspaceMeta.Id, keyspacepb.KeyspaceState_ARCHIVED)
 	re.NoError(err)
 }
 
@@ -137,21 +168,96 @@ func genKeyspaceName() string {
 	return uuid.New().String()
 }
 
+func (s *testGCWithTiKVSuite) prepareClients(storeKeyspaceTypes ...storeKeyspaceType) {
+	s.pdClis = make([]*tikv.CodecPDClient, 0, len(storeKeyspaceTypes))
+	s.stores = make([]*tikv.StoreProbe, 0, len(storeKeyspaceTypes))
+	s.keyspaces = make([]*keyspacepb.KeyspaceMeta, 0, len(storeKeyspaceTypes))
+
+	for _, t := range storeKeyspaceTypes {
+		var keyspaceMeta *keyspacepb.KeyspaceMeta
+		switch t {
+		case storeNullKeyspace:
+			// represents by nil keyspace meta
+		case storeKeyspaceLevelGCKeyspace:
+			keyspaceMeta = s.createKeyspace(genKeyspaceName(), true)
+		case storeUnifiedGCKeyspace:
+			keyspaceMeta = s.createKeyspace(genKeyspaceName(), false)
+		}
+		pdCli, store := s.createClient(keyspaceMeta)
+		s.keyspaces = append(s.keyspaces, keyspaceMeta)
+		s.pdClis = append(s.pdClis, pdCli)
+		s.stores = append(s.stores, store)
+	}
+}
+
 func (s *testGCWithTiKVSuite) TestLoadTxnSafePointFallback() {
 	re := s.Require()
 
-	// Keyspace using unified GC
-	ks1 := s.createKeyspace(genKeyspaceName(), false)
-	defer s.dropKeyspace(ks1)
-	// Keyspace using keyspace level GC
-	ks2 := s.createKeyspace(genKeyspaceName(), true)
-	defer s.dropKeyspace(ks2)
+	re.NoError(failpoint.Enable("tikvclient/noBuiltInTxnSafePointUpdater", "return"))
+	defer func() {
+		re.NoError(failpoint.Disable("tikvclient/noBuiltInTxnSafePointUpdater"))
+	}()
 
-	pd1, store1 := s.createClient(ks1)
-	defer pd1.Close()
-	defer store1.Close()
-	pd2, store2 := s.createClient(ks2)
-	defer pd2.Close()
-	defer store2.Close()
+	s.prepareClients(storeNullKeyspace, storeUnifiedGCKeyspace, storeKeyspaceLevelGCKeyspace)
 
+	ctx := context.Background()
+
+	// The new keyspaces always have zero txn safe point, while the null keyspace may have larger txn safe point due
+	// to other tests that has been run on the cluster. The following test will use values from the null keyspace's
+	// txn safe point.
+	state, err := s.pdClis[0].GetGCStatesClient(constants.NullKeyspaceID).GetGCState(ctx)
+	re.NoError(err)
+	base := state.TxnSafePoint
+
+	callCounter := 0
+	hook := func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error) {
+		callCounter += 1
+		return pdgc.GCState{}, status.Errorf(codes.Unimplemented, "simulated unimplemented error")
+	}
+	for _, store := range s.stores {
+		hookGCStatesClientForStore(store, hook)
+		_, err = store.GetGCStatesClient().GetGCState(ctx)
+		re.Error(err)
+		re.Equal(codes.Unimplemented, status.Code(err))
+	}
+	re.Equal(len(s.stores), callCounter)
+	callCounter = 0
+
+	// Updating the null keyspace. The new value is visible by the null keyspace and keyspaces using unified GC,
+	// but not by keyspaces using keyspace-level GC.
+	res, err := s.pdClis[0].GetGCInternalController(constants.NullKeyspaceID).AdvanceTxnSafePoint(ctx, base+1)
+	re.NoError(err)
+	re.Equal(base+1, res.NewTxnSafePoint)
+	// Call LoadTxnSafePoint twice, so that by checking the callCounter, we chan ensure the new API is called at most
+	// once (for each KVStore) and won't be called again since the first falling back.
+	// For store[0] (null keyspace) and store[1] (unified GC)
+	for i := 0; i < 2; i++ {
+		for _, store := range s.stores[0:2] {
+			txnSafePoint, err := store.LoadTxnSafePoint(ctx)
+			re.NoError(err)
+			re.Equal(base+1, txnSafePoint)
+		}
+		// For store[2] (keyspace level GC): Invisible to the new txn safe point.
+		txnSafePoint, err := s.stores[2].LoadTxnSafePoint(ctx)
+		re.NoError(err)
+		re.Less(txnSafePoint, base+1)
+	}
+
+	// Updating the keyspace with keyspace level GC. The effect is visible only in the same keyspace.
+	res, err = s.pdClis[2].GetGCInternalController(s.keyspaces[2].GetId()).AdvanceTxnSafePoint(ctx, base+2)
+	re.NoError(err)
+	re.Equal(base+2, res.NewTxnSafePoint)
+	for i := 0; i < 2; i++ {
+		txnSafePoint, err := s.stores[2].LoadTxnSafePoint(ctx)
+		re.NoError(err)
+		re.Equal(base+2, txnSafePoint)
+		for _, store := range s.stores[0:2] {
+			txnSafePoint, err := store.LoadTxnSafePoint(ctx)
+			re.NoError(err)
+			re.Less(txnSafePoint, base+2)
+		}
+	}
+
+	// Each store tries `GetGCState` only once.
+	re.Equal(len(s.stores), callCounter)
 }

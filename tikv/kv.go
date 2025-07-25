@@ -393,6 +393,9 @@ func (s *KVStore) IsLatchEnabled() bool {
 }
 
 func (s *KVStore) runTxnSafePointUpdater() {
+	if _, e := util.EvalFailpoint("noBuiltInTxnSafePointUpdater"); e == nil {
+		return
+	}
 	defer s.wg.Done()
 	d := pollTxnSafePointInterval
 	for {
