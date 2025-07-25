@@ -46,11 +46,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tikv/client-go/v2/oracle"
-	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/opentracing/opentracing-go"
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -63,10 +58,14 @@ import (
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/util"
 	"github.com/tikv/pd/client/errs"
 	pderr "github.com/tikv/pd/client/errs"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // shuttingDown is a flag to indicate tidb-server is exiting (Ctrl+C signal
@@ -711,7 +710,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		return rpcCtx, err
 	}
 	if !state.fromAccessKnownLeader {
-		replicaRead := true
+		replicaRead := selector.targetIdx != state.leaderIdx
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
 	staleRead := false

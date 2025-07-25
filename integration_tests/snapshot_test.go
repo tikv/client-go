@@ -47,7 +47,6 @@ import (
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/config/retry"
 	tikverr "github.com/tikv/client-go/v2/error"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
@@ -400,7 +399,7 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 	for _, regionID := range regionIDs {
 		var loc *tikv.KeyLocation
 		s.Eventually(func() bool {
-			loc, err = s.store.GetRegionCache().LocateRegionByID(retry.NewNoopBackoff(context.Background()), regionID)
+			loc, err = s.store.GetRegionCache().LocateRegionByID(tikv.NewNoopBackoff(context.Background()), regionID)
 			return err == nil
 		}, 5*time.Second, time.Millisecond)
 		region := s.store.GetRegionCache().GetCachedRegionWithRLock(loc.Region)
@@ -424,7 +423,7 @@ func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
 			return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
 				// When the request falls back to leader read or when the target replica is the leader,
 				// ReplicaRead should be set to false to avoid read-index operations on the leader.
-				s.Equal(hit && target != leaderStoreAddr, req.ReplicaRead)
+				s.Equal(hit && target != leaderStoreAddr, req.ReplicaRead, target+" | "+leaderStoreAddr)
 				if hit {
 					s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
 				} else {
