@@ -394,16 +394,36 @@ func (s *testSnapshotSuite) TestRCRead() {
 }
 
 func (s *testSnapshotSuite) TestReplicaReadAdjuster() {
-	_, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
+	regionIDs, err := s.store.SplitRegions(context.Background(), [][]byte{[]byte("y1")}, false, nil)
 	s.Nil(err)
+	for _, regionID := range regionIDs {
+		var loc *tikv.KeyLocation
+		s.Eventually(func() bool {
+			loc, err = s.store.GetRegionCache().LocateRegionByID(tikv.NewNoopBackoff(context.Background()), regionID)
+			return err == nil
+		}, 5*time.Second, time.Millisecond)
+		region := s.store.GetRegionCache().GetCachedRegionWithRLock(loc.Region)
+		s.NotNil(region)
+		s.Equal(region.GetLeaderStoreID(), uint64(1))
+	}
+	stores := s.store.GetRegionCache().GetAllStores()
+	var leaderStoreAddr string
+	for _, store := range stores {
+		if store.StoreID() == 1 {
+			leaderStoreAddr = store.GetAddr()
+			break
+		}
+	}
+	s.NotEqual(leaderStoreAddr, "")
 	for _, hit := range []bool{true, false} {
 		txn := s.beginTxn()
 
 		// check the replica read type
 		fn := func(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
 			return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
-				// when the request is fallback to leader read, the ReplicaRead should be false to avoid read-index in store.
-				s.Equal(hit, req.ReplicaRead)
+				// When the request falls back to leader read or when the target replica is the leader,
+				// ReplicaRead should be set to false to avoid read-index operations on the leader.
+				s.Equal(hit && target != leaderStoreAddr, req.ReplicaRead)
 				if hit {
 					s.Equal(kv.ReplicaReadMixed, req.ReplicaReadType)
 				} else {
