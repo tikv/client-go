@@ -418,10 +418,6 @@ func (s *KVStore) runTxnSafePointUpdater() {
 	}
 }
 
-func (s *KVStore) getCodec() Codec {
-	return s.pdClient.(*CodecPDClient).GetCodec()
-}
-
 // Begin a global transaction.
 func (s *KVStore) Begin(opts ...TxnOption) (txn *transaction.KVTxn, err error) {
 	options := &transaction.TxnOptions{}

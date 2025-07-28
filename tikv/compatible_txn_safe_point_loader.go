@@ -105,7 +105,7 @@ func (l *compatibleTxnSafePointLoader) loadTxnSafePoint(ctx context.Context) (ui
 	}
 
 	// Follow the same implementation as the EtcdSafePointKV by setting the timeout 5 seconds.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
 
 	resp, err := l.etcdGet(ctx, cli, key)
