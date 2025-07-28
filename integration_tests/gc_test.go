@@ -326,6 +326,7 @@ func (s *testGCWithTiKVSuite) TestCompatibleTxnSafePointLoaderValueParsing() {
 	re.NoError(err)
 	re.Equal(uint64(18446744073709551615), txnSafePoint)
 
+	// Out of range of uint64
 	re.NoError(failpoint.Enable(fpname, `return("value:18446744073709551616")`))
 	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
 	re.Error(err)
