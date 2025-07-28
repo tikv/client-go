@@ -269,3 +269,64 @@ func (s *testGCWithTiKVSuite) TestLoadTxnSafePointFallback() {
 	// Each store tries `GetGCState` only once.
 	re.Equal(len(s.stores), callCounter)
 }
+
+func (s *testGCWithTiKVSuite) TestCompatibleTxnSafePointLoaderValueParsing() {
+	re := s.Require()
+
+	re.NoError(failpoint.Enable("tikvclient/noBuiltInTxnSafePointUpdater", "return"))
+	defer func() {
+		re.NoError(failpoint.Disable("tikvclient/noBuiltInTxnSafePointUpdater"))
+	}()
+
+	s.prepareClients(storeNullKeyspace)
+	store := s.stores[0]
+	hook := func(inner pdgc.GCStatesClient, ctx context.Context) (pdgc.GCState, error) {
+		return pdgc.GCState{}, status.Errorf(codes.Unimplemented, "simulated unimplemented error")
+	}
+	hookGCStatesClientForStore(store, hook)
+	// Load txn safe point once to enter fallback state.
+	ctx := context.Background()
+	_, err := store.LoadTxnSafePoint(ctx)
+	re.NoError(err)
+
+	fpname := "tikvclient/compatibleTxnSafePointLoaderEtcdGetResult"
+	re.NoError(failpoint.Enable(fpname, `return("empty")`))
+	defer func() {
+		re.NoError(failpoint.Disable(fpname))
+	}()
+	txnSafePoint, err := store.LoadTxnSafePoint(ctx)
+	re.NoError(err)
+	re.Equal(uint64(0), txnSafePoint)
+
+	re.NoError(failpoint.Enable(fpname, `return("value:")`))
+	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
+	re.NoError(err)
+	re.Equal(uint64(0), txnSafePoint)
+
+	re.NoError(failpoint.Enable(fpname, `return("value:1")`))
+	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
+	re.NoError(err)
+	re.Equal(uint64(1), txnSafePoint)
+
+	re.NoError(failpoint.Enable(fpname, `return("value:abcde")`))
+	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
+	re.Error(err)
+
+	re.NoError(failpoint.Enable(fpname, `return("value:459579321342754819")`))
+	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
+	re.NoError(err)
+	re.Equal(uint64(459579321342754819), txnSafePoint)
+
+	re.NoError(failpoint.Enable(fpname, `return("value:459579321342754819abcdefg")`))
+	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
+	re.Error(err)
+
+	re.NoError(failpoint.Enable(fpname, `return("value:18446744073709551615")`))
+	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
+	re.NoError(err)
+	re.Equal(uint64(18446744073709551615), txnSafePoint)
+
+	re.NoError(failpoint.Enable(fpname, `return("value:18446744073709551616")`))
+	txnSafePoint, err = store.LoadTxnSafePoint(ctx)
+	re.Error(err)
+}

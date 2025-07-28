@@ -47,6 +47,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // StoreProbe wraps KVStore and exposes internal states for testing purpose.
@@ -167,6 +168,10 @@ func (s StoreProbe) GetGCStatesClient() pdgc.GCStatesClient {
 
 func (s StoreProbe) ReplaceGCStatesClient(c pdgc.GCStatesClient) {
 	s.KVStore.gcStatesClient = c
+}
+
+func (s StoreProbe) GetCompatibleTxnSafePointLoaderUnderlyingEtcdClient() *clientv3.Client {
+	return s.KVStore.compatibleTxnSafePointLoader.etcdCli.Load()
 }
 
 // LockResolverProbe wraps a LockResolver and exposes internal stats for testing purpose.

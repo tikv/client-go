@@ -5,13 +5,16 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/tikv/client-go/v2/internal/apicodec"
+	"github.com/tikv/client-go/v2/util"
 	pd "github.com/tikv/pd/client"
+	etcdmvccpb "go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -38,9 +41,9 @@ type compatibleTxnSafePointLoader struct {
 	codec     apicodec.Codec
 }
 
-func newCompatibleTxnSafePointLoader(codec apicodec.Codec, endpoints []string, tlsConfig *tls.Config) *compatibleTxnSafePointLoader {
+func newCompatibleTxnSafePointLoader(codec apicodec.Codec, etcdEndpoints []string, tlsConfig *tls.Config) *compatibleTxnSafePointLoader {
 	return &compatibleTxnSafePointLoader{
-		endpoints: endpoints,
+		endpoints: etcdEndpoints,
 		tlsConfig: tlsConfig,
 		codec:     codec,
 	}
@@ -60,6 +63,28 @@ func (l *compatibleTxnSafePointLoader) getEtcdCli() (*clientv3.Client, error) {
 	}
 	l.etcdCli.Store(cli)
 	return cli, nil
+}
+
+func (*compatibleTxnSafePointLoader) etcdGet(ctx context.Context, cli *clientv3.Client, key string) (*clientv3.GetResponse, error) {
+	if val, err := util.EvalFailpoint("compatibleTxnSafePointLoaderEtcdGetResult"); err == nil {
+		str, ok := val.(string)
+		if !ok {
+			panic("invalid failpoint value for compatibleTxnSafePointLoaderEtcdGetResult, string is expected")
+		}
+		if str == "empty" {
+			return &clientv3.GetResponse{}, nil
+		}
+		if strings.HasPrefix(str, "value:") {
+			value := strings.TrimPrefix(str, "value:")
+			return &clientv3.GetResponse{
+				Kvs:   []*etcdmvccpb.KeyValue{{Key: []byte(key), Value: []byte(value)}},
+				Count: 1,
+			}, nil
+		}
+		panic("invalid failpoint value for compatibleTxnSafePointLoaderEtcdGetResult, invalid format")
+	}
+
+	return cli.Get(ctx, key)
 }
 
 func (l *compatibleTxnSafePointLoader) loadTxnSafePoint(ctx context.Context) (uint64, error) {
@@ -83,7 +108,7 @@ func (l *compatibleTxnSafePointLoader) loadTxnSafePoint(ctx context.Context) (ui
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	resp, err := cli.Get(ctx, key)
+	resp, err := l.etcdGet(ctx, cli, key)
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
