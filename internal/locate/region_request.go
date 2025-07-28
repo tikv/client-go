@@ -780,7 +780,7 @@ func (state *tryFollower) next(bo *retry.Backoffer, selector *replicaSelector) (
 		return rpcCtx, err
 	}
 	if !state.fromAccessKnownLeader {
-		replicaRead := selector.targetIdx != state.leaderIdx
+		replicaRead := true
 		rpcCtx.contextPatcher.replicaRead = &replicaRead
 	}
 	staleRead := false
