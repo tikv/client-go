@@ -280,6 +280,7 @@ func NewPDClientWithAPIContext(pdAddrs []string, apiContext pd.APIContext) (pd.C
 		),
 		opt.WithCustomTimeoutOption(time.Duration(cfg.PDClient.PDServerTimeout)*time.Second),
 		opt.WithForwardingOption(config.GetGlobalConfig().EnableForwarding),
+		opt.WithResourceManagerProxyOption(config.GetGlobalConfig().PDClient.UseResourceManagerProxy),
 	)
 	if err != nil {
 		return nil, errors.WithStack(err)

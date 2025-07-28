@@ -106,12 +106,15 @@ func DefaultConfig() Config {
 type PDClient struct {
 	// PDServerTimeout is the max time which PD client will wait for the PD server in seconds.
 	PDServerTimeout uint `toml:"pd-server-timeout" json:"pd-server-timeout"`
+	// UseResourceManagerProxy is for pd client to connect PD leader instead of resource manager leader.
+	UseResourceManagerProxy bool `toml:"use-resource-manager-proxy" json:"use-resource-manager-proxy"`
 }
 
 // DefaultPDClient returns the default configuration for PDClient
 func DefaultPDClient() PDClient {
 	return PDClient{
-		PDServerTimeout: 3,
+		PDServerTimeout:         3,
+		UseResourceManagerProxy: true,
 	}
 }
 

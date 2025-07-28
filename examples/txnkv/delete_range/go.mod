@@ -52,5 +52,5 @@ require (
 
 replace (
 	github.com/tikv/client-go/v2 => ../../../
-	github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20250701024007-b22e096997e0
+	github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20250728050443-07a7a45ddb38
 )

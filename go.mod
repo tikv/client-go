@@ -63,4 +63,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20250701024007-b22e096997e0
+replace github.com/tikv/pd/client => github.com/tidbcloud/pd-cse/client v0.0.0-20250728050443-07a7a45ddb38
