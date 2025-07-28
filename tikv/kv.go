@@ -191,6 +191,7 @@ func (s *KVStore) loadTxnSafePoint(ctx context.Context) (uint64, error) {
 	if err != nil {
 		if status, ok := grpcStatus.FromError(err); ok && status.Code() == codes.Unimplemented {
 			logutil.Logger(ctx).Warn("GC states API is not available, which is possibly caused by cluster version < 9.0. Txn safe point updating will be fallen back to direct etcd reading.", zap.Error(err))
+			s.gcStatesAPIUnavailable.Store(true)
 			return s.compatibleTxnSafePointLoader.loadTxnSafePoint(ctx)
 		}
 		logutil.Logger(ctx).Error("Failed to load current txn safe point from PD", zap.Error(err))
@@ -393,10 +394,10 @@ func (s *KVStore) IsLatchEnabled() bool {
 }
 
 func (s *KVStore) runTxnSafePointUpdater() {
+	defer s.wg.Done()
 	if _, e := util.EvalFailpoint("noBuiltInTxnSafePointUpdater"); e == nil {
 		return
 	}
-	defer s.wg.Done()
 	d := pollTxnSafePointInterval
 	for {
 		select {
@@ -496,6 +497,9 @@ func (s *KVStore) Close() error {
 	s.regionCache.Close()
 
 	if err := s.kv.Close(); err != nil {
+		return err
+	}
+	if err := s.compatibleTxnSafePointLoader.Close(); err != nil {
 		return err
 	}
 	return nil

@@ -101,3 +101,11 @@ func (l *compatibleTxnSafePointLoader) loadTxnSafePoint(ctx context.Context) (ui
 	}
 	return value, nil
 }
+
+func (l *compatibleTxnSafePointLoader) Close() error {
+	cli := l.etcdCli.Load()
+	if cli != nil {
+		return cli.Close()
+	}
+	return nil
+}

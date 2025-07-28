@@ -1,6 +1,7 @@
 package tikv_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -80,12 +81,14 @@ func (s *testGCWithTiKVSuite) SetupTest() {
 
 func (s *testGCWithTiKVSuite) TearDownTest() {
 	re := s.Require()
-	s.globalPDCli.Close()
-	for _, pdCli := range s.pdClis {
-		pdCli.Close()
-	}
 	for _, store := range s.stores {
 		re.NoError(store.Close())
+	}
+	if s.globalPDCli != nil {
+		s.globalPDCli.Close()
+	}
+	for _, pdCli := range s.pdClis {
+		pdCli.Close()
 	}
 	for _, keyspaceMeta := range s.keyspaces {
 		if keyspaceMeta == nil {
@@ -137,16 +140,18 @@ func (s *testGCWithTiKVSuite) createKeyspace(name string, keyspaceLevelGC bool) 
 	}
 	reqJson, err := json.Marshal(req)
 	re.NoError(err)
-	resp, err := http.Post(fmt.Sprintf("http://%s/pd/api/v2/keyspaces", s.addrs[0]), "application/json", strings.NewReader(string(reqJson)))
+	resp, err := http.Post(fmt.Sprintf("%s/pd/api/v2/keyspaces", s.addrs[0]), "application/json", bytes.NewBuffer(reqJson))
 	re.NoError(err)
 	defer resp.Body.Close()
 	respBody := new(strings.Builder)
 	_, err = io.Copy(respBody, resp.Body)
 	re.NoError(err)
-	re.Equal(http.StatusOK, resp.StatusCode, "Failed to create keyspace %s, response: %s", name, err)
+	re.Equal(http.StatusOK, resp.StatusCode, "Failed to create keyspace %s, response: %s", name, respBody.String())
 
 	meta, err := s.globalPDCli.LoadKeyspace(context.Background(), name)
 	re.NoError(err)
+	// Avoid goroutine leak in the test.
+	http.DefaultClient.CloseIdleConnections()
 	return meta
 }
 
@@ -160,8 +165,11 @@ const (
 
 func (s *testGCWithTiKVSuite) dropKeyspace(keyspaceMeta *keyspacepb.KeyspaceMeta) {
 	re := s.Require()
-	_, err := s.globalPDCli.UpdateKeyspaceState(context.Background(), keyspaceMeta.Id, keyspacepb.KeyspaceState_ARCHIVED)
-	re.NoError(err)
+	// Nil might be used to represent the null keyspace.
+	if keyspaceMeta != nil {
+		_, err := s.globalPDCli.UpdateKeyspaceState(context.Background(), keyspaceMeta.Id, keyspacepb.KeyspaceState_ARCHIVED)
+		re.NoError(err)
+	}
 }
 
 func genKeyspaceName() string {
