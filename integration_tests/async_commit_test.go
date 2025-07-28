@@ -631,7 +631,7 @@ func (s *testAsyncCommitSuite) TestRollbackAsyncCommitEnforcesFallback() {
 		s.Nil(err)
 		status, err := resolver.GetTxnStatus(s.bo, lock.TxnID, []byte("a"), currentTS, currentTS, false, false, nil)
 		s.Nil(err)
-		if status.IsRolledBack() {
+		if s.store.GetOracle().IsExpired(lock.TxnID, status.TTL(), &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
 			break
 		}
 		time.Sleep(time.Millisecond * 30)

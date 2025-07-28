@@ -1558,6 +1558,8 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 			logutil.Logger(bo.GetCtx()).Error("load region failure",
 				zap.String("key", redact.Key(key)), zap.Error(err),
 				zap.String("encode-key", redact.Key(c.codec.EncodeRegionKey(key))))
+			// mark as need sync reload
+			r.setSyncFlags(needReloadOnAccess)
 		} else {
 			logutil.Eventf(bo.GetCtx(), "load region %d from pd, due to need-reload", lr.GetID())
 			reloadOnAccess := flags&needReloadOnAccess > 0
@@ -1702,6 +1704,8 @@ func (c *RegionCache) LocateRegionByID(bo *retry.Backoffer, regionID uint64) (*K
 				// ignore error and use old region info.
 				logutil.Logger(bo.GetCtx()).Error("load region failure",
 					zap.Uint64("regionID", regionID), zap.Error(err))
+				// mark as need sync reload
+				r.setSyncFlags(needReloadOnAccess)
 			} else {
 				r = lr
 				c.mu.Lock()
