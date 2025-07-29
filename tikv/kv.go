@@ -181,11 +181,22 @@ func (s *KVStore) updateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
 	s.gcStateCacheMu.cachedTxnSafePoint = txnSafePoint
 }
 
+func (s *KVStore) loadTxnSafePointInCompatibleMode(ctx context.Context) (uint64, error) {
+	res, err := s.compatibleTxnSafePointLoader.loadTxnSafePoint(ctx)
+	if err != nil {
+		logutil.BgLogger().Error("failed to load current txn safe point from PD in compatible mode", zap.Error(err))
+		metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("fail_compatible").Inc()
+		return 0, errors.WithStack(err)
+	}
+	metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("ok_compatible").Inc()
+	return res, nil
+}
+
 func (s *KVStore) loadTxnSafePoint(ctx context.Context) (uint64, error) {
 	if s.gcStatesAPIUnavailable.Load() {
 		// Print in debug level to avoid being too verbose. A warning log will be printed when the first fallback occurs.
 		logutil.Logger(ctx).Debug("GC states API is not available, which is possibly caused by cluster version < 9.0. Txn safe point updating will be fallen back to direct etcd reading.")
-		return s.compatibleTxnSafePointLoader.loadTxnSafePoint(ctx)
+		return s.loadTxnSafePointInCompatibleMode(ctx)
 	}
 
 	gcStates, err := s.gcStatesClient.GetGCState(ctx)
@@ -193,11 +204,13 @@ func (s *KVStore) loadTxnSafePoint(ctx context.Context) (uint64, error) {
 		if status, ok := grpcStatus.FromError(err); ok && status.Code() == codes.Unimplemented {
 			logutil.Logger(ctx).Warn("GC states API is not available, which is possibly caused by cluster version < 9.0. Txn safe point updating will be fallen back to direct etcd reading.", zap.Error(err))
 			s.gcStatesAPIUnavailable.Store(true)
-			return s.compatibleTxnSafePointLoader.loadTxnSafePoint(ctx)
+			return s.loadTxnSafePointInCompatibleMode(ctx)
 		}
-		logutil.Logger(ctx).Error("Failed to load current txn safe point from PD", zap.Error(err))
+		logutil.Logger(ctx).Error("failed to load current txn safe point from PD", zap.Error(err))
+		metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("fail").Inc()
 		return 0, err
 	}
+	metrics.TiKVLoadTxnSafePointCounter.WithLabelValues("ok").Inc()
 	return gcStates.TxnSafePoint, nil
 }
 
@@ -405,12 +418,9 @@ func (s *KVStore) runTxnSafePointUpdater() {
 		case now := <-time.After(d):
 			txnSafePoint, err := s.loadTxnSafePoint(context.Background())
 			if err == nil {
-				metrics.TiKVLoadSafepointCounter.WithLabelValues("ok").Inc()
 				s.updateTxnSafePointCache(txnSafePoint, now)
 				d = pollTxnSafePointInterval
 			} else {
-				metrics.TiKVLoadSafepointCounter.WithLabelValues("fail").Inc()
-				logutil.BgLogger().Error("fail to load txn safe point from pd", zap.Error(err))
 				d = pollTxnSafePointQuickRepeatInterval
 			}
 		case <-s.ctx.Done():

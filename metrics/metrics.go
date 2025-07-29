@@ -54,7 +54,7 @@ var (
 	TiKVRawkvCmdHistogram                          *prometheus.HistogramVec
 	TiKVRawkvSizeHistogram                         *prometheus.HistogramVec
 	TiKVTxnRegionsNumHistogram                     *prometheus.HistogramVec
-	TiKVLoadSafepointCounter                       *prometheus.CounterVec
+	TiKVLoadTxnSafePointCounter                    *prometheus.CounterVec
 	TiKVSecondaryLockCleanupFailureCounter         *prometheus.CounterVec
 	TiKVRegionCacheCounter                         *prometheus.CounterVec
 	TiKVLoadRegionCounter                          *prometheus.CounterVec
@@ -275,7 +275,7 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			ConstLabels: constLabels,
 		}, []string{LblType, LblScope})
 
-	TiKVLoadSafepointCounter = prometheus.NewCounterVec(
+	TiKVLoadTxnSafePointCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace:   namespace,
 			Subsystem:   subsystem,
@@ -922,7 +922,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVRawkvCmdHistogram)
 	prometheus.MustRegister(TiKVRawkvSizeHistogram)
 	prometheus.MustRegister(TiKVTxnRegionsNumHistogram)
-	prometheus.MustRegister(TiKVLoadSafepointCounter)
+	prometheus.MustRegister(TiKVLoadTxnSafePointCounter)
 	prometheus.MustRegister(TiKVSecondaryLockCleanupFailureCounter)
 	prometheus.MustRegister(TiKVRegionCacheCounter)
 	prometheus.MustRegister(TiKVLoadRegionCounter)
