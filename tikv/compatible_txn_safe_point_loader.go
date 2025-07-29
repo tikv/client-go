@@ -61,6 +61,9 @@ func (l *compatibleTxnSafePointLoader) getEtcdCli() (*clientv3.Client, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	// Note that the atomic operation is still necessary though the function is protected by the mutex. It's because
+	// that the first attempt to load the pointer (at the beginning of loadTxnSafePoint) is not in the mutex's range,
+	// and it can be concurrent with the writing here, which is still unsafe.
 	l.etcdCli.Store(cli)
 	return cli, nil
 }

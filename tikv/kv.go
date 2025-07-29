@@ -183,7 +183,8 @@ func (s *KVStore) updateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
 
 func (s *KVStore) loadTxnSafePoint(ctx context.Context) (uint64, error) {
 	if s.gcStatesAPIUnavailable.Load() {
-		logutil.Logger(ctx).Warn("GC states API is not available, which is possibly caused by cluster version < 9.0. Txn safe point updating will be fallen back to direct etcd reading.")
+		// Print in debug level to avoid being too verbose. A warning log will be printed when the first fallback occurs.
+		logutil.Logger(ctx).Debug("GC states API is not available, which is possibly caused by cluster version < 9.0. Txn safe point updating will be fallen back to direct etcd reading.")
 		return s.compatibleTxnSafePointLoader.loadTxnSafePoint(ctx)
 	}
 
