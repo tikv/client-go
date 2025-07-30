@@ -7,6 +7,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/pd/client/constants"
 )
 
 type (
@@ -25,7 +26,7 @@ const (
 
 const (
 	// NullspaceID is a special keyspace id that represents no keyspace exist.
-	NullspaceID KeyspaceID = 0xffffffff
+	NullspaceID = KeyspaceID(constants.NullKeyspaceID)
 )
 
 // ParseKeyspaceID retrieves the keyspaceID from the given keyspace-encoded key.
