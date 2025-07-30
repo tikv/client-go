@@ -123,7 +123,9 @@ func (s *RegionRequestSender) String() string {
 
 // RegionRequestRuntimeStats records the runtime stats of send region requests.
 type RegionRequestRuntimeStats struct {
-	RPCStats map[tikvrpc.CmdType]*RPCRuntimeStats
+	RPCStats    map[tikvrpc.CmdType]*RPCRuntimeStats
+	ReqToRegion *RPCRuntimeStats
+	SendRequest *RPCRuntimeStats
 	RequestErrorStats
 }
 
@@ -161,6 +163,22 @@ func (r *RegionRequestRuntimeStats) RecordRPCRuntimeStats(cmd tikvrpc.CmdType, d
 	}
 	stat.Count++
 	stat.Consume += int64(d)
+}
+
+func (r *RegionRequestRuntimeStats) RecordReqToRegionStats(d time.Duration) {
+	if r.ReqToRegion == nil {
+		r.ReqToRegion = &RPCRuntimeStats{}
+	}
+	r.ReqToRegion.Count++
+	r.ReqToRegion.Consume += int64(d)
+}
+
+func (r *RegionRequestRuntimeStats) RecordSendRequestStats(d time.Duration) {
+	if r.SendRequest == nil {
+		r.SendRequest = &RPCRuntimeStats{}
+	}
+	r.SendRequest.Count++
+	r.SendRequest.Consume += int64(d)
 }
 
 // RecordRPCErrorStats uses to record the request error(region error label and rpc error) info and count.
@@ -1670,7 +1688,12 @@ func (s *RegionRequestSender) SendReqCtx(
 		}
 
 		var retry bool
+		sendReqToRegionStartTime := time.Now()
 		resp, retry, err = s.sendReqToRegion(bo, rpcCtx, req, timeout)
+		if s.Stats != nil {
+			s.Stats.RecordReqToRegionStats(time.Since(sendReqToRegionStartTime))
+		}
+
 		req.IsRetryRequest = true
 		if err != nil {
 			if cost := time.Since(startTime); cost > slowLogSendReqTime || cost > timeout || bo.GetTotalSleep() > 1000 {
@@ -1947,6 +1970,7 @@ func (s *RegionRequestSender) sendReqToRegion(
 			rpcCtx.Store.recordSlowScoreStat(rpcDuration)
 		}
 		if s.Stats != nil {
+			s.Stats.RecordSendRequestStats(rpcDuration)
 			s.Stats.RecordRPCRuntimeStats(req.Type, rpcDuration)
 			if val, fpErr := util.EvalFailpoint("tikvStoreRespResult"); fpErr == nil {
 				if val.(bool) {
