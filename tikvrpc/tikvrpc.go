@@ -47,10 +47,8 @@ import (
 	"github.com/pingcap/kvproto/pkg/mpp"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pkg/errors"
-	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
-	"go.uber.org/zap"
 )
 
 // CmdType represents the concrete request type in Request or response type in Response.
@@ -976,7 +974,6 @@ func (resp *Response) GetExecDetailsV2() *kvrpcpb.ExecDetailsV2 {
 // ch is needed to implement timeout for coprocessor streaming, the stream object's
 // cancel function will be sent to the channel, together with a lease checked by a background goroutine.
 func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Response, error) {
-	startTime := time.Now()
 	resp := &Response{}
 	var err error
 	switch req.Type {
@@ -1097,15 +1094,6 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
-	if d := time.Since(startTime); d > 300*time.Millisecond {
-		logutil.BgLogger().Warn("tikv request took too long",
-			zap.String("type", req.Type.String()),
-			zap.Duration("duration", d),
-			zap.Uint64("region", req.Context.RegionId),
-		)
-	}
-
 	return resp, nil
 }
 
