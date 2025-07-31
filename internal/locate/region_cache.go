@@ -660,6 +660,8 @@ type RegionCache struct {
 	bg *bgRunner
 
 	clusterID uint64
+
+	inflightUpdateBuckets sync.Map
 }
 
 type regionCacheOptions struct {
@@ -2728,9 +2730,13 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 		bucketsVer = buckets.GetVersion()
 	}
 	if bucketsVer < latestBucketsVer {
-		// TODO(youjiali1995): use singleflight.
-		go func() {
-			bo := retry.NewBackoffer(context.Background(), 20000)
+		_, inflight := c.inflightUpdateBuckets.LoadOrStore(regionID.id, struct{}{})
+		if inflight {
+			return
+		}
+		c.bg.run(func(ctx context.Context) {
+			defer c.inflightUpdateBuckets.Delete(regionID.id)
+			bo := retry.NewBackoffer(ctx, 20000)
 			observeLoadRegion("ByID", r, false, 0, loadRegionReasonUpdateBuckets)
 			new, err := c.loadRegionByID(bo, regionID.id)
 			if err != nil {
@@ -2742,7 +2748,7 @@ func (c *RegionCache) UpdateBucketsIfNeeded(regionID RegionVerID, latestBucketsV
 			c.mu.Lock()
 			c.insertRegionToCache(new, true, true)
 			c.mu.Unlock()
-		}()
+		})
 	}
 }
 

@@ -113,6 +113,7 @@ func (lr *LockResolver) Close() {
 
 // TxnStatus represents a txn's final status. It should be Lock or Commit or Rollback.
 type TxnStatus struct {
+	// The ttl is set from the `CheckTxnStatus` kv response, it is read only and do not change it.
 	ttl         uint64
 	commitTS    uint64
 	action      kvrpcpb.Action
@@ -120,10 +121,19 @@ type TxnStatus struct {
 }
 
 // IsCommitted returns true if the txn's final status is Commit.
-func (s TxnStatus) IsCommitted() bool { return s.ttl == 0 && s.commitTS > 0 }
+func (s TxnStatus) IsCommitted() bool { return s.commitTS > 0 }
 
 // IsRolledBack returns true if the txn's final status is rolled back.
-func (s TxnStatus) IsRolledBack() bool { return s.ttl == 0 && s.commitTS == 0 }
+func (s TxnStatus) IsRolledBack() bool {
+	return s.ttl == 0 && s.commitTS == 0 && (s.action == kvrpcpb.Action_NoAction ||
+		s.action == kvrpcpb.Action_LockNotExistRollback ||
+		s.action == kvrpcpb.Action_TTLExpireRollback)
+}
+
+// IsStatusDetermined returns true if the txn's final status is determined.
+func (s TxnStatus) IsStatusDetermined() bool {
+	return s.IsRolledBack() || s.IsCommitted()
+}
 
 // CommitTS returns the txn's commitTS. It is valid iff `IsCommitted` is true.
 func (s TxnStatus) CommitTS() uint64 { return s.commitTS }
@@ -137,27 +147,37 @@ func (s TxnStatus) Action() kvrpcpb.Action { return s.action }
 // StatusCacheable checks whether the transaction status is certain.True will be
 // returned if its status is certain:
 //
-//	If transaction is already committed, the result could be cached.
-//	Otherwise:
-//	  If l.LockType is pessimistic lock type:
-//	      - if its primary lock is pessimistic too, the check txn status result should not be cached.
-//	      - if its primary lock is prewrite lock type, the check txn status could be cached.
-//	  If l.lockType is prewrite lock type:
-//	      - always cache the check txn status result.
+// The `CheckTxnStatus` status logic is:
+//
+//	If l.LockType is pessimistic lock type:
+//	    - if its primary lock is pessimistic too, the check txn status result should NOT be cached.
+//	    - if its primary lock is prewrite lock type, the check txn status could be cached.
+//	If l.lockType is prewrite lock type:
+//	    - always cache the check txn status result.
 //
 // For prewrite locks, their primary keys should ALWAYS be the correct one and will NOT change.
+//
+// The mapping from `CheckTxnStatus` kv result to the tidb status:
+//
+//		TxnStatus::RolledBack => resp.set_action(Action::NoAction),
+//		TxnStatus::TtlExpire => resp.set_action(Action::TtlExpireRollback),
+//		TxnStatus::LockNotExist => resp.set_action(Action::LockNotExistRollback),
+//		TxnStatus::Committed { commit_ts } => {
+//		    resp.set_commit_version(commit_ts.into_inner())
+//		}
+//
+//	 So the transaction is regarded as committed if the commit_ts is not 0, and rolled back if the
+//	 `action` equals `Action::NoAction` or `Action::LockNotExistRollback` or `Action::TtlExpireRollback`.
+//	 Refer to the tikv `CheckTxnStatus` handling logic for more information.
 func (s TxnStatus) StatusCacheable() bool {
-	if s.IsCommitted() {
-		return true
-	}
-	if s.ttl == 0 {
-		if s.action == kvrpcpb.Action_NoAction ||
-			s.action == kvrpcpb.Action_LockNotExistRollback ||
-			s.action == kvrpcpb.Action_TTLExpireRollback {
-			return true
-		}
-	}
-	return false
+	return s.IsStatusDetermined()
+}
+
+// HasSameDeterminedStatus checks whether the current status is equal to another status if the
+// transaction status is determined.
+func (s TxnStatus) HasSameDeterminedStatus(other TxnStatus) bool {
+	return (s.IsCommitted() && other.IsCommitted() && s.CommitTS() == other.CommitTS()) ||
+		(s.IsRolledBack() && other.IsRolledBack())
 }
 
 func (s TxnStatus) String() string {
@@ -204,10 +224,23 @@ func NewLock(l *kvrpcpb.LockInfo) *Lock {
 }
 
 func (lr *LockResolver) saveResolved(txnID uint64, status TxnStatus) {
+	if !status.IsStatusDetermined() {
+		logutil.BgLogger().Error("unexpected undetermined status saved to cache",
+			zap.Uint64("txnID", txnID), zap.Stringer("status", status), zap.Stack("stack"))
+		panic("unexpected undetermined status saved to cache")
+	}
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 
-	if _, ok := lr.mu.resolved[txnID]; ok {
+	if savedStatus, ok := lr.mu.resolved[txnID]; ok {
+		// The saved determined status should always equal to the new one.
+		if !(savedStatus.HasSameDeterminedStatus(status)) {
+			logutil.BgLogger().Error("unexpected txn status saving to the cache, the existing status is not equal to the new one",
+				zap.Uint64("txnID", txnID),
+				zap.String("existing status", savedStatus.String()),
+				zap.String("new status", status.String()))
+			panic("unexpected txn status saved to cache with existing different entry")
+		}
 		return
 	}
 	lr.mu.resolved[txnID] = status
@@ -491,19 +524,28 @@ func (lr *LockResolver) resolveLocks(bo *retry.Backoffer, opts ResolveLocksOptio
 		} else if err != nil {
 			return TxnStatus{}, err
 		}
-		if status.ttl != 0 {
+		ttlExpired := (lr.store == nil) || (lr.store.GetOracle().IsExpired(l.TxnID, status.ttl, &oracle.Option{TxnScope: oracle.GlobalTxnScope}))
+		expiredAsyncCommitLocks := status.primaryLock != nil && status.primaryLock.UseAsyncCommit && !forceSyncCommit && ttlExpired
+		if status.ttl != 0 && !expiredAsyncCommitLocks {
 			return status, nil
 		}
 
-		// If the lock is committed or rolled back, resolve lock.
-		// If the lock is regarded as an expired pessimistic lock, pessimistic rollback it.
+		// If the lock is non-async-commit type:
+		// - It is committed or rolled back, resolve lock accordingly.
+		// - It does not expire, return TTL and backoff wait.
+		// - It is regarded as an expired pessimistic lock, pessimistic rollback it.
+		//
+		// Else if the lock is an async-commit lock:
+		// - It does not expire, return TTL and backoff wait.
+		// - Otherwise, try to trigger the `resolveAsyncCommitLock` process to determine the status of
+		//   corresponding async commit transaction.
 		metrics.LockResolverCountWithExpired.Inc()
 		cleanRegions, exists := cleanTxns[l.TxnID]
 		if !exists {
 			cleanRegions = make(map[locate.RegionVerID]struct{})
 			cleanTxns[l.TxnID] = cleanRegions
 		}
-		if status.primaryLock != nil && status.primaryLock.UseAsyncCommit && !forceSyncCommit {
+		if expiredAsyncCommitLocks {
 			// resolveAsyncCommitLock will resolve all locks of the transaction, so we needn't resolve
 			// it again if it has been resolved once.
 			if exists {
@@ -821,11 +863,7 @@ func (lr *LockResolver) getTxnStatus(bo *retry.Backoffer, txnID uint64, primary 
 		status.action = cmdResp.Action
 		status.primaryLock = cmdResp.LockInfo
 
-		if status.primaryLock != nil && status.primaryLock.UseAsyncCommit && !forceSyncCommit {
-			if !lr.store.GetOracle().IsExpired(txnID, cmdResp.LockTtl, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
-				status.ttl = cmdResp.LockTtl
-			}
-		} else if cmdResp.LockTtl != 0 {
+		if cmdResp.LockTtl != 0 {
 			status.ttl = cmdResp.LockTtl
 		} else {
 			if cmdResp.CommitVersion == 0 {
@@ -879,7 +917,7 @@ func (data *asyncResolveData) addKeys(locks []*kvrpcpb.LockInfo, expected int, s
 
 	// Check locks to see if any have been committed or rolled back.
 	if len(locks) < expected {
-		logutil.BgLogger().Debug("addKeys: lock has been committed or rolled back", zap.Uint64("commit ts", commitTS), zap.Uint64("start ts", startTS))
+		logutil.BgLogger().Info("addKeys: lock has been committed or rolled back", zap.Uint64("commit ts", commitTS), zap.Uint64("start ts", startTS))
 		// A lock is missing - the transaction must either have been rolled back or committed.
 		if !data.missingLock {
 			// commitTS == 0 => lock has been rolled back.
@@ -970,10 +1008,10 @@ func (lr *LockResolver) checkSecondaries(bo *retry.Backoffer, txnID uint64, curK
 }
 
 // resolveAsyncResolveData resolves all locks in an async-commit transaction according to the status.
-func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, status TxnStatus, data *asyncResolveData) error {
+func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, status TxnStatus, keys [][]byte) error {
 	util.EvalFailpoint("resolveAsyncResolveData")
 
-	keysByRegion, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, data.keys, nil)
+	keysByRegion, _, err := lr.store.GetRegionCache().GroupKeysByRegion(bo, keys, nil)
 	if err != nil {
 		return err
 	}
@@ -1012,31 +1050,49 @@ func (lr *LockResolver) resolveAsyncResolveData(bo *retry.Backoffer, l *Lock, st
 func (lr *LockResolver) resolveAsyncCommitLock(bo *retry.Backoffer, l *Lock, status TxnStatus, asyncResolveAll bool) (TxnStatus, error) {
 	metrics.LockResolverCountWithResolveAsync.Inc()
 
-	resolveData, err := lr.checkAllSecondaries(bo, l, &status)
-	if err != nil {
-		return TxnStatus{}, err
-	}
-	resolveData.keys = append(resolveData.keys, l.Primary)
+	var toResolveKeys [][]byte
+	if status.IsStatusDetermined() {
+		toResolveKeys = make([][]byte, 0, len(status.primaryLock.Secondaries)+1)
+		toResolveKeys = append(toResolveKeys, status.primaryLock.Secondaries...)
+		toResolveKeys = append(toResolveKeys, l.Primary)
+	} else {
+		// Only do checkAllSecondaries if the transaction status is undetermined.
+		// The async commit transaction is regarded as committed if `resolveData.commitTS` is not 0,
+		// otherwise it is regarded as rolled back. The transaction status should be determined if the
+		// `checkAllSecondaries` finishes with no errors.
+		resolveData, err := lr.checkAllSecondaries(bo, l, &status)
+		if err != nil {
+			return TxnStatus{}, err
+		}
+		resolveData.keys = append(resolveData.keys, l.Primary)
 
-	status.commitTS = resolveData.commitTs
-	if status.StatusCacheable() {
-		lr.saveResolved(l.TxnID, status)
+		status.commitTS = resolveData.commitTs
+		if status.StatusCacheable() {
+			lr.saveResolved(l.TxnID, status)
+		}
+		toResolveKeys = resolveData.keys
 	}
 
-	logutil.BgLogger().Info("resolve async commit", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS))
+	if _, err := util.EvalFailpoint("resolveAsyncCommitLockReturn"); err == nil {
+		return status, nil
+	}
+	logutil.BgLogger().Info("resolve async commit locks", zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.commitTS), zap.Stringer("TxnStatus", status))
 	if asyncResolveAll {
 		asyncBo := retry.NewBackoffer(lr.asyncResolveCtx, asyncResolveLockMaxBackoff)
 		go func() {
-			err := lr.resolveAsyncResolveData(asyncBo, l, status, resolveData)
+			err := lr.resolveAsyncResolveData(asyncBo, l, status, toResolveKeys)
 			if err != nil {
 				logutil.BgLogger().Info("failed to resolve async-commit locks asynchronously",
 					zap.Uint64("startTS", l.TxnID), zap.Uint64("commitTS", status.CommitTS()), zap.Error(err))
 			}
 		}()
 	} else {
-		err = lr.resolveAsyncResolveData(bo, l, status, resolveData)
+		err := lr.resolveAsyncResolveData(bo, l, status, toResolveKeys)
+		if err != nil {
+			return TxnStatus{}, err
+		}
 	}
-	return status, err
+	return status, nil
 }
 
 // checkAllSecondaries checks the secondary locks of an async commit transaction to find out the final

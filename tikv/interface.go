@@ -58,10 +58,6 @@ type Storage interface {
 	// GetSafePointKV gets the SafePointKV.
 	GetSafePointKV() SafePointKV
 
-	// UpdateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
-	// operations to prevent accessing GC-ed inconsistent data.
-	UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time)
-
 	// SetOracle sets the Oracle.
 	SetOracle(oracle oracle.Oracle)
 

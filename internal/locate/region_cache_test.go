@@ -70,6 +70,7 @@ import (
 type inspectedPDClient struct {
 	pd.Client
 	getRegion        func(ctx context.Context, cli pd.Client, key []byte, opts ...opt.GetRegionOption) (*router.Region, error)
+	getRegionByID    func(ctx context.Context, cli pd.Client, id uint64, opts ...opt.GetRegionOption) (*router.Region, error)
 	batchScanRegions func(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error)
 }
 
@@ -78,6 +79,13 @@ func (c *inspectedPDClient) GetRegion(ctx context.Context, key []byte, opts ...o
 		return c.getRegion(ctx, c.Client, key, opts...)
 	}
 	return c.Client.GetRegion(ctx, key, opts...)
+}
+
+func (c *inspectedPDClient) GetRegionByID(ctx context.Context, id uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
+	if c.getRegionByID != nil {
+		return c.getRegionByID(ctx, c.Client, id, opts...)
+	}
+	return c.Client.GetRegionByID(ctx, id, opts...)
 }
 
 func (c *inspectedPDClient) BatchScanRegions(ctx context.Context, keyRanges []router.KeyRange, limit int, opts ...opt.GetRegionOption) ([]*router.Region, error) {
@@ -3107,4 +3115,40 @@ func (s *testRegionCacheSuite) TestBatchLoadLimitRanges() {
 	}
 	_, err := s.cache.BatchLocateKeyRanges(s.bo, ranges)
 	s.Nil(err)
+}
+
+func (s *testRegionCacheSuite) TestUpdateBucketsConcurrently() {
+	var (
+		bucketsVer uint64
+		count      uint64
+	)
+	s.cache.pdClient = &inspectedPDClient{
+		Client: s.cache.pdClient,
+		getRegionByID: func(ctx context.Context, cli pd.Client, regionID uint64, opts ...opt.GetRegionOption) (*router.Region, error) {
+			time.Sleep(500 * time.Millisecond)
+			atomic.AddUint64(&count, 1)
+			return cli.GetRegionByID(ctx, regionID, opts...)
+		},
+	}
+	loc, err := s.cache.LocateKey(s.bo, []byte("a"))
+	s.NoError(err)
+	r := s.cache.GetCachedRegionWithRLock(loc.Region)
+	s.NotNil(r)
+	if buckets := r.getStore().buckets; buckets != nil {
+		bucketsVer = buckets.GetVersion()
+	}
+
+	// update buckets twice concurrently
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.Equal(uint64(0), atomic.LoadUint64(&count))
+	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 0 }, 3*time.Second, 100*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	s.Equal(uint64(1), atomic.LoadUint64(&count))
+
+	// update buckets again after the previous update is done
+	s.cache.UpdateBucketsIfNeeded(loc.Region, bucketsVer+1)
+	s.Eventually(func() bool { return atomic.LoadUint64(&count) > 1 }, 3*time.Second, 100*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	s.Equal(uint64(2), atomic.LoadUint64(&count))
 }
