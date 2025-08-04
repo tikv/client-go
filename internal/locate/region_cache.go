@@ -1132,7 +1132,7 @@ func (c *RegionCache) GetTiFlashRPCContext(bo *retry.Backoffer, id RegionVerID, 
 	}
 
 	cachedRegion.invalidate(Other)
-	logutil.Logger(bo.GetCtx()).Info("At the end", zap.Int64("access store num", int64(regionStore.accessStoreNum(tiFlashOnly))))
+	logutil.Logger(bo.GetCtx()).Info("tcmsdebug At the end", zap.Int64("access store num", int64(regionStore.accessStoreNum(tiFlashOnly))))
 	return nil, nil
 }
 
@@ -1333,6 +1333,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		if r == nil {
 			// region cache miss, add the cut range to uncachedRanges, load from PD later.
 			uncachedRanges = append(uncachedRanges, router.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
+			logutil.Logger(bo.GetCtx()).Info("tcmsdebug 1 append uncached Ranges", zap.String("start", string(keyRange.StartKey)), zap.String("end", string(keyRange.EndKey)))
 			continue
 		}
 		verID := r.VerID()
@@ -1370,6 +1371,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 			}
 		}
 		if !containsAll {
+			logutil.Logger(bo.GetCtx()).Info("tcmsdebug 2 append uncached Ranges", zap.String("start", string(keyRange.StartKey)), zap.String("end", string(keyRange.EndKey)))
 			uncachedRanges = append(uncachedRanges, router.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
 		}
 	}
@@ -1642,6 +1644,10 @@ func (c *RegionCache) OnSendFailForTiFlash(bo *retry.Backoffer, store *Store, re
 
 	// force reload region when retry all known peers in region.
 	if scheduleReload {
+		logutil.Logger(bo.GetCtx()).Info("tcmsdebug 1 set sync flag",
+			zap.Uint64("region", r.VerID().id),
+			zap.Uint64("ver", r.VerID().ver),
+			zap.Uint64("conf", r.VerID().confVer))
 		r.setSyncFlags(needReloadOnAccess)
 	}
 }
@@ -1704,6 +1710,10 @@ func (c *RegionCache) OnSendFail(bo *retry.Backoffer, ctx *RPCContext, scheduleR
 
 	// force reload region when retry all known peers in region.
 	if scheduleReload {
+		logutil.Logger(bo.GetCtx()).Info("tcmsdebug 2 set sync flag",
+			zap.Uint64("region", r.VerID().id),
+			zap.Uint64("ver", r.VerID().ver),
+			zap.Uint64("conf", r.VerID().confVer))
 		r.setSyncFlags(needReloadOnAccess)
 	}
 
@@ -1875,6 +1885,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRang
 		vid := region.VerID()
 		debugInfo = fmt.Sprintf("%s <region: %d, ver: %d, conf-ver: %d>", debugInfo, vid.GetID(), vid.GetVer(), vid.GetConfVer())
 	}
+	logutil.BgLogger().Info(debugInfo)
 	return
 }
 
@@ -2005,7 +2016,10 @@ func (mu *regionIndexMu) insertRegionToCache(cachedRegion *Region, invalidateOld
 			region.cachedRegion.invalidate(Other, !shouldCount)
 		}
 	}
-	// update related vars.
+	logutil.BgLogger().Info("tcmsdebug insert cachedRegion",
+		zap.Uint64("region", newVer.GetID()),
+		zap.Uint64("ver", newVer.GetVer()),
+		zap.Uint64("conf", newVer.GetConfVer()))
 	mu.regions[newVer] = cachedRegion
 	mu.latestVersions[newVer.id] = newVer
 	return true
