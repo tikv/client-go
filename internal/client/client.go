@@ -368,6 +368,23 @@ func (a *connArray) Get() *grpc.ClientConn {
 	return a.v[next].ClientConn
 }
 
+func (a *connArray) GetByType(cmdTp tikvrpc.CmdType) *grpc.ClientConn {
+	next := getNextConnIdx(&a.index, len(a.v), cmdTp)
+	return a.v[next].ClientConn
+}
+
+func getNextConnIdx(currentIdx *uint32, numCons int, cmdTp tikvrpc.CmdType) uint32 {
+	if numCons == 1 {
+		return 0
+	}
+	halfLen := uint32(numCons / 2)
+	next := atomic.AddUint32(currentIdx, 1) % halfLen
+	if cmdTp == tikvrpc.CmdCop {
+		next += halfLen
+	}
+	return next
+}
+
 func (a *connArray) Close() {
 	if a.batchConn != nil {
 		a.batchConn.Close()
@@ -673,7 +690,7 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 		}
 	}
 
-	clientConn := connArray.Get()
+	clientConn := connArray.GetByType(req.Type)
 	if state := clientConn.GetState(); state == connectivity.TransientFailure {
 		storeID := strconv.FormatUint(req.Context.GetPeer().GetStoreId(), 10)
 		metrics.TiKVGRPCConnTransientFailureCounter.WithLabelValues(addr, storeID).Inc()

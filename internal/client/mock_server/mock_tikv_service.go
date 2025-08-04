@@ -63,6 +63,13 @@ func (s *MockServer) KvPrewrite(ctx context.Context, req *kvrpcpb.PrewriteReques
 	return &kvrpcpb.PrewriteResponse{}, nil
 }
 
+func (s *MockServer) Coprocessor(ctx context.Context, req *coprocessor.Request) (*coprocessor.Response, error) {
+	if err := s.checkMetadata(ctx); err != nil {
+		return nil, err
+	}
+	return &coprocessor.Response{}, nil
+}
+
 func (s *MockServer) CoprocessorStream(req *coprocessor.Request, ss tikvpb.Tikv_CoprocessorStreamServer) error {
 	if err := s.checkMetadata(ss.Context()); err != nil {
 		return err

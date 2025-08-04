@@ -780,3 +780,32 @@ func TestConcurrentCloseConnPanic(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestGetNextConnIdx(t *testing.T) {
+	cases := []struct {
+		numCons    int
+		cmdTp      tikvrpc.CmdType
+		initialIdx uint32
+		next       uint32
+	}{
+		{1, tikvrpc.CmdGet, 0, 0},
+		{1, tikvrpc.CmdCop, 0, 0},
+		{2, tikvrpc.CmdGet, 0, 0},
+		{2, tikvrpc.CmdGet, 1, 0},
+		{2, tikvrpc.CmdCop, 0, 1},
+		{2, tikvrpc.CmdCop, 1, 1},
+		{3, tikvrpc.CmdGet, 0, 0},
+		{3, tikvrpc.CmdGet, 1, 0},
+		{3, tikvrpc.CmdCop, 0, 1},
+		{3, tikvrpc.CmdCop, 1, 1},
+		{4, tikvrpc.CmdGet, 0, 1},
+		{4, tikvrpc.CmdGet, 1, 0},
+		{4, tikvrpc.CmdCop, 0, 3},
+		{4, tikvrpc.CmdCop, 1, 2},
+	}
+	for _, c := range cases {
+		currentIdx := c.initialIdx
+		next := getNextConnIdx(&currentIdx, c.numCons, c.cmdTp)
+		assert.Equal(t, c.next, next)
+	}
+}
