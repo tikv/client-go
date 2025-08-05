@@ -23,12 +23,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 type emptyClient struct{}
 
 func (c emptyClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	return nil, nil
+}
+
+func (c emptyClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
+	cb.Invoke(nil, nil)
 }
 
 func (c emptyClient) Close() error {

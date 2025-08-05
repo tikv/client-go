@@ -32,13 +32,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type ClientAsync interface {
-	Client
-	// SendRequestAsync sends a request to the target address asynchronously.
-	SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response])
-}
-
-// SendRequestAsync implements the ClientAsync interface.
+// SendRequestAsync sends a request to the target address asynchronously.
 func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikvrpc.Request, cb async.Callback[*tikvrpc.Response]) {
 	var err error
 

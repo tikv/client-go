@@ -48,6 +48,7 @@ import (
 	"github.com/pingcap/tidb/pkg/kv"
 	txndriver "github.com/pingcap/tidb/pkg/store/driver/txn"
 	"github.com/pingcap/tidb/pkg/store/mockstore/unistore"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"github.com/tikv/client-go/v2/config"
@@ -172,7 +173,7 @@ func clearStorage(store *tikv.KVStore) error {
 	}
 	iter, err := txn.Iter(nil, nil)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	for iter.Valid() {
 		txn.Delete(iter.Key())

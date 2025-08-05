@@ -756,6 +756,11 @@ func NewRegionCache(pdClient pd.Client, opt ...RegionCacheOpt) *RegionCache {
 	return c
 }
 
+// ForceRefreshAllStores get all stores from PD and refresh store cache.
+func (c *RegionCache) ForceRefreshAllStores(ctx context.Context) {
+	refreshFullStoreList(ctx, c.stores)
+}
+
 // Try to refresh full store list. Errors are ignored.
 func refreshFullStoreList(ctx context.Context, stores storeCache) {
 	storeList, err := stores.fetchAllStores(ctx)
@@ -1852,7 +1857,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRange(bo *retry.Backoffer, startKey
 	// TODO(youjiali1995): scanRegions always fetch regions from PD and these regions don't contain buckets information
 	// for less traffic, so newly inserted regions in region cache don't have buckets information. We should improve it.
 	for _, region := range regions {
-		c.insertRegionToCache(region, true, false)
+		c.insertRegionToCache(region, false, false)
 		vid := region.VerID()
 		debugInfo = fmt.Sprintf("%s <region: %d, ver: %d, conf-ver: %d>", debugInfo, vid.GetID(), vid.GetVer(), vid.GetConfVer())
 	}
@@ -1881,7 +1886,7 @@ func (c *RegionCache) BatchLoadRegionsWithKeyRanges(bo *retry.Backoffer, keyRang
 
 	debugInfo := "tcmsdebug for regions: "
 	for _, region := range regions {
-		c.insertRegionToCache(region, true, false)
+		c.insertRegionToCache(region, false, false)
 		vid := region.VerID()
 		debugInfo = fmt.Sprintf("%s <region: %d, ver: %d, conf-ver: %d>", debugInfo, vid.GetID(), vid.GetVer(), vid.GetConfVer())
 	}
