@@ -90,7 +90,7 @@ func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int)
 		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
 			return false
 		}
-		if !region.checkRegionCacheTTL(now) {
+		if !region.checkRegionCacheTTL(now) || region.checkSyncFlags(needReloadOnAccess) {
 			return false
 		}
 		if !region.Contains(lastStartKey) { // uncached hole

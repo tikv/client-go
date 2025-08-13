@@ -1344,10 +1344,13 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 			if err != nil {
 				return nil, err
 			}
+			debugInfo := "tcmsdebug tryFindRegionByKey scan region: "
 			for _, r = range batchRegionInCache {
 				if !r.Contains(keyRange.StartKey) { // uncached hole, load the rest regions
 					break outer
 				}
+				vid := r.VerID()
+				debugInfo = fmt.Sprintf("%s <region: %d, ver: %d, conf-ver: %d>", debugInfo, vid.GetID(), vid.GetVer(), vid.GetConfVer())
 				cachedRegions = append(cachedRegions, r)
 				lastRegion = r
 				if r.ContainsByEnd(keyRange.EndKey) {
@@ -1357,6 +1360,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 				}
 				keyRange.StartKey = r.EndKey()
 			}
+			logutil.Logger(bo.GetCtx()).Info(debugInfo)
 			if len(batchRegionInCache) < defaultRegionsPerBatch { // region cache miss, load the rest regions
 				break
 			}
