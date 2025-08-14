@@ -171,6 +171,10 @@ func (s *KVStore) Go(f func()) error {
 	return s.gP.Run(f)
 }
 
+func (s *KVStore) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
+	s.updateTxnSafePointCache(txnSafePoint, now)
+}
+
 // updateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
 // operations to prevent accessing GC-ed inconsistent data.
 func (s *KVStore) updateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
