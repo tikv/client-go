@@ -90,7 +90,7 @@ func (s *SortedRegions) AscendGreaterOrEqual(startKey, endKey []byte, limit int)
 		if len(endKey) > 0 && bytes.Compare(region.StartKey(), endKey) >= 0 {
 			return false
 		}
-		if !region.checkRegionCacheTTL(now) {
+		if !region.checkRegionCacheTTL(now) || region.checkSyncFlags(needReloadOnAccess) {
 			return false
 		}
 		if !region.Contains(lastStartKey) { // uncached hole
@@ -148,4 +148,16 @@ func (s *SortedRegions) ValidRegionsInBtree(ts int64) (len int) {
 		return true
 	})
 	return
+}
+
+func (s *SortedRegions) getByRegionID(id RegionVerID) *Region {
+	var region *Region
+	s.b.Descend(func(item *btreeItem) bool {
+		if item.cachedRegion.VerID() == id {
+			region = item.cachedRegion
+			return false
+		}
+		return true
+	})
+	return region
 }
