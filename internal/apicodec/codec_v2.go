@@ -708,7 +708,9 @@ func (c *codecV2) EncodeKey(key []byte) []byte {
 func (c *codecV2) DecodeKey(encodedKey []byte) ([]byte, error) {
 	if len(encodedKey) == 0 {
 		if !intest.InTest {
-			logutil.BgLogger().Warn("codecV2.DecodeKey called with empty key, it should not happen in production", zap.Stack("stack"))
+			logutil.BgLogger().Warn(
+				"codecV2.DecodeKey called with empty key. This shouldn't happen in prod",
+				zap.Stack("stack"))
 		}
 		return nil, nil
 	}
