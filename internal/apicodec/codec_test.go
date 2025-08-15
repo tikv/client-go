@@ -1,6 +1,7 @@
 package apicodec
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
@@ -56,4 +57,12 @@ func TestEncodeUnknownRequest(t *testing.T) {
 	c := NewCodecV1(ModeTxn)
 	_, err := c.EncodeRequest(req)
 	assert.Nil(t, err)
+}
+
+func TestCodecListUtilityFunctions(t *testing.T) {
+	keyCmp := func(lhs, rhs []byte) int {
+		return slices.Compare(lhs, rhs)
+	}
+	assert.True(t, slices.IsSortedFunc(CodecV2Prefixes(), keyCmp))
+	assert.True(t, slices.IsSortedFunc(CodecV1ExcludePrefixes(), keyCmp))
 }
