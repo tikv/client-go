@@ -17,6 +17,7 @@ package locate
 import (
 	"sync/atomic"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -24,7 +25,8 @@ import (
 )
 
 type networkCollector struct {
-	staleRead bool
+	staleRead       bool
+	replicaReadType kv.ReplicaReadType
 }
 
 func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails) {
@@ -51,6 +53,7 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 			atomic.AddInt64(crossZone, int64(size))
 		}
 	}
+
 	// stale read metrics
 	if s.staleRead {
 		s.onReqStaleRead(float64(size), isCrossZoneTraffic)
@@ -88,6 +91,29 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	// stale read metrics
 	if s.staleRead {
 		s.onRespStaleRead(float64(size), isCrossZoneTraffic)
+	}
+
+	// replica read metrics
+	if isReadReq(req.Type) {
+		var observer prometheus.Observer
+		switch req.AccessLocation {
+		case kv.AccessLocalZone:
+			if req.ReplicaRead {
+				observer = metrics.ReadRequestFollowerLocalBytes
+			} else {
+				observer = metrics.ReadRequestLeaderLocalBytes
+			}
+		case kv.AccessCrossZone:
+			if req.ReplicaRead {
+				observer = metrics.ReadRequestFollowerRemoteBytes
+			} else {
+				observer = metrics.ReadRequestLeaderRemoteBytes
+			}
+		case kv.AccessUnknown:
+		}
+		if observer != nil {
+			observer.Observe(float64(size + req.GetSize()))
+		}
 	}
 }
 
