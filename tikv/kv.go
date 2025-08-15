@@ -171,9 +171,9 @@ func (s *KVStore) Go(f func()) error {
 	return s.gP.Run(f)
 }
 
-// updateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
+// UpdateTxnSafePointCache updates the cached txn safe point, which is used for safety check of data access
 // operations to prevent accessing GC-ed inconsistent data.
-func (s *KVStore) updateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
+func (s *KVStore) UpdateTxnSafePointCache(txnSafePoint uint64, now time.Time) {
 	s.gcStateCacheMu.Lock()
 	defer s.gcStateCacheMu.Unlock()
 
@@ -354,7 +354,7 @@ func NewKVStore(uuid string, pdClient pd.Client, spkv SafePointKV, tikvclient Cl
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	store.updateTxnSafePointCache(txnSafePoint, time.Now())
+	store.UpdateTxnSafePointCache(txnSafePoint, time.Now())
 	store.clientMu.client = client.NewReqCollapse(client.NewInterceptedClient(tikvclient))
 	store.clientMu.client.SetEventListener(regionCache.GetClientEventListener())
 
@@ -418,7 +418,7 @@ func (s *KVStore) runTxnSafePointUpdater() {
 		case now := <-time.After(d):
 			txnSafePoint, err := s.loadTxnSafePoint(context.Background())
 			if err == nil {
-				s.updateTxnSafePointCache(txnSafePoint, now)
+				s.UpdateTxnSafePointCache(txnSafePoint, now)
 				d = pollTxnSafePointInterval
 			} else {
 				d = pollTxnSafePointQuickRepeatInterval
