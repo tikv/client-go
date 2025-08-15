@@ -470,6 +470,14 @@ func (s *RegionRequestSender) SendReqAsync(
 	cb async.Callback[*tikvrpc.ResponseExt],
 	opts ...StoreSelectorOption,
 ) {
+	if resp, err := failpointSendReqResult(req, tikvrpc.TiKV); err != nil || resp != nil {
+		var re *tikvrpc.ResponseExt
+		if resp != nil {
+			re = &tikvrpc.ResponseExt{Response: *resp}
+		}
+		cb.Invoke(re, err)
+		return
+	}
 	if err := s.validateReadTS(bo.GetCtx(), req); err != nil {
 		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		cb.Invoke(nil, err)
