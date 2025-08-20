@@ -39,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -322,6 +323,14 @@ func appendBatchKeysBySize(b []batchKeys, region locate.RegionVerID, keys [][]by
 	return b
 }
 
+//go:noinline
+func growStackForBatchGetWorker() {
+	// A batch get worker typically needs 8KB stack space. So we pre-allocate 4KB here to let the stack grow to 8KB
+	// directly (instead of 2KB to 4KB to 8KB).
+	var ballast [4096]byte
+	runtime.KeepAlive(ballast[:])
+}
+
 func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, readTier int, collectF func(k, v []byte)) error {
 	defer func(start time.Time) {
 		if s.IsInternal() {
@@ -352,12 +361,19 @@ func (s *KVSnapshot) batchGetKeysByRegions(bo *retry.Backoffer, keys [][]byte, r
 	if len(batches) == 1 {
 		return s.batchGetSingleRegion(bo, batches[0], readTier, collectF)
 	}
-	ch := make(chan error)
-	for _, batch1 := range batches {
+	ch := make(chan error, len(batches))
+	bo, cancel := bo.Fork()
+	defer cancel()
+	for i, batch1 := range batches {
+		var backoffer *retry.Backoffer
+		if i == 0 {
+			backoffer = bo
+		} else {
+			backoffer = bo.Clone()
+		}
 		batch := batch1
 		go func() {
-			backoffer, cancel := bo.Fork()
-			defer cancel()
+			growStackForBatchGetWorker()
 			ch <- s.batchGetSingleRegion(backoffer, batch, readTier, collectF)
 		}()
 	}
