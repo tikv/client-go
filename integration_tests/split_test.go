@@ -176,6 +176,7 @@ func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
 
 	// inject an error on sending request.
 	failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("timeout")`)
+	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
 	txn = s.begin()
 	_, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
 	s.Error(err)
