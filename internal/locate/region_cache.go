@@ -1577,7 +1577,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
 	var expired bool
 	r, expired = c.searchCachedRegionByKey(key, isEndKey)
-	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess) {
+	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess|needDelayedReloadReady) {
 		return nil
 	}
 	return r
@@ -2190,7 +2190,15 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
-
+	// in-place filter out the regions which need reload.
+	i := 0
+	for _, region := range regions {
+		if !region.checkSyncFlags(needReloadOnAccess | needDelayedReloadReady) {
+			regions[i] = region
+			i++
+		}
+	}
+	regions = regions[:i]
 	return regions, nil
 }
 
