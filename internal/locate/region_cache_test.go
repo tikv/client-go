@@ -2233,14 +2233,20 @@ func (s *testRegionCacheSuite) testSplitThenLocateKey(markRegion func(r *Region)
 	markRegion(r1)
 
 	// locate key
-	loc, err := s.cache.LocateKey(s.bo, k)
+	s.Nil(s.cache.TryLocateKey(r1.StartKey()))
+	s.Nil(s.cache.TryLocateKey(k))
+	s.Len(s.cache.scanRegionsFromCache(r1.StartKey(), nil, 2), 0)
+	loc1, err := s.cache.LocateKey(s.bo, r1.StartKey())
 	s.NoError(err)
-	s.True(loc.Contains(k))
+	s.False(loc1.Contains(k))
+	loc2, err := s.cache.LocateKey(s.bo, k)
+	s.NoError(err)
+	s.True(loc2.Contains(k))
 }
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	_ = s.cache.refreshRegionIndex(s.bo)
-	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r := s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
@@ -2249,14 +2255,62 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	st := newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
+<<<<<<< HEAD
 	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
 	s.Equal(len(r), 2)
 
+=======
+	// Since region cache doesn't remove the first intersected region(it scan intersected region by AscendGreaterOrEqual), the outdated region (-inf, inf) is still alive.
+	// The new inserted valid region [{2}, inf) is ignored because the first seen region (-inf, inf) contains all the required ranges.
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
+	s.Equal(len(r), 1)
+	s.Equal(r[0].StartKey(), []byte(nil))
+
+	// regions: (-inf,2), [2, +inf).  Get all regions.
+	v3 := region.Region.confVer + 2
+	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v3}, StartKey: []byte{}, EndKey: []byte{2}}
+	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
+	s.Equal(len(r), 2)
+
+	// regions: (-inf,1), [2, +inf).  Get region (-inf, 1).
+	v4 := region.Region.confVer + 3
+	r4 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v4}, StartKey: []byte{}, EndKey: []byte{1}}
+	s.cache.insertRegionToCache(&Region{meta: &r4, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
+	s.Equal(len(r), 1)
+
+>>>>>>> a05a5382 (region_cache: reload region cache when flag `needDelayedReloadReady` is set (#1738))
 	_ = s.cache.refreshRegionIndex(s.bo)
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 }
 
+<<<<<<< HEAD
+=======
+func (s *testRegionRequestToSingleStoreSuite) TestRegionCacheStartNonEmpty() {
+	_ = s.cache.refreshRegionIndex(s.bo)
+	r := s.cache.scanRegionsFromCache([]byte{}, nil, 10)
+	s.Equal(len(r), 1)
+
+	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
+	v2 := region.Region.confVer + 1
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	st := newUninitializedStore(s.store)
+
+	s.cache.mu.Lock()
+	s.cache.mu.sorted.Clear()
+	s.cache.mu.Unlock()
+	// region cache after clear: []
+
+	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	// region cache after insert: [[1, +inf)]
+
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
+	s.Equal(len(r), 0)
+}
+
+>>>>>>> a05a5382 (region_cache: reload region cache when flag `needDelayedReloadReady` is set (#1738))
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCacheConcurrency() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func(cache *RegionCache) {
@@ -2354,7 +2408,7 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 	stale = !s.cache.insertRegionToCache(fakeRegion, true, true)
 	s.True(stale)
 
-	rs, err := s.cache.scanRegionsFromCache(s.bo, []byte(""), []byte(""), 100)
+	rs := s.cache.scanRegionsFromCache([]byte(""), []byte(""), 100)
 	s.NoError(err)
 	s.Greater(len(rs), 1)
 	s.NotEqual(rs[0].EndKey(), "")
