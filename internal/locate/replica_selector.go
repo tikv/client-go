@@ -505,7 +505,7 @@ func (s *replicaSelector) onFlashbackInProgress(req *tikvrpc.Request) bool {
 		req.BusyThresholdMs = 0
 		s.busyThreshold = 0
 		s.replicaReadType = kv.ReplicaReadLeader
-		req.ReplicaReadType = kv.ReplicaReadLeader
+		req.SetReplicaReadType(kv.ReplicaReadLeader)
 		return true
 	}
 	return false
