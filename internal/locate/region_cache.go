@@ -1898,19 +1898,15 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 }
 
 // TODO(youjiali1995): for optimizing BatchLoadRegionsWithKeyRange, not used now.
-func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+func (c *RegionCache) scanRegionsFromCache(startKey, endKey []byte, limit int) []*Region {
 	if limit == 0 {
-		return nil, nil
+		return nil
 	}
 
 	var regions []*Region
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
-
-	if len(regions) == 0 {
-		return nil, errors.New("no regions in the cache")
-	}
 	// in-place filter out the regions which need reload.
 	i := 0
 	for _, region := range regions {
@@ -1920,7 +1916,7 @@ func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey
 		}
 	}
 	regions = regions[:i]
-	return regions, nil
+	return regions
 }
 
 func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {

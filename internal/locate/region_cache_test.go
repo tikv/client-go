@@ -2235,9 +2235,7 @@ func (s *testRegionCacheSuite) testSplitThenLocateKey(markRegion func(r *Region)
 	// locate key
 	s.Nil(s.cache.TryLocateKey(r1.StartKey()))
 	s.Nil(s.cache.TryLocateKey(k))
-	regions, err := s.cache.scanRegionsFromCache(s.bo, r1.StartKey(), nil, 2)
-	s.Nil(err)
-	s.Len(regions, 0)
+	s.Len(s.cache.scanRegionsFromCache(r1.StartKey(), nil, 2), 0)
 	loc1, err := s.cache.LocateKey(s.bo, r1.StartKey())
 	s.NoError(err)
 	s.False(loc1.Contains(k))
@@ -2248,7 +2246,7 @@ func (s *testRegionCacheSuite) testSplitThenLocateKey(markRegion func(r *Region)
 
 func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	_ = s.cache.refreshRegionIndex(s.bo)
-	r, _ := s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r := s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
@@ -2257,11 +2255,11 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 	st := newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 2)
 
 	_ = s.cache.refreshRegionIndex(s.bo)
-	r, _ = s.cache.scanRegionsFromCache(s.bo, []byte{}, nil, 10)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 1)
 }
 
@@ -2362,7 +2360,7 @@ func (s *testRegionCacheWithDelaySuite) TestInsertStaleRegion() {
 	stale = !s.cache.insertRegionToCache(fakeRegion, true, true)
 	s.True(stale)
 
-	rs, err := s.cache.scanRegionsFromCache(s.bo, []byte(""), []byte(""), 100)
+	rs := s.cache.scanRegionsFromCache([]byte(""), []byte(""), 100)
 	s.NoError(err)
 	s.Greater(len(rs), 1)
 	s.NotEqual(rs[0].EndKey(), "")
