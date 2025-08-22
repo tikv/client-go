@@ -1220,214 +1220,6 @@ func (c *RegionCache) LocateKeyRange(bo *retry.Backoffer, startKey, endKey []byt
 	return res, nil
 }
 
-<<<<<<< HEAD
-=======
-type batchLocateKeyRangesOption struct {
-	// whether load leader only, if it's set to true, regions without leader will be skipped.
-	// Note there is leader even the leader is invalid or outdated.
-	needRegionHasLeaderPeer bool
-	// whether load buckets, if it's set to true, more traffic will be consumed.
-	needBuckets bool
-}
-
-type BatchLocateKeyRangesOpt func(*batchLocateKeyRangesOption)
-
-func WithNeedBuckets() BatchLocateKeyRangesOpt {
-	return func(opt *batchLocateKeyRangesOption) {
-		opt.needBuckets = true
-	}
-}
-
-func WithNeedRegionHasLeaderPeer() BatchLocateKeyRangesOpt {
-	return func(opt *batchLocateKeyRangesOption) {
-		opt.needRegionHasLeaderPeer = true
-	}
-}
-
-// BatchLocateKeyRanges lists regions in the given ranges.
-func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.KeyRange, opts ...BatchLocateKeyRangesOpt) ([]*KeyLocation, error) {
-	uncachedRanges := make([]router.KeyRange, 0, len(keyRanges))
-	cachedRegions := make([]*Region, 0, len(keyRanges))
-	// 1. find regions from cache
-	var lastRegion *Region
-	for _, keyRange := range keyRanges {
-		if lastRegion != nil {
-			if lastRegion.ContainsByEnd(keyRange.EndKey) {
-				continue
-			} else if lastRegion.Contains(keyRange.StartKey) {
-				keyRange.StartKey = lastRegion.EndKey()
-			}
-		}
-		// TODO: find all the cached regions in the range.
-		// now we only check if the region is cached from the lower bound, if there is a uncached hole in the middle,
-		// we will load the rest regions even they are cached.
-		r := c.tryFindRegionByKey(keyRange.StartKey, false)
-		lastRegion = r
-		if r == nil {
-			// region cache miss, add the cut range to uncachedRanges, load from PD later.
-			uncachedRanges = append(uncachedRanges, router.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
-			continue
-		}
-		// region cache hit, add the region to cachedRegions.
-		cachedRegions = append(cachedRegions, r)
-		if r.ContainsByEnd(keyRange.EndKey) {
-			// the range is fully hit in the region cache.
-			continue
-		}
-		keyRange.StartKey = r.EndKey()
-		// Batch load rest regions from Cache.
-		containsAll := false
-	outer:
-		for {
-			batchRegionInCache := c.scanRegionsFromCache(keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
-			for _, r = range batchRegionInCache {
-				if !r.Contains(keyRange.StartKey) { // uncached hole, load the rest regions
-					break outer
-				}
-				cachedRegions = append(cachedRegions, r)
-				lastRegion = r
-				if r.ContainsByEnd(keyRange.EndKey) {
-					// the range is fully hit in the region cache.
-					containsAll = true
-					break outer
-				}
-				keyRange.StartKey = r.EndKey()
-			}
-			if len(batchRegionInCache) < defaultRegionsPerBatch { // region cache miss, load the rest regions
-				break
-			}
-		}
-		if !containsAll {
-			uncachedRanges = append(uncachedRanges, router.KeyRange{StartKey: keyRange.StartKey, EndKey: keyRange.EndKey})
-		}
-	}
-
-	merger := newBatchLocateRegionMerger(cachedRegions, len(cachedRegions)+len(uncachedRanges))
-
-	// 2. load remaining regions from pd client
-	for len(uncachedRanges) > 0 {
-		// If we send too many ranges to PD, it may exceed the size of grpc limitation or cause a timeout error.
-		// So we limit the number of ranges per batch to avoid this issue.
-		maxRangesPerBatch := 16 * defaultRegionsPerBatch
-		var toBeSentRanges []router.KeyRange
-		if len(uncachedRanges) > maxRangesPerBatch {
-			toBeSentRanges = uncachedRanges[:maxRangesPerBatch]
-		} else {
-			toBeSentRanges = uncachedRanges
-		}
-		regions, err := c.BatchLoadRegionsWithKeyRanges(bo, toBeSentRanges, defaultRegionsPerBatch, opts...)
-		if err != nil {
-			return nil, err
-		}
-		if len(regions) == 0 {
-			return nil, errors.Errorf("BatchLoadRegionsWithKeyRanges return empty batchedRegions without err")
-		}
-
-		for _, r := range regions {
-			merger.appendRegion(r)
-		}
-		// if the regions are not loaded completely, split uncachedRanges and load the rest.
-		uncachedRanges = rangesAfterKey(uncachedRanges, regions[len(regions)-1].EndKey())
-	}
-	return merger.build(), nil
-}
-
-type batchLocateRangesMerger struct {
-	lastEndKey      *[]byte
-	cachedIdx       int
-	cachedRegions   []*Region
-	mergedLocations []*KeyLocation
-}
-
-func newBatchLocateRegionMerger(cachedRegions []*Region, sizeHint int) *batchLocateRangesMerger {
-	return &batchLocateRangesMerger{
-		lastEndKey:      nil,
-		cachedRegions:   cachedRegions,
-		mergedLocations: make([]*KeyLocation, 0, sizeHint),
-	}
-}
-
-func (m *batchLocateRangesMerger) appendKeyLocation(r *Region) {
-	m.mergedLocations = append(m.mergedLocations, &KeyLocation{
-		Region:   r.VerID(),
-		StartKey: r.StartKey(),
-		EndKey:   r.EndKey(),
-		Buckets:  r.getStore().buckets,
-	})
-}
-
-func (m *batchLocateRangesMerger) appendRegion(uncachedRegion *Region) {
-	defer func() {
-		endKey := uncachedRegion.EndKey()
-		if len(endKey) == 0 {
-			// len(end_key) == 0 means region end to +inf, it should be the last region.
-			// discard the rest cached regions by moving the cachedIdx to the end of cachedRegions.
-			m.cachedIdx = len(m.cachedRegions)
-		} else {
-			lastEndKey := uncachedRegion.EndKey()
-			m.lastEndKey = &lastEndKey
-		}
-	}()
-	if len(uncachedRegion.StartKey()) == 0 {
-		// len(start_key) == 0 means region start from -inf, it should be the first region.
-		m.appendKeyLocation(uncachedRegion)
-		return
-	}
-	if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, uncachedRegion.StartKey()) >= 0 {
-		// the uncached regions are continued, do not consider cached region by now.
-		m.appendKeyLocation(uncachedRegion)
-		return
-	}
-	for ; m.cachedIdx < len(m.cachedRegions); m.cachedIdx++ {
-		if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
-			// skip the cached region that is covered by the uncached region.
-			continue
-		}
-		if bytes.Compare(m.cachedRegions[m.cachedIdx].StartKey(), uncachedRegion.StartKey()) >= 0 {
-			break
-		}
-		// append the cached regions that are before the uncached region.
-		m.appendKeyLocation(m.cachedRegions[m.cachedIdx])
-	}
-	m.appendKeyLocation(uncachedRegion)
-}
-
-func (m *batchLocateRangesMerger) build() []*KeyLocation {
-	// append the rest cache hit regions
-	for ; m.cachedIdx < len(m.cachedRegions); m.cachedIdx++ {
-		if m.lastEndKey != nil && bytes.Compare(*m.lastEndKey, m.cachedRegions[m.cachedIdx].EndKey()) >= 0 {
-			// skip the cached region that is covered by the uncached region.
-			continue
-		}
-		m.appendKeyLocation(m.cachedRegions[m.cachedIdx])
-	}
-	return m.mergedLocations
-}
-
-// rangesAfterKey split the key ranges and return the rest ranges after splitKey.
-// the returned ranges are referenced to the input keyRanges, and the key range may be changed in place,
-// the input keyRanges should not be used after calling this function.
-func rangesAfterKey(keyRanges []router.KeyRange, splitKey []byte) []router.KeyRange {
-	if len(keyRanges) == 0 {
-		return nil
-	}
-	if len(splitKey) == 0 || len(keyRanges[len(keyRanges)-1].EndKey) > 0 && bytes.Compare(splitKey, keyRanges[len(keyRanges)-1].EndKey) >= 0 {
-		// fast check, if all ranges are loaded from PD, quit the loop.
-		return nil
-	}
-
-	n := sort.Search(len(keyRanges), func(i int) bool {
-		return len(keyRanges[i].EndKey) == 0 || bytes.Compare(keyRanges[i].EndKey, splitKey) > 0
-	})
-
-	keyRanges = keyRanges[n:]
-	if bytes.Compare(splitKey, keyRanges[0].StartKey) > 0 {
-		keyRanges[0].StartKey = splitKey
-	}
-	return keyRanges
-}
-
->>>>>>> a05a5382 (region_cache: reload region cache when flag `needDelayedReloadReady` is set (#1738))
 // LocateKey searches for the region and range that the key is located.
 func (c *RegionCache) LocateKey(bo *retry.Backoffer, key []byte) (*KeyLocation, error) {
 	r, err := c.findRegionByKey(bo, key, false)
@@ -2105,29 +1897,20 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 	}
 }
 
-<<<<<<< HEAD
 // TODO(youjiali1995): for optimizing BatchLoadRegionsWithKeyRange, not used now.
 func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
-=======
-// For optimizing BatchLocateKeyRanges, scanRegionsFromCache scans at most `limit` regions from cache.
-// It is the caller's responsibility to make sure that startKey is a node in the B-tree, otherwise, the startKey will not be included in the return regions.
-func (c *RegionCache) scanRegionsFromCache(startKey, endKey []byte, limit int) []*Region {
->>>>>>> a05a5382 (region_cache: reload region cache when flag `needDelayedReloadReady` is set (#1738))
 	if limit == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var regions []*Region
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
-<<<<<<< HEAD
 
 	if len(regions) == 0 {
 		return nil, errors.New("no regions in the cache")
 	}
-	return regions, nil
-=======
 	// in-place filter out the regions which need reload.
 	i := 0
 	for _, region := range regions {
@@ -2137,8 +1920,7 @@ func (c *RegionCache) scanRegionsFromCache(startKey, endKey []byte, limit int) [
 		}
 	}
 	regions = regions[:i]
-	return regions
->>>>>>> a05a5382 (region_cache: reload region cache when flag `needDelayedReloadReady` is set (#1738))
+	return regions, nil
 }
 
 func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
