@@ -2251,12 +2251,29 @@ func (s *testRegionRequestToSingleStoreSuite) TestRefreshCache() {
 
 	region, _ := s.cache.LocateRegionByID(s.bo, s.region)
 	v2 := region.Region.confVer + 1
-	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{1}}
+	r2 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v2}, StartKey: []byte{2}}
 	st := newUninitializedStore(s.store)
 	s.cache.insertRegionToCache(&Region{meta: &r2, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 
+	// Since region cache doesn't remove the first intersected region(it scan intersected region by AscendGreaterOrEqual), the outdated region (-inf, inf) is still alive.
+	// The new inserted valid region [{2}, inf) is ignored because the first seen region (-inf, inf) contains all the required ranges.
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
+	s.Equal(len(r), 1)
+	s.Equal(r[0].StartKey(), []byte(nil))
+
+	// regions: (-inf,2), [2, +inf).  Get all regions.
+	v3 := region.Region.confVer + 2
+	r3 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v3}, StartKey: []byte{}, EndKey: []byte{2}}
+	s.cache.insertRegionToCache(&Region{meta: &r3, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
 	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
 	s.Equal(len(r), 2)
+
+	// regions: (-inf,1), [2, +inf).  Get region (-inf, 1).
+	v4 := region.Region.confVer + 3
+	r4 := metapb.Region{Id: region.Region.id, RegionEpoch: &metapb.RegionEpoch{Version: region.Region.ver, ConfVer: v4}, StartKey: []byte{}, EndKey: []byte{1}}
+	s.cache.insertRegionToCache(&Region{meta: &r4, store: unsafe.Pointer(st), ttl: nextTTLWithoutJitter(time.Now().Unix())}, true, true)
+	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
+	s.Equal(len(r), 1)
 
 	_ = s.cache.refreshRegionIndex(s.bo)
 	r = s.cache.scanRegionsFromCache([]byte{}, nil, 10)
