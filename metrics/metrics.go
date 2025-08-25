@@ -116,6 +116,15 @@ var (
 	TiKVPipelinedFlushDuration                     prometheus.Histogram
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
+<<<<<<< HEAD
+=======
+	TiKVStaleRegionFromPDCounter                   prometheus.Counter
+	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
+	TiKVTxnWriteConflictCounter                    prometheus.Counter
+	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
+	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
+	TiKVReadRequestBytes                           *prometheus.SummaryVec
+>>>>>>> 97cad411 (metrcis: add replica read traffic metrics (#1717))
 )
 
 // Label constants.
@@ -841,6 +850,14 @@ func initMetrics(namespace, subsystem string, constLabels prometheus.Labels) {
 			Help:      "The actual working update interval for the low resolution TSO. As there are adaptive mechanism internally, this value may differ from the config.",
 		})
 
+	TiKVReadRequestBytes = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "read_request_bytes",
+			Help:      "Summary of read requests bytes",
+		}, []string{LblType, LblResult})
+
 	initShortcuts()
 }
 
@@ -936,6 +953,15 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVPipelinedFlushDuration)
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
+<<<<<<< HEAD
+=======
+	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
+	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
+	prometheus.MustRegister(TiKVTxnWriteConflictCounter)
+	prometheus.MustRegister(TiKVAsyncSendReqCounter)
+	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
+	prometheus.MustRegister(TiKVReadRequestBytes)
+>>>>>>> 97cad411 (metrcis: add replica read traffic metrics (#1717))
 }
 
 // readCounter reads the value of a prometheus.Counter.

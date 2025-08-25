@@ -78,7 +78,7 @@ import (
 
 const (
 	// DCLabelKey indicates the key of label which represents the dc for Store.
-	DCLabelKey           = "zone"
+	DCLabelKey           = locate.DCLabelKey
 	safeTSUpdateInterval = time.Second * 2
 )
 
