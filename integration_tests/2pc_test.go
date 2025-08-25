@@ -1574,7 +1574,7 @@ func (s *testCommitterSuite) TestAggressiveLockingResetTTLManager() {
 		s.NoError(err)
 	}
 
-	s.Equal(txn2.CommitTS(), lockCtx.MaxLockedWithConflictTS)
+	s.Equal(txn2.GetCommitTS(), lockCtx.MaxLockedWithConflictTS)
 	s.Greater(lockCtx.MaxLockedWithConflictTS, txn.StartTS())
 
 	s.True(txn.GetCommitter().IsTTLRunning())
