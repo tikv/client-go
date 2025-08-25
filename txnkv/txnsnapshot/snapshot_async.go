@@ -75,8 +75,8 @@ func (s *KVSnapshot) asyncBatchGetByRegions(
 		}))
 	}
 	for completed < len(batches) {
-		_, err = runloop.Exec(bo.GetCtx())
-		if err != nil {
+		if _, e := runloop.Exec(bo.GetCtx()); e != nil {
+			err = errors.WithStack(e)
 			break
 		}
 	}

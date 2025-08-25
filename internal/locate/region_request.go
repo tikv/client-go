@@ -469,6 +469,14 @@ func (s *RegionRequestSender) SendReqAsync(
 	cb async.Callback[*tikvrpc.ResponseExt],
 	opts ...StoreSelectorOption,
 ) {
+	if resp, err := failpointSendReqResult(req, tikvrpc.TiKV); err != nil || resp != nil {
+		var re *tikvrpc.ResponseExt
+		if resp != nil {
+			re = &tikvrpc.ResponseExt{Response: *resp}
+		}
+		cb.Invoke(re, err)
+		return
+	}
 	if err := s.validateReadTS(bo.GetCtx(), req); err != nil {
 		logutil.Logger(bo.GetCtx()).Error("validate read ts failed for request", zap.Stringer("reqType", req.Type), zap.Stringer("req", req.Req.(fmt.Stringer)), zap.Stringer("context", &req.Context), zap.Stack("stack"), zap.Error(err))
 		cb.Invoke(nil, err)
@@ -1373,43 +1381,8 @@ func (s *RegionRequestSender) SendReqCtx(
 		bo.SetCtx(opentracing.ContextWithSpan(bo.GetCtx(), span1))
 	}
 
-	if val, err := util.EvalFailpoint("tikvStoreSendReqResult"); err == nil {
-		if s, ok := val.(string); ok {
-			switch s {
-			case "timeout":
-				return nil, nil, 0, errors.New("timeout")
-			case "GCNotLeader":
-				if req.Type == tikvrpc.CmdGC {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
-					}, nil, 0, nil
-				}
-			case "PessimisticLockNotLeader":
-				if req.Type == tikvrpc.CmdPessimisticLock {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
-					}, nil, 0, nil
-				}
-			case "GCServerIsBusy":
-				if req.Type == tikvrpc.CmdGC {
-					return &tikvrpc.Response{
-						Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-					}, nil, 0, nil
-				}
-			case "busy":
-				return &tikvrpc.Response{
-					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
-				}, nil, 0, nil
-			case "requestTiDBStoreError":
-				if et == tikvrpc.TiDB {
-					return nil, nil, 0, errors.WithStack(tikverr.ErrTiKVServerTimeout)
-				}
-			case "requestTiFlashError":
-				if et == tikvrpc.TiFlash {
-					return nil, nil, 0, errors.WithStack(tikverr.ErrTiFlashServerTimeout)
-				}
-			}
-		}
+	if resp, err = failpointSendReqResult(req, et); err != nil || resp != nil {
+		return
 	}
 
 	if err = s.validateReadTS(bo.GetCtx(), req); err != nil {
@@ -2243,4 +2216,61 @@ func (s *baseReplicaSelector) backoffOnNoCandidate(bo *retry.Backoffer) error {
 		return nil
 	}
 	return bo.Backoff(args.cfg, args.err)
+}
+
+// failpointSendReqResult is used to process the failpoint For tikvStoreSendReqResult.
+func failpointSendReqResult(req *tikvrpc.Request, et tikvrpc.EndpointType) (
+	resp *tikvrpc.Response,
+	err error,
+) {
+	if val, e := util.EvalFailpoint("tikvStoreSendReqResult"); e == nil {
+		failpointCfg, ok := val.(string)
+		if !ok {
+			return
+		}
+		switch failpointCfg {
+		case "timeout":
+			{
+				err = errors.New("timeout")
+				return
+			}
+		case "GCNotLeader":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
+			}
+		case "PessimisticLockNotLeader":
+			if req.Type == tikvrpc.CmdPessimisticLock {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.PessimisticLockResponse{RegionError: &errorpb.Error{NotLeader: &errorpb.NotLeader{}}},
+				}
+				return
+			}
+		case "GCServerIsBusy":
+			if req.Type == tikvrpc.CmdGC {
+				resp = &tikvrpc.Response{
+					Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+				}
+				return
+			}
+		case "busy":
+			resp = &tikvrpc.Response{
+				Resp: &kvrpcpb.GCResponse{RegionError: &errorpb.Error{ServerIsBusy: &errorpb.ServerIsBusy{}}},
+			}
+			return
+		case "requestTiDBStoreError":
+			if et == tikvrpc.TiDB {
+				err = errors.WithStack(tikverr.ErrTiKVServerTimeout)
+				return
+			}
+		case "requestTiFlashError":
+			if et == tikvrpc.TiFlash {
+				err = errors.WithStack(tikverr.ErrTiFlashServerTimeout)
+				return
+			}
+		}
+	}
+	return
 }
