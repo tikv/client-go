@@ -39,6 +39,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/kvproto/pkg/meta_storagepb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -172,6 +173,13 @@ func (s *testSplitSuite) TestBatchGetUsingAsyncAPI() {
 	s.Equal([]byte("a"), m[string([]byte{'a'})])
 	s.Equal([]byte("c"), m[string([]byte{'c'})])
 	s.NotContains(m, string([]byte{'b'}))
+
+	// inject an error on sending request.
+	failpoint.Enable("tikvclient/tikvStoreSendReqResult", `1*return("timeout")`)
+	defer failpoint.Disable("tikvclient/tikvStoreSendReqResult")
+	txn = s.begin()
+	_, err = txn.GetSnapshot().BatchGet(context.TODO(), [][]byte{{'a'}, {'b'}, {'c'}})
+	s.Error(err)
 }
 
 func (s *testSplitSuite) TestStaleEpoch() {
