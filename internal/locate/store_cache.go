@@ -469,6 +469,9 @@ func (s *Store) reResolve(c storeCache, scheduler *bgRunner) (bool, error) {
 
 	storeType := tikvrpc.GetStoreTypeByMeta(store)
 	addr = store.GetAddress()
+	if addr == "" {
+		return false, errors.Errorf("empty store(%d) address", s.storeID)
+	}
 	if s.addr != addr || !s.IsSameLabels(store.GetLabels()) {
 		newStore := newStore(
 			s.storeID,
