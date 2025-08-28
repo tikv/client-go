@@ -49,12 +49,6 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		return
 	}
 
-	batchReq := req.ToBatchCommandsRequest()
-	if batchReq == nil {
-		cb.Invoke(nil, errors.New("unsupported request type: "+req.Type.String()))
-		return
-	}
-
 	regionRPC := trace.StartRegion(ctx, req.Type.String())
 	spanRPC := opentracing.SpanFromContext(ctx)
 	if spanRPC != nil && spanRPC.Tracer() != nil {
@@ -71,6 +65,13 @@ func (c *RPCClient) SendRequestAsync(ctx context.Context, addr string, req *tikv
 		}
 	}
 	tikvrpc.AttachContext(req, req.Context)
+
+	// ToBatchCommandsRequest should be called after all modifications to req are done.
+	batchReq := req.ToBatchCommandsRequest()
+	if batchReq == nil {
+		cb.Invoke(nil, errors.New("unsupported request type: "+req.Type.String()))
+		return
+	}
 
 	// TODO(zyguan): If the client created `WithGRPCDialOptions(grpc.WithBlock())`, `getConnPool` might be blocked for
 	// a while when the corresponding conn array is uninitialized. However, since tidb won't set this option, we just
