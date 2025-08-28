@@ -44,6 +44,11 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
+const (
+	// DCLabelKey indicates the key of label which represents the dc for Store.
+	DCLabelKey = "zone"
+)
+
 type testingKnobs interface {
 	getMockRequestLiveness() livenessFunc
 	setMockRequestLiveness(f livenessFunc)

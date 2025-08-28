@@ -177,6 +177,11 @@ var (
 	BatchRequestDurationSend prometheus.Observer
 	BatchRequestDurationRecv prometheus.Observer
 	BatchRequestDurationDone prometheus.Observer
+
+	ReadRequestLeaderLocalBytes    prometheus.Observer
+	ReadRequestLeaderRemoteBytes   prometheus.Observer
+	ReadRequestFollowerLocalBytes  prometheus.Observer
+	ReadRequestFollowerRemoteBytes prometheus.Observer
 )
 
 func initShortcuts() {
@@ -323,4 +328,9 @@ func initShortcuts() {
 	StaleReadLocalOutBytes = TiKVStaleReadBytes.WithLabelValues("local", "out")
 	StaleReadRemoteInBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "in")
 	StaleReadRemoteOutBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "out")
+
+	ReadRequestLeaderLocalBytes = TiKVReadRequestBytes.WithLabelValues("leader", "local")
+	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
+	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
+	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
 }

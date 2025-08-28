@@ -264,7 +264,8 @@ type Request struct {
 	ReadType string
 	// InputRequestSource is the input source of the request, if it's not empty, the final RequestSource sent to store will be attached with the retry info.
 	InputRequestSource string
-
+	// AccessLocationAttr indicates the request is sent to a different zone.
+	AccessLocation kv.AccessLocationType
 	// rev represents the revision of the request, it's increased when `Req.Context` gets patched.
 	rev uint32
 }
