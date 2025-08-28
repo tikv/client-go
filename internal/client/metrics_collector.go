@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/mpp"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -50,6 +51,7 @@ func (s *staleReadMetricsCollector) onResp(size float64, isCrossZoneTraffic bool
 
 type networkCollector struct {
 	staleReadMetricsCollector
+	reqSize int
 }
 
 func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails) {
@@ -93,6 +95,7 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 		return
 	}
 	size += req.Context.Size()
+	s.reqSize = size
 	isTiflashTarget := req.StoreTp == tikvrpc.TiFlash
 	var total, crossZone *int64
 	if isTiflashTarget {
@@ -179,5 +182,37 @@ func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, 
 	// stale read metrics
 	if req.StaleRead {
 		s.staleReadMetricsCollector.onResp(float64(size), isCrossZoneTraffic)
+	}
+	// replica read metrics
+	if isReadReq(req.Type) {
+		var observer prometheus.Observer
+		switch req.AccessLocation {
+		case kv.AccessLocalZone:
+			if req.ReplicaRead {
+				observer = metrics.ReadRequestFollowerLocalBytes
+			} else {
+				observer = metrics.ReadRequestLeaderLocalBytes
+			}
+		case kv.AccessCrossZone:
+			if req.ReplicaRead {
+				observer = metrics.ReadRequestFollowerRemoteBytes
+			} else {
+				observer = metrics.ReadRequestLeaderRemoteBytes
+			}
+		case kv.AccessUnknown:
+		}
+		if observer != nil {
+			observer.Observe(float64(size + s.reqSize))
+		}
+	}
+}
+
+func isReadReq(tp tikvrpc.CmdType) bool {
+	switch tp {
+	case tikvrpc.CmdGet, tikvrpc.CmdBatchGet, tikvrpc.CmdScan,
+		tikvrpc.CmdCop, tikvrpc.CmdBatchCop, tikvrpc.CmdCopStream:
+		return true
+	default:
+		return false
 	}
 }
