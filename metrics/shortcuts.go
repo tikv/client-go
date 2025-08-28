@@ -177,25 +177,11 @@ var (
 	BatchRequestDurationSend prometheus.Observer
 	BatchRequestDurationRecv prometheus.Observer
 	BatchRequestDurationDone prometheus.Observer
-<<<<<<< HEAD
-=======
-
-	AsyncSendReqCounterWithOK          prometheus.Counter
-	AsyncSendReqCounterWithRegionError prometheus.Counter
-	AsyncSendReqCounterWithRPCError    prometheus.Counter
-	AsyncSendReqCounterWithSendError   prometheus.Counter
-	AsyncSendReqCounterWithOtherError  prometheus.Counter
-
-	AsyncBatchGetCounterWithOK          prometheus.Counter
-	AsyncBatchGetCounterWithRegionError prometheus.Counter
-	AsyncBatchGetCounterWithLockError   prometheus.Counter
-	AsyncBatchGetCounterWithOtherError  prometheus.Counter
 
 	ReadRequestLeaderLocalBytes    prometheus.Observer
 	ReadRequestLeaderRemoteBytes   prometheus.Observer
 	ReadRequestFollowerLocalBytes  prometheus.Observer
 	ReadRequestFollowerRemoteBytes prometheus.Observer
->>>>>>> 97cad411 (metrcis: add replica read traffic metrics (#1717))
 )
 
 func initShortcuts() {
@@ -342,23 +328,9 @@ func initShortcuts() {
 	StaleReadLocalOutBytes = TiKVStaleReadBytes.WithLabelValues("local", "out")
 	StaleReadRemoteInBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "in")
 	StaleReadRemoteOutBytes = TiKVStaleReadBytes.WithLabelValues("cross-zone", "out")
-<<<<<<< HEAD
-=======
-
-	AsyncSendReqCounterWithOK = TiKVAsyncSendReqCounter.WithLabelValues("ok")
-	AsyncSendReqCounterWithRegionError = TiKVAsyncSendReqCounter.WithLabelValues("region_error")
-	AsyncSendReqCounterWithRPCError = TiKVAsyncSendReqCounter.WithLabelValues("rpc_error")
-	AsyncSendReqCounterWithSendError = TiKVAsyncSendReqCounter.WithLabelValues("send_error")
-	AsyncSendReqCounterWithOtherError = TiKVAsyncSendReqCounter.WithLabelValues("other_error")
-
-	AsyncBatchGetCounterWithOK = TiKVAsyncBatchGetCounter.WithLabelValues("ok")
-	AsyncBatchGetCounterWithRegionError = TiKVAsyncBatchGetCounter.WithLabelValues("region_error")
-	AsyncBatchGetCounterWithLockError = TiKVAsyncBatchGetCounter.WithLabelValues("lock_error")
-	AsyncBatchGetCounterWithOtherError = TiKVAsyncBatchGetCounter.WithLabelValues("other_error")
 
 	ReadRequestLeaderLocalBytes = TiKVReadRequestBytes.WithLabelValues("leader", "local")
 	ReadRequestLeaderRemoteBytes = TiKVReadRequestBytes.WithLabelValues("leader", "cross-zone")
 	ReadRequestFollowerLocalBytes = TiKVReadRequestBytes.WithLabelValues("follower", "local")
 	ReadRequestFollowerRemoteBytes = TiKVReadRequestBytes.WithLabelValues("follower", "cross-zone")
->>>>>>> 97cad411 (metrcis: add replica read traffic metrics (#1717))
 }

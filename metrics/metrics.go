@@ -116,15 +116,7 @@ var (
 	TiKVPipelinedFlushDuration                     prometheus.Histogram
 	TiKVValidateReadTSFromPDCount                  prometheus.Counter
 	TiKVLowResolutionTSOUpdateIntervalSecondsGauge prometheus.Gauge
-<<<<<<< HEAD
-=======
-	TiKVStaleRegionFromPDCounter                   prometheus.Counter
-	TiKVPipelinedFlushThrottleSecondsHistogram     prometheus.Histogram
-	TiKVTxnWriteConflictCounter                    prometheus.Counter
-	TiKVAsyncSendReqCounter                        *prometheus.CounterVec
-	TiKVAsyncBatchGetCounter                       *prometheus.CounterVec
 	TiKVReadRequestBytes                           *prometheus.SummaryVec
->>>>>>> 97cad411 (metrcis: add replica read traffic metrics (#1717))
 )
 
 // Label constants.
@@ -953,15 +945,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(TiKVPipelinedFlushDuration)
 	prometheus.MustRegister(TiKVValidateReadTSFromPDCount)
 	prometheus.MustRegister(TiKVLowResolutionTSOUpdateIntervalSecondsGauge)
-<<<<<<< HEAD
-=======
-	prometheus.MustRegister(TiKVStaleRegionFromPDCounter)
-	prometheus.MustRegister(TiKVPipelinedFlushThrottleSecondsHistogram)
-	prometheus.MustRegister(TiKVTxnWriteConflictCounter)
-	prometheus.MustRegister(TiKVAsyncSendReqCounter)
-	prometheus.MustRegister(TiKVAsyncBatchGetCounter)
 	prometheus.MustRegister(TiKVReadRequestBytes)
->>>>>>> 97cad411 (metrcis: add replica read traffic metrics (#1717))
 }
 
 // readCounter reads the value of a prometheus.Counter.
