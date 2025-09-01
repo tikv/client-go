@@ -74,6 +74,10 @@ func checkMaxExecutionTimeExceeded(lockCtx *kv.LockCtx, now time.Time) error {
 // calculateEffectiveWaitTime calculates the effective timeout considering both lockWaitTime and max_execution_time.
 // Returns the minimum timeout that should be applied, or kv.LockAlwaysWait if no timeout constraints apply.
 func calculateEffectiveWaitTime(lockCtx *kv.LockCtx, lockWaitTime int64, lockWaitStartTime time.Time, now time.Time) int64 {
+	if lockWaitTime == kv.LockNoWait || lockWaitTime <= 0 {
+		return kv.LockNoWait
+	}
+
 	effectiveTimeout := lockWaitTime
 
 	// Consider lockWaitTime if set
