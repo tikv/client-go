@@ -35,6 +35,8 @@
 package transaction
 
 import (
+	"encoding/binary"
+	"fmt"
 	"math"
 	"strconv"
 	"sync/atomic"
@@ -101,7 +103,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 		if m.IsPessimisticLock(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
-		} else if m.NeedConstraintCheckInPrewrite(i) || config.TestNextGen {
+		} else if m.NeedConstraintCheckInPrewrite(i) || (config.TestNextGen && !IsTempIndexKey(m.GetKey(i))) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
@@ -463,6 +465,20 @@ func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Erro
 func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyError) ([]*txnlock.Lock, error) {
 	var locks []*txnlock.Lock
 	logged := make(map[uint64]struct{})
+	membuffer := handler.committer.txn.GetMemBuffer()
+	iter, err := membuffer.Iter(nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	values := []string{}
+	for iter.Valid() {
+		iter.Value()
+		key := iter.Key()
+		value := iter.Value()
+		values = append(values, fmt.Sprintf("k[%v] v[%v]", key, value))
+		iter.Next()
+	}
+	_ = values
 	for _, keyErr := range keyErrs {
 		// Check already exists error
 		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
@@ -614,4 +630,15 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 		}
 	}
 	return nil
+}
+
+// IsTempIndexKey checks whether the input key is for a temp index.
+func IsTempIndexKey(indexKey []byte) (isTemp bool) {
+	const prefixLen = 11
+	const signMask uint64 = 0x8000000000000000
+	const TempIndexPrefix = 0x7fff000000000000
+	indexIDKey := indexKey[prefixLen : prefixLen+8]
+	indexID := int64(binary.BigEndian.Uint64(indexIDKey) ^ signMask)
+	tempIndexID := int64(TempIndexPrefix) | indexID
+	return tempIndexID == indexID
 }
