@@ -637,6 +637,11 @@ func IsTempIndexKey(indexKey []byte) (isTemp bool) {
 	const prefixLen = 11
 	const signMask uint64 = 0x8000000000000000
 	const TempIndexPrefix = 0x7fff000000000000
+
+	if len(indexKey) < prefixLen+8 {
+		// not an index key
+		return false
+	}
 	indexIDKey := indexKey[prefixLen : prefixLen+8]
 	indexID := int64(binary.BigEndian.Uint64(indexIDKey) ^ signMask)
 	tempIndexID := int64(TempIndexPrefix) | indexID
