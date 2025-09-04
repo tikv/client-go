@@ -641,6 +641,10 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 			latHist.(prometheus.Observer).Observe(latency.Seconds())
 		}
 	}
+
+	execNetworkCollector := &networkCollector{}
+	execNetworkCollector.onReq(req)
+	execNetworkCollector.onResp(req, resp)
 }
 
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
@@ -673,8 +677,9 @@ func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.R
 	staleRead := req.GetStaleRead()
 	defer func() {
 		stmtExec := ctx.Value(util.ExecDetailsKey)
+		var detail *util.ExecDetails
 		if stmtExec != nil {
-			detail := stmtExec.(*util.ExecDetails)
+			detail = stmtExec.(*util.ExecDetails)
 			atomic.AddInt64(&detail.WaitKVRespDuration, int64(time.Since(start)))
 		}
 		c.updateTiKVSendReqHistogram(req, resp, start, staleRead)
