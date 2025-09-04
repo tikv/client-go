@@ -849,7 +849,7 @@ func (s *RegionRequestSender) SendReqCtx(
 		// note: MPP not use this path. need specified in the MPP layer.
 		patchAccessLocation := func() {
 			// set access location based on source and target "zone" label.
-			selfZoneLabel := config.GetGlobalConfig().ZoneLabel
+			selfZoneLabel := config.GetGlobalConfig().TxnScope
 			targetZoneLabel, _ := s.replicaSelector.target.store.GetLabelValue(DCLabelKey)
 			// if either "zone" label is "", we actually don't know if it involves cross AZ traffic.
 			if selfZoneLabel == "" || targetZoneLabel == "" {
@@ -861,9 +861,7 @@ func (s *RegionRequestSender) SendReqCtx(
 			}
 		}
 		if s.replicaSelector != nil &&
-			s.replicaSelector.target != nil &&
-			req.AccessLocation == kv.AccessUnknown &&
-			len(s.replicaSelector.option.labels) != 0 {
+			s.replicaSelector.target != nil {
 			// patch the access location if it is not set under region request sender.
 			patchAccessLocation()
 		}
