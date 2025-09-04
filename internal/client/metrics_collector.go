@@ -19,7 +19,6 @@ import (
 	"github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
-	"github.com/tikv/client-go/v2/util"
 )
 
 type staleReadMetricsCollector struct {
@@ -49,7 +48,7 @@ type networkCollector struct {
 	reqSize int
 }
 
-func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails) {
+func (s *networkCollector) onReq(req *tikvrpc.Request) {
 	if req == nil {
 		return
 	}
@@ -67,7 +66,7 @@ func (s *networkCollector) onReq(req *tikvrpc.Request, details *util.ExecDetails
 	}
 }
 
-func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response, details *util.ExecDetails) {
+func (s *networkCollector) onResp(req *tikvrpc.Request, resp *tikvrpc.Response) {
 	if resp == nil {
 		return
 	}

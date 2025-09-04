@@ -785,7 +785,6 @@ func (s *RegionRequestSender) SendReqCtx(
 	startTime := time.Now()
 	startBackOff := bo.GetTotalSleep()
 	retryTimes = 0
-
 	defer func() {
 		if retryTimes > 0 {
 			metrics.TiKVRequestRetryTimesHistogram.Observe(float64(retryTimes))
@@ -949,7 +948,6 @@ func (s *RegionRequestSender) SendReqCtx(
 				s.replicaSelector.onSendSuccess(req)
 			}
 		}
-
 		return resp, rpcCtx, retryTimes, nil
 	}
 }
