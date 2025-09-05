@@ -36,7 +36,6 @@ package transaction
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 	"strconv"
 	"sync/atomic"
@@ -465,20 +464,6 @@ func (handler *prewrite1BatchReqHandler) handleRegionErr(regionErr *errorpb.Erro
 func (handler *prewrite1BatchReqHandler) extractKeyErrs(keyErrs []*kvrpcpb.KeyError) ([]*txnlock.Lock, error) {
 	var locks []*txnlock.Lock
 	logged := make(map[uint64]struct{})
-	membuffer := handler.committer.txn.GetMemBuffer()
-	iter, err := membuffer.Iter(nil, nil)
-	if err != nil {
-		panic(err)
-	}
-	values := []string{}
-	for iter.Valid() {
-		iter.Value()
-		key := iter.Key()
-		value := iter.Value()
-		values = append(values, fmt.Sprintf("k[%v] v[%v]", key, value))
-		iter.Next()
-	}
-	_ = values
 	for _, keyErr := range keyErrs {
 		// Check already exists error
 		if alreadyExist := keyErr.GetAlreadyExist(); alreadyExist != nil {
