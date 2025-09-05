@@ -59,6 +59,8 @@ func (c *CodecClient) SendRequest(ctx context.Context, addr string, req *tikvrpc
 	if err != nil {
 		return nil, err
 	}
+	// TODO(zyguan): since unistore does not attach context yet, here we attach the context manually to make integration tests pass.
+	tikvrpc.AttachContext(req, req.Context)
 	resp, err := c.Client.SendRequest(ctx, addr, req, timeout)
 	if err != nil {
 		return nil, err

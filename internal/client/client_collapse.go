@@ -87,7 +87,7 @@ func (r reqCollapse) tryCollapseRequest(ctx context.Context, addr string, req *t
 			return
 		}
 		canCollapse = true
-		key := strconv.FormatUint(resolveLock.Context.RegionId, 10) + "-" + strconv.FormatUint(resolveLock.StartVersion, 10)
+		key := strconv.FormatUint(req.Context.RegionId, 10) + "-" + strconv.FormatUint(resolveLock.StartVersion, 10)
 		resp, err = r.collapse(ctx, key, &resolveRegionSf, addr, req, timeout)
 		return
 	default:
