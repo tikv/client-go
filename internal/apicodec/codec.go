@@ -29,6 +29,25 @@ const (
 	NullspaceID = KeyspaceID(constants.NullKeyspaceID)
 )
 
+// CodecV2Prefixes returns a sorted list of prefixes that will be used by Codec V2.
+func CodecV2Prefixes() [][]byte {
+	result := [][]byte{
+		{RawModePrefix},
+		{TxnModePrefix},
+	}
+	// The result should be sorted.
+	// If the list becomes larger in the future, add explicit sorting if necessary.
+	return result
+}
+
+// CodecV1ExcludePrefixes returns a sorted list of prefixes that will not be used by Codec V1. This function can be
+// used to determine if a key belongs to codec v1 in v1+v2 mixed deployment.
+func CodecV1ExcludePrefixes() [][]byte {
+	// Currently this is identical with CodecV2Prefixes, but this function has different semantics. In the future
+	// if other special prefixes or codec versions are introduced, those prefixes should be added here.
+	return CodecV2Prefixes()
+}
+
 // ParseKeyspaceID retrieves the keyspaceID from the given keyspace-encoded key.
 // It returns error if the given key is not in proper api-v2 format.
 func ParseKeyspaceID(b []byte) (KeyspaceID, error) {

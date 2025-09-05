@@ -18,25 +18,27 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
+const (
 	// DefaultKeyspaceID is the keyspaceID of the default keyspace.
 	DefaultKeyspaceID uint32 = 0
 	// DefaultKeyspaceName is the name of the default keyspace.
 	DefaultKeyspaceName = "DEFAULT"
 
-	rawModePrefix     byte = 'r'
-	txnModePrefix     byte = 'x'
+	RawModePrefix     byte = 'r'
+	TxnModePrefix     byte = 'x'
 	keyspacePrefixLen      = 4
 
 	// maxKeyspaceID is the maximum value of keyspaceID, its value is uint24Max.
 	maxKeyspaceID = uint32(0xFFFFFF)
+)
 
+var (
 	// errKeyOutOfBound happens when key to be decoded lies outside the keyspace's range.
 	errKeyOutOfBound = errors.New("given key does not belong to the keyspace")
 )
 
 func checkV2Key(b []byte) error {
-	if len(b) < keyspacePrefixLen || (b[0] != rawModePrefix && b[0] != txnModePrefix) {
+	if len(b) < keyspacePrefixLen || (b[0] != RawModePrefix && b[0] != TxnModePrefix) {
 		return errors.Errorf("invalid API V2 key %s", b)
 	}
 	return nil
@@ -79,9 +81,9 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 	codec.endKey = make([]byte, 4)
 	switch mode {
 	case ModeRaw:
-		codec.prefix[0] = rawModePrefix
+		codec.prefix[0] = RawModePrefix
 	case ModeTxn:
-		codec.prefix[0] = txnModePrefix
+		codec.prefix[0] = TxnModePrefix
 	default:
 		return nil, errors.Errorf("unknown mode")
 	}
