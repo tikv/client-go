@@ -18,5 +18,3 @@ package config
 
 // NextGen indicates if the current build is for the next generation of TiKV.
 const NextGen = false
-
-const TestNextGen = true
