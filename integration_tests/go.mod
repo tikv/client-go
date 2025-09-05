@@ -32,7 +32,6 @@ require (
 	github.com/coocood/rtutil v0.0.0-20190304133409-c84515f646f2 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
-	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548 // indirect
 	github.com/danjacques/gofslock v0.0.0-20220131014315-6e321f4509c8 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da // indirect
@@ -109,6 +108,7 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
 )
 
 replace (
