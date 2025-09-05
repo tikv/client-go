@@ -35,7 +35,6 @@
 package transaction
 
 import (
-	"encoding/binary"
 	"math"
 	"strconv"
 	"sync/atomic"
@@ -102,7 +101,12 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 		}
 		if m.IsPessimisticLock(i) {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_PESSIMISTIC_CHECK
-		} else if m.NeedConstraintCheckInPrewrite(i) || (config.TestNextGen && !IsTempIndexKey(m.GetKey(i))) {
+		} else if m.NeedConstraintCheckInPrewrite(i) ||
+			(config.NextGen && IsTempIndexKey != nil && !IsTempIndexKey(m.GetKey(i))) {
+			// For next-gen builds, we need to perform constraint checks on all non-temporary index keys.
+			// This is to prevent scenarios where a later lock's start_ts is smaller than the previous write's commit_ts,
+			// which can be problematic for CDC and could potentially break correctness.
+			// see https://github.com/tikv/tikv/issues/11187.
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_DO_CONSTRAINT_CHECK
 		} else {
 			pessimisticActions[i] = kvrpcpb.PrewriteRequest_SKIP_PESSIMISTIC_CHECK
@@ -617,18 +621,4 @@ func (handler *prewrite1BatchReqHandler) handleSingleBatchSucceed(reqBegin time.
 	return nil
 }
 
-// IsTempIndexKey checks whether the input key is for a temp index.
-func IsTempIndexKey(indexKey []byte) (isTemp bool) {
-	const prefixLen = 11
-	const signMask uint64 = 0x8000000000000000
-	const TempIndexPrefix = 0x7fff000000000000
-
-	if len(indexKey) < prefixLen+8 {
-		// not an index key
-		return false
-	}
-	indexIDKey := indexKey[prefixLen : prefixLen+8]
-	indexID := int64(binary.BigEndian.Uint64(indexIDKey) ^ signMask)
-	tempIndexID := int64(TempIndexPrefix) | indexID
-	return tempIndexID == indexID
-}
+var IsTempIndexKey func([]byte) bool
