@@ -3,7 +3,6 @@ package apicodec
 import (
 	"bytes"
 	"encoding/binary"
-	"sync"
 
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/errorpb"
@@ -51,7 +50,6 @@ func BuildKeyspaceName(name string) string {
 
 // codecV2 is used to encode/decode keys and request into APIv2 format.
 type codecV2 struct {
-	reqPool      sync.Pool
 	prefix       []byte
 	endKey       []byte
 	memCodec     memCodec
@@ -87,7 +85,6 @@ func NewCodecV2(mode Mode, keyspaceMeta *keyspacepb.KeyspaceMeta) (Codec, error)
 	copy(codec.prefix[1:], prefix)
 	prefixVal := binary.BigEndian.Uint32(codec.prefix)
 	binary.BigEndian.PutUint32(codec.endKey, prefixVal+1)
-	codec.reqPool.New = func() any { return &tikvrpc.Request{} }
 	return codec, nil
 }
 
@@ -125,10 +122,8 @@ func (c *codecV2) GetAPIVersion() kvrpcpb.APIVersion {
 // EncodeRequest encodes with the given Codec.
 // NOTE: req is reused on retry. MUST encode on cloned request, other than overwrite the original.
 func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) {
-	r := c.reqPool.Get().(*tikvrpc.Request)
-	*r = *req
-	setAPICtx(c, r)
-	req = r
+	// attachAPICtx will shallow copy the request.
+	req = attachAPICtx(c, req)
 	// Encode requests based on command type.
 	switch req.Type {
 	// Transaction Request Types.
@@ -294,7 +289,6 @@ func (c *codecV2) EncodeRequest(req *tikvrpc.Request) (*tikvrpc.Request, error) 
 
 // DecodeResponse decode the resp with the given codec.
 func (c *codecV2) DecodeResponse(req *tikvrpc.Request, resp *tikvrpc.Response) (*tikvrpc.Response, error) {
-	defer c.reqPool.Put(req)
 	var err error
 	// Decode response based on command type.
 	switch req.Type {
