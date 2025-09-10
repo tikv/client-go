@@ -1299,10 +1299,7 @@ func (c *RegionCache) BatchLocateKeyRanges(bo *retry.Backoffer, keyRanges []kv.K
 		containsAll := false
 	outer:
 		for {
-			batchRegionInCache, err := c.scanRegionsFromCache(bo, keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
-			if err != nil {
-				return nil, err
-			}
+			batchRegionInCache := c.scanRegionsFromCache(keyRange.StartKey, keyRange.EndKey, defaultRegionsPerBatch)
 			for _, r = range batchRegionInCache {
 				if !r.Contains(keyRange.StartKey) { // uncached hole, load the rest regions
 					break outer
@@ -1552,7 +1549,7 @@ func (c *RegionCache) findRegionByKey(bo *retry.Backoffer, key []byte, isEndKey 
 func (c *RegionCache) tryFindRegionByKey(key []byte, isEndKey bool) (r *Region) {
 	var expired bool
 	r, expired = c.searchCachedRegionByKey(key, isEndKey)
-	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess) {
+	if r == nil || expired || r.checkSyncFlags(needReloadOnAccess|needDelayedReloadReady) {
 		return nil
 	}
 	return r
@@ -2153,17 +2150,25 @@ func (c *RegionCache) loadRegionByID(bo *retry.Backoffer, regionID uint64) (*Reg
 
 // For optimizing BatchLocateKeyRanges, scanRegionsFromCache scans at most `limit` regions from cache.
 // It is the caller's responsibility to make sure that startKey is a node in the B-tree, otherwise, the startKey will not be included in the return regions.
-func (c *RegionCache) scanRegionsFromCache(bo *retry.Backoffer, startKey, endKey []byte, limit int) ([]*Region, error) {
+func (c *RegionCache) scanRegionsFromCache(startKey, endKey []byte, limit int) []*Region {
 	if limit == 0 {
-		return nil, nil
+		return nil
 	}
 
 	var regions []*Region
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	regions = c.mu.sorted.AscendGreaterOrEqual(startKey, endKey, limit)
-
-	return regions, nil
+	// in-place filter out the regions which need reload.
+	i := 0
+	for _, region := range regions {
+		if !region.checkSyncFlags(needReloadOnAccess | needDelayedReloadReady) {
+			regions[i] = region
+			i++
+		}
+	}
+	regions = regions[:i]
+	return regions
 }
 
 func (c *RegionCache) refreshRegionIndex(bo *retry.Backoffer) error {
