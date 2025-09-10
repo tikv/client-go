@@ -641,6 +641,10 @@ func (c *RPCClient) updateTiKVSendReqHistogram(req *tikvrpc.Request, resp *tikvr
 			latHist.(prometheus.Observer).Observe(latency.Seconds())
 		}
 	}
+
+	execNetworkCollector := &networkCollector{}
+	execNetworkCollector.onReq(req)
+	execNetworkCollector.onResp(req, resp)
 }
 
 func (c *RPCClient) sendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (resp *tikvrpc.Response, err error) {
